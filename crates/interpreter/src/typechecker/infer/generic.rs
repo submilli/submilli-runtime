@@ -16,7 +16,7 @@ use crate::{
 
 use super::{Inferer, type_limit_at};
 use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
-use crate::typechecker::type_param_substitution::{TypeParamSubstitution, UnifyError};
+use crate::typechecker::type_param_substitution::{CloseMatch, TypeParamSubstitution, UnifyError};
 
 /// What a receiver-less generic call is calling. Only diagnostics differ: a
 /// constructor has to be described as one, because `function Box<T>(…)` is not
@@ -405,6 +405,11 @@ impl Inferer<'_> {
             return false;
         };
         for member in &members {
+            // An object type routes to the `Object` interface, whose members
+            // every value has; its own fields are unified directly.
+            if matches!(member.peel(), Type::Object { .. }) {
+                continue;
+            }
             let Some((me, _pe, ne, ae)) = member.interface_routing() else {
                 continue;
             };
@@ -669,7 +674,7 @@ impl Inferer<'_> {
         }
 
         if let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
-            let _ = sub.unify(&sig.ret, want, self.resolver());
+            self.bind_from_expected_result(&mut sub, &sig.ret, want);
         }
 
         let has_rest = sig.params.last().is_some_and(|p| p.rest);
@@ -740,9 +745,16 @@ impl Inferer<'_> {
             })
         };
         let errors_before_args = self.error_count();
+        let inferred_generics: &[String] = if type_args.is_some() {
+            &[]
+        } else {
+            &sig.generics
+        };
         let mut typed_args = self.infer_generic_arguments(
             &args,
             &sig.params,
+            &sig.ret,
+            inferred_generics,
             &rest_elem_ty,
             &mut sub,
             signature_help,
@@ -759,9 +771,9 @@ impl Inferer<'_> {
             self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
         }
 
-        let array_from_mapper = iface_mangled == crate::mangle::prelude("ArrayConstructor")
-            && name.name == "from"
-            && sig.generics.len() == 2;
+        let array_from =
+            iface_mangled == crate::mangle::prelude("ArrayConstructor") && name.name == "from";
+        let array_from_mapper = array_from && sig.generics.len() == 2;
         let mapper_type = typed_args
             .get(1)
             .map(|id| {
@@ -774,6 +786,14 @@ impl Inferer<'_> {
                 )
             })
             .transpose()?;
+        // An array-like `{ length }` has no elements to infer the element type
+        // from.
+        if array_from
+            && let Some(element) = sig.generics.first()
+            && sub.get(element).is_none()
+        {
+            sub.insert(element.clone(), Type::Unknown);
+        }
         if array_from_mapper
             && mapper_type
                 .as_ref()
@@ -785,6 +805,8 @@ impl Inferer<'_> {
             sub.insert("U".into(), element);
         }
 
+        sub.bind_whole_union_fallbacks();
+        self.check_deferred_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(
             &mut sub,
             &sig.generics,
@@ -792,6 +814,7 @@ impl Inferer<'_> {
             expected,
             errors_before_args,
         );
+        self.bind_uninferred_to_unknown(&mut sub, &sig.generics, &iface_mangled, span)?;
         if let Err(unbound) = sub
             .resolve_all(&sig.generics, &self.type_limits)
             .map_err(type_limit_at(span))?
@@ -831,6 +854,7 @@ impl Inferer<'_> {
             })),
             None => None,
         };
+        self.record_generic_call_arguments(&typed_args, &sig.params, &sig.ret, type_args.is_some());
 
         // TypeVar params/return need box/cast at the Wasm boundary; composite types use plain MethodCall.
         let any_generic_arg = sig.params.iter().any(|p| matches!(p.ty, Type::TypeVar(_)));
@@ -938,6 +962,124 @@ impl Inferer<'_> {
         }
     }
 
+    /// Bind type parameters from the type a call's result is expected to have,
+    /// before its arguments are inferred, as bindings an argument may still
+    /// replace (see [`TypeParamSubstitution::mark_from_expected_result`]).
+    ///
+    /// The expected type is not an argument, so the union members it closely
+    /// matches are not checked.
+    fn bind_from_expected_result(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
+        let before = sub.clone();
+        self.bind_from_expected_type(sub, ret, want);
+        sub.mark_from_expected_result(&before);
+        sub.forget_close_matches_after(before.close_match_count());
+    }
+
+    /// Bind type parameters by unifying the result type `ret` with `want`.
+    ///
+    /// When `want` is a union and the result type is neither a type
+    /// variable nor a union (both unify with the whole union), the result is
+    /// unified with each member of its own [`ShapeKind`]. The type parameters
+    /// bind only if every such member unifies, all to the same bindings;
+    /// otherwise nothing binds. `Cmp<T>` expected as `Cmp<P> | null` binds
+    /// `T = P`.
+    ///
+    /// Adopting a partial match would fix the type parameters before the
+    /// arguments are seen, although the result could still be assigned to a
+    /// member unification can't match, such as a wider object or an interface.
+    /// A mismatch is reported later, where the call's result is checked
+    /// against the expected type.
+    fn bind_from_expected_type(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
+        let unifies_with_whole_union = matches!(ret.peel(), Type::TypeVar(_) | Type::Union(_));
+        let members = match want.peel() {
+            Type::Union(members) if !unifies_with_whole_union => members,
+            _ => {
+                let _ = sub.unify(ret, want, self.resolver());
+                return;
+            }
+        };
+        let ret_kind = ShapeKind::of(ret);
+        let mut agreed: Option<TypeParamSubstitution> = None;
+        for member in members {
+            if !ret_kind.could_be(ShapeKind::of(member)) {
+                continue;
+            }
+            let mut trial = sub.clone();
+            if trial.unify(ret, member, self.resolver()).is_err() {
+                return;
+            }
+            match &agreed {
+                Some(bindings) if *bindings != trial => return,
+                _ => agreed = Some(trial),
+            }
+        }
+        if let Some(bindings) = agreed {
+            *sub = bindings;
+        }
+    }
+
+    /// Bind the type parameters of a program's own generic that nothing
+    /// inferred to `unknown`, as tsc does: every type is assignable to it.
+    /// Built-in generics keep reporting them, since tsc gives several of them
+    /// `any` instead (`new Map()` is `Map<any, any>`), which a later use may
+    /// still resolve here (`new Map().set(k, v)`).
+    fn bind_uninferred_to_unknown(
+        &self,
+        sub: &mut TypeParamSubstitution,
+        generics: &[String],
+        declared_by: &crate::MangledName,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        if crate::mangle::is_builtin(declared_by) {
+            return Ok(());
+        }
+        bind_remaining(sub, generics, Type::Unknown, &self.type_limits).map_err(type_limit_at(span))
+    }
+
+    /// Report each union argument member that closely matched a parameter
+    /// member while inference ran and fits no member of the parameter now
+    /// that it is done, against the member it closely matched, at its
+    /// argument (or at the call at `span` when no argument was located).
+    fn check_deferred_close_matches(&mut self, sub: &mut TypeParamSubstitution, span: Span) {
+        for close_match in sub.take_close_matches() {
+            if sub
+                .clone()
+                .unify(&close_match.param, &close_match.arg, self.resolver())
+                .is_ok()
+            {
+                continue;
+            }
+            let error_span = close_match.argument_span.unwrap_or(span);
+            let (expected, got) = self.close_match_mismatch(sub, close_match);
+            self.error_with_help(
+                error_span,
+                format!("expected `{expected}`, got `{got}`"),
+                self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
+            );
+        }
+    }
+
+    /// The types to report a close match under: where the argument departs
+    /// from its matched member, or that member as `sub` resolves it when it
+    /// does not depart structurally.
+    fn close_match_mismatch(
+        &self,
+        sub: &TypeParamSubstitution,
+        close_match: CloseMatch,
+    ) -> (Type, Type) {
+        match sub.clone().unify(
+            &close_match.matched_member,
+            &close_match.arg,
+            self.resolver(),
+        ) {
+            Err(UnifyError::Mismatch { expected, got }) => (expected, got),
+            _ => (
+                sub.apply_or_record(&close_match.matched_member, &self.type_limits),
+                close_match.arg,
+            ),
+        }
+    }
+
     /// `ty` with `sub` applied, at a call site at `span`.
     fn instantiate(
         &self,
@@ -967,15 +1109,131 @@ impl Inferer<'_> {
             return Ok(());
         };
         let diagnostics_before = self.diagnostics.len();
+        // An annotation only has to accept what the slot passes, so its
+        // closely matched members are not checked.
+        let close_matches_before = sub.close_match_count();
         for (declared, param) in declared_params.iter().zip(params) {
             if let Some(annotation) = &declared.ty {
                 let annotated = self.resolve_type(annotation)?;
                 let _ = sub.unify_argument(param, &annotated, self.resolver());
             }
         }
+        sub.forget_close_matches_after(close_matches_before);
         self.diagnostics.truncate(diagnostics_before);
 
         Ok(())
+    }
+
+    /// Start inferring an object literal argument's fields one at a time, when
+    /// one of them is a function literal with an unannotated parameter: as in
+    /// tsc, a type parameter an earlier field binds then types that function's
+    /// parameters. `test({ produce: (n: number) => n, consume: (x) => ... })`
+    /// types `x` from `produce`. Returns the inference this one interrupts.
+    fn start_object_argument_inference(
+        &mut self,
+        arg: ExprId,
+        param_ty: &Type,
+        sub: &TypeParamSubstitution,
+    ) -> Result<Option<ObjectArgumentInference>, CompilerFailure> {
+        let enclosing = self.object_argument_inference.take();
+        let ExprKind::ObjectLiteral { members } = self
+            .ast
+            .try_expr(arg)
+            .map_err(super::arena_failure)?
+            .kind
+            .clone()
+        else {
+            return Ok(enclosing);
+        };
+        let mut has_context_sensitive_field = false;
+        for member in &members {
+            if let crate::ObjectLiteralMember::Field(field) = member {
+                has_context_sensitive_field |= self.is_context_sensitive_function(field.value)?;
+            }
+        }
+        let fields = match param_ty.peel() {
+            Type::Object { fields, .. } => Some(fields.clone()),
+            interface @ Type::InterfaceRef { .. } => {
+                match super::assignable::expand_interface_data_shape(interface, self.resolver()) {
+                    Some(Type::Object { fields, .. }) => Some(fields),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(fields) = fields.filter(|_| has_context_sensitive_field) {
+            self.object_argument_inference = Some(ObjectArgumentInference {
+                literal: arg,
+                fields,
+                sub: sub.clone(),
+                fallback_echoes: Vec::new(),
+            });
+        }
+        Ok(enclosing)
+    }
+
+    /// Keep what the fields of the argument bound, and resume `enclosing`.
+    fn finish_object_argument_inference(
+        &mut self,
+        enclosing: Option<ObjectArgumentInference>,
+        sub: &mut TypeParamSubstitution,
+    ) {
+        if let Some(mut finished) =
+            std::mem::replace(&mut self.object_argument_inference, enclosing)
+        {
+            finished
+                .sub
+                .bind_whole_union_fallbacks_named(&finished.fallback_echoes);
+            *sub = finished.sub;
+        }
+    }
+
+    /// The hint for field `name` of `literal`, with what its earlier fields
+    /// bound, if the literal's fields are being inferred one at a time. A
+    /// callback field's parameters take the whole-union fallbacks of the type
+    /// parameters still unbound, as [`fix_callback_parameters`] gives them;
+    /// they apply to the hint only, so its returns or a later field can still
+    /// bind them.
+    pub(super) fn object_argument_field_hint(&self, literal: ExprId, name: &str) -> Option<Type> {
+        let inference = self
+            .object_argument_inference
+            .as_ref()
+            .filter(|inference| inference.literal == literal)?;
+        let field = inference.fields.get(name)?;
+        let mut sub = inference.sub.clone();
+        if let Some(Type::Function { params, .. }) = function_part(&field.ty) {
+            sub.bind_whole_union_fallbacks_in(params);
+        }
+        Some(sub.apply_or_record(&field.ty, &self.type_limits))
+    }
+
+    /// Bind the type parameters field `name` of `literal` determines, for the
+    /// fields after it. A mismatch is reported when the whole argument is.
+    pub(super) fn infer_from_object_argument_field(
+        &mut self,
+        literal: ExprId,
+        name: &str,
+        value_ty: &Type,
+    ) {
+        let Some(mut inference) = self
+            .object_argument_inference
+            .take_if(|inference| inference.literal == literal)
+        else {
+            return;
+        };
+        if let Some(field) = inference.fields.get(name) {
+            let before = inference.sub.clone();
+            let _ = inference
+                .sub
+                .unify_argument(&field.ty, value_ty, self.resolver());
+            // Only a callback field's parameters took the fallback from the
+            // hint; another field binding the same type binds it for real.
+            if function_part(&field.ty).is_some() {
+                let echoes = inference.sub.unbind_fallback_echoes(&before);
+                inference.fallback_echoes.extend(echoes);
+            }
+        }
+        self.object_argument_inference = Some(inference);
     }
 
     fn function_literal_params(
@@ -1021,30 +1279,55 @@ impl Inferer<'_> {
     /// checking it late can't observe a later argument's assignment, while any
     /// other argument could. A fully annotated one binds from its annotations
     /// in order, as in TypeScript.
+    ///
+    /// `inferred_generics` names the type parameters the call infers rather
+    /// than takes as written type arguments. An object literal one of them
+    /// types, when only literals are its candidates, is a source for it and
+    /// isn't checked for unknown fields ([`super::inference_sources`]).
+    ///
     /// `signature_help` renders the callee for a mismatch diagnostic.
+    #[allow(clippy::too_many_arguments)]
     fn infer_generic_arguments(
         &mut self,
         args: &[ExprId],
         params: &[Param],
+        ret: &Type,
+        inferred_generics: &[String],
         rest_elem_ty: &Type,
         sub: &mut TypeParamSubstitution,
         signature_help: impl Fn(&mut Self) -> String,
     ) -> Result<Vec<ExprId>, CompilerFailure> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
+        let args_with_param_types: Vec<(ExprId, Type)> = args
+            .iter()
+            .enumerate()
+            .map(|(i, &arg_id)| {
+                let param_ty = match params.get(i) {
+                    Some(param) if i < fixed_count => param.ty.clone(),
+                    _ if has_rest => rest_elem_ty.clone(),
+                    _ => Type::Error,
+                };
+                (arg_id, param_ty)
+            })
+            .collect();
+        let arguments = GenericArguments {
+            inferred_generics,
+            sourced_by_literals: self
+                .literal_inferred_type_params(&args_with_param_types, inferred_generics)?,
+            literal_types: LiteralTypeArguments::new(
+                &args_with_param_types,
+                ret,
+                inferred_generics,
+            ),
+        };
         let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
         for deferred_pass in [false, true] {
-            for (i, &arg_id) in args.iter().enumerate() {
+            for (i, (arg_id, param_ty)) in args_with_param_types.iter().enumerate() {
+                let (arg_id, param_ty) = (*arg_id, param_ty.clone());
                 if typed_slots[i].is_some() {
                     continue;
                 }
-                let param_ty = if i < fixed_count {
-                    params[i].ty.clone()
-                } else if has_rest {
-                    rest_elem_ty.clone()
-                } else {
-                    Type::Error
-                };
                 let deferred = function_part(&param_ty).is_some()
                     && self.is_context_sensitive_function(arg_id)?;
                 if deferred && !deferred_pass {
@@ -1053,10 +1336,13 @@ impl Inferer<'_> {
                 if deferred != deferred_pass {
                     continue;
                 }
-                // An oversized hint fails at the argument's own checkpoint.
-                let hint = sub.apply_or_record(&param_ty, &self.type_limits);
+                if deferred {
+                    fix_callback_parameters(sub, &param_ty, inferred_generics);
+                }
                 let errors_before = self.error_count();
-                let (typed_id, arg_ty) = self.infer_expr(arg_id, Some(&hint))?;
+                let close_matches_before = sub.close_match_count();
+                let (typed_id, arg_ty) =
+                    self.infer_generic_argument(arg_id, &param_ty, &arguments, sub)?;
                 typed_slots[i] = Some(typed_id);
                 let missing_slot = i >= fixed_count && !has_rest;
                 if missing_slot || matches!(arg_ty, Type::Error) {
@@ -1064,7 +1350,23 @@ impl Inferer<'_> {
                 }
                 // An error inferring the argument already covers a mismatch here.
                 let already_reported = self.error_count() > errors_before;
-                if let Err(error) = sub.unify_argument(&param_ty, &arg_ty, self.resolver()) {
+                // The argument was already reported against the expected
+                // result's binding; replacing it would report the result too.
+                if already_reported {
+                    sub.keep_replaceable_bindings(&param_ty);
+                }
+                let unified = sub.unify_argument(&param_ty, &arg_ty, self.resolver());
+                // A reported argument's close matches, including those its
+                // object literal's fields recorded, would usually report the
+                // same mismatch again. The call is rejected either way, so an
+                // error elsewhere in the argument may hide a close-match one.
+                if already_reported || unified.is_err() {
+                    sub.forget_close_matches_after(close_matches_before);
+                } else {
+                    let arg_span = self.argument_span(typed_id)?;
+                    sub.locate_close_matches_after(close_matches_before, arg_span);
+                }
+                if let Err(error) = unified {
                     self.unify_argument_error(
                         error,
                         sub,
@@ -1079,6 +1381,113 @@ impl Inferer<'_> {
         Ok(typed_slots.into_iter().flatten().collect())
     }
 
+    /// Infer one argument of a generic call against `param_ty`, with what
+    /// `sub` has bound so far as its hint, and return the type to unify with
+    /// `param_ty`: a fresh literal widened where tsc would widen it.
+    fn infer_generic_argument(
+        &mut self,
+        arg_id: ExprId,
+        param_ty: &Type,
+        arguments: &GenericArguments,
+        sub: &mut TypeParamSubstitution,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        // An oversized hint fails at the argument's own checkpoint.
+        let hint = sub.apply_or_record(param_ty, &self.type_limits);
+        let hint = self.literal_argument_hint(arg_id, hint, arguments.inferred_generics)?;
+        let hinted_by_replaceable_binding = sub.mentions_replaceable_binding(param_ty);
+        if hinted_by_replaceable_binding {
+            self.arguments_with_replaceable_hints.insert(arg_id);
+        }
+        let enclosing = self.start_object_argument_inference(arg_id, param_ty, sub)?;
+        let keeps_literal = arguments.literal_types.keeps(param_ty);
+        let inferred = self.with_inferred_positions(
+            arg_id,
+            param_ty,
+            &arguments.sourced_by_literals,
+            |this| {
+                this.keeps_literal_types = keeps_literal;
+                this.next_function_keeps_returned_literals = keeps_literal;
+                this.infer_expr(arg_id, Some(&hint))
+            },
+        );
+        self.finish_object_argument_inference(enclosing, sub);
+        self.arguments_with_replaceable_hints.remove(&arg_id);
+        let (typed_id, arg_ty) = inferred?;
+        if keeps_literal {
+            self.record_kept_literal_argument(typed_id);
+        }
+        // A literal that fits what the type parameter is already bound to is
+        // not widened, so it doesn't conflict with that binding:
+        // `pick(mode, "off")` with `mode: Mode` binds `Mode`, as tsc does when
+        // the type parameter is the result (where it isn't, tsc widens to
+        // `string`, and a later push of another string is SUB-1397). Nor is
+        // one the call's expected result asks for: `const f: () => "a" =
+        // later(c)` binds `"a"`.
+        let hint_is_known = !super::expr::mentions_type_var(&hint, &|var| {
+            arguments.inferred_generics.iter().any(|name| name == var)
+        });
+        let fits_binding = (hinted_by_replaceable_binding || hint_is_known)
+            && super::assignable(&arg_ty, &hint, self.resolver());
+        if arguments.literal_types.widens(param_ty)
+            && !fits_binding
+            && !self.fits_without_fallback_type_params(sub, param_ty, &arg_ty)
+        {
+            let widened = self.widen_fresh_literals(typed_id, &arg_ty)?;
+            return Ok((typed_id, widened));
+        }
+        Ok((typed_id, arg_ty))
+    }
+
+    /// Whether `arg_ty` fits `param_ty` without the type parameters that
+    /// have a whole-union fallback. `"x"` for `T | "x"` then goes to the
+    /// other members, as tsc matches it before widening, and must not bind
+    /// the type parameter widened (see `unify_with_member_beside_fallback`).
+    fn fits_without_fallback_type_params(
+        &self,
+        sub: &TypeParamSubstitution,
+        param_ty: &Type,
+        arg_ty: &Type,
+    ) -> bool {
+        sub.without_fallback_type_params(param_ty, &self.type_limits)
+            .is_some_and(|concrete| super::assignable(arg_ty, &concrete, self.resolver()))
+    }
+
+    /// The hint for an object or array literal argument, with each data-only
+    /// interface whose type arguments are still being inferred replaced by
+    /// its fields, so the literal keeps its own field types to bind them
+    /// from. Typed as `Box<T>` itself, it would bind nothing
+    /// (`unbox({ v: "s" })`).
+    fn literal_argument_hint(
+        &self,
+        arg_id: ExprId,
+        hint: Type,
+        inferred_generics: &[String],
+    ) -> Result<Type, CompilerFailure> {
+        if !self.builds_literal(arg_id)? {
+            return Ok(hint);
+        }
+        Ok(expand_hint_interfaces(
+            &hint,
+            inferred_generics,
+            self.resolver(),
+        ))
+    }
+
+    /// Whether `expr` is an object or array literal, in parentheses or as both
+    /// of a conditional's branches.
+    fn builds_literal(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        Ok(
+            match &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
+                ExprKind::ObjectLiteral { .. } | ExprKind::ArrayLiteral { .. } => true,
+                ExprKind::Paren(inner) => self.builds_literal(*inner)?,
+                ExprKind::Ternary { then_, else_, .. } => {
+                    self.builds_literal(*then_)? && self.builds_literal(*else_)?
+                }
+                _ => false,
+            },
+        )
+    }
+
     /// Handle an argument that didn't unify with its parameter: a structural
     /// match may still bind it; otherwise report it, unless `already_reported`.
     fn unify_argument_error(
@@ -1090,11 +1499,7 @@ impl Inferer<'_> {
         already_reported: bool,
         signature_help: &impl Fn(&mut Self) -> String,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let arg_span = self
-            .typed_ast
-            .try_expr(arg)
-            .map_err(crate::typechecker::arena_failure)?
-            .span;
+        let arg_span = self.argument_span(arg)?;
         let _: () = match error {
             UnifyError::Conflict { .. } if already_reported => {}
             UnifyError::Conflict { name, prev, new } => self.error(
@@ -1119,6 +1524,14 @@ impl Inferer<'_> {
             }
         };
         Ok(())
+    }
+
+    fn argument_span(&self, arg: ExprId) -> Result<Span, crate::compiler_error::CompilerFailure> {
+        Ok(self
+            .typed_ast
+            .try_expr(arg)
+            .map_err(crate::typechecker::arena_failure)?
+            .span)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1176,8 +1589,7 @@ impl Inferer<'_> {
         }
 
         if let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
-            // Mismatch surfaces later at the outer infer_expr site with a better span.
-            let _ = sub.unify(&ret, want, self.resolver());
+            self.bind_from_expected_result(&mut sub, &ret, want);
         }
 
         let has_rest = params.last().is_some_and(|p| p.rest);
@@ -1232,8 +1644,16 @@ impl Inferer<'_> {
             this.generic_callee_lift(callee, &callee_ident, &generics, &params, &ret)
         };
         let errors_before_args = self.error_count();
-        let mut typed_args =
-            self.infer_generic_arguments(&args, &params, &rest_elem_ty, &mut sub, signature_help)?;
+        let inferred_generics: &[String] = if type_args_written { &[] } else { &generics };
+        let mut typed_args = self.infer_generic_arguments(
+            &args,
+            &params,
+            &ret,
+            inferred_generics,
+            &rest_elem_ty,
+            &mut sub,
+            signature_help,
+        )?;
 
         if has_rest || typed_args.len() < params.len() {
             self.typed_ast
@@ -1272,7 +1692,10 @@ impl Inferer<'_> {
             .map_err(type_limit_at(span))?;
         }
 
+        sub.bind_whole_union_fallbacks();
+        self.check_deferred_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
+        self.bind_uninferred_to_unknown(&mut sub, &generics, &mangled, span)?;
         if let Err(unbound) = sub
             .resolve_all(&generics, &self.type_limits)
             .map_err(type_limit_at(span))?
@@ -1345,6 +1768,7 @@ impl Inferer<'_> {
         if let Some(schema) = &llm_schema {
             self.substitute_schema_argument(&params, &mut typed_args, schema, span)?;
         }
+        self.record_generic_call_arguments(&typed_args, &params, &ret, type_args_written);
 
         let generic_args: Vec<crate::GenericArgument> = typed_args
             .into_iter()
@@ -1403,6 +1827,266 @@ impl Inferer<'_> {
     }
 }
 
+/// What every argument of one generic call is inferred with.
+struct GenericArguments<'a> {
+    /// The type parameters the call infers rather than takes as written.
+    inferred_generics: &'a [String],
+    /// Those that only object and array literals are candidates for
+    /// ([`super::inference_sources`]).
+    sourced_by_literals: Vec<String>,
+    literal_types: LiteralTypeArguments,
+}
+
+/// What a call does with the literal type of an argument passed straight for
+/// one of its inferred type parameters, as tsc does: a parameter the result
+/// is (`id<T>(x: T): T`, or a union naming it) keeps the literal (`id(1)` is
+/// `1`), and any other widens a fresh one (`box(c)` with `const c = "a"`
+/// is a `{ v: string }`), so the result can hold other values. An annotated
+/// literal type is not fresh and stays.
+///
+/// This applies only to a type parameter every parameter names at its top
+/// level: one nested in another (`append<T>(a: T[], x: T)`) has candidates
+/// tsc doesn't widen. A literal is kept only when its argument is the type
+/// parameter's sole candidate: tsc would infer a union of several, which a
+/// conflicting binding can't express, so those widen (`two(c, "x")` binds
+/// `string`).
+struct LiteralTypeArguments {
+    kept: Vec<String>,
+    widened: Vec<String>,
+}
+
+impl LiteralTypeArguments {
+    fn new(args: &[(ExprId, Type)], ret: &Type, inferred_generics: &[String]) -> Self {
+        let in_result = top_level_type_params(ret);
+        let mut kept = Vec::new();
+        let mut widened = Vec::new();
+        for name in inferred_generics {
+            let mentioning: Vec<&Type> = args
+                .iter()
+                .map(|(_, param)| param)
+                .filter(|param| super::expr::mentions_type_var(param, &|var| var == name))
+                .collect();
+            let only_top_level = mentioning
+                .iter()
+                .all(|param| top_level_type_params(param).contains(&name.as_str()));
+            if mentioning.is_empty() || !only_top_level {
+                continue;
+            }
+            let sole_candidate = mentioning.len() == 1;
+            if sole_candidate && in_result.contains(&name.as_str()) {
+                kept.push(name.clone());
+            } else {
+                widened.push(name.clone());
+            }
+        }
+        Self { kept, widened }
+    }
+
+    /// Whether an argument for `param` keeps its literal type.
+    fn keeps(&self, param: &Type) -> bool {
+        top_level_type_params(param)
+            .iter()
+            .any(|name| self.kept.iter().any(|kept| kept == name))
+    }
+
+    /// Whether an argument for `param` widens its fresh literal types.
+    fn widens(&self, param: &Type) -> bool {
+        top_level_type_params(param)
+            .iter()
+            .any(|name| self.widened.iter().any(|widened| widened == name))
+    }
+}
+
+/// The type parameters `ty` is, alone or as a member of a union.
+fn top_level_type_params(ty: &Type) -> Vec<&str> {
+    match ty.peel() {
+        Type::Union(members) => members.iter().filter_map(type_param_name).collect(),
+        other => type_param_name(other).into_iter().collect(),
+    }
+}
+
+fn type_param_name(ty: &Type) -> Option<&str> {
+    match ty.peel() {
+        Type::TypeVar(name) => Some(name),
+        _ => None,
+    }
+}
+
+/// How many interfaces one literal argument's hint expands at most per pass
+/// of [`expand_hint_interfaces`], apart from the first pass, which may also
+/// expand as many again at the top union level. Interfaces that name each
+/// other in their fields expand along every order of them, so without a
+/// bound the hint grows factorially, and checking a literal against a large
+/// structural hint takes time in proportion to its size; a literal's hint
+/// needs few levels in practice.
+const MAX_HINT_INTERFACE_EXPANSIONS: usize = 64;
+
+/// How many unions deep one literal argument's hint expands at most.
+const MAX_HINT_UNION_DEPTH: usize = 8;
+
+/// The state of one [`expand_inferred_interfaces`] walk.
+struct InterfaceExpansion {
+    /// The interfaces being expanded, outermost first.
+    expanding: Vec<crate::MangledName>,
+    /// How many more interfaces may expand under `max_union_depth` unions.
+    remaining_at_max_depth: usize,
+    /// How many more interfaces may expand under fewer unions.
+    remaining_shallower: usize,
+    /// How many interfaces have expanded.
+    expansion_count: usize,
+    /// How many unions enclose the type being expanded.
+    union_depth: usize,
+    /// How many enclosing unions an interface may have and still expand.
+    max_union_depth: usize,
+    /// Whether an interface stayed as it is for want of budget.
+    starved: bool,
+    /// Whether an interface stayed as it is for being nested in more unions
+    /// than `max_union_depth`.
+    cut_at_union_depth: bool,
+}
+
+impl InterfaceExpansion {
+    /// A walk that expands up to `remaining_at_max_depth` interfaces under
+    /// `max_union_depth` unions, after those under fewer.
+    fn new(max_union_depth: usize, remaining_at_max_depth: usize) -> Self {
+        Self {
+            expanding: Vec::new(),
+            remaining_at_max_depth,
+            remaining_shallower: MAX_HINT_INTERFACE_EXPANSIONS,
+            expansion_count: 0,
+            union_depth: 0,
+            max_union_depth,
+            starved: false,
+            cut_at_union_depth: false,
+        }
+    }
+
+    /// The budget an interface at the current union depth expands from.
+    fn budget(&mut self) -> &mut usize {
+        if self.union_depth < self.max_union_depth {
+            &mut self.remaining_shallower
+        } else {
+            &mut self.remaining_at_max_depth
+        }
+    }
+
+    /// Whether an interface at the current union depth may expand, noting
+    /// when one may not.
+    fn can_expand(&mut self) -> bool {
+        let available = *self.budget() > 0;
+        self.starved |= !available;
+        available
+    }
+
+    /// Count an interface at the current union depth as expanded.
+    fn spend(&mut self) {
+        *self.budget() -= 1;
+        self.expansion_count += 1;
+    }
+}
+
+/// `ty` expanded by [`expand_inferred_interfaces`] through as many levels of
+/// nested unions as the budget covers. Each pass re-expands what the pass
+/// before did and gives the interfaces one union deeper the rest of
+/// [`MAX_HINT_INTERFACE_EXPANSIONS`]; the passes stop once one runs out of
+/// budget, cuts nothing at its depth, or leaves no budget for the next. So
+/// the members of an outer union all expand before any member of a union
+/// inside them: a wide union of interfaces that name it again
+/// (`Lit<T> | Add<T> | …`) expands its own members rather than the first
+/// member's descendants.
+fn expand_hint_interfaces(
+    ty: &Type,
+    inferred_generics: &[String],
+    types: super::assignable::TypeResolver,
+) -> Type {
+    let mut expansion = InterfaceExpansion::new(1, MAX_HINT_INTERFACE_EXPANSIONS);
+    let mut deepest = expand_inferred_interfaces(ty, inferred_generics, types, &mut expansion);
+    for max_union_depth in 2..=MAX_HINT_UNION_DEPTH {
+        let remaining = MAX_HINT_INTERFACE_EXPANSIONS.saturating_sub(expansion.expansion_count);
+        if expansion.starved || !expansion.cut_at_union_depth || remaining == 0 {
+            break;
+        }
+        expansion = InterfaceExpansion::new(max_union_depth, remaining);
+        deepest = expand_inferred_interfaces(ty, inferred_generics, types, &mut expansion);
+    }
+    deepest
+}
+
+/// `ty` with each data-only interface that names one of `inferred_generics`
+/// replaced by its fields, through object fields, array and tuple elements and
+/// union members: the positions a literal's own fields and elements take
+/// their hints from. An interface stays as it is when met again inside its
+/// own fields (so a recursive one expands once), when more unions than the
+/// walk allows enclose it, or once the walk has used its budget.
+fn expand_inferred_interfaces(
+    ty: &Type,
+    inferred_generics: &[String],
+    types: super::assignable::TypeResolver,
+    expansion: &mut InterfaceExpansion,
+) -> Type {
+    let expand = |inner: &Type, expansion: &mut InterfaceExpansion| {
+        expand_inferred_interfaces(inner, inferred_generics, types, expansion)
+    };
+    match ty.peel() {
+        interface @ Type::InterfaceRef { mangled, .. }
+            if !expansion.expanding.contains(mangled)
+                && super::expr::mentions_type_var(interface, &|var| {
+                    inferred_generics.iter().any(|name| name == var)
+                }) =>
+        {
+            if expansion.union_depth > expansion.max_union_depth {
+                expansion.cut_at_union_depth = true;
+                return ty.clone();
+            }
+            if !expansion.can_expand() {
+                return ty.clone();
+            }
+            let Some(shape) = super::assignable::expand_interface_data_shape(interface, types)
+            else {
+                return ty.clone();
+            };
+            expansion.spend();
+            expansion.expanding.push(mangled.clone());
+            let expanded = expand(&shape, expansion);
+            expansion.expanding.pop();
+            expanded
+        }
+        Type::Object { fields, index } => Type::Object {
+            fields: fields
+                .iter()
+                .map(|(name, field)| {
+                    let ty = expand(&field.ty, expansion);
+                    (
+                        name.clone(),
+                        crate::types::ObjectField {
+                            ty,
+                            ..field.clone()
+                        },
+                    )
+                })
+                .collect(),
+            index: index.clone(),
+        },
+        Type::Array(element) => Type::Array(Box::new(expand(element, expansion))),
+        Type::Tuple(elements) => Type::Tuple(
+            elements
+                .iter()
+                .map(|element| expand(element, expansion))
+                .collect(),
+        ),
+        Type::Union(members) => {
+            expansion.union_depth += 1;
+            let expanded = members
+                .iter()
+                .map(|member| expand(member, expansion))
+                .collect();
+            expansion.union_depth -= 1;
+            Type::union(expanded)
+        }
+        _ => ty.clone(),
+    }
+}
+
 /// The function type a parameter holds: itself through aliases, or the one
 /// function member of a union such as `((x: T) => U) | null`.
 fn function_part(ty: &Type) -> Option<&Type> {
@@ -1417,6 +2101,84 @@ fn function_part(ty: &Type) -> Option<&Type> {
             functions.next().is_none().then_some(function)
         }
         _ => None,
+    }
+}
+
+/// Bind the type parameters a deferred callback's parameters take that no
+/// other argument inferred to their whole-union fallback, or to `unknown`
+/// when there is none, as tsc fixes them before typing the callback:
+/// `Array.from({ length: 3 }, (_, i) => i)` types `_` as `unknown`.
+fn fix_callback_parameters(sub: &mut TypeParamSubstitution, param_ty: &Type, inferred: &[String]) {
+    let Some(Type::Function { params, .. }) = function_part(param_ty) else {
+        return;
+    };
+    for name in inferred {
+        let taken = params
+            .iter()
+            .any(|param| super::expr::mentions_type_var(param, &|var| var == name));
+        if taken && sub.get(name).is_none() {
+            let fixed = sub.whole_union_fallback(name).cloned();
+            sub.insert(name.clone(), fixed.unwrap_or(Type::Unknown));
+        }
+    }
+}
+
+/// An object literal argument whose fields bind a generic call's type
+/// parameters one at a time, for the fields after them.
+pub(crate) struct ObjectArgumentInference {
+    literal: ExprId,
+    /// The parameter's fields, in terms of the type parameters.
+    fields: std::collections::BTreeMap<String, crate::ObjectField>,
+    sub: TypeParamSubstitution,
+    /// Type parameters a callback field bound to just their whole-union
+    /// fallback, left unbound so a later field may bind them; see
+    /// [`TypeParamSubstitution::unbind_fallback_echoes`].
+    fallback_echoes: Vec<String>,
+}
+
+/// A coarse category of value, used to skip the union members a call's result
+/// can never be (a function result and `null`). `Uint8Array` is a primitive
+/// here: no generic result type can be one.
+#[derive(Clone, Copy, PartialEq)]
+enum ShapeKind {
+    Function,
+    /// An object, interface, class instance, array or tuple.
+    Structured,
+    Primitive,
+    /// A type parameter, `unknown`, an error: anything.
+    Any,
+}
+
+impl ShapeKind {
+    fn of(ty: &Type) -> Self {
+        match ty.peel() {
+            Type::Function { .. } => Self::Function,
+            // An array is assignable to an interface or object type of the
+            // fields it has (`{ length: number }`), so it is one kind with them.
+            Type::Object { .. }
+            | Type::InterfaceRef { .. }
+            | Type::ClassRef { .. }
+            | Type::Array(_)
+            | Type::Tuple(_) => Self::Structured,
+            Type::Number
+            | Type::NumberLiteral(_)
+            | Type::BigInt
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::Uint8Array
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::NumberEnum { .. }
+            | Type::StringEnum { .. }
+            | Type::Null
+            | Type::Void
+            | Type::Never => Self::Primitive,
+            _ => Self::Any,
+        }
+    }
+
+    fn could_be(self, other: Self) -> bool {
+        self == other || self == Self::Any || other == Self::Any
     }
 }
 
@@ -2082,21 +2844,18 @@ mod tests {
     }
 
     #[test]
-    fn under_constrained_method_generic_still_diagnoses() {
+    fn under_constrained_method_generic_is_unknown() {
         let (_, diags) = run(r#"
             interface Box<T> {
                 empty<U>(): U[];
             }
             function go(b: Box<number>): void {
-                b.empty();
+                const xs: unknown[] = b.empty();
             }
             "#);
         assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("cannot infer type parameter")
-                    && d.message.contains("`U`")),
-            "expected under-constrained diagnostic, got: {diags:?}",
+            diags.is_empty(),
+            "expected `U` to infer as `unknown`, got: {diags:?}"
         );
     }
 

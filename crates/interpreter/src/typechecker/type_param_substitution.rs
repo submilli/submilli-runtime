@@ -2,15 +2,43 @@
 
 use std::collections::BTreeMap;
 
-use crate::Type;
 use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
-use crate::typechecker::infer::assignable::{TypeResolver, assignable, expand_alias_ref};
+use crate::typechecker::infer::assignable::{
+    TypeResolver, assignable, expand_alias_ref, expand_interface_data_shape, rest_function_accepts,
+};
 use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
+use crate::{Span, Type};
 
 /// BTreeMap for deterministic ordering (stable snapshots and error messages).
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct TypeParamSubstitution {
     bindings: BTreeMap<String, Type>,
+    /// Bindings taken from the type a call's result is expected to have, which
+    /// an argument may still replace: as in tsc, what the arguments say comes
+    /// first. One stays replaceable until an argument agrees with it.
+    replaceable: std::collections::BTreeSet<String>,
+    /// For a type parameter in a union parameter whose other members took
+    /// every member of a union argument, that whole argument: tsc infers it at
+    /// the lowest priority, so it binds the type parameter only when nothing
+    /// else does (see [`Self::bind_whole_union_fallbacks`]).
+    whole_union_fallbacks: BTreeMap<String, Type>,
+    /// Union argument members that only closely matched a member of their
+    /// union parameter while its type parameter was unbound: each must fit
+    /// the parameter once inference is done, as tsc checks the argument then.
+    close_matches: Vec<CloseMatch>,
+}
+
+/// An argument member that must fit the union parameter `param` once
+/// inference is done, reported against `matched_member` if it does not:
+/// the member it closely matched, as `Box<string>` does `Box<number>`, or
+/// the type parameter whose fallback it fit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CloseMatch {
+    pub param: Type,
+    pub matched_member: Type,
+    pub arg: Type,
+    /// The call argument it came from, once the call has located it.
+    pub argument_span: Option<Span>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +68,9 @@ impl TypeParamSubstitution {
                 .zip(type_args.iter())
                 .map(|(name, ty)| (name.clone(), ty.clone()))
                 .collect(),
+            replaceable: Default::default(),
+            whole_union_fallbacks: Default::default(),
+            close_matches: Vec::new(),
         }
     }
 
@@ -48,7 +79,158 @@ impl TypeParamSubstitution {
     /// receiver and is correct only when that declaration is the one the member
     /// was found on.
     pub fn from_bindings(bindings: BTreeMap<String, Type>) -> Self {
-        Self { bindings }
+        Self {
+            bindings,
+            replaceable: Default::default(),
+            whole_union_fallbacks: Default::default(),
+            close_matches: Vec::new(),
+        }
+    }
+
+    /// Mark the bindings made since `before` as taken from the call's expected
+    /// result type, so an argument may replace them.
+    pub fn mark_from_expected_result(&mut self, before: &TypeParamSubstitution) {
+        for name in self.bindings.keys() {
+            if !before.bindings.contains_key(name) {
+                self.replaceable.insert(name.clone());
+            }
+        }
+    }
+
+    /// The argument members that closely matched a union parameter member
+    /// and wait to be checked once inference is done, each once; none are
+    /// left after.
+    pub fn take_close_matches(&mut self) -> Vec<CloseMatch> {
+        let mut distinct: Vec<CloseMatch> = Vec::new();
+        for close_match in std::mem::take(&mut self.close_matches) {
+            if !distinct.contains(&close_match) {
+                distinct.push(close_match);
+            }
+        }
+        distinct
+    }
+
+    /// Locate the close matches recorded after the first `count` in the
+    /// call argument at `argument_span`.
+    pub fn locate_close_matches_after(&mut self, count: usize, argument_span: Span) {
+        for close_match in self.close_matches.iter_mut().skip(count) {
+            close_match.argument_span = Some(argument_span);
+        }
+    }
+
+    /// How many close matches wait to be checked.
+    pub fn close_match_count(&self) -> usize {
+        self.close_matches.len()
+    }
+
+    /// Drop the close matches recorded after the first `count`.
+    pub fn forget_close_matches_after(&mut self, count: usize) {
+        self.close_matches.truncate(count);
+    }
+
+    /// The whole union argument that stands in for `name` when nothing else
+    /// binds it.
+    pub fn whole_union_fallback(&self, name: &str) -> Option<&Type> {
+        self.whole_union_fallbacks.get(name)
+    }
+
+    /// Whether a whole union argument stands in for `name`.
+    pub fn has_whole_union_fallback(&self, name: &str) -> bool {
+        self.whole_union_fallbacks.contains_key(name)
+    }
+
+    /// `ty` with every unbound type parameter that has a whole-union
+    /// fallback replaced by `never`, so only the rest of `ty` can take a
+    /// value; None when `ty` names no such type parameter.
+    pub fn without_fallback_type_params(&self, ty: &Type, limits: &TypeLimits) -> Option<Type> {
+        let names: Vec<&String> = self
+            .whole_union_fallbacks
+            .keys()
+            .filter(|name| {
+                self.is_unbound(name)
+                    && super::infer::expr::mentions_type_var(ty, &|var| var == name.as_str())
+            })
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
+        let mut concrete = self.clone();
+        for name in names {
+            concrete.bindings.insert(name.clone(), Type::Never);
+        }
+        Some(concrete.apply_or_record(ty, limits))
+    }
+
+    /// Bind each type parameter still unbound that a whole union argument
+    /// stands in for, as tsc does with its lowest-priority inference.
+    pub fn bind_whole_union_fallbacks(&mut self) {
+        self.bind_whole_union_fallbacks_where(|_| true);
+    }
+
+    /// [`Self::bind_whole_union_fallbacks`] for the type parameters `names`.
+    pub fn bind_whole_union_fallbacks_named(&mut self, names: &[String]) {
+        self.bind_whole_union_fallbacks_where(|name| names.iter().any(|each| each == name));
+    }
+
+    /// [`Self::bind_whole_union_fallbacks`] for the type parameters `types`
+    /// mention.
+    pub fn bind_whole_union_fallbacks_in(&mut self, types: &[Type]) {
+        self.bind_whole_union_fallbacks_where(|name| {
+            types
+                .iter()
+                .any(|ty| super::infer::expr::mentions_type_var(ty, &|var| var == name))
+        });
+    }
+
+    fn bind_whole_union_fallbacks_where(&mut self, applies: impl Fn(&str) -> bool) {
+        let unbound: Vec<(String, Type)> = self
+            .whole_union_fallbacks
+            .iter()
+            .filter(|(name, _)| applies(name) && self.is_unbound(name))
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect();
+        self.bindings.extend(unbound);
+    }
+
+    /// Unbind, and return, each type parameter unbound in `before` that is
+    /// now bound to just its whole-union fallback, as a callback field typed
+    /// from the fallback binds it: the fallback stays the lowest-priority
+    /// inference, so a later field may still bind the type parameter.
+    pub fn unbind_fallback_echoes(&mut self, before: &TypeParamSubstitution) -> Vec<String> {
+        let echoes: Vec<String> = self
+            .whole_union_fallbacks
+            .iter()
+            .filter(|(name, fallback)| {
+                before.is_unbound(name) && self.bindings.get(name.as_str()) == Some(fallback)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in &echoes {
+            self.bindings.remove(name);
+        }
+        echoes
+    }
+
+    /// Whether `name` has no binding yet, or is bound only to itself.
+    fn is_unbound(&self, name: &str) -> bool {
+        match self.bindings.get(name) {
+            None => true,
+            Some(bound) => matches!(bound.peel(), Type::TypeVar(other) if other == name),
+        }
+    }
+
+    /// Whether `ty` mentions a type parameter whose binding an argument may
+    /// still replace.
+    pub fn mentions_replaceable_binding(&self, ty: &Type) -> bool {
+        super::infer::expr::mentions_type_var(ty, &|name| self.replaceable.contains(name))
+    }
+
+    /// Make the replaceable bindings that `ty` mentions final, so no argument
+    /// replaces them.
+    pub fn keep_replaceable_bindings(&mut self, ty: &Type) {
+        let mentioned =
+            |name: &String| super::infer::expr::mentions_type_var(ty, &|var| var == name);
+        self.replaceable.retain(|name| !mentioned(name));
     }
 
     pub fn insert(&mut self, name: String, ty: Type) {
@@ -120,7 +302,25 @@ impl TypeParamSubstitution {
         arg_ty: &Type,
         types: TypeResolver<'_>,
     ) -> Result<(), UnifyError> {
-        Unifier::new(self, Some(types), types.limits).unify(param_ty, arg_ty)
+        self.keeping_close_matches_on_success(|sub| {
+            Unifier::new(sub, Some(types), types.limits).unify(param_ty, arg_ty)
+        })
+    }
+
+    /// Run `attempt` and keep the close matches it records only if it
+    /// succeeds: a failed unification's mismatch is reported already, and
+    /// its members never took part.
+    #[allow(clippy::result_large_err)]
+    fn keeping_close_matches_on_success(
+        &mut self,
+        attempt: impl FnOnce(&mut Self) -> Result<(), UnifyError>,
+    ) -> Result<(), UnifyError> {
+        let close_matches_before = self.close_match_count();
+        let unified = attempt(self);
+        if unified.is_err() {
+            self.forget_close_matches_after(close_matches_before);
+        }
+        unified
     }
 
     /// [`unify`](Self::unify) for a **call-argument** position.
@@ -145,10 +345,22 @@ impl TypeParamSubstitution {
         {
             return Ok(());
         }
-        let mut unifier = Unifier::new(self, Some(types), types.limits);
-        unifier.subtype_widening = true;
-        unifier.unify(param_ty, arg_ty)
+        self.keeping_close_matches_on_success(|sub| {
+            let mut unifier = Unifier::new(sub, Some(types), types.limits);
+            unifier.subtype_widening = true;
+            unifier.is_argument = true;
+            unifier.unify(param_ty, arg_ty)
+        })
     }
+}
+
+/// A [`Unifier`]'s state before a speculative attempt.
+struct Snapshot {
+    bindings: BTreeMap<String, Type>,
+    replaceable: std::collections::BTreeSet<String>,
+    whole_union_fallbacks: BTreeMap<String, Type>,
+    close_matches_len: usize,
+    assumed_len: usize,
 }
 
 /// The mutable state of one `unify` call: the bindings being built, the
@@ -166,6 +378,12 @@ struct Unifier<'a> {
     /// [`unify_argument`](TypeParamSubstitution::unify_argument), and cleared
     /// while descending into a function *parameter*, which is contravariant.
     subtype_widening: bool,
+    /// Whether this unifies a call argument, which replaces a binding taken
+    /// from the expected result type when it doesn't fit it.
+    is_argument: bool,
+    /// Whether the walk is inside a function type's parameter, where an
+    /// argument may be wider than the type parameter's binding.
+    contravariant: bool,
 }
 
 impl<'a> Unifier<'a> {
@@ -205,10 +423,18 @@ impl<'a> Unifier<'a> {
                     return Ok(());
                 }
                 let arg_resolved = self.sub.apply_or_record(arg_ty, self.limits);
+                // Unified with an argument, a replaceable binding is the
+                // arguments' own from here on, whether or not it is replaced.
+                let replaceable = self.sub.replaceable.remove(name) && self.is_argument;
                 // Recurse instead of `==` to peel aliases at every level; remap to Conflict to pin the offending param.
                 return match self.unify(&resolved, &arg_resolved) {
                     Ok(()) => Ok(()),
                     Err(_) if self.accepts_as_subtype(&arg_resolved, &resolved) => Ok(()),
+                    Err(_) if self.accepts_as_supertype(&arg_resolved, &resolved) => Ok(()),
+                    Err(_) if replaceable => {
+                        self.sub.bindings.insert(name.clone(), arg_ty.clone());
+                        Ok(())
+                    }
                     Err(_) => Err(UnifyError::Conflict {
                         name: name.clone(),
                         prev: resolved,
@@ -254,6 +480,9 @@ impl<'a> Unifier<'a> {
                     ..
                 },
             ) => {
+                if *rest_b && !rest_a {
+                    return self.unify_rest_function(param_ty, arg_ty, pa, pb, ra, rb);
+                }
                 if !Type::function_arity_fits(pb.len(), pa.len(), *rest_a || *rest_b) {
                     return Err(UnifyError::Mismatch {
                         expected: param_ty.clone(),
@@ -261,7 +490,7 @@ impl<'a> Unifier<'a> {
                     });
                 }
                 for (p, a) in pa.iter().zip(pb.iter()) {
-                    self.without_subtype_widening(|u| u.unify(p, a))?;
+                    self.in_function_parameter(|u| u.unify(p, a))?;
                 }
                 self.unify(ra, rb)
             }
@@ -337,19 +566,53 @@ impl<'a> Unifier<'a> {
                     ..
                 },
             ) => {
-                if ma != mb || aa.len() != ab.len() {
-                    return Err(UnifyError::Mismatch {
-                        expected: param_ty.clone(),
-                        got: arg_ty.clone(),
-                    });
+                let mismatch = || UnifyError::Mismatch {
+                    expected: param_ty.clone(),
+                    got: arg_ty.clone(),
+                };
+                if ma != mb {
+                    return if self.accepts_as_supertype(arg_ty, param_ty) {
+                        Ok(())
+                    } else {
+                        Err(mismatch())
+                    };
+                }
+                if aa.len() != ab.len() {
+                    return Err(mismatch());
                 }
                 for (a, b) in aa.iter().zip(ab.iter()) {
                     self.unify(a, b)?;
                 }
                 Ok(())
             }
-            // Two-pass union-vs-union: pair matching members first, then unify leftovers in order.
+            // A data-only interface and an object type are mutually assignable
+            // (spec §2.3), so one infers from the other through its fields.
+            (Type::InterfaceRef { .. }, Type::Object { .. })
+            | (Type::Object { .. }, Type::InterfaceRef { .. }) => {
+                let expanded = self.types.and_then(|types| {
+                    let param = expand_interface_data_shape(param_ty, types);
+                    let arg = expand_interface_data_shape(arg_ty, types);
+                    Some((
+                        param.unwrap_or_else(|| param_ty.clone()),
+                        arg.unwrap_or_else(|| arg_ty.clone()),
+                    ))
+                    .filter(|(param, arg)| param != param_ty || arg != arg_ty)
+                });
+                match expanded {
+                    Some((param, arg)) => self.unify(&param, &arg),
+                    None => Err(UnifyError::Mismatch {
+                        expected: param_ty.clone(),
+                        got: arg_ty.clone(),
+                    }),
+                }
+            }
+            // Union-vs-union: a lone unbound type parameter takes what its
+            // siblings leave (see `unify_union_into_lone_type_var`); otherwise
+            // two passes pair matching members first, then unify leftovers in order.
             (Type::Union(pa), Type::Union(pb)) => {
+                if let Some(unified) = self.unify_union_into_lone_type_var(pa, pb) {
+                    return unified;
+                }
                 if pa.len() != pb.len() {
                     return Err(UnifyError::Mismatch {
                         expected: param_ty.clone(),
@@ -358,7 +621,7 @@ impl<'a> Unifier<'a> {
                 }
                 let mut leftover_pa: Vec<&Type> = Vec::new();
                 let mut leftover_pb: Vec<Type> = pb.to_vec();
-                for a in pa {
+                for a in self.fallback_type_vars_last(pa) {
                     let resolved_a = self.sub.apply_or_record(a, self.limits);
                     // Snapshot and roll back on failure — speculative pairing.
                     let mut paired: Option<usize> = None;
@@ -403,7 +666,13 @@ impl<'a> Unifier<'a> {
                     }
                     self.restore(snap);
                 }
-                for m in pa {
+                if self.unify_by_lone_type_var_rule(pa, arg_ty) {
+                    return Ok(());
+                }
+                if self.defer_to_fitting_fallback(pa, arg_ty) {
+                    return Ok(());
+                }
+                for m in self.fallback_type_vars_last(pa) {
                     let snap = self.snapshot();
                     if self.unify(m, arg_ty).is_ok() {
                         return Ok(());
@@ -432,6 +701,8 @@ impl<'a> Unifier<'a> {
             _ => {
                 if param_ty == arg_ty
                     || (matches!(arg_ty, Type::Never) && self.accepts_as_subtype(arg_ty, param_ty))
+                    || self.is_literal_of(arg_ty, param_ty)
+                    || self.accepts_as_supertype(arg_ty, param_ty)
                 {
                     Ok(())
                 } else {
@@ -454,6 +725,8 @@ impl<'a> Unifier<'a> {
             limits,
             assumed_pairs: Vec::new(),
             subtype_widening: false,
+            is_argument: false,
+            contravariant: false,
         }
     }
 
@@ -464,6 +737,81 @@ impl<'a> Unifier<'a> {
             return false;
         };
         self.subtype_widening && assignable(arg, bound, types)
+    }
+
+    /// Unify a fixed-arity function type, `param_ty`, with an argument that
+    /// has a rest parameter: each fixed position against the argument's
+    /// parameter there, and each position past them against the rest
+    /// parameter's element type (see [`rest_function_accepts`]).
+    #[allow(clippy::result_large_err)]
+    fn unify_rest_function(
+        &mut self,
+        param_ty: &Type,
+        arg_ty: &Type,
+        params: &[Type],
+        arg_params: &[Type],
+        ret: &Type,
+        arg_ret: &Type,
+    ) -> Result<(), UnifyError> {
+        let mut result = Ok(());
+        let fits = rest_function_accepts(arg_params, params, |passed, declared| {
+            let unified = self.in_function_parameter(|u| u.unify(passed, declared));
+            let ok = unified.is_ok();
+            if result.is_ok() {
+                result = unified;
+            }
+            ok
+        });
+        if !fits {
+            return Err(result.err().unwrap_or(UnifyError::Mismatch {
+                expected: param_ty.clone(),
+                got: arg_ty.clone(),
+            }));
+        }
+        self.unify(ret, arg_ret)
+    }
+
+    /// Whether `arg` is a literal type of the primitive `param`, which binds
+    /// nothing and is assignable to it: `{ length: n }` with `const n = 4` is
+    /// a `{ length: number }`.
+    fn is_literal_of(&self, arg: &Type, param: &Type) -> bool {
+        let Some(types) = self.types else {
+            return false;
+        };
+        matches!(param, Type::Number | Type::String | Type::Boolean)
+            && is_primitive_literal(arg)
+            && assignable(arg, param, types)
+    }
+
+    /// Whether an argument's function parameter `arg` that failed to unify with
+    /// the parameter type `param` is still acceptable, because `param` is
+    /// assignable to it: `[5].map((a: unknown, i: unknown) => ...)` passes each
+    /// `number` to a parameter that takes any value, and `(a: Animal) => ...`
+    /// takes each `Dog`. `param` must be fully known: a type parameter still
+    /// unbound in it could later bind to something `arg` doesn't accept.
+    fn accepts_as_supertype(&self, arg: &Type, param: &Type) -> bool {
+        let Some(types) = self.types else {
+            return false;
+        };
+        if !self.is_argument || !self.contravariant {
+            return false;
+        }
+        let known_param = self.sub.apply_or_record(param, self.limits);
+        !super::infer::expr::type_contains_type_var(&known_param)
+            && assignable(&known_param, arg, types)
+    }
+
+    /// Unify within a function type's parameter: subtype-widening stops (see
+    /// [`Self::without_subtype_widening`]), and the variance flips.
+    #[allow(clippy::result_large_err)]
+    fn in_function_parameter(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<(), UnifyError>,
+    ) -> Result<(), UnifyError> {
+        self.contravariant = !self.contravariant;
+        let out = self.without_subtype_widening(f);
+        self.contravariant = !self.contravariant;
+        out
     }
 
     /// Run `f` with subtype-widening off — function parameters are
@@ -485,16 +833,333 @@ impl<'a> Unifier<'a> {
         out
     }
 
+    /// tsc's union-to-union rule when exactly one of `params` is a type
+    /// parameter not yet bound; None otherwise, so the members pair up
+    /// instead. Each member of `args` that unifies with one of the other
+    /// members of `params` is absorbed by it. A member that only
+    /// [`closely_matches`] another member, as `Box<string>` does `Box<number>`,
+    /// is not given to the type parameter, as tsc pairs them (a parameter
+    /// member identical to some argument member is not closely matched with
+    /// others). Then:
+    /// - if members are left over, they bind the type parameter (`T | null`
+    ///   with `"on" | "off" | null` binds `T` to `"on" | "off"`); once it is
+    ///   bound, by them or by absorbing, each closely matched member must fit
+    ///   some member of `params`;
+    /// - otherwise the whole argument is the type parameter's fallback, used
+    ///   only when nothing else binds it, and each closely matched member
+    ///   waits to be checked once inference is done (see
+    ///   [`TypeParamSubstitution::take_close_matches`]).
+    ///
+    /// In a callback's parameter (a contravariant position), a closely
+    /// matched member is dropped instead: the parameter only has to accept
+    /// what the slot passes.
+    #[allow(clippy::result_large_err)]
+    fn unify_union_into_lone_type_var(
+        &mut self,
+        params: &[Type],
+        args: &[Type],
+    ) -> Option<Result<(), UnifyError>> {
+        let (type_var, others) = self.split_lone_unbound_type_var(params)?;
+        let pairable: Vec<&Type> = others
+            .iter()
+            .copied()
+            .filter(|other| !args.iter().any(|arg| arg.peel() == other.peel()))
+            .collect();
+        let mut rest = Vec::new();
+        let mut closely_matched = Vec::new();
+        for arg in args {
+            if others
+                .iter()
+                .any(|other| self.unifies_or_rolls_back(other, arg))
+            {
+                continue;
+            }
+            match pairable.iter().find(|other| closely_matches(other, arg)) {
+                Some(_) if self.contravariant => {}
+                Some(other) => closely_matched.push((*other, arg)),
+                None => rest.push(arg.clone()),
+            }
+        }
+        if !rest.is_empty() {
+            if let Err(error) = self.unify(type_var, &Type::union(rest)) {
+                return Some(Err(error));
+            }
+            return Some(self.check_closely_matched(params, &closely_matched));
+        }
+        // Absorbing argument members into another member, as `Box<T>` does
+        // `Box<number>`, may have bound the type parameter after all.
+        if !self.is_unbound_type_var(type_var) {
+            return Some(self.check_closely_matched(params, &closely_matched));
+        }
+        for (sibling, arg) in closely_matched {
+            self.record_close_match(params, sibling, arg);
+        }
+        self.offer_whole_union_fallback(type_var, Type::union(args.to_vec()));
+        Some(Ok(()))
+    }
+
+    /// Defer `arg` when it fits the whole-union fallback of a member that is
+    /// an unbound type parameter: tsc takes it as one more candidate of the
+    /// fallback's priority, which the fallback already covers, so it binds
+    /// nothing now and is checked against `params` once inference is done.
+    /// Returns whether it deferred `arg`.
+    fn defer_to_fitting_fallback(&mut self, params: &[Type], arg: &Type) -> bool {
+        if !self.infers_from_covariant_argument() {
+            return false;
+        }
+        let fallbacks: Vec<(&Type, Type)> = params
+            .iter()
+            .filter_map(|member| Some((member, self.unbound_fallback_of(member)?.clone())))
+            .collect();
+        let fitting = fallbacks
+            .into_iter()
+            .find(|(_, fallback)| self.would_unify(fallback, arg));
+        let Some((type_var, _)) = fitting else {
+            return false;
+        };
+        self.record_close_match(params, type_var, arg);
+        self.offer_to_type_vars_without_fallback(params, arg);
+        true
+    }
+
+    /// Offer `arg` as the fallback of each unbound type parameter in
+    /// `params` without one of its own: tsc gives it the same low-priority
+    /// candidate, so a later argument still binds it ahead of `arg`.
+    fn offer_to_type_vars_without_fallback(&mut self, params: &[Type], arg: &Type) {
+        // Collected first: offering needs `self` mutably.
+        let without_fallback: Vec<&Type> = params
+            .iter()
+            .filter(|member| self.is_unbound_type_var_without_fallback(member))
+            .collect();
+        for type_var in without_fallback {
+            self.offer_whole_union_fallback(type_var, arg.clone());
+        }
+    }
+
+    /// `members` in order to try an argument against, those that are an
+    /// unbound type parameter with a whole-union fallback last: tsc's first
+    /// candidate for it is the fallback, so a later argument goes to another
+    /// member that takes it first.
+    fn fallback_type_vars_last<'m>(&self, members: &'m [Type]) -> Vec<&'m Type> {
+        if !self.infers_from_covariant_argument() {
+            return members.iter().collect();
+        }
+        let (last, first): (Vec<&Type>, Vec<&Type>) = members
+            .iter()
+            .partition(|member| self.is_unbound_fallback_type_var(member));
+        first.into_iter().chain(last).collect()
+    }
+
+    /// The one member of `params` that is a type parameter not yet bound,
+    /// and the other members; None when there is no such member or more
+    /// than one. In an argument, unbound type parameters with a whole-union
+    /// fallback are left out when another one is unbound: tsc's first
+    /// candidate for them is their fallback, so the other one takes what
+    /// the remaining members leave.
+    fn split_lone_unbound_type_var<'p>(
+        &self,
+        params: &'p [Type],
+    ) -> Option<(&'p Type, Vec<&'p Type>)> {
+        let unbound: Vec<&Type> = params
+            .iter()
+            .filter(|member| self.is_unbound_type_var(member))
+            .collect();
+        let candidates: Vec<&Type> = if unbound.len() > 1 && self.infers_from_covariant_argument() {
+            unbound
+                .into_iter()
+                .filter(|member| self.is_unbound_type_var_without_fallback(member))
+                .collect()
+        } else {
+            unbound
+        };
+        let [type_var] = candidates[..] else {
+            return None;
+        };
+        let others = params
+            .iter()
+            .filter(|member| {
+                !std::ptr::eq(*member, type_var) && !self.is_unbound_fallback_type_var(member)
+            })
+            .collect();
+        Some((type_var, others))
+    }
+
+    /// tsc's rule for a non-union argument against a union parameter whose
+    /// members include exactly one unbound type parameter. Returns true when
+    /// it unified `arg`, false when the caller should try each member in
+    /// order. It unifies `arg` when either:
+    /// - the type parameter has a fallback and another member takes `arg`
+    ///   (see [`Self::unify_with_member_beside_fallback`]); or
+    /// - `arg` [`closely_matches`] another member without unifying with any,
+    ///   as `Box<boolean>` does `Box<number>` in `T | Box<number>`. It is then
+    ///   treated like a union argument whose members all closely matched:
+    ///   recorded as a close match, checked once inference is done, and
+    ///   offered as the type parameter's fallback.
+    fn unify_by_lone_type_var_rule(&mut self, params: &[Type], arg: &Type) -> bool {
+        if !self.infers_from_covariant_argument() {
+            return false;
+        }
+        let Some((type_var, others)) = self.split_lone_unbound_type_var(params) else {
+            return false;
+        };
+        if self.unify_with_member_beside_fallback(type_var, &others, arg) {
+            return true;
+        }
+        let Some(sibling) = others.iter().find(|other| closely_matches(other, arg)) else {
+            return false;
+        };
+        if others.iter().any(|other| self.would_unify(other, arg)) {
+            return false;
+        }
+        self.record_close_match(params, sibling, arg);
+        self.offer_whole_union_fallback(type_var, arg.clone());
+        true
+    }
+
+    /// Unify `arg` with one of `others`, keeping its bindings, when
+    /// `type_var` has a whole-union fallback; returns whether one took it.
+    /// tsc counts such an argument at most as another candidate of the
+    /// fallback's priority, so it must not bind the type parameter ahead of
+    /// the fallback.
+    fn unify_with_member_beside_fallback(
+        &mut self,
+        type_var: &Type,
+        others: &[&Type],
+        arg: &Type,
+    ) -> bool {
+        if !self.is_unbound_fallback_type_var(type_var) {
+            return false;
+        }
+        others
+            .iter()
+            .any(|other| self.unifies_or_rolls_back(other, arg))
+    }
+
+    /// Record that `arg` must fit the union parameter `params` once
+    /// inference is done, to be reported against `matched_member` if not.
+    fn record_close_match(&mut self, params: &[Type], matched_member: &Type, arg: &Type) {
+        self.sub.close_matches.push(CloseMatch {
+            param: Type::union(params.to_vec()),
+            matched_member: matched_member.clone(),
+            arg: arg.clone(),
+            argument_span: None,
+        });
+    }
+
+    /// Offer `candidate` as `type_var`'s whole-union fallback. As tsc picks
+    /// the common supertype of candidates of the same priority, `candidate`
+    /// replaces the existing fallback when that fallback is assignable to
+    /// it; otherwise the existing fallback stays.
+    fn offer_whole_union_fallback(&mut self, type_var: &Type, candidate: Type) {
+        let Type::TypeVar(name) = type_var.peel() else {
+            return;
+        };
+        if let Some(existing) = self.sub.whole_union_fallbacks.get(name).cloned()
+            && !self.would_unify(&candidate, &existing)
+        {
+            return;
+        }
+        self.sub
+            .whole_union_fallbacks
+            .insert(name.clone(), candidate);
+    }
+
+    /// Check each closely matched argument member against the whole
+    /// parameter now that its type parameter is bound, as tsc checks the
+    /// argument once inference is done: one no member takes is reported
+    /// against the member it closely matched.
+    #[allow(clippy::result_large_err)]
+    fn check_closely_matched(
+        &mut self,
+        params: &[Type],
+        closely_matched: &[(&Type, &Type)],
+    ) -> Result<(), UnifyError> {
+        for (other, arg) in closely_matched {
+            if !params
+                .iter()
+                .any(|param| self.unifies_or_rolls_back(param, arg))
+            {
+                return self.unify(other, arg);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `ty` is a type parameter with no binding yet that a whole
+    /// union argument stands in for.
+    fn is_unbound_fallback_type_var(&self, ty: &Type) -> bool {
+        self.unbound_fallback_of(ty).is_some()
+    }
+
+    /// The whole-union fallback of `ty` when it is a type parameter with no
+    /// binding yet.
+    fn unbound_fallback_of(&self, ty: &Type) -> Option<&Type> {
+        if !self.is_unbound_type_var(ty) {
+            return None;
+        }
+        match ty.peel() {
+            Type::TypeVar(name) => self.sub.whole_union_fallback(name),
+            _ => None,
+        }
+    }
+
+    /// Whether `ty` is a type parameter with no binding yet and no
+    /// whole-union fallback.
+    fn is_unbound_type_var_without_fallback(&self, ty: &Type) -> bool {
+        self.is_unbound_type_var(ty) && !self.is_unbound_fallback_type_var(ty)
+    }
+
+    /// Whether the unifier is inferring from a call argument outside any
+    /// callback parameter, where tsc's candidate priorities apply.
+    fn infers_from_covariant_argument(&self) -> bool {
+        self.is_argument && !self.contravariant
+    }
+
+    /// Whether `ty` is a type parameter with no binding yet, or bound only to
+    /// itself.
+    fn is_unbound_type_var(&self, ty: &Type) -> bool {
+        matches!(ty.peel(), Type::TypeVar(name) if self.sub.is_unbound(name))
+    }
+
+    /// Whether `param_ty` unifies with `arg_ty`, keeping the bindings that
+    /// took when it does and undoing them when it doesn't.
+    fn unifies_or_rolls_back(&mut self, param_ty: &Type, arg_ty: &Type) -> bool {
+        let snap = self.snapshot();
+        let unified = self.unify(param_ty, arg_ty).is_ok();
+        if !unified {
+            self.restore(snap);
+        }
+        unified
+    }
+
+    /// Whether `param_ty` unifies with `arg_ty`, undoing the bindings either
+    /// way.
+    fn would_unify(&mut self, param_ty: &Type, arg_ty: &Type) -> bool {
+        let snap = self.snapshot();
+        let unified = self.unify(param_ty, arg_ty).is_ok();
+        self.restore(snap);
+        unified
+    }
+
     /// A speculative attempt's rollback point. The assumption set rolls back
     /// with the bindings: a pair assumed to hold inside an attempt that failed
     /// was never proved, and leaving it behind would let a later mismatch pass.
-    fn snapshot(&self) -> (BTreeMap<String, Type>, usize) {
-        (self.sub.bindings.clone(), self.assumed_pairs.len())
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            bindings: self.sub.bindings.clone(),
+            replaceable: self.sub.replaceable.clone(),
+            whole_union_fallbacks: self.sub.whole_union_fallbacks.clone(),
+            close_matches_len: self.sub.close_matches.len(),
+            assumed_len: self.assumed_pairs.len(),
+        }
     }
 
-    fn restore(&mut self, (bindings, assumed_len): (BTreeMap<String, Type>, usize)) {
-        self.sub.bindings = bindings;
-        self.assumed_pairs.truncate(assumed_len);
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.sub.bindings = snapshot.bindings;
+        self.sub.replaceable = snapshot.replaceable;
+        self.sub.whole_union_fallbacks = snapshot.whole_union_fallbacks;
+        self.sub.close_matches.truncate(snapshot.close_matches_len);
+        self.assumed_pairs.truncate(snapshot.assumed_len);
     }
 
     /// Rehydrate any recursion back-edge in `ty` to its inline form. A no-op
@@ -603,6 +1268,28 @@ impl TypeParamSubstitution {
         } else {
             Ok(Err(unbound))
         }
+    }
+}
+
+fn is_primitive_literal(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
+    )
+}
+
+/// Whether `arg` names the same declaration as the union member `param`
+/// with other type arguments, as `Box<string>` does `Box<number>`: tsc's
+/// "closely matched" rule, which pairs such a member with that sibling rather
+/// than giving it to the union's type parameter. Arrays match arrays of the
+/// same mutability, as `Array` and `ReadonlyArray` are distinct in tsc;
+/// tuples, which name no declaration, match nothing.
+fn closely_matches(param: &Type, arg: &Type) -> bool {
+    match (param.peel(), arg.peel()) {
+        (Type::InterfaceRef { mangled: p, .. }, Type::InterfaceRef { mangled: a, .. }) => p == a,
+        (Type::ClassRef { mangled: p, .. }, Type::ClassRef { mangled: a, .. }) => p == a,
+        (Type::Array(_), Type::Array(_)) => param.is_readonly_array() == arg.is_readonly_array(),
+        _ => false,
     }
 }
 

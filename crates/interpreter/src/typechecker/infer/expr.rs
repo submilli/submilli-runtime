@@ -402,26 +402,37 @@ pub(super) fn spread_element_type(peeled_source: &Type) -> Option<Type> {
 /// parameters must be pinned by the enclosing call — from its arguments or its
 /// expected type — rather than at the receiver in isolation.
 pub(crate) fn type_contains_type_var(ty: &Type) -> bool {
+    mentions_type_var(ty, &|_| true)
+}
+
+/// Whether a value expected as `hint` is in a type parameter's position, which
+/// doesn't ask for a literal type: a fresh literal there widens before it
+/// binds anything, as in tsc. `h({ k: c })` with `h<K>(o: { k: K }): K` and
+/// `const c = "a"` binds `string`, and `new Map([[c, 1]])` is a
+/// `Map<string, number>`.
+pub(super) fn is_type_parameter_position(hint: &Type) -> bool {
+    matches!(hint.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
+}
+
+/// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
+pub(crate) fn mentions_type_var(ty: &Type, wanted: &impl Fn(&str) -> bool) -> bool {
+    let recurse = |ty: &Type| mentions_type_var(ty, wanted);
     match ty {
-        Type::TypeVar(_) => true,
-        Type::Array(elem) | Type::Readonly(elem) => type_contains_type_var(elem),
-        Type::Tuple(elems) => elems.iter().any(type_contains_type_var),
-        Type::Function { params, ret, .. } => {
-            params.iter().any(type_contains_type_var) || type_contains_type_var(ret)
-        }
+        Type::TypeVar(name) => wanted(name),
+        Type::Array(elem) | Type::Readonly(elem) => recurse(elem),
+        Type::Tuple(elems) => elems.iter().any(recurse),
+        Type::Function { params, ret, .. } => params.iter().any(recurse) || recurse(ret),
         Type::Object { fields, index } => {
-            index
-                .as_ref()
-                .is_some_and(|i| type_contains_type_var(&i.value))
-                || fields.values().any(|f| type_contains_type_var(&f.ty))
+            index.as_ref().is_some_and(|i| recurse(&i.value))
+                || fields.values().any(|f| recurse(&f.ty))
         }
         Type::InterfaceRef { args, .. }
         | Type::ClassRef { args, .. }
-        | Type::AliasRef { args, .. } => args.iter().any(type_contains_type_var),
+        | Type::AliasRef { args, .. } => args.iter().any(recurse),
         Type::Alias {
             args, ty: inner, ..
-        } => args.iter().any(type_contains_type_var) || type_contains_type_var(inner),
-        Type::Union(members) => members.iter().any(type_contains_type_var),
+        } => args.iter().any(recurse) || recurse(inner),
+        Type::Union(members) => members.iter().any(recurse),
         _ => false,
     }
 }
@@ -489,6 +500,8 @@ impl Inferer<'_> {
         // Only this expression keeps its literal type; whatever it infers
         // inside starts out widening again, unless it passes the request on.
         let keeps_literal = std::mem::take(&mut self.keeps_literal_types);
+        let keeps_returned_literals =
+            std::mem::take(&mut self.next_function_keeps_returned_literals);
         // A hint is read structurally — an object literal takes its per-field
         // hints from the expected type's fields — and `peel` stops at a
         // recursion back-edge, which carries no body to read. Rehydrating first
@@ -511,7 +524,13 @@ impl Inferer<'_> {
             .kind
             .clone()
         {
-            return self.infer_function_expression(name, function, this_type, expected);
+            return self.infer_function_expression(
+                name,
+                function,
+                this_type,
+                expected,
+                keeps_returned_literals,
+            );
         }
         let expr = self
             .ast
@@ -576,10 +595,11 @@ impl Inferer<'_> {
                 args,
             } => self.infer_call_running_invoked_body(callee, type_args, args, expected, span),
             ExprKind::Paren(inner) => {
+                self.next_function_keeps_returned_literals = keeps_returned_literals;
                 return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
             }
             ExprKind::ObjectLiteral { members } => {
-                self.infer_object_literal(members, expected, span)
+                self.infer_object_literal(expr_id, members, expected, span)
             }
             ExprKind::ArrayLiteral { elements } => {
                 self.infer_array_literal(elements, expected, span)
@@ -601,8 +621,15 @@ impl Inferer<'_> {
                 type_predicate,
                 body,
             } => {
-                let (kind, ty, reported) =
-                    self.infer_arrow(params, return_type, type_predicate, body, expected, span)?;
+                let (kind, ty, reported) = self.infer_arrow(
+                    params,
+                    return_type,
+                    type_predicate,
+                    body,
+                    expected,
+                    keeps_returned_literals,
+                    span,
+                )?;
                 arrow_reported = reported;
                 Ok((kind, ty))
             }
@@ -727,6 +754,7 @@ impl Inferer<'_> {
         // reject as expected.
         if let Some(want) = expected
             && !arrow_reported
+            && !self.arguments_with_replaceable_hints.contains(&expr_id)
             && !assignable(&ty, want, self.resolver())
         {
             let has_structural_diff = self
@@ -2043,7 +2071,8 @@ impl Inferer<'_> {
                         span,
                     );
                 }
-                return self.infer_generic_method_call(
+                let is_array = matches!(recv_ty.peel(), Type::Array(_));
+                let call = self.infer_generic_method_call(
                     typed_receiver,
                     iface_mangled,
                     name.clone(),
@@ -2053,7 +2082,11 @@ impl Inferer<'_> {
                     args,
                     expected,
                     span,
-                );
+                )?;
+                if is_array {
+                    return self.narrow_by_callback_predicate(&name.name, call, span);
+                }
+                return Ok(call);
             }
             if matches!(recv_ty.peel(), Type::InterfaceRef { .. })
                 && self
@@ -2456,6 +2489,68 @@ impl Inferer<'_> {
             }
         };
         Ok((kind, ret_ty))
+    }
+
+    /// `filter`, `find` and `findLast` on an array, given a type guard
+    /// `(x) => x is S`, return `S[]` or `S | null`, as tsc's overloads do. The
+    /// call keeps its declared result type and is wrapped in the cast `as`
+    /// would build, so a guard that lies traps instead of reading a wrong type.
+    fn narrow_by_callback_predicate(
+        &mut self,
+        method: &str,
+        (kind, ty): (TypedExprKind, Type),
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let callback = match &kind {
+            TypedExprKind::MethodCall { args, .. } => args.first().copied(),
+            TypedExprKind::GenericMethodCall { args, .. } => args.first().map(|arg| arg.expr),
+            _ => None,
+        };
+        let Some(callback) = callback else {
+            return Ok((kind, ty));
+        };
+        let callback_ty = self
+            .typed_ast
+            .try_expr(callback)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let Type::Function {
+            predicate: Some(predicate),
+            ..
+        } = callback_ty.peel()
+        else {
+            return Ok((kind, ty));
+        };
+        if predicate.parameter_index != 0 {
+            return Ok((kind, ty));
+        }
+        let guarded = predicate.asserted_type.clone();
+        let target_ty = match method {
+            "filter" => Type::Array(Box::new(guarded)),
+            "find" | "findLast" => Type::union(vec![guarded, Type::Null]),
+            _ => return Ok((kind, ty)),
+        };
+        let shape = self.reduce_interfaces_to_shapes(&target_ty);
+        let fits = assignable(&ty, &shape, self.resolver());
+        if !fits
+            && unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new()).is_some()
+        {
+            return Ok((kind, ty));
+        }
+        let check = (!fits).then(|| Box::new(shape));
+        let value = self
+            .typed_ast
+            .try_push_expr(TypedExpr { kind, span, ty })
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok((
+            TypedExprKind::Cast {
+                value,
+                target_ty: target_ty.clone(),
+                check,
+            },
+            target_ty,
+        ))
     }
 
     /// Computes `flat`'s return type by un-nesting `depth` array levels from the
@@ -4691,6 +4786,75 @@ impl Inferer<'_> {
         Ok(())
     }
 
+    /// Rejects a literal that tsc's unknown-field check skips but its weak-type
+    /// check doesn't (TS2559): one whose fields, spreads included, are all
+    /// absent from a target member whose fields are all optional, when no other
+    /// member of the target accepts it. Width subtyping alone would accept it.
+    fn report_no_field_in_common(
+        &mut self,
+        expected: Option<&Type>,
+        literal_fields: &std::collections::BTreeMap<
+            String,
+            (crate::ObjectField, crate::TypedObjectFieldSource),
+        >,
+        span: Span,
+    ) {
+        let Some(expected) = expected else {
+            return;
+        };
+        if literal_fields.is_empty() {
+            return;
+        }
+        let literal_ty = Type::Object {
+            index: None,
+            fields: literal_fields
+                .iter()
+                .map(|(name, (field, _))| (name.clone(), field.clone()))
+                .collect(),
+        };
+        let targets = match expected.peel() {
+            Type::Union(members) => members.as_slice(),
+            _ => std::slice::from_ref(expected),
+        };
+        let mut disjoint_weak = None;
+        for target in targets {
+            let is_disjoint_weak = self
+                .weak_type_fields(target)
+                .is_some_and(|weak| literal_fields.keys().all(|name| !weak.contains_key(name)));
+            if is_disjoint_weak {
+                disjoint_weak.get_or_insert(target);
+            } else if assignable(&literal_ty, target, self.resolver()) {
+                return;
+            }
+        }
+        if let Some(weak) = disjoint_weak {
+            self.error(
+                span,
+                format!("object literal has no fields in common with `{weak}`, whose fields are all optional"),
+            );
+        }
+    }
+
+    /// The fields of an object type whose fields are all optional, if `ty` is one.
+    fn weak_type_fields(&self, ty: &Type) -> Option<ObjectFields> {
+        let fields = match ty.peel() {
+            Type::Object {
+                fields,
+                index: None,
+            } => fields.clone(),
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            } if self.resolver().index_signature(ty).is_none() => {
+                self.structural_form(mangled, name, args)?
+            }
+            _ => return None,
+        };
+        (!fields.is_empty() && fields.values().all(|field| field.optional)).then_some(fields)
+    }
+
     /// The field maps of a union's object members, skipping its primitives.
     /// `None`, so nothing is checked, when there are none or a member could
     /// take any field: one with an index signature, an empty shape, or a type
@@ -4855,6 +5019,7 @@ impl Inferer<'_> {
 
     fn infer_object_literal(
         &mut self,
+        literal: ExprId,
         members: Vec<crate::ObjectLiteralMember>,
         expected: Option<&Type>,
         span: Span,
@@ -4913,9 +5078,10 @@ impl Inferer<'_> {
             }
             other => other,
         };
+        let checks_unknown_fields = !self.is_inference_source(literal);
         // Still the union only when no member was picked above, so this check
         // and the single-shape one below never both run.
-        if let Some(Type::Union(union_members)) = peeled {
+        if checks_unknown_fields && let Some(Type::Union(union_members)) = peeled {
             self.report_unknown_union_fields(union_members, &members)?;
         }
         let interface_target: Option<(crate::Package, String, crate::MangledName, Vec<Type>)> =
@@ -4940,6 +5106,7 @@ impl Inferer<'_> {
         if let Some(want) = expected_fields.as_ref()
             && expected_index.is_none()
             && !want.is_empty()
+            && checks_unknown_fields
         {
             for member in &members {
                 if let crate::ObjectLiteralMember::Field(field) = member
@@ -4993,13 +5160,16 @@ impl Inferer<'_> {
                     // wins (the override is invariant, the surrounding
                     // hint can only restate it).
                     let override_sig = override_field_signature(&field.name.name);
-                    let hint: Option<Type> = override_sig.clone().or_else(|| {
-                        expected_fields
-                            .as_ref()
-                            .and_then(|m| m.get(&field.name.name))
-                            .map(|f| f.ty.clone())
-                            .or_else(|| expected_index.as_ref().map(|i| (*i.value).clone()))
-                    });
+                    let hint: Option<Type> = override_sig
+                        .clone()
+                        .or_else(|| self.object_argument_field_hint(literal, &field.name.name))
+                        .or_else(|| {
+                            expected_fields
+                                .as_ref()
+                                .and_then(|m| m.get(&field.name.name))
+                                .map(|f| f.ty.clone())
+                                .or_else(|| expected_index.as_ref().map(|i| (*i.value).clone()))
+                        });
                     let previous_hint = self.object_this_hint.take();
                     if matches!(
                         self.ast
@@ -5022,6 +5192,16 @@ impl Inferer<'_> {
                         inferred_fields.remove(&field.value),
                     )?;
                     self.object_this_hint = previous_hint;
+                    let in_type_parameter_position = expected_fields
+                        .as_ref()
+                        .and_then(|m| m.get(&field.name.name))
+                        .is_some_and(|expected| is_type_parameter_position(&expected.ty));
+                    let value_ty = if in_type_parameter_position {
+                        self.widen_fresh_literals(typed_value, &value_ty)?
+                    } else {
+                        value_ty
+                    };
+                    self.infer_from_object_argument_field(literal, &field.name.name, &value_ty);
                     if !has_spread {
                         object_members.push(crate::TypedObjectMember::Value(typed_value));
                     }
@@ -5189,6 +5369,10 @@ impl Inferer<'_> {
                     }
                 }
             }
+        }
+
+        if !checks_unknown_fields && spread_index_values.is_empty() {
+            self.report_no_field_in_common(expected, &merged, span);
         }
 
         // If we had an expected shape, surface missing required fields.
@@ -5604,8 +5788,13 @@ impl Inferer<'_> {
                     // type of its own shape, which one with other fields can't match.
                     let lacks_running_shape = normalization.is_some()
                         && !has_running_shape(self.ast, elem_id, element_ty.as_ref())?;
-                    let hint = if open_element_type && (types_itself || lacks_running_shape) {
+                    // Such a literal still takes the expected element type, which only
+                    // reaches here when it holds an unbound type parameter: its empty
+                    // arrays and callbacks need that context, as in tsc.
+                    let hint = if open_element_type && types_itself {
                         None
+                    } else if open_element_type && lacks_running_shape {
+                        expected_elem
                     } else {
                         element_ty.as_ref().or(expected_elem)
                     };
@@ -6128,8 +6317,8 @@ impl Inferer<'_> {
             // Unbound generic-param slots take the inferred element type —
             // `new Map([["a", 1]])` must report `[string, number]`, not
             // `[K, V]`, so the call site can bind K and V.
-            let slot = if matches!(expected_ty, Type::TypeVar(_) | Type::GenericParam { .. }) {
-                elem_ty.clone()
+            let slot = if is_type_parameter_position(expected_ty) {
+                self.widen_fresh_literals(typed_id, &elem_ty)?
             } else {
                 if self.error_count() == errors_before
                     && !assignable(&elem_ty, expected_ty, self.resolver())
@@ -7093,6 +7282,7 @@ impl Inferer<'_> {
         function: ExprId,
         this_type: Option<TypeAnnotation>,
         expected: Option<&Type>,
+        keeps_returned_literals: bool,
     ) -> Result<(ExprId, Type), CompilerFailure> {
         let signature = self.function_expression_signature(function, expected)?;
         self.scopes.push();
@@ -7110,6 +7300,7 @@ impl Inferer<'_> {
         let previous_this = self.function_this.replace(receiver.clone());
         let previous_class = self.current_class.take();
         let previous_static = self.current_static.take();
+        self.next_function_keeps_returned_literals = keeps_returned_literals;
         let (id, ty) = self.infer_expr(function, expected)?;
         self.function_this = previous_this;
         self.object_this_hint = previous_hint;
@@ -7228,6 +7419,7 @@ impl Inferer<'_> {
     /// mismatch can only be a parameter or a returned value, and each is
     /// reported where it is written. Without such a hint, the caller still
     /// reports the whole type.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn infer_arrow(
         &mut self,
         params: Vec<ParamDecl>,
@@ -7235,6 +7427,7 @@ impl Inferer<'_> {
         type_predicate: Option<crate::TypePredicateAnnotation>,
         body: ArrowBody,
         expected: Option<&Type>,
+        keeps_returned_literals: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type, bool), CompilerFailure> {
         let errors_before = self.error_count();
@@ -7246,15 +7439,20 @@ impl Inferer<'_> {
         // parameters the arrow's line up with: the arrow's take the hint's
         // leading types, and any past the hint's are reported, which is
         // clearer than asking each to be annotated. Only a rest parameter
-        // needs an exact arity. We clone out into owned data so
-        // we can continue mutating `self` without borrow-checker complaints.
+        // needs an exact arity, and a hint with one of its own. We clone out
+        // into owned data so we can continue mutating `self` without
+        // borrow-checker complaints.
         // Peel aliases, and look through a `T | null`-style union to its
         // sole function member so an optional callback param (e.g. a
         // nullable `sort` comparator) still gives the arrow its contextual
         // parameter types.
         let arrow_rest = params.last().is_some_and(|p| p.rest);
+        // A rest arrow standing for a fixed-arity function takes no hint: its
+        // rest parameter would be compared with a single argument's type. It
+        // is checked as a whole function instead.
         let lines_up = |hint_params: &[Type], hint_rest: bool| {
-            hint_params.len() == params.len() || !(arrow_rest || hint_rest)
+            (hint_params.len() == params.len() && arrow_rest == hint_rest)
+                || !(arrow_rest || hint_rest)
         };
         let leading =
             |hint_params: &[Type]| hint_params[..params.len().min(hint_params.len())].to_vec();
@@ -7487,6 +7685,10 @@ impl Inferer<'_> {
         // Save / set return-type frames. Stack-based so nested arrows
         // restore correctly.
         let prev_return = std::mem::replace(&mut self.current_return, ret_hint.clone());
+        let prev_keeps_returned_literals = std::mem::replace(
+            &mut self.returns_keep_literals,
+            keeps_returned_literals && annotated_ret.is_none(),
+        );
         let prev_collect = if annotated_ret.is_none() {
             self.inferred_returns.replace(Vec::new())
         } else {
@@ -7498,7 +7700,7 @@ impl Inferer<'_> {
 
         let (typed_body, body_ret) = match body {
             ArrowBody::Expr(e) => {
-                let (id, t) = self.infer_expr(e, ret_hint.as_ref())?;
+                let (id, t) = self.infer_returned_value(e, ret_hint.as_ref())?;
                 self.validate_type_predicate_return(id, span)?;
                 // Re-emit the seeded regions inside the body, over a fresh read
                 // of the `const` — the closure then captures the ordinary
@@ -7524,7 +7726,7 @@ impl Inferer<'_> {
                     // stays `void`.
                     Type::Unknown
                 } else {
-                    self.unify_returns(&collected)
+                    self.unify_returns(&self.returned_types(collected))
                 };
                 (ClosureBody::Block(id), t)
             }
@@ -7542,6 +7744,7 @@ impl Inferer<'_> {
         self.current_type_predicate = prev_predicate;
         self.inferred_returns = prev_collect;
         self.current_return = prev_return;
+        self.returns_keep_literals = prev_keeps_returned_literals;
         self.scopes.pop();
 
         // when the arrow has an explicit return-type
@@ -7601,6 +7804,29 @@ impl Inferer<'_> {
             arrow_ty,
             hint_owned.is_some() && self.error_count() > errors_before,
         ))
+    }
+
+    /// The types of a block body's returns to unify. Literal types kept for a
+    /// function literal passed as the sole candidate of a type parameter that
+    /// is the call's result (see `returns_keep_literals`) widen when no one of
+    /// them covers the rest, as they would have without it: tsc would infer
+    /// their union, which one return type can't be.
+    fn returned_types(&self, collected: Vec<(Type, Span)>) -> Vec<(Type, Span)> {
+        if !self.returns_keep_literals {
+            return collected;
+        }
+        let covered = collected.iter().any(|(candidate, _)| {
+            collected
+                .iter()
+                .all(|(other, _)| assignable(other, candidate, self.resolver()))
+        });
+        if covered {
+            return collected;
+        }
+        collected
+            .into_iter()
+            .map(|(ty, span)| (ty.widen_literal(), span))
+            .collect()
     }
 
     /// Reduce the `(Type, Span)` entries collected during a block-body

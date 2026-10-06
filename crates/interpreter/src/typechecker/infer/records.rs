@@ -466,7 +466,11 @@ impl Inferer<'_> {
             {
                 self.error(span, format!("expected `{hint}`, got `{value_ty}`"));
             }
-            let value_ty = if hint.is_some() {
+            // A fresh literal widens as it would without a hint.
+            let asks_for_type = hint
+                .as_ref()
+                .is_some_and(|hint| !super::expr::is_type_parameter_position(hint));
+            let value_ty = if asks_for_type {
                 value_ty
             } else {
                 self.widen_fresh_literals(value, &value_ty)?

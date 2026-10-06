@@ -1,9 +1,0 @@
-// expect-error: cannot infer type parameter
-
-function none<T>(): T[] {
-  return [];
-}
-
-function main(): void {
-  none();
-}

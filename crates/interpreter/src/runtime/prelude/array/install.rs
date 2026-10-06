@@ -800,6 +800,22 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
+/// `{ readonly length: number }`: an array-like source with no elements to
+/// read, each of which is `undefined` in JavaScript and `null` here.
+fn array_like_type() -> Type {
+    Type::Object {
+        fields: std::collections::BTreeMap::from([(
+            "length".to_string(),
+            crate::ObjectField {
+                ty: Type::Number,
+                optional: false,
+                readonly: true,
+            },
+        )]),
+        index: None,
+    }
+}
+
 pub fn declare(defs: &mut PackageDeclaration) {
     let t = || Type::TypeVar("T".to_string());
     let u = || Type::TypeVar("U".to_string());
@@ -995,6 +1011,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
                     Type::Readonly(Box::new(arr_ty())),
                     iter(t()),
                     Type::prelude_interface("Iterable".to_string(), vec![t()]),
+                    array_like_type(),
                 ]),
             ),
             Param::new(
@@ -1794,6 +1811,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                         "Iterable".to_string(),
                                         vec![Type::TypeVar("T".to_string())],
                                     ),
+                                    array_like_type(),
                                 ]),
                             ),
                             Param::with_default(

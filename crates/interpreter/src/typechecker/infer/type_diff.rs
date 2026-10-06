@@ -77,6 +77,20 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<Str
             }
             (
                 Type::Function {
+                    params: a,
+                    ret: ar,
+                    has_rest: false,
+                    ..
+                },
+                Type::Function {
+                    params: b,
+                    ret: br,
+                    has_rest: true,
+                    ..
+                },
+            ) => write_rest_function_diff(out, a, ar, b, br),
+            (
+                Type::Function {
                     params: a, ret: ar, ..
                 },
                 Type::Function {
@@ -186,6 +200,42 @@ fn write_object_diff(
         out.push("(no structural difference detected)")?;
     }
     Ok(())
+}
+
+/// A function with a rest parameter, `b`, where the fixed-arity `a` is
+/// expected: each expected parameter past its fixed ones is compared with the
+/// rest parameter's element type. When they all fit, the only difference left
+/// is the parameter count Submilli needs to differ.
+fn write_rest_function_diff(
+    out: &mut Writer,
+    a: &[Type],
+    ar: &Type,
+    b: &[Type],
+    br: &Type,
+) -> Result<(), RenderError> {
+    let Some((Type::Array(element), fixed)) =
+        b.split_last().map(|(rest, fixed)| (rest.peel(), fixed))
+    else {
+        return write_function_diff(out, a, ar, b, br);
+    };
+    let spread_len = fixed.len().max(a.len());
+    let mut spread = Vec::new();
+    spread
+        .try_reserve(spread_len)
+        .map_err(|_| RenderError::Allocation)?;
+    spread.extend(fixed.iter().cloned());
+    spread.extend(std::iter::repeat_n(
+        (**element).clone(),
+        spread_len.saturating_sub(fixed.len()),
+    ));
+    let fits = spread.len() == a.len() && a == spread.as_slice() && ar == br;
+    if a.len() == b.len() && fits {
+        return out.format(format_args!(
+            "a function with a rest parameter can't stand for one with as many parameters ({})",
+            a.len()
+        ));
+    }
+    write_function_diff(out, a, ar, &spread, br)
 }
 
 fn write_function_diff(

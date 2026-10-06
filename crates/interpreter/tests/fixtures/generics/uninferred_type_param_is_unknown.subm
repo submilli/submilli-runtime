@@ -1,0 +1,15 @@
+// A type parameter nothing infers is `unknown`, as in tsc.
+
+function none<T>(): T[] {
+  return [];
+}
+
+function first<T>(n: number): T | null {
+  return null;
+}
+
+function main(): void {
+  const xs = none();
+  assert(xs.length === 0, "an empty array of unknown");
+  assert(first(1) === null, "a nullable unknown");
+}

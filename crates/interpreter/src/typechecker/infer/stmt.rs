@@ -312,7 +312,7 @@ impl Inferer<'_> {
         let typed_value = match value {
             Some(v) => {
                 let hint = self.current_return.clone();
-                let (id, value_ty) = self.infer_expr(v, hint.as_ref())?;
+                let (id, value_ty) = self.infer_returned_value(v, hint.as_ref())?;
                 if let Some(collected) = self.inferred_returns.as_mut() {
                     collected.push((value_ty, span));
                 }

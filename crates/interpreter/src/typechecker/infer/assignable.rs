@@ -561,6 +561,37 @@ impl<'a> TypeResolver<'a> {
     }
 }
 
+/// Whether a function with a rest parameter, `actual`, accepts every argument
+/// list of a fixed-arity function, `expected`, as in tsc: each argument at a
+/// fixed position fits that parameter (`accepts(expected, actual)`), and each
+/// past them fits the rest parameter's element type.
+///
+/// Unlike tsc, the two must differ in parameter count: a rest function's
+/// closure has the same Wasm arity as a fixed function with as many
+/// parameters, so a cast from an erased slot could not tell it needs its
+/// arguments packed.
+pub(crate) fn rest_function_accepts(
+    actual: &[Type],
+    expected: &[Type],
+    mut accepts: impl FnMut(&Type, &Type) -> bool,
+) -> bool {
+    let Some((rest, fixed)) = actual.split_last() else {
+        return false;
+    };
+    let Type::Array(element) = rest.peel() else {
+        return false;
+    };
+    let Some(past_fixed) = expected.get(fixed.len()..) else {
+        return false;
+    };
+    actual.len() != expected.len()
+        && fixed
+            .iter()
+            .zip(expected)
+            .all(|(declared, passed)| accepts(passed, declared))
+        && past_fixed.iter().all(|passed| accepts(passed, element))
+}
+
 pub(crate) fn assignable(actual: &Type, expected: &Type, types: TypeResolver) -> bool {
     // Coinductive assumption set for recursive-alias (`AliasRef`)
     // expansion: a pair re-encountered mid-proof is assumed to hold, so
@@ -863,8 +894,9 @@ fn assignable_rec(
                 has_rest: rest_e,
             },
         ) => {
-            // Rest and non-rest have incompatible Wasm layouts.
-            if rest_a != rest_e {
+            // A rest function can't stand for one whose own rest arguments
+            // it would have to unpack.
+            if *rest_e && !rest_a {
                 return false;
             }
             // Predicate→non-predicate: ok (info dropped). Non-predicate→predicate: rejected (can't manufacture narrowing metadata).
@@ -877,21 +909,26 @@ fn assignable_rec(
                 (None, Some(_)) => false,
                 (None, None) => true,
             };
+            let params_ok = if *rest_a && !rest_e {
+                rest_function_accepts(pa, pe, |e, a| assignable_rec(e, a, types, seen))
+            } else {
+                Type::function_arity_fits(pa.len(), pe.len(), *rest_a)
+                    && pa.iter().zip(pe.iter()).enumerate().all(|(i, (a, e))| {
+                        let both_rest = *rest_a && i + 1 == pa.len() && i + 1 == pe.len();
+                        if both_rest {
+                            assignable_rec(
+                                e.rest_array_ignoring_readonly(),
+                                a.rest_array_ignoring_readonly(),
+                                types,
+                                seen,
+                            )
+                        } else {
+                            assignable_rec(e, a, types, seen)
+                        }
+                    })
+            };
             predicate_ok
-                && Type::function_arity_fits(pa.len(), pe.len(), *rest_a)
-                && pa.iter().zip(pe.iter()).enumerate().all(|(i, (a, e))| {
-                    let both_rest = *rest_a && i + 1 == pa.len() && i + 1 == pe.len();
-                    if both_rest {
-                        assignable_rec(
-                            e.rest_array_ignoring_readonly(),
-                            a.rest_array_ignoring_readonly(),
-                            types,
-                            seen,
-                        )
-                    } else {
-                        assignable_rec(e, a, types, seen)
-                    }
-                })
+                && params_ok
                 && (re.is_void()
                     || (ra.is_void() && matches!(re.peel(), Type::TypeVar(_)))
                     || assignable_rec(ra, re, types, seen))
@@ -1201,7 +1238,7 @@ fn weak_type_rejects(
 /// `Type::Object` of its properties. Returns `None` for non-interfaces,
 /// method-bearing interfaces, or unresolvable names — callers treat `None` as
 /// "not structurally assignable".
-pub(super) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Option<Type> {
+pub(crate) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Option<Type> {
     let Type::InterfaceRef {
         mangled,
         name,

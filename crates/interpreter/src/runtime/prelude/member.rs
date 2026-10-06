@@ -169,7 +169,10 @@ fn defaults_fit(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
             && if ends_in_rest {
                 original.ends_in_rest(caller, argument_count)?
             } else {
-                original.accepts_arguments(caller, argument_count)?
+                // As in assignability (spec §1.4), a rest function stands for a
+                // fixed-arity type only with a different number of parameters.
+                !original.ends_in_rest(caller, argument_count)?
+                    && original.accepts_arguments(caller, argument_count)?
             }
     };
     box_result(caller, Val::I32(i32::from(fits)))
