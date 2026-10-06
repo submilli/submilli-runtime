@@ -22,8 +22,10 @@ use crate::error::ExecuteError;
 
 pub mod events;
 mod program;
+pub mod recheck;
 pub use events::{EVENT_SCHEMA, EventKind, SessionEvent};
 pub use program::{ProgramRun, run_program};
+pub use recheck::{RecheckReport, RecordedRun, recheck};
 pub use submilli_shared::mcp::McpCatalog;
 
 /// How a run reached the server.
