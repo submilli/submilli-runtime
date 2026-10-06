@@ -16,7 +16,7 @@ use interpreter::runtime::{
 };
 use interpreter::stdlib::http::HttpClient;
 use serde::Serialize;
-use submilli_blueprint::{VarBindings, resolve_variables};
+use submilli_blueprint::{HarnessSecretBindings, VarBindings, resolve_variables};
 use tokio::sync::oneshot;
 
 use super::recheck::{VariableReport, reconcile_variables};
@@ -53,6 +53,9 @@ pub struct TestRun {
     /// run did not bind; a recorded value is kept where the blueprint still declares it.
     pub bindings: VarBindings,
     pub mode: TestMode,
+    /// Trusted harness credentials for this test run. Never persisted: the caller supplies
+    /// them as it did for the source run, and recordings never hold them.
+    pub secrets: Option<HarnessSecretBindings>,
 }
 
 /// Why a recorded run cannot be tested.
@@ -166,6 +169,7 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
         recorded,
         bindings,
         mode,
+        secrets,
     } = test;
     let source_run = recorded.execution_id.clone();
     let Some(code) = recorded.code.clone() else {
@@ -214,7 +218,7 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
         code,
         blueprint: recorded.blueprint_name,
         variables: Some(supplied),
-        secrets: None,
+        secrets,
     };
     let (_session, response) = one_shot_with(
         state,
