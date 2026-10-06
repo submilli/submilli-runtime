@@ -503,6 +503,7 @@ fn entry_name(entry: &RunEntry) -> String {
         RunEntry::Mcp => "mcp".into(),
         RunEntry::McpFileTool { tool } => format!("mcp:{tool}"),
         RunEntry::Program => "program".into(),
+        RunEntry::Test => "test".into(),
     }
 }
 

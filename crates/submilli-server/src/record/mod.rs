@@ -41,6 +41,9 @@ pub enum RunEntry {
     McpFileTool { tool: String },
     /// [`run_program`], with the label its caller gave.
     Program,
+    /// A test of a recorded run under a newer blueprint; the run it tests is
+    /// [`RunStart::test_of`].
+    Test,
 }
 
 /// What a run is, captured as it starts.
@@ -52,6 +55,8 @@ pub struct RunStart {
     /// Never the token itself.
     pub label: String,
     pub entry: RunEntry,
+    /// The `execution_id` of the recorded run this run tests; `None` for any other run.
+    pub test_of: Option<String>,
     /// The MCP client's name from its `initialize`, such as `langchain-mcp-adapters`.
     pub client: Option<String>,
     /// The MCP client's id for the tool call that started the run, when it sent one.
@@ -390,6 +395,7 @@ mod tests {
             execution_id: "run-1".into(),
             label: "test".into(),
             entry: RunEntry::Program,
+            test_of: None,
             client: None,
             tool_call_id: None,
             session_id: None,
