@@ -30,9 +30,9 @@ by [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 ## Active work
 
-Entries marked **fixed on main** were merged in PR #151. Entries marked **fixed
+Entries marked **fixed on main** were merged in PR #151 or PR #152. Entries marked **fixed
 on branch** have completed focused verification and review; other N entries
-remain open. Seven N entries remain open, nine are fixed on main, and N07 is
+remain open. Six N entries remain open, ten are fixed on main, and N12 is
 fixed on this branch. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
@@ -51,12 +51,12 @@ fixed on this branch. Evidence means:
 | N04 | **Fixed on main:** charge and bound variable-to-variable substitution chains | Budget and debug/release stack regressions pass |
 | N05 | **Fixed on main:** bound namespace metadata before recursive consumers | Debug/release 2 MiB stack regressions pass |
 | N06 | **Fixed on main:** validate sibling dependencies at public build entry | Typed-error regression passes |
-| N07 | **Fixed on branch:** make resolver error formatting safe for arbitrary UTF-8 | Public formatting regression passes |
+| N07 | **Fixed on main:** make resolver error formatting safe for arbitrary UTF-8 | Public formatting regression passes |
 | N08 | Make watchdog thread creation fallible | Inspection; OS failure |
 | N09 | Handle blocking-pool thread admission failures | Inspection; dependency OS failure |
 | N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
 | N11 | **Fixed on main:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
-| N12 | Bound validation frontiers before enqueueing children | Allocation amplification measured |
+| N12 | **Fixed on branch:** traverse validation children lazily with fallible ancestor frames | Wide-input and allocation-failure regressions |
 | N13 | **Engine fixed; adoption pending:** bound expanded Wasm locals across a module | `submilli-wasm` commit `faacf98`; release/adoption remains |
 | N14 | **Fixed on main:** bound aggregate MCP discovery pages/tools/schemas | Paginated localhost and aggregate-limit regressions pass |
 | N15 | **Fixed on main:** bound artifact reads and retained package data before loading | File and wide-closure regressions pass |
@@ -289,7 +289,7 @@ from this reproduction.
 type at the public boundary. Cover Unicode, short strings and normal 40-digit
 pins across the affected error variants.
 
-**Disposition (2026-10-06, fixed on branch):** error formatting retains the
+**Disposition (2026-10-06, fixed on main through PR #152):** error formatting retains the
 existing 12-byte SHA display cap and moves the endpoint backward when byte 12
 falls inside a UTF-8 code point. Public `Fetch`, `MissingPackageInRepo` and
 `ShaConflict` values now format arbitrary Unicode safely while normal 40-digit
@@ -403,6 +403,17 @@ inspected; it has the same enqueue-before-check mechanism.
 with bounded frames and fallible reservation. Verify wide roots with tiny budgets,
 ordinary limits and early error propagation. The already separate bounded
 diagnostic preflight is not reopened.
+
+**Disposition (2026-10-06): fixed on branch.** Type measurement and annotation
+counting/height checks now retain lazy ancestor iterators rather than an entire
+child frontier. Frame growth is fallible. The public `type_size::measure` API
+returns `Result`; allocation failure remains an internal compiler failure through
+copy charging, comparability, dependency validation, syntax checks and inheritance
+preparation, with stage/span/package context preserved. Limits and reverse child
+visit order are unchanged. Regressions cover 100,000-child roots with tiny budgets,
+mixed width/depth, exact limits, child-bearing variants, injected first/later
+reservation failures and healthy follow-up checks. Broader compiler admission
+remains Q03.
 
 ### N13 — Engine expands local declarations without an aggregate compilation budget
 
@@ -669,7 +680,7 @@ first-party Rust execution-path proof from this scan.
 
 | Area | Fresh review | Remaining limitation |
 | --- | --- | --- |
-| Frontend and compiler | Dispatch proofs, parser/tree guards, type substitution, metadata traversal, codegen entry/cloning, diagnostic collection/rendering | N12; typed payload and total-memory questions Q02/Q03 |
+| Frontend and compiler | Dispatch proofs, parser/tree guards, type substitution, metadata traversal, codegen entry/cloning, diagnostic collection/rendering | Typed payload and total-memory questions Q02/Q03 |
 | Runtime and standard library | ABI validation, numeric/GC/crypto guarantees, watchdog, JSON/vtable depth limits, selected string/BigInt/Git allocations and worker ownership | N08/N10/N16; Q01; other host/dependency allocation internals not exhaustively proved |
 | Blueprint and build | Filter parser/AST consumers, UTF-8 slices, graph traversal, manifest validation, artifact readers, installed closure depth bound | YAML dependency internals not exhaustively reviewed |
 | Shared MCP/LLM/HTTP | OAuth expiry, catalog conversion/depth, bounded bodies, pagination, dispatch error paths, shared policy paths | A bounded response is not a proof of all dependency allocation behavior |
@@ -713,5 +724,18 @@ with the other affected variants in the eight-test resolver integration suite.
 clean-code, correctness/no-panic and edge-case reviews covered the complete diff
 against `upstream/main` at `3361c64f`. Correctness and edge-case review found no
 issues. The clean-code review's one low-priority documentation-consistency
-finding was fixed here and parent-checked. Full verification remains deferred to
-the post-rebase PR gate.
+finding was fixed here and parent-checked. PR #152 merged as `0647e791`; its
+post-rebase verification is recorded in that PR.
+
+### N12 follow-up
+
+Focused verification covers type measurement/copy/substitution, annotation
+counting/height, comparability failure recording, inheritance preparation,
+dependency validation, checked phase APIs, compiler structure limits and namespace
+metadata. All 80 focused Rust tests and seven selected comparability/inheritance
+fixtures pass against integration base `88da49ee`. Formatting and workspace all-target
+Clippy pass. One independent clean-code/correctness/edge-case review round found
+no issues. An integration rebuild initially exhausted disk space; its focused
+retry passed after build-cache cleanup. Exact check commands and review scope are
+recorded in the working handoff. No live HTTP checks were needed; full verification
+remains deferred to the post-rebase PR gate.

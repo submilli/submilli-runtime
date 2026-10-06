@@ -19,9 +19,11 @@ use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::compiler_limits::{MAX_TYPE_DEPTH, MAX_TYPE_NODES, MAX_TYPE_WORK};
 use crate::span::Span;
 
-/// Which type limit a type exceeded.
+/// A type limit or operational failure encountered while validating a type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypeTooLarge {
+    /// Temporary traversal storage could not be allocated.
+    Allocation,
     Nodes,
     Depth,
     /// Dependency namespace containers or qualified paths exceed their limits.
@@ -32,7 +34,15 @@ pub enum TypeTooLarge {
 
 impl TypeTooLarge {
     pub fn into_failure(self, stage: CompilerStage, span: Option<Span>) -> CompilerFailure {
+        if self == Self::Allocation {
+            return CompilerFailure::Internal {
+                stage,
+                span,
+                message: self.to_string(),
+            };
+        }
         let help = match self {
+            Self::Allocation => Vec::new(),
             Self::NamespaceMetadata => vec![
                 "reduce namespace nesting, exported namespace count, or qualified name lengths".into(),
             ],
@@ -61,6 +71,7 @@ impl TypeTooLarge {
 impl std::fmt::Display for TypeTooLarge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Allocation => f.write_str("could not allocate type traversal frames"),
             Self::NamespaceMetadata => write!(
                 f,
                 "namespace metadata exceeds compiler limits ({} levels, {} namespaces, {} qualified-path bytes)",
@@ -96,25 +107,16 @@ pub struct TypeExtent {
 }
 
 /// Measures `ty` without recursion, stopping once either count exceeds its
-/// bound; a stopped measurement reports the count that crossed it.
-pub fn measure(ty: &Type, max_nodes: u64, max_depth: u32) -> TypeExtent {
-    let mut extent = TypeExtent::default();
-    let mut pending = vec![(ty, 1u32)];
-    while let Some((ty, depth)) = pending.pop() {
-        extent.nodes = extent.nodes.saturating_add(1);
-        extent.depth = extent.depth.max(depth);
-        if extent.nodes > max_nodes || extent.depth > max_depth {
-            break;
-        }
-        let child_depth = depth.saturating_add(1);
-        for_each_child(ty, |child| pending.push((child, child_depth)));
-    }
-    extent
+/// bound; a stopped measurement reports the count that crossed it. Temporary
+/// ancestor-frame allocation failures are returned without a partial extent.
+pub fn measure(ty: &Type, max_nodes: u64, max_depth: u32) -> Result<TypeExtent, TypeTooLarge> {
+    crate::type_walk::measure(ty, max_nodes, max_depth, TypeChildren::new)
+        .map_err(|_| TypeTooLarge::Allocation)
 }
 
 /// Rejects a type beyond [`MAX_TYPE_NODES`] or [`MAX_TYPE_DEPTH`].
 pub fn check(ty: &Type) -> Result<(), TypeTooLarge> {
-    let extent = measure(ty, MAX_TYPE_NODES, MAX_TYPE_DEPTH);
+    let extent = measure(ty, MAX_TYPE_NODES, MAX_TYPE_DEPTH)?;
     if extent.depth > MAX_TYPE_DEPTH {
         return Err(TypeTooLarge::Depth);
     }
@@ -144,7 +146,7 @@ impl TypeBudget<'_> {
     pub fn charge_copy(&mut self, ty: &Type, depth: u32) -> Result<(), TypeTooLarge> {
         let remaining_nodes = MAX_TYPE_NODES.saturating_sub(self.nodes);
         let remaining_depth = MAX_TYPE_DEPTH.saturating_sub(depth.saturating_sub(1));
-        let extent = measure(ty, remaining_nodes, remaining_depth);
+        let extent = measure(ty, remaining_nodes, remaining_depth)?;
         self.charge_extent(TypeExtent {
             nodes: extent.nodes,
             depth: depth.saturating_sub(1).saturating_add(extent.depth),
@@ -444,6 +446,83 @@ pub fn map_children<E>(
     })
 }
 
+/// Borrowed child sources in reverse declaration order. Fixed trailing children
+/// (return types, predicates and index values) precede the collection iterator.
+struct TypeChildren<'a> {
+    members: std::slice::Iter<'a, Type>,
+    fields: Option<std::collections::btree_map::Values<'a, String, crate::ObjectField>>,
+    trailing: [Option<&'a Type>; 2],
+}
+
+impl<'a> TypeChildren<'a> {
+    fn new(ty: &'a Type) -> Self {
+        let mut children = Self {
+            members: [].iter(),
+            fields: None,
+            trailing: [None, None],
+        };
+        match ty {
+            Type::Function {
+                params,
+                ret,
+                predicate,
+                ..
+            } => {
+                children.members = params.iter();
+                children.trailing = [Some(ret), predicate.as_ref().map(|p| &p.asserted_type)];
+            }
+            Type::Object { fields, index } => {
+                children.fields = Some(fields.values());
+                children.trailing[0] = index.as_ref().map(|index| index.value.as_ref());
+            }
+            Type::Array(inner) | Type::Readonly(inner) => {
+                children.trailing[0] = Some(inner);
+            }
+            Type::Tuple(members)
+            | Type::Union(members)
+            | Type::InterfaceRef { args: members, .. }
+            | Type::ClassRef { args: members, .. }
+            | Type::AliasRef { args: members, .. } => children.members = members.iter(),
+            Type::Refined { original, ty } => children.trailing = [Some(original), Some(ty)],
+            Type::Alias { args, ty, .. } => {
+                children.members = args.iter();
+                children.trailing[0] = Some(ty);
+            }
+            Type::Number
+            | Type::NumberLiteral(_)
+            | Type::BigInt
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::Uint8Array
+            | Type::Boolean
+            | Type::BooleanLiteral(_)
+            | Type::Null
+            | Type::Void
+            | Type::Unknown
+            | Type::Error
+            | Type::Never
+            | Type::TypeVar(_)
+            | Type::GenericParam { .. }
+            | Type::NumberEnum { .. }
+            | Type::StringEnum { .. } => {}
+        }
+        children
+    }
+}
+
+impl<'a> Iterator for TypeChildren<'a> {
+    type Item = &'a Type;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.trailing
+            .iter_mut()
+            .rev()
+            .find_map(Option::take)
+            .or_else(|| self.fields.as_mut()?.next_back().map(|field| &field.ty))
+            .or_else(|| self.members.next_back())
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::BTreeMap;
@@ -490,7 +569,7 @@ pub(crate) mod tests {
     fn measure_counts_every_node_and_the_longest_path() {
         let ty = Type::union(vec![nested(4), Type::Null]);
         assert_eq!(
-            measure(&ty, u64::MAX, u32::MAX),
+            measure(&ty, u64::MAX, u32::MAX).unwrap(),
             TypeExtent { nodes: 6, depth: 5 }
         );
     }
@@ -498,11 +577,74 @@ pub(crate) mod tests {
     #[test]
     fn measure_stops_once_a_bound_is_crossed() {
         on_compiler_stack(|| {
-            let extent = measure(&nodes(1_000), 10, u32::MAX);
+            let extent = measure(&nodes(1_000), 10, u32::MAX).unwrap();
             assert_eq!(extent.nodes, 11);
-            let extent = measure(&nested(1_000), u64::MAX, 10);
+            let extent = measure(&nested(1_000), u64::MAX, 10).unwrap();
             assert_eq!(extent.depth, 11);
         });
+    }
+
+    #[test]
+    fn wide_types_use_only_ancestor_frames() {
+        let wide = nodes(100_001);
+        for max_nodes in [0, 1, 7, 100_001] {
+            let (extent, observed) = crate::type_walk::tests::observe(None, || {
+                measure(&wide, max_nodes, u32::MAX).unwrap()
+            });
+            assert_eq!(extent.nodes, 100_001.min(max_nodes + 1));
+            assert!(observed.peak_frames <= 1);
+            assert!(observed.reservations <= 1);
+        }
+        // Once a limit is crossed, even a pending reservation failure is irrelevant.
+        let (extent, observed) =
+            crate::type_walk::tests::observe(Some(0), || measure(&wide, 0, u32::MAX).unwrap());
+        assert_eq!(extent.nodes, 1);
+        assert_eq!(observed.reservations, 0);
+    }
+
+    #[test]
+    fn allocation_failure_is_preserved_by_validation_and_copy_charging() {
+        let ty = nodes(3);
+        let (result, _) = crate::type_walk::tests::observe(Some(0), || check(&ty));
+        assert_eq!(result, Err(TypeTooLarge::Allocation));
+        let limits = TypeLimits::default();
+        let (result, _) =
+            crate::type_walk::tests::observe(Some(0), || limits.budget().charge_copy(&ty, 1));
+        assert_eq!(result, Err(TypeTooLarge::Allocation));
+        assert_eq!(limits.work_left.get(), MAX_TYPE_WORK);
+        let span = Span::at(crate::FileId(7));
+        assert!(matches!(
+            TypeTooLarge::Allocation.into_failure(CompilerStage::Infer, Some(span)),
+            CompilerFailure::Internal { stage: CompilerStage::Infer, span: Some(s), .. } if s == span
+        ));
+        assert_eq!(check(&ty), Ok(()));
+    }
+
+    #[test]
+    fn mixed_width_and_depth_keep_exact_counts_and_lifo_order() {
+        let ty = Type::Tuple(vec![nested(6), nodes(100_001), nested(3)]);
+        let (extent, observed) =
+            crate::type_walk::tests::observe(None, || measure(&ty, u64::MAX, u32::MAX).unwrap());
+        assert_eq!(
+            extent,
+            TypeExtent {
+                nodes: 100_011,
+                depth: 7
+            }
+        );
+        assert_eq!(observed.peak_frames, 6);
+        // The rightmost member is visited first, as in the former eager walk.
+        assert_eq!(
+            measure(&ty, 3, u32::MAX).unwrap(),
+            TypeExtent { nodes: 4, depth: 4 }
+        );
+        assert_eq!(
+            measure(&ty, u64::MAX, 0).unwrap(),
+            TypeExtent { nodes: 1, depth: 1 }
+        );
+        let (failed, _) =
+            crate::type_walk::tests::observe(Some(1), || measure(&nested(20), u64::MAX, u32::MAX));
+        assert_eq!(failed, Err(TypeTooLarge::Allocation));
     }
 
     #[test]
@@ -545,7 +687,7 @@ pub(crate) mod tests {
         let fits = nodes(MAX_TYPE_NODES / 2 - 1);
         let applied = binding(fits).apply(&pair_of_t(), &limits).unwrap();
         assert_eq!(
-            measure(&applied, u64::MAX, u32::MAX).nodes,
+            measure(&applied, u64::MAX, u32::MAX).unwrap().nodes,
             MAX_TYPE_NODES - 1
         );
     }
@@ -626,9 +768,21 @@ pub(crate) mod tests {
         let mut visited = 0;
         for_each_child(&ty, |_| visited += 1);
         assert_eq!(visited, 8);
+        check_type_child_order(&ty);
         let rebuilt = map_children(&ty, |child| {
             map_children(child, |grandchild| Ok::<_, ()>(grandchild.clone()))
         });
         assert_eq!(rebuilt, Ok(ty));
+    }
+
+    fn check_type_child_order(ty: &Type) {
+        let mut expected = Vec::new();
+        for_each_child(ty, |child| expected.push(child));
+        expected.reverse();
+        let actual: Vec<_> = TypeChildren::new(ty).collect();
+        assert_eq!(actual, expected);
+        for child in actual {
+            check_type_child_order(child);
+        }
     }
 }
