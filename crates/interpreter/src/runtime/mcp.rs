@@ -50,6 +50,22 @@ pub enum McpCallError {
     Transport(String),
 }
 
+impl McpCallError {
+    /// The failure as the call log keeps it: a stable kind, a message, and the HTTP
+    /// status of an upstream refusal.
+    fn record(&self) -> serde_json::Value {
+        let (kind, message, status) = match self {
+            McpCallError::ResponseTooLarge => ("response-too-large", String::new(), None),
+            McpCallError::Internal { message } => ("internal", (*message).to_owned(), None),
+            McpCallError::AuthExpired => ("auth-expired", String::new(), None),
+            McpCallError::Mcp { message } => ("mcp", message.clone(), None),
+            McpCallError::Upstream { status, body } => ("upstream", body.clone(), Some(*status)),
+            McpCallError::Transport(detail) => ("transport", detail.clone(), None),
+        };
+        serde_json::json!({ "kind": kind, "message": message, "status": status })
+    }
+}
+
 /// Completed transport work, retained even when the tool result is an error.
 pub struct McpOutcome {
     pub result: Result<McpResponse, McpCallError>,
@@ -136,9 +152,7 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                         Ok(response) => Payload::meta(serde_json::Value::Null).with_owned_body(
                             serde_json::to_vec(response.value()).unwrap_or_default(),
                         ),
-                        Err(error) => {
-                            Payload::meta(serde_json::json!({ "error": format!("{error:?}") }))
-                        }
+                        Err(error) => Payload::meta(error.record()),
                     };
                     payload.with_size(outcome.received_bytes)
                 });

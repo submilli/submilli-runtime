@@ -303,7 +303,20 @@ async fn dispatch(
             record_payload(&*caller, ticket, Side::Response, || {
                 let texts: Vec<_> = outcomes.iter().map(|outcome| &outcome.text).collect();
                 let ok: Vec<_> = outcomes.iter().map(|outcome| outcome.ok).collect();
-                Payload::meta(serde_json::json!({ "ok": ok }))
+                let failures: Vec<_> = outcomes
+                    .iter()
+                    .map(|outcome| outcome.failure.as_ref().map(failure_record))
+                    .collect();
+                let usage: Vec<_> = outcomes
+                    .iter()
+                    .map(|outcome| {
+                        serde_json::json!({
+                            "input_tokens": outcome.input_tokens,
+                            "output_tokens": outcome.output_tokens,
+                        })
+                    })
+                    .collect();
+                Payload::meta(serde_json::json!({ "ok": ok, "failures": failures, "usage": usage }))
                     .with_owned_body(serde_json::to_vec(&texts).unwrap_or_default())
                     .with_size(received as u64)
             });
@@ -326,6 +339,18 @@ async fn dispatch(
             Err(throw(op, error))
         }
     }
+}
+
+/// An outcome's failure as the call log keeps it: the closed-set kind and the degraded
+/// message, which never echoes a prompt or a provider body.
+fn failure_record(failure: &crate::runtime::llm::LlmFailure) -> serde_json::Value {
+    serde_json::json!({
+        "kind": failure.reason.as_str(),
+        "message": failure.message,
+        "retryable": failure.retryable,
+        "status": failure.status,
+        "finish_reason": failure.finish_reason,
+    })
 }
 
 /// The bytes a dispatch sends: its prompts and schema.

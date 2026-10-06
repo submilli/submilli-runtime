@@ -475,8 +475,13 @@ fn response_payload(result: &std::result::Result<HttpResponse, HttpError>) -> Pa
             .with_body(&resp.body)
             .with_masked(masked)
         }
-        Err(error) => Payload::meta(serde_json::json!({ "error": error.to_string() })),
+        Err(error) => Payload::meta(failure_meta(error)),
     }
+}
+
+/// A transport failure as the recorder keeps it: a stable kind beside the message.
+fn failure_meta(error: &HttpError) -> serde_json::Value {
+    serde_json::json!({ "kind": error.kind(), "error": error.to_string() })
 }
 
 fn settle_response(
@@ -745,8 +750,11 @@ async fn perform_download(
                 "path": guest_path,
                 "bytes_written": streamed.meta.bytes_written,
             }),
-            Err(DownloadFailure::Transport(_, message) | DownloadFailure::Full(_, message)) => {
-                serde_json::json!({ "error": message })
+            Err(DownloadFailure::Transport(error, message)) => {
+                serde_json::json!({ "kind": error.kind(), "error": message })
+            }
+            Err(DownloadFailure::Full(_, message)) => {
+                serde_json::json!({ "kind": "full", "error": message })
             }
             Err(DownloadFailure::Fs(error)) => serde_json::json!({ "error": error.to_string() }),
         };
