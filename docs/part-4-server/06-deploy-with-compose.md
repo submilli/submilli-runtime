@@ -2,9 +2,8 @@
 title: "Deploy with Compose"
 description: "How to run the server as a container beside your application with the published compose file: a port only the host's loopback and your application's container can reach, state on a volume, the store key as a file, HTTPS, and upgrades by release."
 slug: server/deploy-with-compose
-# The Compose ps output is from the earlier documented run; its image pin
-# was updated for 0.2.0. It could not be recaptured during release preparation
-# because the local Docker engine did not respond.
+# Replay the Compose commands against the published 0.3.0 image before
+# documentation publication; the local Docker engine did not respond.
 # Turn on HTTPS was not run under Docker (no engine was available); the
 # SUBMILLI_TLS_* variables and --health-check over HTTPS were run with the
 # release binaries on main 51ce450b.
@@ -13,7 +12,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "89213ede6a9e59b90e8ba17bac96a1b85ddbba36fcf73ff5adb0c3ededdfc6ed"
+  contentHash: "2844d3fb856ff399cc06393d00bc669f97767954bcf74e0f01078797d8e9c216"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -28,22 +27,21 @@ This guide shows you how to run the server with Docker Compose.
 
 ## Start it
 
+Release preparation: the commands below target 0.3.0. Run them after that
+release and its container image have been published.
+
 The published file is the stack's `compose.yaml`. Your application joins
 it as another service. The file and the image come from the same
 release, so download the file at the release's tag and pin the image to
 the same version in `.env`, beside the token. Into a new directory:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.2.0/compose.yaml
-printf 'SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.2.0\nSUBMILLI_SERVER_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
+curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.3.0/compose.yaml
+printf 'SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.3.0\nSUBMILLI_SERVER_TOKEN=%s\n' "$(openssl rand -hex 32)" > .env
 docker compose up -d
 docker compose ps
 ```
 
-```text
-NAME                   IMAGE                                     COMMAND                  SERVICE    CREATED          STATUS                    PORTS
-myproject-submilli-1   ghcr.io/submilli/submilli-runtime:0.2.0   "/usr/local/bin/subm…"   submilli   12 seconds ago   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
-```
 
 Compose reads the token from `.env` and refuses to start without it. The
 port is published on the host's loopback, so the `submilli server`
@@ -252,11 +250,25 @@ Blueprints migrated before starting the new server. Read the
 [0.2.0 release notes](https://github.com/submilli/submilli-runtime/releases/tag/v0.2.0)
 and back up its state first.
 
-For a later upgrade, download `compose.yaml` from that published release's
-tag, set `SUBMILLI_IMAGE` in `.env` to the same version, and run
-`docker compose up -d`. Keep the API token and the store key. The volume
-carries the state across. Check the release's migration instructions before
-reusing it.
+For an installation already running 0.2.0, stop the server and back up
+its state volume before upgrading to 0.3.0. Keep the API token and store key.
+After 0.3.0 is published, run these commands from the existing Compose
+project directory:
+
+```sh
+docker compose stop submilli
+# Back up the stopped volume with the command below before continuing.
+curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.3.0/compose.yaml
+sed -i.bak 's|^SUBMILLI_IMAGE=.*|SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.3.0|' .env
+docker compose up -d --wait
+```
+
+The server imports Blueprint revisions and active selections into
+`server/db/submilli.db`, then archives their old directory under
+`server/archive/blueprints/`. Persist the database directory, including its
+SQLite journal and lock files, on local or block-backed storage. Later
+Blueprint changes exist only in SQLite. To roll back to 0.2.0, stop 0.3.0
+and restore the pre-upgrade backup before restarting the old image.
 
 To back up, copy the volume while the server is stopped. Compose prefixes
 the volume name with the project name, usually the directory name, and

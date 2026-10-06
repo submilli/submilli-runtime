@@ -11,7 +11,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c40c39bfd706b61fa66aae9cf2ad2fc704e1eb6c7e1544fba1c043bff79bd090"
+  contentHash: "14eeb6a50f277b2c95a768748c8b9d41262a57b86ac8027f028ba1f7d60340b9"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -29,13 +29,13 @@ Install a published chart version from GHCR. Neither the chart nor its
 default image needs a registry login:
 
 ```sh
-helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.3.5 -f values.yaml --wait
+helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.0 -f values.yaml --wait
 helm test submilli
 ```
 
 `values.yaml` holds your settings. The sections below build it up, and an
 empty file is a valid start. Create it before installing.
-Chart 0.3.5 deploys runtime 0.2.0. This gives you one server pod, a
+Chart 0.4.0 deploys runtime 0.3.0. This gives you one server pod, a
 Service called `submilli`, a persistent volume for its state, an
 encrypted secret store with its key in a Secret, and a network policy
 that lets nothing reach it yet.
@@ -146,7 +146,7 @@ tls:
 Apply the values:
 
 ```sh
-helm upgrade submilli oci://ghcr.io/submilli/charts/submilli --version 0.3.5 -f values.yaml
+helm upgrade submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.0 -f values.yaml
 ```
 
 Clients now use `https://submilli.<namespace>.svc:8128`. The probes and
@@ -314,11 +314,17 @@ Leave it at 1 unless your application does that.
 
 ## Upgrade and back up
 
-Review the next chart version's migration instructions, then replace `0.3.5`
+Chart 0.4.0 upgrades the runtime from 0.2.0 to 0.3.0 and moves Blueprint
+revisions into SQLite on the existing state volume. Stop the old pod and
+snapshot the state claim before the upgrade. Use local or block-backed
+storage and persist the database directory, including journal and lock
+files. A rollback to 0.2.0 requires restoring the pre-upgrade state snapshot.
+
+Review the next chart version's migration instructions, then replace `0.4.0`
 with that published chart version:
 
 ```sh
-helm upgrade submilli oci://ghcr.io/submilli/charts/submilli --version 0.3.5 -f values.yaml
+helm upgrade submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.0 -f values.yaml
 ```
 
 Each chart version deploys a matching server version unless you set

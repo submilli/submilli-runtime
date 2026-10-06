@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c1b2cf2d290675642673a32cb9736721a5652bd3826d002e557814a98fcf3b5a"
+  contentHash: "5aba9133290caf3096a607922be251dd63f31376eb9bd935ab38595d9efc8715"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -239,7 +239,7 @@ Constructor object for `Array`.
 
 | Member | Description |
 | --- | --- |
-| `from<T, U>(src: readonly T[] \| Iterable<T> \| Iterator<T>, mapFn?: null \| ((arg0: T, arg1: number) => U)): U[]` | Materializes any iterable — an array, string (code points), `Iterator<T>`, or `Iterable<T>` — into a fresh array. |
+| `from<T, U>(src: { length: number } \| readonly T[] \| Iterable<T> \| Iterator<T>, mapFn?: null \| ((arg0: T, arg1: number) => U)): U[]` | Materializes any iterable — an array, string (code points), `Iterator<T>`, or `Iterable<T>` — into a fresh array. |
 | `isArray<T>(value: T): boolean` | Returns `true` when `value` is an array. |
 | `of<T>(...items: T[]): T[]` | Builds an array from its arguments — `Array.of(1, 2, 3)` is `[1, 2, 3]`. |
 
@@ -431,7 +431,7 @@ Constructor object for `RegExp`.
 
 | Member | Description |
 | --- | --- |
-| `new(source: string, flags: string): RegExp` | Construct a new `RegExp` from `source` and `flags`. |
+| `new(source: string, flags?: string): RegExp` | Construct a new `RegExp` from `source` and `flags`. |
 
 ## `Set`
 
@@ -587,7 +587,7 @@ Packed byte array.
 | `copyWithin(target: number, start?: number, end?: number): Uint8Array` | Copies `bytes[start..end)` to `bytes[target..]` in place. |
 | `equals(other: Uint8Array): boolean` | Byte-by-byte equality with `other`. |
 | `every(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): boolean` | Returns `true` iff `predicate(byte, index, array)` returns `true` for every byte. |
-| `fill(value: number, start?: number, end?: number): Uint8Array` | Writes `value & 0xff` to every byte in `[start, end)`. |
+| `fill(value: number, start?: number, end?: number): Uint8Array` | Converts `value` to a byte and writes it to every position in `[start, end)`. |
 | `filter(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): Uint8Array` | Returns a new `Uint8Array` containing every byte for which `predicate(byte, index, array)` returns `true`. |
 | `find(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number \| null` | Returns the first byte for which `predicate(byte, index, array)` returns `true`, or `null`. |
 | `findIndex(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number` | Returns the index of the first matching byte, or `-1`. |
@@ -598,7 +598,7 @@ Packed byte array.
 | `indexOf(target: number, fromIndex?: number): number` | Returns the first index of `target`, or `-1`. |
 | `join(separator?: string): string` | Returns this array's bytes formatted in decimal and concatenated with `separator` between adjacent pairs. |
 | `lastIndexOf(target: number, fromIndex?: number): number` | Returns the last index of `target`, or `-1`. |
-| `map(callback: (arg0: number, arg1: number, arg2: Uint8Array) => number): Uint8Array` | Returns a new `Uint8Array` whose i-th byte is `callback(this[i], i, this) & 0xff`. |
+| `map(callback: (arg0: number, arg1: number, arg2: Uint8Array) => number): Uint8Array` | Returns a new `Uint8Array` with each `callback(this[i], i, this)` result converted to a byte. |
 | `reduce<U>(callback: (arg0: U, arg1: number, arg2: number, arg3: Uint8Array) => U, initial: U): U` | Folds bytes left-to-right with `callback(acc, byte, index, array)`. |
 | `reduceRight<U>(callback: (arg0: U, arg1: number, arg2: number, arg3: Uint8Array) => U, initial: U): U` | Folds bytes right-to-left with `callback(acc, byte, index, array)`. |
 | `reverse(): Uint8Array` | Reverses this array's bytes in place and returns `this`. |
@@ -613,7 +613,7 @@ Packed byte array.
 | `toReversed(): Uint8Array` | Returns a fresh copy with bytes reversed. |
 | `toSorted(compareFn?: ((arg0: number, arg1: number) => number) \| null): Uint8Array` | Returns a fresh copy sorted via `compareFn`. |
 | `toString(): string` | Returns this array's bytes joined as a comma-separated decimal string — e.g. `Uint8Array.new([1, 2, 3]).toString() === "1,2,3"`. |
-| `with(index: number, value: number): Uint8Array` | Returns a clone of this array with `value & 0xff` written at `index`. |
+| `with(index: number, value: number): Uint8Array` | Returns a clone of this array with `value` converted to a byte and written at `index`. |
 
 | Constant | Description |
 | --- | --- |

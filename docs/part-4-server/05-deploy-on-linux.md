@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "69d09aab36634136d16e773b0f684876ec79980ca4af6d13dc4fcb7c03564764"
+  contentHash: "e53a07678fa78836f55e0fc7d3dbaede8829212460186b52af3af952e322d1e8"
   confirmedAt: "2026-10-05T16:46:31.966Z"
 ---
 
@@ -230,11 +230,20 @@ reference covers the block and its settings.
 
 ## Upgrade and back up
 
-To upgrade, run the installer again and restart the service:
+Before upgrading from 0.2.0 to 0.3.0, stop the service and back up
+`/var/lib/submilli`. The new server imports Blueprint revisions into
+`server/db/submilli.db` and archives the old files. Later revisions live
+only in SQLite. A rollback to 0.2.0 requires restoring the pre-upgrade
+backup. Persist the whole database directory on local or block-backed
+storage.
+
+After the new release is published, run the installer and start the service:
 
 ```sh
-curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --install-dir /usr/local/bin
-sudo systemctl restart submilli
+sudo systemctl stop submilli
+# Back up /var/lib/submilli before continuing.
+curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --version v0.3.0 --install-dir /usr/local/bin
+sudo systemctl start submilli
 ```
 
 Back up `/var/lib/submilli` with the rest of the machine. `/etc/submilli`
