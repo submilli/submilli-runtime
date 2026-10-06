@@ -12,6 +12,11 @@ use crate::{Shape, Span, Type, TypedAst};
 use serde::{Deserialize, Serialize};
 
 /// Maps are `BTreeMap` for deterministic iteration order; codegen derives stable function-index assignments from it.
+///
+/// Directly constructed declarations must pass [`Self::check_type_limits`] before
+/// cloning, formatting, serializing, or calling type/shape accessors. Checked
+/// compilation validates borrowed declarations before any such consumer. Mutation
+/// invalidates that validation; namespace destruction itself needs no validation.
 #[derive(Default, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PackageDeclaration {
     /// Physical user-code signatures, separate from the source API. Inferred
@@ -160,11 +165,12 @@ impl PackageDeclaration {
         collector.shapes
     }
 
-    /// Rejects a declaration holding a type beyond the type limits in
+    /// Rejects oversized namespace metadata and types beyond the limits in
     /// [`crate::type_size`]. Declarations read from artifact JSON are bounded
     /// by the parser's nesting limit, but an embedder can build one directly,
     /// and every recursive walk over its types trusts those limits.
     pub fn check_type_limits(&self) -> Result<(), crate::type_size::TypeTooLarge> {
+        check_namespace_limits(&self.namespaces)?;
         let mut result = Ok(());
         self.for_each_type(&mut |ty| {
             if result.is_ok() {
@@ -232,6 +238,46 @@ impl PackageDeclaration {
             pending.extend(namespaces.values());
         }
     }
+}
+
+fn check_namespace_limits(
+    namespaces: &BTreeMap<String, NamespaceSymbol>,
+) -> Result<(), crate::type_size::TypeTooLarge> {
+    use crate::compiler_limits::{
+        MAX_NAMESPACE_DEPTH, MAX_NAMESPACE_NODES, MAX_NAMESPACE_PATH_BYTES,
+    };
+    use crate::type_size::TypeTooLarge;
+
+    // Iterator frames bound the frontier by depth, not the width of public input.
+    let mut pending = vec![(namespaces.iter(), 0usize)];
+    let mut nodes = 0;
+    let mut path_bytes = 0usize;
+    while let Some((siblings, prefix_bytes)) = pending.last_mut() {
+        let Some((name, namespace)) = siblings.next() else {
+            pending.pop();
+            continue;
+        };
+        let path_len = prefix_bytes.saturating_add(name.len());
+        nodes += 1;
+        path_bytes = path_bytes.saturating_add(path_len);
+        for name in namespace.types.keys() {
+            path_bytes =
+                path_bytes.saturating_add(path_len.saturating_add(1).saturating_add(name.len()));
+            if path_bytes > MAX_NAMESPACE_PATH_BYTES {
+                return Err(TypeTooLarge::NamespaceMetadata);
+            }
+        }
+        if nodes > MAX_NAMESPACE_NODES
+            || pending.len() > MAX_NAMESPACE_DEPTH
+            || path_bytes > MAX_NAMESPACE_PATH_BYTES
+        {
+            return Err(TypeTooLarge::NamespaceMetadata);
+        }
+        if !namespace.namespaces.is_empty() {
+            pending.push((namespace.namespaces.iter(), path_len.saturating_add(1)));
+        }
+    }
+    Ok(())
 }
 
 fn namespace_type_symbol<'a>(
@@ -902,6 +948,8 @@ pub struct FieldSig {
 }
 
 /// No runtime representation; member resolution is fully static.
+/// Recursive derived operations require the containing declaration's successful
+/// [`PackageDeclaration::check_type_limits`] check since its last mutation.
 /// Namespaced types are also mirrored into `PackageDeclaration::types` under their full dotted key.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NamespaceSymbol {
@@ -915,6 +963,63 @@ pub struct NamespaceSymbol {
     pub types: BTreeMap<String, TypeSymbol>,
     pub namespaces: BTreeMap<String, NamespaceSymbol>,
     pub doc: Option<crate::DocComment>,
+}
+
+impl Drop for NamespaceSymbol {
+    fn drop(&mut self) {
+        drop_namespace_children(&mut self.namespaces);
+    }
+}
+
+fn drop_namespace_children(namespaces: &mut BTreeMap<String, NamespaceSymbol>) {
+    if namespaces.is_empty() {
+        return;
+    }
+    let mut pending = Vec::new();
+    if pending.try_reserve(1).is_err() {
+        drop_namespace_children_without_allocation(namespaces);
+        return;
+    }
+    pending.push(std::mem::take(namespaces).into_values());
+    while let Some(siblings) = pending.last_mut() {
+        let Some(mut child) = siblings.next() else {
+            pending.pop();
+            continue;
+        };
+        if child.namespaces.is_empty() {
+            continue;
+        }
+        if pending.try_reserve(1).is_err() {
+            drop_namespace_children_without_allocation(&mut child.namespaces);
+        } else {
+            pending.push(std::mem::take(&mut child.namespaces).into_values());
+        }
+        // Each child now owns no namespaces, so its Drop cannot recurse.
+    }
+}
+
+fn drop_namespace_children_without_allocation(namespaces: &mut BTreeMap<String, NamespaceSymbol>) {
+    // Under memory pressure, repeatedly find and remove a leaf. This is slower
+    // than the iterator stack but needs neither allocation nor native recursion.
+    while !namespaces.is_empty() {
+        let mut branch = &mut *namespaces;
+        loop {
+            if branch
+                .first_key_value()
+                .is_some_and(|(_, child)| child.namespaces.is_empty())
+            {
+                branch.pop_first();
+                break;
+            }
+            // The root is nonempty; descent happens only into a nonempty child.
+            // No callbacks or mutation occur between the check and this access.
+            branch = &mut branch
+                .first_entry()
+                .expect("nonempty namespace branch")
+                .into_mut()
+                .namespaces;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1107,6 +1212,21 @@ mod type_limit_checks {
                 doc: None,
             },
         }
+    }
+
+    #[test]
+    fn namespace_cleanup_can_run_without_allocating_a_frontier() {
+        let mut child = namespace("leaf");
+        for _ in 0..1_000 {
+            let mut parent = namespace("branch");
+            parent.namespaces.insert("child".into(), child);
+            parent
+                .namespaces
+                .insert("sibling".into(), namespace("sibling"));
+            child = parent;
+        }
+        drop_namespace_children_without_allocation(&mut child.namespaces);
+        assert!(child.namespaces.is_empty());
     }
 
     #[test]

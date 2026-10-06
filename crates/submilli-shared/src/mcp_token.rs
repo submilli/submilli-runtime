@@ -244,9 +244,14 @@ impl OAuthTokenManager {
         }
 
         let ttl = grant.expires_in.map_or(DEFAULT_TTL, Duration::from_secs);
+        // Keep a completed refresh-token rotation even if the remote expiry is
+        // invalid; retrying with the old token could permanently lose access.
+        let expires_at = Instant::now().checked_add(ttl).ok_or_else(|| {
+            McpTokenError::Malformed("token expiry is outside the supported range".into())
+        })?;
         slot.cached = Some(Cached {
             access_token: grant.access_token.clone(),
-            expires_at: Instant::now() + ttl,
+            expires_at,
         });
         Ok(grant.access_token)
     }
@@ -581,6 +586,30 @@ mod tests {
         assert!(body.contains("refresh_token=r1"), "{body}");
         assert!(body.contains("client_id=cid"), "{body}");
         assert!(body.contains("scope=api"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn invalid_expiry_preserves_rotation_and_allows_recovery() {
+        let (_tmp, store) = temp_store();
+        seed(&store, "r1").await;
+        let http = MockHttp::new(
+            vec![
+                ok_token_rotating("bad", u64::MAX, "r2"),
+                ok_token("good", 3600),
+            ],
+            None,
+        );
+        let mgr = manager(&store, &http);
+        assert!(matches!(
+            mgr.access_token(BP, SRV).await,
+            Err(McpTokenError::Malformed(_))
+        ));
+        let stored = read_credential(BP, SRV, &store).await.unwrap().unwrap();
+        assert_eq!(stored.refresh_token.as_deref(), Some("r2"));
+        assert_eq!(mgr.access_token(BP, SRV).await.unwrap(), "good");
+        assert!(http.last_body().contains("refresh_token=r2"));
+        assert_eq!(mgr.access_token(BP, SRV).await.unwrap(), "good");
+        assert_eq!(http.count(), 2);
     }
 
     #[tokio::test(start_paused = true)]

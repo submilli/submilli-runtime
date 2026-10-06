@@ -130,8 +130,7 @@ fn emit_body(
             .symbols
             .closure_struct_type_idx(source)
             .ok_or_else(|| crate::codegen::internal_failure("source closure type"))?;
-        body.instruction(&Instruction::LocalGet(original));
-        body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(structure)));
+        emit_is_directly_callable(&mut body, ctx, structure, original, env)?;
         body.instruction(&Instruction::If(result));
         emit_direct_call(&mut body, ctx, source, target, original, receiver, env)?;
         body.instruction(&Instruction::Else);
@@ -147,9 +146,9 @@ fn emit_body(
 /// The closures an adapter to `target` calls without re-entering the host: the
 /// other return convention at the same arity, and every smaller arity, whose
 /// closures ignore the trailing arguments. Every argument such a closure
-/// declares is supplied, so its defaults are never needed. A rest closure is
-/// not expected here: the typechecker never lets it stand for another arity, and
-/// a cast from `unknown` asks `__value_defaults_fit`, which rejects it.
+/// declares is supplied, so its defaults are never needed, but a rest closure
+/// expects the arguments past its fixed parameters packed, so
+/// [`emit_is_directly_callable`] leaves those to the host.
 fn direct_sources(target: ClosureSig, symbols: &SymbolTable) -> Vec<ClosureSig> {
     let smaller = (0..target.arity)
         .rev()
@@ -158,6 +157,74 @@ fn direct_sources(target: ClosureSig, symbols: &SymbolTable) -> Vec<ClosureSig> 
         .chain(smaller)
         .filter(|source| symbols.closure_struct_type_idx(*source).is_some())
         .collect()
+}
+
+/// Push whether the closure in `original` is a `structure` closure without
+/// argument metadata, which an adapter can call directly. A closure with
+/// metadata may have a rest parameter, and only the host's binding packs its
+/// arguments. The metadata sits inside any receiver bindings of the closure's
+/// environment; `env` is free to use as scratch until the call binds it.
+fn emit_is_directly_callable(
+    body: &mut Function,
+    ctx: &CodegenCtx<'_>,
+    structure: u32,
+    original: u32,
+    env: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let metadata = ctx
+        .symbols
+        .call_metadata_type
+        .ok_or_else(|| crate::codegen::internal_failure("call metadata type"))?;
+    body.instruction(&Instruction::LocalGet(original));
+    body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(structure)));
+    body.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+        ValType::I32,
+    )));
+    body.instruction(&Instruction::LocalGet(original));
+    body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+    body.instruction(&Instruction::StructGet {
+        struct_type_index: structure,
+        field_index: 2,
+    });
+    body.instruction(&Instruction::LocalSet(env));
+    emit_unwrap_receiver_bindings(body, ctx, env)?;
+    body.instruction(&Instruction::LocalGet(env));
+    body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(metadata)));
+    body.instruction(&Instruction::I32Eqz);
+    body.instruction(&Instruction::Else);
+    body.instruction(&Instruction::I32Const(0));
+    body.instruction(&Instruction::End);
+    Ok(())
+}
+
+/// Replace the environment in `env` with the one inside its receiver
+/// bindings (`this_environment` wrappers), however many are nested.
+fn emit_unwrap_receiver_bindings(
+    body: &mut Function,
+    ctx: &CodegenCtx<'_>,
+    env: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let wrapper = ctx
+        .symbols
+        .this_environment_type
+        .ok_or_else(|| crate::codegen::internal_failure("this environment"))?;
+    body.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    body.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    body.instruction(&Instruction::LocalGet(env));
+    body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(wrapper)));
+    body.instruction(&Instruction::I32Eqz);
+    body.instruction(&Instruction::BrIf(1));
+    body.instruction(&Instruction::LocalGet(env));
+    body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(wrapper)));
+    body.instruction(&Instruction::StructGet {
+        struct_type_index: wrapper,
+        field_index: 0,
+    });
+    body.instruction(&Instruction::LocalSet(env));
+    body.instruction(&Instruction::Br(0));
+    body.instruction(&Instruction::End);
+    body.instruction(&Instruction::End);
+    Ok(())
 }
 
 /// Call the original closure with its own environment and the leading
@@ -279,7 +346,7 @@ pub fn emit_coercion(
     let Some(target) = target else {
         return Ok(false);
     };
-    if takes_fewer_arguments(source, target) {
+    if takes_fewer_arguments(source, target) || packs_rest_arguments(source, target) {
         let original =
             emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?)?;
         emitter.instruction(Instruction::LocalSet(original));
@@ -288,6 +355,16 @@ pub fn emit_coercion(
         emit_erased_cast(emitter, ctx, target)?;
     }
     Ok(true)
+}
+
+/// A function with a rest parameter in a slot of another arity stands for a
+/// fixed-arity function: a rest function type it fits has as many parameters.
+/// Its adapter binds the arguments through the host, which packs the rest.
+fn packs_rest_arguments(source: &crate::Type, target: ClosureSig) -> bool {
+    matches!(
+        source.peel(),
+        crate::Type::Function { params, has_rest: true, .. } if params.len() != usize::from(target.arity)
+    )
 }
 
 /// A function statically known to declare fewer parameters than `target`

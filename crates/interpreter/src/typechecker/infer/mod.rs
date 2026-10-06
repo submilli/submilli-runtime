@@ -21,6 +21,7 @@ mod globals;
 mod iife;
 mod import_graph;
 mod imports;
+mod inference_sources;
 mod literal_freshness;
 mod lookup;
 pub(in crate::typechecker) mod module_symbols;
@@ -125,6 +126,8 @@ pub fn infer_with_transitive_checked<'a>(
         pattern_sources: BTreeMap::new(),
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
+        returns_keep_literals: false,
+        next_function_keeps_returned_literals: false,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         invoked_body_exit: None,
@@ -159,6 +162,9 @@ pub fn infer_with_transitive_checked<'a>(
         invalid_class_hierarchies: std::collections::BTreeSet::new(),
         current_type_predicate: None,
         inferred_returns: None,
+        inference_source_literals: BTreeSet::new(),
+        arguments_with_replaceable_hints: BTreeSet::new(),
+        object_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,
@@ -390,6 +396,8 @@ pub fn infer_package_checked<'a>(
         pattern_sources: BTreeMap::new(),
         literal_freshness: literal_freshness::LiteralFreshness::default(),
         keeps_literal_types: false,
+        returns_keep_literals: false,
+        next_function_keeps_returned_literals: false,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         invoked_body_exit: None,
@@ -424,6 +432,9 @@ pub fn infer_package_checked<'a>(
         invalid_class_hierarchies: BTreeSet::new(),
         current_type_predicate: None,
         inferred_returns: None,
+        inference_source_literals: BTreeSet::new(),
+        arguments_with_replaceable_hints: BTreeSet::new(),
+        object_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,
@@ -700,6 +711,17 @@ pub(super) struct Inferer<'a> {
     /// entry, so it reaches only the operands that carry the value; set it
     /// through [`Inferer::infer_expr_keeping_literals`].
     keeps_literal_types: bool,
+    /// Whether the unannotated function literal being inferred keeps the
+    /// literal types of the values it returns (see
+    /// `next_function_keeps_returned_literals`).
+    returns_keep_literals: bool,
+    /// The next expression `infer_expr` infers, when it is a function literal,
+    /// keeps the literal types of the values it returns: it is the sole
+    /// argument for a type parameter that is the call's result, as in tsc
+    /// (`id(() => 42)` is `() => 42`). Read and cleared on entry like
+    /// `keeps_literal_types`, so it doesn't reach a conditional's branches,
+    /// whose function types couldn't form one callable union.
+    next_function_keeps_returned_literals: bool,
     aliased_conditions: aliased_conditions::AliasedConditions,
     /// The span of the arrow an immediately-invoked call is about to infer;
     /// see [`iife::immediately_invoked_arrow`].
@@ -828,6 +850,17 @@ pub(super) struct Inferer<'a> {
     pub(super) invalid_class_hierarchies: std::collections::BTreeSet<crate::MangledName>,
     pub(super) current_type_predicate: Option<(crate::TypePredicate, String)>,
     pub(super) inferred_returns: Option<Vec<(Type, Span)>>,
+    /// Object literals inferred for their own type rather than checked against
+    /// a declared one; see [`inference_sources`].
+    pub(super) inference_source_literals: BTreeSet<crate::ExprId>,
+    /// Call arguments whose expected type comes partly from a binding an
+    /// argument may replace (the call's own expected result), so it guides
+    /// their inference without being a requirement:
+    /// an argument that doesn't fit it decides the type parameter instead.
+    pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
+    /// The object literal argument whose fields a generic call is inferring
+    /// one at a time; see [`generic::ObjectArgumentInference`].
+    pub(super) object_argument_inference: Option<generic::ObjectArgumentInference>,
     pub(super) generics_in_scope: Vec<Vec<String>>,
     /// Empty during the signature pass; populated with fresh `GenericParam` ids at body entry.
     pub(super) body_instantiations: Vec<BTreeMap<String, Type>>,
@@ -1423,7 +1456,7 @@ fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
 
 /// Rejects a dependency declaration holding a type beyond the type limits
 /// before any recursive pass reads it.
-fn check_declaration_types<'d>(
+pub(crate) fn check_declaration_types<'d>(
     declarations: impl IntoIterator<Item = &'d PackageDeclaration>,
 ) -> Result<(), CompilerFailure> {
     for declaration in declarations {

@@ -1,4 +1,1 @@
 types: 18 of 46 tsc entries compared, 0 differ
-
-errors:
-line 22: ours: cannot infer type parameter(s) `T`; consider adding an explicit type argument (tsc accepts)

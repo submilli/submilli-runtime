@@ -1,7 +1,7 @@
 /**
  * Shared code-block affordances for the docs site.
  *
- * Input/output labels are deliberately conservative. Authors can always opt in
+ * Input/output classification is deliberately conservative. Authors can always opt in
  * with `input`, `output`, or `type="input|output"` in the fence metadata.
  */
 
@@ -47,10 +47,6 @@ function addClass(element, className) {
 	element.properties = { ...element.properties, className: classes };
 }
 
-function findChild(element, tagName) {
-	return element.children?.find((child) => child.type === 'element' && child.tagName === tagName);
-}
-
 export function codeBlocks() {
 	return {
 		name: 'Submilli code-block affordances',
@@ -61,13 +57,14 @@ export function codeBlocks() {
 
 				const frame = renderData.blockAst;
 				addClass(frame, `sub-code-${role}`);
-				const header = findChild(frame, 'figcaption');
-				if (!header) return;
-				addClass(header, 'sub-code-label-header');
-				header.children = [
-					{ type: 'element', tagName: 'span', properties: { className: ['sub-code-label'] }, children: [{ type: 'text', value: role === 'input' ? 'Input' : 'Output' }] },
-					...header.children,
-				];
+				// Keep the role available to screen readers without adding a title bar.
+				const codeIndex = frame.children.findIndex((child) => child.type === 'element' && child.tagName === 'pre');
+				if (codeIndex < 0) return;
+				frame.children.splice(codeIndex, 0, {
+					type: 'element', tagName: 'span',
+					properties: { className: ['sub-code-role'] },
+					children: [{ type: 'text', value: role === 'input' ? 'Command' : 'Output' }],
+				});
 			},
 		},
 	};

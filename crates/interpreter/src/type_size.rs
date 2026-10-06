@@ -24,6 +24,8 @@ use crate::span::Span;
 pub enum TypeTooLarge {
     Nodes,
     Depth,
+    /// Dependency namespace containers or qualified paths exceed their limits.
+    NamespaceMetadata,
     /// The phase's allowance for building and comparing types is spent.
     Work,
 }
@@ -31,6 +33,9 @@ pub enum TypeTooLarge {
 impl TypeTooLarge {
     pub fn into_failure(self, stage: CompilerStage, span: Option<Span>) -> CompilerFailure {
         let help = match self {
+            Self::NamespaceMetadata => vec![
+                "reduce namespace nesting, exported namespace count, or qualified name lengths".into(),
+            ],
             Self::Nodes => vec![
                 "every place a type mentions another copies it: a value or type parameter used twice in an object, or an alias or generic that uses its parameter twice, doubles the type at each level of nesting".into(),
                 "declare repeated shapes as an `interface` (interface references are not copied), or nest fewer levels".into(),
@@ -56,6 +61,13 @@ impl TypeTooLarge {
 impl std::fmt::Display for TypeTooLarge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NamespaceMetadata => write!(
+                f,
+                "namespace metadata exceeds compiler limits ({} levels, {} namespaces, {} qualified-path bytes)",
+                crate::compiler_limits::MAX_NAMESPACE_DEPTH,
+                crate::compiler_limits::MAX_NAMESPACE_NODES,
+                crate::compiler_limits::MAX_NAMESPACE_PATH_BYTES,
+            ),
             Self::Nodes => write!(
                 f,
                 "type is larger than the compiler limit of {MAX_TYPE_NODES} parts"
@@ -147,10 +159,15 @@ impl TypeBudget<'_> {
         if self.nodes > MAX_TYPE_NODES {
             return Err(TypeTooLarge::Nodes);
         }
+        self.charge_work(extent.nodes)
+    }
+
+    /// Charges traversal work that does not build a result node.
+    pub fn charge_work(&mut self, units: u64) -> Result<(), TypeTooLarge> {
         let work_left = self
             .work_left
             .get()
-            .checked_sub(extent.nodes)
+            .checked_sub(units)
             .ok_or(TypeTooLarge::Work)?;
         self.work_left.set(work_left);
         Ok(())
@@ -552,9 +569,9 @@ pub(crate) mod tests {
 
     #[test]
     fn substitutions_share_the_phase_work_allowance() {
-        let limits = TypeLimits::with_work_allowance(25);
+        let limits = TypeLimits::with_work_allowance(29);
         let sub = binding(nodes(5));
-        // Each application builds 1 + 2 * 5 nodes.
+        // Each application builds 1 + 2 * 5 nodes and chases two bindings.
         assert!(sub.apply(&pair_of_t(), &limits).is_ok());
         assert!(sub.apply(&pair_of_t(), &limits).is_ok());
         assert_eq!(sub.apply(&pair_of_t(), &limits), Err(TypeTooLarge::Work));

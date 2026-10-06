@@ -53,6 +53,16 @@ pub fn prelude(symbol: &str) -> MangledName {
     package_symbol(PRELUDE_PACKAGE, symbol)
 }
 
+/// Whether a symbol is declared by Submilli itself (the prelude or a
+/// `submilli:` standard-library module) rather than by a program or package.
+pub fn is_builtin(name: &MangledName) -> bool {
+    let unprefixed = name
+        .as_str()
+        .strip_prefix(MODULE_PREFIX)
+        .unwrap_or(name.as_str());
+    unprefixed.starts_with("submilli:")
+}
+
 pub fn extend(parent: &MangledName, suffix: &str) -> MangledName {
     MangledName(format!("{}{}{}", parent.as_str(), SEP, suffix))
 }

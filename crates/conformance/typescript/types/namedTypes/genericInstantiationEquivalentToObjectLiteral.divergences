@@ -11,7 +11,3 @@ line 13: x
 line 15: x
   tsc:  Pair<string, number>
   ours: { first: string; second: number }
-
-errors:
-line 13: ours: expected `Pair<T, U>`, got `{ first: string; second: number }` (tsc accepts)
-line 14: ours: expected `Pair<T, U>`, got `{ first: string; second: number }` (tsc accepts)

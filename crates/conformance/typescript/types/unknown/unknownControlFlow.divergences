@@ -168,6 +168,5 @@ errors:
 line 294: tsc TS2345: Argument of type '"foo"' is not assignable to parameter of type 'never'. (we accept)
 line 29: ours: cannot use `unknown` as a condition (tsc accepts)
 line 35: ours: cannot use `unknown` in a boolean context (tsc accepts)
-line 214: ours: expected `T`, got `null | T` (tsc accepts)
 line 278: ours: `keyof` needs an object type or interface, got `T` (tsc accepts)
 line 279: ours: cannot index into non-array type `T` (tsc accepts)

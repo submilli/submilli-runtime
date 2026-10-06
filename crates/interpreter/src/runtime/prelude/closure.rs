@@ -28,8 +28,8 @@ impl Closure {
     }
 
     /// An erased structural signature may omit trailing defaults or pass
-    /// arguments the function ignores, but it cannot change the packed rest ABI
-    /// or omit a required parameter.
+    /// arguments the function ignores or packs into its rest parameter, but it
+    /// cannot omit a required parameter.
     pub(crate) async fn call_with_arguments(
         &self,
         caller: &mut Caller<'_, StoreData>,
@@ -44,8 +44,9 @@ impl Closure {
         self.call_with_receiver(caller, receiver, args).await
     }
 
-    /// Whether `supplied` arguments can call this function: every parameter
-    /// past them has a default, and any beyond its parameters are dropped, as
+    /// Whether `supplied` arguments can call this function through its
+    /// argument metadata: every parameter past them has a default or is the
+    /// rest parameter, and any beyond its parameters are dropped, as
     /// JavaScript drops them. A function without argument metadata has neither
     /// defaults nor a rest parameter, so only its arity matters.
     pub(crate) fn accepts_arguments(
@@ -57,11 +58,10 @@ impl Closure {
         let Some(params) = super::arguments::metadata(caller, &self.env)? else {
             return Ok(declared <= supplied);
         };
-        Ok(!params.iter().any(|(_, rest)| *rest)
-            && params
-                .iter()
-                .skip(supplied)
-                .all(|(default, _)| default.is_some()))
+        Ok(params
+            .iter()
+            .skip(supplied)
+            .all(|(default, rest)| *rest || default.is_some()))
     }
 
     /// Whether this function declares `count` parameters, the last of them a

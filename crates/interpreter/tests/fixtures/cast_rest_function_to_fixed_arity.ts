@@ -1,8 +1,9 @@
-// A function with a rest parameter keeps an exact arity (spec §1.4), so a cast
-// from `unknown` to a fixed-arity function type rejects it, and a cast to a rest
-// function type rejects a fixed-arity function, even where the Wasm arities
-// match; JavaScript would call both. A cast of a rest function to a rest type,
-// and casts of functions with defaults or captures, still succeed.
+// A function with a rest parameter stands for a fixed-arity function type only
+// when the two take a different number of parameters (spec §1.4), so a cast from
+// `unknown` rejects it at the same count and packs the rest arguments otherwise.
+// A cast to a rest function type rejects a fixed-arity function, even where the
+// Wasm arities match; JavaScript would call it. A cast of a rest function to a
+// rest type, and casts of functions with defaults or captures, still succeed.
 function count(...xs: number[]): number {
   return xs.length;
 }
@@ -34,7 +35,7 @@ class Counter {
 function main(): void {
   const rest: unknown = count;
   assert(rejects(() => { const f = rest as (x: number) => number; }), "rest to one parameter");
-  assert(rejects(() => { const f = rest as (x: number, y: number) => number; }), "rest to two");
+  assert((rest as (x: number, y: number) => number)(1, 2) === 2, "rest to two");
   assert((rest as (...xs: number[]) => number)(1, 2, 3) === 3, "rest to rest");
 
   const fixed: unknown = double;
