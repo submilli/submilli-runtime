@@ -768,6 +768,10 @@ impl CodegenAnalysis {
                 self.dependency_usage.note_type(enum_mangled.clone());
             }
             TypedExprKind::Binary { op, lhs, .. } => {
+                if let Some(name) = op.bitwise_name() {
+                    self.dependency_usage
+                        .note_value(crate::mangle::prelude(&format!("__value_{name}")));
+                }
                 if matches!(op, BinOp::Pow) && matches!(expr.ty.peel(), Type::Number) {
                     self.dependency_usage
                         .note_value(crate::runtime::prelude::math::math_key("pow"));
@@ -781,6 +785,12 @@ impl CodegenAnalysis {
                         BinOp::Rem => self.dependency_usage.collect_bigint_host_value("mod"),
                         BinOp::Pow => self.dependency_usage.collect_bigint_host_value("pow"),
                         BinOp::Eq
+                        | BinOp::BitAnd
+                        | BinOp::BitOr
+                        | BinOp::BitXor
+                        | BinOp::Shl
+                        | BinOp::Shr
+                        | BinOp::UnsignedShr
                         | BinOp::NotEq
                         | BinOp::Lt
                         | BinOp::Gt
@@ -822,6 +832,10 @@ impl CodegenAnalysis {
                 }
             }
             TypedExprKind::Unary { op, operand } => {
+                if matches!(op, crate::UnOp::BitNot) {
+                    self.dependency_usage
+                        .note_value(crate::mangle::prelude("__value_bitnot"));
+                }
                 let operand_ty = ta
                     .try_expr(*operand)
                     .map_err(crate::codegen::arena_failure)?

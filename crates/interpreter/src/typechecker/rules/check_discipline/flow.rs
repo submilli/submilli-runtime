@@ -524,7 +524,7 @@ impl<'a> Walker<'a, '_, '_> {
             TypedExprKind::Unary { op, operand } => {
                 let use_ = match op {
                     UnOp::Not => Use::Inspect,
-                    UnOp::Neg | UnOp::Pos => Use::Escape(Usage::Operand),
+                    UnOp::Neg | UnOp::Pos | UnOp::BitNot => Use::Escape(Usage::Operand),
                 };
                 self.consume(*operand, use_)?;
                 stable()
@@ -770,9 +770,18 @@ impl<'a> Walker<'a, '_, '_> {
             | BinOp::Le
             | BinOp::Ge
             | BinOp::In => Some(Use::Inspect),
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow => {
-                Some(Use::Escape(Usage::Operand))
-            }
+            BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::Pow
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::UnsignedShr => Some(Use::Escape(Usage::Operand)),
             BinOp::And | BinOp::Or | BinOp::NullishCoalesce => None,
         };
         let (Some(left), Some(right)) = (use_(), use_()) else {

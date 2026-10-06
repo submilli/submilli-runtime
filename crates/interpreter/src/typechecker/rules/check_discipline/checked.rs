@@ -1449,7 +1449,7 @@ impl<'a> Walker<'a, '_> {
                 let operand = self.eval(*operand)?;
                 match op {
                     UnOp::Not => identity(operand),
-                    UnOp::Neg | UnOp::Pos => derived(operand),
+                    UnOp::Neg | UnOp::Pos | UnOp::BitNot => derived(operand),
                 }
             }
             TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
@@ -1583,7 +1583,13 @@ impl<'a> Walker<'a, '_> {
             | BinOp::Mul
             | BinOp::Div
             | BinOp::Rem
-            | BinOp::Pow => {
+            | BinOp::Pow
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::UnsignedShr => {
                 let mut flow = self.eval(lhs)?;
                 flow.extend(self.eval(rhs)?);
                 Ok(derived(flow))

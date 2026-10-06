@@ -1,0 +1,320 @@
+=== bitwiseOperators.ts ===
+// Written for Submilli: bitwise operand acceptance and inferred results.
+
+function numbers(a: number, b: number): number {
+>numbers : (a: number, b: number) => number
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+  const and = a & b;
+>and : number
+>    : ^^^^^^
+>a & b : number
+>      : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+  const or = a | b;
+>or : number
+>   : ^^^^^^
+>a | b : number
+>      : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+  const xor = a ^ b;
+>xor : number
+>    : ^^^^^^
+>a ^ b : number
+>      : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+  const not = ~a;
+>not : number
+>    : ^^^^^^
+>~a : number
+>   : ^^^^^^
+>a : number
+>  : ^^^^^^
+
+  const left = a << b;
+>left : number
+>     : ^^^^^^
+>a << b : number
+>       : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+  const right = a >> b;
+>right : number
+>      : ^^^^^^
+>a >> b : number
+>       : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+  const unsigned = a >>> b;
+>unsigned : number
+>         : ^^^^^^
+>a >>> b : number
+>        : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+  a &= b; a |= b; a ^= b; a <<= b; a >>= b; a >>>= b;
+>a &= b : number
+>       : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>a |= b : number
+>       : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>a ^= b : number
+>       : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>a <<= b : number
+>        : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>a >>= b : number
+>        : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>a >>>= b : number
+>         : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+  return unsigned;
+>unsigned : number
+>         : ^^^^^^
+
+}
+function bigints(a: bigint, b: bigint): bigint {
+>bigints : (a: bigint, b: bigint) => bigint
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+
+  const and = a & b;
+>and : bigint
+>    : ^^^^^^
+>a & b : bigint
+>      : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+
+  const or = a | b;
+>or : bigint
+>   : ^^^^^^
+>a | b : bigint
+>      : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+
+  const xor = a ^ b;
+>xor : bigint
+>    : ^^^^^^
+>a ^ b : bigint
+>      : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+
+  const not = ~a;
+>not : bigint
+>    : ^^^^^^
+>~a : bigint
+>   : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+
+  const left = a << b;
+>left : bigint
+>     : ^^^^^^
+>a << b : bigint
+>       : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+
+  const right = a >> b;
+>right : bigint
+>      : ^^^^^^
+>a >> b : bigint
+>       : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+
+  a &= b; a |= b; a ^= b; a <<= b; a >>= b;
+>a &= b : bigint
+>       : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+>a |= b : bigint
+>       : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+>a ^= b : bigint
+>       : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+>a <<= b : bigint
+>        : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+>a >>= b : bigint
+>        : ^^^^^^
+>a : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+
+  return right;
+>right : bigint
+>      : ^^^^^^
+
+}
+function unary(text: string, flag: boolean, value: number | bigint): number | bigint {
+>unary : (text: string, flag: boolean, value: number | bigint) => number | bigint
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>text : string
+>     : ^^^^^^
+>flag : boolean
+>     : ^^^^^^^
+>value : number | bigint
+>      : ^^^^^^^^^^^^^^^
+
+  const a = ~text;
+>a : number
+>  : ^^^^^^
+>~text : number
+>      : ^^^^^^
+>text : string
+>     : ^^^^^^
+
+  const b = ~flag;
+>b : number
+>  : ^^^^^^
+>~flag : number
+>      : ^^^^^^
+>flag : boolean
+>     : ^^^^^^^
+
+  const c = ~value;
+>c : number | bigint
+>  : ^^^^^^^^^^^^^^^
+>~value : number | bigint
+>       : ^^^^^^^^^^^^^^^
+>value : number | bigint
+>      : ^^^^^^^^^^^^^^^
+
+  return c;
+>c : number | bigint
+>  : ^^^^^^^^^^^^^^^
+
+}
+function errors(a: number, b: bigint, flag: boolean, value: unknown): void {
+>errors : (a: number, b: bigint, flag: boolean, value: unknown) => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+>flag : boolean
+>     : ^^^^^^^
+>value : unknown
+>      : ^^^^^^^
+
+  const mixed = a & b;
+>mixed : any
+>      : ^^^
+>a & b : any
+>      : ^^^
+>a : number
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+
+  const unsigned = b >>> b;
+>unsigned : bigint
+>         : ^^^^^^
+>b >>> b : bigint
+>        : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+>b : bigint
+>  : ^^^^^^
+
+  const boolean = flag & flag;
+>boolean : number
+>        : ^^^^^^
+>flag & flag : number
+>            : ^^^^^^
+>flag : boolean
+>     : ^^^^^^^
+>flag : boolean
+>     : ^^^^^^^
+
+  const unknown = ~value;
+>unknown : number
+>        : ^^^^^^
+>~value : number
+>       : ^^^^^^
+>value : unknown
+>      : ^^^^^^^
+
+}
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,4 @@
+bitwiseOperators.ts(33,17): error TS2365: Operator '&' cannot be applied to types 'number' and 'bigint'.
+bitwiseOperators.ts(34,20): error TS2365: Operator '>>>' cannot be applied to types 'bigint' and 'bigint'.
+bitwiseOperators.ts(35,19): error TS2447: The '&' operator is not allowed for boolean types. Consider using '&&' instead.
+bitwiseOperators.ts(36,20): error TS18046: 'value' is of type 'unknown'.
