@@ -30,8 +30,10 @@ by [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 ## Active work
 
-Entries marked **fixed on branch** have completed focused verification and review;
-other N entries remain open. Evidence means:
+Entries marked **fixed on main** were merged in PR #151. Entries marked **fixed
+on branch** have completed focused verification and review; other N entries
+remain open. Seven N entries remain open, nine are fixed on main, and N07 is
+fixed on this branch. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
   The entry says whether this was a public API, source input, or only a dependency
@@ -43,21 +45,21 @@ other N entries remain open. Evidence means:
 
 | ID | Work | Evidence |
 | --- | --- | --- |
-| N01 | **Fixed on branch:** bound blueprint filter parsing, tree height and destruction | Debug/release 2 MiB stack regressions pass |
-| N02 | **Fixed on branch:** bound package graph DFS in build and GitHub resolution | Debug/release 2 MiB stack regressions pass |
-| N03 | **Fixed on branch:** check OAuth token expiry before adding it to `Instant` | Overflow/rotation/recovery regression passes |
-| N04 | **Fixed on branch:** charge and bound variable-to-variable substitution chains | Budget and debug/release stack regressions pass |
-| N05 | **Fixed on branch:** bound namespace metadata before recursive consumers | Debug/release 2 MiB stack regressions pass |
-| N06 | **Fixed on branch:** validate sibling dependencies at public build entry | Typed-error regression passes |
-| N07 | Make resolver error formatting safe for arbitrary UTF-8 | Public error formatting panic reproduced |
+| N01 | **Fixed on main:** bound blueprint filter parsing, tree height and destruction | Debug/release 2 MiB stack regressions pass |
+| N02 | **Fixed on main:** bound package graph DFS in build and GitHub resolution | Debug/release 2 MiB stack regressions pass |
+| N03 | **Fixed on main:** check OAuth token expiry before adding it to `Instant` | Overflow/rotation/recovery regression passes |
+| N04 | **Fixed on main:** charge and bound variable-to-variable substitution chains | Budget and debug/release stack regressions pass |
+| N05 | **Fixed on main:** bound namespace metadata before recursive consumers | Debug/release 2 MiB stack regressions pass |
+| N06 | **Fixed on main:** validate sibling dependencies at public build entry | Typed-error regression passes |
+| N07 | **Fixed on branch:** make resolver error formatting safe for arbitrary UTF-8 | Public formatting regression passes |
 | N08 | Make watchdog thread creation fallible | Inspection; OS failure |
 | N09 | Handle blocking-pool thread admission failures | Inspection; dependency OS failure |
 | N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
-| N11 | **Fixed on branch:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
+| N11 | **Fixed on main:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
 | N12 | Bound validation frontiers before enqueueing children | Allocation amplification measured |
 | N13 | **Engine fixed; adoption pending:** bound expanded Wasm locals across a module | `submilli-wasm` commit `faacf98`; release/adoption remains |
-| N14 | **Fixed on branch:** bound aggregate MCP discovery pages/tools/schemas | Paginated localhost and aggregate-limit regressions pass |
-| N15 | **Fixed on branch:** bound artifact reads and retained package data before loading | File and wide-closure regressions pass |
+| N14 | **Fixed on main:** bound aggregate MCP discovery pages/tools/schemas | Paginated localhost and aggregate-limit regressions pass |
+| N15 | **Fixed on main:** bound artifact reads and retained package data before loading | File and wide-closure regressions pass |
 | N16 | Admit native string-builder output before allocation | Inspection; host allocation before store limit |
 | N17 | Validate the public reaper's timer configuration | Inspection; zero interval panics |
 
@@ -81,7 +83,7 @@ paths are relative to the stated crate's published source. All findings are
 pre-existing on the integration base; relevant bodies and locked versions were
 compared. PR #141 changes some surrounding source/lines, not these mechanisms.
 The original audit included no fixes. Subsequent dispositions below record fixes
-on `codex/panic-inventory-fixes`; they are not yet merged.
+merged through PR #151 and later follow-up branches.
 
 ### N01 — Blueprint filter recursion and recursive destruction
 
@@ -286,6 +288,14 @@ from this reproduction.
 **Direction/done:** shorten at a character boundary or enforce a validated SHA
 type at the public boundary. Cover Unicode, short strings and normal 40-digit
 pins across the affected error variants.
+
+**Disposition (2026-10-06, fixed on branch):** error formatting retains the
+existing 12-byte SHA display cap and moves the endpoint backward when byte 12
+falls inside a UTF-8 code point. Public `Fetch`, `MissingPackageInRepo` and
+`ShaConflict` values now format arbitrary Unicode safely while normal 40-digit
+ASCII pins retain their first 12 characters. The focused resolver integration
+suite passes, including the reproduced split boundary, short Unicode and exact
+boundary cases.
 
 ### N08 — Watchdog thread creation uses a panicking OS API
 
@@ -659,12 +669,12 @@ first-party Rust execution-path proof from this scan.
 
 | Area | Fresh review | Remaining limitation |
 | --- | --- | --- |
-| Frontend and compiler | Dispatch proofs, parser/tree guards, type substitution, metadata traversal, codegen entry/cloning, diagnostic collection/rendering | N04/N05/N11/N12; typed payload and total-memory questions Q02/Q03 |
+| Frontend and compiler | Dispatch proofs, parser/tree guards, type substitution, metadata traversal, codegen entry/cloning, diagnostic collection/rendering | N12; typed payload and total-memory questions Q02/Q03 |
 | Runtime and standard library | ABI validation, numeric/GC/crypto guarantees, watchdog, JSON/vtable depth limits, selected string/BigInt/Git allocations and worker ownership | N08/N10/N16; Q01; other host/dependency allocation internals not exhaustively proved |
-| Blueprint and build | Filter parser/AST consumers, UTF-8 slices, graph traversal, manifest validation, artifact readers, installed closure depth bound | N01/N02/N06/N07/N15; YAML dependency internals not exhaustively reviewed |
-| Shared MCP/LLM/HTTP | OAuth expiry, catalog conversion/depth, bounded bodies, pagination, dispatch error paths, shared policy paths | N03/N14; a bounded response is not a proof of all dependency allocation behavior |
-| Server and CLI | Preparation, sized compiler threads, timeout setup, UUIDs, storage workers, accepted locks, recording/events and reaper | N08–N10/N15/N17; library configurations/callback implementations need explicit contracts |
-| Pinned engine/dependencies | Actual locked source for Wasm local expansion, native callback charging, Tokio worker admission/Instant/interval and UUID entropy; rmcp pagination | N09/N10/N13/N14; Q04; no complete transitive-dependency or abort-freedom proof |
+| Blueprint and build | Filter parser/AST consumers, UTF-8 slices, graph traversal, manifest validation, artifact readers, installed closure depth bound | YAML dependency internals not exhaustively reviewed |
+| Shared MCP/LLM/HTTP | OAuth expiry, catalog conversion/depth, bounded bodies, pagination, dispatch error paths, shared policy paths | A bounded response is not a proof of all dependency allocation behavior |
+| Server and CLI | Preparation, sized compiler threads, timeout setup, UUIDs, storage workers, accepted locks, recording/events and reaper | N08–N10/N17; library configurations/callback implementations need explicit contracts |
+| Pinned engine/dependencies | Actual locked source for Wasm local expansion, native callback charging, Tokio worker admission/Instant/interval and UUID entropy; rmcp pagination | N09/N10/N13; Q04; no complete transitive-dependency or abort-freedom proof |
 
 No source-triggered engine operand underflow was demonstrated. No OS entropy,
 thread-exhaustion or allocator exhaustion was intentionally induced. A
@@ -676,7 +686,9 @@ should add bounded mechanism entries rather than restore a repository-wide
 
 ## Verification and review record
 
-Inventory-only change; no production implementation changes or full suites.
+### Reset audit
+
+The reset was an inventory-only change with no production implementation changes.
 Focused scratch checks used existing debug rlibs, not a fresh build after the
 last rebase. Source mechanisms were compared with current checkout and the pinned
 integration base. Parent checks: blueprint parse/format/drop, build DFS/missing
@@ -692,3 +704,14 @@ correctness, and runtime/dependency edge cases. Final document review and Linear
 publication/read-back are recorded in the working handoff, outside Git. Existing
 PR #141 tests remain historical evidence for that implementation, not proof that
 the newly identified mechanisms are fixed.
+
+### N07 follow-up
+
+The reproduced public `ResolveError::Fetch` formatting panic now passes together
+with the other affected variants in the eight-test resolver integration suite.
+`cargo fmt --all --check` and workspace all-target Clippy pass. Independent
+clean-code, correctness/no-panic and edge-case reviews covered the complete diff
+against `upstream/main` at `3361c64f`. Correctness and edge-case review found no
+issues. The clean-code review's one low-priority documentation-consistency
+finding was fixed here and parent-checked. Full verification remains deferred to
+the post-rebase PR gate.
