@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "729fb33a25d224ca1207f7b519d4206801482436a7eaa3d0cceddd22a1a32d04"
+  contentHash: "550cb12e249a9acaa527a74b4aad5e855a1126eed3595e5f919e655e122dbe34"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -52,7 +52,7 @@ Each entry below has the same rows, taken from the Package's
 | Filesystem | The `fs.*` capabilities the Package requires, all without a filter |
 | Readme | The Package's readme on GitHub, with its setup and development notes |
 
-Each entry ends with the same four commands, run in the directory of a
+Each entry includes commands to install and grant access, run in the directory of a
 Blueprint:
 
 | Command | Does |
@@ -123,7 +123,17 @@ submilli install submilli/submilli-runtime @submilli/firecrawl
 submilli blueprint add-package @submilli/firecrawl --no-capabilities
 submilli blueprint capability list @submilli/firecrawl
 submilli blueprint capability add firecrawl.dev/scrape
+submilli blueprint capability add firecrawl.dev/delegatedFetch
 ```
+
+Both grants are required for `scrape("https://example.com")`. The
+`firecrawl.dev/scrape` grant authorizes the submitted URL's host. Use
+`--filter 'host == "example.com"'` to restrict that input. As the
+[Package README's Authority section](https://github.com/submilli/submilli-runtime/blob/main/packages/firecrawl/readme.md#authority)
+explains, `firecrawl.dev/delegatedFetch` also authorizes Firecrawl's remote
+redirects, subresources, discovery, and crawling. A submitted-host filter
+does not constrain those downstream fetches. Do not grant delegation to a
+role that requires strict downstream host isolation.
 
 ## @submilli/github
 
