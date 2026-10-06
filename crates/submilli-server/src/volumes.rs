@@ -29,6 +29,10 @@ pub struct VolumeRegistry {
     /// One cell per volume with a byte limit, so concurrent first users
     /// measure it once and share the result.
     quotas: BTreeMap<String, OnceCell<Arc<DiskQuota>>>,
+    /// For a volume that is a partial copy: what the source holds that the copy does not,
+    /// added to the copy's own measure. `None` is a source that could not be measured.
+    /// Empty for every volume of a normal run.
+    usage_offsets: BTreeMap<String, Option<u64>>,
 }
 
 impl Default for VolumeRegistry {
@@ -92,7 +96,15 @@ impl VolumeRegistry {
             table,
             managed_root,
             quotas,
+            usage_offsets: BTreeMap::new(),
         }
+    }
+
+    /// Counts `offsets` against each named volume's size limit on top of what its
+    /// directory holds, for a volume that holds only part of its source.
+    pub(crate) fn with_usage_offsets(mut self, offsets: BTreeMap<String, Option<u64>>) -> Self {
+        self.usage_offsets = offsets;
+        self
     }
 
     /// The declarations, by name.
@@ -184,11 +196,19 @@ impl VolumeRegistry {
             return Err(SessionError::UnknownVolume(volume.to_string()));
         };
         let host = self.host_of(volume, &spec.kind)?;
+        let offset = self.usage_offsets.get(volume).copied();
         let measured = cell
             .get_or_try_init(|| async move {
-                let used = tokio::task::spawn_blocking(move || measure_host_dir(&host))
+                let mut used = tokio::task::spawn_blocking(move || measure_host_dir(&host))
                     .await
                     .map_err(|err| std::io::Error::other(err.to_string()))??;
+                match offset {
+                    None => {}
+                    Some(Some(offset)) => used = used.saturating_add(offset),
+                    Some(None) => {
+                        return Err(std::io::Error::other("the source volume was not measured"));
+                    }
+                }
                 Ok::<_, std::io::Error>(Arc::new(DiskQuota::new(limit, used)))
             })
             .await;
