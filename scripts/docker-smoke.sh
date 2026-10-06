@@ -202,25 +202,29 @@ ok "Docker healthcheck goes healthy on a non-default port"
 docker rm -f "$envc" >/dev/null
 
 step "5. A path variable relocates state through the image"
-# Distinct from the port check: this exercises the path-valued arm of the env
-# layer, and proves the blueprint store honours it. The store is a revision log
-# (index.json plus <name>.<rev>.yaml), not a directory of loose files, so it is
-# inspected for that shape rather than for a demo.yaml.
+# Blueprint revisions live in SQLite. SUBMILLI_BLUEPRINT_DIR names the legacy
+# import source; SUBMILLI_DATABASE_PATH selects the active store.
 bp_vol="${PROJECT}-bp"
 VOLUMES+=("$bp_vol")
 docker volume create "$bp_vol" >/dev/null
 bp_port=$(free_port)
 bpc=$(docker run -d -p "127.0.0.1:${bp_port}:8128" -v "${bp_vol}:/var/lib/submilli" \
-    -e SUBMILLI_BLUEPRINT_DIR=/var/lib/submilli/relocated "${AUTH_ARGS[@]}" "$IMAGE")
+    -e SUBMILLI_DATABASE_PATH=/var/lib/submilli/relocated/submilli.db "${AUTH_ARGS[@]}" "$IMAGE")
 CONTAINERS+=("$bpc")
-wait_for_health "$bp_port" || die "container with SUBMILLI_BLUEPRINT_DIR never answered"
+wait_for_health "$bp_port" || die "container with SUBMILLI_DATABASE_PATH never answered"
 put_blueprint "$bp_port" >/dev/null
-# Tolerates a missing directory so the greps below report *what* went wrong
-# rather than the script dying on busybox's exit status.
-listing=$(docker run --rm -v "${bp_vol}:/state" busybox ls /state/relocated 2>/dev/null || true)
-grep -qE '^index\.json$' <<<"$listing" || die "blueprint store did not land in the relocated dir: ${listing}"
-grep -qE '^demo\.[0-9]+\.yaml$' <<<"$listing" || die "no revision file in the relocated dir: ${listing}"
-ok "SUBMILLI_BLUEPRINT_DIR relocated the store"
+docker run --rm -v "${bp_vol}:/state:ro" busybox test -s /state/relocated/submilli.db \
+    || die "blueprint database did not land in the relocated directory"
+docker run --rm -v "${bp_vol}:/state:ro" busybox test ! -e /state/server/db/submilli.db \
+    || die "server created a database at the default path despite SUBMILLI_DATABASE_PATH"
+docker restart "$bpc" >/dev/null
+wait_for_health "$bp_port" || die "container with relocated database did not restart"
+result=$(admin_curl -sf -X POST "http://127.0.0.1:${bp_port}/v1/execute" \
+    -H 'content-type: application/json' \
+    -d '{"blueprint":"demo","code":"export function main(): string { return \"persisted\"; }"}' \
+    | json_field result)
+[[ "$result" == "persisted" ]] || die "blueprint did not survive the relocated database restart: ${result}"
+ok "SUBMILLI_DATABASE_PATH relocated the store and preserved the blueprint across restart"
 docker rm -f "$bpc" >/dev/null
 
 step "6. The documented compose story works end to end"

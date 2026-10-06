@@ -11,7 +11,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "14eeb6a50f277b2c95a768748c8b9d41262a57b86ac8027f028ba1f7d60340b9"
+  contentHash: "55020a73b0658864f3e5be7b3736f0db58d3e2efac5c76d41ca3d4e36f8b9fa2"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -313,12 +313,6 @@ submilli-0.submilli-headless.<namespace>.svc:8128
 Leave it at 1 unless your application does that.
 
 ## Upgrade and back up
-
-Chart 0.4.0 upgrades the runtime from 0.2.0 to 0.3.0 and moves Blueprint
-revisions into SQLite on the existing state volume. Stop the old pod and
-snapshot the state claim before the upgrade. Use local or block-backed
-storage and persist the database directory, including journal and lock
-files. A rollback to 0.2.0 requires restoring the pre-upgrade state snapshot.
 
 Review the next chart version's migration instructions, then replace `0.4.0`
 with that published chart version:
