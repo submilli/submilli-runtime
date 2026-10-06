@@ -13,7 +13,7 @@
     "check:published-videos": "node --test ./scripts/check-published-videos.test.mjs",
     "preview": "astro preview",
     "reference": "node --experimental-strip-types ./scripts/generate-reference.ts",
-    "check": "astro check && node --experimental-strip-types --test ./scripts/agent-docs.test.ts ./scripts/code-blocks.test.mjs ./scripts/page-actions.test.ts ./scripts/structured-data.test.ts ./scripts/theme.test.mjs ./scripts/videos.test.ts ./scripts/check-published-videos.test.mjs",
+    "check": "astro check && node --experimental-strip-types --test ./scripts/agent-docs.test.ts ./scripts/code-blocks.test.mjs ./scripts/page-actions.test.ts ./scripts/structured-data.test.ts ./scripts/theme.test.mjs ./scripts/videos.test.ts ./scripts/check-published-videos.test.mjs && bash ../examples/quickstart/verify.sh --blocks-only",
     "precheck": "node ./scripts/ensure-root-tsconfig.mjs"
   },
   "dependencies": {

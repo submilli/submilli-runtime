@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { AstroIntegration } from 'astro';
 import { legacyDocsRoutes } from '../lib/legacy-docs.ts';
 import { createAgentDocs, readChapters } from '../lib/agent-docs.ts';
@@ -19,6 +19,10 @@ export function agentDocs(): AstroIntegration {
 					const current = outputs.get(currentPath);
 					if (!current) throw new Error(`Missing legacy Markdown target: ${currentPath}`);
 					outputs.set(`/docs${source}.md`, current);
+				}
+				for (const file of ['agent.py', 'requirements.txt']) {
+					const source = new URL(`../../../examples/quickstart/${file}`, import.meta.url);
+					outputs.set(`/docs/examples/quickstart/${file}`, await readFile(source, 'utf8'));
 				}
 				for (const [path, content] of outputs) {
 					const destination = new URL(`.${path}`, publishDirectory);

@@ -3,22 +3,14 @@
 # Walks the quickstart chapter's reader journey against the real CLI and server,
 # and asserts both outcomes: the total, and the denial.
 #
-# The chapter is written from this script's transcript. The containment runs one
-# way — every command the chapter prints appears between the `reader journey`
-# fences below, verbatim and in the chapter's order. Inside a fence, `save <path>`
-# stands for a code block the chapter tells the reader to save; everything else is
-# a command the chapter prints. The one exception is the chapter's opening
-# `mkdir`/`cd`, whose analogue is the throwaway workdir this script creates.
-# Readiness waits, assertions, controls, and teardown are harness-only and live
-# outside the fences.
+# The chapter's complete file blocks must match these fixtures. This harness
+# replays the package, Blueprint, and application steps in an isolated directory,
+# then checks failure paths and policy controls. Installation and the optional
+# real-model run are outside this check.
 #
-# With SUBMILLI_QUICKSTART_CHAPTER pointing to the separately maintained book,
-# `--blocks-only` runs just the drift check between the chapter's code blocks
-# and the files here, without touching the CLI or the server.
-#
-# The binaries resolve through $SUBMILLI and $SUBMILLI_SERVER, defaulting to
-# `cargo run` so this works on a checkout where no installer has placed anything.
-# That indirection is the only permitted divergence between script and prose.
+# `--blocks-only` checks the chapter without starting a server. Override the
+# default chapter with SUBMILLI_QUICKSTART_CHAPTER when checking another copy.
+# Binaries resolve through $SUBMILLI and $SUBMILLI_SERVER, defaulting to cargo.
 #
 #   ./verify.sh                                    # from a source checkout
 #   SUBMILLI=submilli SUBMILLI_SERVER=submilli-server ./verify.sh   # installed
@@ -30,6 +22,7 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The journey runs in a throwaway directory, so the cargo fallback has to name
 # the workspace explicitly — there is no Cargo.toml above it to find.
 REPO_ROOT="$(cd "$SRC/../.." && pwd)"
+: "${SUBMILLI_QUICKSTART_CHAPTER:=$REPO_ROOT/docs/part-1-start-here/03-quickstart.md}"
 : "${SUBMILLI:=cargo run -q --manifest-path $REPO_ROOT/Cargo.toml -p submilli --}"
 : "${SUBMILLI_SERVER:=cargo run -q --manifest-path $REPO_ROOT/Cargo.toml -p submilli-server --}"
 
@@ -40,8 +33,13 @@ export SUBMILLI_HOME
 # The journey names its own server and token. Settings inherited from the
 # developer's shell would point the CLI at another server or another token, or
 # hand the server a config the chapter never mentions.
-unset SUBMILLI_SERVER_URL SUBMILLI_SERVER_TOKEN SUBMILLI_SERVER_TOKEN_FILE
+unset SUBMILLI_SERVER_TOKEN SUBMILLI_SERVER_TOKEN_FILE
 unset SUBMILLI_CONFIG SUBMILLI_ALLOW_UNAUTHENTICATED
+if [[ "${1:-}" != "--blocks-only" ]]; then
+  SERVER_PORT="${SUBMILLI_QUICKSTART_PORT:-$(node -e 'const net=require("net"); const s=net.createServer(); s.listen(0,"127.0.0.1",()=>{console.log(s.address().port); s.close();});')}"
+  export SUBMILLI_BIND=127.0.0.1 SUBMILLI_PORT="$SERVER_PORT"
+  export SUBMILLI_SERVER_URL="http://127.0.0.1:$SERVER_PORT"
+fi
 WORK="$(mktemp -d)"
 SERVER_PID=""
 
@@ -72,23 +70,30 @@ chapter, src = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 blocks = [b for _, b in re.findall(r"```(\w*)\n(.*?)```", chapter.read_text(), re.S)]
 missing = [p for p in ("blueprint.yaml", "total.ts",
                        "total-injected.ts", "app.mjs", "package/src/lib.ts",
+                       "package/tests/lib.test.ts",
                        "package/capabilities.yaml")
            if (src / p).read_text() not in blocks]
 for p in missing:
     print(f"  not printed verbatim in the chapter: {p}", file=sys.stderr)
 
-# agent.py is excerpted rather than printed whole, so check the lines a reader
-# copies: the MCP endpoint, the token header, and the session-variable header.
+# agent.py is downloaded rather than printed whole, so check the stable URLs
+# the chapter exposes without coupling the chapter to the optional agent code.
 text = chapter.read_text()
-agent = (src / "agent.py").read_text()
-for needle in [l.strip() for l in agent.splitlines()
-               if '"url"' in l or '"Authorization"' in l or "submilli-variables" in l]:
+for needle in ("/docs/examples/quickstart/agent.py", "/docs/examples/quickstart/requirements.txt"):
     if needle not in text:
         missing.append("agent.py")
-        print(f"  agent.py line missing from the chapter: {needle}", file=sys.stderr)
+        print(f"  downloadable optional agent URL missing from the chapter: {needle}", file=sys.stderr)
 
 sys.exit(1 if missing else 0)
 PYEOF
+}
+
+expect_failure() {
+  local output
+  if output="$("$@" 2>&1)"; then
+    fail "expected a nonzero exit from $*: $output"
+  fi
+  printf '%s\n' "$output"
 }
 
 step() { printf '\n\033[1m# %s\033[0m\n' "$*"; }
@@ -110,7 +115,7 @@ expect_missing() {
 # token being right. `server status` does, and proves the CLI's token works.
 wait_for_server() {
   for _ in $(seq 1 120); do
-    if curl -fsS -o /dev/null http://127.0.0.1:8128/healthz 2>/dev/null; then
+    if curl -fsS -o /dev/null "$SUBMILLI_SERVER_URL/healthz" 2>/dev/null; then
       $SUBMILLI server status >/dev/null || fail "the server is up but refused the token in SUBMILLI_SERVER_TOKEN"
       return 0
     fi
@@ -125,8 +130,8 @@ wait_for_server() {
 # answer counts, which is why curl runs without -f: another listener's 404
 # means the port is taken just as much as a submilli-server's 200.
 require_port_free() {
-  if curl -sS -o /dev/null http://127.0.0.1:8128/healthz 2>/dev/null; then
-    fail "something is already listening on 127.0.0.1:8128 — stop it first (submilli server stop)"
+  if curl -sS -o /dev/null "$SUBMILLI_SERVER_URL/healthz" 2>/dev/null; then
+    fail "something is already listening on $SUBMILLI_SERVER_URL — choose another SUBMILLI_QUICKSTART_PORT"
   fi
 }
 
@@ -151,25 +156,22 @@ step "the package"
 # --- reader journey ---
 $SUBMILLI build init @acme/billing package
 save package/src/lib.ts
-rm package/tests/lib.test.ts
-$SUBMILLI build check
+save package/tests/lib.test.ts
+$SUBMILLI build check --deny-warnings
+$SUBMILLI build test --deny-warnings
 $SUBMILLI build publish-local
 cat package/capabilities.yaml
 save blueprint.yaml
-$SUBMILLI blueprint lint blueprint.yaml
+$SUBMILLI blueprint lint --deny-warnings blueprint.yaml
 # --- end reader journey ---
 
 diff -u "$SRC/package/capabilities.yaml" package/capabilities.yaml \
   || fail "the derived capability schema no longer matches the one the chapter prints"
 
 # The chapter prints `checked @acme/billing v0.1.0` and nothing else.
-check_out="$($SUBMILLI build check 2>&1)"
+check_out="$($SUBMILLI build check --deny-warnings 2>&1)"
 expect_missing "$check_out" "warning:" "the package compiles without warnings"
 
-# The committed test is not part of the reader journey any more, but it still
-# has to pass — it is the package's only real coverage.
-save package/tests/lib.test.ts
-$SUBMILLI build test >/dev/null
 
 # Publishing twice must be safe: a reader who edits and republishes should not
 # have to reset the store.
@@ -183,7 +185,7 @@ save total.ts
 save total-injected.ts
 save app.mjs
 export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
-$SUBMILLI_SERVER &
+$SUBMILLI_SERVER --bind 127.0.0.1 --port "$SERVER_PORT" &
 # --- end reader journey ---
 SERVER_PID=$!
 wait_for_server
@@ -191,14 +193,14 @@ wait_for_server
 # --- reader journey, continued ---
 $SUBMILLI server blueprint apply blueprint.yaml
 node app.mjs total.ts
-node app.mjs total-injected.ts
+expect_failure node app.mjs total-injected.ts
 # --- end reader journey ---
 
 legit="$(node app.mjs total.ts)"
 expect_contains "$legit" "[result]  2 charges, 6150 cents" "the legitimate run"
 expect_missing "$legit" "[denied]" "the legitimate run is not denied"
 
-injected="$(node app.mjs total-injected.ts)"
+injected="$(expect_failure node app.mjs total-injected.ts)"
 expect_contains "$injected" "[program] 2 charges, 6150 cents" "the injected run's legitimate work completes"
 expect_contains "$injected" "[denied]" "the injected run is denied"
 expect_contains "$injected" "acme.com/charges.list" "the denial names the capability"
@@ -216,6 +218,8 @@ fi
 # ---------------------------------------------------------------------------
 
 step "controls"
+expect_contains "$(expect_failure node app.mjs)" "usage:" "missing program argument"
+expect_contains "$(expect_failure node app.mjs missing.ts)" "cannot read" "missing program file"
 
 # Without the filter the injected call is allowed. If this still denies, the
 # denial above was coming from somewhere other than the filter.
@@ -230,13 +234,13 @@ expect_contains "$unfiltered" "reconciliation: 1 charges" "without the filter th
 # denial to the value the application supplied: same blueprint, same programs,
 # only the client's binding changed.
 sed 's/"cus_northwind"/"cus_initech"/' app.mjs > app-flipped.mjs
-flipped_legit="$(node app-flipped.mjs total.ts)"
+flipped_legit="$(expect_failure node app-flipped.mjs total.ts)"
 expect_contains "$flipped_legit" "[denied]" "with cus_initech bound, the northwind call is denied"
-flipped_injected="$(node app-flipped.mjs total-injected.ts)"
+flipped_injected="$(expect_failure node app-flipped.mjs total-injected.ts)"
 expect_contains "$flipped_injected" "[denied]" "the flipped run still denies the first call it makes"
 
 # An unregistered blueprint fails legibly rather than crashing the client.
-missing="$(sed 's/"quickstart"/"no-such-blueprint"/' app.mjs > app-missing.mjs && node app-missing.mjs total.ts 2>&1)"
+missing="$(sed 's/"quickstart"/"no-such-blueprint"/' app.mjs > app-missing.mjs && expect_failure node app-missing.mjs total.ts)"
 expect_contains "$missing" "no-such-blueprint" "an unregistered blueprint names itself in the error"
 expect_missing "$missing" "[result]" "an unregistered blueprint does not run the program"
 
@@ -253,11 +257,13 @@ fi
 expect_contains "$wrongtoken" "[refused]" "an unknown token is refused"
 expect_missing "$wrongtoken" "[result]" "an unknown token does not run the program"
 unauthenticated="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-  -H 'content-type: application/json' -d '{}' http://127.0.0.1:8128/v1/execute)"
+  -H 'content-type: application/json' -d '{}' "$SUBMILLI_SERVER_URL/v1/execute")"
 [[ "$unauthenticated" == "401" ]] || fail "a request with no token: expected 401, got $unauthenticated"
 
 # The variable is required, not defaulted.
-novar="$(sed 's/variables: { customerId }/variables: {}/' app.mjs > app-novar.mjs && node app-novar.mjs total.ts 2>&1)"
+novar="$(sed 's/variables: { customerId }/variables: {}/' app.mjs > app-novar.mjs && expect_failure node app-novar.mjs total.ts)"
+expect_contains "$novar" "[invalid_request]" "omitting the variable is a request error"
+expect_missing "$novar" "[denied]" "omitting the variable is not a policy denial"
 expect_contains "$novar" "customerId" "omitting the variable is rejected by name"
 expect_missing "$novar" "[result]" "omitting the variable does not run the program"
 
@@ -272,6 +278,7 @@ $SUBMILLI server stop
 # --- end reader journey ---
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
+expect_contains "$(expect_failure node app.mjs total.ts)" "cannot reach" "stopped server"
 
 # ---------------------------------------------------------------------------
 # The role split — harness-only, not part of the chapter's journey
@@ -292,7 +299,7 @@ api_tokens:
   role: user
   token_file: $WORK/app.token
 EOF
-$SUBMILLI_SERVER --config "$WORK/roles.yaml" &
+$SUBMILLI_SERVER --bind 127.0.0.1 --port "$SERVER_PORT" --config "$WORK/roles.yaml" &
 SERVER_PID=$!
 wait_for_server
 app_token="$(cat "$WORK/app.token")"

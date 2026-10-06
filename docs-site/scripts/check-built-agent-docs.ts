@@ -97,3 +97,11 @@ const oldExecutionPage = await readFile(new URL('docs/concepts/execution-model/i
 assert.ok(oldExecutionPage.includes('/docs/why/'));
 assert.equal(introduction.id, 'code-execution-introduction');
 console.log(`Verified stable video embeds and HTML discovery for ${chapters.length} visible chapters.`);
+
+for (const file of ['agent.py', 'requirements.txt']) {
+	assert.equal(
+		await readFile(new URL(`docs/examples/quickstart/${file}`, directory), 'utf8'),
+		await readFile(new URL(`../../examples/quickstart/${file}`, import.meta.url), 'utf8'),
+		`Quickstart download matches the verified example: ${file}`,
+	);
+}
