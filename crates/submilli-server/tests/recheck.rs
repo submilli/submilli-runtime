@@ -71,6 +71,7 @@ fn recorded(variables: &[(&str, &str)], decisions: Vec<DecisionRecord>) -> Recor
         blueprint_name: "bp".into(),
         blueprint_hash: None,
         code: Some("function main(): string { return \"x\"; }".into()),
+        session_id: None,
         variables: variables
             .iter()
             .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
