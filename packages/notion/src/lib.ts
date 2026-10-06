@@ -847,14 +847,17 @@ export function createPage(input: CreatePageInput): NotionPage {
 }
 
 /**
- * Create pages sequentially and stop on the first failure. Each page is created as `createPage`
- * creates it and is checked as `submilli/notion.createPage` when its turn comes, so a denial can
- * follow pages already created. Every input is validated before the first page is created.
+ * Create pages sequentially and stop on the first failure. The batch is authorized before any
+ * input is examined. Each page is then created and checked as `createPage` when its turn comes,
+ * so a per-page denial can follow pages already created. Every input is validated before the first
+ * page is created.
  *
  * @param inputs Page creation inputs, created in order.
  * @returns The created pages in input order; a failure throws a `BatchNotionError` listing the IDs already created.
+ * @capability submilli/notion.createPages {}
  */
 export function createPages(inputs: CreatePageInput[]): NotionPage[] {
+    check("submilli/notion.createPages", {});
     for (const input of inputs) pages.validateCreatePageInput(input);
     const created: NotionPage[] = [];
     for (let index = 0; index < inputs.length; index += 1) {

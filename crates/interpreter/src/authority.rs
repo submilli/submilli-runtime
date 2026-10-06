@@ -8,9 +8,10 @@ use serde::{Deserialize, Serialize};
 use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::typechecker::rules::body_walk::{self, Visitor};
 use crate::{
-    ClosureBody, DocCapability, ExportKind, ExprId, MangledName, PackageDeclaration, Param,
-    PostfixTarget, Sources, Span, StmtId, Type, TypeKind, TypedAst, TypedChainPart,
-    TypedClassAccessor, TypedExprKind, TypedStmtKind, TypedTypeDecl, Visibility,
+    ClosureBody, Diagnostic, DocCapability, ExportKind, ExprId, GlobalKind, MangledName,
+    PackageDeclaration, Param, PostfixTarget, Severity, Sources, Span, StmtId, Type, TypeKind,
+    TypedAst, TypedChainPart, TypedClassAccessor, TypedExprKind, TypedStmtKind, TypedTypeDecl,
+    Visibility,
 };
 
 const MAX_CALLABLES: usize = 1 << 16;
@@ -142,6 +143,9 @@ struct Node {
     callable: AuthorityCallable,
     root: Root,
     raw_span: Span,
+    label_span: Span,
+    semantic_routes: BTreeMap<String, Span>,
+    has_direct_semantic_check: bool,
 }
 
 #[derive(Clone)]
@@ -149,6 +153,7 @@ struct RawEdge {
     caller: usize,
     target: Option<usize>,
     span: AuthoritySpan,
+    raw_span: Span,
     unresolved: bool,
     reason: Option<String>,
 }
@@ -157,6 +162,25 @@ struct Propagation {
     adjacency: Vec<Vec<(usize, usize)>>,
     component_of: Vec<usize>,
     component_effects: Vec<BTreeSet<AuthorityEffect>>,
+}
+
+struct Witness {
+    steps: Vec<AuthorityWitnessStep>,
+    edge_indices: Vec<usize>,
+}
+
+#[derive(Clone)]
+struct SemanticRoute {
+    name: String,
+    span: Span,
+}
+
+#[derive(Default)]
+struct SemanticRoutes {
+    functions: BTreeMap<MangledName, Vec<SemanticRoute>>,
+    globals: BTreeMap<MangledName, Vec<SemanticRoute>>,
+    classes: BTreeMap<MangledName, Vec<String>>,
+    statics: BTreeMap<MangledName, Vec<SemanticRoute>>,
 }
 
 #[derive(Clone, Copy)]
@@ -171,7 +195,7 @@ pub(crate) fn analyse<'a>(
     ta: &'a TypedAst,
     sources: &'a Sources,
     dependencies: impl Iterator<Item = &'a PackageDeclaration>,
-) -> Result<AuthorityMap, CompilerFailure> {
+) -> Result<(AuthorityMap, Vec<Diagnostic>), CompilerFailure> {
     let mut builder = Builder::new(
         declaration,
         ta,
@@ -203,8 +227,11 @@ struct Builder<'a> {
     class_hierarchy: BTreeMap<MangledName, Option<MangledName>>,
     external_classes: BTreeMap<MangledName, &'a crate::TypeSymbol>,
     external_surfaces: BTreeMap<MangledName, Rc<ExternalClassSurface>>,
+    semantic_routes: SemanticRoutes,
+    semantic_route_count: usize,
     edges: Vec<RawEdge>,
     exposure_edges: Vec<(usize, usize)>,
+    effect_spans: BTreeMap<AuthorityEffect, Span>,
     direct_effect_count: usize,
     limits: AnalysisLimits,
 }
@@ -217,6 +244,7 @@ impl<'a> Builder<'a> {
         dependencies: impl Iterator<Item = &'a PackageDeclaration>,
         limits: AnalysisLimits,
     ) -> Result<Self, CompilerFailure> {
+        let semantic_routes = index_semantic_routes(declaration, ta, limits.route_effects)?;
         let local_class_declarations = ta
             .types
             .iter()
@@ -245,46 +273,46 @@ impl<'a> Builder<'a> {
             class_hierarchy: BTreeMap::new(),
             external_classes: BTreeMap::new(),
             external_surfaces: BTreeMap::new(),
+            semantic_routes,
+            semantic_route_count: 0,
             edges: Vec::new(),
             exposure_edges: Vec::new(),
+            effect_spans: BTreeMap::new(),
             direct_effect_count: 0,
             limits,
         };
-        builder.index_local()?;
         for dependency in dependencies {
             builder.index_dependency_declaration(dependency);
         }
-        builder.expose_inherited_members(&exports(ta, ExportKind::Type))?;
+        builder.index_local()?;
+        builder.expose_inherited_members()?;
         builder.link_implicit_constructors()?;
         Ok(builder)
     }
 
     fn index_local(&mut self) -> Result<(), CompilerFailure> {
-        let exported_functions = exports(self.ta, ExportKind::Function);
-        let exported_globals = exports(self.ta, ExportKind::Global);
-        let exported_classes = exports(self.ta, ExportKind::Type);
-        let public_statics = public_static_functions(self.declaration, &exported_classes);
-
-        self.index_functions(&exported_functions, &public_statics)?;
-        self.index_classes(&exported_classes)?;
+        self.index_functions()?;
+        self.index_classes()?;
         self.index_closures()?;
-        self.index_module_initializers(&exported_globals)?;
+        self.index_module_initializers()?;
         Ok(())
     }
 
-    fn index_functions(
-        &mut self,
-        exported_functions: &BTreeSet<MangledName>,
-        public_statics: &BTreeSet<MangledName>,
-    ) -> Result<(), CompilerFailure> {
+    fn index_functions(&mut self) -> Result<(), CompilerFailure> {
         for function in &self.ta.functions {
             let kind = if function.mangled_name.as_str().contains("#static#") {
                 AuthorityCallableKind::StaticMethod
             } else {
                 AuthorityCallableKind::Function
             };
-            let exposure = if exported_functions.contains(&function.mangled_name)
-                || public_statics.contains(&function.mangled_name)
+            let exposure = if self
+                .semantic_routes
+                .functions
+                .contains_key(&function.mangled_name)
+                || self
+                    .semantic_routes
+                    .statics
+                    .contains_key(&function.mangled_name)
             {
                 AuthorityExposure::Public
             } else {
@@ -299,15 +327,36 @@ impl<'a> Builder<'a> {
                 vec![function.body],
                 Vec::new(),
             )?;
+            self.nodes[index].label_span = function.name.span;
+            let function_routes = self
+                .semantic_routes
+                .functions
+                .get(&function.mangled_name)
+                .cloned()
+                .unwrap_or_default();
+            for route in function_routes {
+                let span = if route.name == function.name.name {
+                    function.name.span
+                } else {
+                    route.span
+                };
+                self.add_semantic_route(index, route.name.clone(), span)?;
+            }
+            let static_routes = self
+                .semantic_routes
+                .statics
+                .get(&function.mangled_name)
+                .cloned()
+                .unwrap_or_default();
+            for route in static_routes {
+                self.add_semantic_route(index, route.name.clone(), function.name.span)?;
+            }
             self.named.insert(function.mangled_name.clone(), index);
         }
         Ok(())
     }
 
-    fn index_classes(
-        &mut self,
-        exported_classes: &BTreeSet<MangledName>,
-    ) -> Result<(), CompilerFailure> {
+    fn index_classes(&mut self) -> Result<(), CompilerFailure> {
         for declaration in &self.ta.types {
             let TypedTypeDecl::Class(class) = declaration else {
                 continue;
@@ -316,7 +365,10 @@ impl<'a> Builder<'a> {
                 .insert(class.mangled_name.clone(), class.extends.clone());
             self.class_hierarchy
                 .insert(class.mangled_name.clone(), class.extends.clone());
-            let class_public = exported_classes.contains(&class.mangled_name);
+            let class_public = self
+                .semantic_routes
+                .classes
+                .contains_key(&class.mangled_name);
             let ctor_public = class_public && self.constructor_is_public(&class.mangled_name);
             let ctor_mangled = crate::mangle::extend(&class.mangled_name, "constructor");
             let mut ctor_statements = Vec::new();
@@ -364,6 +416,17 @@ impl<'a> Builder<'a> {
                     vec![method.body],
                     Vec::new(),
                 )?;
+                if class_public && method.visibility == Visibility::Public {
+                    let public_class_names =
+                        self.semantic_routes.classes[&class.mangled_name].clone();
+                    for class_name in public_class_names {
+                        self.add_semantic_route(
+                            index,
+                            format!("{class_name}.{}", method.name.name),
+                            method.name.span,
+                        )?;
+                    }
+                }
                 self.methods.insert(
                     (class.mangled_name.clone(), method.name.name.clone()),
                     index,
@@ -449,10 +512,7 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    fn index_module_initializers(
-        &mut self,
-        exported_globals: &BTreeSet<MangledName>,
-    ) -> Result<(), CompilerFailure> {
+    fn index_module_initializers(&mut self) -> Result<(), CompilerFailure> {
         let mut module_roots: BTreeMap<u32, Vec<_>> = BTreeMap::new();
         for statement in &self.ta.top_level_statements {
             let span = self
@@ -480,7 +540,7 @@ impl<'a> Builder<'a> {
                     mangled,
                     target_ty,
                     *value,
-                    exported_globals.contains(mangled),
+                    self.semantic_routes.globals.contains_key(mangled),
                 )?;
             }
         }
@@ -517,6 +577,7 @@ impl<'a> Builder<'a> {
         exported: bool,
     ) -> Result<(), CompilerFailure> {
         let held = self.held_callable(value)?;
+        let capability_callee = self.held_capability_callee(value)?;
         if held.is_none() && !may_be_callable(target_ty) {
             return Ok(());
         }
@@ -560,19 +621,50 @@ impl<'a> Builder<'a> {
             )?;
             target
         };
+        if held.is_none()
+            && let Some(callee) = capability_callee
+        {
+            self.add_unapplied_capability_effects(
+                target,
+                callee,
+                ident.span,
+                0,
+                "some capability bindings depend on function arguments",
+            )?;
+        }
         self.closure_globals.insert(mangled.clone(), target);
         if exported {
             self.nodes[target].callable.exposure = AuthorityExposure::Public;
+            if self
+                .ta
+                .globals
+                .iter()
+                .any(|global| global.mangled_name == *mangled && global.kind == GlobalKind::Const)
+            {
+                self.nodes[target].label_span = ident.span;
+                let global_routes = self
+                    .semantic_routes
+                    .globals
+                    .get(mangled)
+                    .cloned()
+                    .unwrap_or_default();
+                for route in global_routes {
+                    let span = if route.name == ident.name {
+                        ident.span
+                    } else {
+                        route.span
+                    };
+                    self.add_semantic_route(target, route.name.clone(), span)?;
+                }
+            }
         }
         Ok(())
     }
 
-    fn expose_inherited_members(
-        &mut self,
-        exported_classes: &BTreeSet<MangledName>,
-    ) -> Result<(), CompilerFailure> {
+    fn expose_inherited_members(&mut self) -> Result<(), CompilerFailure> {
+        let exported_classes = self.semantic_routes.classes.clone();
         let mut inheritance_work = 0usize;
-        for exported in exported_classes {
+        for (exported, public_names) in &exported_classes {
             let Some(class) = self.local_class_declarations.get(exported).copied() else {
                 continue;
             };
@@ -627,8 +719,9 @@ impl<'a> Builder<'a> {
                     self.expose_local_inherited_methods(
                         parent_class,
                         &parent_name,
+                        public_names,
                         &mut seen.methods,
-                    );
+                    )?;
                     self.expose_local_inherited_accessors(
                         parent_class,
                         &parent_name,
@@ -730,16 +823,26 @@ impl<'a> Builder<'a> {
         &mut self,
         class: &crate::TypedClassDecl,
         owner: &MangledName,
+        public_class_names: &[String],
         seen: &mut BTreeSet<String>,
-    ) {
+    ) -> Result<(), CompilerFailure> {
         for method in &class.methods {
             if method.visibility == Visibility::Public
                 && seen.insert(method.name.name.clone())
                 && let Some(target) = self.methods.get(&(owner.clone(), method.name.name.clone()))
             {
-                self.nodes[*target].callable.exposure = AuthorityExposure::Public;
+                let target = *target;
+                self.nodes[target].callable.exposure = AuthorityExposure::Public;
+                for class_name in public_class_names {
+                    self.add_semantic_route(
+                        target,
+                        format!("{class_name}.{}", method.name.name),
+                        method.name.span,
+                    )?;
+                }
             }
         }
+        Ok(())
     }
 
     fn expose_local_inherited_accessors(
@@ -768,12 +871,22 @@ impl<'a> Builder<'a> {
         span: Span,
         seen: &mut BTreeSet<String>,
     ) -> Result<(), CompilerFailure> {
+        let public_class_names = self
+            .semantic_routes
+            .classes
+            .get(exported)
+            .cloned()
+            .unwrap_or_default();
         for (name, visibility) in &class.static_methods {
             if *visibility != Visibility::Private
                 && seen.insert(name.clone())
                 && let Some(target) = self.named.get(&crate::mangle::static_member(owner, name))
             {
-                self.nodes[*target].callable.exposure = AuthorityExposure::Public;
+                let target = *target;
+                self.nodes[target].callable.exposure = AuthorityExposure::Public;
+                for class_name in &public_class_names {
+                    self.add_semantic_route(target, format!("{class_name}.{name}"), span)?;
+                }
             }
         }
         let function_fields = class
@@ -983,44 +1096,80 @@ impl<'a> Builder<'a> {
             _ => None,
         };
         if let Some(callee) = callee {
-            checked_authority_budget(
-                self.direct_effect_count,
-                callee.capabilities.len().saturating_add(1),
-                self.limits.route_effects,
+            self.add_unapplied_capability_effects(
+                index,
+                callee,
                 span,
-                "direct effect",
+                1,
+                "some inherited capability bindings depend on caller arguments",
             )?;
-            let mut effects = Vec::with_capacity(callee.capabilities.len());
-            for capability in callee.capabilities {
-                let derived =
-                    crate::derive_call_site_capability(capability, callee.params, self.ta, &[])
-                        .map_err(|error| {
-                            error.fatal.unwrap_or_else(|| {
-                        crate::typechecker::invariant_failure(
-                            "inherited capability derivation failed without a typed failure",
-                        )
-                    })
-                        })?;
-                let unresolved = capability.bindings.iter().any(|binding| {
-                    matches!(
-                        binding.kind,
-                        crate::DocCapabilityBindingKind::Parameter { .. }
-                    )
-                });
-                effects.push(AuthorityEffect {
-                    capability: Some(derived.capability),
-                    sink: source_span(self.sources, span)?,
-                    known_bindings: derived.known_bindings,
-                    unresolved,
-                    reason: unresolved.then(|| {
-                        "some inherited capability bindings depend on caller arguments".to_string()
-                    }),
-                });
-            }
-            for effect in effects {
-                self.push_effect(index, effect, span)?;
-            }
         }
+        Ok(())
+    }
+
+    fn add_unapplied_capability_effects(
+        &mut self,
+        index: usize,
+        callee: CapabilityCallee<'_>,
+        span: Span,
+        reserved_effects: usize,
+        unresolved_reason: &str,
+    ) -> Result<(), CompilerFailure> {
+        checked_authority_budget(
+            self.direct_effect_count,
+            callee.capabilities.len().saturating_add(reserved_effects),
+            self.limits.route_effects,
+            span,
+            "direct effect",
+        )?;
+        let mut effects = Vec::with_capacity(callee.capabilities.len());
+        for capability in callee.capabilities {
+            let derived =
+                crate::derive_call_site_capability(capability, callee.params, self.ta, &[])
+                    .map_err(|error| {
+                        error.fatal.unwrap_or_else(|| {
+                            crate::typechecker::invariant_failure(
+                                "unapplied capability derivation failed without a typed failure",
+                            )
+                        })
+                    })?;
+            let unresolved = capability.bindings.iter().any(|binding| {
+                matches!(
+                    binding.kind,
+                    crate::DocCapabilityBindingKind::Parameter { .. }
+                )
+            });
+            effects.push(AuthorityEffect {
+                capability: Some(derived.capability),
+                sink: source_span(self.sources, span)?,
+                known_bindings: derived.known_bindings,
+                unresolved,
+                reason: unresolved.then(|| unresolved_reason.to_string()),
+            });
+        }
+        for effect in effects {
+            self.push_effect(index, effect, span)?;
+        }
+        Ok(())
+    }
+
+    fn add_semantic_route(
+        &mut self,
+        node: usize,
+        name: String,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        if self.nodes[node].semantic_routes.contains_key(&name) {
+            return Ok(());
+        }
+        self.semantic_route_count = checked_authority_budget(
+            self.semantic_route_count,
+            1,
+            self.limits.route_effects,
+            span,
+            "semantic route",
+        )?;
+        self.nodes[node].semantic_routes.insert(name, span);
         Ok(())
     }
 
@@ -1052,6 +1201,9 @@ impl<'a> Builder<'a> {
                 expressions,
             },
             raw_span: span,
+            label_span: span,
+            semantic_routes: BTreeMap::new(),
+            has_direct_semantic_check: false,
         });
         Ok(index)
     }
@@ -1158,6 +1310,7 @@ impl<'a> Builder<'a> {
                 caller,
                 target: Some(target),
                 span: source_span(self.sources, span)?,
+                raw_span: span,
                 unresolved: false,
                 reason: None,
             },
@@ -1184,6 +1337,7 @@ impl<'a> Builder<'a> {
                 caller,
                 target: None,
                 span: source_span(self.sources, span)?,
+                raw_span: span,
                 unresolved: true,
                 reason: Some(reason.to_string()),
             },
@@ -1210,6 +1364,7 @@ impl<'a> Builder<'a> {
             "direct effect",
         )?;
         self.direct_effect_count += 1;
+        self.effect_spans.entry(effect.clone()).or_insert(span);
         self.nodes[caller].callable.direct_effects.push(effect);
         Ok(())
     }
@@ -1246,7 +1401,7 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    fn finish(mut self) -> Result<AuthorityMap, CompilerFailure> {
+    fn finish(mut self) -> Result<(AuthorityMap, Vec<Diagnostic>), CompilerFailure> {
         for node in &mut self.nodes {
             node.callable.direct_effects.sort();
             node.callable.direct_effects.dedup();
@@ -1259,16 +1414,23 @@ impl<'a> Builder<'a> {
                 .cloned()
                 .collect();
         }
-        let mut routes = self.build_routes(&propagation.adjacency)?;
+        let (mut routes, mut warnings) = self.build_routes(&propagation.adjacency)?;
         let edges = self.export_edges();
         let mut callables: Vec<_> = self.nodes.into_iter().map(|node| node.callable).collect();
         callables.sort_by(|a, b| a.id.cmp(&b.id));
         routes.sort_by(|a, b| a.callable.cmp(&b.callable));
-        Ok(AuthorityMap {
-            callables,
-            edges,
-            routes,
-        })
+        warnings.sort_by_key(|warning| {
+            let Span { file, start, end } = warning.span;
+            (file.0, start, end)
+        });
+        Ok((
+            AuthorityMap {
+                callables,
+                edges,
+                routes,
+            },
+            warnings,
+        ))
     }
 
     fn propagate_effects(&self) -> Result<Propagation, CompilerFailure> {
@@ -1346,9 +1508,11 @@ impl<'a> Builder<'a> {
     fn build_routes(
         &self,
         adjacency: &[Vec<(usize, usize)>],
-    ) -> Result<Vec<AuthorityRoute>, CompilerFailure> {
+    ) -> Result<(Vec<AuthorityRoute>, Vec<Diagnostic>), CompilerFailure> {
         let mut routes = Vec::new();
+        let mut warnings = Vec::new();
         let mut witness_work = 0usize;
+        let mut warning_work = 0usize;
         for (route, node) in self
             .nodes
             .iter()
@@ -1356,26 +1520,107 @@ impl<'a> Builder<'a> {
             .filter(|(_, node)| node.callable.exposure != AuthorityExposure::Private)
         {
             let mut effects = Vec::new();
+            let mut representative = None;
             for effect in &node.callable.transitive_effects {
+                let witness = witness(
+                    route,
+                    effect,
+                    adjacency,
+                    &self.edges,
+                    &self.nodes,
+                    &mut witness_work,
+                    self.limits.witness_work,
+                )?;
+                if representative.is_none() && effect.capability.is_some() {
+                    representative = Some((effect, witness.edge_indices.clone()));
+                }
                 effects.push(AuthorityRouteEffect {
                     effect: effect.clone(),
-                    witness: witness(
-                        route,
-                        effect,
-                        adjacency,
-                        &self.edges,
-                        &self.nodes,
-                        &mut witness_work,
-                        self.limits.witness_work,
-                    )?,
+                    witness: witness.steps,
                 });
+            }
+            if !node.has_direct_semantic_check
+                && let Some((effect, edge_indices)) = representative
+            {
+                for (route_name, label_span) in &node.semantic_routes {
+                    let note_count = edge_indices.len().checked_add(1).ok_or_else(|| {
+                        limit(
+                            *label_span,
+                            "semantic warning note count overflows the platform limit".to_string(),
+                        )
+                    })?;
+                    warning_work = checked_authority_budget(
+                        warning_work,
+                        note_count,
+                        self.limits.witness_work,
+                        *label_span,
+                        "semantic warning work",
+                    )?;
+                    warnings.push(self.missing_semantic_check_warning(
+                        *label_span,
+                        route_name,
+                        effect,
+                        &edge_indices,
+                    )?);
+                }
             }
             routes.push(AuthorityRoute {
                 callable: node.callable.id.clone(),
                 effects,
             });
         }
-        Ok(routes)
+        Ok((routes, warnings))
+    }
+
+    fn missing_semantic_check_warning(
+        &self,
+        label_span: Span,
+        route_name: &str,
+        effect: &AuthorityEffect,
+        edge_indices: &[usize],
+    ) -> Result<Diagnostic, CompilerFailure> {
+        let capability = effect.capability.as_deref().ok_or_else(|| {
+            crate::typechecker::invariant_failure(
+                "a semantic-check warning was requested for an unknown authority effect",
+            )
+            .with_span(label_span)
+        })?;
+        let sink = self.effect_spans.get(effect).copied().ok_or_else(|| {
+            crate::typechecker::invariant_failure(
+                "a known authority effect has no source span for its semantic-check warning",
+            )
+            .with_span(label_span)
+        })?;
+        let mut notes = edge_indices
+            .iter()
+            .map(|edge_index| {
+                let edge = &self.edges[*edge_index];
+                let target = edge.target.map_or("an unresolved target", |target| {
+                    self.nodes[target].callable.name.as_str()
+                });
+                (edge.raw_span, format!("`{target}` is called here"))
+            })
+            .collect::<Vec<_>>();
+        notes.push((
+            sink,
+            format!("the `{capability}` operation is reached here"),
+        ));
+        Ok(Diagnostic {
+            severity: Severity::Warning,
+            span: label_span,
+            message: format!(
+                "public route `{route_name}` reaches `{capability}` without a direct semantic `check()`"
+            ),
+            help: vec![
+                format!(
+                    "Call `check()` directly in `{}` to apply the package's semantic policy",
+                    route_name
+                ),
+                "A Blueprint capability grant permits the host operation but does not replace this package check"
+                    .to_string(),
+            ],
+            notes,
+        })
     }
 
     fn export_edges(&self) -> Vec<AuthorityEdge> {
@@ -1622,6 +1867,32 @@ impl<'a> Builder<'a> {
         ))
     }
 
+    fn held_capability_callee(
+        &self,
+        mut id: ExprId,
+    ) -> Result<Option<CapabilityCallee<'a>>, CompilerFailure> {
+        for _ in 0..self.ta.exprs_len() {
+            let expression = self
+                .ta
+                .try_expr(id)
+                .map_err(crate::typechecker::arena_failure)?;
+            match &expression.kind {
+                TypedExprKind::FunctionRef { mangled, .. } => {
+                    return Ok(self.capability_functions.get(mangled).copied());
+                }
+                TypedExprKind::Cast { value, .. }
+                | TypedExprKind::NonNullAssert { value }
+                | TypedExprKind::Narrowed { inner: value, .. }
+                | TypedExprKind::EffectThen { result: value, .. }
+                | TypedExprKind::Sequence { result: value, .. } => id = *value,
+                _ => return Ok(None),
+            }
+        }
+        Err(crate::typechecker::invariant_failure(
+            "function value wrappers form a cycle",
+        ))
+    }
+
     fn constructor_is_public(&self, class: &MangledName) -> bool {
         source_type_symbol(self.declaration, class).is_none_or(|symbol| {
             !matches!(
@@ -1816,6 +2087,9 @@ impl CallVisitor<'_, '_> {
         args: &[ExprId],
         span: Span,
     ) -> Result<(), CompilerFailure> {
+        if crate::stdlib::security::is_check(mangled) {
+            self.builder.nodes[self.caller].has_direct_semantic_check = true;
+        }
         if let Some(&target) = self.builder.named.get(mangled) {
             return self.builder.add_edge(self.caller, target, span);
         }
@@ -2029,38 +2303,113 @@ impl CallVisitor<'_, '_> {
     }
 }
 
-fn exports(ta: &TypedAst, kind: ExportKind) -> BTreeSet<MangledName> {
-    ta.exports
-        .iter()
-        .filter(|entry| entry.kind == kind)
-        .map(|entry| entry.target.clone())
-        .collect()
-}
-
-fn public_static_functions(
+fn index_semantic_routes(
     declaration: &PackageDeclaration,
-    exported_classes: &BTreeSet<MangledName>,
-) -> BTreeSet<MangledName> {
-    declaration
-        .types
+    ta: &TypedAst,
+    maximum_routes: usize,
+) -> Result<SemanticRoutes, CompilerFailure> {
+    let public_values = declaration
+        .values
         .values()
-        .filter(|symbol| exported_classes.contains(&symbol.mangled_name))
-        .flat_map(|symbol| {
-            let TypeKind::Class {
-                statics,
-                static_visibility,
-                ..
-            } = &symbol.kind
-            else {
-                return Vec::new();
-            };
-            statics
-                .keys()
-                .filter(|name| static_visibility.get(*name) != Some(&Visibility::Private))
-                .map(|name| crate::mangle::static_member(&symbol.mangled_name, name))
-                .collect()
-        })
-        .collect()
+        .map(|symbol| (symbol.mangled_name.clone(), symbol.name.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut routes = SemanticRoutes::default();
+    let mut exported_class_targets = BTreeSet::new();
+    let mut route_count = 0usize;
+    for export in &ta.exports {
+        match export.kind {
+            ExportKind::Function | ExportKind::Global => {
+                let Some(name) = public_values.get(&export.public_name) else {
+                    continue;
+                };
+                route_count = checked_authority_budget(
+                    route_count,
+                    1,
+                    maximum_routes,
+                    export.span,
+                    "semantic route",
+                )?;
+                let route = SemanticRoute {
+                    name: name.clone(),
+                    span: export.span,
+                };
+                let target_routes = if export.kind == ExportKind::Function {
+                    &mut routes.functions
+                } else {
+                    &mut routes.globals
+                };
+                target_routes
+                    .entry(export.target.clone())
+                    .or_default()
+                    .push(route);
+            }
+            ExportKind::Type => {
+                exported_class_targets.insert(export.target.clone());
+            }
+        }
+    }
+
+    let mut class_definitions = BTreeMap::new();
+    for symbol in declaration.types.values() {
+        if !exported_class_targets.contains(&symbol.mangled_name) {
+            continue;
+        }
+        let TypeKind::Class { .. } = &symbol.kind else {
+            continue;
+        };
+        route_count = checked_authority_budget(
+            route_count,
+            1,
+            maximum_routes,
+            symbol.declaration_span,
+            "semantic route",
+        )?;
+        routes
+            .classes
+            .entry(symbol.mangled_name.clone())
+            .or_default()
+            .push(symbol.name.clone());
+        class_definitions
+            .entry(symbol.mangled_name.clone())
+            .or_insert(symbol);
+    }
+    for (target, public_names) in &routes.classes {
+        let Some(symbol) = class_definitions.get(target) else {
+            continue;
+        };
+        let TypeKind::Class {
+            statics,
+            static_visibility,
+            ..
+        } = &symbol.kind
+        else {
+            continue;
+        };
+        for member in statics
+            .keys()
+            .filter(|name| static_visibility.get(*name) != Some(&Visibility::Private))
+        {
+            let target = crate::mangle::static_member(target, member);
+            for class_name in public_names {
+                route_count = checked_authority_budget(
+                    route_count,
+                    1,
+                    maximum_routes,
+                    symbol.declaration_span,
+                    "semantic route",
+                )?;
+                routes
+                    .statics
+                    .entry(target.clone())
+                    .or_default()
+                    .push(SemanticRoute {
+                        name: format!("{class_name}.{member}"),
+                        span: symbol.declaration_span,
+                    });
+            }
+        }
+    }
+    Ok(routes)
 }
 
 fn own_static_names(ta: &TypedAst, class: &MangledName) -> BTreeSet<String> {
@@ -2413,14 +2762,17 @@ fn witness(
     nodes: &[Node],
     work: &mut usize,
     maximum_work: usize,
-) -> Result<Vec<AuthorityWitnessStep>, CompilerFailure> {
+) -> Result<Witness, CompilerFailure> {
     if nodes[root]
         .callable
         .direct_effects
         .binary_search(effect)
         .is_ok()
     {
-        return Ok(Vec::new());
+        return Ok(Witness {
+            steps: Vec::new(),
+            edge_indices: Vec::new(),
+        });
     }
     let traversal_bound = nodes.len().checked_add(edges.len()).ok_or_else(|| {
         limit(
@@ -2461,29 +2813,42 @@ fn witness(
         }
     }
     let Some(mut current) = found else {
-        return Ok(Vec::new());
+        return Ok(Witness {
+            steps: Vec::new(),
+            edge_indices: Vec::new(),
+        });
     };
     let mut path = Vec::new();
+    let mut edge_indices = Vec::new();
     while current != root {
         let Some((caller, edge_index)) = previous[current] else {
-            return Ok(Vec::new());
+            return Ok(Witness {
+                steps: Vec::new(),
+                edge_indices: Vec::new(),
+            });
         };
         path.push(AuthorityWitnessStep {
             caller: nodes[caller].callable.id.clone(),
             target: nodes[current].callable.id.clone(),
             span: edges[edge_index].span.clone(),
         });
+        edge_indices.push(edge_index);
         current = caller;
     }
     path.reverse();
-    Ok(path)
+    edge_indices.reverse();
+    Ok(Witness {
+        steps: path,
+        edge_indices,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        ModulePath, PackageSourceModule, Param, Type, ValueKind, ValueSymbol, compile_package,
+        CompiledPackage, ModulePath, PackageSourceModule, Param, Type, ValueKind, ValueSymbol,
+        compile_package,
     };
 
     fn compile(modules: &[(&str, &str)]) -> AuthorityMap {
@@ -2494,6 +2859,13 @@ mod tests {
         modules: &[(&str, &str)],
         dependencies: &[&PackageDeclaration],
     ) -> AuthorityMap {
+        compile_output(modules, dependencies).authority_map
+    }
+
+    fn compile_output(
+        modules: &[(&str, &str)],
+        dependencies: &[&PackageDeclaration],
+    ) -> CompiledPackage {
         let modules = modules
             .iter()
             .map(|(path, source)| PackageSourceModule {
@@ -2508,7 +2880,6 @@ mod tests {
             dependencies,
         )
         .unwrap_or_else(|diagnostics| panic!("compile failed: {diagnostics:#?}"))
-        .authority_map
     }
 
     fn route<'a>(map: &'a AuthorityMap, suffix: &str) -> &'a AuthorityRoute {
@@ -2520,15 +2891,24 @@ mod tests {
 
     #[test]
     fn direct_and_recursive_helpers_propagate_one_http_effect_with_a_witness() {
-        let map = compile(&[(
-            "lib",
-            r#"
+        let compiled = compile_output(
+            &[(
+                "lib",
+                r#"
                 import { get } from "submilli:http";
                 function first(url: string): void { second(url); }
                 function second(url: string): void { if (url !== "") { first(""); } get(url); }
                 export function fetch(): void { first("https://example.com/data"); }
             "#,
-        )]);
+            )],
+            &[],
+        );
+        assert!(compiled.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("public route `fetch` reaches `http.get`")
+        }));
+        let map = compiled.authority_map;
         let route = route(&map, "#fetch");
         let effect = route
             .effects
@@ -2538,6 +2918,276 @@ mod tests {
         assert_eq!(effect.witness.len(), 2, "{effect:#?}");
         assert!(effect.witness[0].target.ends_with("#first"));
         assert!(effect.witness[1].target.ends_with("#second"));
+    }
+
+    #[test]
+    fn unchecked_public_route_warns_with_the_call_path_and_sink() {
+        let compiled = compile_output(
+            &[(
+                "lib",
+                r#"
+                    import { get } from "submilli:http";
+                    function first(): void { second(); }
+                    function second(): void { get("https://example.com/data"); }
+                    export function fetch(): void { first(); }
+                "#,
+            )],
+            &[],
+        );
+        let warning = compiled
+            .warnings
+            .iter()
+            .find(|warning| {
+                warning
+                    .message
+                    .contains("public route `fetch` reaches `http.get`")
+            })
+            .expect("missing semantic-check warning");
+        assert_eq!(warning.severity, Severity::Warning);
+        assert_eq!(warning.notes.len(), 3, "{warning:#?}");
+        assert!(warning.notes[0].1.contains("`first` is called here"));
+        assert!(warning.notes[1].1.contains("`second` is called here"));
+        assert!(
+            warning.notes[2]
+                .1
+                .contains("`http.get` operation is reached here")
+        );
+        assert!(
+            warning
+                .help
+                .iter()
+                .any(|help| help.contains("Blueprint capability grant"))
+        );
+    }
+
+    #[test]
+    fn direct_public_check_covers_an_effectful_helper_but_a_helper_check_does_not() {
+        let checked = compile_output(
+            &[(
+                "lib",
+                r#"
+                    import { get } from "submilli:http";
+                    import { check } from "submilli:security";
+                    function request(): void { get("https://example.com/data"); }
+                    export function fetch(): void { check("example.fetch", {}); request(); }
+                "#,
+            )],
+            &[],
+        );
+        assert!(
+            checked
+                .warnings
+                .iter()
+                .all(|warning| !warning.message.contains("public route `fetch`")),
+            "{:#?}",
+            checked.warnings
+        );
+
+        let helper_checked = compile_output(
+            &[(
+                "lib",
+                r#"
+                    import { get } from "submilli:http";
+                    import { check } from "submilli:security";
+                    function request(): void {
+                        check("example.fetch", {});
+                        get("https://example.com/data");
+                    }
+                    export function fetch(): void { request(); }
+                "#,
+            )],
+            &[],
+        );
+        assert!(helper_checked.warnings.iter().any(|warning| {
+            warning
+                .message
+                .contains("public route `fetch` reaches `http.get`")
+        }));
+        assert!(helper_checked.warnings.iter().any(|warning| {
+            warning.message.contains(
+                "`check()` is called in `request`, which is not part of the package's public API",
+            )
+        }));
+    }
+
+    #[test]
+    fn warning_scope_covers_reexports_constants_and_local_methods_only() {
+        let compiled = compile_output(
+            &[
+                ("lib", "export { send, Client, run } from \"./internal\";"),
+                (
+                    "internal",
+                    r#"
+                        import { get } from "submilli:secrets";
+                        export function send(): void { get("SEND"); }
+                        export const run = (): void => { get("RUN"); };
+                        class Base {
+                            inherited(): void { get("INHERITED"); }
+                        }
+                        export class Client extends Base {
+                            constructor() { super(); get("CONSTRUCTOR"); }
+                            static open(): void { get("STATIC"); }
+                            method(): void { get("METHOD"); }
+                            get secret(): string { return get("ACCESSOR") ?? ""; }
+                        }
+                        function hidden(): void { get("HIDDEN"); }
+                    "#,
+                ),
+            ],
+            &[],
+        );
+        let messages = compiled
+            .warnings
+            .iter()
+            .map(|warning| warning.message.as_str())
+            .filter(|message| message.starts_with("public route"))
+            .collect::<Vec<_>>();
+        for route in [
+            "send",
+            "run",
+            "Client.inherited",
+            "Client.open",
+            "Client.method",
+        ] {
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message.contains(&format!("`{route}`"))),
+                "missing {route}: {messages:#?}"
+            );
+        }
+        for route in ["new Client", "Client.secret", "hidden"] {
+            assert!(
+                messages
+                    .iter()
+                    .all(|message| !message.contains(&format!("`{route}`"))),
+                "unexpected {route}: {messages:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn aliased_exports_each_warn_with_their_public_route_name() {
+        let compiled = compile_output(
+            &[
+                (
+                    "lib",
+                    r#"
+                        export { send as publish, send as retry } from "./internal";
+                        export { Client as ApiClient, Client as BackupClient } from "./internal";
+                    "#,
+                ),
+                (
+                    "internal",
+                    r#"
+                        import { get } from "submilli:secrets";
+                        export function send(): void { get("SEND"); }
+                        export class Client {
+                            request(): void { get("METHOD"); }
+                            static open(): void { get("STATIC"); }
+                        }
+                    "#,
+                ),
+            ],
+            &[],
+        );
+        let messages = compiled
+            .warnings
+            .iter()
+            .map(|warning| warning.message.as_str())
+            .filter(|message| message.starts_with("public route"))
+            .collect::<Vec<_>>();
+        for route in [
+            "publish",
+            "retry",
+            "ApiClient.request",
+            "BackupClient.request",
+            "ApiClient.open",
+            "BackupClient.open",
+        ] {
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message.contains(&format!("`{route}`"))),
+                "missing {route}: {messages:#?}"
+            );
+        }
+        assert!(
+            messages
+                .iter()
+                .all(|message| !message.contains("public route `send`")),
+            "{messages:#?}"
+        );
+    }
+
+    #[test]
+    fn tagged_dependency_effect_warns_while_pure_and_unreachable_routes_do_not() {
+        let dependency = compile_package(
+            "@vendor/api",
+            ModulePath::from("lib"),
+            &[PackageSourceModule {
+                path: ModulePath::from("lib"),
+                source: r#"
+                    /** @capability vendor.send { queue: $queue } */
+                    export function send(queue: string): void {}
+                "#,
+            }],
+            &[],
+        )
+        .expect("dependency compiles")
+        .declaration;
+        let compiled = compile_output(
+            &[(
+                "lib",
+                r#"
+                    import { send } from "@vendor/api";
+                    export function publish(): void { send("jobs"); }
+                    export function pure(): number { return 1; }
+                    function hidden(): void { send("hidden"); }
+                "#,
+            )],
+            &[&dependency],
+        );
+        let messages = compiled
+            .warnings
+            .iter()
+            .map(|warning| warning.message.as_str())
+            .filter(|message| message.starts_with("public route"))
+            .collect::<Vec<_>>();
+        assert!(
+            messages.iter().any(|message| {
+                message.contains("public route `publish` reaches `vendor.send`")
+            })
+        );
+        assert!(messages.iter().all(|message| !message.contains("`pure`")));
+        assert!(messages.iter().all(|message| !message.contains("`hidden`")));
+
+        let direct_alias = compile_output(
+            &[(
+                "lib",
+                r#"
+                    import { send } from "@vendor/api";
+                    export const publish = send;
+                "#,
+            )],
+            &[&dependency],
+        );
+        let warning = direct_alias
+            .warnings
+            .iter()
+            .find(|warning| {
+                warning
+                    .message
+                    .contains("public route `publish` reaches `vendor.send`")
+            })
+            .expect("missing warning for exported capability function value");
+        assert!(
+            warning
+                .notes
+                .iter()
+                .any(|(_, note)| note.contains("`vendor.send` operation is reached here")),
+            "{warning:#?}"
+        );
     }
 
     #[test]

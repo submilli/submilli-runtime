@@ -69,7 +69,7 @@ function readsParentTypeOnce(operation: string, call: (parent: FlippingParent) =
 function main(): string {
     deniedAt("submilli/notion.createPage", "main", () => { createPage({ parent: under(BLOCKED_PARENT) }); });
     reachesCredentialBoundary(() => { createPage({ parent: under(ALLOWED_PARENT) }); });
-    // A batch creates each page as `createPage` does, under the same capability and rule.
+    // The batch route is allowed, then each page is checked as `createPage` when its turn comes.
     deniedAt("submilli/notion.createPage", "main", () => { createPages([{ parent: under(BLOCKED_PARENT) }, { parent: under(ALLOWED_PARENT) }]); });
     deniedAt("submilli/notion.createPage", "main", () => { createPages([{ parent: { type: "workspace" } }]); });
     reachesCredentialBoundary(() => { createPages([{ parent: under(ALLOWED_PARENT) }, { parent: under(ALLOWED_PARENT) }]); });

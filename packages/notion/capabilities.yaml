@@ -30,6 +30,9 @@ provides:
   fields:
     parentId:
       type: string
+- name: submilli/notion.createPages
+  description: Create pages sequentially and stop on the first failure. The batch is authorized before any input is examined. Each page is then created and checked as `createPage` when its turn comes, so a per-page denial can follow pages already created. Every input is validated before the first page is created.
+  fields: {}
 - name: submilli/notion.createView
   description: Create a configured database view.
   fields:
