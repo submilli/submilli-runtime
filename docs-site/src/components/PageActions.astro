@@ -141,4 +141,11 @@ const markdownUrl = markdownPath(slug);
 		outline: 2px solid var(--sl-color-text-accent);
 		outline-offset: 2px;
 	}
+	@media (hover: hover) and (pointer: fine) {
+		.page-actions__button { opacity: 0; }
+		:global(.page-title__heading:is(:hover, :focus-within)) .page-actions__button,
+		:global(.home-hero__title:is(:hover, :focus-within)) .page-actions__button {
+			opacity: 1;
+		}
+	}
 </style>

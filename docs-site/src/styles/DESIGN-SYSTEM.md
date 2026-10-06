@@ -54,7 +54,8 @@ Submilli keeps its typefaces, blue accent, theme preference, content, and routes
   uses the same destination as the public website.
 - Every visible page can expose its already-published Markdown. Copy feedback is
   explicit; a failed fetch or clipboard operation must not look successful.
-  Copy is a small icon beside the authorship icon. View Markdown is a footer
+  Copy is a small icon beside the authorship icon, revealed by title hover or
+  keyboard focus and always visible on touch screens. View Markdown is a footer
   link after chapter navigation and remains usable without JavaScript.
 - Keep authorship tooltips and page-action labels out of the search index. They
   remain accessible on the page without replacing useful article excerpts.
