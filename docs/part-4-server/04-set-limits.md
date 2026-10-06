@@ -10,8 +10,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "26481d4b9024130bd7d4a9f4d5083bf1dbfc724318a2b5d647ddb6a5c05f7234"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "8334521c5b4106dc754a1378a691ddda8df3cf218dfdf01896b4502a27ef03b6"
+  confirmedAt: "2026-10-06T09:57:24.191Z"
 ---
 
 Some of the programs an agent writes will be wrong. A loop never stops,

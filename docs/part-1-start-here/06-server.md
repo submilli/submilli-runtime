@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d71d2cb520e175e3f1dcae496f0cad39ca7e5e42951c9b57ee7cd0855be71b28"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "662dfae5f1a474fd99a792381bcafb255e9879a21bc052158325593945f48532"
+  confirmedAt: "2026-10-06T09:57:24.184Z"
 ---
 
 `submilli-server` is the process that runs the agent's programs. It is one
