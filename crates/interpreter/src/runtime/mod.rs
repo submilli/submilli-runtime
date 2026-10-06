@@ -73,7 +73,8 @@ pub use session_kv::{
 };
 pub use vfs::{
     Access, CopyDirError, MAX_MEASURED_DEPTH, MountError, MountSpec, Vfs, VfsMode, copy_host_dir,
-    measure_dir, measure_host_dir, measure_host_dir_skipping_vanished, regular_files,
+    copy_host_subdir, measure_dir, measure_host_dir, measure_host_dir_skipping_vanished,
+    measure_host_subdir_skipping_vanished, open_host_subdir, regular_files,
 };
 pub use watchdog::Watchdog;
 

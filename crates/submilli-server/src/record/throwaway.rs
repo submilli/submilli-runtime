@@ -3,7 +3,8 @@
 //!
 //! The source session's `per_session` directory and each writable named volume the
 //! blueprint mounts are copied into a temporary directory (a clone where the filesystem
-//! has one, else a plain copy), up to [`LOCAL_STATE_CAP_BYTES`]. The session's `submilli:session`
+//! has one, else a plain copy), up to [`LOCAL_STATE_CAP_BYTES`]. Of a volume only the
+//! sub-paths the blueprint mounts are copied. The session's `submilli:session`
 //! data is read through [`ForkedSessionKv`]. Everything goes when the [`Throwaway`] drops.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,11 +14,15 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 #[cfg(target_os = "macos")]
 use interpreter::runtime::MAX_MEASURED_DEPTH;
+#[cfg(target_os = "macos")]
+use interpreter::runtime::open_host_subdir;
 use interpreter::runtime::session_kv::{
     InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimits, SessionKvPage,
     SessionKvStore,
 };
-use interpreter::runtime::{CopyDirError, copy_host_dir, measure_host_dir_skipping_vanished};
+use interpreter::runtime::{
+    CopyDirError, copy_host_dir, copy_host_subdir, measure_host_subdir_skipping_vanished,
+};
 use serde::Serialize;
 use submilli_blueprint::{Blueprint, VarBindings, VfsConfig};
 
@@ -159,7 +164,13 @@ impl Throwaway {
         let to_copy = planned
             .iter()
             .filter(|volume| volume.copy)
-            .map(|volume| (volume.name.clone(), volume.host.clone()))
+            .map(|volume| {
+                (
+                    volume.name.clone(),
+                    volume.host.clone(),
+                    outermost(&volume.reach),
+                )
+            })
             .collect();
         // The blocking task owns the directory until the copy is done, so a caller that
         // gives up meanwhile cannot have it deleted from under the copy.
@@ -239,6 +250,9 @@ struct PlannedVolume {
     /// Some reference to it resolves to read-write, so it is copied. Otherwise the run
     /// shares the original, read-only.
     copy: bool,
+    /// The directory each reference is limited to, relative to the volume; empty for the
+    /// whole volume.
+    reach: Vec<PathBuf>,
 }
 
 /// Every volume the blueprint references, once each, in order of first reference. A volume
@@ -254,8 +268,10 @@ fn plan_volumes(
             .resolve(reference.volume, reference.access)
             .map_err(|error| ThrowawayError::Unavailable(error.to_string()))?;
         let writes = resolved.access == Access::ReadWrite;
+        let reach = relative_path(reference.sub_path)?;
         if let Some(volume) = planned.iter_mut().find(|v| v.name == reference.volume) {
             volume.copy |= writes;
+            volume.reach.push(reach);
             continue;
         }
         let Some(declared) = manager.volumes().get(reference.volume).cloned() else {
@@ -269,15 +285,53 @@ fn plan_volumes(
             host: resolved.host,
             declared,
             copy: writes,
+            reach: vec![reach],
         });
     }
     Ok(planned)
 }
 
-/// One directory to copy: the source session's workspace (`volume` is `None`) or a volume.
+/// A resolved sub-path as a path relative to its volume, empty for none. One that is not
+/// a plain relative path is refused: the blueprint's resolution never makes one, so this
+/// holds the copy to the volume whatever reaches it.
+fn relative_path(sub_path: Option<&str>) -> Result<PathBuf, ThrowawayError> {
+    let Some(path) = sub_path else {
+        return Ok(PathBuf::new());
+    };
+    if path.is_empty()
+        || path.split('/').any(|part| {
+            part.is_empty() || part == "." || part == ".." || part.contains(['\\', '\0'])
+        })
+    {
+        return Err(ThrowawayError::Unavailable(format!(
+            "the volume sub-path '{path}' is not a normalized relative path"
+        )));
+    }
+    Ok(PathBuf::from(path))
+}
+
+/// `paths` without any that lies inside another, by path components, in order. An empty
+/// path is the whole volume and leaves only itself.
+fn outermost(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut sorted = paths.to_vec();
+    // A path sorts before everything inside it.
+    sorted.sort();
+    sorted.dedup();
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for path in sorted {
+        if !kept.iter().any(|outer| path.starts_with(outer)) {
+            kept.push(path);
+        }
+    }
+    kept
+}
+
+/// One directory to copy: the source session's workspace (`volume` is `None`) or the
+/// directory `sub` of a volume, which goes to `sub` under `to`.
 struct CopyJob {
     volume: Option<String>,
     from: PathBuf,
+    sub: PathBuf,
     to: PathBuf,
 }
 
@@ -304,11 +358,13 @@ struct Copied {
 /// Measures every source, refuses the lot above `cap`, then copies each under `dir`, counting
 /// as it goes so a source that grew since it was measured cannot pass the cap either.
 ///
-/// A volume's copy goes under a generated name, never one built from the volume's name.
+/// A volume's copy goes under a generated name, never one built from the volume's name. Each
+/// volume comes with the sub-paths of it to copy, none inside another; an empty one is all
+/// of it.
 fn copy_all(
     dir: &Path,
     session_from: Option<PathBuf>,
-    volumes: Vec<(String, PathBuf)>,
+    volumes: Vec<(String, PathBuf, Vec<PathBuf>)>,
     cap: u64,
 ) -> Result<Copied, ThrowawayError> {
     let session = dir.join("session");
@@ -317,19 +373,19 @@ fn copy_all(
         .map(|from| CopyJob {
             volume: None,
             from,
+            sub: PathBuf::new(),
             to: session.clone(),
         })
         .collect();
-    jobs.extend(
-        volumes
-            .into_iter()
-            .enumerate()
-            .map(|(index, (name, from))| CopyJob {
-                volume: Some(name),
-                from,
-                to: dir.join("volumes").join(index.to_string()),
-            }),
-    );
+    for (index, (name, from, subs)) in volumes.into_iter().enumerate() {
+        let to = dir.join("volumes").join(index.to_string());
+        jobs.extend(subs.into_iter().map(|sub| CopyJob {
+            volume: Some(name.clone()),
+            from: from.clone(),
+            sub,
+            to: to.clone(),
+        }));
+    }
     let mut session_gone = false;
     let mut measured = 0u64;
     let mut present = Vec::with_capacity(jobs.len());
@@ -338,7 +394,7 @@ fn copy_all(
         .map_err(|error| ThrowawayError::Io(error.to_string()))?;
     for job in jobs {
         refuse_if_holding(&throwaway, &job)?;
-        match measure_host_dir_skipping_vanished(&job.from) {
+        match measure_host_subdir_skipping_vanished(&job.from, &job.sub) {
             Ok(size) => {
                 measured = measured.saturating_add(size);
                 present.push(job);
@@ -361,7 +417,7 @@ fn copy_all(
     let mut volumes = BTreeMap::new();
     for job in present {
         let before = bytes;
-        match clone_tree(&job.from, &job.to, cap, &mut bytes) {
+        match clone_subtree(&job.from, &job.sub, &job.to, cap, &mut bytes) {
             Ok(()) => {
                 if let Some(name) = job.volume {
                     volumes.insert(name, job.to);
@@ -390,7 +446,7 @@ fn copy_all(
 /// itself would never end, and only the run's own files would fill it. A source that is
 /// gone is left to its measure, which settles a reaped session and refuses a volume.
 fn refuse_if_holding(throwaway: &Path, job: &CopyJob) -> Result<(), ThrowawayError> {
-    let source = match job.from.canonicalize() {
+    let source = match job.from.join(&job.sub).canonicalize() {
         Ok(source) => source,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(ThrowawayError::Io(error.to_string())),
@@ -430,23 +486,63 @@ fn walk_stop(error: io::Error) -> CopyDirError {
 /// link. Stops once `bytes` passes `cap`.
 fn clone_tree(from: &Path, to: &Path, cap: u64, bytes: &mut u64) -> Result<(), CopyDirError> {
     #[cfg(target_os = "macos")]
-    if to
-        .parent()
-        .is_none_or(|parent| std::fs::create_dir_all(parent).is_ok())
-        && clonefile(from, to).is_ok()
-    {
-        // The clone keeps the source's modes, and a read-only directory could not be
-        // deleted with the rest of the throwaway, so it is made writable before anything
-        // else can stop the copy.
-        make_dirs_writable(to, 0).map_err(walk_stop)?;
-        // A clone is one call, so what it took is measured after.
-        *bytes = bytes.saturating_add(measure_host_dir_skipping_vanished(to).map_err(walk_stop)?);
-        if *bytes > cap {
-            return Err(CopyDirError::OverCap);
-        }
+    if try_clone(from, to, cap, bytes)? {
         return Ok(());
     }
     copy_host_dir(from, to, cap, bytes)
+}
+
+/// As [`clone_tree`] for the directory `sub` of the volume `from`, which lands at `sub`
+/// under `to`. `sub` is walked without following links first, so one that is a link, or
+/// passes through one, is refused; one that is not there copies nothing. An empty `sub`
+/// is the whole of `from`.
+fn clone_subtree(
+    from: &Path,
+    sub: &Path,
+    to: &Path,
+    cap: u64,
+    bytes: &mut u64,
+) -> Result<(), CopyDirError> {
+    if sub.as_os_str().is_empty() {
+        return clone_tree(from, to, cap, bytes);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // A clone resolves its path, so the walk that refuses links comes first.
+        if open_host_subdir(from, sub)?.is_none() {
+            std::fs::create_dir_all(to)?;
+            return Ok(());
+        }
+        if try_clone(&from.join(sub), &to.join(sub), cap, bytes)? {
+            return Ok(());
+        }
+    }
+    copy_host_subdir(from, sub, to, cap, bytes)
+}
+
+/// Clones `from` to `to` where the filesystem can, measuring what that took; `false` when it
+/// cannot and a copy is needed.
+#[cfg(target_os = "macos")]
+fn try_clone(from: &Path, to: &Path, cap: u64, bytes: &mut u64) -> Result<bool, CopyDirError> {
+    if !to
+        .parent()
+        .is_none_or(|parent| std::fs::create_dir_all(parent).is_ok())
+        || clonefile(from, to).is_err()
+    {
+        return Ok(false);
+    }
+    // The clone keeps the source's modes, and a read-only directory could not be
+    // deleted with the rest of the throwaway, so it is made writable before anything
+    // else can stop the copy.
+    make_dirs_writable(to, 0).map_err(walk_stop)?;
+    // A clone is one call, so what it took is measured after.
+    *bytes = bytes.saturating_add(
+        measure_host_subdir_skipping_vanished(to, Path::new("")).map_err(walk_stop)?,
+    );
+    if *bytes > cap {
+        return Err(CopyDirError::OverCap);
+    }
+    Ok(true)
 }
 
 #[cfg(target_os = "macos")]
@@ -915,7 +1011,7 @@ mod tests {
         ];
         let volumes = names
             .iter()
-            .map(|name| (name.clone(), source.clone()))
+            .map(|name| (name.clone(), source.clone(), vec![PathBuf::new()]))
             .collect();
         let copied = copy_all(&dir, None, volumes, 1 << 20).expect("copied");
         assert_eq!(copied.volumes.len(), names.len());
@@ -934,7 +1030,11 @@ mod tests {
         let error = copy_all(
             root.path(),
             None,
-            vec![("v".to_owned(), root.path().join("absent"))],
+            vec![(
+                "v".to_owned(),
+                root.path().join("absent"),
+                vec![PathBuf::new()],
+            )],
             1 << 20,
         )
         .err()
@@ -1005,7 +1105,7 @@ mod tests {
         let error = copy_all(
             &dir,
             None,
-            vec![("v".to_owned(), root.path().to_owned())],
+            vec![("v".to_owned(), root.path().to_owned(), vec![PathBuf::new()])],
             1 << 20,
         )
         .err()
@@ -1204,5 +1304,168 @@ mod tests {
         let held = kept.path().to_owned();
         drop(kept);
         assert!(!held.exists(), "the throwaway directory is deleted whole");
+    }
+
+    fn user_blueprint(sub_path: &str) -> Blueprint {
+        submilli_blueprint::parse(&format!(
+            "name: x\nvariables:\n  user:\n    required: false\nvfs:\n  mode: per_session\n  mounts:\n    /data: {{mode: named, volume: data, subPath: \"{sub_path}\"}}\n"
+        ))
+        .expect("blueprint")
+    }
+
+    fn user_bindings(user: &str) -> VarBindings {
+        [("user".to_owned(), user.to_owned())].into_iter().collect()
+    }
+
+    /// A `data` volume with `users/alice/a.txt` (5 bytes) and `users/bob/b.txt` (3 bytes).
+    fn users_volume(root: &Path) -> (PathBuf, SessionManager) {
+        let (data, reference) = (root.join("data"), root.join("reference"));
+        std::fs::create_dir_all(data.join("users/alice")).unwrap();
+        std::fs::create_dir_all(data.join("users/bob")).unwrap();
+        std::fs::create_dir_all(&reference).unwrap();
+        std::fs::write(data.join("users/alice/a.txt"), "alice").unwrap();
+        std::fs::write(data.join("users/bob/b.txt"), "bob").unwrap();
+        let manager = manager(volumes(&data, &reference), &root.join("sessions"));
+        (data, manager)
+    }
+
+    #[tokio::test]
+    async fn only_the_mounted_sub_path_of_a_volume_is_copied() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, manager) = users_volume(root.path());
+        let blueprint = user_blueprint("users/${vars.user}");
+        let copy = Throwaway::copy(&manager, None, &blueprint, &user_bindings("alice"))
+            .await
+            .expect("copy");
+        assert_eq!(copy.report.volumes_copied, ["data"]);
+        assert_eq!(copy.report.bytes_copied, 5, "alice's file only");
+        let in_copy = copy.volumes.resolve("data", None).unwrap().host;
+        assert_eq!(
+            std::fs::read_to_string(in_copy.join("users/alice/a.txt")).unwrap(),
+            "alice"
+        );
+        assert!(!in_copy.join("users/bob").exists());
+        std::fs::write(in_copy.join("users/alice/a.txt"), "changed").unwrap();
+        assert_eq!(
+            std::fs::read(data.join("users/alice/a.txt")).unwrap(),
+            b"alice"
+        );
+        assert_eq!(std::fs::read(data.join("users/bob/b.txt")).unwrap(), b"bob");
+    }
+
+    #[tokio::test]
+    async fn a_volume_over_the_cap_is_copied_when_what_is_mounted_fits() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, manager) = users_volume(root.path());
+        std::fs::File::create(data.join("users/bob/big.bin"))
+            .unwrap()
+            .set_len(3 << 20)
+            .unwrap();
+        let blueprint = user_blueprint("users/${vars.user}");
+        let copy =
+            Throwaway::copy_capped(&manager, None, &blueprint, &user_bindings("alice"), 2 << 20)
+                .await
+                .expect("alice's tree fits");
+        assert_eq!(copy.report.bytes_copied, 5);
+        let error =
+            Throwaway::copy_capped(&manager, None, &blueprint, &user_bindings("bob"), 2 << 20)
+                .await
+                .err()
+                .expect("bob's does not");
+        assert!(matches!(error, ThrowawayError::TooLarge { .. }), "{error}");
+    }
+
+    #[tokio::test]
+    async fn overlapping_mounts_copy_the_outer_one_once() {
+        let root = tempfile::tempdir().unwrap();
+        let (_data, manager) = users_volume(root.path());
+        let blueprint = submilli_blueprint::parse(
+            "name: x\nvfs:\n  mode: per_session\n  mounts:\n    /a: {mode: named, volume: data, subPath: users}\n    /b: {mode: named, volume: data, subPath: users/alice}\n",
+        )
+        .expect("blueprint");
+        let copy = Throwaway::copy(&manager, None, &blueprint, &VarBindings::new())
+            .await
+            .expect("copy");
+        assert_eq!(copy.report.bytes_copied, 8, "alice's and bob's, each once");
+    }
+
+    #[test]
+    fn sub_paths_inside_another_are_dropped_by_components_not_prefix() {
+        let paths = ["a/b", "a", "ab", "a/b/c", "x/y", "x/y"].map(PathBuf::from);
+        assert_eq!(outermost(&paths), ["a", "ab", "x/y"].map(PathBuf::from));
+        let all = ["a", "", "b"].map(PathBuf::from);
+        assert_eq!(outermost(&all), [PathBuf::new()]);
+    }
+
+    #[tokio::test]
+    async fn a_reference_to_the_whole_volume_copies_all_of_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (_data, manager) = users_volume(root.path());
+        let blueprint = submilli_blueprint::parse(
+            "name: x\nvfs:\n  mode: per_session\n  mounts:\n    /a: {mode: named, volume: data, subPath: users/alice}\n    /b: {mode: named, volume: data}\n",
+        )
+        .expect("blueprint");
+        let copy = Throwaway::copy(&manager, None, &blueprint, &VarBindings::new())
+            .await
+            .expect("copy");
+        assert_eq!(copy.report.bytes_copied, 8);
+        let in_copy = copy.volumes.resolve("data", None).unwrap().host;
+        assert!(in_copy.join("users/bob/b.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_sub_path_through_a_link_is_refused_not_followed() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, manager) = users_volume(root.path());
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, data.join("users/carol")).unwrap();
+        for sub_path in ["users/carol", "users/carol/inner"] {
+            let error = Throwaway::copy(
+                &manager,
+                None,
+                &user_blueprint(sub_path),
+                &VarBindings::new(),
+            )
+            .await
+            .err()
+            .expect("refused");
+            assert!(matches!(error, ThrowawayError::Io(_)), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_sub_path_copies_nothing_and_the_run_makes_it_as_a_normal_run_does() {
+        let root = tempfile::tempdir().unwrap();
+        let (data, manager) = users_volume(root.path());
+        let blueprint = user_blueprint("users/${vars.user}");
+        let copy = Throwaway::copy(&manager, None, &blueprint, &user_bindings("dave"))
+            .await
+            .expect("copy");
+        assert_eq!(copy.report.bytes_copied, 0);
+        let in_copy = copy.volumes.resolve("data", None).unwrap().host;
+        assert_eq!(std::fs::read_dir(&in_copy).unwrap().count(), 0);
+        // The run's own mount creates it in the copy, as it would in the volume.
+        let vfs = crate::session_manager::build_vfs(
+            &blueprint,
+            &user_bindings("dave"),
+            copy.session_root.as_deref(),
+            None,
+            &copy.volumes,
+        );
+        assert!(vfs.is_ok());
+        assert!(in_copy.join("users/dave").is_dir());
+        assert!(!data.join("users/dave").exists(), "the volume is untouched");
+    }
+
+    #[test]
+    fn a_sub_path_that_is_not_a_plain_relative_path_is_refused() {
+        for bad in ["/etc", "a/../b", "..", "a//b", "", "a/./b", "a\\b"] {
+            assert!(relative_path(Some(bad)).is_err(), "{bad}");
+        }
+        assert_eq!(relative_path(None).unwrap(), PathBuf::new());
+        assert_eq!(relative_path(Some("a/b")).unwrap(), PathBuf::from("a/b"));
     }
 }
