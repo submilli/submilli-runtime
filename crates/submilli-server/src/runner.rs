@@ -13,10 +13,10 @@ use std::time::Instant;
 use interpreter::diagnostics::{self, Severity};
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{
-    AuthProxy, DecisionLog, ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmProvider,
-    McpTransport, RuntimeConfig, SecretProvider, SecurityCheck, SessionKvStore, StoreData, Vfs,
-    VfsInfo, install_package_modules_async, install_runtime_store_bound, install_tenant_limits,
-    is_memory_exhausted,
+    AuthProxy, DecisionLog, EmbeddingProvider, EmbeddingTokenBudget, ExecutionTokenBudget,
+    HttpClient, LinkedPackageModule, LlmProvider, McpTransport, RuntimeConfig, SecretProvider,
+    SecurityCheck, SessionKvStore, StoreData, Vfs, VfsInfo, install_package_modules_async,
+    install_runtime_store_bound, install_tenant_limits, is_memory_exhausted,
 };
 use interpreter::{
     BacktraceMode, Diagnostic, FileId, ParsedScript, ScriptImports, Sources,
@@ -102,6 +102,11 @@ pub struct HostServices {
     /// server-wide one together. Released on drop, so a run that traps or times
     /// out returns its reservation.
     pub llm_budget: Option<Arc<ExecutionTokenBudget>>,
+    /// Outbound `submilli:embedding` dispatch. `None` when the blueprint
+    /// declares no embedding aliases.
+    pub embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+    /// This execution's embedding budget, released on drop like `llm_budget`.
+    pub embedding_budget: Option<Arc<EmbeddingTokenBudget>>,
     /// The run's recorder, finished from the owner task; `None` records nothing.
     pub(crate) recording: Option<crate::record::Recording>,
     /// Fires when someone other than the caller asks to cancel the run.
@@ -158,6 +163,7 @@ pub(crate) async fn run(
         let audit = services.audit.clone();
         let budget = services.llm_budget.clone();
         let log = owner_recording.as_ref().map(crate::record::Recording::log);
+        let embedding_budget = services.embedding_budget.clone();
         let outcome = run_inner(
             &owned_code,
             parsed,
@@ -179,7 +185,11 @@ pub(crate) async fn run(
         )
         .await;
         if let Some(audit) = audit {
-            audit.result(&outcome, budget.as_ref().map_or(0, |b| b.used()));
+            audit.result(
+                &outcome,
+                budget.as_ref().map_or(0, |b| b.used()),
+                embedding_budget.as_ref().map_or(0, |b| b.used()),
+            );
             audit.finish(outcome.error.is_none());
         }
         if let (Some(owner_recording), Some(log)) = (owner_recording, log) {
@@ -294,6 +304,8 @@ async fn run_inner(
     data.session_kv = Some(services.session_kv);
     data.llm_provider = services.llm_provider;
     data.llm_budget = services.llm_budget;
+    data.embedding_provider = services.embedding_provider;
+    data.embedding_budget = services.embedding_budget;
     data.metrics = Arc::new(crate::metrics::SentryMetricsSink);
     data.console = Box::new(Sink(buf.clone()));
     data.install_type_info(compiled.type_info.clone());
@@ -1004,6 +1016,8 @@ mod tests {
             session_kv: Arc::new(InMemorySessionKv::default()),
             llm_provider: None,
             llm_budget: None,
+            embedding_provider: None,
+            embedding_budget: None,
             recording: None,
             cancel_requested: None,
         };

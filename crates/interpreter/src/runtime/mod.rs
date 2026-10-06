@@ -5,6 +5,7 @@ pub mod blocking;
 pub mod call_log;
 pub mod decision;
 pub mod disk_quota;
+pub mod embedding;
 pub mod exec;
 pub mod fs;
 pub mod fuel;
@@ -21,6 +22,7 @@ pub mod prelude;
 pub mod secrets;
 pub mod security;
 pub mod session_kv;
+pub mod token_ledger;
 pub mod vfs;
 pub mod watchdog;
 
@@ -31,6 +33,13 @@ pub use decision::{
     FailureReasonRecord, FailureRecord, NearMissRecord, RecordObserver, RuleCitation, SourceLine,
 };
 pub use disk_quota::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceeded};
+pub use embedding::{
+    DEFAULT_MAX_EMBEDDING_REQUESTS, DEFAULT_MAX_EXECUTION_EMBEDDING_TOKENS, EMBEDDING_MODULE_NAME,
+    EmbeddingBatch, EmbeddingBoundKind, EmbeddingError, EmbeddingFailureReason, EmbeddingLimitKind,
+    EmbeddingLimits, EmbeddingMalformedReason, EmbeddingModel, EmbeddingProvider,
+    EmbeddingShapeError, EmbeddingTokenBudget, Purpose, SubBatchSettlement,
+    estimate_embedding_tokens,
+};
 pub use exec::{RunResult, dispatch_main_async, instantiate_program_async};
 pub use host::{
     INTERNAL_MODULE_NAME, NUMBER_MODULE_NAME, host_package_declarations,
@@ -129,6 +138,13 @@ pub struct StoreData {
     /// bound pathological shapes rather than spend. The embedder installs one
     /// per execution, and dropping it is what returns the reservation.
     pub llm_budget: Option<Arc<ExecutionTokenBudget>>,
+    /// The provider `submilli:embedding` dispatches through, present only when
+    /// the embedder wires one. `None` means the guest sees a catchable
+    /// [`EmbeddingError::NotConfigured`], never a silent default.
+    pub embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+    /// This execution's embedding budget (tokens and outbound requests). `None`
+    /// in the pure-interpreter path; dropping it returns unspent reservation.
+    pub embedding_budget: Option<Arc<EmbeddingTokenBudget>>,
     /// Session-scoped key-value storage, present only when the embedder wires a
     /// provider. Left `None` the store stays absent rather than silently
     /// becoming per-execution scratch state that no later `execute` can read —
@@ -242,6 +258,8 @@ impl StoreData {
             mcp_transport: None,
             llm_provider: None,
             llm_budget: None,
+            embedding_provider: None,
+            embedding_budget: None,
             session_kv: None,
             metrics: Arc::new(metrics::NoopMetricsSink),
             tenant_limits: TenantLimits::new(max_store_bytes),

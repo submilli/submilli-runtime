@@ -35,7 +35,7 @@ use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
 use crate::runtime::host::{
     quota_exceeded_error, range_error, read_string_arg, register_host_fn_async, type_error,
-    write_boxed_number_struct, write_submilli_string_struct,
+    write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::llm::{
@@ -46,7 +46,10 @@ use crate::stdlib::abi::{
     self, backing_struct, i32_field, install_field_getters, nullable_boxed_number_field,
     nullable_string_field, string_field,
 };
-use crate::stdlib::shared::check_security_call;
+use crate::stdlib::shared::{
+    audit_quota_denial, check_security_call, filters_candidate, mark_filtered, optional_number,
+    preflight_models, sanitize_description,
+};
 
 pub const MODULE_NAME: &str = "submilli:llm";
 
@@ -55,15 +58,7 @@ pub const MODULE_NAME: &str = "submilli:llm";
 /// filter context rather than by three capability names.
 pub const CAPABILITY: &str = "llm.call";
 
-/// Characters a `Model.description` may carry into a guest model's
-/// model-selection reasoning.
-///
-/// The bound is not the whole defense — [`sanitize_description`] strips control
-/// characters and collapses the text to one line first, because a length bound
-/// alone does not stop an injection short enough to fit. The bound is what stops
-/// a long one, and what keeps a listing's size independent of how much prose an
-/// operator wrote.
-pub const MAX_DESCRIPTION_CHARS: usize = 280;
+const QUOTA_REASON: &str = "model-token budget exceeded";
 
 // `$CompletionBacking` field indices (0 is the vtable).
 const C_OK: usize = 1;
@@ -287,46 +282,12 @@ async fn dispatch(
     let output_reserve = provider.output_reserve(model);
     let reservation =
         reserve(budget.as_deref(), op, model, &prompts, output_reserve).map_err(|error| {
-            let who = crate::stdlib::shared::running_package(caller)
-                .or_else(crate::stdlib::shared::PrincipalError::label_or_error);
-            let who = match who {
-                Ok(who) => who,
-                Err(error) => return error,
-            };
-            crate::stdlib::shared::audit_denial_in(
-                &*caller,
-                ticket,
-                &who,
-                "llm.call",
-                &serde_json::json!({ "model": model }),
-                "quota",
-                "model-token budget exceeded",
-            );
-            error
-        })?;
-    let dispatched = provider
-        .call(model, &prompts, schema.as_deref())
-        .await
-        .map_err(|e| {
-            if e.is_budget_exceeded() {
-                let who = crate::stdlib::shared::running_package(caller)
-                    .or_else(crate::stdlib::shared::PrincipalError::label_or_error);
-                let who = match who {
-                    Ok(who) => who,
-                    Err(error) => return error,
-                };
-                crate::stdlib::shared::audit_denial_in(
-                    &*caller,
-                    ticket,
-                    &who,
-                    "llm.call",
-                    &serde_json::json!({"model": model}),
-                    "quota",
-                    "model-token budget exceeded",
-                );
+            match audit_quota_denial(caller, ticket, CAPABILITY, model, QUOTA_REASON) {
+                Ok(()) => error,
+                Err(denial) => denial,
             }
-            throw(op, e)
-        });
+        })?;
+    let dispatched = provider.call(model, &prompts, schema.as_deref()).await;
 
     match dispatched {
         Ok(outcomes) => {
@@ -356,7 +317,13 @@ async fn dispatch(
             if let Some(budget) = budget.as_deref() {
                 budget.release(reservation);
             }
-            Err(error)
+            if error.is_budget_exceeded()
+                && let Err(denial) =
+                    audit_quota_denial(caller, ticket, CAPABILITY, model, QUOTA_REASON)
+            {
+                return Err(denial);
+            }
+            Err(throw(op, error))
         }
     }
 }
@@ -409,7 +376,7 @@ fn gate(
 /// count, not an index, not a gap. The visible list is byte-identical to what a
 /// runtime configured with only those models would return.
 async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
-    preflight_models(caller)?;
+    preflight_models(caller, CAPABILITY, "prompt_count")?;
     let provider = provider(caller, "models", "")?;
     let candidates = provider.models().await.map_err(|e| throw("models", e))?;
 
@@ -427,54 +394,15 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
     build_array(caller, built)
 }
 
-/// Charge for the check and establish caller attribution even for an empty
-/// catalog, without asking policy about a model that does not exist.
-fn preflight_models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<()> {
-    fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
-    crate::stdlib::shared::running_package(caller)
-        .map(|_| ())
-        .map_err(|error| {
-            if let crate::stdlib::shared::PrincipalError::Unknown(ref unknown) = error {
-                crate::stdlib::shared::audit_entry_denial(
-                    &*caller,
-                    unknown.label,
-                    CAPABILITY,
-                    &serde_json::json!({ "model": "", "prompt_count": 0 }),
-                    "invariant",
-                    unknown.reason,
-                );
-            }
-            error.into_denial(CAPABILITY)
-        })
-}
-
 /// The per-candidate gate. A denial omits the model rather
 /// than failing the call: a listing that threw on the first forbidden model
 /// would itself disclose that the operator configured it.
 fn may_call(caller: &mut wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
     let keeps = filters_candidate(gate(caller, model, 0).map(|_| ()))?;
     if !keeps {
-        crate::stdlib::shared::mark_filtered(&*caller);
+        mark_filtered(&*caller);
     }
     Ok(keeps)
-}
-
-/// Whether a per-candidate check's answer removes the candidate (`Ok(false)`),
-/// keeps it (`Ok(true)`), or must propagate (`Err`).
-///
-/// Only the policy's own answer filters. An invariant denial means the check
-/// could not be made at all — the caller could not be named, or a runtime rule
-/// refused ahead of the policy — and swallowing it would turn a runtime refusal
-/// into a silently short listing that reads as "the operator configured fewer
-/// models."
-fn filters_candidate(checked: wasmtime::Result<()>) -> wasmtime::Result<bool> {
-    let Err(err) = checked else {
-        return Ok(true);
-    };
-    match err.downcast_ref::<crate::runtime::host::PermissionDenied>() {
-        Some(denial) if denial.is_policy() => Ok(false),
-        _ => Err(err),
-    }
 }
 
 /// Bound the slice in elements and in bytes, before any reservation is taken.
@@ -680,26 +608,6 @@ fn read_prompts(
     Ok(prompts)
 }
 
-/// Reduce an operator-authored `description` to inert single-line data.
-///
-/// This is sanitization, not merely a bound. The text flows verbatim into a
-/// guest model's model-selection reasoning, so an injection that redirects which
-/// model a program calls fits comfortably inside any length limit — a bound
-/// alone stops only the long ones. Control characters and line breaks are what
-/// let injected text present itself as a new instruction block, so they are
-/// removed first; the bound then stops the rest.
-fn sanitize_description(description: &str) -> Option<String> {
-    let flattened: String = description
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let collapsed = flattened.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.is_empty() {
-        return None;
-    }
-    Some(collapsed.chars().take(MAX_DESCRIPTION_CHARS).collect())
-}
-
 fn completion_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
     let intr = build_intrinsic_types(engine)?;
     backing_struct(
@@ -847,18 +755,6 @@ fn optional_string(
     }
 }
 
-fn optional_number(
-    caller: &mut wasmtime::Caller<'_, StoreData>,
-    number: Option<f64>,
-) -> wasmtime::Result<Val> {
-    match number {
-        Some(number) => Ok(Val::AnyRef(Some(
-            write_boxed_number_struct(caller, number)?.to_anyref(),
-        ))),
-        None => Ok(Val::AnyRef(None)),
-    }
-}
-
 fn build_array(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     elements: Vec<Val>,
@@ -870,7 +766,7 @@ fn build_array(
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use super::{MAX_DESCRIPTION_CHARS, filters_candidate, sanitize_description};
+    use super::{filters_candidate, sanitize_description};
     use crate::runtime::llm::{
         ExecutionTokenBudget, FailureReason, LlmCallError, LlmFailure, LlmLimits, LlmModel,
         LlmOutcome, LlmProvider, SharedTokenBudget,
@@ -879,6 +775,7 @@ mod tests {
         CheckOutcome, RuntimeConfig, SecurityCheck, StoreData, Vfs, dispatch_main_async,
         install_runtime_async,
     };
+    use crate::stdlib::shared::MAX_DESCRIPTION_CHARS;
 
     /// One recorded dispatch: everything the host handed the provider. Prompts
     /// are recorded so a test can prove they reached the provider *and* never

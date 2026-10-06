@@ -17,12 +17,16 @@ use axum::{
     routing::{MethodRouter, delete, get, post},
 };
 use interpreter::runtime::{
-    HttpClient, LlmProvider, ReqwestHttpClient, RuntimeConfig, StoreData,
+    EmbeddingProvider, HttpClient, LlmProvider, ReqwestHttpClient, RuntimeConfig, StoreData,
     install_runtime_host_functions,
 };
 use interpreter::{PackageDeclaration, ScriptImports};
 use submilli_blueprint::Blueprint;
 use submilli_build::{ArtifactMetadata, PackageStore, PackageStoreError};
+use submilli_shared::embedding::{
+    BlueprintEmbeddingProvider, EmbeddingDispatch, HttpEmbeddingDispatch,
+    HttpEmbeddingDispatchError,
+};
 use submilli_shared::llm::{
     BlueprintLlmProvider, HttpModelDispatch, HttpModelDispatchError, ModelDispatch,
 };
@@ -44,9 +48,10 @@ use crate::mcp::{
 };
 use crate::session::{InMemorySessionStore, SessionStore};
 use crate::session_manager::{
-    CapabilitySettings, DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_CONCURRENCY,
-    DEFAULT_TOTAL_SESSION_KV_BYTES, HttpClientFactory, LlmSettings, SessionKvSettings,
-    SessionManager,
+    CapabilitySettings, DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS,
+    DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_EMBEDDING_CONCURRENCY,
+    DEFAULT_TOTAL_SESSION_KV_BYTES, EmbeddingSettings, HttpClientFactory, LlmSettings,
+    SessionKvSettings, SessionManager,
 };
 use crate::session_store::{
     DurableSessionStore, FileDurableSessionStore, InMemoryDurableSessionStore,
@@ -76,6 +81,16 @@ type LlmDispatchFactory = Arc<
             Option<Arc<dyn SecretStore>>,
             Arc<interpreter::runtime::NetworkPolicy>,
         ) -> std::result::Result<HttpModelDispatch, HttpModelDispatchError>
+        + Send
+        + Sync,
+>;
+
+type EmbeddingDispatchFactory = Arc<
+    dyn Fn(
+            Arc<Blueprint>,
+            Option<Arc<dyn SecretStore>>,
+            Arc<interpreter::runtime::NetworkPolicy>,
+        ) -> std::result::Result<HttpEmbeddingDispatch, HttpEmbeddingDispatchError>
         + Send
         + Sync,
 >;
@@ -145,6 +160,9 @@ struct AppStateInner {
     /// [`AppState::llm_provider_for`] builds the real per-blueprint HTTP one.
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
     llm_dispatch_factory: LlmDispatchFactory,
+    /// The embedding counterpart of `llm_dispatch`.
+    embedding_dispatch: Option<Arc<dyn EmbeddingDispatch>>,
+    embedding_dispatch_factory: EmbeddingDispatchFactory,
     #[cfg(test)]
     mcp_setup: McpSetup,
     run_recorder: Option<Arc<dyn crate::record::RunRecorderFactory>>,
@@ -173,12 +191,41 @@ impl AppState {
     /// Construct application state with the blueprint store supplied in config.
     /// Store selection and migration belong to server startup.
     pub fn new(config: ServerConfig) -> Result<Self> {
-        Self::with_llm_dispatch_factory(config, Arc::new(HttpModelDispatch::new))
+        Self::with_dispatch_factories(
+            config,
+            Arc::new(HttpModelDispatch::new),
+            Arc::new(HttpEmbeddingDispatch::new),
+        )
     }
 
+    #[cfg(test)]
     fn with_llm_dispatch_factory(
         config: ServerConfig,
         llm_dispatch_factory: LlmDispatchFactory,
+    ) -> Result<Self> {
+        Self::with_dispatch_factories(
+            config,
+            llm_dispatch_factory,
+            Arc::new(HttpEmbeddingDispatch::new),
+        )
+    }
+
+    #[cfg(test)]
+    fn with_embedding_dispatch_factory(
+        config: ServerConfig,
+        embedding_dispatch_factory: EmbeddingDispatchFactory,
+    ) -> Result<Self> {
+        Self::with_dispatch_factories(
+            config,
+            Arc::new(HttpModelDispatch::new),
+            embedding_dispatch_factory,
+        )
+    }
+
+    fn with_dispatch_factories(
+        config: ServerConfig,
+        llm_dispatch_factory: LlmDispatchFactory,
+        embedding_dispatch_factory: EmbeddingDispatchFactory,
     ) -> Result<Self> {
         submilli_shared::mcp::schema_registry::initialize_builtin_packs();
         let blueprints = config.blueprints.context(
@@ -276,6 +323,15 @@ impl AppState {
                             .max_llm_concurrency
                             .unwrap_or(DEFAULT_MAX_CONCURRENCY),
                     ),
+                    embedding: EmbeddingSettings::new(
+                        config.embedding_limits,
+                        config
+                            .max_embedding_tokens
+                            .unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS),
+                        config
+                            .max_embedding_concurrency
+                            .unwrap_or(DEFAULT_MAX_EMBEDDING_CONCURRENCY),
+                    ),
                 },
             )
             .with_audit(audit.clone()),
@@ -318,6 +374,8 @@ impl AppState {
                 bind_addr: OnceLock::new(),
                 llm_dispatch: config.llm_dispatch,
                 llm_dispatch_factory,
+                embedding_dispatch: config.embedding_dispatch,
+                embedding_dispatch_factory,
                 #[cfg(test)]
                 mcp_setup: Arc::new(|| Ok(())),
                 event_hub: config
@@ -520,6 +578,37 @@ impl AppState {
             BlueprintLlmProvider::new(Arc::clone(blueprint), dispatch)
                 .with_max_concurrency(self.inner.session_manager.llm_max_concurrency()),
         )))
+    }
+
+    /// The outbound `submilli:embedding` provider for one blueprint, or `None`
+    /// when the blueprint declares no embedding aliases (the module is then not
+    /// offered, so nothing would reach it). Built per execute for the same
+    /// reasons as [`Self::llm_provider_for`], and overridable the same way.
+    pub(crate) fn embedding_provider_for(
+        &self,
+        blueprint: &Arc<Blueprint>,
+        harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
+        network_policy: &Arc<interpreter::runtime::NetworkPolicy>,
+    ) -> std::result::Result<Option<Arc<dyn EmbeddingProvider>>, HttpEmbeddingDispatchError> {
+        if blueprint.embedding.models.is_empty() {
+            return Ok(None);
+        }
+        let dispatch = match self.inner.embedding_dispatch.as_ref() {
+            Some(installed) => Arc::clone(installed),
+            None => Arc::new(
+                (self.inner.embedding_dispatch_factory)(
+                    Arc::clone(blueprint),
+                    self.secret_store().cloned(),
+                    Arc::clone(network_policy),
+                )?
+                .with_harness_secrets(Arc::clone(harness_secrets)),
+            ) as Arc<dyn EmbeddingDispatch>,
+        };
+        Ok(Some(Arc::new(BlueprintEmbeddingProvider::new(
+            blueprint,
+            dispatch,
+            self.inner.session_manager.embedding_max_concurrency(),
+        ))))
     }
 
     /// The operator-declared volume table, read from the session manager so
@@ -1411,6 +1500,9 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod embedding_setup_tests;
 
 #[cfg(test)]
 mod llm_setup_tests;

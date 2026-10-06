@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "715d8c58e8f58bf057583e06c6512b089a06e523413cf1c802d7bbf3228caa81"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "169898dd77e59935fee5bce478135e4dd0852de4f6a86b436fcac0f0a967a35f"
+  confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
 This page describes how the `permissions` and `default` blocks of a
@@ -93,7 +93,7 @@ These are refused before the rules are read, whatever `default` says:
 
 | Source | Names | Fields |
 | --- | --- | --- |
-| The standard library | `fs.*`, `git.*`, `http.*`, `llm.call`, `secrets.get`, `session.*` | In the tables below |
+| The standard library | `embedding.embed`, `fs.*`, `git.*`, `http.*`, `llm.call`, `secrets.get`, `session.*` | In the tables below |
 | A Package | Chosen by its author, such as `acme.com/credits.apply` | Declared by its `@capability` tags ([Package manifest](/docs/reference/package-manifest)) |
 | An MCP server the Blueprint declares | `mcp.<server>`, such as `mcp.linear` | `tool`, `transport` ([MCP servers](/docs/reference/mcp-servers)) |
 
@@ -145,6 +145,12 @@ missing field is false.
   `capability: mcp.linear` with `filter: tool == "save_issue"`.
 
 <!-- generated:capabilities -->
+
+### `submilli:embedding`
+
+| Capability | Fields | Operation | Example filter |
+| --- | --- | --- | --- |
+| `embedding.embed` | `model: string`, `input_count: number` | Embed text through a declared embedding alias (embed) and enumerate the aliases it may use (models). Narrowing `model` also narrows what `models()` reveals: every candidate is filtered through this same rule, so a listing never offers an alias the caller would be denied at call time. A policy allowing no candidates returns an empty listing | `model glob "memory-*"` |
 
 ### `submilli:fs`
 
@@ -222,7 +228,7 @@ missing field is false.
 | An action or `default` other than `allow` or `deny` | ``unknown variant `maybe`, expected one of …`` |
 | A key in a rule other than `capability`, `filter`, `action` | ``unknown field `extra`, expected one of `capability`, `filter`, `action` `` |
 | An MCP capability with the tool in its name | `permission rule 'mcp.linear/save_issue': use capability 'mcp.linear' with a filter such as 'tool == "name"' instead of '/tool'` |
-| A rule for an undeclared MCP server or `llm` model | `permission rule 'mcp.x' references undeclared mcp server 'x'` |
+| A rule for an undeclared MCP server, `llm` model, or embedding alias | `permission rule 'mcp.x' references undeclared mcp server 'x'` |
 | A Package requires an operation its own list has no rule for (lint and registration) | ``package `@acme/billing` requires `http.get` with filter `…`, but `permissions.@acme/billing` has no matching rule`` (`submilli blueprint lint --fix` adds it) |
 | A filter tests a field the capability doesn't report (lint and registration) | ``rule 1 for `fs.read` tests `owner`, which the operation doesn't report, …`` |
 

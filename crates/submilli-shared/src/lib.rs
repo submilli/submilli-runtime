@@ -7,8 +7,10 @@
 //! MCP servers and resolve `store:` secrets locally, with the same semantics the
 //! server enforces in production.
 
+pub mod embedding;
 pub mod github;
 pub mod host;
+pub mod http_client;
 pub mod library_visibility;
 pub mod llm;
 pub mod mcp;

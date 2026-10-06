@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "b7db325fe76d2dcbb41e870584a06bdcecedaa78bb98c9fd5ad5aa0e9266e155"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "6619726328b7b4f50e72791ae83c0cb6280ba678798922bed871d9859c6bba10"
+  confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
 This page describes how `submilli-server` is configured. It covers every
@@ -63,6 +63,10 @@ flat names listed. A dash means the form doesn't exist.
 | `max_llm_tokens` | `--max-llm-tokens` | `SUBMILLI_MAX_LLM_TOKENS` | count, at least 1 | `20M` | Model tokens across all runs. |
 | `max_execution_llm_tokens` | `--max-execution-llm-tokens` | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | count, at least 1 | `1M` | Model tokens one run may spend. |
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
+| `max_embedding_tokens` | `--max-embedding-tokens` | `SUBMILLI_MAX_EMBEDDING_TOKENS` | count, at least 1 | `50M` | Embedding tokens across all runs. Separate from the model-token budgets. |
+| `max_execution_embedding_tokens` | `--max-execution-embedding-tokens` | `SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS` | count, at least 1 | `2M` | Embedding tokens one run may spend. |
+| `max_execution_embedding_requests` | `--max-execution-embedding-requests` | `SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS` | count, at least 1 | `1K` | Provider requests one run's `submilli:embedding` calls may send. |
+| `max_embedding_concurrency` | `--max-embedding-concurrency` | `SUBMILLI_MAX_EMBEDDING_CONCURRENCY` | requests, at least 1 | `4` | Provider requests of one embedding call in flight at once. |
 | — | — | `SUBMILLI_DENY_WARNINGS` | `1` or unset | unset | Refuse every Package install that has a code warning, whatever the caller asks. |
 | `telemetry` | — | `SUBMILLI_TELEMETRY` | boolean | `false` | Report to the Submilli maintainers. See [`telemetry`](#telemetry). |
 | `telemetry_include_source` | — | `SUBMILLI_TELEMETRY_INCLUDE_SOURCE` | boolean | `false` | Attach failed programs' source to reports. |
@@ -464,6 +468,14 @@ Options:
           Tokens a *single* execution's `submilli:llm` calls may spend. Bounds one run where `--max-llm-tokens` bounds the process, so one program cannot consume the whole server's budget. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1M or 10_000
       --max-llm-concurrency <PROMPTS>
           Prompts one `llm.batch` dispatches at once. Bounded deliberately: unbounded fan-out manufactures the rate-limit errors it then cannot honor a `retry-after` against. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file
+      --max-embedding-tokens <TOKENS>
+          Tokens every live execution's `submilli:embedding` calls may spend *in total*. Separate from `--max-llm-tokens`: embedding and `llm.call` spend against different provider credentials and neither can starve the other. [default: 50000000] Env: `$SUBMILLI_MAX_EMBEDDING_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 50M or 10_000
+      --max-execution-embedding-tokens <TOKENS>
+          Tokens a *single* execution's `submilli:embedding` calls may spend. [default: 2000000] Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 2M or 10_000
+      --max-execution-embedding-requests <REQUESTS>
+          Outbound provider requests a *single* execution's `submilli:embedding` calls may send. [default: 1000] Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1K or 1_000
+      --max-embedding-concurrency <REQUESTS>
+          Provider requests one embedding call sends at once. [default: 4] Env: `$SUBMILLI_MAX_EMBEDDING_CONCURRENCY`, which outranks the config file
       --allow-unauthenticated
           Serve the API without authentication: every caller that can reach the port has full access. The server otherwise refuses to start until it has a token — `$SUBMILLI_SERVER_TOKEN`, which is an admin token, or entries under `api_tokens` in the config file. For a server whose network already admits only its own application, and for local experiments. Cannot be combined with either source of tokens. Env: `$SUBMILLI_ALLOW_UNAUTHENTICATED` (`1`/`true`/`yes`/`on`)
       --health-check

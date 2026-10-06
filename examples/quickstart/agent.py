@@ -7,6 +7,7 @@ customer this session is about rides along in a header, so the agent never
 sees it and cannot restate it.
 
     export GOOGLE_API_KEY=...        # Google AI Studio
+    export GOOGLE_MODEL=...          # a supported Google model id
     export SUBMILLI_SERVER_TOKEN=... # the token the server was started with
     python agent.py
 """
@@ -37,10 +38,18 @@ async def main() -> None:
     if not token:
         raise SystemExit("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with.")
 
+    server_url = os.environ.get("SUBMILLI_SERVER_URL", "http://127.0.0.1:8128").rstrip("/")
+    model_name = os.environ.get("GOOGLE_MODEL")
+    if not model_name:
+        raise SystemExit("error: set GOOGLE_MODEL to a supported Google model id")
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise SystemExit("error: set GOOGLE_API_KEY (or GEMINI_API_KEY) to your Google AI Studio key")
+
     client = MultiServerMCPClient({
         "submilli": {
             "transport": "streamable_http",
-            "url": "http://127.0.0.1:8128/mcp/quickstart",
+            "url": f"{server_url}/mcp/quickstart",
             "headers": {
                 # The API token this application was given for the server.
                 "Authorization": f"Bearer {token}",
@@ -54,9 +63,9 @@ async def main() -> None:
         agent = create_deep_agent(
             tools=await load_mcp_tools(session),
             model=ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash",
+                model=model_name,
                 temperature=0,
-                google_api_key=os.environ["GOOGLE_API_KEY"],
+                google_api_key=api_key,
             ),
         )
         result = await agent.ainvoke({"messages": [{"role": "user", "content": TICKET}]})

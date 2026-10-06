@@ -8,7 +8,7 @@ use crate::runtime::fs::{ContainError, ContentPath, LinkPath, resolve_content, r
 use crate::runtime::fuel;
 use crate::runtime::host::{
     permission_denied, permission_denied_invariant, permission_denied_read_only,
-    quota_exceeded_error,
+    quota_exceeded_error, write_boxed_number_struct,
 };
 use crate::runtime::security::{AuditDecision, CheckOutcome, SecurityCheck};
 use crate::runtime::vfs::{Access, Placement};
@@ -524,4 +524,114 @@ fn write_then_rename(
         let _ = tmp.remove_file();
     }
     result
+}
+
+// --- shared by the model-listing libraries (`submilli:llm`, `submilli:embedding`) ---
+
+/// Characters a `Model.description` may carry into a guest model's
+/// model-selection reasoning.
+///
+/// The bound is not the whole defense — [`sanitize_description`] strips control
+/// characters and collapses the text to one line first, because a length bound
+/// alone does not stop an injection short enough to fit. The bound is what stops
+/// a long one, and what keeps a listing's size independent of how much prose an
+/// operator wrote.
+pub const MAX_DESCRIPTION_CHARS: usize = 280;
+
+/// Whether a per-candidate check's answer removes the candidate (`Ok(false)`),
+/// keeps it (`Ok(true)`), or must propagate (`Err`).
+///
+/// Only the policy's own answer filters. An invariant denial means the check
+/// could not be made at all — the caller could not be named, or a runtime rule
+/// refused ahead of the policy — and swallowing it would turn a runtime refusal
+/// into a silently short listing that reads as "the operator configured fewer
+/// models."
+pub(crate) fn filters_candidate(checked: wasmtime::Result<()>) -> wasmtime::Result<bool> {
+    let Err(err) = checked else {
+        return Ok(true);
+    };
+    match err.downcast_ref::<crate::runtime::host::PermissionDenied>() {
+        Some(denial) if denial.is_policy() => Ok(false),
+        _ => Err(err),
+    }
+}
+
+/// Reduce an operator-authored `description` to inert single-line data.
+///
+/// This is sanitization, not merely a bound. The text flows verbatim into a
+/// guest model's model-selection reasoning, so an injection that redirects which
+/// model a program calls fits comfortably inside any length limit — a bound
+/// alone stops only the long ones. Control characters and line breaks are what
+/// let injected text present itself as a new instruction block, so they are
+/// removed first; the bound then stops the rest.
+pub(crate) fn sanitize_description(description: &str) -> Option<String> {
+    let flattened: String = description
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let collapsed = flattened.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    Some(collapsed.chars().take(MAX_DESCRIPTION_CHARS).collect())
+}
+
+/// Charge for the check and establish caller attribution even for an empty
+/// catalog, without asking policy about a model that does not exist.
+/// `count_field` names the filter context's count (`prompt_count`, `input_count`).
+pub(crate) fn preflight_models(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    capability: &str,
+    count_field: &str,
+) -> wasmtime::Result<()> {
+    fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
+    running_package(caller).map(|_| ()).map_err(|error| {
+        if let PrincipalError::Unknown(ref unknown) = error {
+            audit_entry_denial(
+                &*caller,
+                unknown.label,
+                capability,
+                &serde_json::json!({ "model": "", count_field: 0 }),
+                "invariant",
+                unknown.reason,
+            );
+        }
+        error.into_denial(capability)
+    })
+}
+
+/// Audit a token-budget refusal against the running package, inside the host call
+/// `ticket` names. `Err` is the denial to throw instead when the package cannot
+/// be named.
+pub(crate) fn audit_quota_denial(
+    caller: &wasmtime::Caller<'_, StoreData>,
+    ticket: Option<CallTicket>,
+    capability: &str,
+    model: &str,
+    reason: &str,
+) -> Result<(), wasmtime::Error> {
+    let who = running_package(caller).or_else(PrincipalError::label_or_error)?;
+    audit_denial_in(
+        caller,
+        ticket,
+        &who,
+        capability,
+        &serde_json::json!({ "model": model }),
+        "quota",
+        reason,
+    );
+    Ok(())
+}
+
+/// A boxed number, or `null` when absent.
+pub(crate) fn optional_number(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    number: Option<f64>,
+) -> wasmtime::Result<wasmtime::Val> {
+    match number {
+        Some(number) => Ok(wasmtime::Val::AnyRef(Some(
+            write_boxed_number_struct(caller, number)?.to_anyref(),
+        ))),
+        None => Ok(wasmtime::Val::AnyRef(None)),
+    }
 }

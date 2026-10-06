@@ -1,0 +1,22 @@
+kind: blueprint
+name: embedding-example
+secrets:
+  VOYAGE_API_KEY:
+    store: voyage_api_key
+default: deny
+permissions:
+  main:
+  - capability: embedding.embed
+    filter: model glob "notes-*"
+    action: allow
+embedding:
+  providers:
+    voyage:
+      type: voyage
+      api_key: ${secrets.VOYAGE_API_KEY}
+  models:
+    notes-embedding:
+      provider: voyage
+      model: voyage-3.5
+      dimensions: 1024
+      description: Embeds notes for semantic search.

@@ -808,7 +808,7 @@ mod tests {
             unconfigured: false,
         })
         .unwrap();
-        assert!(out.starts_with("submilli:fs\n"), "{out}");
+        assert!(out.contains("submilli:fs\n"), "{out}");
         assert!(
             out.contains("rule[main]: allow (filter: path glob \"*.csv\")"),
             "{out}"

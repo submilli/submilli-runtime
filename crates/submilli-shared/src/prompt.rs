@@ -139,6 +139,14 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
                 ""
             },
         )
+        .replace(
+            "{embedding_guidance}",
+            if visibility.allows("submilli:embedding") {
+                EMBEDDING_GUIDANCE
+            } else {
+                ""
+            },
+        )
         .replace("{builtins}", &builtins_phrase())
         .replace("{mcp_packages}", &mcp_packages_phrase(blueprint))
         .replace("{t_search}", search)
@@ -166,6 +174,14 @@ counts may be `null`: indeterminate, not free. `batch` is
 bounded-concurrent, one result per prompt, positionally. Models are
 operator-declared — `models()` lists them, and `contextWindow` /
 `description` are `null` when undeclared, so filtering drops those."#;
+
+const EMBEDDING_GUIDANCE: &str = r#"
+
+Embeddings (`submilli:embedding`): `embed(model, texts, purpose)` turns
+text into vectors through an operator-declared alias; `models()` lists
+the aliases with their `dimensions` and `maxInputBytes`. Pass `"query"`
+or `"document"` as the purpose. An input over the limit is rejected, not
+truncated, so size chunks from `maxInputBytes`."#;
 
 const SESSION_GUIDANCE: &str = r#"
 
@@ -206,6 +222,7 @@ fn stdlib_modules_phrase(visibility: LibraryVisibility) -> String {
         "submilli:uuid",
         "submilli:session",
         "submilli:llm",
+        "submilli:embedding",
     ]
     .into_iter()
     .filter(|name| visibility.allows(name))
@@ -568,6 +585,29 @@ mod tests {
                 assert_eq!(prompt.contains(text), visible, "{text}: {prompt}");
             }
             assert!(!prompt.contains("{llm_guidance}"));
+        }
+    }
+
+    #[test]
+    fn embedding_prompt_guidance_requires_an_alias_and_permission() {
+        let config = "embedding:\n  providers:\n    test:\n      type: huggingface\n      base_url: https://hf.example.com\n  models:\n    docs:\n      provider: test\n      model: bge\n      dimensions: 4\n";
+        for (configuration, policy, visible) in [
+            ("", "default: allow\n", false),
+            (config, "", false),
+            (config, "default: allow\n", true),
+            (
+                config,
+                "permissions:\n  main:\n    - capability: embedding.embed\n      action: ask-human\n",
+                true,
+            ),
+        ] {
+            let blueprint =
+                submilli_blueprint::parse(&format!("name: test\n{configuration}{policy}")).unwrap();
+            let prompt = execute_tool_description(&blueprint, PromptSurface::Mcp);
+            for text in ["submilli:embedding", "Embeddings (", "maxInputBytes"] {
+                assert_eq!(prompt.contains(text), visible, "{text}: {prompt}");
+            }
+            assert!(!prompt.contains("{embedding_guidance}"));
         }
     }
 

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cdfc8e55a7af5a449f6634166e9ee4126660f2d209108e1451a89665a08e8dcf"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "37b108fbb93c0f5dcd6943fe72d19e229d1cca5ab4cca058e83e5f1f66d19f77"
+  confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
 This page describes `submilli`, the command-line tool. It covers the
@@ -116,6 +116,9 @@ An error that stopped the command before it could report one begins with
 | `GH_TOKEN`, `GITHUB_TOKEN` | `install`, `build`, `github …` | A GitHub token (see [GitHub token](#github-token)) |
 | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | `run` | Default for `--max-llm-tokens` |
 | `SUBMILLI_MAX_LLM_CONCURRENCY` | `run` | Default for `--max-llm-concurrency` |
+| `SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS` | `run` | Default for `--max-execution-embedding-tokens` |
+| `SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS` | `run` | Default for `--max-execution-embedding-requests` |
+| `SUBMILLI_MAX_EMBEDDING_CONCURRENCY` | `run` | Default for `--max-embedding-concurrency` |
 | `SUBMILLI_OAUTH_REDIRECT_PORT` | `mcp authenticate`, `server mcp authenticate` | Loopback port of the OAuth redirect listener, `8765` by default |
 | `SUBMILLI_SKILL_AUTOUPDATE` | `skill sync` | `0` stops `sync` from contacting the network. It then uses the skill bundled with the CLI |
 | `SUBMILLI_SKILL_SOURCE` | `skill sync` | Repository URL skill releases are downloaded from. Must be `https`, or `http` on loopback |
@@ -413,6 +416,15 @@ Options:
 
       --max-llm-concurrency <PROMPTS>
           Prompts one `llm.batch` dispatches at once. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`
+
+      --max-execution-embedding-tokens <TOKENS>
+          Tokens this run's `submilli:embedding` calls may spend in total. A call that asks for more raises a catchable `QuotaExceededError`. [default: 2000000] Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS`, which outranks the config file
+
+      --max-execution-embedding-requests <REQUESTS>
+          Outbound provider requests this run's `submilli:embedding` calls may send. [default: 1000] Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS`, which outranks the config file
+
+      --max-embedding-concurrency <REQUESTS>
+          Provider requests one embedding call sends at once. [default: 4] Env: `$SUBMILLI_MAX_EMBEDDING_CONCURRENCY`, which outranks the config file
 
   -h, --help
           Print help (see a summary with '-h')
@@ -919,7 +931,7 @@ Usage: submilli blueprint secret <COMMAND>
 Commands:
   add     Declare a secret in the blueprint's `secrets:` block
   list    List the blueprint's declared secrets and their sources (never values)
-  remove  Remove a declared secret. Refused while `auth_proxy:`, `mcp:`, or `llm:` still references it
+  remove  Remove a declared secret. Refused while `auth_proxy:`, `mcp:`, `llm:`, or `embedding:` still references it
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -959,7 +971,7 @@ Options:
 #### `submilli blueprint secret remove`
 
 ```text
-Remove a declared secret. Refused while `auth_proxy:`, `mcp:`, or `llm:` still references it
+Remove a declared secret. Refused while `auth_proxy:`, `mcp:`, `llm:`, or `embedding:` still references it
 
 Usage: submilli blueprint secret remove [OPTIONS] <NAME>
 

@@ -35,50 +35,16 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
 
-use interpreter::stdlib::http::{NetworkPolicy, describe_error_chain};
+use interpreter::stdlib::http::NetworkPolicy;
 use serde_json::Value;
-use submilli_blueprint::{Blueprint, HarnessSecretBindings, LlmProviderDecl, interpolate};
+use submilli_blueprint::{Blueprint, HarnessSecretBindings, LlmProviderDecl};
 
-use crate::host::BlueprintSecretResolver;
+use crate::http_client::{self, TransportFailure};
 use crate::secret_store::SecretStore;
 
 use super::provider::{ModelDispatch, ModelRequest, ProviderFailure, ProviderResponse};
 use super::wire::{self, ProviderKind};
-
-/// How long one dispatch may take end to end.
-///
-/// Generous by HTTP standards and deliberately so: a large reasoning request
-/// legitimately runs for minutes, and a timeout tuned for an ordinary API would
-/// turn a working call into a `transport` failure that costs the operator the
-/// tokens anyway. It exists to stop a hung socket pinning a fan-out slot
-/// forever, not to bound model latency.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
-
-/// How long the TCP/TLS handshake may take, separately from the request as a
-/// whole.
-///
-/// Establishing a connection is not where a model spends its time, so this can
-/// be short where [`REQUEST_TIMEOUT`] cannot. Without it, an endpoint whose
-/// address is routable-but-dead — a typo'd `base_url`, a decommissioned host —
-/// holds a fan-out slot for the OS's own SYN-retry budget, which is over a
-/// minute on most platforms, before the generous overall timeout even begins to
-/// apply.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// A `retry-after` beyond this is treated as absent. The header is advisory and
-/// the value only feeds the `retryable` flag, so an absurd one should not make a
-/// guest wait on a number no provider meant.
-const MAX_RETRY_AFTER_SECS: u64 = 3600;
-
-/// The most of one response this process will buffer.
-///
-/// A completion is text bounded by the model's own output cap, so this is far
-/// above any legitimate answer; it exists because the peer on an
-/// `openai-compatible` connection is operator-supplied and therefore not
-/// necessarily one to trust to bound its own body.
-const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 /// The outbound model dispatch bound to one blueprint.
 ///
@@ -139,11 +105,7 @@ impl HttpModelDispatch {
         // Refuse redirects: Anthropic and Google authenticate using custom
         // headers that reqwest otherwise forwards to a redirected destination.
         // Cookies are disabled, so elements can share this connection pool.
-        let client = builder
-            .timeout(REQUEST_TIMEOUT)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
+        let client = http_client::configure_client(builder).build()?;
         Ok(Self {
             blueprint,
             secret_store,
@@ -160,25 +122,18 @@ impl HttpModelDispatch {
 
     /// Resolve the row's `${secrets.X}` into the actual key.
     ///
-    /// A row that declares no `api_key` resolves to `None` rather than an error:
-    /// a locally-hosted `openai-compatible` endpoint may genuinely need none,
-    /// and inventing a credential requirement it does not have would refuse a
-    /// working deployment. A declared-but-unresolvable key *is* an error, and it
-    /// is [`ProviderFailure::Unauthorized`] — which carries no detail at all, so
-    /// neither the secret's name nor the resolver's message escapes.
+    /// A declared-but-unresolvable key is [`ProviderFailure::Unauthorized`],
+    /// which carries no detail at all, so neither the secret's name nor the
+    /// resolver's message escapes. See [`http_client::resolve_api_key`].
     async fn api_key(&self, decl: &LlmProviderDecl) -> Result<Option<String>, ProviderFailure> {
-        let Some(reference) = &decl.api_key else {
-            return Ok(None);
-        };
-        let resolver = BlueprintSecretResolver::with_harness(
+        http_client::resolve_api_key(
+            decl.api_key.as_deref(),
+            &self.blueprint,
             self.secret_store.clone(),
             Arc::clone(&self.harness_secrets),
-        );
-        match interpolate(reference, &self.blueprint, &resolver).await {
-            Ok(key) if key.is_empty() => Err(ProviderFailure::Unauthorized),
-            Ok(key) => Ok(Some(key)),
-            Err(_) => Err(ProviderFailure::Unauthorized),
-        }
+        )
+        .await
+        .map_err(|_| ProviderFailure::Unauthorized)
     }
 
     async fn dispatch_once(
@@ -244,13 +199,13 @@ impl HttpModelDispatch {
             .json(&wire_request.body)
             .send()
             .await
-            .map_err(map_transport_error)?;
+            .map_err(http_client::map_transport_error)?;
 
         let status = response.status().as_u16();
-        let (retry_after_present, retry_after) = retry_after(response.headers());
+        let (retry_after_present, retry_after) = http_client::retry_after(response.headers());
         // The body is read on both arms: the success parser needs it, and the
         // failure arm needs it for the ladder's context-length classification.
-        let body = read_bounded(response).await?;
+        let body = http_client::read_bounded(response).await?;
 
         if (200..300).contains(&status) {
             wire::parse_response(kind, &body)
@@ -263,35 +218,6 @@ impl HttpModelDispatch {
             ))
         }
     }
-}
-
-/// Read the body, refusing to buffer more than [`MAX_RESPONSE_BYTES`].
-///
-/// `openai-compatible` endpoints are operator-supplied, so the peer is not
-/// necessarily one this process should trust to bound its own response. The
-/// interpreter's outbound HTTP client caps bodies for the same reason; this is
-/// the same guarantee on the same kind of connection, and it stops reading
-/// rather than reading and then measuring.
-///
-/// The overflow is a transport failure carrying only a fixed string — no part of
-/// the body it refused to finish reading.
-async fn read_bounded(response: reqwest::Response) -> Result<String, ProviderFailure> {
-    use futures::StreamExt as _;
-
-    let mut bytes: Vec<u8> = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(map_transport_error)?;
-        if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-            return Err(ProviderFailure::Transport {
-                detail: "response exceeded the size limit".to_string(),
-            });
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    String::from_utf8(bytes).map_err(|_| ProviderFailure::Transport {
-        detail: "response body was not valid UTF-8".to_string(),
-    })
 }
 
 impl ModelDispatch for HttpModelDispatch {
@@ -324,64 +250,12 @@ impl ModelDispatch for HttpModelDispatch {
     }
 }
 
-/// Map a transport-level reqwest failure.
-///
-/// `detail` is one of a fixed set of classification strings, never the error's
-/// own message: reqwest renders the URL into its `Display`, and a
-/// `openai-compatible` URL is operator-supplied. The strings are the vocabulary
-/// [`ProviderFailure::Transport`] documents.
-fn map_transport_error(err: reqwest::Error) -> ProviderFailure {
-    // A resolver refusal surfaces as a connect error; the policy's reason sits at
-    // the bottom of the chain and is what the operator needs to see.
-    let chain = describe_error_chain(&err);
-    if chain.contains("blocked by network policy") {
-        return ProviderFailure::Transport { detail: chain };
+impl From<TransportFailure> for ProviderFailure {
+    fn from(failure: TransportFailure) -> Self {
+        ProviderFailure::Transport {
+            detail: failure.detail,
+        }
     }
-    if err.is_timeout() {
-        return ProviderFailure::Transport {
-            detail: "request timed out".to_string(),
-        };
-    }
-    if err.is_connect() {
-        return ProviderFailure::Transport {
-            detail: "connection failed".to_string(),
-        };
-    }
-    if err.is_body() || err.is_decode() {
-        return ProviderFailure::Transport {
-            detail: "response body could not be read".to_string(),
-        };
-    }
-    ProviderFailure::Transport {
-        detail: "request failed".to_string(),
-    }
-}
-
-/// Whether the response carried a `retry-after` header at all, and its delay in
-/// whole seconds when it used the delta-seconds form.
-///
-/// The two answers are separate on purpose. Presence is what decides
-/// `retryable`, because *any* `retry-after` — delta-seconds or HTTP-date — is
-/// the provider saying to come back later. Reading only the parseable form to
-/// decide that flag gets it backwards: an endpoint behind a proxy that emits
-/// `Retry-After: Wed, 21 Oct 2026 07:28:00 GMT` would reach the guest as
-/// `retryable: false`, which the taxonomy defines as the provider saying the
-/// same request will keep failing, and a guest retry loop would abandon a
-/// request that was going to succeed.
-///
-/// The delay itself is still only read from the delta-seconds form, which is
-/// what the first-party kinds send. Parsing dates would add a clock dependency
-/// for a number nothing currently consumes.
-fn retry_after(headers: &reqwest::header::HeaderMap) -> (bool, Option<u64>) {
-    let Some(raw) = headers.get("retry-after").and_then(|v| v.to_str().ok()) else {
-        return (false, None);
-    };
-    let secs = raw
-        .trim()
-        .parse::<u64>()
-        .ok()
-        .filter(|secs| *secs <= MAX_RETRY_AFTER_SECS);
-    (true, secs)
 }
 
 #[cfg(test)]

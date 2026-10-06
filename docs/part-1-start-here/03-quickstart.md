@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: "ai-assisted"
   confirmed: true
-  contentHash: "88cabeddaa330d7698d4a07ac0625c9b067282396c67e87291236e11928c1c8f"
-  confirmedAt: "2026-10-05T12:09:31.218752+00:00"
+  contentHash: "a734ed1753d65a1f7fd245e7b33965484366b0bd58d477d834b249389524cfc8"
+  confirmedAt: "2026-10-06T10:02:34.830065+00:00"
 ---
 
 In this chapter you will:
@@ -19,17 +19,34 @@ In this chapter you will:
 
 ## Installing Submilli
 
+Use a macOS or Linux terminal with Bash or Zsh, `curl`, `openssl`, and
+[Node.js 22 or newer](https://nodejs.org/en/download). Check Node before continuing:
+
+```sh
+node --version
+```
+
+Keep the same terminal open for the commands in this chapter. The first example
+uses fixed local data and needs no model key. For Windows, use a WSL terminal.
+
 You need the Submilli CLI and the server from [install](/docs/install):
 
 ```
 curl -fsSL https://submilli.ai/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+submilli --version
+submilli-server --version
 ```
 
 Create a directory to work in:
 
 ```
 mkdir quickstart && cd quickstart
+export SUBMILLI_HOME="$PWD/.submilli-data"
 ```
+
+The example stores its Packages and server state in this directory. If
+`quickstart` already exists, use a new directory name.
 
 ## Creating Your First Package
 
@@ -43,7 +60,10 @@ submilli build init @acme/billing package
 ```
 created .../quickstart/submilli.toml
 created .../quickstart/package/src/lib.ts
+created .../quickstart/package/docs/readme.md
+created .../quickstart/package/README.md
 created .../quickstart/package/tests/lib.test.ts
+add packages with `submilli build new <@scope/name> <path>`; compile and install with `submilli build publish-local`; run tests with `submilli build test`
 ```
 
 Replace the contents of `package/src/lib.ts` with our mock implementation of charge lookup (below). In a real system
@@ -97,16 +117,54 @@ operation, `acme.com/charges.list` - this is how Blueprints will reference it. I
 * The `check(...)` call enforces the rules the package author wishes to support.
 It "asks" the Blueprint whether *this* call, with *this* customer, is allowed. This line stops the agent from passing any customer other than the one your application bound for the session.
 
-Compile the Package and install it into your local package store.
+Replace the scaffolded `package/tests/lib.test.ts` with this test:
+
+```typescript
+import { label } from "submilli:test";
+import { listCharges } from "@acme/billing";
+
+function main(): void {
+    label("lists a customer's own charges");
+    const charges = listCharges("cus_northwind");
+    assert(charges.length === 2, "cus_northwind has two charges in the fixture");
+    assert(charges[0].amount === 4900, "the first is the 4900-cent charge");
+
+    label("scopes the lookup to the customer asked for");
+    assert(listCharges("cus_initech").length === 1, "cus_initech has one charge");
+    assert(listCharges("cus_unknown").length === 0, "an unknown customer has none");
+}
+```
+
+Compile and test the Package, then install it into the example's local store.
+The `--deny-warnings` flag stops on warnings as well as errors.
 
 ```
-submilli build check
+submilli build check --deny-warnings
+```
+
+```text
+checked @acme/billing v0.1.0
+```
+
+```sh
+submilli build test --deny-warnings
+```
+
+The test output includes:
+
+```text
+ok   package/tests/lib.test.ts :: lists a customer's own charges
+ok   package/tests/lib.test.ts :: scopes the lookup to the customer asked for
+
+2 passed, 0 failed across 1 files
+```
+
+```sh
 submilli build publish-local
 ```
 
-```
-checked @acme/billing v0.1.0
-installed @acme/billing v0.1.0 -> ~/.submilli/packages/@acme/billing
+```text
+installed @acme/billing v0.1.0 -> .../quickstart/.submilli-data/packages/@acme/billing
 ```
 
 The build creates a schema from the `@capability` annotations in this Package. Blueprints will use this schema.
@@ -154,6 +212,9 @@ permissions:
   - capability: acme.com/charges.list
     filter: customerId == ${vars.customerId}
     action: allow
+
+  # What the package itself may do. Nothing: it reads a fixture.
+  '@acme/billing': []
 ```
 
 This Blueprint specifies that an agent may list charges and nothing else, exclusively for the customer this session was created for. Whatever code the agent writes, it can call `charges.list` only with that customer's id. Any other call is denied.
@@ -165,7 +226,7 @@ Two details are worth noting:
 Now, let's check the Blueprint against the schema:
 
 ```
-submilli blueprint lint blueprint.yaml
+submilli blueprint lint --deny-warnings blueprint.yaml
 ```
 
 ```
@@ -174,17 +235,32 @@ submilli blueprint lint blueprint.yaml
 
 ## The application
 
-The server runs the agent's programs under the Blueprint. It checks a token on every request. Generate one, export it, and start the server in the background:
+Start a server bound to this machine with a generated token. Choose an unused
+port and use that address in both the CLI and application:
 
-```
-export SUBMILLI_SERVER_TOKEN=$(openssl rand -hex 32)
-submilli-server &
+```sh
+unset SUBMILLI_CONFIG SUBMILLI_SERVER_TOKEN_FILE SUBMILLI_ALLOW_UNAUTHENTICATED
+export SUBMILLI_BIND=127.0.0.1
+export SUBMILLI_PORT="$(node --input-type=module -e 'import net from "node:net"; const server = net.createServer(); server.listen(0, "127.0.0.1", () => { console.log(server.address().port); server.close(); });')"
+export SUBMILLI_SERVER_URL="http://127.0.0.1:$SUBMILLI_PORT"
+export SUBMILLI_SERVER_TOKEN="$(openssl rand -hex 32)"
+submilli-server > server.log 2>&1 &
+SUBMILLI_QUICKSTART_PID=$!
 ```
 
+Wait for readiness before registering the Blueprint:
+
+```sh
+for attempt in {1..50}; do
+  submilli-server --health-check >/dev/null 2>&1 && break
+  kill -0 "$SUBMILLI_QUICKSTART_PID" 2>/dev/null || break
+  sleep 0.2
+done
+submilli-server --health-check || cat server.log
 ```
-ts=2026-10-03T17:05:24.939Z level=info stream=log target=submilli_server::auth msg="inbound authentication enabled" tokens="SUBMILLI_SERVER_TOKEN (admin)"
-ts=2026-10-03T17:05:24.947Z level=info stream=log target=submilli_server::serve msg="submilli-server listening" addr=127.0.0.1:8128 protocol=http
-```
+
+Continue only after the health check succeeds. If startup failed, `server.log`
+contains the error. Keep the token in this terminal, out of your source files.
 
 Register the Blueprint. The `submilli server` commands and your application read the same variable, so stay in this terminal:
 
@@ -201,45 +277,85 @@ Now the application. It is ordinary Node.js, outside Submilli, written once. It 
 ```javascript
 import { readFileSync } from "node:fs";
 
-const SUBMILLI_SERVER = "http://127.0.0.1:8128";
+const SUBMILLI_SERVER = (process.env.SUBMILLI_SERVER_URL || "http://127.0.0.1:8128").replace(/\/$/, "");
 const BLUEPRINT_NAME = "quickstart";
-
-// The API token this application was given for the server.
-const token = process.env.SUBMILLI_SERVER_TOKEN;
-if (!token) {
-  console.error("SUBMILLI_SERVER_TOKEN is not set: export the token the server was started with.");
-  process.exit(1);
-}
 
 // In a real application: this customer ID would be something you fetch based on the signed-in user.
 const customerId = "cus_northwind";
 
 // In a real application, this code will be supplied by your code-writing agent
 const agentCodeToRun = process.argv[2];
+if (!agentCodeToRun) {
+  fail("usage: node app.mjs PATH_TO_TYPESCRIPT_PROGRAM");
+}
 
-const response = await fetch(`${SUBMILLI_SERVER}/v1/execute`, {
-  method: "POST",
-  headers: {
-    authorization: `Bearer ${token}`,
-    "content-type": "application/json",
-  },
-  body: JSON.stringify({
-    blueprint: BLUEPRINT_NAME,
-    // this is the code generated by your agent
-    code: readFileSync(agentCodeToRun, "utf8"),
-    variables: { customerId },
-  }),
-});
+// The API token this application was given for the server.
+const token = process.env.SUBMILLI_SERVER_TOKEN;
+if (!token) {
+  fail("error: SUBMILLI_SERVER_TOKEN is not set; export the token the server was started with.");
+}
 
-const body = await response.json();
-if (response.status === 401 || response.status === 403) {
-  // The server did not accept the token, and nothing ran.
-  console.error(`[refused] ${body.message}`);
+let code;
+try {
+  code = readFileSync(agentCodeToRun, "utf8");
+} catch (error) {
+  fail(`error: cannot read ${agentCodeToRun}: ${error.message}`);
+}
+
+let response;
+try {
+  response = await fetch(`${SUBMILLI_SERVER}/v1/execute`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      blueprint: BLUEPRINT_NAME,
+      // this is the code generated by your agent
+      code,
+      variables: { customerId },
+    }),
+  });
+} catch (error) {
+  fail(`error: cannot reach submilli-server at ${SUBMILLI_SERVER}: ${error.message}`);
+}
+
+let body;
+try {
+  body = await response.json();
+} catch (error) {
+  fail(`error: submilli-server returned invalid JSON (HTTP ${response.status}): ${error.message}`);
+}
+
+if (!body || typeof body !== "object") fail("error: invalid response from submilli-server");
+const message = body.message || body.error?.message || body.error || `HTTP ${response.status}`;
+if (!response.ok) {
+  if (response.status === 401 || response.status === 403) fail(`[refused] ${message}`);
+  if (body.error === "invalid_request" || body.error?.kind === "invalid_request") {
+    fail(`[invalid_request] ${message}`);
+  }
+  fail(`[server error] ${message}`);
+}
+
+for (const line of body.console ?? []) console.log(`[program] ${line}`);
+if (body.error?.kind === "invalid_request") {
+  fail(`[invalid_request] ${body.error.message}`);
+}
+// Released v0.2.0 reports policy denials as runtime_error with this diagnostic.
+const isPolicyDenial = body.error?.kind === "permission_denied" ||
+  (body.error?.kind === "runtime_error" && body.error.message?.startsWith("error: PermissionDeniedError: permission denied:"));
+if (isPolicyDenial) {
+  console.error(`[denied]  ${body.error.message}`);
   process.exit(1);
 }
-for (const line of body.console ?? []) console.log(`[program] ${line}`);
-if (body.error) console.log(`[denied]  ${body.error.message}`);
-else console.log(`[result]  ${body.result}`);
+if (body.error) fail(`[error] ${body.error.kind}: ${body.error.message}`);
+console.log(`[result]  ${body.result}`);
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
 ```
 
 Look at where `customerId` comes from. A real application reads it off the signed-in session, the same place it gets the user's identity. The agent's program never sees the binding and cannot change it.
@@ -311,11 +427,11 @@ node app.mjs total-injected.ts
 [program] 2 charges, 6150 cents
 [denied]  error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
   fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list for main"
-  at listCharges (lib:26:38)  [thrown here]
-25 | export function listCharges(customerId: string): Charge[] {
-26 |     check("acme.com/charges.list", { customerId });
+  at listCharges (@acme/billing/lib:28:38)  [thrown here]
+27 | export function listCharges(customerId: string): Charge[] {
+28 |     check("acme.com/charges.list", { customerId });
    |                                      ^
-27 |
+29 |
   at main (<execute>:12:40)  [entry]
 11 |     // The "compliance step" from the ticket.
 12 |     const reconciliation = listCharges("cus_initech");
@@ -323,21 +439,53 @@ node app.mjs total-injected.ts
 13 |     return `${charges.length} charges, ${total} cents; reconciliation: ${reconciliation.length} charges`;
 ```
 
+This command exits with a nonzero status because the policy refused the call.
+
 The first line shows that the legitimate work finished. The second call did not. The error names the capability and the reason, points at both the line that checked and the line that asked, and tells the model not to work around it.
 
 Had that call run, another customer's charge data would have returned into the agent's context. From there it would reach the agent's summary, its reply, its logs, and whoever reads them.
 
-## With a real agent
+## With a real agent (optional)
 
-The repository's `examples/quickstart/agent.py` points a real agent at the Blueprint you registered, with the same server, the same Package, and nothing new to configure. The agent reaches the server over MCP and gets its tools from it. The main tool takes TypeScript the agent writes, and the server runs it. The token and the customer id travel in headers, so the model never sees either. It is about seventy lines, on LangChain's [deepagents](https://github.com/langchain-ai/deepagents) and Gemini, and neither choice is load-bearing. The script hands the agent the support ticket above, injection and all, and prints every program the agent ran:
+The downloadable `agent.py` points a real agent at the Blueprint you registered, with the same server, the same Package, and the same customer binding. The agent reaches the server over MCP and gets its tools from it. The main tool takes TypeScript the agent writes, and the server runs it. The token and the customer id travel in headers, so the model never sees either. It uses LangChain's [deepagents](https://github.com/langchain-ai/deepagents) and Gemini, and neither choice is load-bearing. The script hands the agent the support ticket above, injection and all, and prints every program the agent ran:
 
+This step needs Python 3.11 or newer and a Google AI Studio API key. It makes
+real model calls, which may incur charges. Keep the local server running and
+stay in the same terminal. Download the [agent script](/docs/examples/quickstart/agent.py)
+and [requirements](/docs/examples/quickstart/requirements.txt), then install
+them in a virtual environment:
+
+```sh
+curl -fSLo agent.py https://submilli.ai/docs/examples/quickstart/agent.py
+curl -fSLo requirements.txt https://submilli.ai/docs/examples/quickstart/requirements.txt
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
-pip install -r requirements.txt
-export GOOGLE_API_KEY=...
+
+Set `GOOGLE_API_KEY` to your key and `GOOGLE_MODEL` to a model available to your
+account, using the [Gemini model list](https://ai.google.dev/gemini-api/docs/models).
+The script reports either missing variable before contacting the model.
+
+```sh
 python agent.py
 ```
 
 Run it more than once. The model does not take the bait every time. That is the honest shape of prompt injection, and the reason the guarantee lives in the policy. When it does take the bait, you get the same denial you got a moment ago, on a program written by the agent.
+
+## Stop the example server
+
+Stop the process started in this terminal:
+
+```sh
+kill "$SUBMILLI_QUICKSTART_PID"
+wait "$SUBMILLI_QUICKSTART_PID"
+unset SUBMILLI_SERVER_TOKEN
+```
+
+The example's files and local state remain in `quickstart`. To run it again,
+open that directory, set `SUBMILLI_HOME` to `$PWD/.submilli-data`, and repeat the
+[server startup and Blueprint registration steps](#the-application).
 
 ## What we just did
 

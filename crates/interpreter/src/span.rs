@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 pub struct FileId(pub u32);
 
 impl FileId {
-    pub const FIRST_RESERVED: u32 = u32::MAX - 21;
+    pub const FIRST_RESERVED: u32 = u32::MAX - 22;
     pub const COMPILER: FileId = FileId(Self::FIRST_RESERVED);
 
     pub const PRELUDE: FileId = FileId(u32::MAX);
@@ -36,6 +36,7 @@ impl FileId {
     pub const TEST: FileId = FileId(u32::MAX - 16);
     pub const SESSION: FileId = FileId(u32::MAX - 17);
     pub const LLM: FileId = FileId(u32::MAX - 18);
+    pub const EMBEDDING: FileId = FileId(u32::MAX - 21);
     pub const CODE: FileId = FileId(u32::MAX - 20);
     pub const GIT: FileId = FileId(u32::MAX - 19);
 
@@ -47,6 +48,7 @@ impl FileId {
             FileId::COMPILER => "<compiler>",
             FileId::PRELUDE => "<prelude>",
             FileId::CODE => "submilli:code",
+            FileId::EMBEDDING => "submilli:embedding",
             FileId::GIT => "submilli:git",
             FileId::FS => "submilli:fs",
             FileId::HTTP => "submilli:http",

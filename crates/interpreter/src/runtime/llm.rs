@@ -26,9 +26,9 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+
+pub use super::token_ledger::SharedTokenBudget;
+use super::token_ledger::{LedgerLimits, LedgerRefusal, TokenLedger};
 
 /// The single internal host module every `submilli:llm` call dispatches through.
 pub const LLM_MODULE_NAME: &str = "submilli:llm";
@@ -649,70 +649,6 @@ pub trait LlmProvider: Send + Sync {
     }
 }
 
-/// An aggregate token budget several executions reserve against.
-#[derive(Debug, Clone)]
-pub struct SharedTokenBudget {
-    used: Arc<AtomicU64>,
-    cap: u64,
-}
-
-impl SharedTokenBudget {
-    pub fn new(cap: u64) -> Self {
-        Self {
-            used: Arc::new(AtomicU64::new(0)),
-            cap,
-        }
-    }
-
-    pub fn used(&self) -> u64 {
-        self.used.load(Ordering::Relaxed)
-    }
-
-    pub fn cap(&self) -> u64 {
-        self.cap
-    }
-
-    /// Compare-and-swap so two executions reserving at once cannot both observe
-    /// the same headroom.
-    fn reserve(&self, delta: i64) -> Result<(), u64> {
-        let mut current = self.used.load(Ordering::Relaxed);
-        loop {
-            let next = apply_delta(current, delta);
-            if delta > 0 && next > self.cap {
-                return Err(next);
-            }
-            match self.used.compare_exchange_weak(
-                current,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(observed) => current = observed,
-            }
-        }
-    }
-}
-
-fn apply_delta(current: u64, delta: i64) -> u64 {
-    if delta >= 0 {
-        current.saturating_add(delta as u64)
-    } else {
-        current.saturating_sub(delta.unsigned_abs())
-    }
-}
-
-/// What one execution has reserved, and what of that is indeterminate.
-#[derive(Debug, Default)]
-struct TokenState {
-    /// Tokens reserved against both this execution and the aggregate.
-    used: u64,
-    /// The part of `used` held for elements the provider reported no usage for.
-    /// Tracked separately because it is bounded separately, and because it is
-    /// the part that must *not* be returned to the aggregate on teardown.
-    held: u64,
-}
-
 /// One execution's token budget, reserving against its own ceiling and the
 /// server-wide one together.
 ///
@@ -720,17 +656,19 @@ struct TokenState {
 /// refused dispatch leaves neither counter charged.
 pub struct ExecutionTokenBudget {
     limits: LlmLimits,
-    state: Mutex<TokenState>,
-    aggregate: SharedTokenBudget,
+    ledger: TokenLedger,
 }
 
 impl ExecutionTokenBudget {
     pub fn new(limits: LlmLimits, aggregate: SharedTokenBudget) -> Self {
-        Self {
-            limits,
-            state: Mutex::new(TokenState::default()),
+        let ledger = TokenLedger::new(
+            LedgerLimits {
+                per_execution_tokens: limits.per_execution_tokens,
+                max_held_tokens: limits.max_held_tokens,
+            },
             aggregate,
-        }
+        );
+        Self { limits, ledger }
     }
 
     pub fn limits(&self) -> LlmLimits {
@@ -739,20 +677,12 @@ impl ExecutionTokenBudget {
 
     /// Tokens this execution currently holds against its ceiling.
     pub fn used(&self) -> u64 {
-        self.locked().used
+        self.ledger.used()
     }
 
     /// The part of [`Self::used`] held for unreported usage.
     pub fn held(&self) -> u64 {
-        self.locked().held
-    }
-
-    fn locked(&self) -> std::sync::MutexGuard<'_, TokenState> {
-        // A poisoned lock still yields the counters, and a budget that refused
-        // to account after an unrelated panic would leak the whole reservation.
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.ledger.held()
     }
 
     /// Reserve `tokens` against this execution and the aggregate, before
@@ -764,48 +694,23 @@ impl ExecutionTokenBudget {
     /// are typically the expensive half, and a small prompt can legitimately
     /// produce a very large completion with nothing standing in the way.
     pub fn reserve(&self, model: &str, tokens: u64) -> Result<(), LlmCallError> {
-        let mut state = self.locked();
-
-        if state.held > self.limits.max_held_tokens {
-            return Err(self.refuse(
-                model,
-                LlmLimitKind::IndeterminateSpend {
-                    held: state.held,
-                    limit: self.limits.max_held_tokens,
-                },
-            ));
-        }
-
-        let next_used = state.used.saturating_add(tokens);
-        if next_used > self.limits.per_execution_tokens {
-            return Err(self.refuse(
-                model,
-                LlmLimitKind::PerExecutionTokens {
-                    requested: next_used,
-                    limit: self.limits.per_execution_tokens,
-                },
-            ));
-        }
-
-        if let Err(requested) = self.aggregate.reserve(tokens as i64) {
-            return Err(self.refuse(
-                model,
-                LlmLimitKind::AllExecutionsTokens {
-                    requested,
-                    limit: self.aggregate.cap(),
-                },
-            ));
-        }
-
-        state.used = next_used;
-        Ok(())
-    }
-
-    fn refuse(&self, model: &str, limit_kind: LlmLimitKind) -> LlmCallError {
-        LlmCallError::BudgetExceeded {
-            model: model.to_string(),
-            limit_kind,
-        }
+        self.ledger.reserve(tokens).map_err(|refusal| {
+            let limit_kind = match refusal {
+                LedgerRefusal::HeldReserve { held, limit } => {
+                    LlmLimitKind::IndeterminateSpend { held, limit }
+                }
+                LedgerRefusal::PerExecution { requested, limit } => {
+                    LlmLimitKind::PerExecutionTokens { requested, limit }
+                }
+                LedgerRefusal::AllExecutions { requested, limit } => {
+                    LlmLimitKind::AllExecutionsTokens { requested, limit }
+                }
+            };
+            LlmCallError::BudgetExceeded {
+                model: model.to_string(),
+                limit_kind,
+            }
+        })
     }
 
     /// The reservation a dispatch of `prompt_count` prompts needs:
@@ -835,47 +740,13 @@ impl ExecutionTokenBudget {
     /// billed — and is instead carried as held reserve, bounded by
     /// [`LlmLimits::max_held_tokens`].
     pub fn reconcile(&self, reserved: u64, reported: u64, indeterminate: u64) {
-        let mut state = self.locked();
-        let keep = reported.saturating_add(indeterminate);
-        let release = reserved.saturating_sub(keep);
-        state.used = state.used.saturating_sub(release);
-        state.held = state.held.saturating_add(indeterminate);
-        if release > 0 {
-            let _ = self.aggregate.reserve(-(release as i64));
-        }
+        self.ledger.reconcile(reserved, reported, indeterminate);
     }
 
     /// Release a reservation for prompts that never dispatched — the remainder
     /// of a batch abandoned partway.
     pub fn release(&self, tokens: u64) {
         self.reconcile(tokens, 0, 0);
-    }
-}
-
-/// Releasing on drop is what makes the aggregate budget usable for execution
-/// lifetime: an execution ends by having its budget holder dropped, not by
-/// reconciling every reservation first, so without this the reservation of every
-/// ended execution would be held forever and the budget would ratchet to its cap.
-///
-/// **Held reserve is the deliberate exception.** It releases from the
-/// per-execution budget, which is over, but stays charged against the aggregate.
-/// Releasing indeterminate spend from the aggregate would let it escape the
-/// server-wide ceiling entirely: a caller who can reliably induce null usage pays
-/// real money the aggregate forgets at execution end, so N executions each under
-/// the per-execution ceiling could exceed the server-wide one without ever
-/// tripping it.
-impl Drop for ExecutionTokenBudget {
-    fn drop(&mut self) {
-        // `get_mut` on our own `&mut self` cannot contend; a poisoned lock still
-        // yields the state, whose counters are what we owe back.
-        let state = match self.state.get_mut() {
-            Ok(state) => state,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let returnable = state.used.saturating_sub(state.held);
-        if returnable > 0 {
-            let _ = self.aggregate.reserve(-(returnable as i64));
-        }
     }
 }
 
@@ -933,11 +804,11 @@ mod tests {
             held.reserve(MODEL, 600).expect("reservation fits");
 
             let poisoner = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _guard = held.state.lock().expect("lock");
+                let _guard = held.ledger.lock_state().expect("lock");
                 panic!("poison the budget's lock");
             }));
             assert!(poisoner.is_err(), "the panic must have unwound");
-            assert!(held.state.is_poisoned(), "the lock must be poisoned");
+            assert!(held.ledger.state_is_poisoned(), "the lock must be poisoned");
         }
         assert_eq!(
             aggregate.used(),
