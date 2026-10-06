@@ -1,0 +1,124 @@
+<template data-section-link-template>
+	<button type="button" class="sl-anchor-link section-link-copy" data-pagefind-ignore>
+		<span class="sl-anchor-icon" aria-hidden="true">
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M10 13a5 5 0 0 0 7 .1l3-3a5 5 0 0 0-7.1-7.1l-1.7 1.7M14 11a5 5 0 0 0-7-.1l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7" />
+			</svg>
+		</span>
+		<span class="section-link-copy__feedback" aria-hidden="true" hidden></span>
+	</button>
+</template>
+<span class="sr-only" data-section-link-status data-pagefind-ignore role="status" aria-live="polite"></span>
+
+<script>
+	import { copyText } from '../lib/page-actions';
+
+	const template = document.querySelector<HTMLTemplateElement>('[data-section-link-template]');
+	const status = document.querySelector<HTMLElement>('[data-section-link-status]');
+	const headings = document.querySelectorAll<HTMLElement>(
+		'.sl-heading-wrapper > :is(h1, h2, h3, h4, h5, h6)[id], .page-title__heading h1[id], .home-hero__title h1[id]',
+	);
+	if (template && status) for (const heading of headings) {
+		const wrapper = heading.parentElement;
+		if (!wrapper || wrapper.querySelector('.section-link-copy')) continue;
+		const button = template.content.querySelector('button')?.cloneNode(true);
+		if (!(button instanceof HTMLButtonElement)) continue;
+		const title = heading.textContent?.trim() || heading.id;
+		button.setAttribute('aria-label', `Copy link to “${title}”`);
+		button.title = `Copy link to “${title}”`;
+		const feedback = button.querySelector<HTMLElement>('.section-link-copy__feedback');
+		let manual: HTMLInputElement | undefined;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let copying = false;
+		button.addEventListener('click', async () => {
+			if (copying) return;
+			copying = true;
+			clearTimeout(timer);
+			manual?.remove();
+			status.textContent = '';
+			const url = new URL(window.location.href);
+			url.hash = heading.id;
+			const method = await copyText(url.href, { navigator, document }).finally(() => { copying = false; });
+			const message = method === 'manual' ? 'Copy link manually' : 'Link copied';
+			if (method === 'manual') {
+				manual = document.createElement('input');
+				manual.className = 'section-link-manual not-content';
+				manual.setAttribute('aria-label', `Link to “${title}” to copy manually`);
+				manual.setAttribute('data-pagefind-ignore', '');
+				manual.readOnly = true;
+				manual.value = url.href;
+				wrapper.append(manual);
+				manual.focus();
+				manual.select();
+			}
+			status.textContent = method === 'manual' ? `Clipboard unavailable. Select and copy the link to “${title}”.` : `Link to “${title}” copied.`;
+			if (feedback) {
+				feedback.textContent = message;
+				feedback.hidden = false;
+				timer = setTimeout(() => { feedback.hidden = true; }, 2000);
+			}
+		});
+		// Keep Starlight's ordinary permalink when JavaScript is unavailable.
+		const nativeLink = wrapper.querySelector<HTMLAnchorElement>('a.sl-anchor-link');
+		if (nativeLink) {
+			nativeLink.before(button);
+			nativeLink.hidden = true;
+		} else heading.after(button);
+	}
+</script>
+
+<style is:global>
+	.sl-heading-wrapper { --sl-anchor-icon-size: 1rem; --sl-anchor-icon-gap: 0.375rem; --sl-anchor-icon-space: calc(var(--sl-anchor-icon-size) + var(--sl-anchor-icon-gap)); }
+	a.sl-anchor-link[hidden] { display: none; }
+	.section-link-copy,
+	.section-link-native,
+	.home-hero__steps a.sl-anchor-link {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border: 0;
+		padding: 0;
+		background: transparent;
+		color: var(--sl-color-gray-3);
+		font: inherit;
+		text-decoration: none;
+		cursor: pointer;
+		opacity: 1;
+	}
+	.section-link-copy .sl-anchor-icon > svg { width: 1rem; height: 1rem; }
+	:is(.section-link-copy, .section-link-native, .home-hero__steps a.sl-anchor-link)::after { content: ''; position: absolute; inset: -0.5rem; }
+	.section-link-copy:hover { color: var(--sl-color-white); }
+	.section-link-copy:focus-visible { outline: 2px solid var(--sl-color-text-accent); outline-offset: 4px; border-radius: 2px; }
+	.section-link-copy__feedback {
+		position: absolute;
+		inset-inline-start: 50%;
+		top: calc(100% + 0.5rem);
+		transform: translateX(-50%);
+		z-index: 2;
+		width: max-content;
+		padding: 0.25rem 0.5rem;
+		border: 1px solid var(--sub-line);
+		border-radius: var(--radius-sm);
+		background: var(--sl-color-bg);
+		color: var(--sl-color-white);
+		font: 400 0.75rem/1.5 var(--sl-font);
+		pointer-events: none;
+	}
+	.section-link-copy__feedback[hidden] { display: none; }
+	.section-link-manual {
+		display: block;
+		width: 100%;
+		margin-top: 0.5rem;
+		padding: 0.5rem;
+		border: 1px solid var(--sub-line);
+		border-radius: var(--radius-sm);
+		background: var(--sub-inline);
+		color: var(--sl-color-gray-2);
+		font: 400 0.8125rem/1.5 var(--sl-font-mono);
+	}
+	@media (hover: hover) and (pointer: fine) {
+		:is(.section-link-copy, .section-link-native, .home-hero__steps a.sl-anchor-link) { opacity: 0; }
+		:is(.sl-heading-wrapper, .page-title__heading, .home-hero__title):is(:hover, :focus-within) :is(.section-link-copy, .section-link-native, a.sl-anchor-link) { opacity: 1; }
+	}
+</style>

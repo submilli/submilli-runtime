@@ -1,17 +1,20 @@
 ---
 import type { Film } from '../lib/videos';
 import VideoPlayer from './VideoPlayer.astro';
+import AnchorHeading from '@astrojs/starlight/components/AnchorHeading.astro';
 interface Props { film: Film; }
 const { film } = Astro.props;
 ---
 <figure class="video-introduction" data-video-id={film.id} aria-label={film.title}>
-  <div class="video-heading"><strong>{film.title}</strong></div>
+  <div class="video-heading"><AnchorHeading level={3} id={`video-${film.id}`}>{film.title}</AnchorHeading></div>
   <div class="video-frame"><VideoPlayer film={film} /></div>
   <figcaption>{film.description}</figcaption>
 </figure>
 <style>
   figure { margin: 0 0 2rem; padding: 0; }
   .video-heading { display: flex; flex-wrap: wrap; gap: .5rem 1rem; justify-content: space-between; }
+  .video-heading :global(.sl-heading-wrapper) { margin: 0; font-size: 1rem; }
+  .video-heading :global(h3) { font-size: inherit; margin: 0; }
   .video-frame { margin-top: .75rem; border-radius: 8px; overflow: hidden; }
   figcaption { font-size: .8125rem; line-height: 1.5; margin-top: .625rem; color: var(--sl-color-gray-3); }
 </style>
