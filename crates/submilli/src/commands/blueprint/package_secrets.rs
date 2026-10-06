@@ -43,6 +43,8 @@ fn required_secret_names(capabilities: &CapabilitySchema) -> BTreeSet<String> {
 }
 
 fn parse_filter(filter: &str) -> Option<FilterExpr> {
+    // A Rust string is a supported YAML scalar; the in-memory writer cannot
+    // fail on its contents. Filter syntax is checked by deserialization below.
     serde_yml::from_str(&serde_yml::to_string(filter).expect("filter string serializes")).ok()
 }
 

@@ -28,7 +28,7 @@ use tracing::warn;
 
 use crate::mcp::ToolWarning;
 use crate::mcp::catalog::{ToolCatalogEntry, build_mcp_definitions, package_name};
-use crate::mcp::schema_registry::{self, SchemaPackError};
+use crate::mcp::schema_registry;
 use crate::mcp_auth::{AuthState, blueprint_auth_state};
 use crate::mcp_token::OAuthTokenManager;
 use crate::secret_store::SecretStore;
@@ -37,7 +37,6 @@ use interpreter::runtime::McpCallError;
 /// Local initialization or invariant failures; remote failures remain warnings.
 #[derive(Debug)]
 pub enum DiscoveryError {
-    SchemaPack(SchemaPackError),
     ClientBuild(reqwest::Error),
     Internal { message: &'static str },
 }
@@ -51,16 +50,9 @@ impl std::fmt::Display for DiscoveryError {
 impl std::error::Error for DiscoveryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::SchemaPack(error) => Some(error),
             Self::ClientBuild(error) => Some(error),
             Self::Internal { .. } => None,
         }
-    }
-}
-
-impl From<SchemaPackError> for DiscoveryError {
-    fn from(error: SchemaPackError) -> Self {
-        Self::SchemaPack(error)
     }
 }
 
@@ -296,7 +288,7 @@ async fn discover_matching(
     origin: DiscoveryOrigin,
     client_factory: &super::transport::PolicyClientFactory,
 ) -> Result<McpCatalog, DiscoveryError> {
-    schema_registry::initialize_builtin_packs()?;
+    schema_registry::initialize_builtin_packs();
     let unauthenticated: HashSet<String> =
         match blueprint_auth_state(blueprint, auth.secret_store).await {
             AuthState::Pending { unauthenticated } => unauthenticated.into_iter().collect(),
@@ -403,8 +395,7 @@ async fn discover_server(
         Ok(Ok(tools)) => {
             // A built-in schema pack (matched by endpoint host) fills typed returns for
             // tools whose server publishes no representable `outputSchema`.
-            let pack = schema_registry::pack_for_url(&server.url)
-                .map_err(|error| DiscoveryAttemptError::Fatal(error.into()))?;
+            let pack = schema_registry::pack_for_url(&server.url);
             if let Some(pack) = pack {
                 tracing::info!(
                     server = server_name,

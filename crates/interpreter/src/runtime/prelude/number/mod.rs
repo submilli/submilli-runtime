@@ -18,8 +18,8 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::{
-    format_number_js, parse_float_js, parse_int_js, to_exponential_js_checked, to_fixed_js_checked,
-    to_precision_js_checked, to_string_radix_js_checked,
+    format_number_js, parse_float_js, parse_int_js, to_exponential_js, to_fixed_js,
+    to_precision_js, to_string_radix_js,
 };
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
@@ -104,7 +104,7 @@ fn global_key(name: &str) -> MangledName {
     crate::mangle::prelude(name)
 }
 
-type FormatOp = fn(f64, f64) -> wasmtime::Result<String>;
+type FormatOp = fn(f64, f64) -> Result<String, String>;
 
 /// Dispatch key for an instance method `Number#<m>` — the prelude's `Number`
 /// interface mangled name extended by the method.
@@ -124,35 +124,35 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
     // Instance formatters — receiver `f64` plus a digits/radix `f64` whose NaN /
     // default value is the omitted-optional sentinel the `*_js` ops interpret.
-    // `to_string_radix_js_checked` treats radix 10 (the declared default) as plain
+    // `to_string_radix_js` treats radix 10 (the declared default) as plain
     // `toString`.
     reg_format(
         linker,
         &engine,
         &string_ref,
         method_key("toString"),
-        to_string_radix_js_checked,
+        to_string_radix_js,
     )?;
     reg_format(
         linker,
         &engine,
         &string_ref,
         method_key("toFixed"),
-        to_fixed_js_checked,
+        to_fixed_js,
     )?;
     reg_format(
         linker,
         &engine,
         &string_ref,
         method_key("toPrecision"),
-        to_precision_js_checked,
+        to_precision_js,
     )?;
     reg_format(
         linker,
         &engine,
         &string_ref,
         method_key("toExponential"),
-        to_exponential_js_checked,
+        to_exponential_js,
     )?;
 
     // `Number#toJson` — no argument; non-finite values are not valid JSON and
@@ -399,13 +399,7 @@ fn reg_format(
             let arg = read_f64(abi_arg(params, 1)?, "Number formatter")?;
             // Formatter argument rejections (radix/digits/precision out of
             // range) are spec `RangeError`s.
-            let out = op(x, arg).map_err(|error| {
-                if crate::runtime::host::ends_the_run(&error) {
-                    error
-                } else {
-                    crate::runtime::host::range_error(error.to_string())
-                }
-            })?;
+            let out = op(x, arg).map_err(crate::runtime::host::range_error)?;
             *abi_result(results, 0)? = string_val(caller, &out)?;
             Ok(())
         },
@@ -868,37 +862,4 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
-}
-
-#[cfg(test)]
-mod invariant_tests {
-    use super::*;
-    #[tokio::test]
-    async fn prelude_formatter_preserves_injected_trap() {
-        let config = crate::runtime::RuntimeConfig::default();
-        let engine = config.engine().unwrap();
-        let data = StoreData::with_vfs(crate::runtime::Vfs::tempdir().unwrap());
-        let mut store = config.store_async(&engine, data).unwrap();
-        let mut linker = Linker::new(&engine);
-        let key = method_key("injected_formatter");
-        reg_format(&mut linker, &engine, &ValType::I32, key.clone(), |_, _| {
-            Err(crate::runtime::host::invariant_trap(
-                "injected formatter invariant",
-            ))
-        })
-        .unwrap();
-        let wasmtime::Extern::Func(function) =
-            linker.get(&mut store, MODULE_NAME, key.as_str()).unwrap()
-        else {
-            panic!("expected formatter");
-        };
-        let error = function
-            .call_async(&mut store, &[Val::F64(0), Val::F64(0)], &mut [Val::I32(0)])
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error.downcast_ref::<wasmtime::Trap>(),
-            Some(&wasmtime::Trap::UnreachableCodeReached)
-        );
-    }
 }

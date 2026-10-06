@@ -379,7 +379,7 @@ pub(crate) fn uint8_array_backing(
 }
 
 fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    type FormatOp = fn(f64, f64) -> wasmtime::Result<String>;
+    type FormatOp = fn(f64, f64) -> Result<String, String>;
     let engine = linker.engine().clone();
     let string_struct = intrinsic_string_type(&engine)?;
     let string_struct_result =
@@ -486,22 +486,10 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         [string_struct_result],
     );
     for (name, op) in [
-        (
-            "toFixed",
-            crate::runtime::number::to_fixed_js_checked as FormatOp,
-        ),
-        (
-            "toPrecision",
-            crate::runtime::number::to_precision_js_checked,
-        ),
-        (
-            "toExponential",
-            crate::runtime::number::to_exponential_js_checked,
-        ),
-        (
-            "toStringRadix",
-            crate::runtime::number::to_string_radix_js_checked,
-        ),
+        ("toFixed", crate::runtime::number::to_fixed_js as FormatOp),
+        ("toPrecision", crate::runtime::number::to_precision_js),
+        ("toExponential", crate::runtime::number::to_exponential_js),
+        ("toStringRadix", crate::runtime::number::to_string_radix_js),
     ] {
         register_number_formatter(linker, name, format_ty.clone(), op)?;
     }
@@ -513,7 +501,7 @@ fn register_number_formatter(
     linker: &mut Linker<StoreData>,
     name: &'static str,
     ty: FuncType,
-    op: fn(f64, f64) -> wasmtime::Result<String>,
+    op: fn(f64, f64) -> Result<String, String>,
 ) -> wasmtime::Result<()> {
     register_host_fn(
         linker,
@@ -526,7 +514,8 @@ fn register_number_formatter(
             else {
                 wasmtime::bail!("number.{name} expects (f64, f64)");
             };
-            let formatted = op(f64::from_bits(*x_bits), f64::from_bits(*arg_bits))?;
+            let formatted = op(f64::from_bits(*x_bits), f64::from_bits(*arg_bits))
+                .map_err(wasmtime::Error::msg)?;
             let st = write_submilli_string_struct(caller, &formatted)?;
             *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
@@ -1897,33 +1886,6 @@ mod tests {
         assert_eq!(
             newest.map(|d| d.capability),
             Some(format!("cap.{MAX_THROWN_DENIALS}"))
-        );
-    }
-
-    #[tokio::test]
-    async fn legacy_number_formatter_preserves_injected_trap() {
-        let (engine, mut store, mut linker) = async_store();
-        register_number_formatter(
-            &mut linker,
-            "injected_formatter",
-            FuncType::new(&engine, [ValType::F64, ValType::F64], [ValType::I32]),
-            |_, _| Err(invariant_trap("injected formatter invariant")),
-        )
-        .unwrap();
-        let name = crate::mangle::host(NUMBER_MODULE_NAME, "injected_formatter");
-        let wasmtime::Extern::Func(function) = linker
-            .get(&mut store, NUMBER_MODULE_NAME, name.as_str())
-            .unwrap()
-        else {
-            panic!("expected formatter");
-        };
-        let error = function
-            .call_async(&mut store, &[Val::F64(0), Val::F64(0)], &mut [Val::I32(0)])
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error.downcast_ref::<wasmtime::Trap>(),
-            Some(&wasmtime::Trap::UnreachableCodeReached)
         );
     }
 

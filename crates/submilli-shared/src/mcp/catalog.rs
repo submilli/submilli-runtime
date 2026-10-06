@@ -1138,7 +1138,6 @@ mod tests {
         // `github` pack, and `get_me` — which a default github-mcp-server advertises
         // with no outputSchema — gets the MinimalUser shape as a typed return.
         let pack = crate::mcp::schema_registry::pack_for_url("https://api.githubcopilot.com/mcp/")
-            .unwrap()
             .expect("the GitHub host should resolve to a schema pack");
         let entry = tool("get_me", r#"{"type":"object","properties":{}}"#);
         let (defs, warnings) = build_mcp_definitions("gh", &[entry], Some(pack));

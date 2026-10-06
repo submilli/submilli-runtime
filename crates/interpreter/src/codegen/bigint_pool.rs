@@ -45,7 +45,7 @@ impl BigIntPool {
         if let Some(&existing) = self.text_to_idx.get(digits) {
             return Ok(Some(existing));
         }
-        let limbs_le = decimal_to_limbs(digits)?;
+        let limbs_le = decimal_to_limbs(digits);
         let idx = self.literals.len();
         self.literals.push(BigIntLiteral {
             digits: digits.to_string(),
@@ -100,17 +100,18 @@ fn check_decimal_digits(digits: &str) -> Result<(), CompilerFailure> {
     Ok(())
 }
 
-fn decimal_to_limbs(digits: &str) -> Result<Vec<u64>, CompilerFailure> {
+// intern_digits validates a nonempty ASCII decimal string before calling; BigUint
+// parsing has no digit/empty-input error for that language and no fixed-width limit.
+fn decimal_to_limbs(digits: &str) -> Vec<u64> {
     use num_bigint::BigUint;
     use num_traits::Zero;
-    check_decimal_digits(digits)?;
     let value: BigUint = digits
         .parse()
-        .map_err(|_| internal_failure("a bigint literal could not be parsed"))?;
+        .expect("validated decimal digits parse as BigUint");
     if value.is_zero() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    Ok(value.to_u64_digits())
+    value.to_u64_digits()
 }
 
 #[cfg(test)]
@@ -120,19 +121,19 @@ mod tests {
 
     #[test]
     fn small_round_trip() {
-        let limbs = decimal_to_limbs("18446744073709551616").unwrap();
+        let limbs = decimal_to_limbs("18446744073709551616");
         assert_eq!(limbs, vec![0, 1]);
     }
 
     #[test]
     fn one_bit_under_two_limbs() {
-        let limbs = decimal_to_limbs("18446744073709551615").unwrap();
+        let limbs = decimal_to_limbs("18446744073709551615");
         assert_eq!(limbs, vec![u64::MAX]);
     }
 
     #[test]
     fn very_large() {
-        let limbs = decimal_to_limbs("1267650600228229401496703205376").unwrap();
+        let limbs = decimal_to_limbs("1267650600228229401496703205376");
         // 2^100 = 2^64 * 2^36 = limb[1] = 2^36, limb[0] = 0.
         assert_eq!(limbs, vec![0, 1u64 << 36]);
     }

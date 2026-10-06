@@ -132,7 +132,12 @@ pub fn execute(args: Args) -> Result<ExitCode> {
         }
         Some(Value::String(_)) | None => {}
         Some(other) => {
-            println!("{}", serde_json::to_string(&other).unwrap());
+            // JSON Value has string object keys and only supported scalar/container
+            // types; serializing it to memory has no data or I/O error path.
+            println!(
+                "{}",
+                serde_json::to_string(&other).expect("JSON result value must serialize")
+            );
         }
     }
 

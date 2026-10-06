@@ -53,6 +53,7 @@ use crate::session_store::{
 };
 use submilli_shared::mcp::discovery::{DiscoveryAuth, DiscoveryError};
 
+#[cfg(test)]
 type McpSetup = Arc<dyn Fn() -> std::result::Result<(), DiscoveryError> + Send + Sync>;
 
 use submilli_shared::mcp_token::OAuthTokenManager;
@@ -144,6 +145,7 @@ struct AppStateInner {
     /// [`AppState::llm_provider_for`] builds the real per-blueprint HTTP one.
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
     llm_dispatch_factory: LlmDispatchFactory,
+    #[cfg(test)]
     mcp_setup: McpSetup,
     run_recorder: Option<Arc<dyn crate::record::RunRecorderFactory>>,
     /// Session events for a recorder that wants them.
@@ -178,15 +180,7 @@ impl AppState {
         config: ServerConfig,
         llm_dispatch_factory: LlmDispatchFactory,
     ) -> Result<Self> {
-        Self::with_setup_factories(config, llm_dispatch_factory, Arc::new(initialize_mcp))
-    }
-
-    fn with_setup_factories(
-        config: ServerConfig,
-        llm_dispatch_factory: LlmDispatchFactory,
-        mcp_setup: McpSetup,
-    ) -> Result<Self> {
-        mcp_setup().context("MCP schema initialization failed")?;
+        submilli_shared::mcp::schema_registry::initialize_builtin_packs();
         let blueprints = config.blueprints.context(
             "AppState requires a prepared blueprint store; supply ServerConfig.blueprints",
         )?;
@@ -324,7 +318,8 @@ impl AppState {
                 bind_addr: OnceLock::new(),
                 llm_dispatch: config.llm_dispatch,
                 llm_dispatch_factory,
-                mcp_setup,
+                #[cfg(test)]
+                mcp_setup: Arc::new(|| Ok(())),
                 event_hub: config
                     .run_recorder
                     .as_ref()
@@ -577,6 +572,8 @@ impl AppState {
         blueprint_name: &str,
         blueprint: &Blueprint,
     ) -> std::result::Result<Arc<McpCatalog>, DiscoveryError> {
+        // Exercise discovery-error handling without a network dependency in tests.
+        #[cfg(test)]
         (self.inner.mcp_setup)()?;
         if blueprint.mcp.is_empty() {
             return Ok(Arc::new(McpCatalog::empty()));
@@ -618,6 +615,8 @@ impl AppState {
         harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
         network_policy: &Arc<interpreter::runtime::NetworkPolicy>,
     ) -> std::result::Result<Arc<McpCatalog>, DiscoveryError> {
+        // Exercise discovery-error handling without a network dependency in tests.
+        #[cfg(test)]
         (self.inner.mcp_setup)()?;
         if servers.is_empty() || blueprint.mcp.is_empty() {
             return Ok(Arc::new(McpCatalog::empty()));
@@ -1141,10 +1140,6 @@ fn selected_stdlib_declarations(names: &BTreeSet<String>) -> Vec<PackageDeclarat
         .into_iter()
         .filter(|defs| names.contains(&defs.package_name))
         .collect()
-}
-
-fn initialize_mcp() -> std::result::Result<(), DiscoveryError> {
-    submilli_shared::mcp::schema_registry::initialize_builtin_packs().map_err(DiscoveryError::from)
 }
 
 fn mcp_catalog_cache_key(blueprint_name: &str, servers: Option<&BTreeSet<String>>) -> String {

@@ -423,6 +423,8 @@ fn generated_tsconfig_text(manifest: &ProjectManifest) -> String {
         },
         "include": include,
     });
+    // This closed JSON Value tree has string keys and no custom serializers;
+    // serializing it to an in-memory string cannot return a data or I/O error.
     format!(
         "{}\n",
         serde_json::to_string_pretty(&config).expect("generated tsconfig is serializable")
@@ -461,6 +463,8 @@ fn tasks_json_text() -> String {
             },
         ],
     });
+    // This fixed JSON Value contains only strings, numbers, booleans and
+    // containers; its in-memory serializer has no data or I/O failure path.
     format!(
         "{}\n",
         serde_json::to_string_pretty(&tasks).expect("generated tasks.json is serializable")
@@ -527,6 +531,8 @@ fn test_stub(name: &str) -> String {
 }
 
 fn package_block(name: &str, package_path: &Path) -> String {
+    // Both callers pass validated_package_path output: non-UTF-8 input is
+    // rejected, and normalization only copies/removes those UTF-8 components.
     let path = package_path
         .to_str()
         .expect("validated package path is UTF-8")

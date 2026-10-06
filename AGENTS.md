@@ -41,22 +41,35 @@ scaffolding reads this catalog.
 
 ## No-panic execution paths
 
-Production script execution must not panic, including when an internal invariant
-is violated. This covers parsing, typechecking, compiler transformations, codegen,
-module loading/setup, runtime and host functions, request preparation, diagnostics,
-and cleanup. It applies through CLI, HTTP, MCP, and direct library entry points.
+Production script execution must handle malformed input, unsupported language
+constructs, resource limits, and operational failures through diagnostics, typed
+errors, or appropriate runtime traps. This covers parsing, typechecking, compiler
+transformations, codegen, module loading/setup, runtime and host functions,
+request preparation, diagnostics, and cleanup through CLI, HTTP, MCP, and direct
+library entry points. Documented internal invariants and poisoned-lock access
+may panic under the rules below.
 
-- Use typed `Result` errors and propagate failures to the caller, or express the
-  invariant structurally so the operation cannot panic. "Should never happen"
-  and "the previous phase guarantees this" do not justify a panicking operation.
-- Do not use `panic!`, `unreachable!`, `todo!`, `unimplemented!`, panicking
-  `unwrap`/`expect`, or assertions (including debug assertions) on these paths.
-  Tests may assert or panic to report test failures. Fallible APIs whose names
-  contain `unwrap` are not violations merely because of their names.
+- Propagate expected failures through typed `Result` errors. Do not use `todo!`
+  or `unimplemented!` for unsupported input on production execution paths.
+- `expect`, assertions (including debug assertions), `unreachable!`, and explicit
+  invariant panics are permitted when construction, explicit validation, or a
+  documented API contract establishes the invariant. Explain what establishes it
+  and why intervening mutation, callbacks, or other callers cannot invalidate it.
+  Prefer `expect` with a descriptive message to a bare panicking `unwrap`.
+- Absence of a reproducer, "should never happen," or a general claim that an
+  earlier phase guarantees correctness is insufficient. Identify the actual
+  guarantee and its scope. A private helper dispatched immediately after matching
+  a variant or a fixed host argument slot after ABI validation can qualify;
+  arbitrary external metadata, dynamic guest indexes, and allocation or I/O
+  failures do not become invariants merely because they usually succeed.
+- Prefer expressing an invariant structurally when that makes the code clearer.
+  Do not introduce error variants, fallible APIs, or repeated checks solely for
+  proven invariants. Keep existing fallible paths that remain simple or also
+  report real failures; allowing invariant panics does not require reverting them.
 - Review implicit panic and abort sources too: indexing/slicing, arithmetic and
   narrowing, borrowing, runtime-context APIs, recursive traversal/drop, unchecked
-  allocation sizes, and dependency calls. Use checked or structurally safe
-  operations and enforce resource/depth limits before exhaustion. A broad
+  allocation sizes, and dependency calls. Establish bounds by validation or a
+  documented invariant, and enforce resource/depth limits before exhaustion. A broad
   `catch_unwind` wrapper or a clean text search does not satisfy this requirement.
 - Preserve source context and distinguish ordinary language errors from internal
   failures. Never replace a failure with a successful default, partial Wasm, or
@@ -69,25 +82,23 @@ and cleanup. It applies through CLI, HTTP, MCP, and direct library entry points.
   unrelated pre-existing sites separately without expanding every change into a
   repository-wide rewrite. Existing violations do not excuse new ones. Review
   must distinguish a confirmed policy violation from a demonstrated input-triggered
-  failure; an exploit reproducer is not required to remove an explicit panic.
+  failure. An explicit panic is not automatically a violation: assess its
+  invariant first. A demonstrated violation needs no exploit reproducer.
+- Tests may assert or panic to report test failures. Fallible APIs named
+  `expect` or `unwrap_*` are not panicking operations merely because of their names.
 
-### Accepted poisoned-lock panics
+Poisoned `std::sync::Mutex` and `std::sync::RwLock` access is also permitted to
+panic, including during cleanup: the protected state may have been partly
+updated by an earlier panic. Do not add recovery, error variants, or fallible APIs
+solely for poisoning. Document the reason at the access, shared helper, or
+protected field when changing poison handling. Do not claim poisoning is
+impossible. The initiating panic must independently satisfy this policy;
+poisoning does not excuse it. A poisoned-lock panic during unwinding can still
+cause a second panic and abort the process.
 
-Panicking `unwrap`/`expect` on a poisoned `std::sync::Mutex` or
-`std::sync::RwLock` is an accepted exception to the no-panic requirement.
-Poisoning indicates that another panic occurred while protected state could be
-partly updated. Panic on poisoned access is accepted without introducing recovery
-or treating it as an ordinary operation failure. Do not add error variants or
-fallible APIs solely to handle poisoning. Keep fallible APIs where they also
-report real I/O, backend, setup, or other operation failures.
-
-This exception permits only the panic on poisoned lock access, including during
-cleanup. It does not permit the panic that caused poisoning or any other panic
-source. Poisoned access during unwinding can cause a second panic and abort the
-process. Document this exception at the lock access, shared lock helper, or
-protected field when changing poison handling; do not claim that poisoning is
-impossible. Record these sites as accepted exceptions in SUB-633 rather than as
-removed panics.
+Record justified invariant and poisoned-lock panics in SUB-633 as accepted
+exceptions, with their reasoning, rather than as removed panics or unresolved
+violations. Apply these exceptions when following review and no-panic workflows.
 
 ## Fuel for host functions
 
@@ -152,8 +163,8 @@ When you add or change a host function, add or update its row in
 ## Code style
 
 - Rust 2024; typed errors in library APIs. `anyhow` is appropriate at the CLI
-  boundary. Production execution paths follow the no-panic requirement above,
-  including internal operations believed to be infallible.
+  boundary. Production execution paths follow the failure-handling and documented
+  invariant rules above.
 - Keep functions focused, names descriptive, and control flow easy to follow.
   Prefer early returns to nesting. Keep helpers below their callers.
 - Preserve ordered tables and exhaustive dispatchers: they encode layout or

@@ -131,14 +131,16 @@ fn class_types(
         StorageType::ValType(ValType::I64),
     ));
     def.finish();
+    // Each lookup uses this builder's handle and declared kind. A successful
+    // build preserves both, and no mutation occurs before lookup.
     let group = builder.build().map_err(fatal_host_error)?;
     Ok((
         group
             .get_struct(vtable_label)
-            .ok_or_else(|| fatal_host_error("git class: declared vtable type is missing"))?,
+            .expect("git class: declared vtable type is missing"),
         group
             .get_struct(instance_label)
-            .ok_or_else(|| fatal_host_error("git class: declared instance type is missing"))?,
+            .expect("git class: declared instance type is missing"),
     ))
 }
 
