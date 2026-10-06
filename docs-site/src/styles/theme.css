@@ -787,56 +787,57 @@ mobile-starlight-toc .isMobile a[aria-current='true'] {
 	display: none;
 }
 .expressive-code .frame .copy button {
-	border: 1px solid var(--sub-line);
-	border-radius: var(--radius-sm);
+	border: 0;
+	border-radius: 4px;
 	color: var(--sl-color-gray-2);
-	opacity: 0.9;
-	width: 2.5rem;
-	height: 2.5rem;
-	transition:
-		background-color var(--sub-dur-base) var(--sub-ease-out),
-		color var(--sub-dur-base) var(--sub-ease-out);
+	/* Expressive Code handles hover visibility and keyboard focus. */
+}
+.expressive-code .frame .copy button::after {
+	width: 1rem;
+	height: 1rem;
+	inset: 0;
+	margin: auto;
 }
 .expressive-code .frame .copy button:hover {
 	background: var(--sub-hover);
-	color: var(--sl-color-white);
 }
-.expressive-code .frame .copy .feedback {
-	font: 500 0.75rem/1 var(--sl-font-mono);
-	border-radius: var(--radius-sm);
-}
-
-/* Keep the copy affordance discoverable without requiring hover. */
 .expressive-code .frame .copy button:focus-visible {
 	opacity: 1;
 	outline: 2px solid var(--sl-color-accent);
 	outline-offset: 2px;
 }
+.expressive-code .frame .copy .feedback {
+	font: 500 0.75rem/1 var(--sl-font-mono);
+	border-radius: var(--radius-sm);
+}
+@media (hover: none), (pointer: coarse) {
+	.expressive-code .frame .copy button {
+		opacity: 0.75;
+		width: 2.75rem;
+		height: 2.75rem;
+	}
+}
 
-/* Input/output labels are added by the shared code-block plugin. */
-.expressive-code .frame.sub-code-input .header,
-.expressive-code .frame.sub-code-output .header {
-	display: flex;
-	align-items: center;
-	gap: 0.625rem;
-	padding: 0.5rem 0.75rem;
-	border-bottom: 1px solid var(--sl-color-hairline);
+/* Results use a quiet left rule instead of a second toolbar. */
+.expressive-code .frame.sub-code-output:not(.has-title) {
 	background: transparent;
 }
-.expressive-code .frame.sub-code-input .header .sub-code-label,
-.expressive-code .frame.sub-code-output .header .sub-code-label {
-	flex: none;
-	font: 600 0.6875rem/1 var(--sl-font-mono);
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: var(--sl-color-gray-2);
-}
-.expressive-code .frame.sub-code-input .header .title,
-.expressive-code .frame.sub-code-output .header .title {
-	margin: 0;
-	padding: 0;
+.expressive-code .frame.sub-code-output:not(.has-title) pre {
+	background: transparent;
 	border: 0;
-	background: transparent;
+	border-inline-start: 2px solid var(--sl-color-hairline);
+	border-radius: 0;
+}
+.expressive-code .sub-code-role {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
 }
 
 /* ------------------------------------------------------------------ */

@@ -96,7 +96,7 @@ export default defineConfig({
             inlineButtonBackgroundIdleOpacity: "0",
             inlineButtonBackgroundHoverOrFocusOpacity: "0",
             inlineButtonBorder: "var(--sl-color-hairline)",
-            inlineButtonBorderOpacity: "1",
+            inlineButtonBorderOpacity: "0",
             inlineButtonForeground: "var(--sl-color-gray-2)",
             tooltipSuccessBackground: "var(--sub-tip)",
             tooltipSuccessForeground: "#000000",
