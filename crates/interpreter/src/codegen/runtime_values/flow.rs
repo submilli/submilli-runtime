@@ -347,13 +347,17 @@ fn connect_live_narrow_read(
     id: ExprId,
     flow: &mut Flow,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let TypedExprKind::LocalNarrowRef { path, .. } = &ast
-        .try_expr(id)
-        .map_err(crate::codegen::arena_failure)?
-        .kind
-    else {
+    let expr = ast.try_expr(id).map_err(crate::codegen::arena_failure)?;
+    let TypedExprKind::LocalNarrowRef { path, .. } = &expr.kind else {
         return Ok(());
     };
+    // A local read narrowed to `never` traps rather than reading the binding,
+    // so a closure doesn't capture it and there is no live value to connect.
+    // A field or global still reads its live value, which an alias or a call
+    // may have changed since the guard.
+    if matches!(expr.ty, Type::Never) && path.is_bare_local() {
+        return Ok(());
+    }
     let Some(source) = live_source(ast, lowered, locals, sources, id, flow)? else {
         return Ok(());
     };

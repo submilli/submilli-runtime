@@ -401,7 +401,7 @@ fn sole_array_like_member(hint: &Type) -> Option<&Type> {
 /// The element type `...src` contributes to an array literal, or `None` when `src` is
 /// not spreadable. A tuple spreads as the union of its positions, and a union of
 /// arrays and tuples as any member's element: both are arrays at runtime.
-fn spread_element_type(peeled_source: &Type) -> Option<Type> {
+pub(super) fn spread_element_type(peeled_source: &Type) -> Option<Type> {
     match peeled_source {
         Type::Array(elem) => Some((**elem).clone()),
         Type::Tuple(elements) => Some(Type::union(elements.clone())),
@@ -479,16 +479,16 @@ impl Inferer<'_> {
     // Expression inference
     // --------------------------------------------------------------------
 
-    /// Whether a literal asked to keep its literal type does. One that its
-    /// expected type rejects reports at its base type, as TypeScript does:
-    /// `o.x = "a"` with `x: number` is "got `string`".
-    fn keeps_literal_type(
-        &self,
-        keeps_literal: bool,
+    /// [`Self::infer_expr`], keeping the literal type `expr_id` produces or
+    /// passes through when `keep_literals` is set.
+    pub(super) fn infer_expr_keeping_literals(
+        &mut self,
+        expr_id: ExprId,
         expected: Option<&Type>,
-        literal: &Type,
-    ) -> bool {
-        keeps_literal && expected.is_none_or(|want| assignable(literal, want, self.resolver()))
+        keep_literals: bool,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        self.keeps_literal_types = keep_literals;
+        self.infer_expr(expr_id, expected)
     }
 
     pub(super) fn infer_expr(
@@ -546,13 +546,9 @@ impl Inferer<'_> {
             ExprKind::Number(v) => {
                 let canonical = if v == 0.0 { 0.0 } else { v };
                 let literal = Type::NumberLiteral(crate::types::LiteralF64(canonical));
-                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
-                    || expects_literal(expected, |t| matches!(t, Type::NumberLiteral(_)))
-                {
-                    literal
-                } else {
-                    Type::Number
-                };
+                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::NumberLiteral(_))
+                });
                 Ok((TypedExprKind::Number(v), ty))
             }
             // bigint literal — always widens to `Type::BigInt`
@@ -560,24 +556,16 @@ impl Inferer<'_> {
             ExprKind::BigInt(digits) => Ok((TypedExprKind::BigInt(digits), Type::BigInt)),
             ExprKind::String(s) => {
                 let literal = Type::StringLiteral(s.clone());
-                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
-                    || expects_literal(expected, |t| matches!(t, Type::StringLiteral(_)))
-                {
-                    literal
-                } else {
-                    Type::String
-                };
+                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::StringLiteral(_))
+                });
                 Ok((TypedExprKind::String(s), ty))
             }
             ExprKind::Boolean(b) => {
                 let literal = Type::BooleanLiteral(b);
-                let ty = if self.keeps_literal_type(keeps_literal, expected, &literal)
-                    || expects_literal(expected, |t| matches!(t, Type::BooleanLiteral(_)))
-                {
-                    literal
-                } else {
-                    Type::Boolean
-                };
+                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::BooleanLiteral(_))
+                });
                 Ok((TypedExprKind::Boolean(b), ty))
             }
             ExprKind::Null => Ok((TypedExprKind::Null, Type::Null)),
@@ -599,10 +587,9 @@ impl Inferer<'_> {
                 callee,
                 type_args,
                 args,
-            } => self.infer_call(callee, type_args, args, expected, span),
+            } => self.infer_call_running_invoked_body(callee, type_args, args, expected, span),
             ExprKind::Paren(inner) => {
-                self.keeps_literal_types = keeps_literal;
-                return self.infer_expr(inner, expected);
+                return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
             }
             ExprKind::ObjectLiteral { members } => {
                 self.infer_object_literal(members, expected, span)
@@ -794,6 +781,35 @@ impl Inferer<'_> {
         Ok((id, ty))
     }
 
+    /// A primitive literal's type: the literal itself where it is kept or the
+    /// expected type names a literal of its kind, else its base primitive.
+    fn literal_or_base(
+        &self,
+        keeps_literal: bool,
+        expected: Option<&Type>,
+        literal: Type,
+        is_literal: fn(&Type) -> bool,
+    ) -> Type {
+        if self.keeps_literal_type(keeps_literal, expected, &literal)
+            || expects_literal(expected, is_literal)
+        {
+            return literal;
+        }
+        literal.widen_literal()
+    }
+
+    /// Whether a literal asked to keep its literal type does. One that its
+    /// expected type rejects reports at its base type, as TypeScript does:
+    /// `o.x = "a"` with `x: number` is "got `string`".
+    fn keeps_literal_type(
+        &self,
+        keeps_literal: bool,
+        expected: Option<&Type>,
+        literal: &Type,
+    ) -> bool {
+        keeps_literal && expected.is_none_or(|want| assignable(literal, want, self.resolver()))
+    }
+
     fn resolve_ident(
         &mut self,
         ident: Ident,
@@ -819,10 +835,8 @@ impl Inferer<'_> {
                 name: ident.name.clone(),
                 decl_scope: entry.decl_scope,
             });
-            if let Some(view) = self.lookup_narrowed_view(&path) {
-                let binding = view.binding.clone();
-                let narrowed_ty = view.narrowed_ty.clone();
-                return Ok((TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty));
+            if let Some(read) = self.narrowed_read(path) {
+                return Ok(read);
             }
             return Ok((
                 TypedExprKind::LocalRef {
@@ -867,16 +881,8 @@ impl Inferer<'_> {
             let global_path = super::narrowing::ReferencePath::root(
                 super::narrowing::BindingId::Global(mangled.clone()),
             );
-            if let Some(view) = self.lookup_narrowed_view(&global_path) {
-                let binding = view.binding.clone();
-                let narrowed_ty = view.narrowed_ty.clone();
-                return Ok((
-                    TypedExprKind::LocalNarrowRef {
-                        binding,
-                        path: global_path,
-                    },
-                    narrowed_ty,
-                ));
+            if let Some(read) = self.narrowed_read(global_path) {
+                return Ok(read);
             }
             // Reject generic functions used as first-class values —
             // `let f = identity` and friends. Rationale: a generic
@@ -1351,8 +1357,8 @@ impl Inferer<'_> {
                 // type is TS-style: the branch that keeps the LHS
                 // contributes only the values that can short-circuit
                 // there (`falsy_part` for `&&`, `truthy_part` for `||`).
-                self.keeps_literal_types = keeps_literal;
-                let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None)?;
+                let (typed_lhs, lhs_ty) =
+                    self.infer_expr_keeping_literals(lhs, None, keeps_literal)?;
                 let mut condition_error = false;
                 if matches!(lhs_ty.peel(), Type::Unknown) {
                     // `&&`/`||` on un-narrowed `unknown`
@@ -1370,7 +1376,7 @@ impl Inferer<'_> {
                                 .to_string(),
                         ],
                     );
-                } else if !super::narrowing::condition_compatible(&lhs_ty) {
+                } else if !self.is_condition_value(typed_lhs, &lhs_ty)? {
                     condition_error = true;
                     let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(lhs_span, &lhs_ty);
@@ -1381,10 +1387,11 @@ impl Inferer<'_> {
                     BinOp::Or => false_env,
                     _ => return Err(super::inference_failure("matched And | Or above")),
                 };
-                self.keeps_literal_types = keeps_literal;
                 let (typed_rhs, rhs_ty) =
-                    self.infer_conditional_operand(rhs, &rhs_env, expected)?;
-                if matches!(rhs_ty.peel(), Type::Void | Type::Never) {
+                    self.infer_conditional_operand(rhs, &rhs_env, expected, keeps_literal)?;
+                if matches!(rhs_ty.peel(), Type::Void | Type::Never)
+                    && !self.is_condition_value(typed_rhs, &rhs_ty)?
+                {
                     condition_error = true;
                     let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(rhs_span, &rhs_ty);
@@ -1496,7 +1503,7 @@ impl Inferer<'_> {
                                 .to_string(),
                         ],
                     );
-                } else if !super::narrowing::condition_compatible(&operand_ty) {
+                } else if !self.is_condition_value(id, &operand_ty)? {
                     let operand_span = self
                         .ast
                         .try_expr(operand)
@@ -1744,7 +1751,7 @@ impl Inferer<'_> {
         true
     }
 
-    fn infer_call(
+    pub(super) fn infer_call(
         &mut self,
         callee: ExprId,
         type_args: Option<Vec<crate::TypeAnnotation>>,
@@ -4532,7 +4539,8 @@ impl Inferer<'_> {
         substitution_span: Span,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let peeled = ty.primitive_behavior();
-        if matches!(peeled, Type::String | Type::StringLiteral(_)) {
+        // A `never` value is never read: the code holding it doesn't run.
+        if matches!(peeled, Type::String | Type::StringLiteral(_) | Type::Never) {
             return Ok(expr_id);
         }
         let method_name = crate::Ident {
@@ -5571,9 +5579,9 @@ impl Inferer<'_> {
             ));
         }
 
-        // walk elements in source order. The first resolved
-        // element (Value or Spread source) seeds the running element
-        // type unless an expected concrete hint pins it. For Spread,
+        // Walk elements in source order. The first resolved element
+        // (Value or Spread source) seeds the running element type unless
+        // an expected concrete hint pins it. For Spread,
         // the source must peel to `Type::Array(T)` and `T`
         // participates in unification.
         //
@@ -5592,6 +5600,7 @@ impl Inferer<'_> {
         } else {
             None
         };
+        let mut saw_never = false;
         // Unless a hint pins it, the element type stays open: an element that types
         // itself takes no hint from the elements before it, as in tsc, and the
         // elements join by type afterwards.
@@ -5630,6 +5639,13 @@ impl Inferer<'_> {
                     } =
                         self.infer_value_operand(elem_id, hint, ValuePosition::ArrayElement, None)?;
                     if rejected_void {
+                        typed_elements.push(crate::TypedArrayElement::Value(typed_id));
+                        continue;
+                    }
+                    // A `never` element holds no value (it is read in code no value
+                    // reaches), so it neither seeds nor narrows the element type.
+                    if matches!(elem_ty.peel(), Type::Never) {
+                        saw_never = true;
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
                     }
@@ -5729,12 +5745,17 @@ impl Inferer<'_> {
             }
         }
 
-        // If every element failed to determine an element type (e.g.
-        // every spread had an invalid source), fall back to the hint
-        // or `Type::Error` rather than panicking.
-        let element_ty = element_ty.unwrap_or_else(|| match expected_elem {
-            Some(t) => t.clone(),
-            None => Type::Error,
+        // Reached only without a pinning hint, which seeds `element_ty`
+        // above. When no element fixed an element type, take `never` if the
+        // elements were all `never` (`[x]` is `never[]`, as in TypeScript, and
+        // a generic hint then infers from it); else the hint, or `Type::Error`
+        // (every spread had an invalid source) rather than panicking.
+        let element_ty = element_ty.unwrap_or_else(|| {
+            if saw_never {
+                Type::Never
+            } else {
+                expected_elem.cloned().unwrap_or(Type::Error)
+            }
         });
         // The seed widened every literal type to check the elements against;
         // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
@@ -6186,7 +6207,7 @@ impl Inferer<'_> {
             && self.namespace_symbols.contains_key(&root.name)
         {
             segments.push(name.clone());
-            return self.infer_namespace_symbol_field_access(root, segments, span);
+            return Ok(self.infer_namespace_symbol_field_access(root, segments, span));
         }
 
         // namespace member in non-call position
@@ -6350,11 +6371,9 @@ impl Inferer<'_> {
                     .push(super::narrowing::PathElem::Field(name.name.clone()));
                 p
             })
-            && let Some(view) = self.lookup_narrowed_view(&path)
+            && let Some(read) = self.narrowed_read(path)
         {
-            let binding = view.binding.clone();
-            let narrowed_ty = view.narrowed_ty.clone();
-            return Ok((TypedExprKind::LocalNarrowRef { binding, path }, narrowed_ty));
+            return Ok(read);
         }
         // interface-property dispatch lands here BEFORE the
         // user-object field path. `lookup_interface_property` returns `None`
@@ -6559,13 +6578,11 @@ impl Inferer<'_> {
                 &key_ty,
                 self.ast.try_expr(index).map_err(super::arena_failure)?.span,
             );
-            return Ok((
-                TypedExprKind::IndexAccess {
-                    receiver: typed_receiver,
-                    index: typed_index,
-                },
-                ty,
-            ));
+            let kind = TypedExprKind::IndexAccess {
+                receiver: typed_receiver,
+                index: typed_index,
+            };
+            return self.narrowed_index_read(kind, ty);
         }
         // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
         // is indexable on the same terms as the type it names.
@@ -6721,18 +6738,21 @@ impl Inferer<'_> {
             receiver: typed_receiver,
             index: typed_index,
         };
+        self.narrowed_index_read(kind, elem_ty)
+    }
+
+    /// An index read, or the narrowed view of it when a guard narrowed it.
+    fn narrowed_index_read(
+        &self,
+        kind: TypedExprKind,
+        read_ty: Type,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if let Some(path) = self.kind_to_reference_path(&kind)?
-            && let Some(view) = self.lookup_narrowed_view(&path)
+            && let Some(read) = self.narrowed_read(path)
         {
-            return Ok((
-                TypedExprKind::LocalNarrowRef {
-                    binding: view.binding.clone(),
-                    path,
-                },
-                view.narrowed_ty.clone(),
-            ));
+            return Ok(read);
         }
-        Ok((kind, elem_ty))
+        Ok((kind, read_ty))
     }
 
     /// The element a read at `index` gives from a union of arrays and tuples: the
@@ -7461,7 +7481,10 @@ impl Inferer<'_> {
         // scope so a shadowed root is rejected. `pending_joins` is deliberately
         // left alone: a `break` inside the body snapshots an empty range over
         // the fresh, shorter stack.
-        let narrow_seed = self.enter_closure_narrow_boundary(span)?;
+        let immediately_invoked = self.immediately_invoked.take() == Some(span);
+        let returns_before_end =
+            immediately_invoked && super::iife::returns_before_end(self.ast, &body)?;
+        let narrow_seed = self.enter_closure_narrow_boundary(span, immediately_invoked)?;
         // The body's own `return`s end its flow, not the enclosing one's.
         let prev_reachable = std::mem::replace(&mut self.reachable, true);
         // Nor can its `break`/`continue` reach a loop or switch outside it.
@@ -7537,6 +7560,9 @@ impl Inferer<'_> {
             }
         };
 
+        if immediately_invoked {
+            self.invoked_body_exit = Some(self.capture_invoked_body_exit(returns_before_end));
+        }
         // Restore frames.
         self.exit_closure_narrow_boundary()?;
         self.reachable = prev_reachable;
@@ -8240,17 +8266,17 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
         let cond_span = self.ast.try_expr(cond).map_err(super::arena_failure)?.span;
-        self.check_condition_ty(&cond_ty, cond_span);
+        self.check_condition_ty(typed_cond, &cond_ty, cond_span)?;
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
-        self.keeps_literal_types = keeps_literal;
-        let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected)?;
+        let (typed_then, then_ty) =
+            self.infer_conditional_operand(then_, &true_env, expected, keeps_literal)?;
         let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span)?;
 
-        self.keeps_literal_types = keeps_literal;
-        let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected)?;
+        let (typed_else, else_ty) =
+            self.infer_conditional_operand(else_, &false_env, expected, keeps_literal)?;
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
@@ -8278,11 +8304,13 @@ impl Inferer<'_> {
         keeps_literal: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        self.keeps_literal_types = keeps_literal;
-        let (typed_lhs, lhs_ty) = self.infer_expr(lhs, None)?;
-        self.keeps_literal_types = keeps_literal;
+        let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, keeps_literal)?;
+        // The right side runs only where the left is `null`.
+        let rhs_env = self.null_operand_env(typed_lhs)?;
         let (typed_rhs, rhs_ty) =
-            self.infer_conditional_operand(rhs, &super::narrowing::NarrowEnv::new(), None)?;
+            self.infer_conditional_operand(rhs, &rhs_env, None, keeps_literal)?;
+        let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
+        let typed_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
 
         // `void` has no value to test for null. JavaScript would always take
         // the right side, which a left side that is `void` on only some paths
@@ -9240,16 +9268,10 @@ impl Inferer<'_> {
                 Some(path)
             }
             TypedChainPart::Index { idx, .. } => {
-                let Some(lit) = super::predicate_envs::index_literal_value(
-                    &self
-                        .typed_ast
-                        .try_expr(*idx)
-                        .map_err(crate::typechecker::arena_failure)?
-                        .kind,
-                ) else {
+                let Some(element) = self.index_path_elem(*idx)? else {
                     return Ok(None);
                 };
-                path.chain.push(super::narrowing::PathElem::Index(lit));
+                path.chain.push(element);
                 Some(path)
             }
             TypedChainPart::NonNull { .. } => Some(path),
@@ -10686,6 +10708,10 @@ pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
         (Type::String | Type::StringLiteral(_), Type::String | Type::StringLiteral(_)) => {
             Some(Type::String)
         }
+        // A `never` operand is in code that doesn't run, as TypeScript reads
+        // `"bad: " + x` after every member of `x` was ruled out.
+        (Type::String | Type::StringLiteral(_), Type::Never)
+        | (Type::Never, Type::String | Type::StringLiteral(_)) => Some(Type::String),
         // Mixed `number` ↔ `bigint` is rejected, so no widening arm here.
         (Type::BigInt, Type::BigInt) => Some(Type::BigInt),
         _ => None,

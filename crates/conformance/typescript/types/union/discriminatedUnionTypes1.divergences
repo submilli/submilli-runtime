@@ -1,12 +1,8 @@
-types: 145 of 251 tsc entries compared, 3 differ
+types: 145 of 251 tsc entries compared, 2 differ
 
 line 62: s
   tsc:  never
   ours: Shape
-
-line 97: m
-  tsc:  { kind: "A"; x: string; } | { kind: "D"; }
-  ours: Message
 
 line 119: m
   tsc:  { kind: "A"; x: string; } | { kind: "D"; }

@@ -84,6 +84,28 @@ impl Harness {
         }
     }
 
+    /// Like [`Harness::from_blueprints`] with a run recorder installed.
+    fn from_blueprints_recorded(
+        bps: Vec<Blueprint>,
+        recorder: Arc<dyn submilli_server::record::RunRecorderFactory>,
+    ) -> Self {
+        let session_root = tempfile::tempdir().expect("session root");
+        let session_root_path = session_root.path().to_path_buf();
+        let blueprints = Arc::new(InMemoryBlueprintStore::seed(bps).expect("seed blueprints"));
+        let config = ServerConfig {
+            blueprints: Some(blueprints),
+            session_storage_root: Some(session_root_path.clone()),
+            run_recorder: Some(recorder),
+            ..in_memory_config::config()
+        };
+        Self {
+            state: AppState::new(config).expect("AppState"),
+            session_root: session_root_path,
+            _owned_session_root: Some(session_root),
+            _package_store_root: None,
+        }
+    }
+
     /// Like [`Harness::from_blueprints`] but with a declared volume table, for
     /// the sessionless mount route.
     fn from_blueprints_with_volumes(bps: Vec<Blueprint>, volumes: VolumeTable) -> Self {
@@ -2347,6 +2369,83 @@ async fn mcp_virtual_package_discovers_typechecks_and_calls() {
             "typed required fields must remain checked: {response}"
         );
     }
+}
+
+/// The `@mcp` package names of each finished run's catalog, in finishing order.
+type CatalogNames = Arc<std::sync::Mutex<Vec<Option<Vec<String>>>>>;
+
+/// Records every run, keeping only the catalog it compiled against.
+#[derive(Default)]
+struct CatalogRecorder(CatalogNames);
+
+impl submilli_server::record::RunRecorderFactory for CatalogRecorder {
+    fn start(
+        &self,
+        _run: submilli_server::record::RunStart,
+    ) -> Option<Arc<dyn submilli_server::record::RunRecorder>> {
+        Some(Arc::new(CatalogRun(self.0.clone())))
+    }
+}
+
+struct CatalogRun(CatalogNames);
+
+impl submilli_server::record::RunRecorder for CatalogRun {
+    fn finish(&self, run: submilli_server::record::FinishedRun) {
+        let names = run.mcp_catalog.map(|catalog| {
+            catalog
+                .defs_refs()
+                .iter()
+                .map(|defs| defs.package_name.clone())
+                .collect()
+        });
+        self.0.lock().unwrap().push(names);
+    }
+}
+
+/// A recorded run keeps the `@mcp` catalog it compiled against, so a replay can compile
+/// without contacting the server.
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test]
+async fn a_recorded_run_keeps_the_mcp_catalog_it_compiled_against() {
+    let url = upstream::spawn().await;
+    let server = |url: String| McpServer {
+        transport: "streamable_http".into(),
+        url,
+        headers: BTreeMap::new(),
+        auth: None,
+    };
+    let bp = Blueprint {
+        name: "up-bp".into(),
+        // `other` is declared but not imported, so the run does not compile against it.
+        mcp: BTreeMap::from([
+            ("up".to_string(), server(url.clone())),
+            ("other".to_string(), server(url)),
+        ]),
+        permissions: BTreeMap::from([(
+            "main".to_string(),
+            vec![PermissionRule {
+                name: None,
+                capability: "mcp.up".into(),
+                filter: None,
+                action: Action::Allow,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let recorder = CatalogRecorder::default();
+    let runs = recorder.0.clone();
+    let h = Harness::from_blueprints_recorded(vec![bp], Arc::new(recorder));
+    let session = h.handshake("up-bp").await;
+    let code = r#"import up from "@mcp/up"; function main(): string { return up.createIssue({ title: "x" }) as string; }"#;
+    let (status, _, response) = h.post("up-bp", tools_call(2, code), Some(&session)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(output(&response)["error"].is_null(), "{response}");
+
+    let runs = runs.lock().unwrap();
+    let [Some(packages)] = runs.as_slice() else {
+        panic!("one run with a catalog: {runs:?}");
+    };
+    assert_eq!(packages, &["@mcp/up".to_string()]);
 }
 
 /// A server that keeps state in its session (a browser page, a cursor) only

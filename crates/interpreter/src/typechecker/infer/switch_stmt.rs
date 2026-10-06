@@ -343,6 +343,14 @@ impl Inferer<'_> {
         let mut saw_null: Option<Span> = None;
         let mut all_assigned: BTreeSet<narrowing::ReferencePath> = BTreeSet::new();
         let mut any_arm_reachable_exit = false;
+        // The clause last in the source leaves the switch when it runs off
+        // its end, as a `break` there would.
+        let last_clause = cases
+            .iter()
+            .map(|case| (case.span.start, case.body))
+            .chain(default.as_ref().map(|d| (d.span.start, d.body)))
+            .max()
+            .map(|(_, body)| body);
 
         for case in cases {
             let case_span = case.span;
@@ -431,6 +439,9 @@ impl Inferer<'_> {
             self.reachable = entry_reachable;
             let typed_body = self.infer_case_clause(switch_id, case.body, body_span)?;
             let body_reachable = self.reachable;
+            if body_reachable && last_clause == Some(case.body) {
+                self.record_break_exit();
+            }
             self.switch_depth -= 1;
             let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
             let typed_body = self.wrap_narrow_regions(typed_body, &true_env, body_span)?;
@@ -460,6 +471,9 @@ impl Inferer<'_> {
             self.reachable = entry_reachable;
             let typed_body = self.infer_case_clause(switch_id, d.body, body_span)?;
             let body_reachable = self.reachable;
+            if body_reachable && last_clause == Some(d.body) {
+                self.record_break_exit();
+            }
             self.switch_depth -= 1;
             let (_n, body_assigned) = self.pop_narrow_frame_capture()?;
             let typed_body = self.wrap_narrow_regions(typed_body, &env, body_span)?;
@@ -467,11 +481,13 @@ impl Inferer<'_> {
             any_arm_reachable_exit |= body_reachable;
             Some(typed_body)
         } else {
-            if matches!(residual, Type::Never) {
-            } else if residual != disc_ty {
-                self.emit_non_exhaustive(&residual, &site, switch_span);
-                any_arm_reachable_exit |= entry_reachable;
-            } else {
+            let unmatched = self.unmatched_residual(&residual, &site, saw_null.is_some());
+            let leaves_values_unmatched =
+                !matches!(unmatched, Type::Never) && !narrowing::is_ruled_out(&unmatched);
+            if leaves_values_unmatched {
+                if requires_every_case(&disc_ty) {
+                    self.emit_non_exhaustive(&unmatched, &site, switch_span);
+                }
                 any_arm_reachable_exit |= entry_reachable;
             }
             None
@@ -750,6 +766,17 @@ impl Inferer<'_> {
             notes: vec![],
         });
     }
+}
+
+/// Whether a `switch` without `default` must list every value of its
+/// discriminant: when its type is made of literals alone, which cases can
+/// cover. One with a member such as `string` or `null`, even in a single
+/// member of a discriminated union, can't be listed out, so the switch may
+/// simply fall through.
+fn requires_every_case(disc_ty: &Type) -> bool {
+    narrowing::union_members(disc_ty).into_iter().all(|member| {
+        narrowing::unit_literal_value(member).is_some() || matches!(member.peel(), Type::Boolean)
+    })
 }
 
 fn format_residual_missing(residual: &Type) -> String {

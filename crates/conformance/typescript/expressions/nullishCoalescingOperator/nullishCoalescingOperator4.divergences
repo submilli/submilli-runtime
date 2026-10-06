@@ -1,5 +1,1 @@
-types: 7 of 18 tsc entries compared, 1 differ
-
-line 5: a1
-  tsc:  null
-  ours: "literal" | null
+types: 7 of 18 tsc entries compared, 0 differ

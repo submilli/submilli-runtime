@@ -23,6 +23,7 @@ use wasmtime::{
     Rooted, StorageType, StructRef, StructRefPre, StructType, Val, ValType,
 };
 
+use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fs::{
     ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES, guest_normalize,
@@ -255,7 +256,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.exists")?;
-            gate(
+            let ticket = gate(
                 &mut *caller,
                 "fs.stat",
                 serde_json::json!({ "path": &path }),
@@ -274,6 +275,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 Err(ContainError::Escape | ContainError::Io(_)) => false,
                 Err(e) => return Err(contain_trap("fs.exists", &path, &e)),
             };
+            record_payload(&*caller, ticket, Side::Response, || {
+                Payload::meta(serde_json::json!({ "exists": found }))
+            });
             *abi_result(results, 0)? = Val::I32(i32::from(found));
             Ok(())
         },
@@ -287,7 +291,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         /* deterministic = */ false,
         |caller, params, results| {
             let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.size")?;
-            gate(
+            let ticket = gate(
                 &mut *caller,
                 "fs.stat",
                 serde_json::json!({ "path": &path }),
@@ -299,6 +303,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             if meta.is_dir() {
                 wasmtime::bail!("fs.size {}: path is a directory", path);
             }
+            record_payload(&*caller, ticket, Side::Response, || {
+                Payload::meta(serde_json::json!({ "size": meta.len() }))
+            });
             *abi_result(results, 0)? = Val::F64((meta.len() as f64).to_bits());
             Ok(())
         },
@@ -397,7 +404,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readBytes")?;
             let offset = f64_arg(abi_arg(params, 1)?, "fs.readBytes (offset)")? as i64;
             let length = f64_arg(abi_arg(params, 2)?, "fs.readBytes (length)")? as i64;
-            gate(
+            let ticket = gate(
                 &mut *caller,
                 "fs.read",
                 serde_json::json!({
@@ -406,6 +413,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 }),
             )?;
             let bytes = read_byte_range(caller, &path, offset, length)?;
+            record_payload(&*caller, ticket, Side::Response, || {
+                Payload::meta(serde_json::json!({ "offset": offset })).with_body(&bytes)
+            });
             let arr = write_submilli_uint8array_struct(caller, &bytes)?;
             *abi_result(results, 0)? = Val::AnyRef(Some(arr.to_anyref()));
             Ok(())
@@ -1002,7 +1012,7 @@ fn read_whole_capped(
     op: &str,
 ) -> wasmtime::Result<Option<Vec<u8>>> {
     let ctx = format!("fs.{op}");
-    gate(&mut *caller, "fs.read", serde_json::json!({ "path": path }))?;
+    let ticket = gate(&mut *caller, "fs.read", serde_json::json!({ "path": path }))?;
     let resolved = resolve_content_or_trap(caller.data(), path, &ctx)?;
     let meta = resolved
         .metadata()
@@ -1011,11 +1021,17 @@ fn read_whole_capped(
         wasmtime::bail!("{ctx} {}: path is a directory", path);
     }
     if meta.len() > caller.data().fs_max_read_size {
+        record_payload(&*caller, ticket, Side::Response, || {
+            Payload::meta(serde_json::json!({ "over_max_read_size": meta.len() })).with_size(0)
+        });
         return Ok(None);
     }
     // The size is known before the read, so the charge comes first.
     fuel::charge(&mut *caller, fuel::IO, meta.len())?;
     let bytes = resolved.read().map_err(|e| contain_trap(&ctx, path, &e))?;
+    record_payload(&*caller, ticket, Side::Response, || {
+        Payload::meta(serde_json::Value::Null).with_body(&bytes)
+    });
     Ok(Some(bytes))
 }
 

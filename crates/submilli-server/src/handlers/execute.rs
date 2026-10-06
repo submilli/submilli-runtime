@@ -14,6 +14,9 @@ use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
 use crate::app::AppState;
 use crate::error::{ErrorKind, ExecuteError};
+use crate::record::RunEntry;
+use interpreter::runtime::{Vfs, VfsInfo};
+
 use crate::runner::{self, RunOutcome};
 use crate::session::LastRun;
 use crate::session_manager::SessionError;
@@ -86,6 +89,21 @@ pub async fn handle(
                 .into_response();
         }
     };
+    let (session_id, response) =
+        one_shot(&state, req, crate::audit::execution(), RunEntry::Http).await;
+    with_session_header(&session_id, response).into_response()
+}
+
+/// Runs one program in a fresh session that is torn down once it returns, the
+/// `POST /v1/execute` shape. Returns the session id and the response. `run_entry` is how the
+/// run is recorded: [`RunEntry::Http`] for the endpoint, [`RunEntry::Program`] for an
+/// in-process caller.
+pub(crate) async fn one_shot(
+    state: &AppState,
+    req: ExecuteRequest,
+    audit: Option<Arc<crate::audit::ExecutionAudit>>,
+    run_entry: RunEntry,
+) -> (String, ExecuteResponse) {
     // Stateless one-shot: every call gets a fresh transient session, torn down
     // once the run returns. A caller that wants state across executes (a
     // persistent `per_session` VFS, reused variable bindings) uses the session
@@ -93,7 +111,13 @@ pub async fn handle(
     // The generated id is returned so the run's output stays readable via
     // `GET /v1/sessions/{id}/last-run`.
     let session_id = Uuid::new_v4().to_string();
-    if let Some(audit) = crate::audit::execution() {
+    let failed = |kind: ErrorKind, message: String| {
+        (
+            session_id.clone(),
+            failure_response(audit.as_deref(), &session_id, kind, message),
+        )
+    };
+    if let Some(audit) = &audit {
         audit.annotate(
             &req.code,
             &req.blueprint,
@@ -107,56 +131,34 @@ pub async fn handle(
     let found = match state.blueprints().get(&req.blueprint).await {
         Ok(found) => found,
         Err(error) => {
-            return with_session_header(
-                &session_id,
-                error_response(
-                    &session_id,
-                    ErrorKind::RuntimeError,
-                    crate::blueprint::store_failure_message(error).into(),
-                ),
-            )
-            .into_response();
+            return failed(
+                ErrorKind::RuntimeError,
+                crate::blueprint::store_failure_message(error).into(),
+            );
         }
     };
     let Some(blueprint) = found else {
-        let message = match blueprint_miss_message(&state, &req.blueprint).await {
-            Ok(message) => message,
-            Err(error) => {
-                return with_session_header(
-                    &session_id,
-                    error_response(
-                        &session_id,
-                        ErrorKind::RuntimeError,
-                        crate::blueprint::store_failure_message(error).into(),
-                    ),
-                )
-                .into_response();
-            }
+        return match blueprint_miss_message(state, &req.blueprint).await {
+            Ok(message) => failed(ErrorKind::BlueprintNotFound, message),
+            Err(error) => failed(
+                ErrorKind::RuntimeError,
+                crate::blueprint::store_failure_message(error).into(),
+            ),
         };
-        return with_session_header(
-            &session_id,
-            error_response(&session_id, ErrorKind::BlueprintNotFound, message),
-        )
-        .into_response();
     };
     let blueprint = Arc::new(blueprint);
 
     let supplied = req.variables.clone().unwrap_or_default();
-    if let Some(audit) = crate::audit::execution() {
+    if let Some(audit) = &audit {
         audit.annotate(&req.code, &req.blueprint, Some(&blueprint), &supplied);
     }
     let variables = match resolve_variables(&blueprint.variables, &supplied) {
         Ok(resolved) => Arc::new(resolved),
         Err(err) => {
-            return with_session_header(
-                &session_id,
-                error_response(
-                    &session_id,
-                    ErrorKind::InvalidRequest,
-                    format!("invalid variables: {err}"),
-                ),
-            )
-            .into_response();
+            return failed(
+                ErrorKind::InvalidRequest,
+                format!("invalid variables: {err}"),
+            );
         }
     };
     if let Err(error) = blueprint
@@ -165,28 +167,16 @@ pub async fn handle(
         .map(|_| ())
         .and_then(|()| submilli_shared::resolve_git(&blueprint, &variables).map(|_| ()))
     {
-        return with_session_header(
-            &session_id,
-            error_response(&session_id, ErrorKind::InvalidRequest, error.to_string()),
-        )
-        .into_response();
+        return failed(ErrorKind::InvalidRequest, error.to_string());
     }
-    if let Some(audit) = crate::audit::execution() {
+    if let Some(audit) = &audit {
         audit.annotate(&req.code, &req.blueprint, Some(&blueprint), &variables);
     }
     let supplied_secrets = req.secrets.clone().unwrap_or_default();
     let harness_secrets = match resolve_harness_secrets(&blueprint.secrets, &supplied_secrets) {
         Ok(resolved) => Arc::new(resolved),
         Err(err) => {
-            return with_session_header(
-                &session_id,
-                error_response(
-                    &session_id,
-                    ErrorKind::InvalidRequest,
-                    format!("invalid secrets: {err}"),
-                ),
-            )
-            .into_response();
+            return failed(ErrorKind::InvalidRequest, format!("invalid secrets: {err}"));
         }
     };
 
@@ -206,15 +196,14 @@ pub async fn handle(
             tracing::error!(%error, session = %session_id, "one-shot session bind failed");
             (ErrorKind::RuntimeError, error.to_string())
         };
-        return with_session_header(&session_id, error_response(&session_id, kind, message))
-            .into_response();
+        return failed(kind, message);
     }
 
     // The one-shot path mints a fresh session per call, so a key would have
     // nothing durable to bind to: `dispatched` is irrelevant here and any
     // `Idempotency-Key` header is ignored rather than rejected.
     let outcome = execute_core(
-        &state,
+        state,
         ExecuteInputs {
             session_id: &session_id,
             code: &req.code,
@@ -222,6 +211,12 @@ pub async fn handle(
             blueprint,
             variables,
             harness_secrets,
+            audit,
+            vfs_source: VfsSource::Rest,
+            run_entry,
+            client: None,
+            tool_call_id: None,
+            idempotency_key: None,
         },
     )
     .await;
@@ -231,23 +226,52 @@ pub async fn handle(
     // day by default. The last-run record lives in a separate store, so the
     // teardown does not take it.
     state.session_manager().wipe_now(&session_id).await;
-    with_session_header(&session_id, outcome.response).into_response()
+    (session_id, outcome.response)
 }
 
 /// Already-resolved inputs to one execution, shared by the one-shot
-/// `POST /v1/execute` and the session-scoped `POST /v1/sessions/{id}/execute`
-/// handlers. Each handler resolves the blueprint and variables its own way (the
+/// `POST /v1/execute`, the session-scoped `POST /v1/sessions/{id}/execute`, and the MCP
+/// execute tool. Each caller resolves the blueprint and variables its own way (the
 /// one-shot reads them from the request body; the session path reads them from
 /// the bound session) before handing off to [`execute_core`].
 pub(crate) struct ExecuteInputs<'a> {
+    /// The session the run executes against; empty for an MCP request that has none.
     pub session_id: &'a str,
+    /// The program's source.
     pub code: &'a str,
     /// The blueprint's name, used to key MCP catalog / package resolution and
     /// the outbound MCP transport.
     pub blueprint_name: &'a str,
+    /// The blueprint the run is decided under.
     pub blueprint: Arc<Blueprint>,
+    /// The validated `${vars.NAME}` bindings.
     pub variables: Arc<VarBindings>,
+    /// Trusted harness credentials for this run alone.
     pub harness_secrets: Arc<HarnessSecretBindings>,
+    /// The execution's audit record. REST handlers take it from the request's
+    /// task-local; MCP creates its own per tool call.
+    pub audit: Option<Arc<crate::audit::ExecutionAudit>>,
+    /// Who opens the run's VFS.
+    pub vfs_source: VfsSource,
+    /// How the run is recorded, when it is.
+    pub run_entry: RunEntry,
+    /// The MCP client's name, for the run's record.
+    pub client: Option<String>,
+    /// The MCP client's id for the tool call, for the run's record.
+    pub tool_call_id: Option<String>,
+    /// The session API's `Idempotency-Key`, for the run's record.
+    pub idempotency_key: Option<&'a str>,
+}
+
+/// Who opens a run's VFS, which also sets how the core audits a program that fails to
+/// parse.
+pub(crate) enum VfsSource {
+    /// REST: the core registers the session and opens its VFS.
+    Rest,
+    /// MCP: the tool opened the VFS under its own file-area rules, ahead of the
+    /// core. A program that fails to parse is audited as a compile error, as the
+    /// MCP tool always has.
+    Mcp { vfs: Vfs, vfs_info: VfsInfo },
 }
 
 /// What one execution produced, plus whether the program actually reached the
@@ -280,13 +304,82 @@ impl ExecuteOutcome {
     }
 }
 
-/// Run one program against a session and record its last-run. Registers the
-/// session id (idempotent), builds the per-session VFS + HTTP client + host
-/// services, resolves imports, runs, and touches the session's idle timer.
+/// Runs one program: starts its recording (when the server records runs), registers it
+/// to be cancelled, prepares and runs it, and reports to its recorder what the caller
+/// got. See [`prepare_and_run`] for the work itself.
 pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) -> ExecuteOutcome {
-    if let Some(audit) = crate::audit::execution() {
-        audit.begin();
+    let recording = crate::record::Recording::start(state, || run_start(&inputs));
+    // Only a recorded run can be cancelled from outside (the registry exists for a stop
+    // control over recorded runs), so an unrecorded run pays for no registration. The
+    // guard keeps the entry until this function returns, which is after the run has
+    // ended, so `cancel_run` finds the run for exactly as long as it is in flight.
+    let (_registered, cancel_requested) = match (&recording, &inputs.audit) {
+        (Some(_), Some(audit)) => {
+            let (registered, cancel_requested) = state.register_run(&audit.id);
+            (Some(registered), Some(cancel_requested))
+        }
+        _ => (None, None),
+    };
+    let outcome = prepare_and_run(state, inputs, recording.clone(), cancel_requested).await;
+    if let Some(recording) = &recording {
+        match (&outcome.response.error, outcome.dispatched) {
+            // The runner finishes a dispatched run itself; one that never got there is
+            // finished here.
+            (Some(error), false) => recording.undispatched(error),
+            _ => recording.returned(returned_bytes(&outcome.response)),
+        }
     }
+    outcome
+}
+
+/// The run as its recorder first sees it.
+fn run_start(inputs: &ExecuteInputs<'_>) -> crate::record::RunStart {
+    let audit = inputs.audit.as_deref();
+    crate::record::RunStart {
+        execution_id: execution_id_of(audit),
+        label: audit.map_or_else(
+            || "unauthenticated".to_owned(),
+            |audit| audit.principal.clone(),
+        ),
+        entry: inputs.run_entry.clone(),
+        client: inputs.client.clone(),
+        tool_call_id: inputs.tool_call_id.clone(),
+        session_id: (!inputs.session_id.is_empty()).then(|| inputs.session_id.to_owned()),
+        idempotency_key: inputs.idempotency_key.map(str::to_owned),
+        blueprint_name: inputs.blueprint_name.to_owned(),
+        blueprint: Arc::clone(&inputs.blueprint),
+        blueprint_hash: crate::audit::blueprint_hash(&inputs.blueprint),
+        variables: Arc::clone(&inputs.variables),
+        code: Some(Arc::from(inputs.code)),
+    }
+}
+
+/// The size, as JSON, of what the caller received: the result, error, and console
+/// output both transports return.
+fn returned_bytes(response: &ExecuteResponse) -> u64 {
+    #[derive(Serialize)]
+    struct Returned<'a> {
+        result: &'a Option<String>,
+        console: &'a [String],
+        error: &'a Option<ExecuteError>,
+    }
+    serde_json::to_vec(&Returned {
+        result: &response.result,
+        console: &response.console,
+        error: &response.error,
+    })
+    .map_or(0, |bytes| bytes.len() as u64)
+}
+
+/// Runs one program against a session and records its last-run. Registers the session id
+/// (idempotent), builds the per-session VFS + HTTP client + host services, resolves
+/// imports, runs, and touches the session's idle timer.
+async fn prepare_and_run(
+    state: &AppState,
+    inputs: ExecuteInputs<'_>,
+    recording: Option<crate::record::Recording>,
+    cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
+) -> ExecuteOutcome {
     let ExecuteInputs {
         session_id,
         code,
@@ -294,30 +387,45 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         blueprint,
         variables,
         harness_secrets,
+        audit: execution_audit,
+        vfs_source,
+        run_entry: _,
+        client: _,
+        tool_call_id: _,
+        idempotency_key: _,
     } = inputs;
+    if let Some(audit) = &execution_audit {
+        audit.begin();
+    }
+    let audit = execution_audit.as_deref();
+    let fail = |kind: ErrorKind, message: String| {
+        ExecuteOutcome::undispatched(failure_response(audit, session_id, kind, message))
+    };
+    let parse_audit_kind = match vfs_source {
+        VfsSource::Rest => ErrorKind::RuntimeError,
+        VfsSource::Mcp { .. } => ErrorKind::CompileError,
+    };
+    let fail_to_parse = |message: String| {
+        if let Some(audit) = audit {
+            audit.error(parse_audit_kind);
+        }
+        ExecuteOutcome::undispatched(response_for_error(
+            audit,
+            session_id,
+            ErrorKind::RuntimeError,
+            message,
+        ))
+    };
 
     let parsed = match runner::parse(code) {
         Ok(parsed) => parsed,
-        Err(error) => {
-            return ExecuteOutcome::undispatched(error_response(
-                session_id,
-                ErrorKind::RuntimeError,
-                error.to_string(),
-            ));
-        }
+        Err(error) => return fail_to_parse(error.to_string()),
     };
     let script_imports = match parsed.imports() {
         Ok(imports) => imports,
-        Err(message) => {
-            return ExecuteOutcome::undispatched(error_response(
-                session_id,
-                ErrorKind::RuntimeError,
-                message,
-            ));
-        }
+        Err(message) => return fail_to_parse(message),
     };
 
-    let execution_audit = crate::audit::execution();
     let network_policy = execution_audit.as_ref().map_or_else(
         || state.network_policy().clone(),
         |audit| audit.network_policy(state.network_policy()),
@@ -326,11 +434,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         Ok(provider) => provider,
         Err(error) => {
             tracing::error!(error = ?error, "LLM dispatch initialization failed");
-            return ExecuteOutcome::undispatched(error_response(
-                session_id,
-                ErrorKind::RuntimeError,
-                error.to_string(),
-            ));
+            return fail(ErrorKind::RuntimeError, error.to_string());
         }
     };
 
@@ -347,42 +451,42 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         Ok(catalog) => catalog,
         Err(error) => {
             tracing::error!(error = ?error, "MCP discovery initialization failed");
-            return ExecuteOutcome::undispatched(error_response(
-                session_id,
-                ErrorKind::RuntimeError,
-                error.to_string(),
-            ));
+            return fail(ErrorKind::RuntimeError, error.to_string());
         }
     };
 
     let manager = state.session_manager();
-    if let Err(err) = manager.ensure(session_id, &blueprint).await {
-        return ExecuteOutcome::undispatched(error_response(
-            session_id,
-            ErrorKind::RuntimeError,
-            format!("internal: session init failed: {err}"),
-        ));
-    }
-    // Mark activity at entry as well as at exit. The idle reaper is wall-clock
-    // and has no notion of an execution in flight, so a session that was
-    // already nearly idle when this call arrived would otherwise be reaped
-    // moments into the run — taking its idempotency reservation with it. This
-    // buys the program a full idle window rather than whatever was left of one;
-    // it does not make the run un-reapable, and an execution that outlasts
-    // `idle_timeout` on its own is still collected mid-flight. The write is
-    // debounced (`PERSIST_INTERVAL`), so this costs nothing per call.
-    manager.touch(session_id).await;
-    let (vfs, vfs_info) = match manager
-        .vfs_for_execute_with_variables(session_id, &blueprint, &variables)
-        .await
-    {
-        Ok(pair) => pair,
-        Err(err) => {
-            return ExecuteOutcome::undispatched(error_response(
-                session_id,
-                ErrorKind::RuntimeError,
-                format!("internal: vfs init failed: {err}"),
-            ));
+    let (vfs, vfs_info) = match vfs_source {
+        VfsSource::Mcp { vfs, vfs_info } => (vfs, vfs_info),
+        VfsSource::Rest => {
+            if let Err(err) = manager.ensure(session_id, &blueprint).await {
+                return fail(
+                    ErrorKind::RuntimeError,
+                    format!("internal: session init failed: {err}"),
+                );
+            }
+            // Mark activity at entry as well as at exit. The idle reaper is
+            // wall-clock and has no notion of an execution in flight, so a session
+            // that was already nearly idle when this call arrived would otherwise
+            // be reaped moments into the run — taking its idempotency reservation
+            // with it. This buys the program a full idle window rather than
+            // whatever was left of one; it does not make the run un-reapable, and
+            // an execution that outlasts `idle_timeout` on its own is still
+            // collected mid-flight. The write is debounced (`PERSIST_INTERVAL`),
+            // so this costs nothing per call.
+            manager.touch(session_id).await;
+            match manager
+                .vfs_for_execute_with_variables(session_id, &blueprint, &variables)
+                .await
+            {
+                Ok(pair) => pair,
+                Err(err) => {
+                    return fail(
+                        ErrorKind::RuntimeError,
+                        format!("internal: vfs init failed: {err}"),
+                    );
+                }
+            }
         }
     };
 
@@ -411,7 +515,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         },
     );
     let services = runner::HostServices {
-        audit: execution_audit,
+        audit: execution_audit.clone(),
         git: submilli_shared::resolve_git(&blueprint, &variables)
             .map_err(|error| error.to_string()),
         auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
@@ -430,17 +534,13 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         session_kv,
         llm_provider,
         llm_budget: Some(manager.llm_budget_for_execute()),
+        recording,
+        cancel_requested,
     };
     let packages =
         match state.prepared_packages_for_imports(blueprint_name, &blueprint, &script_imports) {
             Ok(packages) => packages,
-            Err(err) => {
-                return ExecuteOutcome::undispatched(error_response(
-                    session_id,
-                    ErrorKind::PackageResolution,
-                    err.to_string(),
-                ));
-            }
+            Err(err) => return fail(ErrorKind::PackageResolution, err.to_string()),
         };
     let outcome = runner::run(
         code,
@@ -464,21 +564,23 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
     manager.touch(session_id).await;
 
     let console_lines = split_console(&outcome.console_raw);
-    let response = into_response(session_id, &outcome, &console_lines);
+    let response = into_response(audit, session_id, &outcome, &console_lines);
 
     // The success response omits console output; the session keeps the full
-    // capture so `/v1/last-run/{id}` can still return it.
-    if let Err(error) = state
-        .sessions()
-        .record(
-            session_id,
-            LastRun {
-                result: response.result.clone(),
-                console: console_lines,
-                error: response.error.clone(),
-            },
-        )
-        .await
+    // capture so `/v1/last-run/{id}` can still return it. An MCP request with no
+    // session (one rmcp let through) has nowhere to keep it.
+    if !session_id.is_empty()
+        && let Err(error) = state
+            .sessions()
+            .record(
+                session_id,
+                LastRun {
+                    result: response.result.clone(),
+                    console: console_lines,
+                    error: response.error.clone(),
+                },
+            )
+            .await
     {
         // Execution already finished; losing its output would invite a retry of effects.
         tracing::warn!(operation = "record", session = session_id, %error, "last-run storage failed");
@@ -499,11 +601,35 @@ pub(crate) fn with_session_header(
 }
 
 fn error_response(session_id: &str, kind: ErrorKind, message: String) -> ExecuteResponse {
-    if let Some(audit) = crate::audit::execution() {
+    failure_response(
+        crate::audit::execution().as_deref(),
+        session_id,
+        kind,
+        message,
+    )
+}
+
+/// A failed response, with the failure recorded on the execution's audit.
+fn failure_response(
+    audit: Option<&crate::audit::ExecutionAudit>,
+    session_id: &str,
+    kind: ErrorKind,
+    message: String,
+) -> ExecuteResponse {
+    if let Some(audit) = audit {
         audit.error(kind);
     }
+    response_for_error(audit, session_id, kind, message)
+}
+
+fn response_for_error(
+    audit: Option<&crate::audit::ExecutionAudit>,
+    session_id: &str,
+    kind: ErrorKind,
+    message: String,
+) -> ExecuteResponse {
     ExecuteResponse {
-        execution_id: crate::audit::execution_id(),
+        execution_id: execution_id_of(audit),
         session_id: session_id.to_string(),
         result: None,
         console: Vec::new(),
@@ -517,14 +643,19 @@ fn error_response(session_id: &str, kind: ErrorKind, message: String) -> Execute
     }
 }
 
+fn execution_id_of(audit: Option<&crate::audit::ExecutionAudit>) -> String {
+    audit.map_or_else(crate::audit::execution_id, |audit| audit.id.clone())
+}
+
 fn into_response(
+    audit: Option<&crate::audit::ExecutionAudit>,
     session_id: &str,
     outcome: &RunOutcome,
     console_lines: &[String],
 ) -> ExecuteResponse {
     let (result, console, error) = outcome_to_parts(outcome, console_lines);
     ExecuteResponse {
-        execution_id: crate::audit::execution_id(),
+        execution_id: execution_id_of(audit),
         session_id: session_id.to_string(),
         result,
         console,
@@ -536,7 +667,7 @@ fn into_response(
 /// Map a `RunOutcome` to the transport-agnostic `{ result, console, error }`
 /// triple shared by the REST handler and the MCP tool. Console output is
 /// suppressed on success (the full capture lives in the session's last-run).
-pub(crate) fn outcome_to_parts(
+fn outcome_to_parts(
     outcome: &RunOutcome,
     console_lines: &[String],
 ) -> (Option<String>, Vec<String>, Option<ExecuteError>) {
@@ -548,7 +679,7 @@ pub(crate) fn outcome_to_parts(
     (outcome.value.clone(), Vec::new(), None)
 }
 
-pub(crate) fn split_console(raw: &str) -> Vec<String> {
+fn split_console(raw: &str) -> Vec<String> {
     if raw.is_empty() {
         return Vec::new();
     }

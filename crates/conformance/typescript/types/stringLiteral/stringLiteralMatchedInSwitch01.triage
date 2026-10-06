@@ -1,1 +1,0 @@
-line 12 type: bug SUB-1212 a `switch` default doesn't exclude matched literals from a union with a non-literal member

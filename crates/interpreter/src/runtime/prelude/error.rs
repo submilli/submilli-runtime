@@ -221,13 +221,15 @@ pub(crate) fn build_error_subclass_types(
     ));
     def.finish();
 
+    // Each lookup uses this builder's handle and declared kind. A successful
+    // build preserves both, and no mutation occurs before lookup.
     let g = b.build().map_err(fatal_host_error)?;
     let vtable = g
         .get_struct(vtable_label)
-        .ok_or_else(|| fatal_host_error("error subclass vtable should be a struct"))?;
+        .expect("error subclass vtable was declared as a struct");
     let struct_ty = g
         .get_struct(struct_label)
-        .ok_or_else(|| fatal_host_error("error subclass should be a struct"))?;
+        .expect("error subclass was declared as a struct");
     Ok((vtable, struct_ty))
 }
 

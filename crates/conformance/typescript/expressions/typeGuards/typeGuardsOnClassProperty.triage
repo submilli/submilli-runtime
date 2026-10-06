@@ -1,2 +1,1 @@
 line 29 extra: by-design spec §1.7 strings have a core method set without the locale methods or `substr`
-line 27 type: by-design spec §1.6 `&&` keeps `number` and `boolean` whole in its falsy part, where tsc narrows to `0` or `false`

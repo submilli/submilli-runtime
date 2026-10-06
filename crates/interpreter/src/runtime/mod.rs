@@ -2,6 +2,7 @@
 
 pub(crate) mod array_storage;
 pub mod blocking;
+pub mod call_log;
 pub mod decision;
 pub mod disk_quota;
 pub mod exec;
@@ -23,10 +24,11 @@ pub mod session_kv;
 pub mod vfs;
 pub mod watchdog;
 
+pub use call_log::{BodyCopy, CallOutcome, CallRecord, ModelUsage, PayloadRecord};
 pub use decision::{
     CallSite, CallTicket, DecisionAction, DecisionCause, DecisionExplanation, DecisionLog,
     DecisionLogConfig, DecisionLogOutput, DecisionRecord, DecisionRecorder, EntryPath,
-    FailureReasonRecord, FailureRecord, NearMissRecord, RuleCitation, SourceLine,
+    FailureReasonRecord, FailureRecord, NearMissRecord, RecordObserver, RuleCitation, SourceLine,
 };
 pub use disk_quota::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceeded};
 pub use exec::{RunResult, dispatch_main_async, instantiate_program_async};

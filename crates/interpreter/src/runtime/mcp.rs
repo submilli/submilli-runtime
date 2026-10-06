@@ -18,9 +18,10 @@ use std::pin::Pin;
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::fuel;
 use crate::runtime::host::{intrinsic_string_type, read_string_arg, register_host_fn_async};
-use crate::stdlib::shared::check_security;
+use crate::stdlib::shared::check_security_call;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 /// The single internal host module every MCP call dispatches through.
@@ -112,11 +113,15 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                 // Deny before any network bytes leave. One capability per server
                 // (`mcp.<server>`, known when the blueprint is written); the tool is
                 // in the filter context so a policy can constrain by tool.
-                check_security(
+                let ticket = check_security_call(
                     &mut *caller,
                     &format!("mcp.{server}"),
                     serde_json::json!({ "tool": tool, "transport": "streamable_http" }),
                 )?;
+                record_payload(&*caller, ticket, Side::Request, || {
+                    Payload::meta(serde_json::json!({ "server": server, "tool": tool }))
+                        .with_body(args_json.as_bytes())
+                });
 
                 let transport = caller.data().mcp_transport.clone().ok_or_else(|| {
                     wasmtime::Error::msg(format!(
@@ -126,6 +131,17 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
 
                 fuel::charge(&mut *caller, fuel::IO, args_json.len() as u64)?;
                 let outcome = transport.call(&server, &tool, &args_json).await;
+                record_payload(&*caller, ticket, Side::Response, || {
+                    let payload = match &outcome.result {
+                        Ok(response) => Payload::meta(serde_json::Value::Null).with_owned_body(
+                            serde_json::to_vec(response.value()).unwrap_or_default(),
+                        ),
+                        Err(error) => {
+                            Payload::meta(serde_json::json!({ "error": format!("{error:?}") }))
+                        }
+                    };
+                    payload.with_size(outcome.received_bytes)
+                });
                 fuel::settle(&mut *caller, fuel::IO, outcome.received_bytes)?;
                 fuel::settle(&mut *caller, fuel::PARSE, outcome.parsed_bytes)?;
                 fuel::settle_result(caller, |caller| {

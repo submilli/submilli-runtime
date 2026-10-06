@@ -5,7 +5,9 @@
 //! delegate to [`crate::did_you_mean`] but need access to `self.types`
 //! and `self.scopes`, so the helper sits here on the `Inferer`.
 
-use crate::{Diagnostic, ExprId, MethodSig, Severity, Span, Type, TypeKind, ValueKind};
+use crate::{
+    Diagnostic, ExprId, MethodSig, Severity, Span, Type, TypeKind, TypedExprKind, ValueKind,
+};
 
 use super::format_signature::SignatureKind;
 use super::lookup::FieldWrite;
@@ -387,6 +389,14 @@ impl<'a> Inferer<'a> {
         &self,
         path: &narrowing::ReferencePath,
     ) -> Option<DiagnosticAddon> {
+        // Guards that ruled out every value hold here: no write or boundary
+        // dropped them, though a write elsewhere may have left a tombstone.
+        if self
+            .narrowed_read(path.clone())
+            .is_some_and(|(_, ty)| matches!(ty, Type::Never))
+        {
+            return None;
+        }
         if let Some(reason) = self.lookup_tombstone(path) {
             return Some(self.invalidation_reason_hint(path, &reason));
         }
@@ -1552,13 +1562,18 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// validate a condition expression's type, preferring
+    /// Validate a condition expression's type, preferring
     /// the "narrow first" diagnostic when the type is `unknown`
     /// (forcing the LLM toward `typeof` / `x === null` /
     /// `Array.isArray(x)` rather than puzzling over a generic
-    /// "expected boolean" mismatch). Falls back to the standard
-    /// boolean-compatibility check for all other non-condition types.
-    pub(super) fn check_condition_ty(&mut self, ty: &Type, span: Span) {
+    /// "expected boolean" mismatch). Otherwise defers to
+    /// [`is_condition_value`](Self::is_condition_value).
+    pub(super) fn check_condition_ty(
+        &mut self,
+        condition: ExprId,
+        ty: &Type,
+        span: Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if matches!(ty.peel(), Type::Unknown) {
             self.error_with_help(
                 span,
@@ -1569,9 +1584,32 @@ impl<'a> Inferer<'a> {
                         .to_string(),
                 ],
             );
-        } else if !super::narrowing::condition_compatible(ty) {
+        } else if !self.is_condition_value(condition, ty)? {
             self.error_non_condition_type(span, ty);
         }
+        Ok(())
+    }
+
+    /// Whether a condition operand produces a value to test. A local that a
+    /// guard narrowed to `never` counts, as in TypeScript: the test sits in code no
+    /// value reaches (after an exhausted `else if` chain), and its read traps.
+    pub(super) fn is_condition_value(
+        &self,
+        condition: ExprId,
+        ty: &Type,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        if super::narrowing::condition_compatible(ty) {
+            return Ok(true);
+        }
+        let kind = &self
+            .typed_ast
+            .try_expr(condition)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind;
+        Ok(
+            matches!(ty.peel(), Type::Never)
+                && matches!(kind, TypedExprKind::LocalNarrowRef { .. }),
+        )
     }
 }
 
@@ -1622,19 +1660,21 @@ fn render_literal(literal: &narrowing::LiteralValue) -> String {
 mod dropped_guard_tests {
     use super::super::test_support::run;
 
+    // A guard through a key whose declared type can't index, which the
+    // narrowing source can't rebuild from declared types.
     const TYPES: &str = "class Leaf { z: number | null = 3; }\n\
-        class Element { y: Leaf | null = new Leaf(); }\n\
-        class Holder { elems: Element[] = [new Element()]; }\n";
+        const key: string | null = \"k\";\n\
+        class Holder { leaves: Record<string, Leaf | null> = {}; }\n";
 
     #[test]
     fn dropped_guard_hint_stays_in_its_branch() {
         for (condition, guarded_arm) in [
             (
-                "h.elems[0].y !== null && h.elems[0].y.z !== null",
+                "key !== null && h.leaves[key] !== null && h.leaves[key].z !== null",
                 "thenValue",
             ),
             (
-                "h.elems[0].y === null || h.elems[0].y.z === null",
+                "key === null || h.leaves[key] === null || h.leaves[key].z === null",
                 "elseValue",
             ),
         ] {
@@ -1643,11 +1683,11 @@ mod dropped_guard_tests {
                 function main(): void {{
                     const h = new Holder();
                     if ({condition}) {{
-                        const thenValue: number = h.elems[0].y.z;
+                        const thenValue: number = h.leaves[key].z;
                     }} else {{
-                        const elseValue: number = h.elems[0].y.z;
+                        const elseValue: number = h.leaves[key].z;
                     }}
-                    const afterValue: number = h.elems[0].y.z;
+                    const afterValue: number = h.leaves[key].z;
                 }}"
             );
             let (_, diagnostics) = run(&source);
@@ -1683,8 +1723,8 @@ mod dropped_guard_tests {
             "{TYPES}
             function main(): number {{
                 const h = new Holder();
-                if (h.elems[0].y === null || h.elems[0].y.z === null) return 0;
-                return h.elems[0].y.z;
+                if (key === null || h.leaves[key] === null || h.leaves[key].z === null) return 0;
+                return h.leaves[key].z;
             }}"
         );
         let (_, diagnostics) = run(&source);
@@ -1703,7 +1743,7 @@ mod dropped_guard_tests {
     fn branch_join_keeps_only_a_common_dropped_refinement() {
         for (else_guard, expected_hint) in [
             (
-                "if (h.elems[0].y === null || h.elems[0].y.z === null) return 0;",
+                "if (key === null || h.leaves[key] === null || h.leaves[key].z === null) return 0;",
                 true,
             ),
             ("", false),
@@ -1712,9 +1752,9 @@ mod dropped_guard_tests {
                 "{TYPES}
                 function read(h: Holder, flag: boolean): number {{
                     if (flag) {{
-                        if (h.elems[0].y === null || h.elems[0].y.z === null) return 0;
+                        if (key === null || h.leaves[key] === null || h.leaves[key].z === null) return 0;
                     }} else {{ {else_guard} }}
-                    return h.elems[0].y.z;
+                    return h.leaves[key].z;
                 }}"
             );
             let (_, diagnostics) = run(&source);
@@ -1734,12 +1774,12 @@ mod dropped_guard_tests {
             "{TYPES}
             function first(): void {{
                 const h = new Holder();
-                do {{}} while (h.elems[0].y !== null && h.elems[0].y.z !== null);
-                const read = (): number => h.elems[0].y.z;
+                do {{}} while (key !== null && h.leaves[key] !== null && h.leaves[key].z !== null);
+                const read = (): number => h.leaves[key].z;
             }}
             function second(): number {{
                 const h = new Holder();
-                return h.elems[0].y.z;
+                return h.leaves[key].z;
             }}"
         );
         let (_, diagnostics) = run(&source);

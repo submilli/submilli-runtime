@@ -17,9 +17,9 @@
 //! ([`LiteralOrigin`]), on its scope entry or, for a module-level binding, under
 //! its mangled name.
 //!
-//! A literal type of unknown origin counts as fresh. Widening it is what
-//! Submilli did before tracking freshness, so a gap here costs a literal type
-//! TypeScript keeps, never a rejected program. Generic inference is the main
+//! A literal type of unknown origin counts as fresh. Widening is the
+//! conservative default: a gap here costs a literal type TypeScript keeps,
+//! never a rejected program. Generic inference is the main
 //! such origin: it can infer a literal type argument where TypeScript infers the
 //! widened one (`new Box(c1)` is `Box<"hello">`), so a literal read out of a
 //! value it produced counts as fresh, however it is reached.
@@ -119,8 +119,8 @@ impl Inferer<'_> {
     /// first, as in TypeScript: `let x: string | null = c1` reads as `string`,
     /// not `"hello"`, so a later `x === "other"` is still a comparison that can
     /// be true, while `let done = false` reads as `false`, a member of the
-    /// `boolean` it declares. A literal of unknown origin narrows as it always
-    /// has, since widening it could reject a read the narrowing allowed.
+    /// `boolean` it declares. A literal of unknown origin keeps its literal
+    /// type, since widening it could reject a read the narrowing allowed.
     pub(super) fn assigned_flow_type(
         &self,
         declared_ty: &Type,
@@ -290,8 +290,8 @@ impl Inferer<'_> {
     /// widened: the union of the elements' own types with only their fresh
     /// literal types widened.
     ///
-    /// Only an array of primitives narrows, and only when every element is a
-    /// value that fits `seed`, so the result names no type `seed` doesn't.
+    /// Only an array of primitives narrows, and only when every element that
+    /// holds a value fits `seed`, so the result names no type `seed` doesn't.
     pub(super) fn kept_element_type(
         &self,
         seed: Type,
@@ -302,21 +302,42 @@ impl Inferer<'_> {
         }
         let mut members = Vec::with_capacity(elements.len());
         for element in elements {
-            let crate::TypedArrayElement::Value(value) = element else {
-                return Ok(seed);
+            let Some(kept) = self.kept_element_member(element)? else {
+                continue;
             };
-            let ty = &self
-                .typed_ast
-                .try_expr(*value)
-                .map_err(crate::typechecker::arena_failure)?
-                .ty;
-            let kept = self.widen_fresh_literals(*value, ty)?;
             if !is_primitive_union(&kept) || !assignable(&kept, &seed, self.resolver()) {
                 return Ok(seed);
             }
-            members.extend(union_members(&kept).into_iter().cloned());
+            members.extend(flattened_union_members(&kept).into_iter().cloned());
+        }
+        if members.is_empty() {
+            return Ok(seed);
         }
         Ok(without_absorbed_literals(members))
+    }
+
+    /// The type one array literal element adds to its kept element type: a
+    /// value's type with its fresh literal types widened, or the element type
+    /// of a spread source (whose own literal types were already settled).
+    /// `None` for an element that holds no value: a `never` value, or a
+    /// spread of a `never[]`. A source that can't spread yields `Type::Error`,
+    /// which is no primitive union, so the caller keeps `seed`.
+    fn kept_element_member(
+        &self,
+        element: &crate::TypedArrayElement,
+    ) -> Result<Option<Type>, CompilerFailure> {
+        let expr_ty = &self
+            .typed_ast
+            .try_expr(element.expr_id())
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        let member = match element {
+            crate::TypedArrayElement::Value(id) => self.widen_fresh_literals(*id, expr_ty)?,
+            crate::TypedArrayElement::Spread(_) => {
+                super::expr::spread_element_type(expr_ty.peel()).unwrap_or(Type::Error)
+            }
+        };
+        Ok((!matches!(member.peel(), Type::Never)).then_some(member))
     }
 
     /// The literal types `&&` or `||` keeps of a left side whose type doesn't
@@ -519,8 +540,8 @@ impl Inferer<'_> {
         let Some(declared_ty) = self.declared_path_ty(path) else {
             return false;
         };
-        let declared_members = union_members(&declared_ty);
-        union_members(read_ty)
+        let declared_members = flattened_union_members(&declared_ty);
+        flattened_union_members(read_ty)
             .into_iter()
             .all(|member| !contains_literal(member) || declared_members.contains(&member))
     }
@@ -549,9 +570,9 @@ impl Inferer<'_> {
             ty = match elem {
                 narrowing::PathElem::Field(field) => self.narrow_source_field_ty(&ty, field)?,
                 narrowing::PathElem::Index(narrowing::LiteralValue::Number(index)) => {
-                    Self::pattern_index_flow_type(&ty, tuple_index(index.0)?)?
+                    Self::pattern_index_flow_type(&ty, narrowing::tuple_position(index.0)?)?
                 }
-                narrowing::PathElem::Index(_) => return None,
+                narrowing::PathElem::Index(_) | narrowing::PathElem::Key(..) => return None,
             };
         }
         Some(ty)
@@ -590,15 +611,10 @@ impl Inferer<'_> {
     }
 }
 
-/// The element a numeric path index names, when it is one.
-fn tuple_index(index: f64) -> Option<usize> {
-    (index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64).then_some(index as usize)
-}
-
 /// Whether `ty` is made only of `string`, `number`, `boolean`, `null` and
 /// their literal types.
 fn is_primitive_union(ty: &Type) -> bool {
-    union_members(ty).into_iter().all(|member| {
+    flattened_union_members(ty).into_iter().all(|member| {
         matches!(
             member,
             Type::String
@@ -613,7 +629,7 @@ fn is_primitive_union(ty: &Type) -> bool {
 }
 
 /// `ty`'s union members, through aliases, or `ty` itself.
-fn union_members(ty: &Type) -> Vec<&Type> {
+fn flattened_union_members(ty: &Type) -> Vec<&Type> {
     let mut members = Vec::new();
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {

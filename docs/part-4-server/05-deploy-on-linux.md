@@ -2,16 +2,13 @@
 title: "Deploy on Linux"
 description: "How to run the server on a Linux machine of its own under systemd: the binaries for the system, a user and directories of its own, the config and token files under /etc/submilli, the unit, HTTPS, upgrades, and backups."
 slug: server/deploy-on-linux
-# Enable HTTPS was not run under systemd; its config, the server log, and
-# the CLI trust flow were run on macOS with the release binaries on main
-# 51ce450b (Run the server and Connect the CLI show those outputs).
 sidebar:
   order: 5
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "b15d0aa9fa0b1f5e4606e3215138661661eabce8adec1f3d0dde72a7371f9253"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "69d09aab36634136d16e773b0f684876ec79980ca4af6d13dc4fcb7c03564764"
+  confirmedAt: "2026-10-05T16:46:31.966Z"
 ---
 
 In production, `submilli-server` runs on a dedicated machine, and your
@@ -29,7 +26,8 @@ Kubernetes, use [Deploy on Kubernetes](/docs/server/deploy-on-kubernetes).
 ## Install for the system
 
 The install script puts the binaries under your home directory unless
-told otherwise. For a service, put them where all users find them:
+told otherwise. The published Linux binaries require x86-64. For a
+service, put them where all users find them:
 
 ```sh
 curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --install-dir /usr/local/bin
@@ -111,9 +109,11 @@ WantedBy=multi-user.target
 EOF
 ```
 
-On stop, systemd sends SIGTERM and the server lets running requests
-finish for five seconds before it exits. `TimeoutStopSec` gives it that
-and a margin, so a program still running isn't killed mid-request.
+On stop, systemd sends SIGTERM and the server waits up to five seconds
+for running requests to finish. Requests still running after that grace
+period are cancelled and their connections dropped. `TimeoutStopSec`
+gives the server that grace period and a margin to exit before systemd
+forces it to stop.
 
 ```sh
 sudo systemctl daemon-reload
@@ -174,10 +174,19 @@ tls:
   key_file: /etc/submilli/server.key
 ```
 
-Restart and connect using HTTPS on the same port:
+Restart and watch the journal:
 
 ```sh
 sudo systemctl restart submilli
+sudo journalctl -u submilli -f
+```
+
+Wait for a new `submilli-server listening` line with `protocol=https`,
+then press Ctrl+C to stop following the journal. `systemctl restart`
+can return before the server is ready to accept connections. Connect
+using HTTPS on the same port:
+
+```sh
 sudo submilli server status --server "https://$(hostname -f):8128" --token-file /etc/submilli/admin.token
 ```
 

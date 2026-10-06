@@ -53,6 +53,7 @@ pub struct FunctionEmitter<'a> {
     sized_instructions: usize,
     /// The encoded size of those instructions.
     instruction_bytes: usize,
+    // Construction seeds a root; pop_scope rejects removing it.
     scopes: Vec<Scope>,
 
     wasm_block_depth: u32,
@@ -207,7 +208,6 @@ impl<'a> FunctionEmitter<'a> {
     }
 
     pub fn define_local(&mut self, name: &Ident, ty: ValType) -> Result<u32, CompilerFailure> {
-        self.require_scope()?;
         let index = self.add_anonymous_local(ty)?;
         self.rebind_in_innermost_scope(&name.name, index, ty)?;
         Ok(index)
@@ -345,8 +345,10 @@ impl<'a> FunctionEmitter<'a> {
         ty: ValType,
     ) -> Result<(), CompilerFailure> {
         self.check_local_type(index, ty)?;
-        let failure = self.state_failure("no active emitter scope");
-        let scope = self.scopes.last_mut().ok_or(failure)?;
+        let scope = self
+            .scopes
+            .last_mut()
+            .expect("emitter retains its root scope");
         scope.define(name.to_string(), index, ty);
         Ok(())
     }
@@ -360,8 +362,10 @@ impl<'a> FunctionEmitter<'a> {
         ty: ValType,
     ) -> Result<(), CompilerFailure> {
         self.check_local_type(index, ty)?;
-        let failure = self.state_failure("no active emitter scope");
-        let scope = self.scopes.last_mut().ok_or(failure)?;
+        let scope = self
+            .scopes
+            .last_mut()
+            .expect("emitter retains its root scope");
         scope.set_shadow(name.to_string(), index, ty);
         Ok(())
     }
@@ -377,8 +381,10 @@ impl<'a> FunctionEmitter<'a> {
             .ta
             .try_expr(source)
             .map_err(crate::codegen::arena_failure)?;
-        let failure = self.state_failure("no active emitter scope");
-        let scope = self.scopes.last_mut().ok_or(failure)?;
+        let scope = self
+            .scopes
+            .last_mut()
+            .expect("emitter retains its root scope");
         scope.narrow_sources.insert(name.to_string(), source);
         Ok(())
     }
@@ -436,7 +442,6 @@ impl<'a> FunctionEmitter<'a> {
         if params.len() != typed_slots.len() {
             return Err(self.state_failure("typed slots must have one entry per parameter"));
         }
-        self.require_scope()?;
         // Resolve every registration before mutating bindings or emitting a prologue.
         let mut boxes = Vec::new();
         for (p, &typed_slot) in params.iter().zip(typed_slots) {
@@ -937,13 +942,6 @@ impl<'a> FunctionEmitter<'a> {
             .map_or(failure.clone(), |span| failure.with_span(span))
     }
 
-    fn require_scope(&self) -> Result<(), CompilerFailure> {
-        if self.scopes.is_empty() {
-            return Err(self.state_failure("no active emitter scope"));
-        }
-        Ok(())
-    }
-
     fn local_type(&self, index: u32) -> Result<ValType, CompilerFailure> {
         let index = usize::try_from(index)
             .map_err(|_| self.state_failure("local index does not fit usize"))?;
@@ -1147,7 +1145,7 @@ pub fn emit_closure_function(
             field_index: 0,
         });
     }
-    if crate::codegen::call_arguments::typed_metadata(&meta.params)?.is_some() {
+    if crate::codegen::call_arguments::typed_metadata(&meta.params).is_some() {
         crate::codegen::call_arguments::unwrap(&mut emitter, ctx)?;
     }
     emitter.instructions.push(Instruction::RefCastNonNull(
@@ -1678,7 +1676,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_scope_and_local_return_errors_without_mutation() {
+    fn root_scope_and_missing_locals_are_checked() {
         let f = fixture();
         let cx = cx_of(&f);
         let mut emitter = FunctionEmitter::new(&cx, &[]).unwrap();
@@ -1686,10 +1684,6 @@ mod tests {
         assert_internal(emitter.write_slot("missing"), "not defined");
         assert_internal(emitter.pop_scope(), "root");
         assert_eq!(emitter.scopes.len(), 1);
-        emitter.scopes.clear();
-        assert_internal(emitter.define_local(&ident("x"), ValType::I32), "scope");
-        assert_eq!(emitter.local_count(), 0);
-        assert_internal(emitter.build(), "unfinished");
         validate_in_module(
             FunctionEmitter::new(&cx, &[]).unwrap().build().unwrap(),
             vec![],

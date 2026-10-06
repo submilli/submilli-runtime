@@ -256,49 +256,49 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     def.forward_ref_param(object).nullable(true).finish();
     def.finish();
 
+    // Each lookup uses this builder's handle and declared kind. A successful
+    // build preserves both, and no mutation occurs before lookup.
     let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
     let vtable = g
         .get_struct(vtable)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("vtable should be a struct"))?;
+        .expect("vtable was declared as a struct");
     let object = g
         .get_struct(object)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("object should be a struct"))?;
+        .expect("object was declared as a struct");
     let string = g
         .get_struct(string)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("string should be a struct"))?;
+        .expect("string was declared as a struct");
     let boxed_number = g
         .get_struct(boxed_number)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("boxed_number should be a struct"))?;
-    let boxed_boolean = g.get_struct(boxed_boolean).ok_or_else(|| {
-        crate::runtime::host::fatal_host_error("boxed_boolean should be a struct")
-    })?;
+        .expect("boxed_number was declared as a struct");
+    let boxed_boolean = g
+        .get_struct(boxed_boolean)
+        .expect("boxed_boolean was declared as a struct");
     let field_names = g
         .get_array(field_names)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("field_names should be an array"))?;
-    let object_fields = g.get_array(object_fields).ok_or_else(|| {
-        crate::runtime::host::fatal_host_error("object_fields should be an array")
-    })?;
+        .expect("field_names was declared as an array");
+    let object_fields = g
+        .get_array(object_fields)
+        .expect("object_fields was declared as an array");
     let object_shape = g
         .get_struct(object_shape)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("object_shape should be a struct"))?;
+        .expect("object_shape was declared as a struct");
     let to_string_fn = g
         .get_func(to_string_fn)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("to_string_fn should be a func"))?;
+        .expect("to_string_fn was declared as a func");
     let to_json_fn = g
         .get_func(to_json_fn)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("to_json_fn should be a func"))?;
+        .expect("to_json_fn was declared as a func");
     let equals_fn = g
         .get_func(equals_fn)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("equals_fn should be a func"))?;
-    let hash_fn = g
-        .get_func(hash_fn)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("hash_fn should be a func"))?;
+        .expect("equals_fn was declared as a func");
+    let hash_fn = g.get_func(hash_fn).expect("hash_fn was declared as a func");
     let field_getter = g
         .get_func(field_getter)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("field_getter should be a func"))?;
+        .expect("field_getter was declared as a func");
     let field_setter = g
         .get_func(field_setter)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("field_setter should be a func"))?;
+        .expect("field_setter was declared as a func");
 
     // Standalone types, each its own rec group. Built after the main group so they
     // can reference `$Object`/`$VTable`/`$string`/`$rawString` as concrete handles.
@@ -375,10 +375,12 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         .finish();
     def.field(FieldType::new(imm, StorageType::ValType(ValType::I32)));
     def.finish();
+    // Each lookup uses this builder's handle and declared kind. A successful
+    // build preserves both, and no mutation occurs before lookup.
     let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
     let class_vtable = g
         .get_struct(class_vtable_label)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("class_vtable should be a struct"))?;
+        .expect("class_vtable was declared as a struct");
 
     // `(rec $Error_vtable $Error)` — the class-shaped pair, one 2-member rec
     // group mirroring the user-class emitter's output (`classes.rs`): the vtable
@@ -436,13 +438,15 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     def.field(FieldType::new(mutv, StorageType::ValType(ValType::I64)));
     def.finish();
 
+    // Each lookup uses this builder's handle and declared kind. A successful
+    // build preserves both, and no mutation occurs before lookup.
     let g = b.build().map_err(crate::runtime::host::fatal_host_error)?;
     let error_vtable = g
         .get_struct(error_vtable_label)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("error_vtable should be a struct"))?;
+        .expect("error_vtable was declared as a struct");
     let error = g
         .get_struct(error_label)
-        .ok_or_else(|| crate::runtime::host::fatal_host_error("error should be a struct"))?;
+        .expect("error was declared as a struct");
 
     let raw_bigint = singleton_array(
         engine,

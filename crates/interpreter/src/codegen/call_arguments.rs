@@ -10,20 +10,21 @@ use wasm_encoder::{HeapType, Instruction};
 
 pub(crate) fn metadata<'a>(
     params: impl Iterator<Item = (Option<&'a DefaultValue>, bool)>,
-) -> Result<Option<String>, CompilerFailure> {
+) -> Option<String> {
     let params: Vec<_> = params.collect();
     if !params
         .iter()
         .any(|(default, rest)| default.is_some() || *rest)
     {
-        return Ok(None);
+        return None;
     }
-    serde_json::to_string(&params).map(Some).map_err(|error| {
-        internal_failure(format!("call defaults could not be serialized: {error}"))
-    })
+    // DefaultValue is a closed enum of JSON-compatible scalars/strings and unit
+    // variants; its numeric serializer encodes non-finite values as strings.
+    // No user serializer or map key can introduce a serialization failure.
+    Some(serde_json::to_string(&params).expect("call defaults have JSON-compatible shapes"))
 }
 
-pub(crate) fn typed_metadata(params: &[TypedParam]) -> Result<Option<String>, CompilerFailure> {
+pub(crate) fn typed_metadata(params: &[TypedParam]) -> Option<String> {
     metadata(
         params
             .iter()

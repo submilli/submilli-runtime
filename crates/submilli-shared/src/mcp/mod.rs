@@ -21,7 +21,7 @@ pub use transport::StreamableHttpTransport;
 /// `@mcp/<server>` surface. Invalid or duplicate names are dropped; untyped
 /// results are summarized per server. Unsupported input fields remain callable
 /// as `unknown`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolWarning {
     pub server: String,
     pub tool: String,

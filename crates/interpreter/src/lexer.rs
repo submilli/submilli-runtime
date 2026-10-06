@@ -340,6 +340,7 @@ impl<'a> Lexer<'a> {
         tok
     }
 
+    // next_token_inner matches the current byte immediately before dispatch.
     fn lex_newline(&mut self) -> Token {
         let start = self.pos;
         match self.peek() {
@@ -350,7 +351,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             Some(b'\n') => self.pos += 1,
-            _ => return self.fail("newline lexer dispatched on a non-newline byte"),
+            _ => unreachable!("newline dispatch requires a newline byte"),
         }
         Token::new(TokenKind::Newline, self.span(start, self.pos))
     }
@@ -999,11 +1000,10 @@ impl<'a> Lexer<'a> {
         Token::new(kind, span)
     }
 
+    // next_token_inner matches the current byte immediately before dispatch.
     fn lex_operator(&mut self) -> Token {
         let start = self.pos;
-        let Some(b) = self.peek() else {
-            return self.fail("lexer dispatch has no source byte");
-        };
+        let b = self.peek().expect("dispatch matched a source byte");
         let kind = match b {
             b'=' => {
                 self.pos += 1;
@@ -1147,16 +1147,15 @@ impl<'a> Lexer<'a> {
                     TokenKind::Dot
                 }
             }
-            _ => return self.fail("operator lexer dispatched on an unexpected byte"),
+            _ => unreachable!("operator dispatch requires an operator byte"),
         };
         Token::new(kind, self.span(start, self.pos))
     }
 
+    // next_token_inner matches the current byte immediately before dispatch.
     fn lex_delimiter(&mut self) -> Token {
         let start = self.pos;
-        let Some(b) = self.peek() else {
-            return self.fail("lexer dispatch has no source byte");
-        };
+        let b = self.peek().expect("dispatch matched a source byte");
         if let Some(depth) = self.template_frames.last_mut() {
             if b == b'{' {
                 let Some(next) = depth.checked_add(1) else {
@@ -1195,7 +1194,7 @@ impl<'a> Lexer<'a> {
                 }
                 _ => TokenKind::Question,
             },
-            _ => return self.fail("delimiter lexer dispatched on an unexpected byte"),
+            _ => unreachable!("delimiter dispatch requires a delimiter byte"),
         };
         Token::new(kind, self.span(start, self.pos))
     }
@@ -1453,7 +1452,7 @@ mod tests {
     const F: FileId = FileId(0);
 
     #[test]
-    fn invalid_dispatch_and_unicode_cursor_return_fatal_errors() {
+    fn invalid_unicode_cursor_and_template_depth_return_fatal_errors() {
         let mut lexer = Lexer::new("é", F);
         lexer.pos = 1;
         assert!(matches!(lexer.lex_ident().kind, TokenKind::Eof));
@@ -1461,16 +1460,6 @@ mod tests {
             lexer
                 .finish()
                 .expect_err("invalid UTF-8 cursor")
-                .fatal
-                .is_some()
-        );
-
-        let mut lexer = Lexer::new("a", F);
-        assert!(matches!(lexer.lex_operator().kind, TokenKind::Eof));
-        assert!(
-            lexer
-                .finish()
-                .expect_err("invalid operator dispatch")
                 .fatal
                 .is_some()
         );

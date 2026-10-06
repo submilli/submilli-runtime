@@ -496,7 +496,7 @@ fn reconstruct_one(
                 sig.params
                     .iter()
                     .map(|param| (param.default.as_ref(), param.rest)),
-            )?,
+            ),
             None => None,
         };
         let generic = class

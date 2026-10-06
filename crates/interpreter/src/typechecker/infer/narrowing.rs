@@ -11,6 +11,12 @@ pub struct ReferencePath {
 }
 
 impl ReferencePath {
+    /// A local itself, with no field or element step. Only such a path can't
+    /// change behind a guard's back, through an alias or in a call.
+    pub fn is_bare_local(&self) -> bool {
+        self.chain.is_empty() && matches!(self.root, BindingId::Local { .. })
+    }
+
     pub fn root(root: BindingId) -> Self {
         Self {
             root,
@@ -18,26 +24,32 @@ impl ReferencePath {
         }
     }
 
+    /// Whether a write to `self` may change what `other` reads. A key step
+    /// of `other` (`o[key]`) may name any field or element, so any written
+    /// step matches it. A written key matches only itself, as in
+    /// TypeScript: `values[index] = 4` leaves `values[0]` narrowed.
     pub fn is_prefix_of(&self, other: &ReferencePath) -> bool {
-        self.root == other.root && other.chain.starts_with(&self.chain)
+        self.root == other.root
+            && self.chain.len() <= other.chain.len()
+            && self
+                .chain
+                .iter()
+                .zip(&other.chain)
+                .all(|(written, read)| read.is_written_by(written))
     }
 
     pub fn render(&self) -> String {
-        let mut out = match &self.root {
-            BindingId::Local { name, .. } => name.clone(),
-            BindingId::Global(mangled) => mangled
-                .as_str()
-                .rsplit('#')
-                .next()
-                .unwrap_or(mangled.as_str())
-                .to_string(),
-            BindingId::This => "this".to_string(),
-        };
+        let mut out = self.root.render();
         for elem in &self.chain {
             match elem {
                 PathElem::Field(name) => {
                     out.push('.');
                     out.push_str(name);
+                }
+                PathElem::Key(binding, _) => {
+                    out.push('[');
+                    out.push_str(&binding.render());
+                    out.push(']');
                 }
                 PathElem::Index(lit) => {
                     use std::fmt::Write;
@@ -71,15 +83,47 @@ pub enum BindingId {
     This,
 }
 
+impl BindingId {
+    /// The name the source reads the binding by.
+    pub fn render(&self) -> String {
+        match self {
+            BindingId::Local { name, .. } => name.clone(),
+            BindingId::Global(mangled) => mangled
+                .as_str()
+                .rsplit('#')
+                .next()
+                .unwrap_or(mangled.as_str())
+                .to_string(),
+            BindingId::This => "this".to_string(),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ScopeId(pub u32);
 
 /// `Index` is restricted to constant literal indices so paths stay hash-comparable;
-/// non-constant index expressions are not narrowable.
+/// `Key` indexes by a binding that holds one value for its whole life (a
+/// `const`, or a parameter or `let` never assigned), as TypeScript narrows
+/// `obj[key]`. Other index expressions are not narrowable.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PathElem {
     Field(String),
     Index(LiteralValue),
+    Key(BindingId, KeyKind),
+}
+
+impl PathElem {
+    fn is_written_by(&self, written: &PathElem) -> bool {
+        matches!(self, PathElem::Key(..)) || self == written
+    }
+}
+
+/// What a [`PathElem::Key`] reads: a property, by a string key, or an element.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum KeyKind {
+    Property,
+    Element,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -407,6 +451,10 @@ pub fn is_covered_by_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> bo
         Type::Union(members) => members
             .iter()
             .all(|member| is_covered_by_literals(member, covered)),
+        // `boolean` is `true | false`.
+        Type::Boolean => [true, false]
+            .into_iter()
+            .all(|value| covered.contains(&LiteralValue::Boolean(value))),
         other => unit_literal_value(other).is_some_and(|value| covered.contains(&value)),
     }
 }
@@ -419,7 +467,7 @@ pub fn has_type_parameter_member(ty: &Type) -> bool {
     }
 }
 
-fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
+pub(super) fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
     match ty.peel() {
         Type::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
         Type::NumberLiteral(n) => Some(LiteralValue::Number(*n)),
@@ -711,17 +759,22 @@ pub fn truthy_part(ty: &Type) -> Type {
     {
         return preserve_refinement(original, truthy_part(shape));
     }
+    // `boolean` is exactly `true | false` (spec §1.2), so its truthy part is `true`.
     let kept: Vec<Type> = union_members(ty)
         .into_iter()
         .filter(|m| truthiness_class(m) != TruthinessClass::AlwaysFalsy)
-        .cloned()
+        .map(|m| match m.without_aliases() {
+            Type::Boolean => Type::BooleanLiteral(true),
+            _ => m.clone(),
+        })
         .collect();
     Type::union(kept)
 }
 
 /// The type of `x` where `x` is known falsy: keep `null` and falsy literals,
-/// collapse `string` to `""`, drop never-falsy reference types. `number` stays
-/// `number` — a `0` literal would be unsound for `NaN`/`-0`.
+/// collapse `string` to `""` and `boolean` to `false`, drop never-falsy
+/// reference types. `number` stays `number` — a `0` literal would be unsound
+/// for `NaN`/`-0`.
 pub fn falsy_part(ty: &Type) -> Type {
     if let Type::Refined {
         original,
@@ -738,7 +791,10 @@ pub fn falsy_part(ty: &Type) -> Type {
                 Type::String => Type::StringLiteral(String::new()),
                 _ => m.clone(),
             }),
-            _ => Some(m.clone()),
+            _ => Some(match m.without_aliases() {
+                Type::Boolean => Type::BooleanLiteral(false),
+                _ => m.clone(),
+            }),
         })
         .collect();
     Type::union(kept)
@@ -940,7 +996,8 @@ pub(super) fn preserve_refinement(original: &Type, shape: Type) -> Type {
 /// Strip covered literal values from `ty`. When the residual is `Type::Never`,
 /// all discriminant values were covered by `case` labels.
 ///
-/// - **Literal-union**: filter out covered members; collapses to `Never` when all drop.
+/// - **Union**: filter out covered literal members, keeping the rest (`number`
+///   in `number | "a"`); collapses to `Never` when all drop.
 /// - **Single literal**: `Never` if covered, unchanged otherwise.
 /// - **Anything else**: returned unchanged.
 pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
@@ -953,15 +1010,6 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
     }
     match ty.peel() {
         Type::Union(members) => {
-            // Only fire when every member is a unit-literal type; a
-            // mixed union (e.g., `"a" | number`) can't be exhaustively
-            // covered by literal `case` labels, so return as-is. A
-            // `boolean` member counts: it is `true | false`.
-            let coverable_by_cases =
-                |m: &Type| unit_literal_value(m).is_some() || matches!(m.peel(), Type::Boolean);
-            if !members.iter().all(coverable_by_cases) {
-                return ty.clone();
-            }
             let kept: Vec<Type> = members
                 .iter()
                 .map(|m| subtract_literals(m, covered))
@@ -1035,6 +1083,12 @@ pub fn union_envs(
     for (path, a_view) in &a_narrowings {
         if let Some(b_view) = b_narrowings.get(path) {
             let joined_ty = join_flow_types(&a_view.narrowed_ty, &b_view.narrowed_ty);
+            // A ruled-out view has no shadow, so the join reads through the other.
+            let a_view = if is_ruled_out(&a_view.narrowed_ty) {
+                b_view
+            } else {
+                a_view
+            };
             joined_narrowings.insert(
                 path.clone(),
                 NarrowedView {
@@ -1088,9 +1142,49 @@ pub fn union_envs(
     (joined_narrowings, joined_assigned)
 }
 
+/// Whether `ty` is made of unit types only (literals and `null`), so it lists
+/// every value it holds.
+pub fn is_unit_union(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members.iter().all(is_unit_union),
+        Type::Null => true,
+        other => unit_literal_value(other).is_some(),
+    }
+}
+
+/// The tuple position a number names, if it names one.
+pub(super) fn tuple_position(index: f64) -> Option<usize> {
+    (index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64).then_some(index as usize)
+}
+
+/// The type of a view whose guard ruled out every value. Narrowing yields
+/// `Error` when nothing is left; a view keeps it, rather than `never`, so
+/// codegen gives the path no shadow local, and a read of the path turns it
+/// into `never` where [`rules_out_to_never`] allows.
+pub const RULED_OUT: Type = Type::Error;
+
+/// Whether a narrowed type is [`RULED_OUT`].
+pub fn is_ruled_out(ty: &Type) -> bool {
+    matches!(ty, Type::Error)
+}
+
+/// Whether a guard that rules out every value of `path` makes it `never`
+/// where it holds. Only a local qualifies: a field, an element or a global
+/// can change behind the guard's back (through an alias, or in a call).
+pub fn rules_out_to_never(path: &ReferencePath) -> bool {
+    path.is_bare_local()
+}
+
 /// Flow joins collapse a literal already covered by a broad primitive. Keep
 /// authored unions unchanged: their overlap is meaningful to JSON diagnostics.
 pub(super) fn join_flow_types(left: &Type, right: &Type) -> Type {
+    // A ruled-out side holds no value, so it adds nothing to the other.
+    if is_ruled_out(left) {
+        return right.clone();
+    }
+    if is_ruled_out(right) {
+        return left.clone();
+    }
     let joined = Type::union(vec![left.clone(), right.clone()]);
     let Type::Union(mut members) = joined else {
         return joined;
@@ -1486,7 +1580,7 @@ mod tests {
             Type::StringLiteral("a".to_string())
         );
         assert_eq!(truthy_part(&Type::Null), Type::Never);
-        assert_eq!(truthy_part(&Type::Boolean), Type::Boolean);
+        assert_eq!(truthy_part(&Type::Boolean), Type::BooleanLiteral(true));
         assert_eq!(truthy_part(&Type::Number), Type::Number);
     }
 
@@ -1497,7 +1591,7 @@ mod tests {
             Type::union(vec![Type::StringLiteral(String::new()), Type::Null])
         );
         assert_eq!(falsy_part(&Type::Number), Type::Number);
-        assert_eq!(falsy_part(&Type::Boolean), Type::Boolean);
+        assert_eq!(falsy_part(&Type::Boolean), Type::BooleanLiteral(false));
         // Never-falsy references drop entirely.
         assert_eq!(
             falsy_part(&Type::union(vec![
