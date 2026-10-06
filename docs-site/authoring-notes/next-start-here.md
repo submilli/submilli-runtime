@@ -82,7 +82,7 @@ order; each chapter assumes only the ones before it.
 - **Purpose:** Where operations come from and why there is no other way out.
 - **Starting point:** Chapter 4.
 - **Understanding:** A package is an npm-style library built for agents;
-  why not npm (OS access, no semantic security); packages versus MCP
+  why not npm (OS access, no [semantic permissions](/docs/blueprints/#semantic-permission-model)); packages versus MCP
   servers; where packages come from; what an operation looks like from the
   inside and how it hands typed facts to the runtime; what the agent's
   program sees; the tools for building one.

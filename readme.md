@@ -2,7 +2,7 @@
 
 # Submilli
 
-A code-execution runtime with semantic security, for business agents that
+A code-execution runtime with a [semantic permission model](https://submilli.ai/docs/blueprints/#semantic-permission-model), for business agents that
 generate code. Think about someone who wants to allow their customer support agent to issue a refund of up to $500 for platinum clients, and up to $100 for all other customer tiers. Currently, there's no elegant way to do this, (that we know of, at least). 
 
 They could try to add it as a safeguard to the prompt, but due to the nature of models, it will likely only work *some* of the time. By using the Submilli Runtime to execute the agent generated code, the owner of that agentic workflow can define these guardrails in advance, and they will be enforced by the runtime, outside the model's control.
@@ -40,7 +40,7 @@ operation, and that language allows you to control what your agent can do in tho
 refund up to $500, only for customer 123".
 
 We also gave the ecosystem a reset. All the Packages for Submilli are written
-from scratch, purposely for agents, with semantic security. We don't use npm
+from scratch, purposely for agents, with [semantic permissions](https://submilli.ai/docs/blueprints/#semantic-permission-model). We don't use npm
 Packages, and while we do support MCP servers, Packages are the native way to
 work with Submilli.
 

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "abec4d0a47f11e9d8d987a39d8915f6947254efe420923afcd68f56ee1e91a0e"
+  contentHash: "cf16f6a01adc6ebfd369afd197642914f12148b6a20b46bed16e7f6af33df1aa"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -43,7 +43,8 @@ is written for Node, and Node gives it the whole operating system: files,
 sockets, processes, anything a system call can reach. Submilli is designed
 for agents, and the ways a program can reach the outside world are designed
 for that. A program gets a small set of operations, each named and checked. An npm
-package also has no semantic security (no `check` calls), so a Blueprint
+package also has no [semantic permissions](/docs/blueprints/#semantic-permission-model)
+(no `check` calls), so a Blueprint
 would have nothing to govern. You pay by wrapping your systems as Packages.
 
 ## A Package, from the inside
@@ -107,7 +108,8 @@ warning: payload key `customerClass` missing from `@capability` binding
 ```
 :::
 
-This is semantic security from the Package's side. The Package decides
+This is the [semantic permission model](/docs/blueprints/#semantic-permission-model)
+from the Package's side. The Package decides
 what the operation means and which facts describe it, and hands them to
 the runtime typed: the customer, the amount, and the customer's class,
 which the call didn't carry and the Package looked up. A Blueprint can then
