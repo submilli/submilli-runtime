@@ -326,6 +326,9 @@ async fn dispatch(
             if let Some(budget) = budget.as_deref() {
                 budget.release(reservation);
             }
+            record_payload(&*caller, ticket, Side::Response, || {
+                Payload::meta(serde_json::json!({ "call_error": call_error_record(&error) }))
+            });
             if error.is_budget_exceeded()
                 && let Err(denial) =
                     audit_quota_denial(caller, ticket, CAPABILITY, model, QUOTA_REASON)
@@ -359,11 +362,37 @@ pub fn request_digest(op: &str, model: &str, prompts: &[String], schema: Option<
     request_payload(op, model, prompts, schema).digest()
 }
 
+/// A whole-call failure as the call log keeps it: a stable kind, the model, and what a
+/// connector needs to raise the same error again. Never a prompt or a provider body.
+fn call_error_record(error: &LlmCallError) -> serde_json::Value {
+    let model = error.model();
+    match error {
+        LlmCallError::NotConfigured { .. } => {
+            serde_json::json!({ "kind": "not-configured", "model": model })
+        }
+        LlmCallError::UnknownModel { available, .. } => {
+            serde_json::json!({ "kind": "unknown-model", "model": model, "available": available })
+        }
+        LlmCallError::BudgetExceeded { .. } => {
+            serde_json::json!({ "kind": "budget-exceeded", "model": model })
+        }
+        LlmCallError::PromptBoundsExceeded { .. } => {
+            serde_json::json!({ "kind": "prompt-bounds-exceeded", "model": model })
+        }
+        LlmCallError::Unauthorized { .. } => {
+            serde_json::json!({ "kind": "unauthorized", "model": model })
+        }
+        LlmCallError::Transport { detail, .. } => {
+            serde_json::json!({ "kind": "transport", "model": model, "detail": detail })
+        }
+    }
+}
+
 /// An outcome's failure as the call log keeps it: the closed-set kind and the degraded
 /// message, which never echoes a prompt or a provider body.
 fn failure_record(failure: &crate::runtime::llm::LlmFailure) -> serde_json::Value {
     serde_json::json!({
-        "kind": failure.reason.as_str(),
+        "kind": if failure.local { "local" } else { failure.reason.as_str() },
         "message": failure.message,
         "retryable": failure.retryable,
         "status": failure.status,

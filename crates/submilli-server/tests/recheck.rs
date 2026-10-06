@@ -316,6 +316,21 @@ fn newly_declared_variables_are_filled_and_removed_ones_dropped() {
 }
 
 #[test]
+fn a_declared_default_is_what_a_filter_sees_when_nothing_is_bound() {
+    let run = recorded(
+        &[],
+        vec![decision(0, "http.get", http_context("api.test"), None)],
+    );
+    let current = blueprint(
+        "name: bp\ndefault: deny\nvariables:\n  region: {default: api.test}\npermissions:\n  main:\n    - capability: http.get\n      filter: host == ${vars.region}\n      action: allow\n",
+    );
+    let report = recheck(&current, &VarBindings::new(), &run);
+    // A test run resolves the same declarations, so it would see the same host.
+    assert!(report.variables.filled.is_empty());
+    assert_eq!(verdicts(&report), [Verdict::NewlyAllowed]);
+}
+
+#[test]
 fn an_unchanged_blueprint_yields_no_changes() {
     let yaml = allow_get_for("api.test");
     let run = recorded(

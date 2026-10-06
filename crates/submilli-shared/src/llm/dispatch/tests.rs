@@ -954,13 +954,30 @@ async fn a_private_provider_endpoint_is_blocked_by_the_network_policy() {
             .await
             .expect_err("the endpoint must be refused");
         match failure {
-            ProviderFailure::Transport { detail } => assert!(
+            ProviderFailure::Local { detail } => assert!(
                 detail.contains("blocked by network policy"),
                 "{base_url}: expected the policy reason, got: {detail}"
             ),
-            other => panic!("{base_url}: expected a transport failure, got {other:?}"),
+            other => panic!("{base_url}: expected a local refusal, got {other:?}"),
         }
     }
+}
+
+/// A request that could not be built never reached the wire: local, and the same words
+/// as a transport failure for the guest.
+#[tokio::test]
+async fn a_request_that_cannot_be_built_is_a_local_failure() {
+    let error = reqwest::Client::new()
+        .get("http://example.invalid/")
+        .header("authorization", "bad\nvalue")
+        .send()
+        .await
+        .expect_err("an invalid header value fails the build");
+    assert!(error.is_builder());
+    assert!(matches!(
+        ProviderFailure::from(crate::http_client::map_transport_error(error)),
+        ProviderFailure::Local { detail } if detail == "request failed"
+    ));
 }
 
 #[test]

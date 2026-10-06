@@ -430,6 +430,7 @@ fn a_body_over_the_cap_is_a_transport_failure() {
 fn only_the_timeout_classification_becomes_a_timeout() {
     let timed_out = TransportFailure {
         detail: http_client::TIMEOUT_DETAIL.to_string(),
+        local: false,
     };
     assert_eq!(
         failed_from(timed_out),
@@ -445,7 +446,8 @@ fn only_the_timeout_classification_becomes_a_timeout() {
     ] {
         assert_eq!(
             failed_from(TransportFailure {
-                detail: detail.to_string()
+                detail: detail.to_string(),
+                local: false,
             }),
             DispatchFailure::Failed {
                 kind: SentFailure::Transport,

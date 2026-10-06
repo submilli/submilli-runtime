@@ -48,6 +48,9 @@ pub enum McpCallError {
     Upstream { status: u16, body: String },
     /// The request never completed (connection / transport failure).
     Transport(String),
+    /// Refused by this host's own configuration before anything was sent: unavailable
+    /// credentials, or the network policy. Reads as a transport error to the script.
+    Local(String),
 }
 
 impl McpCallError {
@@ -61,6 +64,7 @@ impl McpCallError {
             McpCallError::Mcp { message } => ("mcp", message.clone(), None),
             McpCallError::Upstream { status, body } => ("upstream", body.clone(), Some(*status)),
             McpCallError::Transport(detail) => ("transport", detail.clone(), None),
+            McpCallError::Local(detail) => ("local", detail.clone(), None),
         };
         serde_json::json!({ "kind": kind, "message": message, "status": status })
     }
@@ -246,7 +250,7 @@ fn mcp_error_to_throw(server: &str, tool: &str, err: McpCallError) -> wasmtime::
         McpCallError::Upstream { status, body } => {
             format!("@mcp/{server}.{tool}: server returned HTTP {status}: {body}")
         }
-        McpCallError::Transport(detail) => {
+        McpCallError::Transport(detail) | McpCallError::Local(detail) => {
             format!("@mcp/{server}.{tool}: transport error: {detail}")
         }
     };

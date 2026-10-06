@@ -14,13 +14,13 @@
 //! size limit, and a guest path is routed to exactly one of them by
 //! [`Vfs::locate`] before anything is opened.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cap_fs_ext::DirExt;
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 use tempfile::TempDir;
@@ -656,34 +656,52 @@ impl Vfs {
 }
 
 /// The bytes held by regular files under the host directory `root`, as a size
-/// limit starting from it counts them. The error carries no host path.
+/// limit starting from it counts them. The error carries no host path; a tree with too
+/// many entries or nested too deep is [`io::ErrorKind::InvalidData`].
 pub fn measure_host_dir(root: &Path) -> io::Result<u64> {
     measure_dir(&*open_volume(root)?)
+}
+
+/// As [`measure_host_dir`], but an entry removed mid-walk is not counted instead of
+/// failing the measure: for a tree being copied, never for a size limit's accounting.
+pub fn measure_host_dir_skipping_vanished(root: &Path) -> io::Result<u64> {
+    let mut total: u64 = 0;
+    let root = open_volume(root)?;
+    for_each_regular_file(&root, MAX_MEASURED_ENTRIES, true, |_, bytes| {
+        total = total.saturating_add(bytes);
+    })?;
+    Ok(total)
 }
 
 /// The bytes held by regular files under `root`; see [`for_each_regular_file`].
 pub fn measure_dir(root: &Dir) -> io::Result<u64> {
     let mut total: u64 = 0;
-    for_each_regular_file(root, MAX_MEASURED_ENTRIES, |_, bytes| {
+    for_each_regular_file(root, MAX_MEASURED_ENTRIES, false, |_, bytes| {
         total = total.saturating_add(bytes);
     })?;
     Ok(total)
 }
 
 /// Every regular file under `root` and its size, as a removal of the tree frees
-/// them; more than `max_entries` entries is an error.
+/// them; more than `max_entries` entries is an [`io::ErrorKind::InvalidData`] error.
 pub fn regular_files(root: &Dir, max_entries: usize) -> io::Result<Vec<(FileIdentity, u64)>> {
     let mut files = Vec::new();
-    for_each_regular_file(root, max_entries, |file, bytes| files.push((file, bytes)))?;
+    for_each_regular_file(root, max_entries, false, |file, bytes| {
+        files.push((file, bytes));
+    })?;
     Ok(files)
 }
 
 /// Visit each regular file under `root`. Links are never followed, so a link cannot
 /// make a file count twice. The walk goes depth first, holding one open directory
 /// per level, so its descriptors and memory grow with depth, not with the tree.
+///
+/// An entry that cannot be read is an error, so a size limit treats the tree as full;
+/// with `skip_vanished` one that was removed meanwhile (`NotFound`) is left out instead.
 fn for_each_regular_file(
     root: &Dir,
     max_entries: usize,
+    skip_vanished: bool,
     mut visit: impl FnMut(FileIdentity, u64),
 ) -> io::Result<()> {
     let mut entries: usize = 0;
@@ -696,25 +714,339 @@ fn for_each_regular_file(
         let entry = entry?;
         entries += 1;
         if entries > max_entries {
-            return Err(io::Error::other(format!("more than {max_entries} entries")));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("more than {max_entries} entries"),
+            ));
         }
-        let kind = entry.file_type()?;
+        let Some(kind) = vanished(entry.file_type(), skip_vanished)? else {
+            continue;
+        };
         if kind.is_dir() {
             if open.len() > MAX_MEASURED_DEPTH {
-                return Err(io::Error::other(format!(
-                    "directories nested more than {MAX_MEASURED_DEPTH} deep"
-                )));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("directories nested more than {MAX_MEASURED_DEPTH} deep"),
+                ));
             }
-            let child = entry.open_dir()?.entries()?;
+            let Some(child) = vanished(
+                entry.open_dir().and_then(|dir| dir.entries()),
+                skip_vanished,
+            )?
+            else {
+                continue;
+            };
             open.push(child);
         } else if kind.is_file() {
             // Full metadata, which Windows reads through a handle, carries the
             // file's identity.
-            let metadata = cap_fs_ext::DirEntryExt::full_metadata(&entry)?;
+            let Some(metadata) = vanished(
+                cap_fs_ext::DirEntryExt::full_metadata(&entry),
+                skip_vanished,
+            )?
+            else {
+                continue;
+            };
             visit(FileIdentity::of(&metadata)?, metadata.len());
         }
     }
     Ok(())
+}
+
+/// `None` when the entry was removed meanwhile and `skip` is set.
+fn vanished<T>(result: io::Result<T>, skip: bool) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if skip && error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Why [`copy_host_dir`] stopped.
+#[derive(Debug)]
+pub enum CopyDirError {
+    Io(io::Error),
+    /// The copy went past its byte cap.
+    OverCap,
+    /// More entries or deeper nesting than a walk goes through, as for [`measure_host_dir`].
+    TooMany,
+}
+
+impl From<io::Error> for CopyDirError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+/// Copies the host directory `from` to `to`, adding the bytes copied to `bytes` and stopping
+/// once they pass `cap`.
+///
+/// Nothing under `from` is followed: every entry is opened relative to its already open
+/// parent without following links, so a program swapping an entry for a link mid-copy
+/// cannot get a file from outside the tree copied. A link is recreated as a link; an entry
+/// removed meanwhile is skipped. Only `from` itself, which the caller vouches for, is
+/// resolved by path.
+pub fn copy_host_dir(
+    from: &Path,
+    to: &Path,
+    cap: u64,
+    bytes: &mut u64,
+) -> Result<(), CopyDirError> {
+    let source = open_volume(from)?;
+    std::fs::create_dir_all(to)?;
+    let target = Dir::open_ambient_dir(to, ambient_authority())?;
+    let mut copy = TreeCopy {
+        cap,
+        bytes,
+        entries: 0,
+        rel: PathBuf::new(),
+    };
+    copy.dir(&source, &target, 0)
+}
+
+#[derive(Clone, Copy)]
+enum EntryKind {
+    Dir,
+    File,
+    Link,
+    Other,
+}
+
+impl EntryKind {
+    fn of(file_type: cap_std::fs::FileType) -> Self {
+        if file_type.is_dir() {
+            Self::Dir
+        } else if file_type.is_file() {
+            Self::File
+        } else if file_type.is_symlink() {
+            Self::Link
+        } else {
+            Self::Other
+        }
+    }
+}
+
+struct TreeCopy<'a> {
+    cap: u64,
+    bytes: &'a mut u64,
+    entries: usize,
+    /// The directory being copied, relative to the root, for errors.
+    rel: PathBuf,
+}
+
+impl TreeCopy<'_> {
+    /// An error naming the entry it came from, relative to the root.
+    fn at(&self, name: &OsStr, error: io::Error) -> CopyDirError {
+        let path = self.rel.join(name);
+        let shown = if path.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            &path
+        };
+        io::Error::new(error.kind(), format!("{}: {error}", shown.display())).into()
+    }
+
+    fn dir(&mut self, source: &Dir, target: &Dir, depth: usize) -> Result<(), CopyDirError> {
+        let entries = source
+            .entries()
+            .map_err(|error| self.at(OsStr::new(""), error))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| self.at(OsStr::new(""), error))?;
+            self.entries += 1;
+            if self.entries > MAX_MEASURED_ENTRIES {
+                return Err(CopyDirError::TooMany);
+            }
+            let Some(file_type) = vanished(entry.file_type(), true)? else {
+                continue;
+            };
+            let kind = EntryKind::of(file_type);
+            self.entry(source, target, &entry.file_name(), kind, depth)?;
+        }
+        Ok(())
+    }
+
+    /// Copies the entry `name` of `source`, which was listed as `kind`. An entry that is
+    /// another kind by the time it is opened is copied as what it is, whatever it was listed as.
+    fn entry(
+        &mut self,
+        source: &Dir,
+        target: &Dir,
+        name: &OsStr,
+        kind: EntryKind,
+        depth: usize,
+    ) -> Result<(), CopyDirError> {
+        match kind {
+            EntryKind::Dir => self.subdir(source, target, name, depth),
+            EntryKind::File => self.file(source, target, name, false),
+            EntryKind::Link => self.link(source, target, name, false),
+            EntryKind::Other => Ok(()),
+        }
+    }
+
+    fn subdir(
+        &mut self,
+        source: &Dir,
+        target: &Dir,
+        name: &OsStr,
+        depth: usize,
+    ) -> Result<(), CopyDirError> {
+        if depth >= MAX_MEASURED_DEPTH {
+            return Err(CopyDirError::TooMany);
+        }
+        let child = match source.open_dir_nofollow(name) {
+            Ok(child) => child,
+            Err(error) => return self.changed(source, target, name, EntryKind::Dir, error, false),
+        };
+        match target.create_dir(name) {
+            Ok(()) => {}
+            // Listed twice.
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(error) => return Err(self.at(name, error)),
+        }
+        let copied = target
+            .open_dir(name)
+            .map_err(|error| self.at(name, error))?;
+        self.rel.push(name);
+        let result = self.dir(&child, &copied, depth + 1);
+        self.rel.pop();
+        result
+    }
+
+    /// `reclassified`: the entry already turned out another kind than it was listed as.
+    fn file(
+        &mut self,
+        source: &Dir,
+        target: &Dir,
+        name: &OsStr,
+        reclassified: bool,
+    ) -> Result<(), CopyDirError> {
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        // A device or pipe swapped in must not block the open, nor become our terminal.
+        #[cfg(unix)]
+        cap_std::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NONBLOCK | libc::O_NOCTTY);
+        let mut input = match source.open_with(name, &options) {
+            Ok(file) => file,
+            Err(error) => {
+                return self.changed(source, target, name, EntryKind::File, error, reclassified);
+            }
+        };
+        let metadata = input.metadata().map_err(|error| self.at(name, error))?;
+        if !metadata.is_file() {
+            return Ok(());
+        }
+        let mut output = match target.open_with(
+            name,
+            cap_std::fs::OpenOptions::new().write(true).create_new(true),
+        ) {
+            Ok(file) => file,
+            // Listed twice.
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(error) => return Err(self.at(name, error)),
+        };
+        // One byte past what is left is enough to tell the cap was passed.
+        let room = self.cap.saturating_sub(*self.bytes).saturating_add(1);
+        let copied = io::copy(&mut input.by_ref().take(room), &mut output)
+            .map_err(|error| self.at(name, error))?;
+        *self.bytes = self.bytes.saturating_add(copied);
+        if *self.bytes > self.cap {
+            return Err(CopyDirError::OverCap);
+        }
+        output
+            .set_permissions(metadata.permissions())
+            .map_err(|error| self.at(name, error))?;
+        Ok(())
+    }
+
+    fn link(
+        &mut self,
+        source: &Dir,
+        target: &Dir,
+        name: &OsStr,
+        reclassified: bool,
+    ) -> Result<(), CopyDirError> {
+        // The target is kept as written, where `read_link` would refuse one that leaves
+        // the directory; it is never resolved here.
+        let to = match source.read_link_contents(name) {
+            Ok(to) => to,
+            Err(error) => {
+                return self.changed(source, target, name, EntryKind::Link, error, reclassified);
+            }
+        };
+        #[cfg(not(windows))]
+        match target.symlink_contents(to, name) {
+            Ok(()) => {}
+            // Listed twice.
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(self.at(name, error)),
+        }
+        #[cfg(windows)]
+        let _ = to;
+        Ok(())
+    }
+
+    /// Settles an entry that could not be handled as `listed`: gone is skipped, and one that
+    /// is now another kind is copied as that, by its type without following links. An entry
+    /// still of the kind listed fails the copy as unreadable, unless the error says it is not
+    /// that kind (it flipped back meanwhile), which skips it like a vanished one. An entry is
+    /// re-classified once: one that changed kind again meanwhile is skipped the same way, so a
+    /// program flipping it cannot keep the copy at it.
+    fn changed(
+        &mut self,
+        source: &Dir,
+        target: &Dir,
+        name: &OsStr,
+        listed: EntryKind,
+        error: io::Error,
+        reclassified: bool,
+    ) -> Result<(), CopyDirError> {
+        if error.kind() == io::ErrorKind::NotFound {
+            return Ok(());
+        }
+        if reclassified {
+            return if wrong_kind(&error) {
+                Ok(())
+            } else {
+                Err(self.at(name, error))
+            };
+        }
+        let now = match source.symlink_metadata(name) {
+            Ok(meta) => EntryKind::of(meta.file_type()),
+            Err(gone) if gone.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(_) => return Err(self.at(name, error)),
+        };
+        match (listed, now) {
+            (EntryKind::Dir | EntryKind::Link, EntryKind::File) => {
+                self.file(source, target, name, true)
+            }
+            (EntryKind::Dir | EntryKind::File, EntryKind::Link) => {
+                self.link(source, target, name, true)
+            }
+            // Swapped for a directory since it was listed: skipped like a vanished entry.
+            (EntryKind::File | EntryKind::Link, EntryKind::Dir) | (_, EntryKind::Other) => Ok(()),
+            // Still the kind listed: skipped only if the error says it is not that kind, as
+            // when it flipped back since the check.
+            _ if wrong_kind(&error) => Ok(()),
+            _ => Err(self.at(name, error)),
+        }
+    }
+}
+
+/// Whether `error` is the one an open or `read_link` gives an entry of another kind than
+/// asked for: not a directory, a followed link refused, or not a link.
+fn wrong_kind(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(
+            error.raw_os_error(),
+            Some(libc::ENOTDIR | libc::ELOOP | libc::EINVAL)
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
 }
 
 /// How many entries [`for_each_regular_file`] walks before it gives up, so a directory
@@ -723,7 +1055,7 @@ const MAX_MEASURED_ENTRIES: usize = 1_000_000;
 
 /// How many directories deep below the root [`for_each_regular_file`] descends
 /// before it gives up, which bounds the directories it holds open at once.
-const MAX_MEASURED_DEPTH: usize = 64;
+pub const MAX_MEASURED_DEPTH: usize = 64;
 
 /// The root-relative form of a mount's guest path, refusing anything that is
 /// not absolute, normalized, and made of ASCII letters, digits, `.`, `_` and
@@ -1145,10 +1477,8 @@ mod tests {
         let dir = root.dir().expect("dir");
         assert_eq!(regular_files(dir, 2).expect("two entries fit").len(), 1);
         std::fs::write(outer.path().join("d/b"), b"2").expect("write");
-        assert!(
-            regular_files(dir, 2).is_err(),
-            "a third entry passes the cap"
-        );
+        let error = regular_files(dir, 2).expect_err("a third entry passes the cap");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]
@@ -1184,5 +1514,303 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
             .expect("chmod back");
         assert!(unmeasured, "a failed walk leaves the VFS treated as full");
+    }
+
+    #[test]
+    fn only_a_walk_that_skips_vanished_entries_survives_one() {
+        let gone = || io::Result::<u8>::Err(io::ErrorKind::NotFound.into());
+        // A size limit's measure fails, so the directory opens as full.
+        assert!(vanished(gone(), false).is_err());
+        assert_eq!(vanished(gone(), true).expect("skipped"), None);
+        let denied = io::Result::<u8>::Err(io::ErrorKind::PermissionDenied.into());
+        assert!(vanished(denied, true).is_err());
+        assert_eq!(vanished(Ok(1u8), false).expect("ok"), Some(1));
+        let dir = tempfile::tempdir().expect("dir");
+        std::fs::write(dir.path().join("a"), "abc").expect("write");
+        assert_eq!(measure_host_dir(dir.path()).expect("strict"), 3);
+        assert_eq!(
+            measure_host_dir_skipping_vanished(dir.path()).expect("lenient"),
+            3
+        );
+    }
+
+    fn copied(from: &Path, cap: u64) -> (tempfile::TempDir, Result<u64, CopyDirError>) {
+        let to = tempfile::tempdir().expect("to");
+        let mut bytes = 0;
+        let result = copy_host_dir(from, &to.path().join("out"), cap, &mut bytes).map(|()| bytes);
+        (to, result)
+    }
+
+    #[test]
+    fn a_copy_has_the_files_and_stops_at_the_cap() {
+        let from = tempfile::tempdir().expect("from");
+        std::fs::create_dir(from.path().join("sub")).expect("mkdir");
+        std::fs::write(from.path().join("sub/a.txt"), "hello").expect("write");
+        let (to, result) = copied(from.path(), 100);
+        assert_eq!(result.expect("copied"), 5);
+        assert_eq!(
+            std::fs::read_to_string(to.path().join("out/sub/a.txt")).expect("read"),
+            "hello"
+        );
+        let (_to, result) = copied(from.path(), 4);
+        assert!(matches!(result, Err(CopyDirError::OverCap)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_recreates_links_and_never_follows_them() {
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(outside.path().join("secret"), "host file").expect("write");
+        std::fs::create_dir(outside.path().join("dir")).expect("mkdir");
+        std::fs::write(outside.path().join("dir/inner"), "host dir file").expect("write");
+        let from = tempfile::tempdir().expect("from");
+        std::os::unix::fs::symlink(outside.path().join("secret"), from.path().join("file-link"))
+            .expect("symlink");
+        std::os::unix::fs::symlink(outside.path().join("dir"), from.path().join("dir-link"))
+            .expect("symlink");
+        let (to, result) = copied(from.path(), 1_000);
+        assert_eq!(result.expect("copied"), 0, "no linked content is copied");
+        for name in ["file-link", "dir-link"] {
+            let copy = to.path().join("out").join(name);
+            assert!(std::fs::symlink_metadata(&copy).expect("kept").is_symlink());
+        }
+        assert!(!to.path().join("out/dir-link-copy").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_is_a_link_when_opened_is_not_followed() {
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(outside.path().join("secret"), "host file").expect("write");
+        std::fs::create_dir(outside.path().join("dir")).expect("mkdir");
+        let from = tempfile::tempdir().expect("from");
+        let to = tempfile::tempdir().expect("to");
+        std::os::unix::fs::symlink(outside.path().join("secret"), from.path().join("swapped"))
+            .expect("symlink");
+        std::os::unix::fs::symlink(outside.path().join("dir"), from.path().join("swapped-dir"))
+            .expect("symlink");
+        let source = Dir::open_ambient_dir(from.path(), ambient_authority()).expect("source");
+        let target = Dir::open_ambient_dir(to.path(), ambient_authority()).expect("target");
+        let mut bytes = 0;
+        let mut copy = TreeCopy {
+            cap: 1_000,
+            bytes: &mut bytes,
+            entries: 0,
+            rel: PathBuf::new(),
+        };
+        // Listed as a file and a directory, as they were before being swapped.
+        copy.entry(&source, &target, OsStr::new("swapped"), EntryKind::File, 0)
+            .expect("file");
+        copy.entry(
+            &source,
+            &target,
+            OsStr::new("swapped-dir"),
+            EntryKind::Dir,
+            0,
+        )
+        .expect("dir");
+        assert_eq!(bytes, 0);
+        for name in ["swapped", "swapped-dir"] {
+            let copy = to.path().join(name);
+            assert!(std::fs::symlink_metadata(&copy).expect("kept").is_symlink());
+        }
+    }
+
+    #[test]
+    fn an_entry_removed_since_it_was_listed_is_skipped() {
+        let from = tempfile::tempdir().expect("from");
+        let to = tempfile::tempdir().expect("to");
+        let source = Dir::open_ambient_dir(from.path(), ambient_authority()).expect("source");
+        let target = Dir::open_ambient_dir(to.path(), ambient_authority()).expect("target");
+        let mut bytes = 0;
+        let mut copy = TreeCopy {
+            cap: 1_000,
+            bytes: &mut bytes,
+            entries: 0,
+            rel: PathBuf::new(),
+        };
+        for kind in [EntryKind::Dir, EntryKind::File, EntryKind::Link] {
+            copy.entry(&source, &target, OsStr::new("gone"), kind, 0)
+                .expect("skipped");
+        }
+        assert_eq!(std::fs::read_dir(to.path()).expect("list").count(), 0);
+    }
+
+    #[test]
+    fn an_entry_that_changed_kind_since_it_was_listed_is_copied_as_what_it_is() {
+        let from = tempfile::tempdir().expect("from");
+        let to = tempfile::tempdir().expect("to");
+        std::fs::write(from.path().join("was-dir"), "abc").expect("write");
+        std::fs::write(from.path().join("was-link"), "de").expect("write");
+        let source = Dir::open_ambient_dir(from.path(), ambient_authority()).expect("source");
+        let target = Dir::open_ambient_dir(to.path(), ambient_authority()).expect("target");
+        let mut bytes = 0;
+        let mut copy = TreeCopy {
+            cap: 1_000,
+            bytes: &mut bytes,
+            entries: 0,
+            rel: PathBuf::new(),
+        };
+        copy.entry(&source, &target, OsStr::new("was-dir"), EntryKind::Dir, 0)
+            .expect("dir now a file");
+        copy.entry(&source, &target, OsStr::new("was-link"), EntryKind::Link, 0)
+            .expect("link now a file");
+        // The same name listed again is left as copied.
+        copy.entry(&source, &target, OsStr::new("was-dir"), EntryKind::File, 0)
+            .expect("duplicate");
+        assert_eq!(bytes, 5);
+        assert_eq!(
+            std::fs::read_to_string(to.path().join("was-link")).expect("read"),
+            "de"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_changes_kind_a_second_time_is_skipped_not_chased() {
+        let outside = tempfile::tempdir().expect("outside");
+        let from = tempfile::tempdir().expect("from");
+        let to = tempfile::tempdir().expect("to");
+        std::os::unix::fs::symlink(outside.path(), from.path().join("now-link")).expect("symlink");
+        std::fs::write(from.path().join("now-file"), "abc").expect("write");
+        let source = Dir::open_ambient_dir(from.path(), ambient_authority()).expect("source");
+        let target = Dir::open_ambient_dir(to.path(), ambient_authority()).expect("target");
+        let mut bytes = 0;
+        let mut copy = TreeCopy {
+            cap: 1_000,
+            bytes: &mut bytes,
+            entries: 0,
+            rel: PathBuf::new(),
+        };
+        // Listed as a file, it is a link: copied as one, once.
+        copy.file(&source, &target, OsStr::new("now-link"), false)
+            .expect("re-classified once");
+        assert!(
+            std::fs::symlink_metadata(to.path().join("now-link"))
+                .expect("kept")
+                .is_symlink()
+        );
+        // Already re-classified, one that fails again is skipped, not re-classified again:
+        // here a link that reads as a file, as if it had flipped back.
+        copy.link(&source, &target, OsStr::new("now-file"), true)
+            .expect("skipped");
+        copy.file(&source, &target, OsStr::new("now-link"), true)
+            .expect("skipped");
+        assert!(!to.path().join("now-file").exists());
+        assert_eq!(bytes, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_flipped_back_is_skipped_but_an_unreadable_one_still_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let from = tempfile::tempdir().expect("from");
+        std::fs::write(from.path().join("plain"), "abc").expect("write");
+        std::fs::create_dir(from.path().join("dir")).expect("mkdir");
+        let locked = from.path().join("locked");
+        std::fs::write(&locked, "x").expect("write");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let source = Dir::open_ambient_dir(from.path(), ambient_authority()).expect("source");
+        let to = tempfile::tempdir().expect("to");
+        let target = Dir::open_ambient_dir(to.path(), ambient_authority()).expect("target");
+        let mut bytes = 0;
+        let mut copy = TreeCopy {
+            cap: 1_000,
+            bytes: &mut bytes,
+            entries: 0,
+            rel: PathBuf::new(),
+        };
+        // Listed as a directory, a file, and a link; each is still the kind that now fails
+        // the open the way a flipped-back entry does.
+        copy.entry(&source, &target, OsStr::new("plain"), EntryKind::Dir, 0)
+            .expect("file listed as dir, re-classified");
+        let not_a_dir = io::Error::from_raw_os_error(libc::ENOTDIR);
+        copy.changed(
+            &source,
+            &target,
+            OsStr::new("dir"),
+            EntryKind::Dir,
+            not_a_dir,
+            false,
+        )
+        .expect("flipped back to a directory");
+        let not_a_link = io::Error::from_raw_os_error(libc::EINVAL);
+        copy.changed(
+            &source,
+            &target,
+            OsStr::new("plain"),
+            EntryKind::File,
+            not_a_link,
+            false,
+        )
+        .expect("flipped back to a file");
+        let loop_error = io::Error::from_raw_os_error(libc::ELOOP);
+        copy.changed(
+            &source,
+            &target,
+            OsStr::new("plain"),
+            EntryKind::Link,
+            loop_error,
+            true,
+        )
+        .expect("reclassified, wrong kind");
+        // A privileged user reads it anyway.
+        if unsafe { libc::geteuid() } != 0 {
+            // Reclassified: only wrong-kind errors skip; an unreadable file fails.
+            let result = copy.file(&source, &target, OsStr::new("locked"), true);
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600))
+                .expect("chmod");
+            let Err(CopyDirError::Io(error)) = result else {
+                panic!("expected an I/O error, got {result:?}");
+            };
+            assert!(error.to_string().starts_with("locked: "), "{error}");
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        // Other errors on an entry still of the kind listed fail too.
+        let denied = io::Error::from_raw_os_error(libc::EIO);
+        let result = copy.changed(
+            &source,
+            &target,
+            OsStr::new("dir"),
+            EntryKind::Dir,
+            denied,
+            false,
+        );
+        assert!(matches!(result, Err(CopyDirError::Io(_))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_entry_fails_the_copy_naming_its_path_in_the_tree() {
+        use std::os::unix::fs::PermissionsExt;
+        let from = tempfile::tempdir().expect("from");
+        std::fs::create_dir(from.path().join("sub")).expect("mkdir");
+        let locked = from.path().join("sub/locked");
+        std::fs::write(&locked, "x").expect("write");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let (_to, result) = copied(from.path(), 1_000);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        // A privileged user reads it anyway.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let Err(CopyDirError::Io(error)) = result else {
+            panic!("expected an I/O error, got {result:?}");
+        };
+        let message = error.to_string();
+        assert!(message.starts_with("sub/locked: "), "{message}");
+        assert!(!message.contains(from.path().to_str().expect("utf8")));
+    }
+
+    #[test]
+    fn a_copy_stops_in_a_tree_nested_too_deep() {
+        let from = tempfile::tempdir().expect("from");
+        let mut path = from.path().to_path_buf();
+        for _ in 0..=MAX_MEASURED_DEPTH + 1 {
+            path = path.join("d");
+        }
+        std::fs::create_dir_all(&path).expect("mkdir");
+        let (_to, result) = copied(from.path(), 1_000);
+        assert!(matches!(result, Err(CopyDirError::TooMany)));
     }
 }

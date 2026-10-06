@@ -8,6 +8,9 @@
 //! [`Cassette`], fires the run's cancel signal, and returns its error. The cancel ends the
 //! run before the program can act on that error, so the program cannot catch the stop.
 //!
+//! The current blueprint's declarations are enforced beyond its permissions: an MCP server
+//! or model it no longer declares is refused as a live run refuses it, whatever was recorded.
+//!
 //! A connector may be given its live counterpart for a mode that lets a call with nothing
 //! recorded go live (`with_live`): the call is noted in the cassette and sent as a normal
 //! run would send it.

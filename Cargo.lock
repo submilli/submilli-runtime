@@ -3227,6 +3227,7 @@ dependencies = [
  "ipnet",
  "jiff",
  "jiff-tzdb",
+ "libc",
  "num-bigint",
  "num-traits",
  "percent-encoding",

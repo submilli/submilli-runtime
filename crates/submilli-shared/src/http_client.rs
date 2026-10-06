@@ -59,12 +59,16 @@ pub const TIMEOUT_DETAIL: &str = "request timed out";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportFailure {
     pub detail: String,
+    /// Refused on this side, before anything reached the wire: the network policy, or a
+    /// request that could not be built.
+    pub local: bool,
 }
 
 impl TransportFailure {
     fn fixed(detail: &str) -> Self {
         Self {
             detail: detail.to_string(),
+            local: false,
         }
     }
 }
@@ -168,7 +172,17 @@ pub fn map_transport_error(err: reqwest::Error) -> TransportFailure {
     // the bottom of the chain and is what the operator needs to see.
     let chain = describe_error_chain(&err);
     if chain.contains(BLOCKED_BY_POLICY_DETAIL) {
-        return TransportFailure { detail: chain };
+        return TransportFailure {
+            detail: chain,
+            local: true,
+        };
+    }
+    // The request could not be built (an unusable header from a credential, say).
+    if err.is_builder() {
+        return TransportFailure {
+            local: true,
+            ..TransportFailure::fixed("request failed")
+        };
     }
     if err.is_timeout() {
         return TransportFailure::fixed(TIMEOUT_DETAIL);

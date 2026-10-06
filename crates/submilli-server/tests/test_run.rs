@@ -861,6 +861,27 @@ async fn an_mcp_program_compiles_from_the_recorded_catalog_and_is_answered_with_
     assert_eq!(error_kind(&stopped), Some(ErrorKind::Cancelled));
 }
 
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_server_the_blueprint_no_longer_declares_cannot_be_imported_from_the_recorded_catalog() {
+    let (url, _upstream) = upstream::spawn().await;
+    let world = World::new(vec![mcp_blueprint(&url)]);
+    let source = world.run("up-bp", ISSUE, &[]).await;
+    assert_eq!(source.response.result.as_deref(), Some("created x"));
+    let mut without = mcp_blueprint(&url);
+    without.mcp.clear();
+    world.blueprints.upsert(without).await.unwrap();
+
+    let live = world.run("up-bp", ISSUE, &[]).await;
+    let live_error = live.response.error.as_ref().expect("a normal run fails");
+    let outcome = world.test(&source.recorded, TestMode::Recorded).await;
+    let error = outcome.response.error.as_ref().expect("the test run fails");
+    assert_eq!(error.kind, live_error.kind);
+    assert_eq!(error.message, live_error.message);
+    assert!(outcome.report.stopped.is_none(), "a refusal, not a stop");
+    assert!(outcome.report.served.is_empty());
+}
+
 // ---- reads go live, and continue live ---------------------------------------------------
 
 const ONLY_A: &str = r#"import { get } from "submilli:http";
@@ -1141,7 +1162,7 @@ async fn a_missing_required_secret_is_refused_naming_it_and_starts_no_run() {
     let world = World::new(vec![secret_blueprint(true)]);
     let recorded = run_with_secret(&world, "function main(): string { return \"x\"; }").await;
     let started = world.recordings.started.lock().unwrap().len();
-    let outcome = test_program(
+    let error = test_program(
         &world.state,
         TestRun {
             label: "tester".into(),
@@ -1152,9 +1173,9 @@ async fn a_missing_required_secret_is_refused_naming_it_and_starts_no_run() {
         },
     )
     .await
-    .expect("a refused secret comes back as the run's failed response");
-    assert_eq!(error_kind(&outcome), Some(ErrorKind::InvalidRequest));
-    let message = &outcome.response.error.as_ref().unwrap().message;
+    .expect_err("a missing secret is refused");
+    assert!(matches!(error, TestError::InvalidSecrets(_)), "{error}");
+    let message = error.to_string();
     assert!(
         message.contains("invalid secrets") && message.contains('K'),
         "{message}"
@@ -1283,6 +1304,324 @@ async fn a_cancel_from_outside_stops_a_test_run_waiting_on_a_live_call() {
         .expect("the test run started");
     assert_eq!(outcome.response.execution_id, cancelled);
     assert_eq!(error_kind(&outcome), Some(ErrorKind::Cancelled));
+    assert!(
+        outcome.report.stopped.is_none(),
+        "someone outside asked; no call was missed"
+    );
     assert!(!world.state.cancel_run(&cancelled), "no longer running");
     slow.assert_hits_async(1).await;
+}
+
+// ---- a volume referenced more than once -------------------------------------------------
+
+#[tokio::test]
+async fn a_volume_one_mount_only_reads_and_another_writes_is_still_copied() {
+    let shared = tempfile::tempdir().expect("volume");
+    std::fs::write(shared.path().join("log.txt"), "one\n").unwrap();
+    let twice = "name: twice\ndefault: allow\nvfs:\n  mode: per_session\n  mounts:\n    /a: {mode: named, volume: shared, access: read_only}\n    /b: {mode: named, volume: shared}\n";
+    let world = World::with(vec![blueprint(twice)], |config| ServerConfig {
+        volumes: volumes(shared.path()),
+        ..config
+    });
+    let session = world.open_session("twice").await;
+    let source = world
+        .session_run(&session, "function main(): string { return \"x\"; }")
+        .await;
+    let mut recorded = source.recorded.clone();
+    recorded.code = Some(
+        r#"import { appendText, readText } from "submilli:fs";
+function main(): string {
+  appendText("/b/log.txt", "two\n");
+  return String(readText("/a/log.txt"));
+}"#
+        .to_owned(),
+    );
+    let outcome = world.test(&recorded, TestMode::Recorded).await;
+    assert_eq!(
+        result(&outcome),
+        Some("one\ntwo\n"),
+        "{:?}",
+        outcome.response.error
+    );
+    assert_eq!(outcome.report.local_state.volumes_copied, ["shared"]);
+    assert_eq!(
+        std::fs::read(shared.path().join("log.txt")).unwrap(),
+        b"one\n",
+        "the volume is byte-identical"
+    );
+}
+
+// ---- a credential the auth proxy added never reaches a report ---------------------------
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_proxy_injected_query_value_appears_in_no_report_error_or_call_log() {
+    let server = MockServer::start_async().await;
+    let _file = server
+        .mock_async(|when, then| {
+            when.method(Method::GET).path("/f.bin");
+            then.status(200).body("data");
+        })
+        .await;
+    let proxied = "name: dl\ndefault: allow\nallow_insecure_http: true\nvfs:\n  mode: per_session\nsecrets:\n  K:\n    harness:\n      required: true\nauth_proxy:\n  - host: 127.0.0.1\n    allow_insecure_http: true\n    query:\n      appid: \"${secrets.K}\"\n";
+    let world = World::new(vec![blueprint(proxied)]);
+    let url = server.url("/f.bin");
+    let code = format!(
+        r#"import {{ download }} from "submilli:http";
+function main(): number {{
+  return download("{url}", "/f.bin").bytesWritten;
+}}"#
+    );
+    let response = run_program(
+        &world.state,
+        ProgramRun {
+            label: "source".into(),
+            blueprint: "dl".into(),
+            code,
+            variables: Default::default(),
+            secrets: [("K".to_owned(), "SECRET-TOKEN".to_owned())].into(),
+        },
+    )
+    .await;
+    assert_eq!(
+        response.result.as_deref(),
+        Some("4"),
+        "{:?}",
+        response.error
+    );
+    let recorded = world.recordings.run(&response.execution_id);
+
+    // A download is never answered, so the test run stops at it.
+    let outcome = test_program(
+        &world.state,
+        TestRun {
+            label: "tester".into(),
+            recorded,
+            bindings: VarBindings::new(),
+            mode: TestMode::Recorded,
+            secrets: Some([("K".to_owned(), "SECRET-TOKEN".to_owned())].into()),
+        },
+    )
+    .await
+    .expect("the test run starts");
+    let stop = outcome.report.stopped.as_ref().expect("the run stopped");
+    assert_eq!(stop.reason, MissReason::Download);
+    assert_eq!(stop.key, format!("http GET {url}"));
+    assert!(
+        stop.nearest.is_some(),
+        "the recorded download is the nearest"
+    );
+    let test_log = world.recordings.run(&outcome.response.execution_id);
+    for text in [
+        serde_json::to_string(&outcome.report).unwrap(),
+        serde_json::to_string(&outcome.response).unwrap(),
+        serde_json::to_string(&test_log).unwrap(),
+    ] {
+        assert!(!text.contains("SECRET-TOKEN"), "{text}");
+    }
+}
+
+// ---- the same model request as a call or a batch ----------------------------------------
+
+#[tokio::test]
+async fn a_batch_the_test_run_makes_as_a_call_is_still_paired_with_its_source() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let world = World::with(vec![model_blueprint()], |config| ServerConfig {
+        llm_dispatch: Some(Arc::new(Dispatch(calls))),
+        ..config
+    });
+    let source = world
+        .run(
+            "llm",
+            r#"import llm from "submilli:llm";
+function main(): string { return String(llm.batch("test-model", ["a"])[0].text); }"#,
+            &[],
+        )
+        .await;
+    let mut recorded = source.recorded.clone();
+    recorded.code = Some(
+        r#"import llm from "submilli:llm";
+function main(): string { return String(llm.call("test-model", "a").text); }"#
+            .to_owned(),
+    );
+    let outcome = world.test(&recorded, TestMode::Recorded).await;
+    assert_eq!(
+        result(&outcome),
+        Some("answer"),
+        "{:?}",
+        outcome.response.error
+    );
+    assert_eq!(outcome.report.served.len(), 1);
+    assert!(outcome.report.served[0].test_call_index.is_some());
+}
+
+// ---- a model stop cannot be caught -------------------------------------------------------
+
+#[tokio::test]
+async fn a_model_call_stop_inside_try_catch_still_ends_the_run_cancelled() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let world = World::with(vec![model_blueprint()], |config| ServerConfig {
+        llm_dispatch: Some(Arc::new(Dispatch(calls.clone()))),
+        ..config
+    });
+    let guarded = |prompt: &str| {
+        format!(
+            r#"import llm from "submilli:llm";
+function main(): string {{
+  try {{ return String(llm.call("test-model", "{prompt}").text); }} catch (e) {{ return "caught"; }}
+}}"#
+        )
+    };
+    let source = world.run("llm", &guarded("a"), &[]).await;
+    assert_eq!(source.response.result.as_deref(), Some("answer"));
+    let before = calls.load(Ordering::SeqCst);
+    let mut recorded = source.recorded.clone();
+    recorded.code = Some(guarded("b"));
+    let outcome = world.test(&recorded, TestMode::Recorded).await;
+    assert_eq!(result(&outcome), None, "the program did not finish");
+    assert_eq!(error_kind(&outcome), Some(ErrorKind::Cancelled));
+    assert!(outcome.report.stopped.is_some());
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        before,
+        "nothing reached the model"
+    );
+}
+
+// ---- refusals before anything is copied or run -------------------------------------------
+
+#[tokio::test]
+async fn missing_secrets_are_refused_before_any_local_state_is_copied() {
+    let shared = tempfile::tempdir().expect("volume");
+    let both = "name: both\ndefault: allow\nvfs:\n  mode: per_session\n  mounts:\n    /data: {mode: named, volume: shared}\nsecrets:\n  K:\n    harness:\n      required: true\n";
+    let world = World::with(vec![blueprint(both)], |config| ServerConfig {
+        volumes: volumes(shared.path()),
+        ..config
+    });
+    let response = run_program(
+        &world.state,
+        ProgramRun {
+            label: "source".into(),
+            blueprint: "both".into(),
+            code: "function main(): string { return \"x\"; }".into(),
+            variables: Default::default(),
+            secrets: secrets("tok"),
+        },
+    )
+    .await;
+    let recorded = world.recordings.run(&response.execution_id);
+    // Copying this would be refused for its size; the refusal that comes is the secret's.
+    std::fs::File::create(shared.path().join("big.bin"))
+        .unwrap()
+        .set_len(submilli_server::record::LOCAL_STATE_CAP_BYTES + 1)
+        .unwrap();
+    let error = test_program(
+        &world.state,
+        TestRun {
+            label: "tester".into(),
+            recorded,
+            bindings: VarBindings::new(),
+            mode: TestMode::Recorded,
+            secrets: None,
+        },
+    )
+    .await
+    .expect_err("refused");
+    assert!(matches!(error, TestError::InvalidSecrets(_)), "{error}");
+}
+
+#[tokio::test]
+async fn a_server_with_no_run_recorder_refuses_a_test_run() {
+    let source_world = World::new(vec![blueprint(ALLOW_ALL)]);
+    let source = source_world
+        .run("bp", "function main(): string { return \"x\"; }", &[])
+        .await;
+    let world = World::with(vec![blueprint(ALLOW_ALL)], |config| ServerConfig {
+        run_recorder: None,
+        ..config
+    });
+    let error = test_program(
+        &world.state,
+        TestRun {
+            label: "tester".into(),
+            recorded: source.recorded,
+            bindings: VarBindings::new(),
+            mode: TestMode::Recorded,
+            secrets: None,
+        },
+    )
+    .await
+    .expect_err("refused");
+    assert!(matches!(error, TestError::NoRecorder), "{error}");
+}
+
+/// Records nothing.
+struct Declines;
+
+impl RunRecorderFactory for Declines {
+    fn start(&self, _run: RunStart) -> Option<Arc<dyn RunRecorder>> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn a_recorder_that_declines_the_test_run_refuses_it_before_it_runs() {
+    let server = MockServer::start_async().await;
+    let (_a, b) = site(&server).await;
+    let source_world = World::new(vec![blueprint(DENY_B)]);
+    let source = source_world.run("bp", &fetch_both(&server), &[]).await;
+    let world = World::with(vec![blueprint(ALLOW_ALL)], |config| ServerConfig {
+        run_recorder: Some(Arc::new(Declines)),
+        ..config
+    });
+    let error = test_program(
+        &world.state,
+        TestRun {
+            label: "tester".into(),
+            recorded: source.recorded,
+            bindings: VarBindings::new(),
+            mode: TestMode::Live,
+            secrets: None,
+        },
+    )
+    .await
+    .expect_err("refused");
+    assert!(matches!(error, TestError::NoRecorder), "{error}");
+    assert!(error.to_string().contains("declined"), "{error}");
+    b.assert_hits_async(0).await;
+}
+
+// ---- a model the blueprint no longer declares ---------------------------------------------
+
+#[tokio::test]
+async fn a_model_removed_from_the_blueprint_fails_as_it_does_in_a_normal_run() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let world = World::with(vec![model_blueprint()], |config| ServerConfig {
+        llm_dispatch: Some(Arc::new(Dispatch(calls.clone()))),
+        ..config
+    });
+    let source = world.run("llm", BATCH, &[]).await;
+    let mut without = model_blueprint();
+    without.llm.models.clear();
+    world.blueprints.upsert(without).await.unwrap();
+
+    let live = world.run("llm", BATCH, &[]).await;
+    let live_error = live
+        .response
+        .error
+        .as_ref()
+        .expect("a normal run is refused");
+    assert!(
+        live_error.message.contains("does not serve that model"),
+        "{live_error:?}"
+    );
+    let outcome = world.test(&source.recorded, TestMode::Recorded).await;
+    let error = outcome
+        .response
+        .error
+        .as_ref()
+        .expect("the test run is refused");
+    assert_eq!(error.message, live_error.message);
+    assert!(outcome.report.stopped.is_none(), "a refusal, not a stop");
+    assert!(outcome.report.served.is_empty());
 }

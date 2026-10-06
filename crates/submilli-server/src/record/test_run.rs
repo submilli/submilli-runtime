@@ -9,26 +9,27 @@
 //! [`TestReport`] says which call, why, and what was served before it.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use interpreter::runtime::{
-    CallOutcome, CallRecord, LlmProvider, McpTransport, SessionKvStore, SourceLine, Vfs, VfsInfo,
-};
+use interpreter::runtime::{CallOutcome, CallRecord, LlmProvider, McpTransport, SourceLine};
 use interpreter::stdlib::http::HttpClient;
 use serde::Serialize;
-use submilli_blueprint::{HarnessSecretBindings, VarBindings, resolve_variables};
+use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings, resolve_harness_secrets};
 use tokio::sync::oneshot;
 
 use super::recheck::{VariableReport, reconcile_variables};
 use super::replay::{
     Cassette, LiveReach, Miss, MissReason, Nearest, RecordedHttpClient, RecordedLlmProvider,
-    RecordedMcpTransport, call_key,
+    RecordedMcpTransport, Served, call_key,
 };
 use super::throwaway::{LocalState, Throwaway, ThrowawayError};
 use super::{FinishedRun, McpCatalog, RecordedRun, RunEntry, RunRecorder};
 use crate::app::AppState;
-use crate::handlers::execute::{ExecuteRequest, ExecuteResponse, one_shot_with};
-use crate::session_manager::{SessionError, SessionManager};
+use crate::handlers::execute::{
+    ExecuteRequest, ExecuteResponse, RunWorld, WorldContext, one_shot_with, open_session,
+    outside_clients,
+};
 
 /// How a test run answers a call the recording cannot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -70,6 +71,11 @@ pub enum TestError {
     Store(String),
     /// The variables do not satisfy the current blueprint's declarations.
     InvalidVariables(String),
+    /// The harness secrets do not satisfy the current blueprint's declarations.
+    InvalidSecrets(String),
+    /// The server records no runs, or its recorder declined this one, and a test run is
+    /// reported from its own record.
+    NoRecorder,
     /// The local state could not be copied; over the cap, the message says so.
     LocalState(ThrowawayError),
 }
@@ -86,6 +92,11 @@ impl std::fmt::Display for TestError {
             Self::BlueprintNotFound(name) => write!(f, "blueprint '{name}' is not registered"),
             Self::Store(message) => f.write_str(message),
             Self::InvalidVariables(message) => write!(f, "invalid variables: {message}"),
+            Self::InvalidSecrets(message) => write!(f, "invalid secrets: {message}"),
+            Self::NoRecorder => f.write_str(
+                "this server has no run recorder, or its recorder declined this run, and a \
+                 test run is recorded as a run of its own and reported from that record",
+            ),
             Self::LocalState(error) => error.fmt(f),
         }
     }
@@ -171,6 +182,9 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
         mode,
         secrets,
     } = test;
+    if state.run_recorder().is_none() {
+        return Err(TestError::NoRecorder);
+    }
     let source_run = recorded.execution_id.clone();
     let Some(code) = recorded.code.clone() else {
         return Err(TestError::NoProgram { source_run });
@@ -186,8 +200,12 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
     };
     let variables = reconcile_variables(&blueprint, &bindings, &recorded.variables);
     let supplied = variables.bindings();
-    let resolved = resolve_variables(&blueprint.variables, &supplied)
+    let resolved = variables
+        .resolve(&blueprint)
         .map_err(|error| TestError::InvalidVariables(error.to_string()))?;
+    // Refused before anything is copied, as the run would refuse them.
+    resolve_harness_secrets(&blueprint.secrets, &secrets.clone().unwrap_or_default())
+        .map_err(|error| TestError::InvalidSecrets(error.to_string()))?;
     let local = Throwaway::copy(
         state.session_manager(),
         recorded.session_id.as_deref(),
@@ -205,12 +223,18 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
         source_run: source_run.clone(),
         mode,
         cassette: Arc::clone(&cassette),
-        cancel: Some(cancel_requested),
-        mcp_catalog: recorded
-            .mcp_catalog
-            .clone()
-            .unwrap_or_else(|| Arc::new(McpCatalog::empty())),
-        local,
+        cancel: cancel_requested,
+        // Only the servers today's blueprint declares can be imported, as a normal run's
+        // discovery would have it.
+        mcp_catalog: Arc::new(
+            recorded
+                .mcp_catalog
+                .as_deref()
+                .map_or_else(McpCatalog::empty, |catalog| {
+                    catalog.restricted_to(|server| blueprint.mcp.contains_key(server))
+                }),
+        ),
+        local: Arc::new(local),
         tap: Arc::clone(&tap),
     };
     let audit = crate::audit::ExecutionAudit::new(state.audit().clone(), &label, "test", None);
@@ -229,6 +253,10 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
     )
     .await;
     audit.finish(response.error.is_none());
+    // Refused before it ran, so there is no run to report.
+    if tap.was_declined() {
+        return Err(TestError::NoRecorder);
+    }
 
     let replay = cassette.report();
     let calls = tap.calls();
@@ -251,9 +279,10 @@ pub(crate) struct TestWorld {
     source_run: String,
     mode: TestMode,
     cassette: Arc<Cassette>,
-    cancel: Option<oneshot::Receiver<()>>,
+    /// The cassette's own cancel signal: a stop reaches the runner with no hop in between.
+    cancel: oneshot::Receiver<()>,
     mcp_catalog: Arc<McpCatalog>,
-    local: Throwaway,
+    local: Arc<Throwaway>,
     tap: Arc<CallTap>,
 }
 
@@ -266,64 +295,61 @@ impl TestWorld {
         &self.tap
     }
 
-    pub(crate) fn mcp_catalog(&self) -> Arc<McpCatalog> {
-        Arc::clone(&self.mcp_catalog)
-    }
-
-    /// The run's cancel signal: the cassette's own, so a stop reaches the runner with no
-    /// hop in between. A cancel from outside (`cancel_run`) is forwarded into it.
-    pub(crate) fn cancel_requested(
-        &mut self,
-        external: Option<oneshot::Receiver<()>>,
-    ) -> oneshot::Receiver<()> {
-        let own = self
-            .cancel
-            .take()
-            .expect("a test run's cancel is taken once");
-        if let Some(external) = external {
-            let cassette = Arc::clone(&self.cassette);
-            tokio::spawn(async move {
-                if external.await.is_ok() {
-                    cassette.cancel();
-                }
-            });
-        }
-        own
-    }
-
-    /// The run's filesystem, over the throwaway copies.
-    pub(crate) async fn vfs(
-        &self,
-        manager: &SessionManager,
-        blueprint: &submilli_blueprint::Blueprint,
-        variables: &VarBindings,
-    ) -> Result<(Vfs, VfsInfo), SessionError> {
-        manager
+    /// The run's world in place of a normal run's: the catalog its source compiled
+    /// against (no MCP server is contacted to discover one), the throwaway copies of its
+    /// local state, a budget of its own (recorded token usage is not new spend), and the
+    /// recorded-world connectors with the live ones behind them as far as the mode lets a
+    /// call go live.
+    pub(crate) async fn into_world(self, context: WorldContext<'_>) -> Result<RunWorld, String> {
+        open_session(context.state, context.session_id, context.blueprint).await?;
+        let manager = context.state.session_manager();
+        let (vfs, vfs_info) = manager
             .vfs_over_roots(
-                blueprint,
-                variables,
+                context.blueprint,
+                context.variables,
                 self.local.session_root.as_deref(),
                 &self.local.volumes,
             )
             .await
-    }
-
-    pub(crate) fn session_kv(&self) -> Arc<dyn SessionKvStore> {
-        self.local.kv.clone()
+            .map_err(|err| format!("internal: vfs init failed: {err}"))?;
+        let (live_http, live_mcp) = outside_clients(&context);
+        let connectors = self.connectors(
+            live_http,
+            live_mcp,
+            context.llm_provider,
+            Arc::clone(context.blueprint),
+        );
+        Ok(RunWorld {
+            mcp_catalog: self.mcp_catalog,
+            vfs,
+            vfs_info,
+            session_kv: self.local.kv.clone(),
+            http_client: connectors.http,
+            mcp_transport: connectors.mcp,
+            llm_provider: connectors.llm,
+            llm_budget: manager.private_llm_budget(),
+            cancel_requested: Some(forward_cancel(
+                self.cancel,
+                &self.cassette,
+                context.cancel_requested,
+            )),
+            throwaway: Some(self.local),
+        })
     }
 
     /// The run's outside connectors: the recorded ones, with the live ones behind them as
     /// far as the mode lets a call go live. The live ones a mode does not reach are dropped
     /// unused, so such a run has no route to them.
-    pub(crate) fn connectors(
+    fn connectors(
         &self,
         live_http: Arc<dyn HttpClient>,
         live_mcp: Arc<dyn McpTransport>,
         live_llm: Option<Arc<dyn LlmProvider>>,
+        blueprint: Arc<Blueprint>,
     ) -> Connectors {
         let cassette = &self.cassette;
         let http = RecordedHttpClient::new(Arc::clone(cassette));
-        let mcp = RecordedMcpTransport::new(Arc::clone(cassette));
+        let mcp = RecordedMcpTransport::new(Arc::clone(cassette), blueprint);
         let llm = live_llm.map(|declared| {
             let llm = RecordedLlmProvider::new(Arc::clone(cassette), declared);
             Arc::new(if self.mode == TestMode::Live {
@@ -348,6 +374,24 @@ impl TestWorld {
     }
 }
 
+/// The run's cancel signal, `own` (the cassette's), with a cancel from `external`
+/// (`cancel_run`) forwarded into the cassette so it ends the run the same way a stop does.
+fn forward_cancel(
+    own: oneshot::Receiver<()>,
+    cassette: &Arc<Cassette>,
+    external: Option<oneshot::Receiver<()>>,
+) -> oneshot::Receiver<()> {
+    if let Some(external) = external {
+        let cassette = Arc::clone(cassette);
+        tokio::spawn(async move {
+            if external.await.is_ok() {
+                cassette.cancel();
+            }
+        });
+    }
+    own
+}
+
 /// The three connectors a run reaches outside through.
 pub(crate) struct Connectors {
     pub http: Arc<dyn HttpClient>,
@@ -359,9 +403,19 @@ pub(crate) struct Connectors {
 #[derive(Default)]
 pub(crate) struct CallTap {
     calls: Mutex<Vec<TestCall>>,
+    /// The recorder declined the run, so it was refused before it started.
+    declined: AtomicBool,
 }
 
 impl CallTap {
+    pub(crate) fn declined(&self) {
+        self.declined.store(true, Ordering::Release);
+    }
+
+    fn was_declined(&self) -> bool {
+        self.declined.load(Ordering::Acquire)
+    }
+
     fn calls(&self) -> Vec<TestCall> {
         self.calls
             .lock()
@@ -431,24 +485,33 @@ impl RunRecorder for TapRecorder {
     }
 }
 
-/// Each served call with the test run's index for it: the call whose request has the same
-/// digest, in the order the run made them.
-fn pair_served(
-    served: &[super::replay::Served],
-    calls: &[TestCall],
-) -> (Vec<ServedCall>, HashSet<u64>) {
+/// The first call the test run finished, not yet taken, that `matches`: taken from then on.
+fn claim<'a>(
+    calls: &'a [TestCall],
+    taken: &mut HashSet<u64>,
+    matches: impl Fn(&TestCall) -> bool,
+) -> Option<&'a TestCall> {
+    let call = calls.iter().find(|call| {
+        call.outcome != Some(CallOutcome::Unfinished)
+            && !taken.contains(&call.index)
+            && matches(call)
+    })?;
+    taken.insert(call.index);
+    Some(call)
+}
+
+/// Each served call with the test run's index for it: the call whose request has one of the
+/// digests the served call was accepted under, in the order the run made them.
+fn pair_served(served: &[Served], calls: &[TestCall]) -> (Vec<ServedCall>, HashSet<u64>) {
     let mut taken: HashSet<u64> = HashSet::new();
     let paired = served
         .iter()
         .map(|served| {
-            let test_call = calls.iter().find(|call| {
-                call.outcome != Some(CallOutcome::Unfinished)
-                    && call.digest.as_deref() == Some(served.request_digest.as_str())
-                    && !taken.contains(&call.index)
+            let test_call = claim(calls, &mut taken, |call| {
+                call.digest
+                    .as_ref()
+                    .is_some_and(|digest| served.request_digests.contains(digest))
             });
-            if let Some(call) = test_call {
-                taken.insert(call.index);
-            }
             ServedCall {
                 source_call_index: served.source_call_index,
                 test_call_index: test_call.map(|call| call.index),
@@ -466,14 +529,9 @@ fn pair_live(went_live: Vec<Miss>, calls: &[TestCall], mut taken: HashSet<u64>) 
     went_live
         .into_iter()
         .map(|miss| {
-            let call = calls.iter().find(|call| {
-                call.outcome != Some(CallOutcome::Unfinished)
-                    && call.key.as_deref() == Some(miss.key.as_str())
-                    && !taken.contains(&call.index)
+            let call = claim(calls, &mut taken, |call| {
+                call.key.as_deref() == Some(miss.key.as_str())
             });
-            if let Some(call) = call {
-                taken.insert(call.index);
-            }
             LiveCall {
                 key: miss.key,
                 reason: miss.reason,
@@ -484,7 +542,8 @@ fn pair_live(went_live: Vec<Miss>, calls: &[TestCall], mut taken: HashSet<u64>) 
 }
 
 /// The stop, with the call the test run's log shows it ended on: the unfinished call for
-/// the same key, or the only unfinished one.
+/// the same key, else the only unfinished one. With several and none of the key, the log
+/// does not say which, and the call is left out.
 fn stop_of(miss: Miss, calls: &[TestCall]) -> Stop {
     let mut unfinished = calls
         .iter()
@@ -492,7 +551,10 @@ fn stop_of(miss: Miss, calls: &[TestCall]) -> Stop {
     let call = unfinished
         .clone()
         .find(|call| call.key.as_deref() == Some(miss.key.as_str()))
-        .or_else(|| unfinished.next());
+        .or_else(|| match (unfinished.next(), unfinished.next()) {
+            (Some(only), None) => Some(only),
+            _ => None,
+        });
     Stop {
         key: miss.key,
         reason: miss.reason,
@@ -502,5 +564,53 @@ fn stop_of(miss: Miss, calls: &[TestCall]) -> Stop {
         caller: call.map(|call| call.caller.clone()),
         capability: call.map(|call| call.capability.clone()),
         line: call.and_then(|call| call.line),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unfinished(index: u64, key: &str) -> TestCall {
+        TestCall {
+            index,
+            caller: "main".into(),
+            capability: "http.get".into(),
+            line: None,
+            outcome: Some(CallOutcome::Unfinished),
+            digest: None,
+            key: Some(key.to_owned()),
+        }
+    }
+
+    fn miss(key: &str) -> Miss {
+        Miss {
+            key: key.to_owned(),
+            reason: MissReason::NoRecording,
+            detail: String::new(),
+            nearest: None,
+        }
+    }
+
+    #[test]
+    fn a_stop_is_attributed_to_the_unfinished_call_of_its_key() {
+        let calls = [unfinished(0, "http GET a"), unfinished(1, "http GET b")];
+        assert_eq!(stop_of(miss("http GET b"), &calls).test_call_index, Some(1));
+    }
+
+    #[test]
+    fn a_stop_with_one_unfinished_call_of_another_key_falls_back_to_it() {
+        let calls = [unfinished(4, "http GET a")];
+        let stop = stop_of(miss("http GET b"), &calls);
+        assert_eq!(stop.test_call_index, Some(4));
+        assert_eq!(stop.caller.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn a_stop_with_several_unfinished_calls_and_none_of_its_key_names_none() {
+        let calls = [unfinished(0, "http GET a"), unfinished(1, "http GET c")];
+        let stop = stop_of(miss("http GET b"), &calls);
+        assert!(stop.test_call_index.is_none() && stop.caller.is_none());
+        assert!(stop.capability.is_none() && stop.line.is_none());
     }
 }

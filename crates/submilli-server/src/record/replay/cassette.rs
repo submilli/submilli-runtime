@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use interpreter::runtime::{CallOutcome, CallRecord, DecisionRecord, EntryPath, PayloadRecord};
+use base64::Engine as _;
+use interpreter::runtime::{
+    BodyCopy, CallOutcome, CallRecord, DecisionRecord, EntryPath, PayloadRecord,
+};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -37,6 +40,8 @@ fn kind_of(capability: &str) -> Option<Kind> {
 
 /// A recorded redirect hop of a request: the capability it was checked as and its context.
 pub(super) struct Hop {
+    /// The hop's position in its request's chain, counting from 0.
+    pub index: u32,
     pub capability: String,
     pub context: Value,
     /// The recorder kept the context whole.
@@ -56,7 +61,39 @@ pub(super) struct Entry {
     pub response: Option<PayloadRecord>,
     /// Policy-decided redirect hops of the request, in order.
     pub hops: Vec<Hop>,
+    /// The recorder's caps cut the run's decisions or calls, so `hops` may lack some.
+    pub log_cut: bool,
     used: bool,
+}
+
+impl Entry {
+    /// What came back, when the recording holds all of it.
+    pub fn finished_response(&self) -> Result<&PayloadRecord, Unusable> {
+        let response = self
+            .response
+            .as_ref()
+            .ok_or_else(|| Unusable::incomplete("the recorded call never finished"))?;
+        if response.truncated {
+            return Err(Unusable::incomplete(
+                "the recorded response was cut by the recorder's caps",
+            ));
+        }
+        Ok(response)
+    }
+}
+
+/// The bytes a response kept as its body. `what` names it in the miss: a recording that
+/// kept only the digest has none.
+pub(super) fn decoded_body(response: &PayloadRecord, what: &str) -> Result<Vec<u8>, Unusable> {
+    match &response.body {
+        Some(BodyCopy::Text(text)) => Ok(text.clone().into_bytes()),
+        Some(BodyCopy::Base64(data)) => base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|_| Unusable::incomplete(format!("the recorded {what} is unreadable"))),
+        None => Err(Unusable::incomplete(format!(
+            "the recorder kept the digest of the response, not its {what}"
+        ))),
+    }
 }
 
 /// Why a recording cannot answer a call it matched.
@@ -79,6 +116,16 @@ impl Unusable {
             detail: detail.into(),
         }
     }
+
+    /// A recorded failure that is not an answer from outside the runtime: a local or
+    /// configuration refusal, a kind not known to be outside, or none. Each connector serves
+    /// the kinds it lists as outside answers and refuses the rest with this.
+    pub fn decided_today(kind: Option<&str>) -> Self {
+        let kind = kind.map_or_else(|| "unnamed".to_owned(), |kind| format!("`{kind}`"));
+        Self::failure(format!(
+            "the recorded {kind} failure is not an answer from outside, and today's configuration decides"
+        ))
+    }
 }
 
 /// Why a call was not answered from the recording.
@@ -92,8 +139,9 @@ pub enum MissReason {
     /// The recording lacks what the answer needs: a truncated body or meta, digest only,
     /// or a call that never finished.
     RecordingIncomplete,
-    /// The recorded failure cannot be rebuilt: it kept no stable kind, or it cannot be
-    /// raised by a connector.
+    /// The recorded failure is not an answer from outside the runtime (the remote's or the
+    /// wire's), or kept no kind: a model not declared, credentials, the network policy and
+    /// the like, which today's configuration decides again.
     RecordedFailure,
     /// A download: only its size was recorded.
     Download,
@@ -128,15 +176,14 @@ impl std::fmt::Display for Miss {
 /// A recording that answered a call.
 #[derive(Debug, Clone, Serialize)]
 pub struct Served {
-    /// Counts the answers of this run from 0.
-    pub order: usize,
     /// The call's index in the recorded run.
     pub source_call_index: u64,
     pub capability: String,
     pub key: Option<String>,
-    /// The digest of the request, which the test run's own call log records for the same
-    /// call: the way to pair a served call with its source.
-    pub request_digest: String,
+    /// The digests the test run's own call log may hold for the same call, the way to pair
+    /// it with its source: one for each way the request could have been recorded (a model
+    /// `call` and `batch` of the same prompts are answered alike).
+    pub request_digests: Vec<String>,
 }
 
 /// What a test run took from the recording.
@@ -214,15 +261,13 @@ impl Cassette {
         };
         match answer(&state.entries[at]) {
             Ok(answer) => {
-                let order = state.served.len();
                 let entry = &mut state.entries[at];
                 entry.used = true;
                 let served = Served {
-                    order,
                     source_call_index: entry.call_index,
                     capability: entry.capability.clone(),
                     key: entry.key.clone(),
-                    request_digest: entry.digest.clone(),
+                    request_digests: accept.to_vec(),
                 };
                 state.served.push(served);
                 Ok(answer)
@@ -350,6 +395,7 @@ fn entries_of(run: &RecordedRun) -> Vec<Entry> {
                 } else {
                     hops.remove(&call.call_index).unwrap_or_default()
                 },
+                log_cut: run.log_truncated,
                 used: false,
             })
         })
@@ -401,6 +447,7 @@ fn hops_of(decisions: &[DecisionRecord]) -> BTreeMap<u64, Vec<Hop>> {
         by_parent.entry(parent_call_index).or_default().push((
             index,
             Hop {
+                index,
                 capability: decision.capability.clone(),
                 context: decision.context.clone(),
                 complete: !(decision.context_truncated || decision.payload_dropped),

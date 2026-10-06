@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
@@ -335,6 +335,19 @@ async fn execute_core_with(
         || run_start(&inputs, test.as_ref()),
         test.as_ref().map(TestWorld::tap),
     );
+    // A test run is reported from its own record, so one the recorder declined is refused
+    // before it can have any effect.
+    if let Some(test) = &test
+        && recording.is_none()
+    {
+        test.tap().declined();
+        return ExecuteOutcome::undispatched(failure_response(
+            inputs.audit.as_deref(),
+            inputs.session_id,
+            ErrorKind::RuntimeError,
+            crate::record::TestError::NoRecorder.to_string(),
+        ));
+    }
     // Only a recorded run can be cancelled from outside (the registry exists for a stop
     // control over recorded runs), so an unrecorded run pays for no registration. The
     // guard keeps the entry until this function returns, which is after the run has
@@ -406,7 +419,7 @@ async fn prepare_and_run(
     inputs: ExecuteInputs<'_>,
     recording: Option<crate::record::Recording>,
     cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
-    mut test: Option<TestWorld>,
+    test: Option<TestWorld>,
 ) -> ExecuteOutcome {
     let ExecuteInputs {
         session_id,
@@ -454,12 +467,6 @@ async fn prepare_and_run(
         Err(message) => return fail_to_parse(message),
     };
 
-    // A stop by the test run's own connectors, or a cancel from outside, ends the run.
-    let cancel_requested = match test.as_mut() {
-        Some(test) => Some(test.cancel_requested(cancel_requested)),
-        None => cancel_requested,
-    };
-
     let network_policy = execution_audit.as_ref().map_or_else(
         || state.network_policy().clone(),
         |audit| audit.network_policy(state.network_policy()),
@@ -481,101 +488,38 @@ async fn prepare_and_run(
             }
         };
 
-    // A test run compiles against the catalog its source run compiled against, and never
-    // contacts an MCP server to discover one.
-    let mcp_catalog = match test.as_ref() {
-        Some(test) => test.mcp_catalog(),
-        None => match state
-            .mcp_catalog_for_imports(
-                blueprint_name,
-                &blueprint,
-                &script_imports.mcp_servers,
-                &harness_secrets,
-                &network_policy,
-            )
-            .await
-        {
-            Ok(catalog) => catalog,
-            Err(error) => {
-                tracing::error!(error = ?error, "MCP discovery initialization failed");
-                return fail(ErrorKind::RuntimeError, error.to_string());
-            }
-        },
+    let context = WorldContext {
+        state,
+        session_id,
+        blueprint_name,
+        blueprint: &blueprint,
+        variables: &variables,
+        harness_secrets: &harness_secrets,
+        network_policy: &network_policy,
+        llm_provider,
+        cancel_requested,
     };
-
+    // The one place a test run's world replaces the run's own.
+    let world = match test {
+        Some(test) => test.into_world(context).await,
+        None => live_world(context, vfs_source, &script_imports.mcp_servers).await,
+    };
+    let RunWorld {
+        mcp_catalog,
+        vfs,
+        vfs_info,
+        session_kv,
+        http_client,
+        mcp_transport,
+        llm_provider,
+        llm_budget,
+        cancel_requested,
+        throwaway,
+    } = match world {
+        Ok(world) => world,
+        Err(message) => return fail(ErrorKind::RuntimeError, message),
+    };
     let manager = state.session_manager();
-    let (vfs, vfs_info) = match vfs_source {
-        VfsSource::Mcp { vfs, vfs_info } => (vfs, vfs_info),
-        VfsSource::Rest => {
-            if let Err(err) = manager.ensure(session_id, &blueprint).await {
-                return fail(
-                    ErrorKind::RuntimeError,
-                    format!("internal: session init failed: {err}"),
-                );
-            }
-            // Mark activity at entry as well as at exit. The idle reaper is
-            // wall-clock and has no notion of an execution in flight, so a session
-            // that was already nearly idle when this call arrived would otherwise
-            // be reaped moments into the run — taking its idempotency reservation
-            // with it. This buys the program a full idle window rather than
-            // whatever was left of one; it does not make the run un-reapable, and
-            // an execution that outlasts `idle_timeout` on its own is still
-            // collected mid-flight. The write is debounced (`PERSIST_INTERVAL`),
-            // so this costs nothing per call.
-            manager.touch(session_id).await;
-            let vfs = match test.as_ref() {
-                Some(test) => test.vfs(manager, &blueprint, &variables).await,
-                None => {
-                    manager
-                        .vfs_for_execute_with_variables(session_id, &blueprint, &variables)
-                        .await
-                }
-            };
-            match vfs {
-                Ok(pair) => pair,
-                Err(err) => {
-                    return fail(
-                        ErrorKind::RuntimeError,
-                        format!("internal: vfs init failed: {err}"),
-                    );
-                }
-            }
-        }
-    };
-
-    let http_client = manager.http_client(session_id);
-    let session_kv = match test.as_ref() {
-        Some(test) => test.session_kv(),
-        None => manager.session_kv_for_execute(session_id),
-    };
-    let mcp_transport: Arc<dyn interpreter::runtime::McpTransport> = Arc::new(
-        submilli_shared::mcp::transport::StreamableHttpTransport::new(
-            blueprint_name.to_string(),
-            Arc::clone(&blueprint),
-            state.oauth_token_manager().cloned(),
-            state.secret_store().cloned(),
-            Arc::clone(&network_policy),
-        )
-        .with_harness_secrets(Arc::clone(&harness_secrets)),
-    );
-    let (http_client, mcp_transport, llm_provider, llm_budget) = match test.as_ref() {
-        // Recorded token usage is charged to a held budget, so a test run holds its own.
-        Some(test) => {
-            let connectors = test.connectors(http_client, mcp_transport, llm_provider);
-            (
-                connectors.http,
-                connectors.mcp,
-                connectors.llm,
-                manager.private_llm_budget(),
-            )
-        }
-        None => (
-            http_client,
-            mcp_transport,
-            llm_provider,
-            manager.llm_budget_for_execute(),
-        ),
-    };
     let policy: Arc<dyn interpreter::runtime::SecurityCheck> = Arc::new(
         PolicyCheck::with_variables(Arc::clone(&blueprint), Arc::clone(&variables)),
     );
@@ -612,6 +556,7 @@ async fn prepare_and_run(
         embedding_budget: Some(manager.embedding_budget_for_execute()),
         recording,
         cancel_requested,
+        throwaway,
     };
     let packages =
         match state.prepared_packages_for_imports(blueprint_name, &blueprint, &script_imports) {
@@ -663,6 +608,131 @@ async fn prepare_and_run(
     }
 
     ExecuteOutcome::dispatched(response)
+}
+
+/// What a run's world is built from: the run's own inputs, and the cancel signal its
+/// caller registered.
+pub(crate) struct WorldContext<'a> {
+    pub state: &'a AppState,
+    pub session_id: &'a str,
+    pub blueprint_name: &'a str,
+    pub blueprint: &'a Arc<Blueprint>,
+    pub variables: &'a Arc<VarBindings>,
+    pub harness_secrets: &'a Arc<HarnessSecretBindings>,
+    pub network_policy: &'a Arc<interpreter::runtime::NetworkPolicy>,
+    pub llm_provider: Option<Arc<dyn interpreter::runtime::LlmProvider>>,
+    pub cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+/// What a run executes in and reaches outside through: its compile-time MCP catalog, its
+/// files and data, its connectors, and its token budget.
+pub(crate) struct RunWorld {
+    pub mcp_catalog: Arc<crate::record::McpCatalog>,
+    pub vfs: Vfs,
+    pub vfs_info: VfsInfo,
+    pub session_kv: Arc<dyn interpreter::runtime::SessionKvStore>,
+    pub http_client: Arc<dyn interpreter::stdlib::http::HttpClient>,
+    pub mcp_transport: Arc<dyn interpreter::runtime::McpTransport>,
+    pub llm_provider: Option<Arc<dyn interpreter::runtime::LlmProvider>>,
+    pub llm_budget: Arc<interpreter::runtime::ExecutionTokenBudget>,
+    pub cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
+    /// A test run's throwaway copies, kept until the run's owner task is done with them.
+    pub throwaway: Option<Arc<crate::record::Throwaway>>,
+}
+
+/// A normal run's world: discovery against its MCP servers, its session's files and data,
+/// its session's HTTP client, and a budget charged to the server's.
+async fn live_world(
+    context: WorldContext<'_>,
+    vfs_source: VfsSource,
+    mcp_servers: &BTreeSet<String>,
+) -> Result<RunWorld, String> {
+    let mcp_catalog = context
+        .state
+        .mcp_catalog_for_imports(
+            context.blueprint_name,
+            context.blueprint,
+            mcp_servers,
+            context.harness_secrets,
+            context.network_policy,
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "MCP discovery initialization failed");
+            error.to_string()
+        })?;
+    let manager = context.state.session_manager();
+    let (vfs, vfs_info) = match vfs_source {
+        VfsSource::Mcp { vfs, vfs_info } => (vfs, vfs_info),
+        VfsSource::Rest => {
+            open_session(context.state, context.session_id, context.blueprint).await?;
+            manager
+                .vfs_for_execute_with_variables(
+                    context.session_id,
+                    context.blueprint,
+                    context.variables,
+                )
+                .await
+                .map_err(|err| format!("internal: vfs init failed: {err}"))?
+        }
+    };
+    let (http_client, mcp_transport) = outside_clients(&context);
+    Ok(RunWorld {
+        mcp_catalog,
+        vfs,
+        vfs_info,
+        session_kv: manager.session_kv_for_execute(context.session_id),
+        http_client,
+        mcp_transport,
+        llm_provider: context.llm_provider,
+        llm_budget: manager.llm_budget_for_execute(),
+        cancel_requested: context.cancel_requested,
+        throwaway: None,
+    })
+}
+
+/// Registers the session and marks activity at entry as well as at exit. The idle reaper
+/// is wall-clock and has no notion of an execution in flight, so a session that was
+/// already nearly idle when this call arrived would otherwise be reaped moments into the
+/// run, taking its idempotency reservation with it. This buys the program a full idle
+/// window rather than whatever was left of one; it does not make the run un-reapable,
+/// and an execution that outlasts `idle_timeout` on its own is still collected
+/// mid-flight. The write is debounced (`PERSIST_INTERVAL`), so this costs nothing per call.
+pub(crate) async fn open_session(
+    state: &AppState,
+    session_id: &str,
+    blueprint: &Arc<Blueprint>,
+) -> Result<(), String> {
+    let manager = state.session_manager();
+    manager
+        .ensure(session_id, blueprint)
+        .await
+        .map_err(|err| format!("internal: session init failed: {err}"))?;
+    manager.touch(session_id).await;
+    Ok(())
+}
+
+/// The session's HTTP client and the blueprint's MCP transport: what a run reaches
+/// outside through when nothing stands in for them.
+pub(crate) fn outside_clients(
+    context: &WorldContext<'_>,
+) -> (
+    Arc<dyn interpreter::stdlib::http::HttpClient>,
+    Arc<dyn interpreter::runtime::McpTransport>,
+) {
+    let state = context.state;
+    let mcp_transport = submilli_shared::mcp::transport::StreamableHttpTransport::new(
+        context.blueprint_name.to_string(),
+        Arc::clone(context.blueprint),
+        state.oauth_token_manager().cloned(),
+        state.secret_store().cloned(),
+        Arc::clone(context.network_policy),
+    )
+    .with_harness_secrets(Arc::clone(context.harness_secrets));
+    (
+        state.session_manager().http_client(context.session_id),
+        Arc::new(mcp_transport),
+    )
 }
 
 pub(crate) fn with_session_header(

@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use interpreter::runtime::{CallRecord, DecisionRecord, EntryPath, SourceLine};
 use serde::{Serialize, Serializer};
-use submilli_blueprint::{Action, Blueprint, Resolution, ResolutionCause, VarBindings};
+use submilli_blueprint::{
+    Action, Blueprint, Resolution, ResolutionCause, VarBindings, VariableError, resolve_variables,
+};
 
 use super::{FinishedRun, McpCatalog, RunStart};
 
@@ -121,6 +123,13 @@ impl VariableReport {
         bindings.extend(self.filled.clone());
         bindings
     }
+
+    /// [`bindings`](Self::bindings) with the declarations' defaults filled in and the
+    /// required ones checked: what a run of `blueprint` would see. A re-check and a test
+    /// run both read variables through this, so they see the same values.
+    pub fn resolve(&self, blueprint: &Blueprint) -> Result<VarBindings, VariableError> {
+        resolve_variables(&blueprint.variables, &self.bindings())
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -164,7 +173,11 @@ pub fn recheck(
     run: &RecordedRun,
 ) -> RecheckReport {
     let variables = reconcile_variables(blueprint, current_bindings, &run.variables);
-    let bindings = variables.bindings();
+    // A required variable nobody bound leaves a run unable to start; the decisions are
+    // still resolved, over what was bound.
+    let bindings = variables
+        .resolve(blueprint)
+        .unwrap_or_else(|_| variables.bindings());
     // Calls with a decision that is now denied: their redirect hops are never made.
     let mut denied_calls: HashSet<u64> = HashSet::new();
     let mut summary = RecheckSummary::default();

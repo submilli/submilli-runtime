@@ -449,18 +449,26 @@ async fn run(source: &str, setup: Setup) -> Outcome {
     }
 }
 
-/// Serves `open` and `secret`, answering every prompt.
+/// Serves `open` and `secret`, answering every prompt; a prompt `transport down` fails the
+/// whole call.
 struct FakeLlm;
 
 impl LlmProvider for FakeLlm {
     fn call<'a>(
         &'a self,
-        _model: &'a str,
+        model: &'a str,
         prompts: &'a [String],
         _schema_json: Option<&'a str>,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>,
     > {
+        if prompts.iter().any(|prompt| prompt == "transport down") {
+            let error = LlmCallError::Transport {
+                model: model.to_owned(),
+                detail: "connection reset".to_owned(),
+            };
+            return Box::pin(async move { Err(error) });
+        }
         let outcomes = prompts
             .iter()
             .map(|prompt| {
@@ -1868,6 +1876,34 @@ function main(): string {
             input_tokens: Some(13),
             output_tokens: None,
         })
+    );
+}
+
+#[tokio::test]
+async fn a_model_call_that_fails_whole_records_its_kind_and_the_fields_to_raise_it_again() {
+    let source = r#"
+import llm from "submilli:llm";
+function main(): string {
+  try { llm.call("open", "transport down"); } catch (e) { return "caught"; }
+  return "answered";
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            llm: Some(LlmLimits::default()),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("caught".to_owned()));
+    let call = outcome.call("llm.call");
+    assert_eq!(call.outcome, Some(CallOutcome::Failed));
+    let response = call.response.as_ref().expect("the failure");
+    assert_eq!(
+        response.meta,
+        json!({ "call_error": { "kind": "transport", "model": "open", "detail": "connection reset" } })
     );
 }
 
