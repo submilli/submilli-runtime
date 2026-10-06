@@ -53,6 +53,11 @@ jobs:
       - name: Package tests
         run: cargo run -p submilli -- build test --skip-network
 
+      - name: Quickstart reader journey
+        run: |
+          cargo build -p submilli -p submilli-server
+          SUBMILLI="$PWD/target/debug/submilli" SUBMILLI_SERVER="$PWD/target/debug/submilli-server" bash examples/quickstart/verify.sh
+
       # Ratchet: the not-yet-zero lints are off the gate (so `-D warnings` is clean).
       # Enable them explicitly here, as warnings, only to print the trend to the job
       # summary. Not a gate. Keep this list in sync with the comment in Cargo.toml.

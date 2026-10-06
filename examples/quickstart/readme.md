@@ -1,7 +1,6 @@
 # Quickstart example
 
-Every artifact the separately maintained quickstart chapter
-has the reader author, in runnable form. `submilli.toml` and
+Every artifact the quickstart chapter has the reader author, in runnable form. `submilli.toml` and
 `package/capabilities.yaml` are not in the table because you never write them —
 `submilli build` produces them.
 
@@ -43,26 +42,26 @@ MCP, against the same blueprint. It binds `customerId` through the
 ```
 pip install -r requirements.txt
 export GOOGLE_API_KEY=...
+export GOOGLE_MODEL=...
 export SUBMILLI_SERVER_TOKEN=...   # the value the server was started with
 python agent.py
 ```
 
 `verify.sh` leaves this alone: it needs a key, costs money, and a model only
-takes the injection bait some of the time. The snippet the chapter prints is
-drift-checked when SUBMILLI_QUICKSTART_CHAPTER points to the chapter.
+takes the injection bait some of the time. The docs build publishes this script and its requirements directly from these
+files, and checks that the downloads match.
 
-## Why this needs the server
+## Server and local CLI
 
-`submilli run` accepts a blueprint but binds no session variables, and an
-unresolved `${vars.NAME}` is a silent non-match rather than an error — so under
-`submilli run` this blueprint denies the legitimate call too. Binding a variable
-per request is what `submilli-server` adds, and it is the whole point of the
-chapter.
+The example uses the server to exercise the same HTTP route as an application.
+For a local CLI check, use `submilli run --blueprint blueprint.yaml
+--var customerId=cus_northwind total.ts` after publishing the Package locally.
+Both routes enforce the Blueprint and require the customer binding.
 
 ## Checking the book
 
-The book is maintained separately. To compare its code blocks with these files:
+The book lives in `docs/part-1-start-here/03-quickstart.md` and is checked by default. To compare its code blocks with these files:
 
 ```sh
-SUBMILLI_QUICKSTART_CHAPTER=/path/to/02-quickstart.md ./verify.sh --blocks-only
+./verify.sh --blocks-only
 ```
