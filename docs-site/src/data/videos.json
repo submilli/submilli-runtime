@@ -34,7 +34,7 @@
     {
       "id": "using",
       "title": "Using Submilli",
-      "status": "published",
+      "status": "hidden",
       "destination": "Start here → Quickstart",
       "description": "Building and running a Submilli integration.",
       "canonicalPath": "/docs/quickstart/",
@@ -44,7 +44,7 @@
     {
       "id": "works",
       "title": "Understanding Submilli",
-      "status": "published",
+      "status": "hidden",
       "destination": "Start here → The server",
       "description": "How programs, Packages, Blueprints, and the runtime work together.",
       "canonicalPath": "/docs/server/#what-happens-to-a-program",
