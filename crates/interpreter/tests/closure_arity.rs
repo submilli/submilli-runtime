@@ -262,7 +262,7 @@ fn run(source: &str, packages: &[CompiledPackage]) -> String {
             .data_mut()
             .install_type_info(compiled.type_info.clone());
         let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
-        let _watchdog = config.arm_timeout(&engine);
+        let _watchdog = config.arm_timeout(&engine).unwrap();
         dispatch_main_async(&mut store, &instance)
             .await
             .unwrap()

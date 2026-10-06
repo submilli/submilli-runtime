@@ -155,7 +155,7 @@ impl PreparedRuntime {
         let mut linker = self.base_linker.clone();
         install_runtime_store_bound(&mut linker, &mut store)?;
         let inst = linker.instantiate_async(&mut store, &module).await?;
-        let _watchdog = self.config.arm_timeout(&self.engine);
+        let _watchdog = self.config.arm_timeout(&self.engine)?;
         let value = interpreter::dispatch_main_async(&mut store, &inst).await?;
         let captured = buf.lock().unwrap().clone();
         let console = String::from_utf8(captured)
@@ -205,7 +205,7 @@ impl PreparedRuntime {
         store.data_mut().install_type_info(root.type_info.clone());
         let root_module = Module::new(&self.engine, &root.wasm)?;
         let inst = linker.instantiate_async(&mut store, &root_module).await?;
-        let _watchdog = self.config.arm_timeout(&self.engine);
+        let _watchdog = self.config.arm_timeout(&self.engine)?;
         let value = interpreter::dispatch_main_async(&mut store, &inst).await?;
         Ok(RunResult {
             value,
