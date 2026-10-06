@@ -269,23 +269,42 @@ impl TypeParamSubstitution {
         budget: &mut TypeBudget<'_>,
         substituting: &mut Vec<String>,
     ) -> Result<Type, TypeTooLarge> {
-        if let Type::TypeVar(name) = ty
-            && let Some(bound) = self.bindings.get(name)
-            && !substituting.iter().any(|open| open == name)
-        {
-            // The bound type takes the variable's place, at the same depth.
+        let open_before = substituting.len();
+        let applied = self
+            .chase_binding(ty, budget, substituting)
+            .and_then(|bound| {
+                budget.charge(depth)?;
+                let child = depth.saturating_add(1);
+                // An unbound or re-entered variable stays a leaf. GenericParam is
+                // opaque here: body-form, not substituted.
+                map_children(bound, |inner| {
+                    self.apply_rec(inner, child, budget, substituting)
+                })
+            });
+        substituting.truncate(open_before);
+        applied
+    }
+
+    fn chase_binding<'a>(
+        &'a self,
+        mut ty: &'a Type,
+        budget: &mut TypeBudget<'_>,
+        substituting: &mut Vec<String>,
+    ) -> Result<&'a Type, TypeTooLarge> {
+        while let Type::TypeVar(name) = ty {
+            // Charge the lookup and linear cycle check before doing them.
+            // Chasing does not add result nodes or native recursion frames.
+            budget.charge_work(1 + substituting.len() as u64)?;
+            let Some(bound) = self.bindings.get(name) else {
+                break;
+            };
+            if substituting.iter().any(|open| open == name) {
+                break;
+            }
             substituting.push(name.clone());
-            let applied = self.apply_rec(bound, depth, budget, substituting);
-            substituting.pop();
-            return applied;
+            ty = bound;
         }
-        budget.charge(depth)?;
-        let child = depth.saturating_add(1);
-        // An unbound or re-entered variable is a leaf and stays itself.
-        // GenericParam is opaque here — body-form, not substituted.
-        map_children(ty, |inner| {
-            self.apply_rec(inner, child, budget, substituting)
-        })
+        Ok(ty)
     }
 
     /// Structural unification of `param_ty` against `arg_ty`, binding `TypeVar`s
@@ -1371,6 +1390,29 @@ mod tests {
             s.apply(&t("T"), &crate::type_size::TypeLimits::default())
                 .unwrap(),
             t("T")
+        );
+    }
+
+    #[test]
+    fn binding_chases_spend_work_before_following_the_chain() {
+        let mut substitution = TypeParamSubstitution::new();
+        substitution.insert("T".into(), t("U"));
+        substitution.insert("U".into(), Type::Number);
+        // Two lookups, a cycle comparison, and one output node cost four.
+        assert_eq!(
+            substitution.apply(&t("T"), &TypeLimits::with_work_allowance(3)),
+            Err(TypeTooLarge::Work)
+        );
+        assert_eq!(
+            substitution.apply(&t("T"), &TypeLimits::with_work_allowance(4)),
+            Ok(Type::Number)
+        );
+        let limits = TypeLimits::with_work_allowance(1);
+        assert_eq!(substitution.apply_or_record(&t("T"), &limits), Type::Error);
+        assert_eq!(limits.take(), Err(TypeTooLarge::Work));
+        assert_eq!(
+            substitution.apply(&t("T"), &TypeLimits::default()),
+            Ok(Type::Number)
         );
     }
 

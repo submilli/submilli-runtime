@@ -46,7 +46,7 @@ other N entries remain open. Evidence means:
 | N01 | **Fixed on branch:** bound blueprint filter parsing, tree height and destruction | Debug/release 2 MiB stack regressions pass |
 | N02 | **Fixed on branch:** bound package graph DFS in build and GitHub resolution | Debug/release 2 MiB stack regressions pass |
 | N03 | **Fixed on branch:** check OAuth token expiry before adding it to `Instant` | Overflow/rotation/recovery regression passes |
-| N04 | Charge and bound variable-to-variable substitution chains | Budget bypass reproduced; stack risk inspected |
+| N04 | **Fixed on branch:** charge and bound variable-to-variable substitution chains | Budget and debug/release stack regressions pass |
 | N05 | Bound namespace metadata before recursive consumers | Inspection; direct metadata API |
 | N06 | Validate sibling dependencies at public build entry | Public API panic reproduced |
 | N07 | Make resolver error formatting safe for arbitrary UTF-8 | Public error formatting panic reproduced |
@@ -199,6 +199,14 @@ also uses this mechanism, but its achievable chain length remains unproven.
 **Direction/done:** iterate or explicitly charge/bound binding hops, including
 cycle detection work. Cover long distinct chains, self/mutual cycles, exhausted
 work and normal substitution results.
+
+**Disposition (2026-10-06, fixed on branch):** binding chains are chased
+iteratively, charging lookup/cycle-scan work before each hop. Output type-node
+and depth accounting is unchanged; active bindings are restored on success and
+error. Exact work-boundary/latch tests, 29 substitution and nine type-size tests
+pass. Isolated debug/release 2 MiB-stack regressions cover 2,000-hop chains/cycles,
+10,000-hop work rejection and healthy follow-up. Three independent reviewers
+report no findings; formatting and workspace/all-target Clippy pass. No full suites.
 
 ### N05 — Namespace metadata depth is not validated
 

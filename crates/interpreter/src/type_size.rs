@@ -147,10 +147,15 @@ impl TypeBudget<'_> {
         if self.nodes > MAX_TYPE_NODES {
             return Err(TypeTooLarge::Nodes);
         }
+        self.charge_work(extent.nodes)
+    }
+
+    /// Charges traversal work that does not build a result node.
+    pub fn charge_work(&mut self, units: u64) -> Result<(), TypeTooLarge> {
         let work_left = self
             .work_left
             .get()
-            .checked_sub(extent.nodes)
+            .checked_sub(units)
             .ok_or(TypeTooLarge::Work)?;
         self.work_left.set(work_left);
         Ok(())
@@ -552,9 +557,9 @@ pub(crate) mod tests {
 
     #[test]
     fn substitutions_share_the_phase_work_allowance() {
-        let limits = TypeLimits::with_work_allowance(25);
+        let limits = TypeLimits::with_work_allowance(29);
         let sub = binding(nodes(5));
-        // Each application builds 1 + 2 * 5 nodes.
+        // Each application builds 1 + 2 * 5 nodes and chases two bindings.
         assert!(sub.apply(&pair_of_t(), &limits).is_ok());
         assert!(sub.apply(&pair_of_t(), &limits).is_ok());
         assert_eq!(sub.apply(&pair_of_t(), &limits), Err(TypeTooLarge::Work));
