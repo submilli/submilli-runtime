@@ -3357,6 +3357,8 @@ impl<'a> Inferer<'a> {
                 methods: method_sigs,
                 method_visibility,
                 statics: static_sigs,
+                static_visibility,
+                static_fields,
                 constructor: ctor_params,
                 extends: parent,
                 implements,
@@ -3457,6 +3459,19 @@ impl<'a> Inferer<'a> {
             let decl = TypedClassDecl {
                 name: name.clone(),
                 fields: typed_fields,
+                static_methods: static_sigs
+                    .keys()
+                    .map(|name| {
+                        (
+                            name.clone(),
+                            static_visibility
+                                .get(name)
+                                .copied()
+                                .unwrap_or(Visibility::Public),
+                        )
+                    })
+                    .collect(),
+                static_fields,
                 inherited_ctor_params: if typed_ctor.is_some() {
                     Vec::new()
                 } else {

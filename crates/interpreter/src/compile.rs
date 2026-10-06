@@ -232,6 +232,7 @@ pub struct CompiledPackage {
     pub type_info: crate::TypeInfoTable,
     pub declaration: PackageDeclaration,
     pub required_capabilities: Vec<DerivedCapability>,
+    pub authority_map: crate::AuthorityMap,
     pub warnings: Vec<Diagnostic>,
 }
 
@@ -598,6 +599,22 @@ fn compile_package_sources(
         )
         .map_err(|error| error.with_prior_diagnostics(&diagnostics))?;
     diagnostics.extend(capability_warnings);
+    let (prelude_defs, host_defs, internal_defs) = prelude::cached_runtime_package_declarations();
+    let authority_map = crate::authority::analyse(
+        &declaration,
+        &ta,
+        sources,
+        stdlib_defs
+            .iter()
+            .chain(prelude_defs)
+            .chain(host_defs)
+            .chain(dependencies.iter().copied())
+            .chain(transitive.iter().copied()),
+    )
+    .map_err(|fatal| CompileError {
+        diagnostics: diagnostics.clone(),
+        fatal: Some(fatal),
+    })?;
     ta = capture(ta).map_err(|fatal| CompileError {
         diagnostics: diagnostics.clone(),
         fatal: Some(fatal),
@@ -616,7 +633,6 @@ fn compile_package_sources(
         fatal: Some(fatal),
     })?;
 
-    let (prelude_defs, host_defs, internal_defs) = prelude::cached_runtime_package_declarations();
     let stdlib_defs = runtime::stdlib_package_declarations();
     let mut codegen_deps: Vec<&PackageDeclaration> = prelude_defs.iter().collect();
     codegen_deps.extend(host_defs.iter());
@@ -637,6 +653,7 @@ fn compile_package_sources(
         type_info: generated.type_info,
         declaration,
         required_capabilities,
+        authority_map,
         warnings: warnings_only(diagnostics),
     })
 }

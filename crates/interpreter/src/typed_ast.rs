@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::arena::{self, ArenaError, ArenaKind};
 use crate::typechecker::infer::narrowing::{CastInfo, ReferencePath};
 use crate::{BinOp, BindingKind, ExprId, Ident, MangledName, Span, StmtId, Type, UnOp};
@@ -927,6 +929,12 @@ pub enum TypedTypeDecl {
 pub struct TypedClassDecl {
     pub name: Ident,
     pub fields: Vec<TypedClassField>,
+    /// Static member visibility retained for analyses that run after package
+    /// declarations have been reduced to their runtime surface.
+    pub static_methods: BTreeMap<String, crate::Visibility>,
+    /// Static field signatures are lowered to globals, but their source-level
+    /// visibility and callable types remain relevant to public-surface analysis.
+    pub static_fields: BTreeMap<String, crate::FieldSig>,
     pub constructor: Option<TypedClassConstructor>,
     /// The signature a class with no `constructor` of its own exposes, taken
     /// from the nearest ancestor that declares one with the `extends` clause's

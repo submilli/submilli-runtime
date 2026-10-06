@@ -11,7 +11,7 @@ use crate::{
 
 /// Receives each node [`walk_program`] reaches, before the walk descends
 /// into it.
-pub(super) trait Visitor {
+pub(crate) trait Visitor {
     fn visit_stmt(&mut self, _kind: &TypedStmtKind) -> Result<(), CompilerFailure> {
         Ok(())
     }
@@ -24,11 +24,19 @@ pub(super) trait Visitor {
     ) -> Result<(), CompilerFailure> {
         Ok(())
     }
+
+    fn visit_expr(&mut self, _id: ExprId, _kind: &TypedExprKind) -> Result<(), CompilerFailure> {
+        Ok(())
+    }
+
+    fn descend_into_closures(&self) -> bool {
+        true
+    }
 }
 
 /// Walks every body of the program: functions, class constructors, methods
 /// and accessors, field initializers, and top-level statements.
-pub(super) fn walk_program(
+pub(crate) fn walk_program(
     ta: &TypedAst,
     visitor: &mut impl Visitor,
 ) -> Result<(), CompilerFailure> {
@@ -48,6 +56,28 @@ pub(super) fn walk_program(
     }
     for &stmt_id in &ta.top_level_statements {
         walk.stmt(stmt_id)?;
+    }
+    Ok(())
+}
+
+/// Walk selected roots with one shared seen set. Authority analysis uses this
+/// to keep nested closure bodies separate from the callable that creates them.
+pub(crate) fn walk_roots(
+    ta: &TypedAst,
+    statement_roots: impl IntoIterator<Item = StmtId>,
+    expression_roots: impl IntoIterator<Item = ExprId>,
+    visitor: &mut impl Visitor,
+) -> Result<(), CompilerFailure> {
+    let mut walk = Walk {
+        ta,
+        visitor,
+        seen: BTreeSet::new(),
+    };
+    for root in statement_roots {
+        walk.stmt(root)?;
+    }
+    for root in expression_roots {
+        walk.expr(root)?;
     }
     Ok(())
 }
@@ -185,16 +215,20 @@ impl<V: Visitor> Walk<'_, V> {
         if !self.seen.insert(expr_id) {
             return Ok(());
         }
-        let _: () = match &self
+        let kind = &self
             .ta
             .try_expr(expr_id)
             .map_err(crate::typechecker::arena_failure)?
-            .kind
-        {
+            .kind;
+        self.visitor.visit_expr(expr_id, kind)?;
+        let _: () = match kind {
             TypedExprKind::Closure {
                 return_type, body, ..
             } => {
                 self.visitor.visit_closure(expr_id, return_type, body)?;
+                if !self.visitor.descend_into_closures() {
+                    return Ok(());
+                }
                 match body {
                     ClosureBody::Expr(e) => self.expr(*e)?,
                     ClosureBody::Block(b) => self.stmt(*b)?,
