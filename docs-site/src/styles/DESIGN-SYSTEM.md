@@ -49,6 +49,9 @@ Submilli keeps its typefaces, blue accent, theme preference, content, and routes
 - Navigation has three jobs: global discovery in search, chapter selection in
   the sidebar, and orientation within an article in the local contents list.
   Do not repeat all three as competing toolbars. Keep the mobile contents bar.
+- Book a meeting is the primary header action. Agent setup remains a secondary
+  text link, with both actions available in the mobile menu. The booking link
+  uses the same destination as the public website.
 - Every visible page can expose its already-published Markdown. Copy feedback is
   explicit; a failed fetch or clipboard operation must not look successful.
   View Markdown remains usable without JavaScript.
