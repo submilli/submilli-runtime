@@ -1,0 +1,111 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:04.300
+Submilli is the runtime where
+agent-written code runs.
+
+00:00:04.580 --> 00:00:08.340
+Packages give that code typed ways to work
+with services,
+
+00:00:08.420 --> 00:00:12.500
+and blueprints say which operations and
+arguments are allowed.
+
+00:00:12.580 --> 00:00:16.420
+The runtime brings those pieces together
+and enforces the decision
+
+00:00:16.500 --> 00:00:18.820
+before protected work continues.
+
+00:00:20.100 --> 00:00:24.860
+As the developer, you can write a package
+or use one that already exists.
+
+00:00:25.140 --> 00:00:28.500
+A package exposes typed functions for a
+service,
+
+00:00:28.580 --> 00:00:32.420
+and its checkpoint checks the action and
+arguments before protected
+
+00:00:32.500 --> 00:00:33.780
+work continues.
+
+00:00:35.067 --> 00:00:39.147
+You define the rules. Create a blueprint
+that allows a billing
+
+00:00:39.227 --> 00:00:43.307
+lookup when the requested customer matches
+the application’s context.
+
+00:00:43.867 --> 00:00:46.267
+Deny other operations by default.
+
+00:00:47.533 --> 00:00:51.853
+Your application binds Customer A’s ID as
+trusted context
+
+00:00:51.933 --> 00:00:55.933
+for the runtime. The package passes the
+requested customer into
+
+00:00:56.013 --> 00:01:00.093
+its permission check. The runtime compares
+that request with the customer
+
+00:01:00.173 --> 00:01:02.333
+ID the application selected.
+
+00:01:03.600 --> 00:01:08.200
+The agent writes this program in
+Submilli’s curated TypeScript subset.
+
+00:01:08.480 --> 00:01:11.560
+It reads Customer A’s charges and totals
+them.
+
+00:01:11.840 --> 00:01:16.240
+Unsupported API calls and unavailable
+imports fail validation
+
+00:01:16.320 --> 00:01:20.480
+before execution, but valid code still
+needs permission.
+
+00:01:21.767 --> 00:01:25.767
+The agent calls the package. Before
+looking up the charges,
+
+00:01:25.847 --> 00:01:29.367
+the package checks the operation and
+customer ID.
+
+00:01:29.447 --> 00:01:33.447
+The runtime applies the blueprint:
+Customer A matches,
+
+00:01:33.527 --> 00:01:35.207
+so the lookup proceeds.
+
+00:01:36.500 --> 00:01:40.500
+Now request Customer B. The code still
+passes language
+
+00:01:40.580 --> 00:01:44.820
+validation, but the permission check
+denies this lookup because Customer
+
+00:01:44.900 --> 00:01:48.740
+B does not match the application’s
+Customer A context.
+
+00:01:50.000 --> 00:01:54.080
+Submilli runs agent code with the access
+you define through packages
+
+00:01:54.160 --> 00:01:55.280
+and blueprints.

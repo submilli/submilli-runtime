@@ -1,9 +1,0 @@
-In about ninety seconds, we’ll build a local billing package under a blueprint you approve. Watch the package explicitly check access, the blueprint set the rule, and your application supply the trusted customer ID. Northwind’s lookup succeeds. Change the customer, and it’s denied.
-
-Create the billing package and add its charge lookup. Before reading the local ledger, the package checks the named operation and the requested customer ID. Check the package, then publish it to the local store.
-
-Define, review and approve the blueprint yourself, with an agent's help if useful. Require customer ID from the application, deny by default, and allow this lookup only when its argument matches that context. Then lint the blueprint.
-
-Start the server with a fresh local token. The application selects the configured blueprint, binds the customer ID for this request, and sends the program with that token. The response reports two charges and their total.
-
-Now run the second program. It keeps the useful total, then tries the same lookup for another customer. That customer ID fails the blueprint rule, so the runtime denies the lookup and returns an error instead of a result. The application supplies request context; the runtime enforces the configured check.

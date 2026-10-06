@@ -1,0 +1,23 @@
+1. What is Submilli?
+Submilli is the runtime where agent-written code runs. Packages give that code typed ways to work with services, and blueprints say which operations and arguments are allowed. The runtime brings those pieces together and enforces the decision before protected work continues.
+
+2. Use or write packages
+As the developer, you can write a package or use one that already exists. A package exposes typed functions for a service, and its checkpoint checks the action and arguments before protected work continues.
+
+3. Create a blueprint
+You define the rules. Create a blueprint that allows a billing lookup when the requested customer matches the application’s context. Deny other operations by default.
+
+4. Customer-scoped access
+Your application binds Customer A’s ID as trusted context for the runtime. The package passes the requested customer into its permission check. The runtime compares that request with the customer ID the application selected.
+
+5. Agent code inside the runtime
+The agent writes this program in Submilli’s curated TypeScript subset. It reads Customer A’s charges and totals them. Unsupported A P I calls and unavailable imports fail validation before execution, but valid code still needs permission.
+
+6. Check before the lookup
+The agent calls the package. Before looking up the charges, the package checks the operation and customer ID. The runtime applies the blueprint: Customer A matches, so the lookup proceeds.
+
+7. A different customer is denied
+Now request Customer B. The code still passes language validation, but the permission check denies this lookup because Customer B does not match the application’s Customer A context.
+
+8. What Submilli does
+Submilli runs agent code with the access you define through packages and blueprints.
