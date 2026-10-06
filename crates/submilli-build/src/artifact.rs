@@ -1,8 +1,8 @@
 //! Local prebuilt package artifact reader/writer.
 
 use std::fmt;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use interpreter::{ModulePath, PackageDeclaration, TypeInfoTable};
@@ -38,6 +38,97 @@ const TYPE_INFO_FILE: &str = "type-info.json";
 const METADATA_FILE: &str = "metadata.json";
 const DOCS_README_FILE: &str = "docs/readme.md";
 const SOURCES_FILE: &str = "sources.json";
+
+// Keep one Wasm file compatible with the engine's default 256 MiB module cap,
+// while bounding auxiliary files and the whole retained package set too.
+const MAX_ARTIFACT_FILE_BYTES: usize = 256 << 20;
+const MAX_ARTIFACT_LOAD_BYTES: usize = 512 << 20;
+// Byte limits alone allow pathological numbers of nearly empty packages and
+// their map/vector bookkeeping.
+const MAX_ARTIFACT_PACKAGES: usize = 4_096;
+const READ_BUFFER_BYTES: usize = 8 << 10;
+
+#[derive(Clone, Copy)]
+pub(crate) struct ArtifactReadLimits {
+    pub(crate) max_file_bytes: usize,
+    pub(crate) max_total_bytes: usize,
+    pub(crate) max_packages: usize,
+}
+
+impl Default for ArtifactReadLimits {
+    fn default() -> Self {
+        Self {
+            max_file_bytes: MAX_ARTIFACT_FILE_BYTES,
+            max_total_bytes: MAX_ARTIFACT_LOAD_BYTES,
+            max_packages: MAX_ARTIFACT_PACKAGES,
+        }
+    }
+}
+
+pub(crate) struct ArtifactReadBudget {
+    limits: ArtifactReadLimits,
+    remaining: usize,
+    packages: usize,
+}
+
+impl ArtifactReadBudget {
+    pub(crate) fn new(limits: ArtifactReadLimits) -> Self {
+        Self {
+            limits,
+            remaining: limits.max_total_bytes,
+            packages: 0,
+        }
+    }
+
+    fn begin_package(&mut self, path: &Path) -> Result<(), ArtifactError> {
+        self.packages =
+            self.packages
+                .checked_add(1)
+                .ok_or_else(|| ArtifactError::PackageLimitExceeded {
+                    path: path.to_path_buf(),
+                    limit: self.limits.max_packages,
+                })?;
+        if self.packages > self.limits.max_packages {
+            return Err(ArtifactError::PackageLimitExceeded {
+                path: path.to_path_buf(),
+                limit: self.limits.max_packages,
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure(&self, path: &Path, bytes: u64) -> Result<(), ArtifactError> {
+        if bytes > self.limits.max_file_bytes as u64 {
+            return Err(ArtifactError::FileTooLarge {
+                path: path.to_path_buf(),
+                bytes,
+                limit: self.limits.max_file_bytes,
+            });
+        }
+        if bytes > self.remaining as u64 {
+            return Err(ArtifactError::LoadBudgetExceeded {
+                path: path.to_path_buf(),
+                bytes,
+                remaining: self.remaining,
+                limit: self.limits.max_total_bytes,
+            });
+        }
+        Ok(())
+    }
+
+    fn commit(&mut self, path: &Path, bytes: usize) -> Result<(), ArtifactError> {
+        self.remaining =
+            self.remaining
+                .checked_sub(bytes)
+                .ok_or_else(|| ArtifactError::LoadBudgetExceeded {
+                    path: path.to_path_buf(),
+                    bytes: bytes as u64,
+                    remaining: self.remaining,
+                    limit: self.limits.max_total_bytes,
+                })?;
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactMetadata {
@@ -182,6 +273,24 @@ pub enum ArtifactError {
         path: PathBuf,
         found: u32,
     },
+    FileTooLarge {
+        path: PathBuf,
+        bytes: u64,
+        limit: usize,
+    },
+    LoadBudgetExceeded {
+        path: PathBuf,
+        bytes: u64,
+        remaining: usize,
+        limit: usize,
+    },
+    Allocation {
+        path: PathBuf,
+    },
+    PackageLimitExceeded {
+        path: PathBuf,
+        limit: usize,
+    },
 }
 
 impl fmt::Display for ArtifactError {
@@ -209,6 +318,29 @@ impl fmt::Display for ArtifactError {
                 "unsupported artifact schema version {found} in {}; expected {ARTIFACT_SCHEMA_VERSION}",
                 path.display()
             ),
+            ArtifactError::FileTooLarge { path, bytes, limit } => write!(
+                f,
+                "artifact file {} is {bytes} bytes; limit is {limit} bytes",
+                path.display()
+            ),
+            ArtifactError::LoadBudgetExceeded {
+                path,
+                bytes,
+                remaining,
+                limit,
+            } => write!(
+                f,
+                "artifact file {} is {bytes} bytes with {remaining} bytes left in the {limit}-byte package-load budget",
+                path.display()
+            ),
+            ArtifactError::Allocation { path } => {
+                write!(f, "could not allocate artifact file {}", path.display())
+            }
+            ArtifactError::PackageLimitExceeded { path, limit } => write!(
+                f,
+                "artifact package count exceeds limit {limit} while loading {}",
+                path.display()
+            ),
         }
     }
 }
@@ -219,7 +351,11 @@ impl std::error::Error for ArtifactError {
             ArtifactError::Io { source, .. } => Some(source),
             ArtifactError::Json { source, .. } => Some(source),
             ArtifactError::Yaml { source, .. } => Some(source),
-            ArtifactError::UnsupportedSchema { .. } => None,
+            ArtifactError::UnsupportedSchema { .. }
+            | ArtifactError::FileTooLarge { .. }
+            | ArtifactError::LoadBudgetExceeded { .. }
+            | ArtifactError::Allocation { .. }
+            | ArtifactError::PackageLimitExceeded { .. } => None,
         }
     }
 }
@@ -303,24 +439,33 @@ pub fn write_capabilities_file(
 }
 
 pub fn read_package_artifact(dir: impl AsRef<Path>) -> Result<Artifact, ArtifactError> {
+    let mut budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
+    read_package_artifact_with_budget(dir, &mut budget)
+}
+
+pub(crate) fn read_package_artifact_with_budget(
+    dir: impl AsRef<Path>,
+    budget: &mut ArtifactReadBudget,
+) -> Result<Artifact, ArtifactError> {
     let dir = dir.as_ref();
+    budget.begin_package(dir)?;
     let metadata_path = dir.join(METADATA_FILE);
     // The version gate comes first: a schema bump can change the shape of the
     // other files, and decoding them against the current types would surface a
     // serde error about some interior field instead of "rebuild this package".
-    let metadata: ArtifactMetadata = read_json(&metadata_path)?;
+    let metadata: ArtifactMetadata = read_json(&metadata_path, budget)?;
     if metadata.schema_version != ARTIFACT_SCHEMA_VERSION {
         return Err(ArtifactError::UnsupportedSchema {
             path: metadata_path,
             found: metadata.schema_version,
         });
     }
-    let wasm = read_bytes(dir.join(WASM_FILE))?;
-    let type_info = read_json(dir.join(TYPE_INFO_FILE))?;
-    let capabilities = read_yaml(dir.join(CAPABILITIES_FILE))?;
-    let package_declaration = read_json(dir.join(PACKAGE_DECLARATION_FILE))?;
-    let documentation = read_optional_text(dir.join(DOCS_README_FILE))?;
-    let sources = read_optional_json(dir.join(SOURCES_FILE))?.unwrap_or_default();
+    let wasm = read_bytes(dir.join(WASM_FILE), budget)?;
+    let type_info = read_json(dir.join(TYPE_INFO_FILE), budget)?;
+    let capabilities = read_yaml(dir.join(CAPABILITIES_FILE), budget)?;
+    let package_declaration = read_json(dir.join(PACKAGE_DECLARATION_FILE), budget)?;
+    let documentation = read_optional_text(dir.join(DOCS_README_FILE), budget)?;
+    let sources = read_optional_json(dir.join(SOURCES_FILE), budget)?.unwrap_or_default();
 
     Ok(Artifact {
         wasm,
@@ -340,29 +485,128 @@ fn create_dir_all(path: &Path) -> Result<(), ArtifactError> {
     })
 }
 
-fn read_bytes(path: PathBuf) -> Result<Vec<u8>, ArtifactError> {
-    fs::read(&path).map_err(|source| ArtifactError::Io { path, source })
+fn read_bytes(path: PathBuf, budget: &mut ArtifactReadBudget) -> Result<Vec<u8>, ArtifactError> {
+    let file = File::open(&path).map_err(|source| ArtifactError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    read_open_file(file, path, budget)
 }
 
-fn read_optional_text(path: PathBuf) -> Result<String, ArtifactError> {
-    match fs::read_to_string(&path) {
-        Ok(text) => Ok(text),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(String::new()),
-        Err(source) => Err(ArtifactError::Io { path, source }),
-    }
+fn read_optional_text(
+    path: PathBuf,
+    budget: &mut ArtifactReadBudget,
+) -> Result<String, ArtifactError> {
+    let Some(bytes) = read_optional_file(path.clone(), budget)? else {
+        return Ok(String::new());
+    };
+    String::from_utf8(bytes).map_err(|source| ArtifactError::Io {
+        path,
+        source: io::Error::new(io::ErrorKind::InvalidData, source),
+    })
 }
 
-fn read_optional_json<T>(path: PathBuf) -> Result<Option<T>, ArtifactError>
+fn read_optional_json<T>(
+    path: PathBuf,
+    budget: &mut ArtifactReadBudget,
+) -> Result<Option<T>, ArtifactError>
 where
     T: for<'de> Deserialize<'de>,
 {
-    match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|source| ArtifactError::Json { path, source }),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(ArtifactError::Io { path, source }),
+    let Some(bytes) = read_optional_file(path.clone(), budget)? else {
+        return Ok(None);
+    };
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|source| ArtifactError::Json { path, source })
+}
+
+fn read_optional_file(
+    path: PathBuf,
+    budget: &mut ArtifactReadBudget,
+) -> Result<Option<Vec<u8>>, ArtifactError> {
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(ArtifactError::Io { path, source }),
+    };
+    read_open_file(file, path, budget).map(Some)
+}
+
+fn read_open_file(
+    mut file: File,
+    path: PathBuf,
+    budget: &mut ArtifactReadBudget,
+) -> Result<Vec<u8>, ArtifactError> {
+    let declared_size = file
+        .metadata()
+        .map_err(|source| ArtifactError::Io {
+            path: path.clone(),
+            source,
+        })?
+        .len();
+    budget.ensure(&path, declared_size)?;
+    let declared_size =
+        usize::try_from(declared_size).map_err(|_| ArtifactError::FileTooLarge {
+            path: path.clone(),
+            bytes: declared_size,
+            limit: budget.limits.max_file_bytes,
+        })?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(declared_size)
+        .map_err(|_| ArtifactError::Allocation { path: path.clone() })?;
+    budget.ensure(&path, bytes.capacity() as u64)?;
+    let mut buffer = [0_u8; READ_BUFFER_BYTES];
+    loop {
+        let read = file.read(&mut buffer).map_err(|source| ArtifactError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        if read == 0 {
+            break;
+        }
+        let total = bytes
+            .len()
+            .checked_add(read)
+            .ok_or_else(|| ArtifactError::FileTooLarge {
+                path: path.clone(),
+                bytes: u64::MAX,
+                limit: budget.limits.max_file_bytes,
+            })?;
+        budget.ensure(&path, total as u64)?;
+        reserve_for_growth(&mut bytes, total, &path, budget)?;
+        bytes.extend_from_slice(&buffer[..read]);
     }
+    // Vec capacity, rather than logical length, is the allocation retained by
+    // Wasm/text artifacts. This also keeps a truncated file or an allocator's
+    // rounded capacity from escaping the aggregate budget.
+    budget.commit(&path, bytes.capacity())?;
+    Ok(bytes)
+}
+
+fn reserve_for_growth(
+    bytes: &mut Vec<u8>,
+    required: usize,
+    path: &Path,
+    budget: &ArtifactReadBudget,
+) -> Result<(), ArtifactError> {
+    if required <= bytes.capacity() {
+        return Ok(());
+    }
+    let ceiling = budget.limits.max_file_bytes.min(budget.remaining);
+    let target = bytes
+        .capacity()
+        .max(READ_BUFFER_BYTES)
+        .saturating_mul(2)
+        .max(required)
+        .min(ceiling);
+    bytes
+        .try_reserve_exact(target - bytes.len())
+        .map_err(|_| ArtifactError::Allocation {
+            path: path.to_path_buf(),
+        })?;
+    budget.ensure(path, bytes.capacity() as u64)
 }
 
 fn write_bytes(path: PathBuf, bytes: &[u8]) -> Result<(), ArtifactError> {
@@ -372,15 +616,12 @@ fn write_bytes(path: PathBuf, bytes: &[u8]) -> Result<(), ArtifactError> {
     fs::write(&path, bytes).map_err(|source| ArtifactError::Io { path, source })
 }
 
-fn read_json<T>(path: impl AsRef<Path>) -> Result<T, ArtifactError>
+fn read_json<T>(path: impl AsRef<Path>, budget: &mut ArtifactReadBudget) -> Result<T, ArtifactError>
 where
     T: for<'de> Deserialize<'de>,
 {
     let path = path.as_ref();
-    let bytes = fs::read(path).map_err(|source| ArtifactError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let bytes = read_bytes(path.to_path_buf(), budget)?;
     serde_json::from_slice(&bytes).map_err(|source| ArtifactError::Json {
         path: path.to_path_buf(),
         source,
@@ -398,14 +639,11 @@ where
     fs::write(&path, bytes).map_err(|source| ArtifactError::Io { path, source })
 }
 
-fn read_yaml<T>(path: PathBuf) -> Result<T, ArtifactError>
+fn read_yaml<T>(path: PathBuf, budget: &mut ArtifactReadBudget) -> Result<T, ArtifactError>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let bytes = fs::read(&path).map_err(|source| ArtifactError::Io {
-        path: path.clone(),
-        source,
-    })?;
+    let bytes = read_bytes(path.clone(), budget)?;
     serde_yml::from_slice(&bytes).map_err(|source| ArtifactError::Yaml { path, source })
 }
 
@@ -636,6 +874,56 @@ mod tests {
 
         assert!(matches!(err, ArtifactError::Io { .. }));
         assert!(err.to_string().contains("pkg.wasm"));
+    }
+
+    #[test]
+    fn artifact_rejects_an_oversized_file_before_decoding_it() {
+        let dir = tempdir().expect("tempdir");
+        let defs = sample_declaration();
+        write_package_artifact(
+            dir.path(),
+            b"\0asm\x01\0\0\0",
+            &sample_type_info(),
+            &sample_capabilities(),
+            &defs,
+            &ArtifactMetadata::new("@acme/util", "1.0.0", Vec::new()),
+        )
+        .expect("write artifact");
+        fs::write(dir.path().join(WASM_FILE), vec![0_u8; 1_025]).expect("replace wasm");
+        let limits = ArtifactReadLimits {
+            max_file_bytes: 1_024,
+            max_total_bytes: 16 << 10,
+            max_packages: 1,
+        };
+        let mut budget = ArtifactReadBudget::new(limits);
+
+        let error = read_package_artifact_with_budget(dir.path(), &mut budget)
+            .expect_err("oversized wasm must fail");
+
+        assert!(matches!(
+            error,
+            ArtifactError::FileTooLarge {
+                bytes: 1_025,
+                limit: 1_024,
+                ..
+            }
+        ));
+        assert!(error.to_string().contains(WASM_FILE));
+    }
+
+    #[test]
+    fn bounded_reader_accepts_the_exact_file_and_total_limit() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("exact.bin");
+        fs::write(&path, b"1234").expect("write fixture");
+        let mut budget = ArtifactReadBudget::new(ArtifactReadLimits {
+            max_file_bytes: 4,
+            max_total_bytes: 4,
+            max_packages: 1,
+        });
+
+        assert_eq!(read_bytes(path, &mut budget).unwrap(), b"1234");
+        assert_eq!(budget.remaining, 0);
     }
 
     /// A stale artifact reports its version rather than a serde error about

@@ -57,7 +57,7 @@ other N entries remain open. Evidence means:
 | N12 | Bound validation frontiers before enqueueing children | Allocation amplification measured |
 | N13 | **Engine fixed; adoption pending:** bound expanded Wasm locals across a module | `submilli-wasm` commit `faacf98`; release/adoption remains |
 | N14 | **Fixed on branch:** bound aggregate MCP discovery pages/tools/schemas | Paginated localhost and aggregate-limit regressions pass |
-| N15 | Bound artifact reads and retained package data before loading | Inspection; file-input allocation |
+| N15 | **Fixed on branch:** bound artifact reads and retained package data before loading | File and wide-closure regressions pass |
 | N16 | Admit native string-builder output before allocation | Inspection; host allocation before store limit |
 | N17 | Validate the public reaper's timer configuration | Inspection; zero interval panics |
 
@@ -470,6 +470,16 @@ package stores or aggregate loaded artifacts.
 read/decode/cache growth. Preserve I/O/format errors and package context. Test
 oversized individual files and a wide closure of individually acceptable files;
 never claim passing depth tests establish byte bounds.
+
+**Disposition (2026-10-06): fixed on branch.** Artifact reads now cap each file
+at 256 MiB and share a 512 MiB/4,096-package budget across multi-package loads,
+dependency closures and the compiler driver's retained external cache. Reads use
+fallible allocation, verify growth after metadata inspection, grow geometrically
+within the remaining limits and charge retained buffer capacity. Typed errors
+preserve the file and package context. All 71 build-library tests pass, including
+exact bounds, oversized files, wide closures, driver-cache sharing and recovery;
+formatting, workspace all-target Clippy and three independent review rounds pass.
+No full-suite tests ran.
 
 ### N16 — Native string results are allocated before tenant admission
 

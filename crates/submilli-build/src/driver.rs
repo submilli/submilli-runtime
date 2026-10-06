@@ -12,6 +12,8 @@ use interpreter::{
     compile_package_with_transitive, diagnostics,
 };
 
+use crate::artifact::{ArtifactReadBudget, ArtifactReadLimits};
+
 use crate::{
     ArtifactDependency, ArtifactError, ArtifactMetadata, ArtifactSource,
     CANONICAL_SOURCE_EXTENSION, CapabilitySchema, DependencyKind, LEGACY_SOURCE_EXTENSION,
@@ -56,6 +58,7 @@ pub fn build_packages(
 
     let mut built: BTreeMap<PackageName, PackageDeclaration> = BTreeMap::new();
     let mut external_cache: BTreeMap<PackageName, ExternalArtifact> = BTreeMap::new();
+    let mut external_budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
     let mut results = Vec::with_capacity(order.len());
     // Schema derivation resolves a binding path through these as the
     // compiler does.
@@ -64,7 +67,12 @@ pub fn build_packages(
         interpreter::runtime::prelude::cached_runtime_package_declarations();
     for index in order {
         let package = scoped[index];
-        load_external_dependencies(package, externals, &mut external_cache)?;
+        load_external_dependencies(
+            package,
+            externals,
+            &mut external_cache,
+            &mut external_budget,
+        )?;
         let dependency_refs: Vec<&PackageDeclaration> = package
             .dependencies
             .iter()
@@ -553,6 +561,7 @@ fn load_external_dependencies(
     package: &PackageManifest,
     externals: &PackageStore,
     cache: &mut BTreeMap<PackageName, ExternalArtifact>,
+    budget: &mut ArtifactReadBudget,
 ) -> Result<(), DriverError> {
     let mut queue: Vec<(PackageName, Option<PackageVersion>)> = package
         .dependencies
@@ -564,13 +573,12 @@ fn load_external_dependencies(
         if cache.contains_key(&name) {
             continue;
         }
-        let artifact =
-            externals
-                .load(name.as_str())
-                .map_err(|source| DriverError::MissingExternal {
-                    package: name.clone(),
-                    source: Box::new(source),
-                })?;
+        let artifact = externals
+            .load_with_budget(name.as_str(), budget)
+            .map_err(|source| DriverError::MissingExternal {
+                package: name.clone(),
+                source: Box::new(source),
+            })?;
         // GitHub deps pin by SHA and adopt the fetched version; only a
         // version-declared external must match the store exactly.
         if let Some(required) = &required_version
@@ -827,12 +835,88 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::{PackageEntrypoint, PackagePath, ResolvedDependency, write_package_artifact};
 
     #[test]
     fn module_path_rejects_file_outside_source_directory() {
         let error = module_path(Path::new("package/src"), Path::new("other/lib.ts"))
             .expect_err("the file is outside the source directory");
         assert!(matches!(error, DriverError::ModuleOutsideSource { .. }));
+    }
+
+    #[test]
+    fn external_dependency_cache_shares_one_package_budget() {
+        let root = tempdir().expect("store root");
+        write_external_artifact(root.path(), "@external/a");
+        write_external_artifact(root.path(), "@external/b");
+        let store = PackageStore::new(root.path());
+        let package = PackageManifest {
+            name: PackageName::new("@app/main"),
+            version: PackageVersion::new("1.0.0"),
+            description: String::new(),
+            keywords: Vec::new(),
+            path: PackagePath::new("."),
+            entrypoint: PackageEntrypoint::new("src/lib.ts"),
+            dependencies: vec![
+                ResolvedDependency {
+                    name: PackageName::new("@external/a"),
+                    version: Some(PackageVersion::new("1.0.0")),
+                    kind: DependencyKind::External,
+                },
+                ResolvedDependency {
+                    name: PackageName::new("@external/b"),
+                    version: Some(PackageVersion::new("1.0.0")),
+                    kind: DependencyKind::External,
+                },
+            ],
+        };
+        let limits = ArtifactReadLimits {
+            max_file_bytes: 1 << 20,
+            max_total_bytes: 1 << 20,
+            max_packages: 1,
+        };
+        let mut budget = ArtifactReadBudget::new(limits);
+        let mut cache = BTreeMap::new();
+
+        let error = load_external_dependencies(&package, &store, &mut cache, &mut budget)
+            .expect_err("the second retained external must exceed the shared budget");
+
+        assert!(matches!(
+            error,
+            DriverError::MissingExternal { source, .. }
+                if matches!(
+                    source.as_ref(),
+                    PackageStoreError::Artifact {
+                        source: ArtifactError::PackageLimitExceeded { limit: 1, .. },
+                        ..
+                    }
+                )
+        ));
+        let mut budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
+        let mut cache = BTreeMap::new();
+        load_external_dependencies(&package, &store, &mut cache, &mut budget)
+            .expect("ordinary budget recovers");
+        assert_eq!(cache.len(), 2);
+    }
+
+    fn write_external_artifact(root: &Path, name: &str) {
+        let mut declaration = PackageDeclaration::with_package(name);
+        declaration.refresh_shapes();
+        let type_info = interpreter::TypeInfoTable {
+            package_name: name.to_string(),
+            types: Vec::new(),
+        };
+        let capabilities = derive_capability_schema(&declaration, &[], &[]);
+        let (scope, package) = name.split_once('/').expect("scoped package");
+        write_package_artifact(
+            root.join(scope).join(package),
+            b"\0asm\x01\0\0\0",
+            &type_info,
+            &capabilities,
+            &declaration,
+            &ArtifactMetadata::new(name, "1.0.0", Vec::new()),
+        )
+        .expect("write external artifact");
     }
 
     #[cfg(unix)]

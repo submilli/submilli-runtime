@@ -4,7 +4,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::{Artifact, ArtifactError, read_package_artifact};
+use crate::artifact::{ArtifactReadBudget, ArtifactReadLimits, read_package_artifact_with_budget};
+use crate::{Artifact, ArtifactError};
 
 // Bound recursive dependency traversal before it can exhaust the host stack.
 const MAX_DEPENDENCY_DEPTH: usize = 128;
@@ -93,8 +94,17 @@ impl PackageStore {
     /// root: silently running a different copy than the one on disk would be
     /// worse than refusing.
     pub fn load(&self, name: &str) -> Result<Artifact, PackageStoreError> {
+        let mut budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
+        self.load_with_budget(name, &mut budget)
+    }
+
+    pub(crate) fn load_with_budget(
+        &self,
+        name: &str,
+        budget: &mut ArtifactReadBudget,
+    ) -> Result<Artifact, PackageStoreError> {
         for root in self.roots() {
-            if let Some(artifact) = self.load_from(root, name)? {
+            if let Some(artifact) = self.load_from(root, name, budget)? {
                 return Ok(artifact);
             }
         }
@@ -105,7 +115,8 @@ impl PackageStore {
     /// decisions (conflicts, upgrades, lockfile satisfaction) use this so the
     /// owned store stays self-contained.
     pub fn load_owned(&self, name: &str) -> Result<Artifact, PackageStoreError> {
-        match self.load_from(&self.root, name)? {
+        let mut budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
+        match self.load_from(&self.root, name, &mut budget)? {
             Some(artifact) => Ok(artifact),
             None => Err(self.missing(name, vec![self.root.clone()])),
         }
@@ -116,17 +127,23 @@ impl PackageStore {
     /// applies. A directory that exists but is missing files (an interrupted
     /// install, a hand-deleted artifact) is the artifact's own error, so a
     /// half-written owned copy is never silently replaced by a fallback one.
-    fn load_from(&self, root: &Path, name: &str) -> Result<Option<Artifact>, PackageStoreError> {
+    fn load_from(
+        &self,
+        root: &Path,
+        name: &str,
+        budget: &mut ArtifactReadBudget,
+    ) -> Result<Option<Artifact>, PackageStoreError> {
         let dir = package_dir_under(root, name)?;
         if !package_directory_exists(name, &dir)? {
             return Ok(None);
         }
-        let artifact =
-            read_package_artifact(&dir).map_err(|source| PackageStoreError::Artifact {
+        let artifact = read_package_artifact_with_budget(&dir, budget).map_err(|source| {
+            PackageStoreError::Artifact {
                 name: name.to_string(),
                 package_dir: dir.clone(),
                 source,
-            })?;
+            }
+        })?;
         validate_artifact_name(name, &dir, artifact).map(Some)
     }
 
@@ -151,7 +168,11 @@ impl PackageStore {
         &self,
         names: impl IntoIterator<Item = &'a str>,
     ) -> Result<Vec<Artifact>, PackageStoreError> {
-        names.into_iter().map(|name| self.load(name)).collect()
+        let mut budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
+        names
+            .into_iter()
+            .map(|name| self.load_with_budget(name, &mut budget))
+            .collect()
     }
 
     /// Load the named packages plus their transitive dependencies (from
@@ -163,11 +184,20 @@ impl PackageStore {
         &self,
         names: impl IntoIterator<Item = &'a str>,
     ) -> Result<Vec<Artifact>, PackageStoreError> {
+        self.load_closure_with_limits(names, ArtifactReadLimits::default())
+    }
+
+    fn load_closure_with_limits<'a>(
+        &self,
+        names: impl IntoIterator<Item = &'a str>,
+        limits: ArtifactReadLimits,
+    ) -> Result<Vec<Artifact>, PackageStoreError> {
         let mut marks = BTreeMap::new();
         let mut stack = Vec::new();
         let mut order = Vec::new();
+        let mut budget = ArtifactReadBudget::new(limits);
         for name in names {
-            self.visit_closure(name, None, &mut marks, &mut stack, &mut order)?;
+            self.visit_closure(name, None, &mut marks, &mut stack, &mut order, &mut budget)?;
         }
         Ok(order)
     }
@@ -179,6 +209,7 @@ impl PackageStore {
         marks: &mut BTreeMap<String, ClosureMark>,
         stack: &mut Vec<String>,
         order: &mut Vec<Artifact>,
+        budget: &mut ArtifactReadBudget,
     ) -> Result<(), PackageStoreError> {
         match marks.get(name) {
             Some(ClosureMark::Done { version }) => {
@@ -198,27 +229,36 @@ impl PackageStore {
                 limit: MAX_DEPENDENCY_DEPTH,
             });
         }
-        let artifact = self.load(name).map_err(|err| match (err, required_by) {
-            (
-                PackageStoreError::MissingPackage {
-                    searched_roots,
-                    available,
-                    ..
-                },
-                Some((dependent, _)),
-            ) => PackageStoreError::MissingDependency {
-                name: name.to_string(),
-                required_by: dependent.to_string(),
-                searched_roots,
-                available,
-            },
-            (err, _) => err,
-        })?;
+        let artifact =
+            self.load_with_budget(name, budget)
+                .map_err(|err| match (err, required_by) {
+                    (
+                        PackageStoreError::MissingPackage {
+                            searched_roots,
+                            available,
+                            ..
+                        },
+                        Some((dependent, _)),
+                    ) => PackageStoreError::MissingDependency {
+                        name: name.to_string(),
+                        required_by: dependent.to_string(),
+                        searched_roots,
+                        available,
+                    },
+                    (err, _) => err,
+                })?;
         check_edge_version(name, required_by, &artifact.metadata.package_version)?;
         marks.insert(name.to_string(), ClosureMark::Visiting);
         stack.push(name.to_string());
         for dep in &artifact.metadata.dependencies {
-            self.visit_closure(&dep.name, Some((name, &dep.version)), marks, stack, order)?;
+            self.visit_closure(
+                &dep.name,
+                Some((name, &dep.version)),
+                marks,
+                stack,
+                order,
+                budget,
+            )?;
         }
         stack.pop();
         marks.insert(
@@ -993,6 +1033,42 @@ mod tests {
     }
 
     #[test]
+    fn load_closure_bounds_bytes_across_individually_valid_packages() {
+        let tmp = tempdir().expect("tempdir");
+        write_package(tmp.path(), "@acme/a", "@acme/a");
+        write_package(tmp.path(), "@acme/b", "@acme/b");
+        let a_dir = tmp.path().join("@acme/a");
+        let b_dir = tmp.path().join("@acme/b");
+        let (a_total, a_max) = artifact_file_sizes(&a_dir);
+        let (b_total, b_max) = artifact_file_sizes(&b_dir);
+        let limits = ArtifactReadLimits {
+            max_file_bytes: a_max.max(b_max),
+            max_total_bytes: a_total.max(b_total),
+            max_packages: 2,
+        };
+        let store = PackageStore::new(tmp.path());
+
+        let error = store
+            .load_closure_with_limits(["@acme/a", "@acme/b"], limits)
+            .expect_err("combined closure exceeds the single-package budget");
+
+        assert!(matches!(
+            error,
+            PackageStoreError::Artifact {
+                source: ArtifactError::LoadBudgetExceeded { .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            store
+                .load_closure(["@acme/a", "@acme/b"])
+                .expect("ordinary budget recovers")
+                .len(),
+            2
+        );
+    }
+
+    #[test]
     fn load_closure_missing_dependency_names_the_dependent() {
         let tmp = tempdir().expect("tempdir");
         write_package_with_deps(
@@ -1065,5 +1141,25 @@ mod tests {
             text.contains("2.0.0") && text.contains("1.0.0"),
             "got: {text}"
         );
+    }
+
+    fn artifact_file_sizes(dir: &Path) -> (usize, usize) {
+        let mut total = 0;
+        let mut largest = 0;
+        let mut pending = vec![dir.to_path_buf()];
+        while let Some(path) = pending.pop() {
+            for entry in fs::read_dir(path).expect("read artifact directory") {
+                let entry = entry.expect("read artifact entry");
+                let metadata = entry.metadata().expect("read artifact metadata");
+                if metadata.is_dir() {
+                    pending.push(entry.path());
+                } else {
+                    let bytes = usize::try_from(metadata.len()).expect("fixture fits usize");
+                    total += bytes;
+                    largest = largest.max(bytes);
+                }
+            }
+        }
+        (total, largest)
     }
 }
