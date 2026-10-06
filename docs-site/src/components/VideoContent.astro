@@ -25,3 +25,19 @@ const sections = rendered.split(/<!-- video:([a-z][a-z0-9-]*) -->/);
     })}
   </> : <slot />}
 </DefaultContent>
+
+<script>
+  // Preserve native table semantics while making overflow keyboard-scrollable.
+  const tables = document.querySelectorAll<HTMLTableElement>('.sl-markdown-content table');
+  const updateTable = (table: HTMLTableElement) => {
+    if (table.scrollWidth > table.clientWidth + 1) table.tabIndex = 0;
+    else table.removeAttribute('tabindex');
+  };
+  const observer = new ResizeObserver((entries) => {
+    for (const { target } of entries) if (target instanceof HTMLTableElement) updateTable(target);
+  });
+  for (const table of tables) {
+    updateTable(table);
+    observer.observe(table);
+  }
+</script>

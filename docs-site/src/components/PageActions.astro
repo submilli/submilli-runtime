@@ -1,0 +1,148 @@
+---
+import { markdownPath } from '../lib/agent-docs';
+
+interface Props {
+	slug: string;
+}
+
+const { slug } = Astro.props;
+const markdownUrl = markdownPath(slug);
+---
+
+<div class="page-actions" data-markdown-url={markdownUrl}>
+	<a href={markdownUrl} class="page-actions__link">
+		<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+			<path d="M14 2v6h6M8 13h8M8 17h6" />
+		</svg>
+		<span>View Markdown</span>
+	</a>
+	<button type="button" class="page-actions__button" data-copy-page disabled>
+		<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<rect x="9" y="9" width="11" height="11" rx="2" />
+			<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+		</svg>
+		<span>Copy page</span>
+	</button>
+	<button type="button" class="page-actions__retry" data-retry hidden>Retry</button>
+	<span class="page-actions__status" data-status role="status" aria-live="polite"></span>
+	<textarea class="page-actions__manual" data-manual readonly hidden aria-label="Page Markdown to copy manually"></textarea>
+</div>
+
+<script>
+	import { copyText, fetchMarkdown } from '../lib/page-actions';
+
+	for (const root of document.querySelectorAll('.page-actions')) {
+		if (!(root instanceof HTMLElement) || root.dataset.pageActionsReady === 'true') continue;
+		root.dataset.pageActionsReady = 'true';
+		const copyButton = root.querySelector('[data-copy-page]');
+		const retryButton = root.querySelector('[data-retry]');
+		const status = root.querySelector('[data-status]');
+		const manual = root.querySelector('[data-manual]');
+		const markdownUrl = root.dataset.markdownUrl;
+		let request: AbortController | undefined;
+		let running = false;
+
+		if (copyButton instanceof HTMLButtonElement && retryButton instanceof HTMLButtonElement && status instanceof HTMLElement && manual instanceof HTMLTextAreaElement && markdownUrl) {
+			copyButton.disabled = false;
+
+			const setStatus = (message: string) => { status.textContent = message; };
+			const copyPage = async () => {
+				if (running) return;
+				running = true;
+				request = new AbortController();
+				copyButton.disabled = true;
+				retryButton.hidden = true;
+				manual.hidden = true;
+				setStatus('Loading page Markdown…');
+
+				try {
+					const markdown = await fetchMarkdown(fetch, markdownUrl, request.signal);
+					const method = await copyText(markdown, { navigator, document });
+					if (method === 'manual') {
+						manual.value = markdown;
+						manual.hidden = false;
+						manual.focus();
+						manual.select();
+						setStatus('Clipboard unavailable. Select the Markdown and copy it manually.');
+					} else {
+						setStatus('Page Markdown copied.');
+					}
+				} catch (error) {
+					if (error instanceof DOMException && error.name === 'AbortError') return;
+					setStatus('Could not load the page Markdown.');
+					retryButton.hidden = false;
+				} finally {
+					running = false;
+					copyButton.disabled = false;
+				}
+			};
+
+			copyButton.addEventListener('click', copyPage);
+			retryButton.addEventListener('click', copyPage);
+			window.addEventListener('pagehide', () => request?.abort(), { once: true });
+		}
+	}
+</script>
+
+<style>
+	.page-actions {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.25rem 0.875rem;
+		margin-top: 0.875rem;
+		font: 500 0.8125rem/1.4 var(--sl-font);
+	}
+	.page-actions__link,
+	.page-actions__button,
+	.page-actions__retry {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		min-height: 2.75rem;
+		padding: 0.25rem 0.375rem;
+		border: 0;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		color: var(--sl-color-gray-2);
+		font: inherit;
+		text-decoration: none;
+		cursor: pointer;
+	}
+	.page-actions__link:hover,
+	.page-actions__button:hover:not(:disabled),
+	.page-actions__retry:hover {
+		background: var(--sub-hover);
+		color: var(--sl-color-white);
+	}
+	.page-actions__button:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+	}
+	.page-actions__retry {
+		color: var(--sl-color-text-accent);
+	}
+	.page-actions__status {
+		color: var(--sl-color-gray-3);
+	}
+	.page-actions [hidden] {
+		display: none !important;
+	}
+	.page-actions__manual {
+		flex-basis: 100%;
+		width: 100%;
+		min-height: 7rem;
+		padding: 0.625rem;
+		border: 1px solid var(--sub-line);
+		border-radius: var(--radius-sm);
+		background: var(--sub-inline);
+		color: var(--sl-color-gray-2);
+		font: 0.8125rem/1.5 var(--sl-font-mono);
+		resize: vertical;
+	}
+	.page-actions :is(a, button):focus-visible {
+		outline: 2px solid var(--sl-color-text-accent);
+		outline-offset: 2px;
+	}
+</style>

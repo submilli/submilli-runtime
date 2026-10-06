@@ -10,6 +10,7 @@ const slug = entry.id === 'index' ? '' : entry.id;
 ---
 
 <footer class="page-footer">
+	<Pagination />
 	<div class="footer-details">
 		{entry.id !== '404' && !entry.data.sidebar.hidden && (
 			<nav class="resource-links print:hidden" aria-label="Page resources">
@@ -23,7 +24,6 @@ const slug = entry.id === 'index' ? '' : entry.id;
 			<LastUpdated />
 		</div>
 	</div>
-	<Pagination />
 </footer>
 
 <style>
