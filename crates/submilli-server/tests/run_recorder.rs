@@ -490,7 +490,6 @@ function main(): number {
   check("test.com/ok", {});
   let spins = 0;
   while (true) { spins = spins + 1; }
-  return spins;
 }
 "#;
 
