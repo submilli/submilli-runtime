@@ -20,7 +20,7 @@ test('honors explicit metadata and leaves unknown code neutral', () => {
 	assert.equal(classifyCodeBlock('export const value = 1;', 'typescript', metadata()), undefined);
 });
 
-test('renders labels after frames while preserving the copy payload', async () => {
+test('keeps roles accessible without adding headers or changing the copy payload', async () => {
 	const engine = new ExpressiveCode({ plugins: [codeBlocks()] });
 	const { renderedGroupAst } = await engine.render({
 		code: 'submilli build init @acme/billing package',
@@ -28,7 +28,8 @@ test('renders labels after frames while preserving the copy payload', async () =
 	});
 	const html = toHtml(renderedGroupAst);
 	assert.match(html, /class="frame sub-code-input/);
-	assert.match(html, /<span class="sub-code-label">Input<\/span>/);
+	assert.match(html, /<span class="sub-code-role">Command<\/span>/);
+	assert.match(html, /<figcaption class="header"><\/figcaption><span class="sub-code-role">Command<\/span><pre/);
 	assert.match(html, /data-code="submilli build init @acme\/billing package"/);
 
 	const titled = await engine.render({
@@ -38,6 +39,6 @@ test('renders labels after frames while preserving the copy payload', async () =
 	});
 	const titledHtml = toHtml(titled.renderedGroupAst);
 	assert.match(titledHtml, /class="frame [^\"]*sub-code-output[^\"]*"/);
-	assert.match(titledHtml, /sub-code-label">Output<\/span>/);
+	assert.match(titledHtml, /sub-code-role">Output<\/span>/);
 	assert.match(titledHtml, /title[^>]*>result<\/div>|title[^>]*>result<\/span>/);
 });
