@@ -23,9 +23,14 @@ use crate::error::ExecuteError;
 pub mod events;
 mod program;
 pub mod recheck;
+pub mod replay;
 pub use events::{EVENT_SCHEMA, EventKind, SessionEvent};
 pub use program::{ProgramRun, run_program};
 pub use recheck::{RecheckReport, RecordedRun, recheck};
+pub use replay::{
+    Cassette, Miss, MissReason, RecordedHttpClient, RecordedLlmProvider, RecordedMcpTransport,
+    ReplayReport, Served,
+};
 pub use submilli_shared::mcp::McpCatalog;
 
 /// How a run reached the server.
