@@ -1037,6 +1037,13 @@ fn build_commands_report_unresolved_http_hosts() {
             let out = build_subcommand(command, &project, tmp.path(), &[]);
             assert!(out.status.success(), "{command}: {}", stderr(&out));
             let diagnostics = stderr(&out);
+            let semantic_warning =
+                "public route `fetch` reaches `http.get` without a direct semantic `check()`";
+            assert_eq!(
+                diagnostics.matches(semantic_warning).count(),
+                1,
+                "{command} with {prefix}: {diagnostics}"
+            );
             let warning = "cannot statically resolve the host in the URL passed to `http.get`";
             assert_eq!(
                 diagnostics.matches(warning).count(),
@@ -2076,6 +2083,15 @@ export function op(customer: string): void {
  const approve = (): void => { check("acme.com/op", { customer }); };
  approve();
 }
+"#,
+        ),
+        (
+            "public route `op` reaches `http.get` without a direct semantic `check()`",
+            r#"import { get } from "submilli:http";
+/** Fetch data.
+ * @returns The response body.
+ */
+export function op(): string { return get("https://api.example.com/data").body; }
 "#,
         ),
         (

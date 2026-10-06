@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c79ae1075feef5fdf61d7bd8eff0301abd89f4b9f3b52a3df12f06a073bfa862"
+  contentHash: "838453aff4af883a4a0458f900ffc12685598f047b905a29ccbff34716635d5c"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -244,6 +244,7 @@ The build compares each tag with the `check` calls (from
 | Severity | Message | Cause |
 | --- | --- | --- |
 | Error | ``payload key `extra` missing from `@capability` binding`` | A `check` payload field the tag doesn't list |
+| Warning | ``public route `send` reaches `http.post` without a direct semantic `check()` `` | An exported function, function-valued constant, or public method reaches a privileged operation without calling `check()` in its own body |
 | Warning | ``` `@capability` binding key `team` is missing from `check()` payload``` | A tag field the `check` payload doesn't contain |
 | Warning | ``missing `@capability acme.com/tickets.reopen` for `check()` call`` | A `check` with no tag of that name |
 | Warning | ``extra `@capability acme.com/tickets.open` has no matching `check()` call`` | A tag with no `check` of that name |
@@ -256,6 +257,11 @@ A warning doesn't stop the build. With `--deny-warnings`, or
 documentation warnings alike, fails `submilli build check`, `build test`,
 `build publish-local`, `submilli install`, and `submilli server packages
 install`, which then installs nothing.
+
+The missing semantic-check diagnostic starts as a warning while maintained
+Packages add direct checks to their public authority routes. It will become a
+compile error after that rollout. Use `--deny-warnings` to enforce the future
+rule now.
 
 Where a `check` may be called, and how each value reaching it must be read,
 is in [Export a function](/docs/packages/export-a-function).
