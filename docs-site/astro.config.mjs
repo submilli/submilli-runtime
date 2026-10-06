@@ -6,6 +6,7 @@ import { satteri } from "@astrojs/markdown-satteri";
 import { submilliDark, submilliLight } from "./src/code-themes.mjs";
 import { securityAside } from "./src/plugins/satteri-security-aside.mjs";
 import { agentDocs } from "./src/plugins/agent-docs.ts";
+import { codeBlocks } from "./src/plugins/code-blocks.mjs";
 
 import { legacyDocsRoutes } from "./src/lib/legacy-docs.ts";
 
@@ -58,6 +59,7 @@ export default defineConfig({
         LastUpdated: "./src/components/LastUpdated.astro",
       },
       expressiveCode: {
+        plugins: [codeBlocks()],
         themes: [submilliDark, submilliLight],
         useStarlightDarkModeSwitch: true,
         useStarlightUiThemeColors: false,

@@ -5,10 +5,10 @@ slug: why
 sidebar:
   order: 1
 authorship:
-  label: human-written
-  confirmed: false
-  contentHash: "0ed93cf873a63c12a53cc1a2431f9d03104992466dcb5a646f7f8c10ff6a94fc"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  label: "human-written"
+  confirmed: true
+  contentHash: "7c2b3720446a25c1b51f3159a2401f96cbf90860e3abd4bab80a18519d426764"
+  confirmedAt: "2026-10-05T20:18:00.685778+00:00"
 ---
 
 Agents use tools to perform tasks. Most of them call one tool at a time, wait for the service to respond, process its response using inference tokens, and make the decision on next steps. This typically means slow (model turns, waiting for tool call completion), expensive (context bloat, inference) and potentially brittle - inference is not meant for highly deterministic tasks (like mathematical functions).
@@ -78,6 +78,10 @@ or ten thousand, and only the evidence needed for a decision returns to context 
 
 ## Agent generated code is risky
 
+<span id="this-code-is-a-stranger"></span>
+
+<!-- video:challenges -->
+
 We want ti run a program that was written by a model - with no review, no testing, no CI.
 
 Not only that, but the agent that wrote the code can be fooled into executing harmful code. To do its job, the agent reads support tickets written by customers (or by anyone who emails the support address). This is a volnurability bad actors can capitalize on.
@@ -113,6 +117,10 @@ make it do. Control must live outside the model.
 :::
 
 ## Introducting Submilli
+
+<span id="what-submilli-is"></span>
+
+<!-- video:helps -->
 
 Submilli closes this gap. Submilli's runtime makes sure generated code cannot make arbitrary
 calls. It has no raw network connection, and no credential access. It can only call the tools you expose to it, under the conditions you supply.
@@ -150,9 +158,6 @@ It doesn't matter that the model was persuaded to do, because the policy is exte
 Submilli is a dedicate runtime for a strict subset of TypeScript, compiled to WebAssembly and run in-process.
 
 Running in-proces smeans no microVM and no cold start delay. It works with the harness you choose, connected over MCP or an SDK. Your agent keeps its brain, and Submilli runs its code.
-
-[The essay](https://submilli.ai/blog/why-submilli/) makes the full argument,
-with every attack replayed.
 
 Next: [install](/docs/install) the CLI and the server, then the
 [quickstart](/docs/quickstart), where you write a Blueprint and a
