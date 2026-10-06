@@ -3435,7 +3435,7 @@ mod tests {
         let (_, d) = run(r#"function f(): void { try { } catch (e: string) { } }"#);
         assert!(
             d.iter().any(|x| x.message
-                == "a `catch` binding must be `Error` or a class extending `Error`; got `string`"),
+                == "a `catch` binding must be `Error`, `unknown`, or a class extending `Error`; got `string`"),
             "expected catch-type diagnostic, got: {d:?}",
         );
     }
