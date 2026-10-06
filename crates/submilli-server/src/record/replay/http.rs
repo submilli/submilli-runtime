@@ -20,40 +20,84 @@ use super::cassette::{Cassette, Entry, Hop, Kind, Miss, Unusable, http_key};
 ///
 /// The request is recognized by [`HttpRequest::recorded_as`], which the host functions set
 /// before the auth proxy runs, so a credential the proxy injected cannot change it.
+///
+/// With [`with_live`](Self::with_live), a request the recording cannot answer and the live
+/// client may send goes to the live client instead of stopping the run. The live client is
+/// used exactly as in a normal run: the request has already been through the host
+/// function's policy check and the auth proxy, and the live client applies its own
+/// transport policy and redirect guard.
 pub struct RecordedHttpClient {
     cassette: Arc<Cassette>,
+    live: Option<(Arc<dyn HttpClient>, LiveReach)>,
+}
+
+/// Which requests a recorded client may send live when the recording has no answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveReach {
+    /// `GET` and `HEAD` requests: they read. Everything else still stops the run.
+    Reads,
+    /// Every request, downloads included.
+    Everything,
+}
+
+impl LiveReach {
+    fn allows(self, method: &str) -> bool {
+        match self {
+            Self::Reads => {
+                method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD")
+            }
+            Self::Everything => true,
+        }
+    }
 }
 
 impl RecordedHttpClient {
     pub fn new(cassette: Arc<Cassette>) -> Self {
-        Self { cassette }
+        Self {
+            cassette,
+            live: None,
+        }
     }
 
-    async fn serve(
+    /// Sends what the recording cannot answer, within `reach`, through `live`.
+    #[must_use]
+    pub fn with_live(mut self, live: Arc<dyn HttpClient>, reach: LiveReach) -> Self {
+        self.live = Some((live, reach));
+        self
+    }
+
+    /// The live client for `method`, when a miss may go live, noting the miss.
+    fn live_for(&self, req: &HttpRequest, miss: &Miss) -> Option<&Arc<dyn HttpClient>> {
+        let (live, reach) = self.live.as_ref()?;
+        if !reach.allows(&req.method) {
+            return None;
+        }
+        self.cassette.went_live(miss.clone());
+        Some(live)
+    }
+
+    /// The recording's answer to `req`, or the miss.
+    fn lookup(
         &self,
         req: &HttpRequest,
         follow_redirects: bool,
-    ) -> Result<HttpResponse, HttpError> {
-        let miss = match &req.recorded_as {
+    ) -> Result<Result<HttpResponse, HttpError>, Miss> {
+        match &req.recorded_as {
             Some(recorded) => {
                 let key = http_key(&req.method, &recorded.masked_url);
-                match self.cassette.serve(
+                self.cassette.serve(
                     Kind::Http,
                     &key,
                     std::slice::from_ref(&recorded.digest),
                     |entry| answer(entry, req, follow_redirects),
-                ) {
-                    Ok(answer) => return answer,
-                    Err(miss) => miss,
-                }
+                )
             }
-            None => self.cassette.unmatched(
+            None => Err(self.cassette.unmatched(
                 Kind::Http,
                 &http_key(&req.method, &mask_url(&req.url)),
                 "the request carries no record of what the program sent",
-            ),
-        };
-        Err(self.stop(miss).await)
+            )),
+        }
     }
 
     async fn stop(&self, miss: Miss) -> HttpError {
@@ -71,7 +115,13 @@ impl HttpClient for RecordedHttpClient {
     }
 
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
-        self.serve(req, true).await
+        match self.lookup(req, true) {
+            Ok(answer) => answer,
+            Err(miss) => match self.live_for(req, &miss) {
+                Some(live) => live.send(req).await,
+                None => Err(self.stop(miss).await),
+            },
+        }
     }
 
     async fn send_without_redirects_to(
@@ -79,7 +129,15 @@ impl HttpClient for RecordedHttpClient {
         req: &HttpRequest,
         body: &mut (dyn std::io::Write + Send),
     ) -> Result<HttpResponse, HttpError> {
-        let response = self.serve(req, false).await?;
+        let response = match self.lookup(req, false) {
+            Ok(answer) => answer?,
+            Err(miss) => {
+                return match self.live_for(req, &miss) {
+                    Some(live) => live.send_without_redirects_to(req, body).await,
+                    None => Err(self.stop(miss).await),
+                };
+            }
+        };
         body.write_all(&response.body)
             .map_err(|error| HttpError::Other(error.to_string()))?;
         Ok(HttpResponse {
@@ -91,11 +149,20 @@ impl HttpClient for RecordedHttpClient {
     async fn download(
         &self,
         req: &HttpRequest,
-        _writer: &mut (dyn std::io::Write + Send),
+        writer: &mut (dyn std::io::Write + Send),
     ) -> Result<DownloadMeta, HttpError> {
         let key = http_key(&req.method, &mask_url(&req.url));
         let miss = self.cassette.download(&key);
-        Err(self.stop(miss).await)
+        // A download writes to disk, so it is more than a read.
+        let live = self
+            .live
+            .as_ref()
+            .filter(|(_, reach)| *reach == LiveReach::Everything)
+            .and_then(|_| self.live_for(req, &miss));
+        match live {
+            Some(live) => live.download(req, writer).await,
+            None => Err(self.stop(miss).await),
+        }
     }
 }
 

@@ -8,6 +8,10 @@
 //! [`Cassette`], fires the run's cancel signal, and returns its error. The cancel ends the
 //! run before the program can act on that error, so the program cannot catch the stop.
 //!
+//! A connector may be given its live counterpart for a mode that lets a call with nothing
+//! recorded go live (`with_live`): the call is noted in the cassette and sent as a normal
+//! run would send it.
+//!
 //! The three share one [`Cassette`], built from the [`RecordedRun`](super::RecordedRun).
 
 mod cassette;
@@ -17,6 +21,6 @@ mod mcp;
 
 pub(crate) use cassette::call_key;
 pub use cassette::{Cassette, Miss, MissReason, Nearest, ReplayReport, Served};
-pub use http::RecordedHttpClient;
+pub use http::{LiveReach, RecordedHttpClient};
 pub use llm::RecordedLlmProvider;
 pub use mcp::RecordedMcpTransport;

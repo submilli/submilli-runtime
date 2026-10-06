@@ -145,12 +145,15 @@ pub struct ReplayReport {
     pub served: Vec<Served>,
     /// The first call with nothing to answer it; the run was stopped there.
     pub miss: Option<Miss>,
+    /// Calls with nothing to answer them that were sent live instead, in order.
+    pub went_live: Vec<Miss>,
 }
 
 struct State {
     entries: Vec<Entry>,
     served: Vec<Served>,
     miss: Option<Miss>,
+    went_live: Vec<Miss>,
     cancel: Option<oneshot::Sender<()>>,
 }
 
@@ -170,6 +173,7 @@ impl Cassette {
                 entries: entries_of(run),
                 served: Vec::new(),
                 miss: None,
+                went_live: Vec::new(),
                 cancel: Some(cancel),
             }),
         })
@@ -181,6 +185,7 @@ impl Cassette {
         ReplayReport {
             served: state.served.clone(),
             miss: state.miss.clone(),
+            went_live: state.went_live.clone(),
         }
     }
 
@@ -254,6 +259,11 @@ impl Cassette {
                 .find(|entry| entry.kind == Kind::Download && entry.key.as_deref() == Some(key))
                 .map(nearest),
         }
+    }
+
+    /// Notes a call with nothing to answer it that is sent live instead.
+    pub(super) fn went_live(&self, miss: Miss) {
+        self.lock().went_live.push(miss);
     }
 
     /// Cancels the run, with no miss to note: someone outside asked.

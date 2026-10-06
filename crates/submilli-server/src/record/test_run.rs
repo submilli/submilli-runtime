@@ -21,7 +21,7 @@ use tokio::sync::oneshot;
 
 use super::recheck::{VariableReport, reconcile_variables};
 use super::replay::{
-    Cassette, Miss, MissReason, Nearest, RecordedHttpClient, RecordedLlmProvider,
+    Cassette, LiveReach, Miss, MissReason, Nearest, RecordedHttpClient, RecordedLlmProvider,
     RecordedMcpTransport, call_key,
 };
 use super::throwaway::{LocalState, Throwaway, ThrowawayError};
@@ -36,6 +36,12 @@ use crate::session_manager::{SessionError, SessionManager};
 pub enum TestMode {
     /// The run stops there.
     Recorded,
+    /// An unrecorded `GET` or `HEAD` request goes live, through the same auth proxy,
+    /// transport policy and redirect guard as in any run, and is recorded in the test
+    /// run's own log. Writes, MCP calls, model calls and downloads still stop the run.
+    ReadsLive,
+    /// Every call the recording cannot answer goes live. Recorded calls are still served.
+    Live,
 }
 
 /// A recorded run to run again.
@@ -101,6 +107,8 @@ pub struct TestReport {
     pub test_run: String,
     /// Calls answered from the recording, in the order they were answered.
     pub served: Vec<ServedCall>,
+    /// Calls with nothing recorded that went live instead, in the order they were made.
+    pub went_live: Vec<LiveCall>,
     /// The call the run stopped at. A run that stopped is reported stopped even when the
     /// program caught the error it saw there.
     pub stopped: Option<Stop>,
@@ -118,6 +126,17 @@ pub struct ServedCall {
     pub test_call_index: Option<u64>,
     pub capability: String,
     pub key: Option<String>,
+}
+
+/// A call that went live because the recording could not answer it.
+#[derive(Debug, Clone, Serialize)]
+pub struct LiveCall {
+    /// `http GET <url>`, `mcp <server>.<tool>`, or `llm <model>`.
+    pub key: String,
+    /// Why the recording could not answer it.
+    pub reason: MissReason,
+    /// The test run's own index for the call; its call log holds the live response.
+    pub test_call_index: Option<u64>,
 }
 
 /// The call a test run stopped at, from the test run's own call log and the recording.
@@ -180,6 +199,7 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
     let tap = Arc::new(CallTap::default());
     let world = TestWorld {
         source_run: source_run.clone(),
+        mode,
         cassette: Arc::clone(&cassette),
         cancel: Some(cancel_requested),
         mcp_catalog: recorded
@@ -208,11 +228,13 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
 
     let replay = cassette.report();
     let calls = tap.calls();
+    let (served, taken) = pair_served(&replay.served, &calls);
     let report = TestReport {
         mode,
         source_run,
         test_run: response.execution_id.clone(),
-        served: pair_served(&replay.served, &calls),
+        served,
+        went_live: pair_live(replay.went_live, &calls, taken),
         stopped: replay.miss.map(|miss| stop_of(miss, &calls)),
         variables,
         local_state,
@@ -223,6 +245,7 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
 /// What a test run needs from its caller's world, handed to the one-shot path.
 pub(crate) struct TestWorld {
     source_run: String,
+    mode: TestMode,
     cassette: Arc<Cassette>,
     cancel: Option<oneshot::Receiver<()>>,
     mcp_catalog: Arc<McpCatalog>,
@@ -285,22 +308,38 @@ impl TestWorld {
         self.local.kv.clone()
     }
 
-    /// The run's outside connectors. `live` are the ones a normal run would use, and are
-    /// dropped unused: a test run has no route to the network.
+    /// The run's outside connectors: the recorded ones, with the live ones behind them as
+    /// far as the mode lets a call go live. The live ones a mode does not reach are dropped
+    /// unused, so such a run has no route to them.
     pub(crate) fn connectors(
         &self,
-        _live_http: Arc<dyn HttpClient>,
-        _live_mcp: Arc<dyn McpTransport>,
-        declared_llm: Option<Arc<dyn LlmProvider>>,
+        live_http: Arc<dyn HttpClient>,
+        live_mcp: Arc<dyn McpTransport>,
+        live_llm: Option<Arc<dyn LlmProvider>>,
     ) -> Connectors {
         let cassette = &self.cassette;
+        let http = RecordedHttpClient::new(Arc::clone(cassette));
+        let mcp = RecordedMcpTransport::new(Arc::clone(cassette));
+        let llm = live_llm.map(|declared| {
+            let llm = RecordedLlmProvider::new(Arc::clone(cassette), declared);
+            Arc::new(if self.mode == TestMode::Live {
+                llm.with_live()
+            } else {
+                llm
+            }) as Arc<dyn LlmProvider>
+        });
+        let (http, mcp) = match self.mode {
+            TestMode::Recorded => (http, mcp),
+            TestMode::ReadsLive => (http.with_live(live_http, LiveReach::Reads), mcp),
+            TestMode::Live => (
+                http.with_live(live_http, LiveReach::Everything),
+                mcp.with_live(live_mcp),
+            ),
+        };
         Connectors {
-            http: Arc::new(RecordedHttpClient::new(Arc::clone(cassette))),
-            mcp: Arc::new(RecordedMcpTransport::new(Arc::clone(cassette))),
-            llm: declared_llm.map(|declared| {
-                Arc::new(RecordedLlmProvider::new(Arc::clone(cassette), declared))
-                    as Arc<dyn LlmProvider>
-            }),
+            http: Arc::new(http),
+            mcp: Arc::new(mcp),
+            llm,
         }
     }
 }
@@ -390,9 +429,12 @@ impl RunRecorder for TapRecorder {
 
 /// Each served call with the test run's index for it: the call whose request has the same
 /// digest, in the order the run made them.
-fn pair_served(served: &[super::replay::Served], calls: &[TestCall]) -> Vec<ServedCall> {
+fn pair_served(
+    served: &[super::replay::Served],
+    calls: &[TestCall],
+) -> (Vec<ServedCall>, HashSet<u64>) {
     let mut taken: HashSet<u64> = HashSet::new();
-    served
+    let paired = served
         .iter()
         .map(|served| {
             let test_call = calls.iter().find(|call| {
@@ -408,6 +450,30 @@ fn pair_served(served: &[super::replay::Served], calls: &[TestCall]) -> Vec<Serv
                 test_call_index: test_call.map(|call| call.index),
                 capability: served.capability.clone(),
                 key: served.key.clone(),
+            }
+        })
+        .collect();
+    (paired, taken)
+}
+
+/// Each call that went live with the test run's index for it: the next call of the same key
+/// that no served call was paired with.
+fn pair_live(went_live: Vec<Miss>, calls: &[TestCall], mut taken: HashSet<u64>) -> Vec<LiveCall> {
+    went_live
+        .into_iter()
+        .map(|miss| {
+            let call = calls.iter().find(|call| {
+                call.outcome != Some(CallOutcome::Unfinished)
+                    && call.key.as_deref() == Some(miss.key.as_str())
+                    && !taken.contains(&call.index)
+            });
+            if let Some(call) = call {
+                taken.insert(call.index);
+            }
+            LiveCall {
+                key: miss.key,
+                reason: miss.reason,
+                test_call_index: call.map(|call| call.index),
             }
         })
         .collect()

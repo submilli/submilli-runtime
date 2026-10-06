@@ -9,20 +9,58 @@ use interpreter::runtime::mcp::request_digest;
 use interpreter::runtime::{BodyCopy, McpCallError, McpOutcome, McpResponse, McpTransport};
 use serde_json::Value;
 
-use super::cassette::{Cassette, Entry, Kind, Unusable, mcp_key};
+use super::cassette::{Cassette, Entry, Kind, Miss, Unusable, mcp_key};
 
 /// An [`McpTransport`] that answers from a recorded run: the next unused recording of the
 /// same server, tool and arguments.
 ///
 /// A recorded response is admitted through [`McpResponse::take`], the bounded path a live
 /// response takes. A recorded failure is raised again from its kind.
+///
+/// With [`with_live`](Self::with_live), a call the recording cannot answer goes to the live
+/// transport instead of stopping the run.
 pub struct RecordedMcpTransport {
     cassette: Arc<Cassette>,
+    live: Option<Arc<dyn McpTransport>>,
 }
 
 impl RecordedMcpTransport {
     pub fn new(cassette: Arc<Cassette>) -> Self {
-        Self { cassette }
+        Self {
+            cassette,
+            live: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_live(mut self, live: Arc<dyn McpTransport>) -> Self {
+        self.live = Some(live);
+        self
+    }
+}
+
+impl RecordedMcpTransport {
+    /// A call with nothing recorded: sent live when this transport may, else it stops the run.
+    async fn unanswered(
+        &self,
+        miss: Miss,
+        server: &str,
+        tool: &str,
+        args_json: &str,
+    ) -> McpOutcome {
+        if let Some(live) = &self.live {
+            self.cassette.went_live(miss);
+            return live.call(server, tool, args_json).await;
+        }
+        self.cassette.stop(miss).await;
+        McpOutcome {
+            // Fatal to the guest as well, in case the cancel were somehow not seen.
+            result: Err(McpCallError::Internal {
+                message: "no recorded response for this MCP call",
+            }),
+            received_bytes: 0,
+            parsed_bytes: 0,
+        }
     }
 }
 
@@ -38,18 +76,7 @@ impl McpTransport for RecordedMcpTransport {
             let key = mcp_key(server, tool);
             match self.cassette.serve(Kind::Mcp, &key, &[digest], answer) {
                 Ok(outcome) => outcome,
-                Err(miss) => {
-                    self.cassette.stop(miss).await;
-                    McpOutcome {
-                        // Fatal to the guest as well, in case the cancel were somehow not
-                        // seen.
-                        result: Err(McpCallError::Internal {
-                            message: "no recorded response for this MCP call",
-                        }),
-                        received_bytes: 0,
-                        parsed_bytes: 0,
-                    }
-                }
+                Err(miss) => self.unanswered(miss, server, tool, args_json).await,
             }
         })
     }

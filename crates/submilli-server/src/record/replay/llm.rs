@@ -24,11 +24,23 @@ use super::cassette::{Cassette, Entry, Kind, Unusable, llm_key};
 pub struct RecordedLlmProvider {
     cassette: Arc<Cassette>,
     declared: Arc<dyn LlmProvider>,
+    live: bool,
 }
 
 impl RecordedLlmProvider {
     pub fn new(cassette: Arc<Cassette>, declared: Arc<dyn LlmProvider>) -> Self {
-        Self { cassette, declared }
+        Self {
+            cassette,
+            declared,
+            live: false,
+        }
+    }
+
+    /// Sends a call the recording cannot answer to `declared` instead of stopping the run.
+    #[must_use]
+    pub fn with_live(mut self) -> Self {
+        self.live = true;
+        self
     }
 }
 
@@ -52,6 +64,10 @@ impl LlmProvider for RecordedLlmProvider {
                     answer(entry, prompts.len())
                 }) {
                 Ok(outcomes) => Ok(outcomes),
+                Err(miss) if self.live => {
+                    self.cassette.went_live(miss);
+                    self.declared.call(model, prompts, schema_json).await
+                }
                 Err(miss) => {
                     self.cassette.stop(miss).await;
                     Err(LlmCallError::Transport {

@@ -856,3 +856,243 @@ async fn an_mcp_program_compiles_from_the_recorded_catalog_and_is_answered_with_
     assert_eq!(stop.key, "mcp up.createIssue");
     assert_eq!(error_kind(&stopped), Some(ErrorKind::Cancelled));
 }
+
+// ---- reads go live, and continue live ---------------------------------------------------
+
+const ONLY_A: &str = r#"import { get } from "submilli:http";
+function main(): string { return get("__A__").body; }"#;
+
+/// Reads `/a`, then posts to `/b` (a denial is caught and reported).
+fn read_then_post(server: &MockServer) -> String {
+    format!(
+        r#"import {{ get, post }} from "submilli:http";
+function main(): string {{
+  const a = get("{}").body;
+  let b = "";
+  try {{
+    b = post("{}", "payload").body;
+  }} catch (e: Error) {{
+    b = "denied";
+  }}
+  return a + "|" + b;
+}}"#,
+        server.url("/a"),
+        server.url("/b"),
+    )
+}
+
+const DENY_POST: &str = "\
+name: bp
+default: allow
+allow_insecure_http: true
+vfs:
+  mode: none
+permissions:
+  main:
+    - capability: http.post
+      action: deny
+";
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reads_live_completes_the_newly_allowed_get_and_records_it_in_the_test_runs_own_log() {
+    let server = MockServer::start_async().await;
+    let (a, b) = site(&server).await;
+    let world = World::new(vec![blueprint(DENY_B)]);
+    let source = world.run("bp", &fetch_both(&server), &[]).await;
+    world.blueprints.upsert(blueprint(ALLOW_ALL)).await.unwrap();
+
+    let outcome = world.test(&source.recorded, TestMode::ReadsLive).await;
+    assert_eq!(
+        result(&outcome),
+        Some("alpha|bravo"),
+        "{:?}",
+        outcome.response.error
+    );
+    let report = &outcome.report;
+    assert!(report.stopped.is_none());
+    assert_eq!(report.served.len(), 1);
+    assert_eq!(report.went_live.len(), 1);
+    assert!(report.went_live[0].key.ends_with("/b"));
+    assert_eq!(report.went_live[0].reason, MissReason::NoRecording);
+    assert_eq!(report.went_live[0].test_call_index, Some(1));
+    // The recorded read was not sent again; the new one went out once.
+    a.assert_hits_async(1).await;
+    b.assert_hits_async(1).await;
+    let test_run = world.recordings.run(&report.test_run);
+    assert_eq!(test_run.calls.len(), 2);
+    let live = &test_run.calls[1];
+    assert_eq!(live.capability, "http.get");
+    assert!(
+        live.response.is_some(),
+        "the live response is in the test run's log"
+    );
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reads_live_still_stops_at_a_newly_allowed_post_and_live_sends_it() {
+    let server = MockServer::start_async().await;
+    let (_a, _b) = site(&server).await;
+    let posted = server
+        .mock_async(|when, then| {
+            when.method(Method::POST).path("/b");
+            then.status(200).body("posted");
+        })
+        .await;
+    let world = World::new(vec![blueprint(DENY_POST)]);
+    let source = world.run("bp", &read_then_post(&server), &[]).await;
+    assert_eq!(source.response.result.as_deref(), Some("alpha|denied"));
+    world.blueprints.upsert(blueprint(ALLOW_ALL)).await.unwrap();
+
+    let reads = world.test(&source.recorded, TestMode::ReadsLive).await;
+    let stop = reads.report.stopped.as_ref().expect("a write still stops");
+    assert_eq!(stop.reason, MissReason::NoRecording);
+    assert_eq!(stop.capability.as_deref(), Some("http.post"));
+    assert!(reads.report.went_live.is_empty());
+    assert_eq!(error_kind(&reads), Some(ErrorKind::Cancelled));
+    posted.assert_hits_async(0).await;
+
+    let live = world.test(&source.recorded, TestMode::Live).await;
+    assert_eq!(
+        result(&live),
+        Some("alpha|posted"),
+        "{:?}",
+        live.response.error
+    );
+    assert!(live.report.stopped.is_none());
+    assert_eq!(live.report.served.len(), 1);
+    assert_eq!(live.report.went_live.len(), 1);
+    posted.assert_hits_async(1).await;
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_completes_the_newly_allowed_get_too() {
+    let server = MockServer::start_async().await;
+    let (a, b) = site(&server).await;
+    let world = World::new(vec![blueprint(DENY_B)]);
+    let source = world.run("bp", &fetch_both(&server), &[]).await;
+    world.blueprints.upsert(blueprint(ALLOW_ALL)).await.unwrap();
+    let outcome = world.test(&source.recorded, TestMode::Live).await;
+    assert_eq!(result(&outcome), Some("alpha|bravo"));
+    a.assert_hits_async(1).await;
+    b.assert_hits_async(1).await;
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_live_read_is_still_checked_against_the_current_blueprint() {
+    let server = MockServer::start_async().await;
+    let (_a, b) = site(&server).await;
+    let world = World::new(vec![blueprint(ALLOW_ALL)]);
+    let only_a = ONLY_A.replace("__A__", &server.url("/a"));
+    let source = world.run("bp", &only_a, &[]).await;
+    // The blueprint now denies `/b`, and the program being tested reads it.
+    world.blueprints.upsert(blueprint(DENY_B)).await.unwrap();
+    let mut recorded = source.recorded.clone();
+    recorded.code = Some(fetch_both(&server));
+    let outcome = world.test(&recorded, TestMode::Live).await;
+    assert_eq!(
+        result(&outcome),
+        Some("alpha|denied"),
+        "{:?}",
+        outcome.response.error
+    );
+    assert!(outcome.report.went_live.is_empty(), "denied before it left");
+    b.assert_hits_async(0).await;
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_live_read_is_still_checked_against_the_network_policy() {
+    let server = MockServer::start_async().await;
+    let (_a, b) = site(&server).await;
+    let recorded_on = World::new(vec![blueprint(ALLOW_ALL)]);
+    let only_a = ONLY_A.replace("__A__", &server.url("/a"));
+    let source = recorded_on.run("bp", &only_a, &[]).await;
+
+    // A server that refuses loopback addresses: the recorded read is served, the new one
+    // is refused by the live client's own policy.
+    let strict = World::with(vec![blueprint(ALLOW_ALL)], |config| ServerConfig {
+        network_policy: interpreter::runtime::NetworkPolicy::deny_private(),
+        ..config
+    });
+    let mut recorded = source.recorded.clone();
+    recorded.code = Some(fetch_both(&server));
+    let outcome = strict.test(&recorded, TestMode::ReadsLive).await;
+    assert_eq!(
+        result(&outcome),
+        Some("alpha|denied"),
+        "{:?}",
+        outcome.response.error
+    );
+    assert_eq!(outcome.report.served.len(), 1);
+    assert_eq!(
+        outcome.report.went_live.len(),
+        1,
+        "it reached the live client"
+    );
+    b.assert_hits_async(0).await;
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_mcp_call_with_nothing_recorded_stops_unless_the_run_continues_live() {
+    let (url, _upstream) = upstream::spawn().await;
+    let world = World::new(vec![mcp_blueprint(&url)]);
+    let source = world.run("up-bp", ISSUE, &[]).await;
+    let mut other = source.recorded.clone();
+    other.code = Some(ISSUE.replace("\"x\"", "\"y\""));
+
+    let reads = world.test(&other, TestMode::ReadsLive).await;
+    let stop = reads
+        .report
+        .stopped
+        .as_ref()
+        .expect("an MCP call still stops");
+    assert_eq!(stop.reason, MissReason::RequestDiffers);
+    assert_eq!(result(&reads), None);
+
+    let live = world.test(&other, TestMode::Live).await;
+    assert_eq!(
+        result(&live),
+        Some("created y"),
+        "{:?}",
+        live.response.error
+    );
+    assert!(live.report.stopped.is_none());
+    assert_eq!(live.report.went_live.len(), 1);
+    assert_eq!(live.report.went_live[0].key, "mcp up.createIssue");
+}
+
+#[tokio::test]
+async fn a_model_call_with_nothing_recorded_stops_unless_the_run_continues_live() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let world = World::with(vec![model_blueprint()], |config| ServerConfig {
+        llm_dispatch: Some(Arc::new(Dispatch(calls.clone()))),
+        ..config
+    });
+    let source = world.run("llm", BATCH, &[]).await;
+    let before = calls.load(Ordering::SeqCst);
+    let mut other = source.recorded.clone();
+    other.code = Some(BATCH.replace("[\"a\", \"b\"]", "[\"a\", \"c\"]"));
+
+    let reads = world.test(&other, TestMode::ReadsLive).await;
+    assert!(reads.report.stopped.is_some());
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        before,
+        "a model call stays stopped"
+    );
+
+    let live = world.test(&other, TestMode::Live).await;
+    assert_eq!(
+        result(&live),
+        Some("answer,answer,7"),
+        "{:?}",
+        live.response.error
+    );
+    assert_eq!(live.report.went_live.len(), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), before + 2);
+}
