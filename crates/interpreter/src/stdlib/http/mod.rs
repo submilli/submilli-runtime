@@ -53,7 +53,7 @@ pub use declaration::package_declaration;
 pub use policy::NetworkPolicy;
 pub use transport::{
     AuthProxy, AuthProxyError, EgressAt, HttpClient, HttpError, HttpRequest, HttpResponse,
-    NoopAuthProxy, RedirectDenied, RedirectGuard, RedirectHop, ReqwestHttpClient,
+    NoopAuthProxy, RecordedRequest, RedirectDenied, RedirectGuard, RedirectHop, ReqwestHttpClient,
     default_auth_proxy, default_http_client, describe_error_chain,
 };
 pub use transport_policy::{HttpTransportPolicy, TransportPolicyError};
@@ -394,6 +394,7 @@ async fn perform_request(
     record_payload(&*caller, ticket, Side::Request, || {
         request_payload(method, url, &headers, &body)
     });
+    let recorded_as = recorded_request(&*caller, || request_payload(method, url, &headers, &body));
 
     let (who, guard) = request_principal(
         caller,
@@ -412,6 +413,7 @@ async fn perform_request(
         decompress: false,
         transport_policy: None,
         redirect_guard: None,
+        recorded_as,
     };
     let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
     let http_client = std::sync::Arc::clone(&caller.data().http_client);
@@ -442,6 +444,23 @@ async fn perform_request(
         response_payload(&send_result)
     });
     settle_response(caller, send_result, method)
+}
+
+/// The request's key and digest as the call log records them, when the transport reads
+/// them. Computed from the program's own request, before the auth proxy changes it.
+fn recorded_request<'a>(
+    caller: &Caller<'_, StoreData>,
+    payload: impl FnOnce() -> Payload<'a>,
+) -> Option<RecordedRequest> {
+    if !caller.data().http_client.wants_recorded_request() {
+        return None;
+    }
+    let payload = payload();
+    let masked_url = payload.meta["url"].as_str().map(str::to_owned)?;
+    Some(RecordedRequest {
+        masked_url,
+        digest: payload.digest(),
+    })
 }
 
 /// A request as the recorder keeps it: credential headers and URL credentials masked.
@@ -709,6 +728,9 @@ async fn perform_download(
     record_payload(&*caller, ticket, Side::Request, || {
         request_payload("GET", &url, &options.headers, &[]).with_size(0)
     });
+    let recorded_as = recorded_request(&*caller, || {
+        request_payload("GET", &url, &options.headers, &[])
+    });
     let req = HttpRequest {
         method: "GET".to_string(),
         url: url.clone(),
@@ -719,6 +741,7 @@ async fn perform_download(
         decompress: options.decompress,
         transport_policy: None,
         redirect_guard: None,
+        recorded_as,
     };
     let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
     let mut req = auth_proxy

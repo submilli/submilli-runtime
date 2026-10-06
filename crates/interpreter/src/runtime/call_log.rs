@@ -336,17 +336,9 @@ pub(crate) fn capture(
     room: u64,
     max_body: usize,
 ) -> PayloadRecord {
-    let mut hasher = Sha256::new();
     let meta_text = serde_json::to_vec(&payload.meta).unwrap_or_default();
-    // The length prefix marks where the meta ends and the body begins, so two payloads
-    // that split the same bytes differently do not share a digest.
-    hasher.update((meta_text.len() as u64).to_le_bytes());
-    hasher.update(&meta_text);
     let body = payload.body.as_deref();
-    if let Some(body) = body {
-        hasher.update(body);
-    }
-    let digest = format!("{:x}", hasher.finalize());
+    let digest = digest_of(&meta_text, body);
     let (meta, mut truncated) = super::decision::cap_context(&payload.meta, max_meta);
     if payload.masked_headers.len() > MAX_MASKED_HEADERS {
         truncated = true;
@@ -381,6 +373,29 @@ pub(crate) fn capture(
         bytes: full,
         truncated,
         masked_headers,
+    }
+}
+
+/// SHA-256, hex, of a payload: the meta's JSON text, then the body. The length prefix
+/// marks where the meta ends and the body begins, so two payloads that split the same
+/// bytes differently do not share a digest.
+fn digest_of(meta_text: &[u8], body: Option<&[u8]>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update((meta_text.len() as u64).to_le_bytes());
+    hasher.update(meta_text);
+    if let Some(body) = body {
+        hasher.update(body);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+impl Payload<'_> {
+    /// The digest a record of this payload carries ([`PayloadRecord::digest`]), whatever
+    /// the recorder's caps keep of it. Lets a transport compute what the call log
+    /// recorded for a request.
+    pub fn digest(&self) -> String {
+        let meta_text = serde_json::to_vec(&self.meta).unwrap_or_default();
+        digest_of(&meta_text, self.body.as_deref())
     }
 }
 
