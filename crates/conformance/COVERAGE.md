@@ -26,29 +26,29 @@ line, a name it declares, or the type `tsc` printed. It is approximate, and
 `COVERAGE_SAMPLE=<feature>` prints what it counted. It shows a feature that
 pruning nearly removed.
 
-Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 test262 cases.
+Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 657 test262 cases.
 
 ## Types
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| `number` | §1.1 | done | 1407 | 225 | 1182 | 0 | 2320 | 1 of 1 | — | — |  |
-| `string` | §1.1 | done | 1498 | 243 | 1255 | 0 | 2307 | 1 of 1 | — | — |  |
-| `boolean` | §1.1 | done | 482 | 107 | 375 | 0 | 1707 | 1 of 1 | — | — |  |
+| `number` | §1.1 | done | 1407 | 225 | 1182 | 0 | 2338 | 1 of 1 | — | — |  |
+| `string` | §1.1 | done | 1498 | 243 | 1255 | 0 | 2309 | 1 of 1 | — | — |  |
+| `boolean` | §1.1 | done | 482 | 107 | 375 | 0 | 1711 | 1 of 1 | — | — |  |
 | `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1370 | 1 of 1 | — | — |  |
-| `void` | §1.1 | done | 500 | 41 | 459 | 0 | 583 | 1 of 1 | — | — |  |
+| `void` | §1.1 | done | 500 | 41 | 459 | 0 | 584 | 1 of 1 | — | — |  |
 | `never` | §1.1 | done | 72 | 8 | 64 | 0 | 67 | 1 of 1 | — | — |  |
-| `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 15 | 1 of 1 | 16 | 68 |  |
+| `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 30 | 1 of 1 | 16 | 68 |  |
 | Radix literals (`0x`/`0b`/`0o`) | §1.1 | done | 22 | 3 | 19 | 0 | 15 | 4 of 4 | — | — |  |
 | Numeric separators (`1_000`) | §1.1 | done | 6 | 2 | 4 | 0 | 9 | 1 of 1 | — | — |  |
-| `unknown` | §2.11 | done | 74 | 10 | 64 | 0 | 733 | 1 of 1 | — | — |  |
+| `unknown` | §2.11 | done | 74 | 10 | 64 | 0 | 735 | 1 of 1 | — | — |  |
 | Object types (`{ x: T }`) | §1.2 | done | 1443 | 169 | 1274 | 0 | 1124 | 1 of 1 | — | — |  |
 | Optional properties (`a?: T`) | §1.2 | done | 129 | 35 | 94 | 0 | 40 | 1 of 1 | — | — |  |
 | Object literal shorthand (`{ x }`) | §1.2 | done | 79 | 6 | 73 | 0 | 2 | 1 of 1 | — | — |  |
 | Arrays (`T[]`) | §1.2 | done | 781 | 125 | 656 | 0 | 474 | 1 of 1 | 72 | 294 |  |
 | Tuples (`[T, U]`) | §1.2 | done | 153 | 30 | 123 | 0 | 173 | 1 of 1 | — | — |  |
 | `readonly` arrays and tuples | §1.2 | done | 24 | 5 | 19 | 0 | 43 | 1 of 1 | — | — |  |
-| Union types (`A | B`) | §1.2 | done | 458 | 159 | 299 | 0 | 1586 | 1 of 1 | — | — |  |
+| Union types (`A | B`) | §1.2 | done | 458 | 159 | 299 | 0 | 1589 | 1 of 1 | — | — |  |
 | Type aliases (`type X = …`) | §1.2 | done | 267 | 48 | 219 | 0 | 327 | 1 of 1 | — | — |  |
 | Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 258 | 66 | 192 | 0 | 844 | 2 of 2 | — | — |  |
 
@@ -57,14 +57,14 @@ Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 te
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
 | `let` | §1.3 | done | 479 | 111 | 368 | 0 | 2492 | 1 of 1 | — | — |  |
-| `const` | §1.3 | done | 574 | 83 | 491 | 0 | 321 | 1 of 1 | — | — |  |
-| Type inference on `let`/`const` | §1.3 | done | 1969 | 262 | 1707 | 0 | 1804 | 1 of 1 | — | — |  |
+| `const` | §1.3 | done | 574 | 83 | 491 | 0 | 341 | 1 of 1 | — | — |  |
+| Type inference on `let`/`const` | §1.3 | done | 1969 | 262 | 1707 | 0 | 1824 | 1 of 1 | — | — |  |
 
 ## Functions
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Function declarations | §1.4 | done | 1367 | 158 | 1209 | 0 | 659 | 1 of 1 | — | — |  |
+| Function declarations | §1.4 | done | 1367 | 158 | 1209 | 0 | 663 | 1 of 1 | — | — |  |
 | Nested function declarations | §1.4 | done | 62 | 4 | 58 | 0 | 1 | 1 of 1 | — | — |  |
 | Arrow functions | §1.4 | done | 563 | 61 | 502 | 0 | 132 | 1 of 1 | — | — |  |
 | Closures (function expressions and arrows in a function) | §1.4 | done | 205 | 21 | 184 | 0 | 46 | 1 of 1 | — | — |  |
@@ -95,7 +95,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 451 TypeScript cases, 657 te
 | Logical (`&&`, `||`, `!`) | §1.6 | done | 219 | 70 | 149 | 0 | 356 | 3 of 3 | — | — |  |
 | Unary arithmetic (`+x`, `-x`) | §1.6 | done | 105 | 24 | 81 | 0 | 142 | 2 of 2 | — | — |  |
 | Ternary (`? :`) | §1.6 | done | 107 | 43 | 64 | 0 | 202 | 1 of 1 | — | — |  |
-| Assignment (`=`, `+=`, …) | §1.6 | done | 680 | 137 | 543 | 0 | 801 | 7 of 7 | — | — |  |
+| Assignment (`=`, `+=`, …) | §1.6 | done | 680 | 137 | 543 | 0 | 803 | 7 of 7 | — | — |  |
 | Postfix `++` / `--` | §1.6 | done | 88 | 17 | 71 | 0 | 93 | 2 of 2 | — | — |  |
 | `typeof x === "T"` narrowing | §1.6 | done | 84 | 46 | 38 | 0 | 240 | 5 of 5 | — | — |  |
 | `x === null` narrowing | §1.6 | done | 33 | 12 | 21 | 0 | 148 | 2 of 2 | — | — |  |
