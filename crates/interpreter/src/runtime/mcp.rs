@@ -135,8 +135,7 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                     serde_json::json!({ "tool": tool, "transport": "streamable_http" }),
                 )?;
                 record_payload(&*caller, ticket, Side::Request, || {
-                    Payload::meta(serde_json::json!({ "server": server, "tool": tool }))
-                        .with_body(args_json.as_bytes())
+                    request_payload(&server, &tool, &args_json)
                 });
 
                 let transport = caller.data().mcp_transport.clone().ok_or_else(|| {
@@ -172,6 +171,18 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
             })
         },
     )
+}
+
+/// A call's request as the recorder keeps it.
+fn request_payload<'a>(server: &str, tool: &str, args_json: &'a str) -> Payload<'a> {
+    Payload::meta(serde_json::json!({ "server": server, "tool": tool }))
+        .with_body(args_json.as_bytes())
+}
+
+/// The digest the call log records for a call's request: what a transport sees of it, so a
+/// transport can recognize a call it saw recorded.
+pub fn request_digest(server: &str, tool: &str, args_json: &str) -> String {
+    request_payload(server, tool, args_json).digest()
 }
 
 fn allocate_response(

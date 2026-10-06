@@ -31,6 +31,23 @@ pub struct HttpRequest {
     /// Custom transports must consult it before sending every redirect hop; the
     /// initial URL is already authorized.
     pub redirect_guard: Option<Arc<dyn RedirectGuard>>,
+    /// What the call log recorded for the program's own request, before the auth proxy
+    /// changed it. Set only for a client that asks ([`HttpClient::wants_recorded_request`]),
+    /// and by the host functions alone: an auth proxy that builds a new request instead
+    /// of changing this one drops it.
+    pub recorded_as: Option<RecordedRequest>,
+}
+
+/// How the call log keys and digests a request: its masked URL, and the digest of its
+/// masked meta and body. The auth proxy may rewrite the URL and headers (a credential
+/// injected into the query or a header, in another position), so a transport that must
+/// recognize a request it saw recorded reads this instead of deriving it again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedRequest {
+    /// [`mask_url`](crate::runtime::call_log::mask_url) of the program's URL.
+    pub masked_url: String,
+    /// The `digest` of the request's payload record.
+    pub digest: String,
 }
 
 /// Authorizes one redirect hop before any byte of it is sent.
@@ -236,6 +253,12 @@ impl std::io::Write for ReceivedWriter<'_> {
 /// `HttpError::Internal` as a fatal host failure.
 #[async_trait::async_trait]
 pub trait HttpClient: Send + Sync {
+    /// Whether this client reads [`HttpRequest::recorded_as`]. The host functions
+    /// compute it only for a client that does.
+    fn wants_recorded_request(&self) -> bool {
+        false
+    }
+
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError>;
 
     /// Sends `req` to exactly its URL, never following a redirect, even on

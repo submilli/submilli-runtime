@@ -258,11 +258,7 @@ async fn dispatch(
 ) -> wasmtime::Result<Vec<LlmOutcome>> {
     let ticket = gate(caller, model, prompts.len())?;
     record_payload(&*caller, ticket, Side::Request, || {
-        let body = serde_json::to_vec(&prompts).unwrap_or_default();
-        let bytes = sent_bytes(&prompts, schema.as_deref());
-        Payload::meta(serde_json::json!({ "op": op, "model": model, "schema": schema }))
-            .with_owned_body(body)
-            .with_size(bytes)
+        request_payload(op, model, &prompts, schema.as_deref())
     });
 
     let budget = budget(caller);
@@ -339,6 +335,28 @@ async fn dispatch(
             Err(throw(op, error))
         }
     }
+}
+
+/// A call's request as the recorder keeps it.
+fn request_payload(
+    op: &str,
+    model: &str,
+    prompts: &[String],
+    schema: Option<&str>,
+) -> Payload<'static> {
+    let body = serde_json::to_vec(prompts).unwrap_or_default();
+    Payload::meta(serde_json::json!({ "op": op, "model": model, "schema": schema }))
+        .with_owned_body(body)
+        .with_size(sent_bytes(prompts, schema))
+}
+
+/// The ops a request is recorded under, `call` and `batch`. The provider is not told
+/// which one a request came from.
+pub const OPS: [&str; 2] = ["call", "batch"];
+
+/// The digest the call log records for a request of this `op`.
+pub fn request_digest(op: &str, model: &str, prompts: &[String], schema: Option<&str>) -> String {
+    request_payload(op, model, prompts, schema).digest()
 }
 
 /// An outcome's failure as the call log keeps it: the closed-set kind and the degraded

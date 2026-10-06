@@ -487,6 +487,7 @@ impl Client {
                 decompress: false,
                 transport_policy: None,
                 redirect_guard: None,
+                recorded_as: None,
             },
             response: None,
             body_closed: method == "GET",

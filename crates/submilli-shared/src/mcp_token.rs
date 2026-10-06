@@ -327,6 +327,7 @@ impl OAuthTokenManager {
             decompress: false,
             transport_policy: None,
             redirect_guard: None,
+            recorded_as: None,
         };
 
         let resp = self
