@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { films, introduction } from '../src/lib/videos.ts';
 import videoRegistry from '../src/data/videos.json' with { type: 'json' };
 import { createAgentDocs, readChapters, markdownPath } from '../src/lib/agent-docs.ts';
@@ -53,7 +53,7 @@ for (const film of films.filter((film) => film.canonicalPath?.split('#')[0] === 
   assert.ok(whyPage.includes(`data-video-id="${film.id}"`));
   assert.ok(whyPage.includes(film.embedUrl));
 }
-for (const [id, slug, heading] of [['helps', 'why', 'what-submilli-is'], ['using', 'quickstart', ''], ['packages', 'packages', ''], ['blueprints', 'blueprints', '']] as const) {
+for (const [id, slug, heading] of [['helps', 'why', 'what-submilli-is'], ['using', 'quickstart', ''], ['works', 'server', 'what-happens-to-a-program'], ['packages', 'packages', ''], ['blueprints', 'blueprints', '']] as const) {
   const film = films.find((film) => film.id === id);
   assert.ok(film, `${id} is finalized and registered`);
   const page = await readFile(new URL(`docs/${slug}/index.html`, directory), 'utf8');
@@ -74,9 +74,6 @@ for (const film of films) {
   assert.ok(legacyEmbed.includes(film.embedUrl), `${film.id} legacy embed target`);
   assert.ok(!legacyEmbed.includes('<video') && !legacyEmbed.includes('/docs/videos/releases/'), `${film.id} legacy embed has no bundled media`);
 }
-for (const id of ['works']) {
-  await assert.rejects(access(new URL(`docs/videos/embed/${id}/index.html`, directory)), { code: 'ENOENT' }, `${id} has no public embed redirect`);
-}
 const transcriptPage = await readFile(new URL('docs/videos/code-execution-introduction/index.html', directory), 'utf8');
 assert.ok(transcriptPage.includes('https://submilli-videos.onrender.com/watch/why-code/'));
 for (const file of await readdir(directory, { recursive: true })) {
@@ -86,7 +83,6 @@ for (const file of await readdir(directory, { recursive: true })) {
     assert.ok(!html.includes(film.embedUrl) && !html.includes(`data-video-id="${film.id}"`), `${file}: hidden film ${film.id}`);
   }
   assert.ok(!html.includes('<video'), file);
-  assert.ok(!/submilli-videos\.onrender\.com\/embed\/(works)\//.test(html), `${file}: no unfinished video embed`);
   assert.ok(!html.includes('/docs/videos/releases/'), file);
   assert.ok(!/publication pending|Revision pending|pending recording|Read the complete transcript/i.test(html), file);
 }
