@@ -797,6 +797,10 @@ async fn an_embedding_call_stops_a_recorded_or_reads_live_run_and_never_reaches_
         assert_eq!(stop.key, "embedding docs");
         assert_eq!(stop.reason, MissReason::NotRecorded);
         assert_eq!(stop.capability.as_deref(), Some("embedding.embed"));
+        assert!(
+            stop.nearest.is_some(),
+            "the recorded embed call is the nearest"
+        );
         assert!(outcome.report.served.is_empty() && outcome.report.went_live.is_empty());
         assert!(outcome.response.result.is_none(), "{:?}", outcome.response);
         assert_eq!(calls.load(Ordering::SeqCst), before, "no provider call");
