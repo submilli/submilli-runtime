@@ -24,6 +24,7 @@ pub mod events;
 mod program;
 pub mod recheck;
 pub mod replay;
+mod throwaway;
 pub use events::{EVENT_SCHEMA, EventKind, SessionEvent};
 pub use program::{ProgramRun, run_program};
 pub use recheck::{RecheckReport, RecordedRun, recheck};
@@ -32,6 +33,9 @@ pub use replay::{
     ReplayReport, Served,
 };
 pub use submilli_shared::mcp::McpCatalog;
+pub use throwaway::{
+    ForkedSessionKv, LOCAL_STATE_CAP_BYTES, LocalState, Throwaway, ThrowawayError,
+};
 
 /// How a run reached the server.
 #[derive(Debug, Clone, PartialEq, Eq)]

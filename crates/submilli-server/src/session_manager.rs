@@ -817,6 +817,35 @@ impl SessionManager {
         Ok((attach_limits(vfs, blueprint, &self.volumes).await?, info))
     }
 
+    /// The directory a `per_session` session's files live in, when it has one.
+    pub(crate) fn session_vfs_root(&self, session_id: &str) -> Option<PathBuf> {
+        self.lock().sessions.get(session_id)?.vfs_root.clone()
+    }
+
+    /// [`vfs_for_execute_with_variables`](Self::vfs_for_execute_with_variables) over roots
+    /// the caller supplies instead of a session's own: `session_root` for a `per_session`
+    /// workspace, and `volumes` to resolve named volumes through. A test run's throwaway
+    /// copies are opened this way.
+    pub async fn vfs_over_roots(
+        &self,
+        blueprint: &Blueprint,
+        variables: &VarBindings,
+        session_root: Option<&Path>,
+        volumes: &VolumeRegistry,
+    ) -> Result<(Vfs, VfsInfo), SessionError> {
+        let vfs = build_vfs(
+            blueprint,
+            variables,
+            session_root,
+            self.ephemeral_root.as_deref(),
+            volumes,
+        )?;
+        Ok((
+            attach_limits(vfs, blueprint, volumes).await?,
+            vfs_info(blueprint),
+        ))
+    }
+
     /// Mark execute activity, keeping the session alive and resetting idle.
     /// Persistence of the new `last_activity` is debounced (see
     /// [`PERSIST_INTERVAL`]).
