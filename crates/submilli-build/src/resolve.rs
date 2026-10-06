@@ -476,5 +476,9 @@ fn lock_satisfies(
 }
 
 fn short(sha: &str) -> &str {
-    &sha[..sha.len().min(12)]
+    let mut end = sha.len().min(12);
+    while !sha.is_char_boundary(end) {
+        end -= 1;
+    }
+    &sha[..end]
 }
