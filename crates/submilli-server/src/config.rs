@@ -3,8 +3,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use interpreter::runtime::{LlmLimits, NetworkPolicy, RuntimeConfig, SessionKvLimits};
+use interpreter::runtime::{
+    EmbeddingLimits, LlmLimits, NetworkPolicy, RuntimeConfig, SessionKvLimits,
+};
 
+use submilli_shared::embedding::EmbeddingDispatch;
 use submilli_shared::llm::ModelDispatch;
 use submilli_shared::secret_store::SecretStore;
 
@@ -136,6 +139,24 @@ pub struct ServerConfig {
     /// A deployment that configures no model still gets a catchable error (R12),
     /// raised from the blueprint as the undeclared-model refusal.
     pub llm_dispatch: Option<Arc<dyn ModelDispatch>>,
+    /// Per-execution bounds on `submilli:embedding` (tokens, held tokens,
+    /// outbound requests, texts and bytes per call). Embedder-only except for
+    /// the token and request ceilings, which the operator sets by flag.
+    /// Defaults to [`EmbeddingLimits::default`].
+    pub embedding_limits: EmbeddingLimits,
+    /// Server-wide ceiling on `submilli:embedding` tokens summed across every
+    /// live execution. `None` uses
+    /// [`crate::session_manager::DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS`].
+    /// Kept separate from the `submilli:llm` ceiling so neither can starve the
+    /// other.
+    pub max_embedding_tokens: Option<u64>,
+    /// Sub-batches one embedding call sends at once. `None` uses
+    /// [`crate::session_manager::DEFAULT_MAX_EMBEDDING_CONCURRENCY`].
+    pub max_embedding_concurrency: Option<usize>,
+    /// An override for the outbound embedding dispatch, mirroring
+    /// [`Self::llm_dispatch`]: `None` builds the real HTTP dispatch per
+    /// execute. Not an operator setting.
+    pub embedding_dispatch: Option<Arc<dyn EmbeddingDispatch>>,
     /// Operator-declared named volumes a blueprint's `vfs` root or `mounts`
     /// resolve through, by name. Config-file only: no CLI flag and no
     /// environment variable, so the declarations live in one reviewable place.

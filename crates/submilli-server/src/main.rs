@@ -249,6 +249,34 @@ pub struct Cli {
     #[arg(long, value_name = "PROMPTS")]
     max_llm_concurrency: Option<usize>,
 
+    /// Tokens every live execution's `submilli:embedding` calls may spend *in
+    /// total*. Separate from `--max-llm-tokens`: embedding and `llm.call` spend
+    /// against different provider credentials and neither can starve the other.
+    /// [default: 50000000]
+    /// Env: `$SUBMILLI_MAX_EMBEDDING_TOKENS`, which outranks the config file.
+    /// Accepts decimal K/M/B/T suffixes and digit separators, e.g. 50M or 10_000.
+    #[arg(long, value_name = "TOKENS", value_parser = count::parse_count)]
+    max_embedding_tokens: Option<u64>,
+
+    /// Tokens a *single* execution's `submilli:embedding` calls may spend.
+    /// [default: 2000000]
+    /// Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS`, which outranks the config file.
+    /// Accepts decimal K/M/B/T suffixes and digit separators, e.g. 2M or 10_000.
+    #[arg(long, value_name = "TOKENS", value_parser = count::parse_count)]
+    max_execution_embedding_tokens: Option<u64>,
+
+    /// Outbound provider requests a *single* execution's `submilli:embedding`
+    /// calls may send. [default: 1000]
+    /// Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS`, which outranks the config file.
+    /// Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1K or 1_000.
+    #[arg(long, value_name = "REQUESTS", value_parser = count::parse_count)]
+    max_execution_embedding_requests: Option<u64>,
+
+    /// Provider requests one embedding call sends at once. [default: 4]
+    /// Env: `$SUBMILLI_MAX_EMBEDDING_CONCURRENCY`, which outranks the config file.
+    #[arg(long, value_name = "REQUESTS")]
+    max_embedding_concurrency: Option<usize>,
+
     /// Serve the API without authentication: every caller that can reach the
     /// port has full access. The server otherwise refuses to start until it
     /// has a token — `$SUBMILLI_SERVER_TOKEN`, which is an admin token, or

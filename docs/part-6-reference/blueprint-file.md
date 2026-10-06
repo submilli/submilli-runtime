@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f1c47353a8b343f06f9f41d641a2a422a09258a631449b73cf0043a6bef56fbb"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "031afdc13ca6a29d327626369fe5549beef3cef9ccf2d1e313684f44883f4dac"
+  confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
 A Blueprint file is one YAML document. This page describes each of its
@@ -33,16 +33,18 @@ errors that refuse a file when it is linted or registered.
 | [`permissions`](#permissions) | map | no | empty |
 | [`mcp`](#mcp) | map | no | empty |
 | [`llm`](#llm) | map | no | empty |
+| [`embedding`](#embedding) | map | no | empty |
 
 Any other top-level key is a parse error, and so is an unknown field in any
 block. A key repeated at the top level or within one block's fields is
 refused. Repeated names in `secrets`, `variables`, `permissions`, `mcp`,
-`llm.providers`, `llm.models`, and the map form of `packages` are also
+`llm.providers`, `llm.models`, `embedding.providers`,
+`embedding.models`, and the map form of `packages` are also
 refused. The same rule applies to MCP and auth-proxy header maps,
 auth-proxy query maps, and paths in `vfs.mounts`.
 
 ```text
-error: case.yaml: blueprint parse error: unknown field `permision`, expected one of `kind`, `name`, `allow_insecure_http`, `idle_timeout`, `vfs`, `secrets`, `variables`, `packages`, `auth_proxy`, `git`, `default`, `permissions`, `mcp`, `llm` at line 2 column 1
+error: case.yaml: blueprint parse error: unknown field `permision`, expected one of `kind`, `name`, `allow_insecure_http`, `idle_timeout`, `vfs`, `secrets`, `variables`, `packages`, `auth_proxy`, `git`, `default`, `permissions`, `mcp`, `llm`, `embedding` at line 3 column 1
 ```
 
 ```text
@@ -114,6 +116,16 @@ llm:
       context_window: 200000
       output_reserve: 4000
       description: Cheap and fast.
+embedding:
+  providers:
+    voyage:
+      type: voyage
+      api_key: ${secrets.VOYAGE_API_KEY}
+  models:
+    notes-embedding:
+      provider: voyage
+      model: voyage-3.5
+      dimensions: 1024
 ```
 
 ### References to variables and secrets
@@ -127,7 +139,7 @@ file doesn't declare is an error.
 | Reference | Fields |
 | --- | --- |
 | `${vars.NAME}` | `permissions` rule `filter`; `git.identity.name`, `git.identity.email`, `git.username`; `vfs.subPath`, `vfs.cwd`, and a mount's `subPath`, as a whole path component |
-| `${secrets.NAME}` | `auth_proxy` `headers` and `query` values; `mcp` `headers` values; `mcp` `auth` `client_id`, `authorization_endpoint`, `token_endpoint`, `scopes`; `llm.providers` `api_key` and `base_url` |
+| `${secrets.NAME}` | `auth_proxy` `headers` and `query` values; `mcp` `headers` values; `mcp` `auth` `client_id`, `authorization_endpoint`, `token_endpoint`, `scopes`; `llm.providers` `api_key` and `base_url`; `embedding.providers` `api_key` and `base_url` |
 | A secret name, bare | `auth_proxy` `auth.bearer` and `auth.basic.password` |
 
 ## kind
@@ -692,6 +704,144 @@ model:
 error: case.yaml: invalid llm config: caller 'main': permission filter names undeclared llm model 'gpt-9'; declare it under 'llm.models:' or filter on one of: m
 ```
 
+## embedding
+
+The embedding providers `submilli:embedding` reaches and the model aliases a
+program may name. An alias this block doesn't declare can't be used.
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `providers` | map from provider name to [provider](#embedding-providers) | empty |
+| `models` | map from alias to [alias](#embedding-models) | empty |
+
+```yaml title="blueprint.yaml (fragment)"
+embedding:
+  providers:
+    voyage:
+      type: voyage
+      api_key: ${secrets.VOYAGE_API_KEY}
+  models:
+    notes-embedding:
+      provider: voyage
+      model: voyage-3.5
+      dimensions: 1024
+      description: "Embeds notes for semantic search."
+```
+
+The block has no budget fields. Embedding budgets are server settings; see
+[Server settings](/docs/reference/server-settings).
+
+### Embedding providers
+
+| Field | Type | Required | Default | Constraints |
+| --- | --- | --- | --- | --- |
+| `type` | `voyage`, `openai`, `google`, `jina`, `huggingface` | yes | | |
+| `base_url` | string | for a Hugging Face dedicated endpoint | the provider's own endpoint | An absolute `https://` URL; not `localhost`, nor a loopback, unspecified, link-local, private, broadcast, or carrier-grade NAT address literal. May hold `${secrets.NAME}` |
+| `api_key` | string | yes, except for `huggingface` with a `base_url` | none | `${secrets.NAME}`; a literal key is refused |
+
+A `huggingface` provider without `base_url` calls the shared Inference
+Providers router. With `base_url` it calls the dedicated Inference Endpoint at
+that address.
+
+```text
+error: bad.yaml: invalid embedding config: embedding provider 'p': unknown type 'cohere' (use one of: voyage, openai, google, jina, huggingface)
+```
+
+```text
+error: bad.yaml: invalid embedding config: embedding provider 'p': base_url 'http://api.x.com/v1' uses the 'http' scheme; the API key travels in the Authorization header, so the endpoint must be https://
+```
+
+```text
+error: bad.yaml: invalid embedding config: embedding provider 'p': 'api_key' must be a "${secrets.NAME}" reference, not a literal key; declare the key under 'secrets:'
+```
+
+```text
+error: bad.yaml: invalid embedding config: embedding provider 'p': 'api_key' is required; set it to "${secrets.NAME}" naming a declared secret (only a huggingface provider with a 'base_url' may omit it)
+```
+
+```text
+error: case.yaml: invalid embedding config: embedding provider 'p' references undeclared secret 'Q'; add it under 'secrets:'
+```
+
+### Embedding models
+
+The key is the name a program passes to `embed` and the name `models()`
+returns. Every field except `provider`, `model`, and `dimensions` is optional.
+
+| Field | Type | Required | Default | Constraints |
+| --- | --- | --- | --- | --- |
+| `provider` | string | yes | | A key of `embedding.providers` |
+| `model` | string | yes | | The provider's own model id, including any version suffix |
+| `dimensions` | integer | yes | | 1 to 8,192. Sent to the provider where the model accepts it, and checked against every response either way. `text-embedding-ada-002` must be 1,536 |
+| `max_input_tokens` | positive integer | no | Per provider, below | At most half the provider's per-request token cap, below |
+| `description` | string | no | none | One line; at most 512 characters; no control or invisible formatting characters. Returned by `models()` |
+| `query_prompt_name` | string | no | none | `huggingface` with a `base_url` only; 1 to 128 printable characters. The prompt applied to queries |
+| `document_prompt_name` | string | no | none | `huggingface` with a `base_url` only; same limits. The prompt applied to documents |
+
+Prompt names are refused on Hugging Face shared hosting (a provider without
+a `base_url`), because the shared router might truncate the text it prefixes
+with the prompt.
+
+The alias's embedding-space identity changes with the provider's `type`,
+`model`, `dimensions`, the prompt names, how the alias applies purpose
+(`input_type` for Voyage, `task` for Jina, `taskType` or a text template for
+Google, the prompt names for Hugging Face, nothing for OpenAI), and, for a
+Hugging Face dedicated endpoint, the host of its `base_url`. It doesn't change
+with `max_input_tokens`, `description`, or the provider's key.
+
+Limits by provider. `maxInputBytes`, which `models()` reports, is three bytes
+per token of the alias's input limit and, for Google, no more than the byte
+bound. On Hugging Face shared hosting it is the input limit minus 16 bytes
+instead (496 by default), because the shared router ignores a request not to
+truncate and cuts long input silently with a success response; an alias there
+must declare a `max_input_tokens` above 16, and it must not exceed the
+model's real maximum, or the router truncates silently. A dedicated endpoint
+keeps three bytes per token. For longer chunks, use a dedicated endpoint or another
+provider. Submilli splits a batch into requests that fit the request caps.
+
+| Provider | Default `max_input_tokens` | Byte bound (Google, shared Hugging Face) | Texts per request | Other request cap | Ceiling for `max_input_tokens` |
+| --- | --- | --- | --- | --- | --- |
+| Voyage | 32,000 | | 1,000 | Tokens per request: 1,000,000 for `voyage-4-lite` and `voyage-3.5-lite`, 320,000 for `voyage-4` and `voyage-3.5`, 120,000 for other models | Half the token cap |
+| OpenAI | 8,192 | | 2,048 | 300,000 tokens | 150,000 |
+| Google | 2,048; 8,192 for `gemini-embedding-2` | 2,032 bytes; 8,147 for `gemini-embedding-2` | 100 | None | None |
+| Jina | 8,192 | | 512 | None | None |
+| Hugging Face | 512 | 496 bytes on shared hosting (input limit minus 16) | 32 | None | None |
+
+A Google model other than `gemini-embedding-2` takes the `gemini-embedding-001`
+row. `gemini-embedding-001` reports no usage, so its estimates stay held against
+the server-wide budget like Hugging Face's; `gemini-embedding-2` reports usage.
+The token counts behind budgets are an estimate of three bytes per token, not
+the provider's tokenizer. The input limit uses the same three bytes per token,
+except for Google and shared Hugging Face hosting, whose byte bounds above
+assume one byte per token so that nothing is silently truncated.
+
+```text
+error: bad.yaml: invalid embedding config: embedding model 'm': dimensions 0 is out of range; use a whole number from 1 to 8192
+```
+
+```text
+error: bad.yaml: invalid embedding config: embedding model 'm': text-embedding-ada-002 always returns 1536 dimensions and cannot be shortened; set 'dimensions: 1536'
+```
+
+```text
+error: bad.yaml: invalid embedding config: embedding model 'm': max_input_tokens 200000 is over 150000, half of the openai provider's per-request token cap; lower it
+```
+
+```text
+error: bad.yaml: invalid embedding config: embedding model 'm': 'query_prompt_name' applies only to huggingface providers; remove it
+```
+
+```text
+error: bad.yaml: invalid embedding config: embedding model 'm' names undeclared provider 'q'; declare it under 'embedding.providers:' or point the model at one of: p
+```
+
+An `embedding.embed` rule whose filter tests `model == "…"` must name a declared
+alias:
+
+```text
+error: bad.yaml: invalid embedding config: caller 'main': permission filter names undeclared embedding model 'gpt'; declare it under 'embedding.models:' or filter on one of: (none declared)
+```
+
 ## Errors
 
 `submilli blueprint lint`, `submilli run --blueprint`, and registration
@@ -714,6 +864,7 @@ whose `error` field names the class. See [HTTP API](/docs/reference/http-api).
 | `invalid git config` | `invalid_git` | [`git`](#git) |
 | `invalid mcp config` | `invalid_mcp` | [`mcp`](#mcp), `mcp.<name>` rules |
 | `invalid llm config` | `invalid_llm` | [`llm`](#llm), `llm.call` model filters |
+| `invalid embedding config` | `invalid_embedding` | [`embedding`](#embedding), `embedding.embed` model filters |
 
 ### Registration
 

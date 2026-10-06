@@ -142,7 +142,7 @@ an array, or a data-only `interface` you declare (no methods) — and
 combinations like `Issue[]`.{mcp_packages}{git_package}
 
 {sandbox}
-{http_access}{session_guidance}
+{http_access}{session_guidance}{embedding_guidance}
 
 {llm_guidance}
 
@@ -171,6 +171,7 @@ resolved values.
 | `{mcp_packages}` | empty when no MCP servers; else a note on the available `@mcp/<server>` packages | policy `mcp:` block |
 | `{session_guidance}` | session-state guidance only when `main` has potential `session.read` and `session.write` permission | policy default and `permissions:` rules |
 | `{llm_guidance}` | model-call guidance only when at least one model is declared and `main` has potential `llm.call` permission | policy `llm.models`, default, and `permissions:` rules |
+| `{embedding_guidance}` | embedding guidance only when at least one embedding alias is declared and `main` has potential `embedding.embed` permission | policy `embedding.models`, default, and `permissions:` rules |
 | `{git_package}` | empty unless Git is configured; otherwise a pointer to its package docs | policy `git:` block |
 
 HTTP, FS, and Code are advertised when the default action is not `deny`, or
@@ -180,7 +181,8 @@ default means `deny`. Filters and rule shadowing do not affect discovery;
 `fs.read`, `fs.write`, `fs.stat`, and `fs.list` with FS. Other callers' grants
 do not advertise these libraries to `main`. LLM additionally requires at least
 one declared model and uses the same non-deny rule for `llm.call`. A provider
-without models is not enough to advertise LLM. Session uses the same non-deny
+without models is not enough to advertise LLM. Embedding follows the same
+rule with `embedding.models` and `embedding.embed`. Session uses the same non-deny
 rule but needs both `session.read` and `session.write`: a store the agent can
 only write or only read holds nothing it can use, and `session.remove` and
 `session.list` do not count. Git visibility depends only on

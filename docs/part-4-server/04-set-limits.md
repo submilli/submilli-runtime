@@ -10,8 +10,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8334521c5b4106dc754a1378a691ddda8df3cf218dfdf01896b4502a27ef03b6"
-  confirmedAt: "2026-10-06T09:57:24.191Z"
+  contentHash: "8006554339ef3a393c428c1fd94d07e7399af21ca769386ebbffe2391f52fba9"
+  confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
 Some of the programs an agent writes will be wrong. A loop never stops,
@@ -37,6 +37,10 @@ and the fixed limits inside the standard library.
 | Model tokens, one run | 1,000,000 | `max_execution_llm_tokens` | `QuotaExceededError` |
 | Model tokens, all runs | 20,000,000 | `max_llm_tokens` | `QuotaExceededError` |
 | Prompts in flight | 4 | `max_llm_concurrency` | Further prompts wait |
+| Embedding tokens, one run | 2,000,000 | `max_execution_embedding_tokens` | `QuotaExceededError` |
+| Embedding tokens, all runs | 50,000,000 | `max_embedding_tokens` | `QuotaExceededError` |
+| Embedding requests, one run | 1,000 | `max_execution_embedding_requests` | `QuotaExceededError` |
+| Embedding requests in flight | 4 | `max_embedding_concurrency` | Further requests wait |
 | Session state, all sessions | 1,024 MB | `max_session_state_memory`, MB | `QuotaExceededError` |
 
 "The run ends" means the program can't catch it. The caller gets the

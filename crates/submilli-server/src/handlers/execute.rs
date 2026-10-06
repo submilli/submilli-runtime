@@ -438,6 +438,19 @@ async fn prepare_and_run(
         }
     };
 
+    let embedding_provider =
+        match state.embedding_provider_for(&blueprint, &harness_secrets, &network_policy) {
+            Ok(provider) => provider,
+            Err(error) => {
+                tracing::error!(error = ?error, "embedding dispatch initialization failed");
+                return ExecuteOutcome::undispatched(error_response(
+                    session_id,
+                    ErrorKind::RuntimeError,
+                    error.to_string(),
+                ));
+            }
+        };
+
     let mcp_catalog = match state
         .mcp_catalog_for_imports(
             blueprint_name,
@@ -534,6 +547,8 @@ async fn prepare_and_run(
         session_kv,
         llm_provider,
         llm_budget: Some(manager.llm_budget_for_execute()),
+        embedding_provider,
+        embedding_budget: Some(manager.embedding_budget_for_execute()),
         recording,
         cancel_requested,
     };

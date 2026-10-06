@@ -15,13 +15,17 @@
 //! `mcp.<server>` rule naming an undeclared server is.
 
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use serde::{Deserialize, Serialize};
-use url::Url;
 
-use crate::auth_proxy::secret_refs;
-use crate::{Blueprint, BlueprintError, Fault, FieldMatch, yaml_path};
+use crate::endpoint::{self, ProviderBlock};
+use crate::{Blueprint, BlueprintError, Fault, yaml_path};
+
+/// How this block names itself in endpoint and secret-reference faults.
+const PROVIDER_BLOCK: ProviderBlock = ProviderBlock {
+    key: "llm",
+    label: "llm provider",
+};
 
 /// The capability every `llm.*` permission rule names. One capability covers
 /// `call`, `batch`, and `models()`; the `model` filter is what distinguishes
@@ -44,12 +48,7 @@ const DEFERRED_TYPE: &str = "gateway";
 
 /// Characters a model `description` may hold, at most. It reaches a guest model's
 /// model-selection reasoning verbatim, so it is bounded as well as sanitized.
-const MAX_DESCRIPTION_CHARS: usize = 512;
-
-/// Host names that always mean this machine, whatever DNS says. Mirrors the
-/// loopback set the server's MCP endpoint keeps
-/// (`submilli-server/src/file_config.rs`).
-const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
+pub(crate) const MAX_DESCRIPTION_CHARS: usize = 512;
 
 /// The `llm:` block: the providers a script may reach and the models it may name.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,7 +171,13 @@ pub(crate) fn validate_llm(blueprint: &Blueprint) -> Result<(), BlueprintError> 
     for (name, provider) in &blueprint.llm.providers {
         validate_provider_type(name, &provider.provider_type)?;
         validate_base_url(name, provider)?;
-        check_secret_refs(name, provider, blueprint)?;
+        endpoint::check_secret_refs(
+            PROVIDER_BLOCK,
+            name,
+            provider.secret_bearing_values(),
+            blueprint,
+        )
+        .map_err(BlueprintError::InvalidLlm)?;
     }
     for (name, model) in &blueprint.llm.models {
         if !blueprint.llm.providers.contains_key(&model.provider) {
@@ -182,7 +187,7 @@ pub(crate) fn validate_llm(blueprint: &Blueprint) -> Result<(), BlueprintError> 
                     "llm model '{name}' names undeclared provider '{}'; declare it under \
                      'llm.providers:' or point the model at one of: {}",
                     model.provider,
-                    declared(&blueprint.llm.providers)
+                    endpoint::declared_names(&blueprint.llm.providers)
                 ),
             ));
         }
@@ -243,145 +248,7 @@ fn validate_base_url(name: &str, provider: &LlmProviderDecl) -> Result<(), Bluep
         }
         return Ok(());
     };
-    validate_endpoint(name, base_url)
-}
-
-/// Reject an endpoint that would carry the API key somewhere it must not go.
-///
-/// Because `openai-compatible` endpoints are operator-supplied by design, a
-/// plaintext-`http` or attacker-chosen base URL exfiltrates the key in the
-/// `Authorization` header on the very first call. Loopback / link-local /
-/// private hosts are refused on the same grounds the outbound HTTP policy
-/// refuses them (`interpreter/src/stdlib/http/policy.rs`): they are reachable
-/// only from inside the deployment, so pointing a credentialed client at one is
-/// either a mistake or an SSRF.
-///
-/// Literal addresses and the loopback names are what a parse-time check can
-/// decide; a name that *resolves* privately is caught by the same runtime policy
-/// every other outbound request goes through.
-fn validate_endpoint(name: &str, base_url: &str) -> Result<(), BlueprintError> {
-    let path = yaml_path!["llm", "providers", name, "base_url"];
-    let refuse = |reason: String| -> BlueprintError {
-        fault(
-            path.clone(),
-            format!("llm provider '{name}': base_url '{base_url}' {reason}"),
-        )
-    };
-
-    let Ok(url) = Url::parse(base_url) else {
-        return Err(refuse(
-            "is not a valid URL; use an absolute https:// endpoint".to_string(),
-        ));
-    };
-    if url.scheme() != "https" {
-        return Err(refuse(format!(
-            "uses the '{}' scheme; the API key travels in the Authorization header, so the \
-             endpoint must be https://",
-            url.scheme()
-        )));
-    }
-    let Some(host) = url.host_str() else {
-        return Err(refuse(
-            "has no host; use an absolute https:// endpoint".to_string(),
-        ));
-    };
-    if is_private_host(host) {
-        return Err(refuse(
-            "resolves to loopback, link-local, or private address space, which a credentialed \
-             client must not be pointed at; use the endpoint's public https:// hostname"
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
-/// Whether a URL host is one a credentialed client must not be pointed at.
-fn is_private_host(host: &str) -> bool {
-    // A trailing dot makes a fully-qualified name: `localhost.` is a valid FQDN
-    // that resolves to loopback, so it must compare equal to `localhost` or it
-    // walks straight past this check.
-    let host = host.strip_suffix('.').unwrap_or(host);
-    if LOOPBACK_HOSTS
-        .iter()
-        .any(|known| host.eq_ignore_ascii_case(known))
-    {
-        return true;
-    }
-    // `Url` brackets an IPv6 literal; parse the inside.
-    let literal = host.strip_prefix('[').and_then(|h| h.strip_suffix(']'));
-    match literal.unwrap_or(host).parse::<IpAddr>() {
-        Ok(ip) => is_private_ip(normalize(ip)),
-        // A name that is not a literal cannot be decided here, and this is the
-        // whole of the SSRF control on this path: the LLM dispatch uses its own
-        // `reqwest` client, which does *not* install the `PolicyResolver` that
-        // re-checks resolved addresses for `submilli:http`. So a name resolving
-        // into private space is not caught later. Refusing redirects
-        // (`llm/dispatch.rs`) closes the credential-exfiltration half; the
-        // resolve-time half stays open by construction, which is why an
-        // operator-supplied `base_url` is a trusted input and documented as one.
-        Err(_) => false,
-    }
-}
-
-/// An IPv4-mapped IPv6 address reaches the same host as the bare IPv4, so it is
-/// classified as the embedded v4 — the rule
-/// `interpreter/src/stdlib/http/policy.rs` follows, and without it
-/// `::ffff:127.0.0.1` walks straight past the loopback check.
-fn normalize(ip: IpAddr) -> IpAddr {
-    match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
-        v4 => v4,
-    }
-}
-
-fn is_private_ip(ip: IpAddr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() {
-        return true;
-    }
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.is_private() || is_cgnat(v4) || v4.is_link_local() || v4.is_broadcast()
-        }
-        IpAddr::V6(v6) => is_ula(v6) || is_v6_link_local(v6),
-    }
-}
-
-/// `100.64.0.0/10` — RFC6598 carrier-grade NAT.
-fn is_cgnat(v4: Ipv4Addr) -> bool {
-    v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1])
-}
-
-/// `fc00::/7` — IPv6 unique local addresses.
-fn is_ula(v6: Ipv6Addr) -> bool {
-    v6.segments()[0] & 0xfe00 == 0xfc00
-}
-
-/// `fe80::/10`.
-fn is_v6_link_local(v6: Ipv6Addr) -> bool {
-    v6.segments()[0] & 0xffc0 == 0xfe80
-}
-
-/// Every `${secrets.X}` in a provider's key and endpoint names a
-/// declared secret — the load-time check `mcp:` and `auth_proxy:` both apply.
-fn check_secret_refs(
-    name: &str,
-    provider: &LlmProviderDecl,
-    blueprint: &Blueprint,
-) -> Result<(), BlueprintError> {
-    for value in provider.secret_bearing_values() {
-        for secret in secret_refs(value) {
-            if !blueprint.secrets.contains_key(secret) {
-                return Err(fault(
-                    yaml_path!["llm", "providers", name],
-                    format!(
-                        "llm provider '{name}' references undeclared secret '{secret}'; add it \
-                         under 'secrets:'"
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(())
+    endpoint::validate_endpoint(PROVIDER_BLOCK, name, base_url).map_err(BlueprintError::InvalidLlm)
 }
 
 /// A `description` is operator-authored free text that flows verbatim into a
@@ -434,7 +301,7 @@ fn validate_description(name: &str, description: &str) -> Result<(), BlueprintEr
 /// already refused above, and this additionally refuses the invisible
 /// format/separator characters (zero-width joiners, bidi overrides, line and
 /// paragraph separators) that render as nothing but change how the rest reads.
-fn is_printable(c: char) -> bool {
+pub(crate) fn is_printable(c: char) -> bool {
     !matches!(
         c,
         '\u{00ad}'
@@ -453,45 +320,19 @@ fn is_printable(c: char) -> bool {
 /// Every `model` filter on an `llm.call` rule, across all caller blocks, names a
 /// model declared in the `llm.models:` block — the check
 /// [`validate_permission_servers`](crate::mcp) applies to `mcp.<server>` rules.
-///
-/// Only exact `model == "..."` matches are checked: a `glob` or `matches`
-/// pattern is a shape, not a name, and may legitimately match nothing today.
 fn validate_permission_models(blueprint: &Blueprint) -> Result<(), BlueprintError> {
-    for (caller, rules) in &blueprint.permissions {
-        for (i, rule) in rules.iter().enumerate() {
-            if rule.capability != LLM_CAPABILITY {
-                continue;
-            }
-            let Some(filter) = &rule.filter else {
-                continue;
-            };
-            for matched in filter.field_matches(MODEL_FIELD) {
-                let FieldMatch::Equals(model) = matched else {
-                    continue;
-                };
-                if !blueprint.llm.models.contains_key(&model) {
-                    return Err(fault(
-                        yaml_path!["permissions", caller, i, "filter"],
-                        format!(
-                            "caller '{caller}': permission filter names undeclared llm model \
-                             '{model}'; declare it under 'llm.models:' or filter on one of: {}",
-                            declared(&blueprint.llm.models)
-                        ),
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// The declared keys, for a message that names the alternatives rather than only
-/// the rejection.
-fn declared<T>(entries: &BTreeMap<String, T>) -> String {
-    if entries.is_empty() {
-        return "(none declared)".to_string();
-    }
-    entries.keys().cloned().collect::<Vec<_>>().join(", ")
+    let models: Vec<&str> = blueprint.llm.models.keys().map(String::as_str).collect();
+    endpoint::check_permission_names(
+        blueprint,
+        &endpoint::PermissionNames {
+            capability: LLM_CAPABILITY,
+            field: MODEL_FIELD,
+            noun: "llm model",
+            declared_in: "llm.models:",
+        },
+        &models,
+    )
+    .map_err(BlueprintError::InvalidLlm)
 }
 
 fn fault(path: crate::YamlPath, message: String) -> BlueprintError {

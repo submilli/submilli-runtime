@@ -39,7 +39,8 @@ async fn get(route: &str) -> (StatusCode, Value) {
 async fn search_lists_all_and_filters_by_symbol() {
     let (status, all) = get("/packages/search").await;
     assert_eq!(status, StatusCode::OK);
-    // Every stdlib module but `submilli:llm`, which needs models declared.
+    // Every stdlib module but `submilli:llm` and `submilli:embedding`, which need
+    // models declared.
     assert_eq!(all["results"].as_array().unwrap().len(), 8, "got: {all}");
 
     let (_, hit) = get("/packages/search?q=sha256").await;
@@ -510,6 +511,75 @@ mod blueprint_scoped {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(
                 body["prompt"].as_str().unwrap().contains("Model calls"),
+                visible
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn embedding_rest_discovery_requires_aliases_and_permission() {
+        let config = "embedding:\n  providers:\n    test:\n      type: huggingface\n      base_url: https://hf.example.com\n  models:\n    docs:\n      provider: test\n      model: bge\n      dimensions: 4\n";
+        for (configuration, default, visible) in [
+            ("", "allow", false),
+            (config, "deny", false),
+            (config, "allow", true),
+            (config, "ask-human", true),
+        ] {
+            let blueprint = submilli_blueprint::parse(&format!(
+                "name: scoped\ndefault: {default}\n{configuration}"
+            ))
+            .unwrap();
+            let router = app(AppState::new(ServerConfig {
+                blueprints: Some(Arc::new(
+                    InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"),
+                )),
+                ..ServerConfig::default()
+            })
+            .unwrap());
+            for query in ["", "embed", "submilli:embedding", "nothingmatchesthis"] {
+                let (status, body) = get_from(
+                    router.clone(),
+                    &format!("/v1/blueprints/scoped/packages/search?q={query}"),
+                )
+                .await;
+                assert_eq!(status, StatusCode::OK);
+                assert_eq!(
+                    body.to_string().contains("submilli:embedding"),
+                    visible,
+                    "{body}"
+                );
+            }
+            let (status, body) = get_from(
+                router.clone(),
+                "/v1/blueprints/scoped/packages/docs?name=submilli:embedding",
+            )
+            .await;
+            assert_eq!(
+                status,
+                if visible {
+                    StatusCode::OK
+                } else {
+                    StatusCode::NOT_FOUND
+                }
+            );
+            assert_eq!(body["source"] == "host", visible);
+            let (_, body) = get_from(
+                router.clone(),
+                "/v1/blueprints/scoped/packages/docs?name=submilli:embeddingx",
+            )
+            .await;
+            assert_eq!(
+                body["did_you_mean"] == "submilli:embedding",
+                visible,
+                "{body}"
+            );
+            let (status, body) = get_from(router.clone(), "/v1/blueprints/scoped/prompt").await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                body["prompt"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Embeddings (`submilli:embedding`)"),
                 visible
             );
         }

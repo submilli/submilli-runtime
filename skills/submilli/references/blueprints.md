@@ -61,6 +61,7 @@ Every top-level key, all optional except `name`:
 | `vfs` | The program's `/`: `none` (every `submilli:fs` call fails), `ephemeral` (default; a scratch directory deleted after the run), `per_session` (lasts as long as the session, like `submilli:session` state), or `named` (`{ mode: named, volume, access? }`: an operator-declared volume kept across sessions and restarts and shared with other blueprints naming it). `mounts` adds named volumes below an `ephemeral`, `per_session` or `named` root: `mounts: { /memory: { mode: named, volume: memory, access: read_only } }`. `access` can only narrow the server's; a write under a read-only volume throws `PermissionDeniedError`. Mounts may not nest, and mount points cannot be moved or removed. A named root or mount takes `subPath`, a directory inside the volume to expose instead of all of it, relative and normalized; a whole component may be `${vars.NAME}` (`subPath: users/${vars.userId}`), which is how one volume gives each user their own directory at the same path. A writable mount creates it. `cwd` (absolute, default `/`, may use `${vars.NAME}`) is where relative paths resolve for `fs`, packages, Git, and downloads; `fs.cwd()` returns it. It confines nothing: permissions still match absolute paths. A program run outside a session gets one that closes when it returns. `ephemeral` and `per_session` take `size_limit` (`100MB`, binary units: 104,857,600 bytes). Every write counts, packages' included: `fs` writes, appends, writers, copies, `http.download`, and Git; `fs.remove` and `fs.move` free space. One past it throws a catchable `QuotaExceededError`; under `per_session` the limit spans the session. It counts bytes, not entries. A named volume's limit is set in the server config and shared by everyone using it |
 | `idle_timeout` | Session reaping window, e.g. `3600s`; default one day |
 | `llm` | Models a program may call through `submilli:llm`: `providers` (name → `type`, `api_key: ${secrets.X}`) and `models` (name → `provider`, optional `description`). A model not listed cannot be called; descriptions reach the model writing the program, so they say which model is for what |
+| `embedding` | Embedding aliases a program may use through `submilli:embedding`: `providers` (name → `type` of `voyage`, `openai`, `google`, `jina` or `huggingface`, `api_key: ${secrets.X}`, optional `base_url`; a Hugging Face provider with `base_url` is a dedicated endpoint and may omit `api_key`) and `models` (alias → `provider`, `model`, required `dimensions`, optional `max_input_tokens`, `description`, and for Hugging Face `query_prompt_name` / `document_prompt_name`). An alias fixes everything that changes vectors, so a program cannot change it per call. Changing `model`, `dimensions`, or a prompt name changes the results' `identity`; a dedicated Hugging Face endpoint redeployed with another model is not detected unless `model` changes, so change it. An alias not listed cannot be used |
 
 `submilli blueprint init` scaffolds a commented minimal file; `--full` lists
 every stdlib capability as a deny rule with example filters.
@@ -136,6 +137,7 @@ Stdlib gates and their fields, from `submilli blueprint capability list`:
 | `secrets.get` (packages only) | `name` |
 | `mcp.<server>` | `tool`, `transport` |
 | `llm.call` (covers `call`, `batch`, `models()`) | `model`, `prompt_count`; narrowing `model` also narrows what `models()` lists |
+| `embedding.embed` (covers `embed`, `models()`) | `model`, `input_count`; narrowing `model` also narrows what `models()` lists, and decides which provider receives which texts |
 
 ## A real service
 
@@ -358,7 +360,7 @@ provides for `main` (which cannot import it), unless `--force` is given. It
 accepts any other HTTP method as `http.<method>` (`http.request("TRACE", …)`
 checks `http.trace`) and warns that the rule matches only that method, but
 refuses a near miss of a cataloged operation such as `http.dlete`. Add
-`variables`, `vfs`, `idle_timeout` and `llm` by editing the file; the CLI
+`variables`, `vfs`, `idle_timeout`, `llm` and `embedding` by editing the file; the CLI
 editors rewrite YAML and drop comments, so keep hand-written commentary
 elsewhere. Lint warns on the names `capability add` refuses or warns about (a
 name nothing provides never matches), on `main` rules the runtime never

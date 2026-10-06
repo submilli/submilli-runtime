@@ -2775,6 +2775,93 @@ async fn llm_discovery_requires_models_and_permission() {
 }
 
 #[tokio::test]
+async fn embedding_discovery_requires_aliases_and_permission() {
+    let config = "embedding:\n  providers:\n    test:\n      type: huggingface\n      base_url: https://hf.example.com\n  models:\n    docs:\n      provider: test\n      model: bge\n      dimensions: 4\n";
+    for (configuration, policy, visible) in [
+        ("", "default: allow\n", false),
+        (
+            "embedding:\n  providers:\n    test:\n      type: huggingface\n      base_url: https://hf.example.com\n",
+            "default: allow\n",
+            false,
+        ),
+        (config, "default: deny\n", false),
+        (config, "default: allow\n", true),
+        (
+            config,
+            "permissions:\n  main:\n    - capability: embedding.embed\n      action: ask-human\n",
+            true,
+        ),
+    ] {
+        let blueprint =
+            submilli_blueprint::parse(&format!("name: eph\n{configuration}{policy}")).unwrap();
+        let h = Harness::from_blueprints(vec![blueprint]);
+        let session = h.handshake(EPH).await;
+        let (_, _, tools) = h.post(EPH, tools_list(1), Some(&session)).await;
+        let prompt = tool_desc(&tools, EXECUTE);
+        assert_eq!(prompt.contains("submilli:embedding"), visible);
+        assert_eq!(
+            prompt.contains("Embeddings (`submilli:embedding`)"),
+            visible
+        );
+        for query in ["", "submilli:embedding", "embed", "nothingmatchesthis"] {
+            let (_, _, response) = h
+                .post(
+                    EPH,
+                    rpc_call(
+                        2,
+                        "submilli__typescript__packages__search",
+                        json!({"query": query}),
+                    ),
+                    Some(&session),
+                )
+                .await;
+            assert_eq!(
+                output(&response).to_string().contains("submilli:embedding"),
+                visible,
+                "{response}"
+            );
+        }
+        let (_, _, response) = h
+            .post(
+                EPH,
+                rpc_call(
+                    3,
+                    "submilli__typescript__packages__docs",
+                    json!({"name": "submilli:embedding"}),
+                ),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(output(&response)["source"] == "host", visible, "{response}");
+        if !visible {
+            assert_eq!(output(&response)["error"], "unknown_package");
+        }
+        let (_, _, response) = h
+            .post(
+                EPH,
+                rpc_call(
+                    4,
+                    "submilli__typescript__builtins__docs",
+                    json!({"names": ["submilli:embedding", "submilli:embeddingx"]}),
+                ),
+                Some(&session),
+            )
+            .await;
+        let entries = output(&response)["results"].as_array().unwrap().clone();
+        assert_eq!(
+            entries[0]["error"] == "not_a_builtin",
+            visible,
+            "{response}"
+        );
+        assert_eq!(
+            entries[1]["did_you_mean"] == "submilli:embedding",
+            visible,
+            "{response}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn files_tools_enforce_session_policy_on_a_named_volume() {
     let dir = tempfile::tempdir().expect("volume");
     for user in ["ada", "grace"] {

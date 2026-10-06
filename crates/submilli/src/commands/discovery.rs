@@ -97,6 +97,10 @@ impl Scope {
                 "it needs a model and a rule allowing `llm.call`. Run `submilli blueprint \
                  capability list {name}`"
             ),
+            "submilli:embedding" => format!(
+                "it needs an embedding alias and a rule allowing `embedding.embed`. Run \
+                 `submilli blueprint capability list {name}`"
+            ),
             _ if is_stdlib(name) => format!(
                 "no rule for caller `main` allows one of its capabilities. Run `submilli \
                  blueprint capability list {name}`"

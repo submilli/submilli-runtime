@@ -2,6 +2,8 @@
 
 mod auth_proxy;
 mod diag;
+mod embedding;
+mod endpoint;
 mod filter;
 mod git;
 mod llm;
@@ -25,6 +27,10 @@ pub use auth_proxy::{
     resolve_injections, secret_refs, verify_secrets,
 };
 pub use diag::{Fault, PathSeg, YamlPath};
+pub use embedding::{
+    EmbeddingConfig, EmbeddingModelDecl, EmbeddingProviderDecl, EmbeddingProviderType,
+    limits as embedding_limits,
+};
 pub use filter::{
     ComparisonFailure, FailureReason, FieldMatch, FilterEvaluation, FilterExpr, VarBindings,
 };
@@ -126,6 +132,11 @@ pub struct Blueprint {
     /// declaration is authoritative and gates calling.
     #[serde(default, skip_serializing_if = "LlmConfig::is_empty")]
     pub llm: LlmConfig,
+    /// Remote embedding providers the script reaches through
+    /// `submilli:embedding`, and the model aliases it may name. Like `llm:`,
+    /// declaration is authoritative and gates calling.
+    #[serde(default, skip_serializing_if = "EmbeddingConfig::is_empty")]
+    pub embedding: EmbeddingConfig,
 }
 
 impl Default for Blueprint {
@@ -145,6 +156,7 @@ impl Default for Blueprint {
             permissions: BTreeMap::new(),
             mcp: BTreeMap::new(),
             llm: LlmConfig::default(),
+            embedding: EmbeddingConfig::default(),
         }
     }
 }
@@ -1247,6 +1259,7 @@ pub fn parse(yaml: &str) -> Result<Blueprint, BlueprintError> {
     vfs_paths::validate(&blueprint)?;
     mcp::validate_mcp(&blueprint)?;
     llm::validate_llm(&blueprint)?;
+    embedding::validate_embedding(&blueprint)?;
     Ok(blueprint)
 }
 
@@ -1557,6 +1570,7 @@ pub enum BlueprintError {
     InvalidPermissions(Fault),
     InvalidMcp(Fault),
     InvalidLlm(Fault),
+    InvalidEmbedding(Fault),
 }
 
 impl BlueprintError {
@@ -1575,7 +1589,8 @@ impl BlueprintError {
             | BlueprintError::InvalidAuthProxy(fault)
             | BlueprintError::InvalidPermissions(fault)
             | BlueprintError::InvalidMcp(fault)
-            | BlueprintError::InvalidLlm(fault) => Some(fault),
+            | BlueprintError::InvalidLlm(fault)
+            | BlueprintError::InvalidEmbedding(fault) => Some(fault),
         }
     }
 }
@@ -1610,6 +1625,9 @@ impl fmt::Display for BlueprintError {
             }
             BlueprintError::InvalidMcp(fault) => write!(f, "invalid mcp config: {}", fault.message),
             BlueprintError::InvalidLlm(fault) => write!(f, "invalid llm config: {}", fault.message),
+            BlueprintError::InvalidEmbedding(fault) => {
+                write!(f, "invalid embedding config: {}", fault.message)
+            }
         }
     }
 }
@@ -1824,6 +1842,8 @@ permissions:
             "auth_proxy:\n  - host: example.com\n    query: { repeated: first, repeated: second }\n",
             "llm:\n  providers:\n    repeated: { type: openai }\n    repeated: { type: google }\n",
             "llm:\n  models:\n    repeated: { provider: openai }\n    repeated: { provider: google }\n",
+            "embedding:\n  providers:\n    repeated: { type: openai }\n    repeated: { type: google }\n",
+            "embedding:\n  models:\n    repeated: { provider: openai, model: m, dimensions: 8 }\n    repeated: { provider: google, model: m, dimensions: 8 }\n",
             "packages:\n  repeated: {}\n  repeated: {}\n",
         ] {
             let error = parse(&format!("name: duplicates\n{block}")).expect_err(block);

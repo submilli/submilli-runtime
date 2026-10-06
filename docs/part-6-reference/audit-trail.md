@@ -10,8 +10,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7511d0e84bdca3f79d65960a41007bfe1018507a6d3697580479e34bcec26d71"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "64685a92b3eaf977d7bdc3885491cf15d962e9fb0bd29fadf613bff374cb8a44"
+  confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
 The server writes one audit record per line, in logfmt, to its log's
@@ -113,7 +113,7 @@ when it ends. A request that is refused before the program runs, such
 as one naming a Blueprint the server doesn't hold, still gets both.
 
 ```text
-ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audit msg=execution blueprint=support blueprint_hash=5a2a1e61c440e6b36c43c60b2eff7ecad0ed7989bf5dee30d486678206a480d0 entry_point=http event=finished event_id=9b94bd43-647f-4b60-a740-0dee88e0d048 execution_id=0dfa846a-4483-4b8a-b271-45339daecbaf fuel=2264 host_fuel=2211 memory_peak=65536 model_tokens=0 outcome=ok principal=SUBMILLI_SERVER_TOKEN schema=submilli.audit/1 source_hash=9869da7b5d729a383bbfb33edf1a8ab68ab23fcc3fd3939a675b91bd906179cc source_size=265 type=execution vars.0.name=customerId vars.0.value=cus_northwind wall_ms=38 wasm_fuel=53
+ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audit msg=execution blueprint=support blueprint_hash=5a2a1e61c440e6b36c43c60b2eff7ecad0ed7989bf5dee30d486678206a480d0 embedding_tokens=0 entry_point=http event=finished event_id=9b94bd43-647f-4b60-a740-0dee88e0d048 execution_id=0dfa846a-4483-4b8a-b271-45339daecbaf fuel=2264 host_fuel=2211 memory_peak=65536 model_tokens=0 outcome=ok principal=SUBMILLI_SERVER_TOKEN schema=submilli.audit/1 source_hash=9869da7b5d729a383bbfb33edf1a8ab68ab23fcc3fd3939a675b91bd906179cc source_size=265 type=execution vars.0.name=customerId vars.0.value=cus_northwind wall_ms=38 wasm_fuel=53
 ```
 
 | Field | Value |
@@ -135,6 +135,7 @@ ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audi
 | `fuel`, `wasm_fuel`, `host_fuel` | Fuel consumed, as in [Set limits](/docs/server/set-limits#measure-a-program) |
 | `memory_peak` | The most memory the run held, in bytes |
 | `model_tokens` | Model tokens the run spent |
+| `embedding_tokens` | Embedding tokens the run spent |
 | `wall_ms` | Elapsed milliseconds |
 
 A request repeated with the same `Idempotency-Key` returns the first

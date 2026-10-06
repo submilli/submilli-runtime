@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "b316181a40f118b787f61623f5abc3a58db24051517cc308e14edc85f0fbfebd"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "2c3eb285d02288236f6512c2086fdaac71865f5b49c5179de7b54b8c291758fd"
+  confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
 This page describes what each `submilli:` module does, the capabilities
@@ -23,6 +23,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | `submilli:fs` | The program's filesystem: read, write, list, stat, move, copy, remove | `fs.*` |
 | `submilli:http` | HTTP requests, and downloads into the filesystem | `http.<method>`, `http.download` |
 | `submilli:llm` | Model calls: `call`, `batch`, `models` | `llm.call` |
+| `submilli:embedding` | Text embeddings: `embed`, `models` | `embedding.embed` |
 | `submilli:session` | Key-value state that lasts for the session | `session.*` |
 | `submilli:git` | Repositories in the filesystem: history, commits, branches, clone, fetch, pull | `git.init`, `git.clone`, `git.fetch`, `git.commit` |
 | `submilli:code` | Numbered reads, search, glob, tree, anchored edits, and diffs over the program's files | `fs.read`, `fs.list`, `fs.stat`, `fs.write` |
@@ -144,6 +145,45 @@ An operation that passes a limit throws and leaves the repository as it was.
 - A batch takes up to 128 prompts, each up to 256 KB. A call's tokens are
   reserved against the run's and the server's budgets before it is sent.
 
+## Embeddings
+
+`submilli:embedding` turns texts into vectors through the aliases the
+Blueprint declares ([Blueprint file](/docs/reference/blueprint-file#embedding)):
+
+| Form | Returns |
+| --- | --- |
+| `embed(model, texts, purpose)` | One `Embeddings`: `vector(i)` is the vector of `texts[i]` |
+| `models()` | The `EmbeddingModel`s this caller may use |
+
+- `purpose` is `"query"` for text you search with and `"document"` for text
+  you search over. A provider or model with no notion of purpose ignores it:
+  OpenAI always, and Hugging Face unless the alias sets
+  `query_prompt_name` or `document_prompt_name`. Elsewhere it is sent as
+  Voyage `input_type`; Jina `task` (`retrieval.query`, `retrieval.passage`);
+  Google `taskType`, or for `gemini-embedding-2` a text prefix the model reads.
+- A call returns every vector or throws; nothing is truncated, and there are
+  no per-text outcomes. An empty `texts`, more than 128 texts, more than
+  2 MiB of text, or a text longer than the alias's `maxInputBytes` throws a
+  `RangeError` before anything is sent.
+- Every vector has unit length. `vector(i)` returns a `number[]` and `bytes(i)`
+  returns `dimensions * 4` bytes of little-endian 32-bit floats; an `i` that
+  isn't an integer below `count` throws a `RangeError`.
+- The vectors live in the runtime at 4 bytes per number and count against
+  `max_execution_memory` until the program drops the result.
+- `identity` is opaque: compare the whole string, and don't mix vectors whose
+  identities differ. It covers the Blueprint's configuration of the alias and
+  can't see a vendor changing a model behind an unchanged name (a risk for
+  OpenAI and shared Hugging Face hosting), or a model redeployed at the same
+  dedicated Hugging Face endpoint unless the alias's `model` changes. A
+  `"query"` and a `"document"` result from one alias share an identity.
+  A different `base_url` doesn't change it, except a dedicated Hugging Face
+  endpoint's host.
+- Failures: `QuotaExceededError` for a budget or the request limit,
+  `TypeError` for an unusable provider response, and an `Error` with a reason
+  of `rate-limited`, `request-rejected`, `provider-unavailable`, `transport`,
+  `timeout`, or `blocked-by-network-policy` for other provider failures. No
+  error quotes a text or a vector.
+
 ## Modules for Packages and tests
 
 `secrets.get(name)` returns a declared secret's value to a Package. From the
@@ -188,6 +228,42 @@ Hashing, HMAC, and random bytes.
 | `sha256(input: string \| Uint8Array): Uint8Array` |  | SHA-256 digest of `input`. |
 | `sha512(input: string \| Uint8Array): Uint8Array` |  | SHA-512 digest of `input`. |
 | `timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean` |  | Constant-time byte-array equality, suitable for comparing HMAC tags. |
+
+## `submilli:embedding`
+
+Remote text embeddings: embed batches into sealed vectors, and models() to discover aliases.
+
+| Function | Capability | Description |
+| --- | --- | --- |
+| `embed(model: string, texts: string[], purpose: "document" \| "query"): Embeddings` | `embedding.embed { model, input_count: $texts.length }` | Embed `texts` with the alias `model` and return one sealed `Embeddings`: `result.vector(i)` is the vector of `texts[i]`, in input order. |
+| `models(): EmbeddingModel[]` | `embedding.embed { model, input_count: 0 }` | The embedding aliases this runtime serves and this caller may use. |
+
+### `EmbeddingModel`
+
+One alias this caller may embed with.
+
+| Member | Description |
+| --- | --- |
+| `readonly description: string \| null` | Operator-authored deployment intent, or `null` when none was declared. |
+| `readonly dimensions: number` | The length of every vector this alias returns. |
+| `readonly identity: string` | The embedding-space identity results from this alias carry. |
+| `readonly maxInputBytes: number` | The UTF-8 byte length above which one text is refused before sending. |
+| `readonly maxInputTokens: number \| null` | The alias's input limit in tokens, or `null` when none is known. |
+| `readonly name: string` | The alias name, exactly as `embed` expects it. |
+
+### `Embeddings`
+
+The sealed result of `embed`: vectors held by the runtime at 4 bytes per number, in input order, labeled with the embedding-space `identity`.
+
+| Member | Description |
+| --- | --- |
+| `readonly count: number` | The number of vectors, equal to the number of texts embedded. |
+| `readonly dimensions: number` | The length of every vector. |
+| `readonly identity: string` | The embedding-space identity of every vector here. |
+| `readonly inputTokens: number \| null` | Input tokens the provider reported for the whole call, or `null` when it reported none. |
+| `readonly model: string` | The alias these vectors were embedded with. |
+| `bytes(index: number): Uint8Array` | The vector of `texts[index]` as little-endian 32-bit floats: `dimensions * 4` bytes, the compact form for storing a vector. |
+| `vector(index: number): number[]` | The vector of `texts[index]` as a `number[]` of `dimensions` numbers. |
 
 ## `submilli:fs`
 

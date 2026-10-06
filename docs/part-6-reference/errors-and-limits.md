@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "626dc213a7525b63d1d2b6168394a76cb0ffe091ac891dad446b512893637599"
-  confirmedAt: "2026-10-06T09:57:24.192Z"
+  contentHash: "535ae98f075f905b0348b90f121b515d28055d11f3a96bfb30cc16e689c6957a"
+  confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
 This page lists the limits on a program's run, the fixed limits inside the
@@ -37,6 +37,10 @@ gives all three forms and their precedence. A Blueprint can't raise them.
 | Model tokens, one run | `max_execution_llm_tokens` | 1,000,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
 | Model tokens, all runs | `max_llm_tokens` | 20,000,000 | count, with suffixes | All live runs on the server | `QuotaExceededError` | Yes |
 | Prompts in flight | `max_llm_concurrency` | 4 | prompts | One `llm.batch` call | Further prompts wait | — |
+| Embedding tokens, one run | `max_execution_embedding_tokens` | 2,000,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
+| Embedding tokens, all runs | `max_embedding_tokens` | 50,000,000 | count, with suffixes | All live runs on the server | `QuotaExceededError` | Yes |
+| Embedding requests, one run | `max_execution_embedding_requests` | 1,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
+| Embedding requests in flight | `max_embedding_concurrency` | 4 | requests | One `embed` call | Further requests wait | — |
 | Session state, all sessions | `max_session_state_memory` | 1,024 | megabytes | All live sessions on the server | `QuotaExceededError` | Yes |
 | Named volume size | `size_limit` of an entry under `volumes` | none (required) | bytes, or a size such as `1GB` (binary units), or `unlimited` | The volume, across every session and Blueprint that uses it | `QuotaExceededError` | Yes |
 
@@ -88,6 +92,9 @@ no outbound network block.
 | Stack | `--max-stack <BYTES>` | 524,288 |
 | Model tokens | `--max-llm-tokens <TOKENS>`, or `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | 1,000,000 |
 | Prompts in flight | `--max-llm-concurrency <PROMPTS>`, or `SUBMILLI_MAX_LLM_CONCURRENCY` | 4 |
+| Embedding tokens | `--max-execution-embedding-tokens <TOKENS>`, or `SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS` | 2,000,000 |
+| Embedding requests | `--max-execution-embedding-requests <REQUESTS>`, or `SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS` | 1,000 |
+| Embedding requests in flight | `--max-embedding-concurrency <REQUESTS>`, or `SUBMILLI_MAX_EMBEDDING_CONCURRENCY` | 4 |
 | Memory | none | 50 megabytes |
 
 `--report` prints the run's fuel, peak memory, and time to standard error:
@@ -178,6 +185,19 @@ volume can undo each other's changes.
 | Reserve held for calls whose usage the provider didn't report | 200,000 tokens per run | `QuotaExceededError` |
 | A model call | 10 minutes, and 10 seconds to connect | `Error` |
 
+### `submilli:embedding`
+
+| Limit | Value | When passed |
+| --- | --- | --- |
+| Texts in one `embed` call | 128 | `RangeError`, before anything is sent |
+| Text in one `embed` call | 2 MiB of UTF-8 | `RangeError`, before anything is sent |
+| One text | The alias's `maxInputBytes`: three bytes per token of its input limit | `RangeError` naming the text, before anything is sent |
+| One text, Google | The same, but no more than 2,032 bytes (`gemini-embedding-001` and unlisted models) or 8,147 (`gemini-embedding-2`) | `RangeError` naming the text, before anything is sent |
+| One text, Hugging Face shared hosting | The input limit minus 16 bytes (496 by default) | `RangeError` naming the text, before anything is sent |
+| Reserve held for requests whose usage the provider didn't report (Hugging Face and `gemini-embedding-001`) | 200,000 tokens per run | `QuotaExceededError` |
+| Free-tier Gemini keys | About 100 texts per minute | `Error` with the `rate-limited` reason |
+| An empty `texts` | | `RangeError` |
+
 ### `submilli:session`
 
 | Limit | Value | When passed |
@@ -267,6 +287,9 @@ call is decided.
 | Filesystem size | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more` |
 | Model tokens, one run | `llm.call: llm.call("claude-haiku-4-5") exceeded the execution token budget: 64006 tokens exceeds the 1000 this execution may spend — use fewer or shorter calls, or split the work across executions` |
 | Model tokens, all runs | Names the server token budget, says the run's own spend isn't what is in the way, and names `--max-llm-tokens`. |
+| Embedding tokens, one run | Names the execution embedding token budget and `--max-execution-embedding-tokens`. |
+| Embedding tokens, all runs | Names the server embedding token budget and `--max-embedding-tokens`. |
+| Embedding requests, one run | Names the request limit and `--max-execution-embedding-requests`. |
 | Session state, one session | `session.set("v16") exceeded the session payload limit: 17001238 retained bytes exceeds the 16777216 this session may hold — remove entries this session no longer needs, or store less per key` |
 | Keys, one session | `session.set("k1024") exceeded the entry count limit: the session already holds 1024` |
 | Session state, all sessions | ``session.set("more") exceeded the server session-state budget: 1600154 retained bytes exceeds the 1048576 allowed across all live sessions — this session's own data is not what is in the way, so shrinking it need not help; the operator raises the budget with `--max-session-state-memory` `` |
@@ -280,6 +303,7 @@ RangeError: Invalid count value
 RangeError: Invalid string length
 RangeError: invalid Uint8Array length 1073741825 — the maximum is 1073741824
 RangeError: object graph is nested deeper than 128 levels, so it cannot be compared, hashed, or serialized — a cycle (an object reachable from itself) reaches this bound too
+RangeError: embedding.embed("notes-embedding"): text 2 exceeds the 96000 bytes this model accepts — shorten or split it
 RangeError: llm.batch: llm.call("claude-haiku-4-5"): prompt bound exceeded: 129 prompts in one batch exceeds the 128 allowed — send fewer prompts per call, or shorten each one
 RangeError: session.set("big") exceeded the value size limit: 1200004 serialized bytes exceeds the 1048576 allowed
 SyntaxError: JSON.parse: recursion limit exceeded at line 1 column 128
