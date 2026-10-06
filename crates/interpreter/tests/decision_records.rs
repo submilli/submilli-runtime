@@ -490,6 +490,29 @@ impl EmbeddingProvider for FakeEmbedding {
         Box::pin(async move {
             let estimate = self.estimate_tokens(alias, texts);
             budget.mark_sent(alias, estimate)?;
+            // A later sub-batch fails after an earlier one was billed (`flaky`)
+            // or after none reported usage (`dark`).
+            let failed_after = |reported| EmbeddingError::Provider {
+                alias: alias.to_string(),
+                reason: interpreter::runtime::EmbeddingFailureReason::Transport,
+                settlements: vec![
+                    interpreter::runtime::SubBatchSettlement {
+                        estimate: 4,
+                        reported,
+                        indeterminate: 4 - reported,
+                    },
+                    interpreter::runtime::SubBatchSettlement {
+                        estimate: 3,
+                        reported: 0,
+                        indeterminate: 3,
+                    },
+                ],
+            };
+            match alias {
+                "open-embed-flaky" => return Err(failed_after(4)),
+                "open-embed-dark" => return Err(failed_after(0)),
+                _ => {}
+            }
             let batch = EmbeddingBatch::new(
                 vec![0.5; texts.len() * 4],
                 texts.len(),
@@ -521,7 +544,7 @@ impl EmbeddingProvider for FakeEmbedding {
     }
 
     fn max_input_bytes(&self, alias: &str) -> Option<u64> {
-        (alias == "open-embed").then_some(1024)
+        alias.starts_with("open-embed").then_some(1024)
     }
 }
 
@@ -1745,6 +1768,43 @@ function main(): string {
             output_tokens: None,
         })
     );
+}
+
+#[tokio::test]
+async fn a_failed_embed_call_keeps_the_usage_its_sent_batches_reported() {
+    for (alias, usage) in [
+        (
+            "open-embed-flaky",
+            Some(interpreter::runtime::ModelUsage {
+                input_tokens: Some(4),
+                output_tokens: None,
+            }),
+        ),
+        ("open-embed-dark", None),
+    ] {
+        let source = format!(
+            r#"
+import embedding from "submilli:embedding";
+function main(): string {{
+  try {{ embedding.embed("{alias}", ["alpha", "beta"], "document"); return "ok"; }}
+  catch (e: Error) {{ return "failed"; }}
+}}
+"#
+        );
+        let outcome = run(
+            &source,
+            Setup {
+                record: recording(),
+                embedding: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        assert_eq!(outcome.result, Ok("failed".to_owned()), "{alias}");
+        let call = outcome.call("embedding.embed");
+        assert_eq!(call.outcome, Some(CallOutcome::Failed), "{alias}");
+        assert_eq!(call.usage, usage, "{alias}");
+    }
 }
 
 #[tokio::test]

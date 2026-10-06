@@ -294,6 +294,22 @@ async fn embed(
             // Settled before the error becomes a throw, or a fatal one, so the
             // sent sub-batches stay charged either way.
             budget.settle(estimate, error.settlements());
+            // What the sent sub-batches reported is real spend; record it as
+            // success does, and nothing when no sub-batch reported any.
+            let reported: u64 = error
+                .settlements()
+                .iter()
+                .fold(0, |sum, settlement| sum.saturating_add(settlement.reported));
+            if reported > 0 {
+                record_usage(
+                    &*caller,
+                    ticket,
+                    ModelUsage {
+                        input_tokens: Some(reported),
+                        output_tokens: None,
+                    },
+                );
+            }
             return Err(quota_throw(caller, ticket, model, error));
         }
     };

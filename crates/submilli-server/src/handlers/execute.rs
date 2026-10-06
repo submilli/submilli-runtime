@@ -443,11 +443,7 @@ async fn prepare_and_run(
             Ok(provider) => provider,
             Err(error) => {
                 tracing::error!(error = ?error, "embedding dispatch initialization failed");
-                return ExecuteOutcome::undispatched(error_response(
-                    session_id,
-                    ErrorKind::RuntimeError,
-                    error.to_string(),
-                ));
+                return fail(ErrorKind::RuntimeError, error.to_string());
             }
         };
 

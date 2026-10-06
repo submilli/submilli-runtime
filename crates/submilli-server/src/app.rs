@@ -85,6 +85,16 @@ type LlmDispatchFactory = Arc<
         + Sync,
 >;
 
+type EmbeddingDispatchFactory = Arc<
+    dyn Fn(
+            Arc<Blueprint>,
+            Option<Arc<dyn SecretStore>>,
+            Arc<interpreter::runtime::NetworkPolicy>,
+        ) -> std::result::Result<HttpEmbeddingDispatch, HttpEmbeddingDispatchError>
+        + Send
+        + Sync,
+>;
+
 struct AppStateInner {
     boot_lock: AsyncMutex<()>,
     booted: AtomicBool,
@@ -152,6 +162,7 @@ struct AppStateInner {
     llm_dispatch_factory: LlmDispatchFactory,
     /// The embedding counterpart of `llm_dispatch`.
     embedding_dispatch: Option<Arc<dyn EmbeddingDispatch>>,
+    embedding_dispatch_factory: EmbeddingDispatchFactory,
     #[cfg(test)]
     mcp_setup: McpSetup,
     run_recorder: Option<Arc<dyn crate::record::RunRecorderFactory>>,
@@ -180,12 +191,41 @@ impl AppState {
     /// Construct application state with the blueprint store supplied in config.
     /// Store selection and migration belong to server startup.
     pub fn new(config: ServerConfig) -> Result<Self> {
-        Self::with_llm_dispatch_factory(config, Arc::new(HttpModelDispatch::new))
+        Self::with_dispatch_factories(
+            config,
+            Arc::new(HttpModelDispatch::new),
+            Arc::new(HttpEmbeddingDispatch::new),
+        )
     }
 
+    #[cfg(test)]
     fn with_llm_dispatch_factory(
         config: ServerConfig,
         llm_dispatch_factory: LlmDispatchFactory,
+    ) -> Result<Self> {
+        Self::with_dispatch_factories(
+            config,
+            llm_dispatch_factory,
+            Arc::new(HttpEmbeddingDispatch::new),
+        )
+    }
+
+    #[cfg(test)]
+    fn with_embedding_dispatch_factory(
+        config: ServerConfig,
+        embedding_dispatch_factory: EmbeddingDispatchFactory,
+    ) -> Result<Self> {
+        Self::with_dispatch_factories(
+            config,
+            Arc::new(HttpModelDispatch::new),
+            embedding_dispatch_factory,
+        )
+    }
+
+    fn with_dispatch_factories(
+        config: ServerConfig,
+        llm_dispatch_factory: LlmDispatchFactory,
+        embedding_dispatch_factory: EmbeddingDispatchFactory,
     ) -> Result<Self> {
         submilli_shared::mcp::schema_registry::initialize_builtin_packs();
         let blueprints = config.blueprints.context(
@@ -335,6 +375,7 @@ impl AppState {
                 llm_dispatch: config.llm_dispatch,
                 llm_dispatch_factory,
                 embedding_dispatch: config.embedding_dispatch,
+                embedding_dispatch_factory,
                 #[cfg(test)]
                 mcp_setup: Arc::new(|| Ok(())),
                 event_hub: config
@@ -555,7 +596,7 @@ impl AppState {
         let dispatch = match self.inner.embedding_dispatch.as_ref() {
             Some(installed) => Arc::clone(installed),
             None => Arc::new(
-                HttpEmbeddingDispatch::new(
+                (self.inner.embedding_dispatch_factory)(
                     Arc::clone(blueprint),
                     self.secret_store().cloned(),
                     Arc::clone(network_policy),
@@ -1459,6 +1500,9 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod embedding_setup_tests;
 
 #[cfg(test)]
 mod llm_setup_tests;
