@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "dcf5f3512bb368efb589e4f6a08418ee77c95e3fa41e9c940551f666ebd7de9f"
+  contentHash: "6549ef36ecaa2395d1e2df53b57ae67df2822a459d80ecab1e6282d33ab0b373"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -138,7 +138,12 @@ code can use the billing API only through the Package's function. The CLI writes
 you add it. What it provides, you grant to `main`, narrowed with filters
 and variables.
 
-## Rules are about what an operation means
+<span id="rules-are-about-what-an-operation-means"></span>
+
+## Semantic permission model
+
+A semantic permission model defines which business operations an agent may
+perform, on which resources, and with which argument values.
 
 Consider the alternative. You run the agent in a secure sandbox, or route
 all of its traffic through a gateway, and write rules over what it sends. To
@@ -156,7 +161,7 @@ means. `acme.com/credits.apply` means applying a credit, and the Package
 hands the runtime the customer, the amount, and the customer's class, typed,
 before anything is sent. The rule is written against those fields, never
 against a raw payload. Nobody guesses what a request does, and the model is never asked
-to judge its own intent. Submilli calls this **semantic security**, and the
+to judge its own intent. These are **semantic permissions**, and the
 [next chapter](/docs/packages) shows where the meaning comes from.
 
 ## Context: who the session is for
