@@ -160,6 +160,7 @@ impl World {
                     .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
                     .collect::<VarBindings>(),
                 mode,
+                secrets: None,
             },
         )
         .await
@@ -417,6 +418,7 @@ async fn a_recording_with_no_program_is_refused_naming_its_run() {
             recorded: recorded.clone(),
             bindings: VarBindings::new(),
             mode: TestMode::Recorded,
+            secrets: None,
         },
     )
     .await
@@ -448,6 +450,7 @@ async fn a_recording_whose_blueprint_is_gone_is_refused() {
             recorded,
             bindings: VarBindings::new(),
             mode: TestMode::Recorded,
+            secrets: None,
         },
     )
     .await
@@ -618,6 +621,7 @@ async fn a_volume_over_the_cap_is_refused_with_the_cap_in_the_message() {
             recorded: source.recorded,
             bindings: VarBindings::new(),
             mode: TestMode::Recorded,
+            secrets: None,
         },
     )
     .await
@@ -1095,4 +1099,190 @@ async fn a_model_call_with_nothing_recorded_stops_unless_the_run_continues_live(
     );
     assert_eq!(live.report.went_live.len(), 1);
     assert_eq!(calls.load(Ordering::SeqCst), before + 2);
+}
+
+// ---- harness secrets --------------------------------------------------------------------
+
+/// Reads `/a`, then `/b`, sending the harness secret `K` as a bearer token. The first
+/// blueprint denies `/b`; the second allows it.
+fn secret_blueprint(deny_b: bool) -> Blueprint {
+    let deny = if deny_b {
+        "permissions:\n  main:\n    - capability: http.get\n      filter: path == \"/b\"\n      action: deny\n"
+    } else {
+        ""
+    };
+    blueprint(&format!(
+        "name: bp\ndefault: allow\nallow_insecure_http: true\nvfs:\n  mode: none\nsecrets:\n  K:\n    harness:\n      required: true\nauth_proxy:\n  - host: 127.0.0.1\n    allow_insecure_http: true\n    auth:\n      bearer: K\n{deny}"
+    ))
+}
+
+fn secrets(token: &str) -> submilli_blueprint::HarnessSecretBindings {
+    [("K".to_owned(), token.to_owned())].into()
+}
+
+/// Runs `code` as a program that was given the secret `K`.
+async fn run_with_secret(world: &World, code: &str) -> RecordedRun {
+    let response = run_program(
+        &world.state,
+        ProgramRun {
+            label: "source".into(),
+            blueprint: "bp".into(),
+            code: code.into(),
+            variables: Default::default(),
+            secrets: secrets("tok-source"),
+        },
+    )
+    .await;
+    world.recordings.run(&response.execution_id)
+}
+
+#[tokio::test]
+async fn a_missing_required_secret_is_refused_naming_it_and_starts_no_run() {
+    let world = World::new(vec![secret_blueprint(true)]);
+    let recorded = run_with_secret(&world, "function main(): string { return \"x\"; }").await;
+    let started = world.recordings.started.lock().unwrap().len();
+    let outcome = test_program(
+        &world.state,
+        TestRun {
+            label: "tester".into(),
+            recorded,
+            bindings: VarBindings::new(),
+            mode: TestMode::Live,
+            secrets: None,
+        },
+    )
+    .await
+    .expect("a refused secret comes back as the run's failed response");
+    assert_eq!(error_kind(&outcome), Some(ErrorKind::InvalidRequest));
+    let message = &outcome.response.error.as_ref().unwrap().message;
+    assert!(
+        message.contains("invalid secrets") && message.contains('K'),
+        "{message}"
+    );
+    assert_eq!(
+        world.recordings.started.lock().unwrap().len(),
+        started,
+        "a refusal starts no run"
+    );
+}
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_live_call_carries_the_secret_the_test_run_was_given() {
+    let server = MockServer::start_async().await;
+    let _a = server
+        .mock_async(|when, then| {
+            when.method(Method::GET).path("/a");
+            then.status(200).body("alpha");
+        })
+        .await;
+    let b = server
+        .mock_async(|when, then| {
+            when.method(Method::GET)
+                .path("/b")
+                .header("authorization", "Bearer tok-test");
+            then.status(200).body("bravo");
+        })
+        .await;
+    let world = World::new(vec![secret_blueprint(true)]);
+    let recorded = run_with_secret(&world, &fetch_both(&server)).await;
+    world
+        .blueprints
+        .upsert(secret_blueprint(false))
+        .await
+        .unwrap();
+    let outcome = test_program(
+        &world.state,
+        TestRun {
+            label: "tester".into(),
+            recorded,
+            bindings: VarBindings::new(),
+            mode: TestMode::Live,
+            secrets: Some(secrets("tok-test")),
+        },
+    )
+    .await
+    .expect("the test run starts");
+    assert_eq!(
+        result(&outcome),
+        Some("alpha|bravo"),
+        "{:?}",
+        outcome.response.error
+    );
+    b.assert_hits_async(1).await;
+}
+
+// ---- cancelling from outside ------------------------------------------------------------
+
+#[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancel_from_outside_stops_a_test_run_waiting_on_a_live_call() {
+    let server = MockServer::start_async().await;
+    let _a = server
+        .mock_async(|when, then| {
+            when.method(Method::GET).path("/a");
+            then.status(200).body("alpha");
+        })
+        .await;
+    let world = World::new(vec![blueprint(DENY_B)]);
+    let source = world.run("bp", &fetch_both(&server), &[]).await;
+    world.blueprints.upsert(blueprint(ALLOW_ALL)).await.unwrap();
+    // The newly allowed read now goes live, and the page is slow to answer.
+    let slow = server
+        .mock_async(|when, then| {
+            when.method(Method::GET).path("/b");
+            then.status(200)
+                .body("bravo")
+                .delay(std::time::Duration::from_secs(30));
+        })
+        .await;
+
+    let state = world.state.clone();
+    let recorded = source.recorded.clone();
+    let running = tokio::spawn(async move {
+        test_program(
+            &state,
+            TestRun {
+                label: "tester".into(),
+                recorded,
+                bindings: VarBindings::new(),
+                mode: TestMode::Live,
+                secrets: None,
+            },
+        )
+        .await
+    });
+    let cancelled = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        // Cancel once the live call is in flight.
+        while slow.hits_async().await == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        loop {
+            let id = world
+                .recordings
+                .started
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|start| start.entry == RunEntry::Test)
+                .map(|start| start.execution_id.clone());
+            if let Some(id) = id
+                && world.state.cancel_run(&id)
+            {
+                return id;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the test run was registered for cancelling");
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(20), running)
+        .await
+        .expect("the cancelled test run returns")
+        .unwrap()
+        .expect("the test run started");
+    assert_eq!(outcome.response.execution_id, cancelled);
+    assert_eq!(error_kind(&outcome), Some(ErrorKind::Cancelled));
+    assert!(!world.state.cancel_run(&cancelled), "no longer running");
+    slow.assert_hits_async(1).await;
 }
