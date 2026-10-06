@@ -30,7 +30,8 @@ by [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 ## Active work
 
-Every N entry below is open. Evidence means:
+Entries marked **fixed on branch** have completed focused verification and review;
+other N entries remain open. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
   The entry says whether this was a public API, source input, or only a dependency
@@ -42,7 +43,7 @@ Every N entry below is open. Evidence means:
 
 | ID | Work | Evidence |
 | --- | --- | --- |
-| N01 | Bound blueprint filter parsing, tree height and destruction | Reproduced stack aborts |
+| N01 | **Fixed on branch:** bound blueprint filter parsing, tree height and destruction | Debug/release 2 MiB stack regressions pass |
 | N02 | Bound package graph DFS in build and GitHub resolution | Build DFS abort reproduced; resolver inspected |
 | N03 | Check OAuth token expiry before adding it to `Instant` | Overflow operation reproduced; caller traced |
 | N04 | Charge and bound variable-to-variable substitution chains | Budget bypass reproduced; stack risk inspected |
@@ -79,7 +80,8 @@ Paths and line numbers below refer to the pinned review revision. Dependency
 paths are relative to the stated crate's published source. All findings are
 pre-existing on the integration base; relevant bodies and locked versions were
 compared. PR #141 changes some surrounding source/lines, not these mechanisms.
-No fixes are included in this inventory update.
+The original audit included no fixes. Subsequent dispositions below record fixes
+on `codex/panic-inventory-fixes`; they are not yet merged.
 
 ### N01 — Blueprint filter recursion and recursive destruction
 
@@ -109,6 +111,17 @@ walkers. Cover rejection cleanup, `not`, parentheses, flat `and`/`or`, evaluatio
 serialization and destruction; verify ordinary filters and a healthy follow-up.
 Programmatically constructible `FilterExpr` trees need an explicit ownership and
 validation contract too. A parser-only counter does not close this item.
+
+**Disposition (2026-10-06, fixed on branch):** private `FilterExpr` nodes preserve
+parser-established bounds: at most 128 total operators/groups and 64 KiB of both
+input and canonical spelling. Oversized filters return existing parse errors
+before recursive construction; all tree consumers and rejection drop are bounded.
+This removes public unchecked enum construction. Blueprint tests (224) and
+isolated debug/release 2 MiB-stack regressions pass, including exact limits,
+mixed nesting, malformed suffix cleanup, YAML rejection, canonical-size
+round trips and healthy follow-up. Three independent reviewers completed two
+rounds; the canonical-size finding was fixed. Formatting and workspace/all-target
+Clippy pass. No full suites or live HTTP tests (transport unchanged).
 
 ### N02 — Package dependency DFS has no depth bound
 
