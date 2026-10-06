@@ -554,6 +554,7 @@ fn map_resolve_error(err: ResolveError) -> InstallFailure {
             install_err(StatusCode::CONFLICT, "dependency_conflict", err.to_string())
         }
         ResolveError::Cycle { .. }
+        | ResolveError::DependencyDepth { .. }
         | ResolveError::MissingPackageInRepo { .. }
         | ResolveError::Manifest { .. } => install_err(
             StatusCode::BAD_REQUEST,
@@ -652,6 +653,15 @@ mod tests {
             code(GithubError::Download("reset".into()), "download_failed"),
             "download_failed"
         );
+    }
+
+    #[test]
+    fn a_dependency_depth_limit_is_a_bad_request() {
+        let error = map_resolve_error(ResolveError::DependencyDepth {
+            name: PackageName::new("@acme/deep"),
+        });
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert_eq!(error.1.0.error, "invalid_dependency");
     }
 
     #[test]

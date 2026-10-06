@@ -44,7 +44,7 @@ other N entries remain open. Evidence means:
 | ID | Work | Evidence |
 | --- | --- | --- |
 | N01 | **Fixed on branch:** bound blueprint filter parsing, tree height and destruction | Debug/release 2 MiB stack regressions pass |
-| N02 | Bound package graph DFS in build and GitHub resolution | Build DFS abort reproduced; resolver inspected |
+| N02 | **Fixed on branch:** bound package graph DFS in build and GitHub resolution | Debug/release 2 MiB stack regressions pass |
 | N03 | Check OAuth token expiry before adding it to `Instant` | Overflow operation reproduced; caller traced |
 | N04 | Charge and bound variable-to-variable substitution chains | Budget bypass reproduced; stack risk inspected |
 | N05 | Bound namespace metadata before recursive consumers | Inspection; direct metadata API |
@@ -143,6 +143,16 @@ recursion is confirmed by inspection; no network or resolver-abort test ran.
 **Direction/done:** bounded iterative DFS or explicit graph depth/node budgets
 for both walkers. Preserve dependency order, shared-node deduplication and cycle
 diagnostics. Test long acyclic chains as well as cycles and rejection cleanup.
+
+**Disposition (2026-10-06, fixed on branch):** both DFS walkers reject more than
+128 active dependency levels through typed errors before expanding/fetching the
+next node. Completed-node reuse and cycle diagnostics retain precedence; the
+server maps the resolver limit to `400 invalid_dependency`. Isolated debug/release
+2 MiB-stack tests pass at 128/129/3,000 levels and on a healthy follow-up;
+12 driver and seven resolver integration tests pass (including cycle/diamond
+ordering). Three independent reviewers report no findings. Four server mapping tests,
+formatting and workspace/all-target Clippy pass.
+No full suites or network calls.
 
 ### N03 — Remote OAuth expiry overflows `Instant`
 

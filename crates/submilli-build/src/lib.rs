@@ -56,6 +56,9 @@ pub use scaffold::{
 };
 pub use warning_policy::{deny_warnings_from_env, warning_denial_message};
 
+// Bound recursive graph traversal on request threads before following an edge.
+pub(crate) const MAX_DEPENDENCY_DEPTH: usize = 128;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectManifest {
     pub dependencies: BTreeMap<PackageName, DependencySource>,

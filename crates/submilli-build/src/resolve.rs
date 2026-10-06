@@ -114,6 +114,8 @@ pub enum ResolveError {
         second_requirer: PackageName,
         second_sha: String,
     },
+    /// The unresolved dependency chain exceeds the request-stack bound.
+    DependencyDepth { name: PackageName },
     /// A dependency cycle across repos.
     Cycle { path: Vec<PackageName> },
 }
@@ -197,6 +199,12 @@ impl fmt::Display for ResolveError {
                 short(first_sha),
                 second_requirer.as_str(),
                 short(second_sha),
+            ),
+            ResolveError::DependencyDepth { name } => write!(
+                f,
+                "package dependency traversal exceeds {} levels at `{}`; shorten the dependency chain",
+                crate::MAX_DEPENDENCY_DEPTH,
+                name.as_str()
             ),
             ResolveError::Cycle { path } => write!(
                 f,
@@ -304,6 +312,9 @@ impl Resolver<'_> {
             return Err(ResolveError::Cycle { path });
         }
 
+        if self.in_progress.len() >= crate::MAX_DEPENDENCY_DEPTH {
+            return Err(ResolveError::DependencyDepth { name });
+        }
         self.in_progress.push(name.clone());
 
         let fetched = self

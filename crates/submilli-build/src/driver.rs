@@ -202,6 +202,9 @@ pub enum DriverError {
         package: PackageName,
         source: interpreter::rendering::RenderError,
     },
+    DependencyDepth {
+        package: PackageName,
+    },
     DependencyCycle {
         cycle: Vec<PackageName>,
     },
@@ -262,6 +265,12 @@ impl fmt::Display for DriverError {
             DriverError::Diagnostic { package, source } => write!(
                 f,
                 "package `{}` diagnostic failed: {source}",
+                package.as_str()
+            ),
+            DriverError::DependencyDepth { package } => write!(
+                f,
+                "package dependency traversal exceeds {} levels at `{}`; shorten the dependency chain",
+                crate::MAX_DEPENDENCY_DEPTH,
                 package.as_str()
             ),
             DriverError::DependencyCycle { cycle } => {
@@ -486,6 +495,11 @@ fn visit(
             return Err(DriverError::DependencyCycle { cycle });
         }
         None => {}
+    }
+    if stack.len() >= crate::MAX_DEPENDENCY_DEPTH {
+        return Err(DriverError::DependencyDepth {
+            package: packages[index].name.clone(),
+        });
     }
     marks.insert(index, Mark::Visiting);
     stack.push(index);
