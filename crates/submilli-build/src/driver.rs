@@ -205,6 +205,10 @@ pub enum DriverError {
     DependencyDepth {
         package: PackageName,
     },
+    MissingSibling {
+        package: PackageName,
+        dependency: PackageName,
+    },
     DependencyCycle {
         cycle: Vec<PackageName>,
     },
@@ -272,6 +276,15 @@ impl fmt::Display for DriverError {
                 "package dependency traversal exceeds {} levels at `{}`; shorten the dependency chain",
                 crate::MAX_DEPENDENCY_DEPTH,
                 package.as_str()
+            ),
+            DriverError::MissingSibling {
+                package,
+                dependency,
+            } => write!(
+                f,
+                "package `{}` depends on missing sibling package `{}`; add its [[package]] declaration or remove the dependency",
+                package.as_str(),
+                dependency.as_str(),
             ),
             DriverError::DependencyCycle { cycle } => {
                 let names = cycle
@@ -507,9 +520,13 @@ fn visit(
         if dep.kind != DependencyKind::Sibling {
             continue;
         }
-        if let Some(dep_index) = index_by_name.get(&dep.name) {
-            visit(*dep_index, packages, index_by_name, marks, stack, order)?;
-        }
+        let Some(dep_index) = index_by_name.get(&dep.name) else {
+            return Err(DriverError::MissingSibling {
+                package: packages[index].name.clone(),
+                dependency: dep.name.clone(),
+            });
+        };
+        visit(*dep_index, packages, index_by_name, marks, stack, order)?;
     }
     stack.pop();
     marks.insert(index, Mark::Done);

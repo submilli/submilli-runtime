@@ -48,7 +48,7 @@ other N entries remain open. Evidence means:
 | N03 | **Fixed on branch:** check OAuth token expiry before adding it to `Instant` | Overflow/rotation/recovery regression passes |
 | N04 | **Fixed on branch:** charge and bound variable-to-variable substitution chains | Budget and debug/release stack regressions pass |
 | N05 | **Fixed on branch:** bound namespace metadata before recursive consumers | Debug/release 2 MiB stack regressions pass |
-| N06 | Validate sibling dependencies at public build entry | Public API panic reproduced |
+| N06 | **Fixed on branch:** validate sibling dependencies at public build entry | Typed-error regression passes |
 | N07 | Make resolver error formatting safe for arbitrary UTF-8 | Public error formatting panic reproduced |
 | N08 | Make watchdog thread creation fallible | Inspection; OS failure |
 | N09 | Handle blocking-pool thread admission failures | Inspection; dependency OS failure |
@@ -260,6 +260,14 @@ not evidence that loader-validated TOML reaches the same panic.
 **Direction/done:** validate public graph inputs or accept a structurally
 validated manifest type. Return a useful dependency diagnostic for missing
 siblings; test mutation/construction and preserve valid topological order.
+
+**Disposition (2026-10-06, fixed on branch):** topological preflight returns
+`DriverError::MissingSibling` with both package names before source loading or
+the later built-map lookup. Scoped builds retain reachable missing edges for the
+same validation. All 13 driver integration tests pass, including public manifest
+mutation, cycles, valid ordering and scoped closure. Three independent reviewers
+report no findings; formatting and workspace/all-target Clippy pass. No full
+suites.
 
 ### N07 — Public resolver error formatting assumes ASCII SHAs
 
