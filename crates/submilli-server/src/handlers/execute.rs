@@ -497,6 +497,7 @@ async fn prepare_and_run(
         harness_secrets: &harness_secrets,
         network_policy: &network_policy,
         llm_provider,
+        embedding_provider,
         cancel_requested,
     };
     // The one place a test run's world replaces the run's own.
@@ -513,6 +514,8 @@ async fn prepare_and_run(
         mcp_transport,
         llm_provider,
         llm_budget,
+        embedding_provider,
+        embedding_budget,
         cancel_requested,
         throwaway,
     } = match world {
@@ -553,7 +556,7 @@ async fn prepare_and_run(
         llm_provider,
         llm_budget: Some(llm_budget),
         embedding_provider,
-        embedding_budget: Some(manager.embedding_budget_for_execute()),
+        embedding_budget: Some(embedding_budget),
         recording,
         cancel_requested,
         throwaway,
@@ -621,11 +624,12 @@ pub(crate) struct WorldContext<'a> {
     pub harness_secrets: &'a Arc<HarnessSecretBindings>,
     pub network_policy: &'a Arc<interpreter::runtime::NetworkPolicy>,
     pub llm_provider: Option<Arc<dyn interpreter::runtime::LlmProvider>>,
+    pub embedding_provider: Option<Arc<dyn interpreter::runtime::EmbeddingProvider>>,
     pub cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 /// What a run executes in and reaches outside through: its compile-time MCP catalog, its
-/// files and data, its connectors, and its token budget.
+/// files and data, its connectors, and its token budgets.
 pub(crate) struct RunWorld {
     pub mcp_catalog: Arc<crate::record::McpCatalog>,
     pub vfs: Vfs,
@@ -635,13 +639,15 @@ pub(crate) struct RunWorld {
     pub mcp_transport: Arc<dyn interpreter::runtime::McpTransport>,
     pub llm_provider: Option<Arc<dyn interpreter::runtime::LlmProvider>>,
     pub llm_budget: Arc<interpreter::runtime::ExecutionTokenBudget>,
+    pub embedding_provider: Option<Arc<dyn interpreter::runtime::EmbeddingProvider>>,
+    pub embedding_budget: Arc<interpreter::runtime::EmbeddingTokenBudget>,
     pub cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
     /// A test run's throwaway copies, kept until the run's owner task is done with them.
     pub throwaway: Option<Arc<crate::record::Throwaway>>,
 }
 
 /// A normal run's world: discovery against its MCP servers, its session's files and data,
-/// its session's HTTP client, and a budget charged to the server's.
+/// its session's HTTP client, and budgets charged to the server's.
 async fn live_world(
     context: WorldContext<'_>,
     vfs_source: VfsSource,
@@ -686,6 +692,8 @@ async fn live_world(
         mcp_transport,
         llm_provider: context.llm_provider,
         llm_budget: manager.llm_budget_for_execute(),
+        embedding_provider: context.embedding_provider,
+        embedding_budget: manager.embedding_budget_for_execute(),
         cancel_requested: context.cancel_requested,
         throwaway: None,
     })

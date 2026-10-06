@@ -15,15 +15,20 @@
 //! recorded go live (`with_live`): the call is noted in the cassette and sent as a normal
 //! run would send it.
 //!
+//! An embedding call is never answered from a recording, which keeps no vectors: it stops the
+//! run, or goes live where the mode allows.
+//!
 //! The three share one [`Cassette`], built from the [`RecordedRun`](super::RecordedRun).
 
 mod cassette;
+mod embedding;
 mod http;
 mod llm;
 mod mcp;
 
 pub(crate) use cassette::call_key;
 pub use cassette::{Cassette, Miss, MissReason, Nearest, ReplayReport, Served};
+pub use embedding::RecordedEmbeddingProvider;
 pub use http::{LiveReach, RecordedHttpClient};
 pub use llm::RecordedLlmProvider;
 pub use mcp::RecordedMcpTransport;

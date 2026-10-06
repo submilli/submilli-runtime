@@ -29,6 +29,9 @@ use submilli_server::record::{
     RunStart, TestError, TestMode, TestOutcome, TestRun, run_program, test_program,
 };
 use submilli_server::{AppState, ServerConfig, app};
+use submilli_shared::embedding::{
+    DispatchFailure, DispatchResponse, DispatchRow, EmbeddingDispatch, EmbeddingRequest,
+};
 use submilli_shared::llm::{
     ModelDispatch, ModelRequest, ProviderFailure, ProviderResponse, ProviderUsage, StopReason,
 };
@@ -731,6 +734,104 @@ async fn a_model_batch_is_served_whole_without_touching_the_servers_token_budget
     assert!(outcome.report.stopped.is_none());
     assert_eq!(outcome.report.served.len(), 1);
     assert_eq!(provider_calls.load(Ordering::SeqCst), 0, "no tokens spent");
+}
+
+// ---- embeddings -------------------------------------------------------------------------
+
+/// Answers every embedding request with a unit vector per text, counting the requests.
+struct EmbedDispatch(Arc<AtomicUsize>);
+
+impl EmbeddingDispatch for EmbedDispatch {
+    fn dispatch<'a>(
+        &'a self,
+        request: EmbeddingRequest<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<DispatchResponse, DispatchFailure>> + Send + 'a>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        let rows = request
+            .texts
+            .iter()
+            .map(|_| DispatchRow {
+                index: None,
+                values: vec![1.0, 0.0, 0.0, 0.0],
+            })
+            .collect();
+        Box::pin(async move { Ok(DispatchResponse { rows, usage: None }) })
+    }
+}
+
+fn embedding_blueprint() -> Blueprint {
+    submilli_blueprint::parse(
+        "name: embed\n\
+         default: allow\n\
+         embedding:\n  providers:\n    hf:\n      type: huggingface\n      base_url: https://hf.example.com\n  models:\n    docs:\n      provider: hf\n      model: bge\n      dimensions: 4\n",
+    )
+    .expect("blueprint parses")
+}
+
+const EMBED: &str = r#"import embedding from "submilli:embedding";
+function main(): string {
+  const r = embedding.embed("docs", ["a text of some length"], "document");
+  return "OK:" + r.count.toString();
+}"#;
+
+fn embedding_world(calls: &Arc<AtomicUsize>, tokens: Option<u64>) -> World {
+    World::with(vec![embedding_blueprint()], |config| ServerConfig {
+        embedding_dispatch: Some(Arc::new(EmbedDispatch(calls.clone()))),
+        max_embedding_tokens: tokens,
+        ..config
+    })
+}
+
+#[tokio::test]
+async fn an_embedding_call_stops_a_recorded_or_reads_live_run_and_never_reaches_the_provider() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let world = embedding_world(&calls, None);
+    let source = world.run("embed", EMBED, &[]).await;
+    assert_eq!(source.response.result.as_deref(), Some("OK:1"));
+    let before = calls.load(Ordering::SeqCst);
+    assert_eq!(before, 1);
+
+    for mode in [TestMode::Recorded, TestMode::ReadsLive] {
+        let outcome = world.test(&source.recorded, mode).await;
+        let stop = outcome.report.stopped.as_ref().expect("the run stopped");
+        assert_eq!(stop.key, "embedding docs");
+        assert_eq!(stop.reason, MissReason::NotRecorded);
+        assert_eq!(stop.capability.as_deref(), Some("embedding.embed"));
+        assert!(outcome.report.served.is_empty() && outcome.report.went_live.is_empty());
+        assert!(outcome.response.result.is_none(), "{:?}", outcome.response);
+        assert_eq!(calls.load(Ordering::SeqCst), before, "no provider call");
+    }
+}
+
+#[tokio::test]
+async fn a_live_test_run_sends_an_embedding_call_live_on_a_budget_of_its_own() {
+    let source_calls = Arc::new(AtomicUsize::new(0));
+    let source = embedding_world(&source_calls, None)
+        .run("embed", EMBED, &[])
+        .await;
+    assert_eq!(source.response.result.as_deref(), Some("OK:1"));
+
+    // A server whose whole embedding budget is one token: a run that charged it would be
+    // refused.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let world = embedding_world(&calls, Some(1));
+    let refused = world.run("embed", EMBED, &[]).await;
+    assert!(
+        refused.response.error.is_some(),
+        "the budget refuses a live run"
+    );
+
+    let live = world.test(&source.recorded, TestMode::Live).await;
+    assert_eq!(result(&live), Some("OK:1"), "{:?}", live.response.error);
+    assert!(live.report.stopped.is_none());
+    assert_eq!(live.report.went_live.len(), 1);
+    assert_eq!(live.report.went_live[0].key, "embedding docs");
+    assert_eq!(live.report.went_live[0].reason, MissReason::NotRecorded);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the provider was called once"
+    );
 }
 
 // ---- MCP ------------------------------------------------------------------------------

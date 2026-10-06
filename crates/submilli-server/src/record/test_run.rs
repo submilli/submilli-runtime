@@ -12,7 +12,9 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use interpreter::runtime::{CallOutcome, CallRecord, LlmProvider, McpTransport, SourceLine};
+use interpreter::runtime::{
+    CallOutcome, CallRecord, EmbeddingProvider, LlmProvider, McpTransport, SourceLine,
+};
 use interpreter::stdlib::http::HttpClient;
 use serde::Serialize;
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings, resolve_harness_secrets};
@@ -20,8 +22,8 @@ use tokio::sync::oneshot;
 
 use super::recheck::{VariableReport, reconcile_variables};
 use super::replay::{
-    Cassette, LiveReach, Miss, MissReason, Nearest, RecordedHttpClient, RecordedLlmProvider,
-    RecordedMcpTransport, Served, call_key,
+    Cassette, LiveReach, Miss, MissReason, Nearest, RecordedEmbeddingProvider, RecordedHttpClient,
+    RecordedLlmProvider, RecordedMcpTransport, Served, call_key,
 };
 use super::throwaway::{LocalState, Throwaway, ThrowawayError};
 use super::{FinishedRun, McpCatalog, RecordedRun, RunEntry, RunRecorder};
@@ -39,7 +41,7 @@ pub enum TestMode {
     Recorded,
     /// An unrecorded `GET` or `HEAD` request goes live, through the same auth proxy,
     /// transport policy and redirect guard as in any run, and is recorded in the test
-    /// run's own log. Writes, MCP calls, model calls and downloads still stop the run.
+    /// run's own log. Writes, MCP calls, model and embedding calls and downloads still stop the run.
     ReadsLive,
     /// Every call the recording cannot answer goes live. Recorded calls are still served.
     Live,
@@ -145,7 +147,7 @@ pub struct ServedCall {
 /// A call that went live because the recording could not answer it.
 #[derive(Debug, Clone, Serialize)]
 pub struct LiveCall {
-    /// `http GET <url>`, `mcp <server>.<tool>`, or `llm <model>`.
+    /// `http GET <url>`, `mcp <server>.<tool>`, `llm <model>`, or `embedding <model>`.
     pub key: String,
     /// Why the recording could not answer it.
     pub reason: MissReason,
@@ -156,7 +158,7 @@ pub struct LiveCall {
 /// The call a test run stopped at, from the test run's own call log and the recording.
 #[derive(Debug, Clone, Serialize)]
 pub struct Stop {
-    /// `http GET <url>`, `mcp <server>.<tool>`, or `llm <model>`.
+    /// `http GET <url>`, `mcp <server>.<tool>`, `llm <model>`, or `embedding <model>`.
     pub key: String,
     pub reason: MissReason,
     pub detail: String,
@@ -297,7 +299,7 @@ impl TestWorld {
 
     /// The run's world in place of a normal run's: the catalog its source compiled
     /// against (no MCP server is contacted to discover one), the throwaway copies of its
-    /// local state, a budget of its own (recorded token usage is not new spend), and the
+    /// local state, budgets of their own (recorded token usage is not new spend), and the
     /// recorded-world connectors with the live ones behind them as far as the mode lets a
     /// call go live.
     pub(crate) async fn into_world(self, context: WorldContext<'_>) -> Result<RunWorld, String> {
@@ -317,6 +319,7 @@ impl TestWorld {
             live_http,
             live_mcp,
             context.llm_provider,
+            context.embedding_provider,
             Arc::clone(context.blueprint),
         );
         Ok(RunWorld {
@@ -328,6 +331,8 @@ impl TestWorld {
             mcp_transport: connectors.mcp,
             llm_provider: connectors.llm,
             llm_budget: manager.private_llm_budget(),
+            embedding_provider: connectors.embedding,
+            embedding_budget: manager.private_embedding_budget(),
             cancel_requested: Some(forward_cancel(
                 self.cancel,
                 &self.cassette,
@@ -345,6 +350,7 @@ impl TestWorld {
         live_http: Arc<dyn HttpClient>,
         live_mcp: Arc<dyn McpTransport>,
         live_llm: Option<Arc<dyn LlmProvider>>,
+        live_embedding: Option<Arc<dyn EmbeddingProvider>>,
         blueprint: Arc<Blueprint>,
     ) -> Connectors {
         let cassette = &self.cassette;
@@ -358,6 +364,14 @@ impl TestWorld {
                 llm
             }) as Arc<dyn LlmProvider>
         });
+        let embedding = live_embedding.map(|declared| {
+            let embedding = RecordedEmbeddingProvider::new(Arc::clone(cassette), declared);
+            Arc::new(if self.mode == TestMode::Live {
+                embedding.with_live()
+            } else {
+                embedding
+            }) as Arc<dyn EmbeddingProvider>
+        });
         let (http, mcp) = match self.mode {
             TestMode::Recorded => (http, mcp),
             TestMode::ReadsLive => (http.with_live(live_http, LiveReach::Reads), mcp),
@@ -370,6 +384,7 @@ impl TestWorld {
             http: Arc::new(http),
             mcp: Arc::new(mcp),
             llm,
+            embedding,
         }
     }
 }
@@ -392,11 +407,12 @@ fn forward_cancel(
     own
 }
 
-/// The three connectors a run reaches outside through.
+/// The connectors a run reaches outside through.
 pub(crate) struct Connectors {
     pub http: Arc<dyn HttpClient>,
     pub mcp: Arc<dyn McpTransport>,
     pub llm: Option<Arc<dyn LlmProvider>>,
+    pub embedding: Option<Arc<dyn EmbeddingProvider>>,
 }
 
 /// What the test run's own call log said of each call, kept when the run finished.
