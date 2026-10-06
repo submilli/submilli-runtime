@@ -1078,7 +1078,7 @@ mod test_runner {
             let mut linker = Linker::<StoreData>::new(engine);
             install_runtime_async(&mut linker, &mut store).await?;
             interpreter::stdlib::test::install(&mut linker)?;
-            let _watchdog = cfg.arm_timeout(engine);
+            let _watchdog = cfg.arm_timeout(engine)?;
             // The packages' top-level statements, then the file's, run here; their
             // failure is the file's first segment failing, as one in `main` would be.
             let result = async {

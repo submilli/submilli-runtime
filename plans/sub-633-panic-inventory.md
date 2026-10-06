@@ -30,9 +30,9 @@ by [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 ## Active work
 
-Entries marked **fixed on main** were merged in PR #151 or PR #152. Entries marked **fixed
+Entries marked **fixed on main** were merged in PR #151, PR #152 or PR #163. Entries marked **fixed
 on branch** have completed focused verification and review; other N entries
-remain open. Six N entries remain open, ten are fixed on main, and N12 is
+remain open. Five N entries remain open, eleven are fixed on main, and N08 is
 fixed on this branch. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
@@ -52,11 +52,11 @@ fixed on this branch. Evidence means:
 | N05 | **Fixed on main:** bound namespace metadata before recursive consumers | Debug/release 2 MiB stack regressions pass |
 | N06 | **Fixed on main:** validate sibling dependencies at public build entry | Typed-error regression passes |
 | N07 | **Fixed on main:** make resolver error formatting safe for arbitrary UTF-8 | Public formatting regression passes |
-| N08 | Make watchdog thread creation fallible | Inspection; OS failure |
+| N08 | **Fixed on branch:** make watchdog thread creation fallible | Injected setup failure, recovery and timer lifecycle regressions |
 | N09 | Handle blocking-pool thread admission failures | Inspection; dependency OS failure |
 | N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
 | N11 | **Fixed on main:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
-| N12 | **Fixed on branch:** traverse validation children lazily with fallible ancestor frames | Wide-input and allocation-failure regressions |
+| N12 | **Fixed on main:** traverse validation children lazily with fallible ancestor frames | Wide-input and allocation-failure regressions |
 | N13 | **Engine fixed; adoption pending:** bound expanded Wasm locals across a module | `submilli-wasm` commit `faacf98`; release/adoption remains |
 | N14 | **Fixed on main:** bound aggregate MCP discovery pages/tools/schemas | Paginated localhost and aggregate-limit regressions pass |
 | N15 | **Fixed on main:** bound artifact reads and retained package data before loading | File and wide-closure regressions pass |
@@ -313,6 +313,20 @@ is not an invariant. This concerns CLI/direct timeout setup; the server's separa
 execution. Preserve timer ownership/disarming. Inject a spawn failure and verify
 a later successful run; do not silently disable a requested timeout.
 
+**Disposition (N08 follow-up):** fixed on `codex/fallible-watchdog`, against
+integration base `6358bd85`. `watchdog::arm` returns `std::io::Result<Watchdog>`
+from `Builder::spawn`; `RuntimeConfig::arm_timeout` returns
+`wasmtime::Result<Option<Watchdog>>` with watchdog startup context and its I/O
+cause. Direct, CLI, package-test and harness callers propagate failure. Production
+callers arm before guest code; CLI worker draining and per-file package setup
+reporting remain intact. Cancellation-on-drop and detached timer ownership remain
+unchanged. This is an injected OS-failure check, not induced thread exhaustion.
+
+Focused evidence: five watchdog tests cover failure cause, healthy follow-up,
+failure before guest top-level execution, disabled timeout, interruption and
+disarming. Caller regressions, formatting, Clippy and review results are recorded
+in the working handoff; full verification is deferred to the post-rebase PR gate.
+
 ### N09 — Tokio blocking-pool admission can panic before a join exists
 
 **Sites:** `crates/submilli-server/src/idempotency_store.rs:369`,
@@ -414,6 +428,8 @@ visit order are unchanged. Regressions cover 100,000-child roots with tiny budge
 mixed width/depth, exact limits, child-bearing variants, injected first/later
 reservation failures and healthy follow-up checks. Broader compiler admission
 remains Q03.
+
+Merged through PR #163 as `f360df57`; the branch evidence above is historical.
 
 ### N13 — Engine expands local declarations without an aggregate compilation budget
 

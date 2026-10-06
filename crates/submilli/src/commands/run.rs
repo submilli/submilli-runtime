@@ -585,7 +585,7 @@ fn execute_on_this_thread(
         install_runtime_async(&mut linker, &mut store).await?;
         // Installing a package runs its top-level statements, so the deadline
         // covers them as it covers the program's.
-        let _watchdog = cfg.arm_timeout(&engine);
+        let _watchdog = cfg.arm_timeout(&engine)?;
         install_package_modules_async(&mut linker, &mut store, &linked_packages).await?;
         let instance = instantiate_program_async(&linker, &mut store, &module).await?;
         dispatch_main_async(&mut store, &instance).await
