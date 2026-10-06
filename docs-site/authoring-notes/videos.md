@@ -7,11 +7,11 @@ per-version metadata. The independent Render service owns playback, native
 controls, and captions; captions start off and viewers can enable them with the
 player's CC control.
 
-The library is `/docs/videos/`. Its finalized films are ordered as introduction,
-Challenges, Helps, Quickstart, Packages, and Blueprints. The latter two also appear on
+The library is `/docs/videos/`. Its published films are ordered as introduction,
+Challenges, Helps, Quickstart, How Submilli works, Packages, and Blueprints.
+How Submilli works appears under the execution explanation on `/docs/server/`.
+Packages and Blueprints also appear on
 `/docs/packages/` and `/docs/blueprints/`, respectively.
-How Submilli works remains an unpublished review draft.
-Keep it out of the registry until its final cut is approved and hosted.
 
 `VideoContent.astro` places the same stable embeds at the registry's contextual book anchors. The standalone introduction
 transcript remains available for agents and readers, but it points to the host's
