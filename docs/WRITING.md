@@ -133,8 +133,10 @@ sections with a different provenance where needed. Identify generated reference
 regions separately; generated API tables do not make surrounding human-written
 explanations AI-generated.
 
-A person confirms the label against the version being published. Reconfirm it
-after content changes. Detector scores can help prioritize editorial review;
+A person must confirm transitions from Human-written to AI-assisted or
+AI-generated, and transitions from either AI label to Human-written. Keeping
+an existing AI-assisted or AI-generated label after edits does not require
+renewed confirmation. Detector scores can help prioritize editorial review;
 they must never assign or certify authorship. Human-written is an explicit
 human declaration, not the absence of an AI flag.
 
@@ -174,9 +176,11 @@ The page content starts here.
 ```
 
 The uppercase placeholders are not valid metadata. Replace them before
-publication. `confirmed: true` records a person's explicit confirmation of the
-label for this version; an assistant must not set it without that confirmation.
-`confirmedAt` is the confirmation time in ISO 8601 format with a timezone.
+publication. `confirmed: true` records the established authorship classification.
+An assistant may retain it when refreshing metadata for an existing AI-assisted
+or AI-generated page. Transitions between Human-written and either AI label
+require a person's explicit confirmation. `confirmedAt` records when the label
+was established or reclassified, in ISO 8601 format with a timezone.
 `contentHash` is the lowercase SHA-256 digest of the Markdown body, excluding
 frontmatter, with CRLF converted to LF and surrounding whitespace trimmed.
 
@@ -188,7 +192,7 @@ paragraph to the source body. For mixed content, add an explicit note beside the
 relevant section, for example: `Authorship of this table: Generated from source.`
 Include these notes before calculating the hash.
 
-After the person confirms the label and the body is final, run this from
+Once the body is final and any required label transition is confirmed, run this from
 `docs-site/` to calculate the values. Replace the example path with the page's
 path. The command prints values only; it does not confirm authorship or edit files.
 
@@ -205,11 +209,15 @@ console.log('confirmedAt:', new Date().toISOString());
 JS
 ```
 
-Copy the digest and timestamp into the frontmatter, keeping the timestamp
-quoted. Use the actual confirmation time if confirmation happened earlier.
-Changing only frontmatter does not change the body hash. After any body edit,
-recheck the label and obtain confirmation again, then regenerate
-the hash and timestamp.
+Copy the digest into the frontmatter. For an unchanged AI-assisted or
+AI-generated label, preserve `confirmed` and `confirmedAt`; refreshing the hash
+does not require another confirmation. For a label change, use the classification time, or the actual human
+confirmation time when required, quoted. AI-assisted ↔ AI-generated changes and
+Generated from source classifications do not require human confirmation; choose
+them from the actual authoring process, not a detector score. Changing only frontmatter does not change
+the body hash. After a body edit, check that the label still fits and regenerate
+the hash. Ask for confirmation only when crossing between Human-written and
+either AI label.
 
 The site displays the authorship icon only when `confirmed` is true and the
 hash matches the current body. Missing or stale metadata suppresses the icon;
