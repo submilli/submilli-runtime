@@ -158,7 +158,9 @@ impl Proof<'_> {
         relate: impl FnOnce(&mut Self) -> bool,
     ) -> bool {
         let key = (source.clone(), target.clone());
-        let size = pair_size(&key);
+        let Some(size) = self.types.limits.ok_or_record(pair_size(&key)) else {
+            return false;
+        };
         if self.proven.contains(&key)
             || self.active.iter().any(|open| open.pair == key)
             || self.deeply_nested(&key, size)
@@ -599,7 +601,44 @@ fn instance_shape(ty: &Type, types: TypeResolver) -> InstanceShape {
 
 /// The combined node count of a pair's types, which grows when a recursive
 /// generic wraps its arguments again.
-fn pair_size((source, target): &(Type, Type)) -> u64 {
-    let nodes = |ty| measure(ty, MAX_TYPE_NODES, MAX_TYPE_DEPTH).nodes;
-    nodes(source).saturating_add(nodes(target))
+fn pair_size((source, target): &(Type, Type)) -> Result<u64, crate::type_size::TypeTooLarge> {
+    let nodes = |ty| measure(ty, MAX_TYPE_NODES, MAX_TYPE_DEPTH).map(|extent| extent.nodes);
+    Ok(nodes(source)?.saturating_add(nodes(target)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::type_size::{TypeLimits, TypeTooLarge};
+    use crate::typechecker::infer::{type_namespace::TypeNamespace, type_registry::TypeRegistry};
+
+    #[test]
+    fn measurement_failure_is_recorded_before_comparison_can_succeed() {
+        let types = TypeNamespace::new();
+        let registry = TypeRegistry::new();
+        let limits = TypeLimits::default();
+        let resolver = TypeResolver {
+            types: &types,
+            registry: &registry,
+            limits: &limits,
+        };
+        let mut proof = Proof {
+            types: resolver,
+            active: Vec::new(),
+            refuted: BTreeSet::new(),
+            proven: BTreeSet::new(),
+            proven_log: Vec::new(),
+        };
+        let ty = Type::Array(Box::new(Type::Number));
+        let (related, _) = crate::type_walk::tests::observe(Some(0), || {
+            proof.step(&ty, &ty, |_| {
+                panic!("failed measurement must stop before relation")
+            })
+        });
+        assert!(!related);
+        assert_eq!(limits.take(), Err(TypeTooLarge::Allocation));
+        assert!(proof.active.is_empty());
+        assert!(proof.proven.is_empty());
+        assert!(proof.step(&ty, &ty, |_| true));
+    }
 }

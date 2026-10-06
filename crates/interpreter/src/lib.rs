@@ -33,6 +33,7 @@ pub mod tree_height;
 pub mod type_info;
 mod type_rendering;
 pub mod type_size;
+mod type_walk;
 pub mod typechecker;
 pub mod typed_ast;
 pub mod types;

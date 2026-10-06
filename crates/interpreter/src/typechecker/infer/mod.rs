@@ -1184,6 +1184,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dependency_measurement_failure_is_internal_and_keeps_package_context() {
+        let mut declaration = PackageDeclaration::with_package("dep");
+        declaration.runtime_globals.insert(
+            crate::mangle::prelude("value"),
+            Type::Array(Box::new(Type::Number)),
+        );
+        let (result, _) =
+            crate::type_walk::tests::observe(Some(0), || check_declaration_types([&declaration]));
+        let failure = result.unwrap_err();
+        assert!(matches!(
+            failure,
+            CompilerFailure::Internal {
+                stage: CompilerStage::Infer,
+                ..
+            }
+        ));
+        assert!(failure.to_string().contains("package `dep`"));
+        assert_eq!(check_declaration_types([&declaration]), Ok(()));
+    }
+
+    #[test]
     fn missing_prelude_is_a_typed_inference_failure() {
         let ast = Ast::new();
         let error = infer_with_transitive_checked("", "main", &ast, &[], &[])
@@ -1460,9 +1481,18 @@ pub(crate) fn check_declaration_types<'d>(
     declarations: impl IntoIterator<Item = &'d PackageDeclaration>,
 ) -> Result<(), CompilerFailure> {
     for declaration in declarations {
-        declaration
-            .check_type_limits()
-            .map_err(|exceeded| CompilerFailure::Limit {
+        declaration.check_type_limits().map_err(|exceeded| {
+            if exceeded == crate::type_size::TypeTooLarge::Allocation {
+                return CompilerFailure::Internal {
+                    stage: CompilerStage::Infer,
+                    span: None,
+                    message: format!(
+                        "could not validate package `{}`: {exceeded}",
+                        declaration.package_name
+                    ),
+                };
+            }
+            CompilerFailure::Limit {
                 stage: CompilerStage::Infer,
                 span: None,
                 message: format!(
@@ -1472,7 +1502,8 @@ pub(crate) fn check_declaration_types<'d>(
                 help: vec![
                     "rebuild the package with a compiler that enforces the same limits".into(),
                 ],
-            })?;
+            }
+        })?;
     }
     Ok(())
 }
