@@ -390,6 +390,7 @@ fn run_start(inputs: &ExecuteInputs<'_>, test: Option<&TestWorld>) -> crate::rec
         blueprint: Arc::clone(&inputs.blueprint),
         blueprint_hash: crate::audit::blueprint_hash(&inputs.blueprint),
         variables: Arc::clone(&inputs.variables),
+        harness_secrets: Arc::clone(&inputs.harness_secrets),
         code: Some(Arc::from(inputs.code)),
     }
 }

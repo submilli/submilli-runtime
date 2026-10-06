@@ -26,9 +26,13 @@ mod control_auth;
 #[cfg(unix)]
 mod host;
 #[cfg(unix)]
+mod labels;
+#[cfg(unix)]
 mod project;
 #[cfg(unix)]
 mod state;
+#[cfg(unix)]
+mod store;
 
 /// Not running, or a lock whose listener failed the nonce challenge.
 const EXIT_NOT_RUNNING: u8 = 6;

@@ -362,6 +362,7 @@ fn a_recorded_run_is_built_from_its_start_and_end_and_serializes() {
         blueprint: Arc::new(blueprint(DENY_ALL)),
         blueprint_hash: Some("abc".into()),
         variables: Arc::new(VarBindings::from([("a".to_owned(), "b".to_owned())])),
+        harness_secrets: Arc::default(),
         code: Some(Arc::from("function main(): void {}")),
     };
     let finished = FinishedRun {

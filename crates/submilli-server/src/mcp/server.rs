@@ -795,6 +795,8 @@ impl SubmilliMcp {
             blueprint: Arc::clone(blueprint),
             blueprint_hash: crate::audit::blueprint_hash(blueprint),
             variables: Arc::clone(variables),
+            // A file tool runs no program and reads no secret.
+            harness_secrets: Arc::default(),
             code: None,
         })
     }

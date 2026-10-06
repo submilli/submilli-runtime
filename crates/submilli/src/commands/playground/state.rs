@@ -3,7 +3,8 @@
 //! The directory is owner-only (0700) and every file in it is 0600. It holds a
 //! self-ignoring `.gitignore`, the lock and ready files, the tokens, the start
 //! lock that serializes concurrent starts, the detached child's log, and the
-//! embedded server's blueprint, session, VFS, and volume directories.
+//! embedded server's blueprint, session, VFS, and volume directories, and the run
+//! store.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -86,6 +87,11 @@ impl StateDir {
 
     pub(crate) fn volumes_dir(&self) -> PathBuf {
         self.root.join("volumes")
+    }
+
+    /// The run store, its event logs, and the change log.
+    pub(crate) fn store_dir(&self) -> PathBuf {
+        self.root.join("store")
     }
 
     /// Create the directory, its `.gitignore`, and its token directory, owner-only.

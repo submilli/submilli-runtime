@@ -41,6 +41,8 @@ axum = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 ipnet = { workspace = true }
 hmac = "0.12"
+async-trait = { workspace = true }
+percent-encoding = { workspace = true }
 
 [dev-dependencies]
 rcgen.workspace = true

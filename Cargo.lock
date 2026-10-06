@@ -5323,6 +5323,7 @@ name = "submilli"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "clap",
@@ -5332,6 +5333,7 @@ dependencies = [
  "interpreter",
  "ipnet",
  "libc",
+ "percent-encoding",
  "rcgen",
  "rustls",
  "sentry",

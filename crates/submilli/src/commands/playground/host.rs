@@ -30,6 +30,8 @@ use tokio::sync::Notify;
 use super::control_auth::{self, Caller, ControlAuth, LoginRefusal};
 use super::project::Project;
 use super::state::{APP_TOKEN, Lock, StateDir};
+use super::store::redact::WatchedSecretStore;
+use super::store::{KnownSecrets, Recorder, Store};
 use super::{Egress, ReadyRecord};
 
 /// How long in-flight requests may finish after a stop before they are dropped.
@@ -82,12 +84,18 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
     let blueprint = submilli_blueprint::parse(&blueprint_yaml)
         .with_context(|| format!("parsing {}", options.project.blueprint.display()))?;
     let admin = state_dir.admin_token()?;
-    let secret_store = crate::commands::local::open_secret_store()?;
+    let secrets = KnownSecrets::default();
+    let store = Store::open(&state_dir.store_dir()).context("opening the run store")?;
+    let secret_store = Arc::new(WatchedSecretStore::new(
+        crate::commands::local::open_secret_store()?,
+        secrets.clone(),
+    ));
     let config = server_config(
         &state_dir,
         &options.egress,
         tokens.clone(),
         Some(secret_store),
+        Some(Arc::new(Recorder::new(Arc::new(store), secrets))),
     );
     let runtime = submilli_server::runtime(&config).context("starting the async runtime")?;
     let result = runtime.block_on(run(
@@ -236,6 +244,7 @@ fn server_config(
     egress: &Egress,
     tokens: Vec<submilli_server::ApiToken>,
     secret_store: Option<Arc<dyn submilli_server::SecretStore>>,
+    run_recorder: Option<Arc<dyn submilli_server::record::RunRecorderFactory>>,
 ) -> ServerConfig {
     ServerConfig {
         // Main's audit writes whole permission-check contexts, unredacted, to the
@@ -255,6 +264,8 @@ fn server_config(
         // keep working.
         package_store_root: Some(submilli_build::default_package_store_dir()),
         secret_store,
+        // Every run the server executes, whoever sent it, goes to the playground's store.
+        run_recorder,
         // No run content leaves the machine, whatever the CLI's telemetry setting.
         run_telemetry: RunTelemetry::Off,
         ..ServerConfig::default()
@@ -586,7 +597,7 @@ mod tests {
         let state = StateDir::for_project(dir.path());
         state.create().unwrap();
         let tokens = state.tokens().unwrap();
-        let config = server_config(&state, &Egress::default(), tokens, None);
+        let config = server_config(&state, &Egress::default(), tokens, None, None);
         assert_eq!(config.run_telemetry, RunTelemetry::Off);
         assert!(!config.audit.enabled);
         assert!(matches!(config.auth, AuthConfig::Tokens(ref tokens) if tokens.len() == 5));

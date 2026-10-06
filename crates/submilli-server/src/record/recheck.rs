@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use interpreter::runtime::{CallRecord, DecisionRecord, EntryPath, SourceLine};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use submilli_blueprint::{
     Action, Blueprint, Resolution, ResolutionCause, VarBindings, VariableError, resolve_variables,
 };
@@ -19,7 +19,7 @@ use super::{FinishedRun, McpCatalog, RunStart};
 
 /// A recorded run, as an embedder keeps it and hands it back: what [`recheck`] reads, and
 /// what a test run is built from.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RecordedRun {
     pub execution_id: String,
     pub blueprint_name: String,
@@ -34,7 +34,10 @@ pub struct RecordedRun {
     pub calls: Vec<CallRecord>,
     /// The recorder's caps cut the decisions or calls: some are missing.
     pub log_truncated: bool,
-    #[serde(serialize_with = "serialize_catalog")]
+    #[serde(
+        serialize_with = "serialize_catalog",
+        deserialize_with = "deserialize_catalog"
+    )]
     pub mcp_catalog: Option<Arc<McpCatalog>>,
 }
 
@@ -43,6 +46,12 @@ fn serialize_catalog<S: Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     catalog.as_deref().serialize(serializer)
+}
+
+fn deserialize_catalog<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Arc<McpCatalog>>, D::Error> {
+    Ok(Option::<McpCatalog>::deserialize(deserializer)?.map(Arc::new))
 }
 
 impl RecordedRun {
