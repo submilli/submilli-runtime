@@ -55,7 +55,7 @@ other N entries remain open. Evidence means:
 | N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
 | N11 | **Fixed on branch:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
 | N12 | Bound validation frontiers before enqueueing children | Allocation amplification measured |
-| N13 | Bound expanded Wasm locals across a module | Inspection; engine compilation allocation |
+| N13 | **Engine fixed; adoption pending:** bound expanded Wasm locals across a module | `submilli-wasm` commit `faacf98`; release/adoption remains |
 | N14 | Bound aggregate MCP discovery pages/tools/schemas | Inspection; remote response accumulation |
 | N15 | Bound artifact reads and retained package data before loading | Inspection; file-input allocation |
 | N16 | Admit native string-builder output before allocation | Inspection; host allocation before store limit |
@@ -414,6 +414,12 @@ was not established. Do not describe validator limits as absent.
 before growth, with fallible reservation. Track the engine fix and adoption of its
 released version here. Test repeated compressed local groups under a deliberately
 small compile budget and successful ordinary module loading.
+
+**Progress:** `submilli-wasm` commit `faacf98` adds a configurable aggregate
+expanded-locals ceiling, checked arithmetic and fallible reservation before arena
+growth. Focused limit tests, formatting, all-target Clippy and three independent
+review passes are clean. N13 remains open until that engine change is released and
+this workspace adopts the release.
 
 ### N14 — MCP discovery limits each response but retains unbounded pages
 
