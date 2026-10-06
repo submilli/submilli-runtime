@@ -602,6 +602,59 @@ function main(): string {
 }
 
 #[tokio::test]
+async fn a_test_run_copies_only_the_sub_path_it_mounts() {
+    let shared = tempfile::tempdir().expect("volume");
+    for (user, text) in [("alice", "alice's"), ("bob", "bob's")] {
+        std::fs::create_dir_all(shared.path().join("users").join(user)).unwrap();
+        std::fs::write(shared.path().join("users").join(user).join("f.txt"), text).unwrap();
+    }
+    let world = World::with(
+        vec![blueprint(
+            "name: users\ndefault: allow\nvariables:\n  user:\n    required: false\nvfs:\n  mode: ephemeral\n  mounts:\n    /home: {mode: named, volume: shared, subPath: \"users/${vars.user}\"}\n",
+        )],
+        |config| ServerConfig {
+            volumes: volumes(shared.path()),
+            ..config
+        },
+    );
+    let source = world
+        .run(
+            "users",
+            "function main(): string { return \"x\"; }",
+            &[("user", "alice")],
+        )
+        .await;
+    let mut recorded = source.recorded.clone();
+    recorded.code = Some(
+        r#"import { readText, writeText } from "submilli:fs";
+function main(): string {
+  const seen = String(readText("/home/f.txt"));
+  writeText("/home/f.txt", "changed by the test run");
+  return seen;
+}"#
+        .to_owned(),
+    );
+    let outcome = world.test(&recorded, TestMode::Recorded).await;
+    assert_eq!(
+        result(&outcome),
+        Some("alice's"),
+        "{:?}",
+        outcome.response.error
+    );
+    let local = &outcome.report.local_state;
+    assert_eq!(local.volumes_copied, ["shared"]);
+    assert_eq!(local.bytes_copied, "alice's".len() as u64, "not bob's");
+    assert_eq!(
+        std::fs::read(shared.path().join("users/alice/f.txt")).unwrap(),
+        b"alice's"
+    );
+    assert_eq!(
+        std::fs::read(shared.path().join("users/bob/f.txt")).unwrap(),
+        b"bob's"
+    );
+}
+
+#[tokio::test]
 async fn a_volume_over_the_cap_is_refused_with_the_cap_in_the_message() {
     let shared = tempfile::tempdir().expect("volume");
     // A sparse file: it counts for its length and takes no disk.

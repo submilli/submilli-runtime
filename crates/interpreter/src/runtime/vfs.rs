@@ -17,7 +17,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
@@ -673,6 +673,45 @@ pub fn measure_host_dir_skipping_vanished(root: &Path) -> io::Result<u64> {
     Ok(total)
 }
 
+/// As [`measure_host_dir_skipping_vanished`], for the directory `sub` below the volume
+/// `volume`, which is no link all the way down. A `sub` that is not there is empty.
+pub fn measure_host_subdir_skipping_vanished(volume: &Path, sub: &Path) -> io::Result<u64> {
+    let Some(root) = open_host_subdir(volume, sub)? else {
+        return Ok(0);
+    };
+    let mut total: u64 = 0;
+    for_each_regular_file(&root, MAX_MEASURED_ENTRIES, true, |_, bytes| {
+        total = total.saturating_add(bytes);
+    })?;
+    Ok(total)
+}
+
+/// Opens the directory `sub` below the host directory `volume`, one component at a time
+/// without following links, so a link anywhere in `sub` is an error. `None` when a
+/// component is not there. `sub` must be relative with no `.` or `..`.
+pub fn open_host_subdir(volume: &Path, sub: &Path) -> io::Result<Option<Arc<Dir>>> {
+    let mut dir = open_volume(volume)?;
+    for component in sub.components() {
+        let Component::Normal(name) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a sub-path must be a normalized relative path",
+            ));
+        };
+        dir = match dir.open_dir_nofollow(name) {
+            Ok(child) => Arc::new(child),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!("{}: {error}", sub.display()),
+                ));
+            }
+        };
+    }
+    Ok(Some(dir))
+}
+
 /// The bytes held by regular files under `root`; see [`for_each_regular_file`].
 pub fn measure_dir(root: &Dir) -> io::Result<u64> {
     let mut total: u64 = 0;
@@ -800,6 +839,40 @@ pub fn copy_host_dir(
         bytes,
         entries: 0,
         rel: PathBuf::new(),
+    };
+    copy.dir(&source, &target, 0)
+}
+
+/// As [`copy_host_dir`], for the directory `sub` below the volume `volume`, copied to
+/// `to_root/sub`. `sub` is walked without following links, so one that is a link, or
+/// passes through one, is refused. `to_root` is made either way; a `sub` that is not in
+/// `volume` copies nothing.
+pub fn copy_host_subdir(
+    volume: &Path,
+    sub: &Path,
+    to_root: &Path,
+    cap: u64,
+    bytes: &mut u64,
+) -> Result<(), CopyDirError> {
+    std::fs::create_dir_all(to_root)?;
+    let Some(source) = open_host_subdir(volume, sub)? else {
+        return Ok(());
+    };
+    let mut target = Dir::open_ambient_dir(to_root, ambient_authority())?;
+    for component in sub.components() {
+        target = match target.create_dir(component) {
+            Ok(()) => target.open_dir_nofollow(component)?,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                target.open_dir_nofollow(component)?
+            }
+            Err(error) => return Err(error.into()),
+        };
+    }
+    let mut copy = TreeCopy {
+        cap,
+        bytes,
+        entries: 0,
+        rel: sub.to_path_buf(),
     };
     copy.dir(&source, &target, 0)
 }
