@@ -127,9 +127,6 @@ several servers for capacity, and route each session to the server that
 opened it. A restart keeps every session. While a server is down, its
 sessions wait for it, and the others keep serving.
 
-Submilli Enterprise is fault tolerant. To learn more, email us at
-[hello@submilli.ai](mailto:hello@submilli.ai).
-
 ## In production
 
 The server is the part of Submilli you run in production, and the part

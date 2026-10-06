@@ -2,6 +2,18 @@
 
 use num_traits::FromPrimitive;
 
+/// ECMAScript ToUint32: truncate then wrap, including non-finite inputs.
+pub(crate) fn to_uint32(value: f64) -> u32 {
+    if value == 0.0 || !value.is_finite() {
+        return 0;
+    }
+    value.trunc().rem_euclid(4_294_967_296.0) as u32
+}
+
+pub(crate) fn to_int32(value: f64) -> i32 {
+    to_uint32(value) as i32
+}
+
 /// ECMAScript ToString for f64 — spells NaN/Infinity/-Infinity and
 /// normalizes -0 to "0" (Rust's default prints "inf" and keeps the sign).
 pub fn format_number_js(n: f64) -> String {

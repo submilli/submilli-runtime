@@ -38,6 +38,10 @@ metric — improving this prompt is a primary lever.
 Run a submilli program — strict TypeScript subset compiled to
 WebAssembly.
 
+Bitwise `&`, `|`, `^`, `~`, `<<`, `>>`, `>>>` and their compound
+assignments follow TypeScript: numbers use 32-bit integer conversion;
+bigints support all except `>>>`. Do not mix numbers and bigints.
+
 Prefer one coherent program over a sequence of one-call executions.
 Batch related API calls, follow data dependencies and pagination in
 code, and reuse fetched data. An ID or path returned by one call can

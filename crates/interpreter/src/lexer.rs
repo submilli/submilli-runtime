@@ -108,7 +108,7 @@ impl<'a> Lexer<'a> {
                 b'=' | b'!' | b'<' | b'>' | b'+' | b'-' | b'*' | b'/' | b'%' | b'.' => {
                     self.lex_operator()
                 }
-                b'&' if self.peek_at(1) == Some(b'&') => self.lex_operator(),
+                b'&' | b'^' | b'~' => self.lex_operator(),
                 b'|' => self.lex_operator(),
                 b'(' | b')' | b'{' | b'}' | b'[' | b']' | b',' | b':' | b';' | b'?' => {
                     self.lex_delimiter()
@@ -1140,14 +1140,40 @@ impl<'a> Lexer<'a> {
                 }
             }
             b'&' => {
-                self.pos += 2;
-                TokenKind::AmpAmp
+                self.pos += 1;
+                match self.peek() {
+                    Some(b'&') => {
+                        self.pos += 1;
+                        TokenKind::AmpAmp
+                    }
+                    Some(b'=') => {
+                        self.pos += 1;
+                        TokenKind::AmpEquals
+                    }
+                    _ => TokenKind::Amp,
+                }
+            }
+            b'^' => {
+                self.pos += 1;
+                if self.peek() == Some(b'=') {
+                    self.pos += 1;
+                    TokenKind::CaretEquals
+                } else {
+                    TokenKind::Caret
+                }
+            }
+            b'~' => {
+                self.pos += 1;
+                TokenKind::Tilde
             }
             b'|' => {
                 self.pos += 1;
                 if self.peek() == Some(b'|') {
                     self.pos += 1;
                     TokenKind::PipePipe
+                } else if self.peek() == Some(b'=') {
+                    self.pos += 1;
+                    TokenKind::PipeEquals
                 } else {
                     TokenKind::Pipe
                 }
@@ -1428,6 +1454,12 @@ pub fn is_regex_context(prev: &Option<TokenKind>) -> bool {
         | TokenKind::GreaterEquals
         | TokenKind::Bang
         | TokenKind::AmpAmp
+        | TokenKind::Amp
+        | TokenKind::AmpEquals
+        | TokenKind::PipeEquals
+        | TokenKind::Caret
+        | TokenKind::CaretEquals
+        | TokenKind::Tilde
         | TokenKind::Pipe
         | TokenKind::PipePipe
         | TokenKind::Question
@@ -2517,6 +2549,24 @@ mod tests {
     }
 
     #[test]
+    fn lex_bitwise_operators() {
+        for (source, kind) in [
+            ("&", TokenKind::Amp),
+            ("&=", TokenKind::AmpEquals),
+            ("|", TokenKind::Pipe),
+            ("|=", TokenKind::PipeEquals),
+            ("^", TokenKind::Caret),
+            ("^=", TokenKind::CaretEquals),
+            ("~", TokenKind::Tilde),
+        ] {
+            expect_single_token(source, kind, Span::new(F, 0, source.len() as u32).unwrap());
+        }
+        let (tokens, diags) = tokenize_all("~ /x/.test('x')");
+        assert!(diags.is_empty(), "{diags:?}");
+        assert!(matches!(tokens[1].kind, TokenKind::RegexLiteral { .. }));
+    }
+
+    #[test]
     fn lex_regex_literal_basic() {
         // At start of input `last_significant_token` is `None`; `is_regex_context` returns true.
         expect_single_token(
@@ -2764,10 +2814,8 @@ mod tests {
     }
 
     #[test]
-    fn single_amp_is_unexpected() {
-        let (_, _, diags) = tokenize_one("&");
-        assert_eq!(diags.len(), 1);
-        assert!(diags[0].message.contains("unexpected character"));
+    fn single_amp_is_bitwise_and() {
+        expect_single_token("&", TokenKind::Amp, Span::new(F, 0, 1).unwrap());
     }
 
     #[test]

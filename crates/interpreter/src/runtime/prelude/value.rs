@@ -26,7 +26,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
     let value = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
-    for operation in ARITHMETIC {
+    for operation in ARITHMETIC.into_iter().chain(super::bitwise::OPERATIONS) {
         register_host_fn_async(
             linker,
             MODULE_NAME,
@@ -72,7 +72,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             },
         )?;
     }
-    for operation in ["neg", "pos", "numeric", "inc", "dec"] {
+    for operation in ["neg", "pos", "numeric", "inc", "dec", "bitnot"] {
         register_host_fn_async(
             linker,
             MODULE_NAME,
@@ -149,7 +149,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 pub(super) fn declare(defs: &mut PackageDeclaration) {
-    for operation in ARITHMETIC {
+    for operation in ARITHMETIC.into_iter().chain(super::bitwise::OPERATIONS) {
         let name = format!("__value_{operation}");
         declare_method(
             defs,
@@ -175,7 +175,7 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
             Type::Boolean,
         );
     }
-    for operation in ["neg", "pos", "numeric", "inc", "dec"] {
+    for operation in ["neg", "pos", "numeric", "inc", "dec", "bitnot"] {
         let name = format!("__value_{operation}");
         declare_method(
             defs,
@@ -496,6 +496,9 @@ fn arithmetic(
         "div" => lhs / rhs,
         "rem" => lhs % rhs,
         "pow" => crate::runtime::number::pow_js(lhs, rhs),
+        name if super::bitwise::OPERATIONS.contains(&name) => {
+            super::bitwise::number(name, lhs, rhs)?
+        }
         _ => {
             return Err(crate::runtime::host::invariant_trap(
                 "number arithmetic: unknown operation",
@@ -560,6 +563,9 @@ fn bigint_arithmetic(
             rhs.to_u32()
                 .ok_or_else(|| range_error("BigInt exponent must fit a non-negative u32"))?,
         ),
+        name if super::bitwise::OPERATIONS.contains(&name) => {
+            super::bitwise::bigint(caller, name, lhs, rhs)?
+        }
         _ => {
             return Err(crate::runtime::host::invariant_trap(
                 "bigint arithmetic: unknown operation",
@@ -580,6 +586,7 @@ fn unary(
         {
             let value = match operation {
                 "neg" => -value,
+                "bitnot" => super::bitwise::complement(caller, value)?,
                 "inc" => value + 1,
                 "dec" => value - 1,
                 _ => value.clone(),
@@ -589,6 +596,7 @@ fn unary(
             let number = number(value)?;
             let number = match operation {
                 "neg" => -number,
+                "bitnot" => f64::from(!crate::runtime::number::to_int32(number)),
                 "inc" => number + 1.0,
                 "dec" => number - 1.0,
                 _ => number,

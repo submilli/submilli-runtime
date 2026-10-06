@@ -1015,7 +1015,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ],
                             ret: Type::Uint8Array,
                             predicate: None,
-                            doc: doc("/** Writes `value & 0xff` to every byte in `[start, end)`. Returns `this`. */"),
+                            doc: doc("/** Converts `value` to a byte and writes it to every position in `[start, end)`. Returns `this`. */"),
                         },
                     ),
                     (
@@ -1068,7 +1068,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ],
                             ret: Type::Uint8Array,
                             predicate: None,
-                            doc: doc("/** Returns a clone of this array with `value & 0xff` written at `index`. */"),
+                            doc: doc("/** Returns a clone of this array with `value` converted to a byte and written at `index`. */"),
                         },
                     ),
                     (
@@ -1111,7 +1111,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             })],
                             ret: Type::Uint8Array,
                             predicate: None,
-                            doc: doc("/** Returns a new `Uint8Array` whose i-th byte is `callback(this[i], i, this) & 0xff`. */"),
+                            doc: doc("/** Returns a new `Uint8Array` with each `callback(this[i], i, this)` result converted to a byte. */"),
                         },
                     ),
                     (
@@ -1439,7 +1439,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Uint8Array,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Build a new `Uint8Array`. Given an array, copies one byte per element, each truncated to the low 8 bits (`v & 0xff`); given a number, allocates that many zero bytes (the same as `Uint8Array.alloc`, including its `RangeError` on a negative or too-large length).\n * @param values Numeric values to copy into the new array, or the length to allocate.\n */",
+                                "/**\n * Build a new `Uint8Array`. Given an array, converts each element to an unsigned 32-bit integer with saturation, then keeps the low byte. Use `v & 0xff` explicitly when wrapping negative or oversized values is intended. Given a number, allocates that many zero bytes (the same as `Uint8Array.alloc`, including its `RangeError` on a negative or too-large length).\n * @param values Numeric values to copy into the new array, or the length to allocate.\n */",
                             ),
                         },
                     ),

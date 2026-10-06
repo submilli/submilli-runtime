@@ -7,6 +7,7 @@ use wasmtime::{Caller, FuncType, Global, GlobalType, Linker, Mutability, Store, 
 use crate::runtime::StoreData;
 use crate::runtime::host::register_host_fn;
 use crate::runtime::intrinsic_types::intrinsic_types;
+use crate::runtime::number::{to_int32, to_uint32};
 use crate::runtime::prelude::MODULE_NAME;
 use crate::{
     MangledName, NamespaceSymbol, PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol,
@@ -355,22 +356,6 @@ fn math_imul(a: f64, b: f64) -> f64 {
     let a = to_int32(a);
     let b = to_int32(b);
     f64::from(a.wrapping_mul(b))
-}
-
-fn to_uint32(x: f64) -> u32 {
-    if x == 0.0 || !x.is_finite() {
-        return 0;
-    }
-    x.trunc().rem_euclid(4_294_967_296.0) as u32
-}
-
-fn to_int32(x: f64) -> i32 {
-    let u = to_uint32(x);
-    if u >= 0x8000_0000 {
-        (i64::from(u) - 4_294_967_296) as i32
-    } else {
-        u as i32
-    }
 }
 
 fn math_min(values: &[f64]) -> f64 {

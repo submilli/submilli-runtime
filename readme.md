@@ -131,8 +131,7 @@ Breaking changes are called out in the release notes, and a Blueprint that
 uses a removed feature fails to load with a message that says what to write
 instead.
 
-Submilli Enterprise is fault tolerant. To learn more, email
-[hello@submilli.ai](mailto:hello@submilli.ai).
+Submilli is open source, of course. If you’re thinking of using it, we’d love to talk to you! Contact us at [hello@submilli.ai](mailto:hello@submilli.ai).
 
 ## Repository
 
