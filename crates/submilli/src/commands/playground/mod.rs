@@ -28,7 +28,11 @@ mod host;
 #[cfg(unix)]
 mod labels;
 #[cfg(unix)]
+mod packages;
+#[cfg(unix)]
 mod project;
+#[cfg(unix)]
+mod scaffold;
 #[cfg(unix)]
 mod state;
 #[cfg(unix)]
@@ -40,6 +44,8 @@ mod watch;
 const EXIT_NOT_RUNNING: u8 = 6;
 /// No project to serve, or no single blueprint in it.
 const EXIT_NO_PROJECT: u8 = 2;
+/// A package the blueprint needs could not be built or found.
+const EXIT_PACKAGE_RESOLUTION: u8 = 5;
 
 #[derive(ClapArgs)]
 #[command(args_conflicts_with_subcommands = true)]
@@ -61,6 +67,10 @@ pub enum PlaygroundCmd {
     Open(OutputArgs),
     /// Stop the running playground: drain its runs and end browser sessions.
     Stop(OutputArgs),
+    /// Create a `submilli/` folder with a starter billing package, a blueprint that
+    /// pins charges to the signed-in customer, and an example program. Writes
+    /// nothing outside `submilli/`.
+    Init(OutputArgs),
 }
 
 #[derive(ClapArgs, Clone, Default)]
@@ -141,6 +151,7 @@ impl Args {
             Some(PlaygroundCmd::Status(_)) => "playground.status",
             Some(PlaygroundCmd::Open(_)) => "playground.open",
             Some(PlaygroundCmd::Stop(_)) => "playground.stop",
+            Some(PlaygroundCmd::Init(_)) => "playground.init",
         }
     }
 }
@@ -159,6 +170,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         Some(PlaygroundCmd::Status(output)) => unix::status(Output::from_json(output.json)),
         Some(PlaygroundCmd::Open(output)) => unix::open(Output::from_json(output.json)),
         Some(PlaygroundCmd::Stop(output)) => unix::stop(Output::from_json(output.json)),
+        Some(PlaygroundCmd::Init(output)) => unix::init(Output::from_json(output.json)),
     }
 }
 
@@ -328,6 +340,37 @@ fn print_description(record: &Value) {
         ),
     }
     println!("  log:        {}", text(&record["log_file"]));
+    print_packages(record);
+}
+
+/// The package closure, one package per line: its origin and whether a program may
+/// import it.
+fn print_packages(record: &Value) {
+    let packages = record["packages"].as_array().cloned().unwrap_or_default();
+    if packages.is_empty() {
+        println!("  packages:   none");
+    }
+    for (index, package) in packages.iter().enumerate() {
+        let label = if index == 0 { "packages:" } else { "" };
+        let mut notes = vec![text(&package["origin"])];
+        notes.push(if package["importable"] == true {
+            "importable".to_owned()
+        } else {
+            "not importable".to_owned()
+        });
+        if package["project"] == true {
+            notes.push("project".to_owned());
+        }
+        println!(
+            "  {label:<11} {} {} ({})",
+            text(&package["name"]),
+            text(&package["version"]),
+            notes.join(", ")
+        );
+    }
+    if let Some(error) = record["packages_error"].as_str() {
+        println!("  packages:   {error}");
+    }
 }
 
 fn text(value: &Value) -> String {
@@ -348,11 +391,13 @@ mod unix {
 
     use super::client::{self, Probe};
     use super::host::{self, HostOptions};
-    use super::project::{self, Project};
+    use super::packages::ProjectPackages;
+    use super::project::{self, DiscoveryError, Project};
+    use super::scaffold;
     use super::state::{Lock, StateDir, random_hex};
     use super::{
-        EXIT_NO_PROJECT, EXIT_NOT_RUNNING, Egress, Output, ReadyRecord, StartArgs,
-        print_description,
+        EXIT_NO_PROJECT, EXIT_NOT_RUNNING, EXIT_PACKAGE_RESOLUTION, Egress, Output, ReadyRecord,
+        StartArgs, print_description,
     };
 
     /// How long a background start waits for its child to be ready.
@@ -367,6 +412,9 @@ mod unix {
         let cwd = std::env::current_dir().context("reading the current directory")?;
         let project = match project::discover(&cwd, args.blueprint.as_deref()) {
             Ok(project) => project,
+            Err(DiscoveryError::NoProject { .. }) if !args.child && offer_init(&cwd)? => {
+                project::discover(&cwd, args.blueprint.as_deref())?
+            }
             Err(error) => {
                 eprintln!("{error}");
                 return Ok(ExitCode::from(EXIT_NO_PROJECT));
@@ -399,6 +447,12 @@ mod unix {
             Probe::Stale => state.remove_stale(),
             Probe::NotRunning => {}
         }
+        // A package the blueprint needs that cannot be built or found fails here, with
+        // the command that fixes it, rather than in the detached child's log.
+        if let Err(message) = check_packages(&project) {
+            eprintln!("{message}");
+            return Ok(ExitCode::from(EXIT_PACKAGE_RESOLUTION));
+        }
         let nonce = random_hex(32)?;
         if args.foreground {
             host::serve(HostOptions {
@@ -427,6 +481,97 @@ mod unix {
             Probe::NotRunning | Probe::Stale => {
                 eprintln!("the playground started but does not answer its control listener");
                 Ok(ExitCode::from(1))
+            }
+        }
+    }
+
+    /// Build the blueprint's project packages and resolve its closure, as the child
+    /// will. A blueprint that does not parse is left for the child to report.
+    fn check_packages(project: &Project) -> std::result::Result<(), String> {
+        let Ok(yaml) = std::fs::read_to_string(&project.blueprint) else {
+            return Ok(());
+        };
+        let Ok(blueprint) = submilli_blueprint::parse(&yaml) else {
+            return Ok(());
+        };
+        ProjectPackages::new(
+            &project.package_dir,
+            submilli_build::default_package_store_dir(),
+        )
+        .prepare(&blueprint)
+        .map(|_| ())
+        .map_err(|failure| failure.to_string())
+    }
+
+    /// Outside any project, a terminal is asked whether to create one; anything else
+    /// gets the command to run.
+    fn offer_init(cwd: &std::path::Path) -> Result<bool> {
+        use std::io::IsTerminal;
+        if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+            return Ok(false);
+        }
+        let root = scaffold::root_for(cwd);
+        let create = dialoguer::Confirm::new()
+            .with_prompt(format!(
+                "No Submilli project here. Create {} with a starter billing package?",
+                root.join(scaffold::FOLDER).display()
+            ))
+            .default(true)
+            .interact()
+            .context("asking whether to create a project")?;
+        if !create {
+            return Ok(false);
+        }
+        let scaffolded = scaffold::init(&root)?;
+        report_init(&scaffolded, Output::Text);
+        Ok(true)
+    }
+
+    pub(super) fn init(output: Output) -> Result<ExitCode> {
+        let cwd = std::env::current_dir().context("reading the current directory")?;
+        if let Some(root) = project::find_project_root(&cwd) {
+            eprintln!(
+                "{} already holds a Submilli project; start it with `submilli playground`",
+                root.display()
+            );
+            return Ok(ExitCode::from(1));
+        }
+        match scaffold::init(&scaffold::root_for(&cwd)) {
+            Ok(scaffolded) => {
+                report_init(&scaffolded, output);
+                Ok(ExitCode::SUCCESS)
+            }
+            Err(error) => {
+                eprintln!("{error:#}");
+                Ok(ExitCode::from(1))
+            }
+        }
+    }
+
+    fn report_init(scaffolded: &scaffold::Scaffolded, output: Output) {
+        match output {
+            Output::Json => println!(
+                "{}",
+                json!({
+                    "project": scaffolded.root,
+                    "files": scaffolded.files,
+                    "blueprint": scaffold::BLUEPRINT_NAME,
+                    "package": scaffold::PACKAGE_NAME,
+                    "example": scaffolded.root.join(scaffold::FOLDER).join(scaffold::EXAMPLE),
+                    "variables": { "customerId": "cus_northwind" },
+                })
+            ),
+            Output::Text => {
+                for file in &scaffolded.files {
+                    eprintln!("created {}", file.display());
+                }
+                eprintln!(
+                    "Start the playground with `submilli playground`; it builds {} and serves \
+                     blueprint `{}`. The example {} runs with customerId cus_northwind.",
+                    scaffold::PACKAGE_NAME,
+                    scaffold::BLUEPRINT_NAME,
+                    scaffold::EXAMPLE
+                );
             }
         }
     }

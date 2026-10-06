@@ -181,6 +181,45 @@ pub struct ServerConfig {
     /// the playground, turns it off whatever the process's own telemetry setting.
     /// Code-only: no flag, env var, or config-file key.
     pub run_telemetry: RunTelemetry,
+    /// Called before every program is compiled, whoever sent it, so an embedder can
+    /// bring the packages the run imports up to date first; the playground rebuilds a
+    /// package whose source changed since it was installed. A refusal fails the run
+    /// as a package-resolution error. Code-only, like `run_recorder`. `None` (the
+    /// default) checks nothing.
+    pub pre_execute: Option<Arc<dyn PreExecuteHook>>,
+}
+
+/// What a [`PreExecuteHook`] is told about the run about to be compiled.
+pub struct PreExecute<'a> {
+    pub state: &'a crate::AppState,
+    pub blueprint_name: &'a str,
+    pub blueprint: &'a Arc<submilli_blueprint::Blueprint>,
+    /// The registry packages the program imports that the blueprint lists: what the
+    /// run will load from the package store, before their dependencies.
+    pub packages: &'a std::collections::BTreeSet<String>,
+}
+
+/// Why a [`PreExecuteHook`] stopped a run: reported to the caller, and recorded, as a
+/// package-resolution error with this message, which should name the package and how
+/// to fix it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreExecuteRefusal {
+    pub message: String,
+}
+
+impl fmt::Display for PreExecuteRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for PreExecuteRefusal {}
+
+/// See [`ServerConfig::pre_execute`]. Called from the async worker running the
+/// request: work that blocks belongs on a blocking thread.
+#[async_trait::async_trait]
+pub trait PreExecuteHook: Send + Sync {
+    async fn before_execute(&self, run: PreExecute<'_>) -> Result<(), PreExecuteRefusal>;
 }
 
 /// See [`ServerConfig::run_telemetry`].

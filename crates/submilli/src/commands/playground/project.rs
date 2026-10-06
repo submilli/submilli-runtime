@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 pub(crate) struct Project {
     /// The directory that holds the project; the playground's state lives under it.
     pub(crate) root: PathBuf,
+    /// The directory holding the project's `submilli.toml`: `<root>/submilli` or the
+    /// root itself.
+    pub(crate) package_dir: PathBuf,
     pub(crate) blueprint: PathBuf,
 }
 
@@ -74,7 +77,11 @@ pub(crate) fn discover(from: &Path, blueprint: Option<&Path>) -> Result<Project,
         Some(path) => canonical(path)?,
         None => only_blueprint(&root, &package_dir)?,
     };
-    Ok(Project { root, blueprint })
+    Ok(Project {
+        root,
+        package_dir,
+        blueprint,
+    })
 }
 
 /// The project enclosing `from`, without choosing a blueprint.
@@ -90,9 +97,16 @@ fn find_root(from: &Path) -> Option<(PathBuf, PathBuf)> {
         if nested.join("submilli.toml").is_file() {
             return Some((dir.to_path_buf(), nested));
         }
-        dir.join("submilli.toml")
-            .is_file()
-            .then(|| (dir.to_path_buf(), dir.to_path_buf()))
+        if !dir.join("submilli.toml").is_file() {
+            return None;
+        }
+        // Inside a nested project's `submilli/` folder, the project is its parent.
+        match dir.parent() {
+            Some(parent) if dir.file_name() == Some("submilli".as_ref()) => {
+                Some((parent.to_path_buf(), dir.to_path_buf()))
+            }
+            _ => Some((dir.to_path_buf(), dir.to_path_buf())),
+        }
     })
 }
 
@@ -162,6 +176,31 @@ mod tests {
             project.blueprint,
             root.join("submilli/blueprints/demo.yaml")
         );
+    }
+
+    #[test]
+    fn a_root_project_is_found_from_a_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        write(&root.join("submilli.toml"), "");
+        write(&root.join("blueprint.yaml"), "name: demo\n");
+        std::fs::create_dir_all(root.join("app/handlers")).unwrap();
+        let project = discover(&root.join("app/handlers"), None).unwrap();
+        assert_eq!(project.root, root);
+        assert_eq!(project.package_dir, root);
+        assert_eq!(project.blueprint, root.join("blueprint.yaml"));
+        assert_eq!(find_project_root(&root.join("app")), Some(root));
+    }
+
+    #[test]
+    fn the_nested_layout_names_its_package_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        write(&root.join("submilli/submilli.toml"), "");
+        write(&root.join("submilli/blueprints/demo.yaml"), "name: demo\n");
+        let project = discover(&root.join("submilli/blueprints"), None).unwrap();
+        assert_eq!(project.root, root);
+        assert_eq!(project.package_dir, root.join("submilli"));
     }
 
     #[test]

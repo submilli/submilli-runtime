@@ -30,7 +30,7 @@ pub mod volumes;
 
 pub use app::{AppState, app, route_table};
 pub use auth::{Access, ApiToken, AuthConfig, Role};
-pub use config::{RunTelemetry, ServerConfig};
+pub use config::{PreExecute, PreExecuteHook, PreExecuteRefusal, RunTelemetry, ServerConfig};
 pub use interpreter::runtime::{
     DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, LlmLimits, NetworkPolicy, RuntimeConfig,
 };

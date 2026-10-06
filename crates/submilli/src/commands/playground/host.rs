@@ -27,6 +27,7 @@ use submilli_server::{AppState, AuthConfig, RunTelemetry, ServerConfig};
 use tokio::sync::Notify;
 
 use super::control_auth::{self, Caller, ControlAuth, LoginRefusal};
+use super::packages::{self, ClosureEntry, Freshness, ProjectPackages};
 use super::project::Project;
 use super::state::{APP_TOKEN, Lock, StateDir};
 use super::store::redact::WatchedSecretStore;
@@ -64,6 +65,9 @@ pub(crate) struct Description {
     pub(crate) egress_grants: Vec<String>,
     pub(crate) provider: Option<&'static str>,
     pub(crate) model: Option<String>,
+    /// The blueprint's package closure at start: each package's origin and whether a
+    /// program may import it. `status` reads it again for the blueprint in force.
+    pub(crate) packages: Vec<ClosureEntry>,
 }
 
 #[derive(Clone, Serialize)]
@@ -83,19 +87,30 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
         .with_context(|| format!("reading {}", options.project.blueprint.display()))?;
     let blueprint = submilli_blueprint::parse(&blueprint_yaml)
         .with_context(|| format!("parsing {}", options.project.blueprint.display()))?;
+    // Project packages are built and installed before the blueprint is registered,
+    // which requires them in the store.
+    let packages = Arc::new(ProjectPackages::new(
+        &options.project.package_dir,
+        submilli_build::default_package_store_dir(),
+    ));
+    let (_, closure) = packages
+        .prepare(&blueprint)
+        .map_err(|failure| anyhow::anyhow!("{failure}"))?;
     let secrets = KnownSecrets::default();
     let store = Arc::new(Store::open(&state_dir.store_dir()).context("opening the run store")?);
     let secret_store = Arc::new(WatchedSecretStore::new(
         crate::commands::local::open_secret_store()?,
         secrets.clone(),
     ));
-    let config = server_config(
+    let mut config = server_config(
         &state_dir,
         &options.egress,
         tokens.clone(),
         Some(secret_store),
         Some(Arc::new(Recorder::new(Arc::clone(&store), secrets))),
     );
+    config.volumes = project_volumes(&options.project.package_dir);
+    config.pre_execute = Some(Arc::new(Freshness::new(Arc::clone(&packages))));
     let runtime = submilli_server::runtime(&config).context("starting the async runtime")?;
     let result = runtime.block_on(run(
         options,
@@ -105,6 +120,8 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
         Served {
             name: blueprint.name.clone(),
             store,
+            packages,
+            closure,
         },
     ));
     // Teardown is bounded: a stray connection task must not keep the process up.
@@ -117,6 +134,9 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
 struct Served {
     name: String,
     store: Arc<Store>,
+    packages: Arc<ProjectPackages>,
+    /// The closure as it was at start, for the ready record.
+    closure: Vec<ClosureEntry>,
 }
 
 async fn run(
@@ -126,9 +146,11 @@ async fn run(
     tokens: Vec<submilli_server::ApiToken>,
     blueprint: Served,
 ) -> Result<()> {
-    config.blueprints = Some(submilli_server::prepare_blueprint_store(&config).await?);
+    let blueprints = submilli_server::prepare_blueprint_store(&config).await?;
+    config.blueprints = Some(Arc::clone(&blueprints));
     let state = AppState::new(config)?;
     state.boot().await?;
+    let _store_watch = packages::watch_store(state.clone(), blueprint.packages.store_root())?;
     // The file as it is now, then every save, through the trusted local path.
     let applier = Arc::new(Applier::new(
         state.clone(),
@@ -155,6 +177,7 @@ async fn run(
         &blueprint.name,
         control_port,
         server_port,
+        blueprint.closure,
     );
     let auth = Arc::new(ControlAuth::new(tokens));
     let shared = ControlState(Arc::new(ControlInner {
@@ -164,6 +187,9 @@ async fn run(
         server_shutdown: state.shutdown_signal(),
         description: description.clone(),
         blueprint_status,
+        blueprints,
+        blueprint_name: blueprint.name.clone(),
+        packages: Arc::clone(&blueprint.packages),
     }));
     let control_stop = Arc::new(Notify::new());
     let control_task = tokio::spawn({
@@ -247,6 +273,7 @@ fn describe(
     blueprint: &str,
     control_port: u16,
     server_port: u16,
+    packages: Vec<ClosureEntry>,
 ) -> Description {
     let (provider, model) = detect_provider();
     Description {
@@ -264,7 +291,32 @@ fn describe(
         egress_grants: options.egress.grants(),
         provider,
         model,
+        packages,
     }
+}
+
+/// The project's volumes: each directory under `submilli/volumes/` is a read-only
+/// volume of that name, so a fixture there is read through a recorded file read. A
+/// blueprint naming any other volume gets a managed one under the state directory.
+fn project_volumes(package_dir: &std::path::Path) -> submilli_server::config::VolumeTable {
+    let mut volumes = submilli_server::config::VolumeTable::new();
+    let Ok(entries) = std::fs::read_dir(package_dir.join("volumes")) else {
+        return volumes;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if path.is_dir() && submilli_server::config::is_managed_name(&name) {
+            volumes.insert(
+                name,
+                submilli_server::config::VolumeSpec::local_path(path)
+                    .with_access(submilli_server::config::Access::ReadOnly),
+            );
+        }
+    }
+    volumes
 }
 
 /// The bring-your-own-key provider the environment names when the playground
@@ -314,6 +366,10 @@ struct ControlInner {
     description: Description,
     /// The version in force and the last refused save.
     blueprint_status: Arc<std::sync::Mutex<BlueprintStatus>>,
+    /// The server's blueprint store, for the blueprint in force.
+    blueprints: Arc<dyn submilli_server::blueprint::BlueprintStore>,
+    blueprint_name: String,
+    packages: Arc<ProjectPackages>,
 }
 
 /// The control listener's routes, by who may call them. Later steps add their
@@ -520,8 +576,32 @@ async fn status(State(state): State<ControlState>) -> Response {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         object.insert("blueprint_status".into(), json!(blueprint_status));
+        // The closure of the blueprint in force now, which a save may have changed.
+        match current_closure(&state).await {
+            Ok(Some(closure)) => {
+                object.insert("packages".into(), json!(closure));
+            }
+            Ok(None) => {}
+            Err(message) => {
+                object.insert("packages_error".into(), json!(message));
+            }
+        }
     }
     Json(description).into_response()
+}
+
+async fn current_closure(state: &ControlState) -> Result<Option<Vec<ClosureEntry>>, String> {
+    let blueprint = match state.0.blueprints.get(&state.0.blueprint_name).await {
+        Ok(Some(blueprint)) => blueprint,
+        Ok(None) => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let packages = Arc::clone(&state.0.packages);
+    tokio::task::spawn_blocking(move || packages.closure(&blueprint))
+        .await
+        .map_err(|error| error.to_string())?
+        .map(Some)
+        .map_err(|failure| failure.to_string())
 }
 
 async fn stop(State(state): State<ControlState>) -> Response {

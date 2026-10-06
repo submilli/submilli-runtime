@@ -172,6 +172,7 @@ struct AppStateInner {
     /// interrupted a registration; AGENTS.md permits the poisoned-lock panic.
     running: Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
     run_telemetry: crate::config::RunTelemetry,
+    pre_execute: Option<Arc<dyn crate::config::PreExecuteHook>>,
     /// The opaque version tag each registered blueprint carries, by name: set by
     /// [`AppState::apply_local_blueprint`], cleared by every other registration.
     /// Every write to the blueprint store holds this lock for writing across the
@@ -393,6 +394,7 @@ impl AppState {
                 run_recorder: config.run_recorder,
                 running: Mutex::new(HashMap::new()),
                 run_telemetry: config.run_telemetry,
+                pre_execute: config.pre_execute,
                 blueprint_tags: AsyncRwLock::new(HashMap::new()),
             }),
         })
@@ -451,6 +453,10 @@ impl AppState {
 
     pub fn audit(&self) -> &crate::audit::AuditLog {
         &self.inner.audit
+    }
+
+    pub(crate) fn pre_execute(&self) -> Option<&Arc<dyn crate::config::PreExecuteHook>> {
+        self.inner.pre_execute.as_ref()
     }
 
     pub(crate) fn run_recorder(&self) -> Option<&Arc<dyn crate::record::RunRecorderFactory>> {

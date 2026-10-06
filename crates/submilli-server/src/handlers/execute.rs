@@ -476,6 +476,27 @@ async fn prepare_and_run(
         Ok(imports) => imports,
         Err(message) => return fail_to_parse(message),
     };
+    // Every entry point reaches here before anything is compiled, so the embedder's
+    // check runs for every run, whoever sent it.
+    if let Some(hook) = state.pre_execute() {
+        let packages: BTreeSet<String> = script_imports
+            .registry_packages
+            .iter()
+            .filter(|package| blueprint.packages.contains(*package))
+            .cloned()
+            .collect();
+        let checked = hook
+            .before_execute(crate::config::PreExecute {
+                state,
+                blueprint_name,
+                blueprint: &blueprint,
+                packages: &packages,
+            })
+            .await;
+        if let Err(refusal) = checked {
+            return fail(ErrorKind::PackageResolution, refusal.message);
+        }
+    }
 
     let network_policy = execution_audit.as_ref().map_or_else(
         || state.network_policy().clone(),
