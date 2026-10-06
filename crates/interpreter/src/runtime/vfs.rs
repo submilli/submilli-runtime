@@ -1876,6 +1876,80 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_component_opens_as_none() {
+        let volume = tempfile::tempdir().expect("volume");
+        std::fs::create_dir_all(volume.path().join("a")).expect("mkdir");
+        assert!(
+            open_host_subdir(volume.path(), Path::new("a"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            open_host_subdir(volume.path(), Path::new("a/b/c"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            open_host_subdir(volume.path(), Path::new("x"))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            measure_host_subdir_skipping_vanished(volume.path(), Path::new("a/b")).unwrap(),
+            0
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_component_is_an_error() {
+        let volume = tempfile::tempdir().expect("volume");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::create_dir_all(outside.path().join("deep")).expect("mkdir");
+        std::fs::write(outside.path().join("deep/f"), "x").expect("write");
+        std::fs::create_dir_all(volume.path().join("a")).expect("mkdir");
+        std::os::unix::fs::symlink(outside.path(), volume.path().join("a/link")).expect("link");
+        for sub in ["a/link", "a/link/deep"] {
+            let error = open_host_subdir(volume.path(), Path::new(sub)).expect_err("refused");
+            assert!(error.to_string().starts_with(sub), "{error}");
+            assert!(measure_host_subdir_skipping_vanished(volume.path(), Path::new(sub)).is_err());
+            let to = tempfile::tempdir().expect("to");
+            let result = copy_host_subdir(volume.path(), Path::new(sub), to.path(), 1_000, &mut 0);
+            assert!(matches!(result, Err(CopyDirError::Io(_))));
+        }
+    }
+
+    #[test]
+    fn a_sub_path_is_copied_to_the_same_place_under_the_target() {
+        let from = tempfile::tempdir().expect("from");
+        std::fs::create_dir_all(from.path().join("users/ada/notes")).expect("mkdir");
+        std::fs::write(from.path().join("users/ada/notes/n.txt"), "note").expect("write");
+        std::fs::write(from.path().join("users/ada/a.txt"), "ada").expect("write");
+        std::fs::write(from.path().join("users/b.txt"), "bob").expect("write");
+        std::fs::write(from.path().join("top.txt"), "top").expect("write");
+        let to = tempfile::tempdir().expect("to");
+        let mut bytes = 0;
+        copy_host_subdir(
+            from.path(),
+            Path::new("users/ada"),
+            to.path(),
+            1_000,
+            &mut bytes,
+        )
+        .expect("copied");
+        assert_eq!(bytes, 7);
+        let read = |rel: &str| std::fs::read_to_string(to.path().join(rel)).expect(rel);
+        assert_eq!(read("users/ada/notes/n.txt"), "note");
+        assert_eq!(read("users/ada/a.txt"), "ada");
+        assert!(!to.path().join("users/b.txt").exists());
+        assert!(!to.path().join("top.txt").exists());
+        assert_eq!(
+            measure_host_subdir_skipping_vanished(from.path(), Path::new("users/ada")).unwrap(),
+            7
+        );
+    }
+
+    #[test]
     fn a_copy_stops_in_a_tree_nested_too_deep() {
         let from = tempfile::tempdir().expect("from");
         let mut path = from.path().to_path_buf();
