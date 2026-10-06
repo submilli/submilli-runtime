@@ -5,8 +5,9 @@ use std::path::Path;
 
 use interpreter::{FileId, ModulePath, PackageSourceModule, compile_package, compile_script};
 use submilli_build::{
-    ArtifactDependency, ArtifactMetadata, DriverError, PackageName, PackageStore, build_packages,
-    derive_capability_schema, install_packages, parse_manifest, write_package_artifact,
+    ArtifactDependency, ArtifactMetadata, DependencyKind, DriverError, PackageName, PackageStore,
+    ResolvedDependency, build_packages, derive_capability_schema, install_packages, parse_manifest,
+    write_package_artifact,
 };
 use tempfile::TempDir;
 
@@ -581,6 +582,31 @@ dependencies = ["@acme/a"]
         text.contains("@acme/a -> @acme/b -> @acme/a")
             || text.contains("@acme/b -> @acme/a -> @acme/b"),
         "got: {text}"
+    );
+}
+
+#[test]
+fn constructed_manifest_with_missing_sibling_returns_an_error() {
+    let project = TempDir::new().expect("project tempdir");
+    write_module(project.path(), "src/lib.ts", "");
+    let mut manifest = parse_manifest(
+        "[[package]]\nname = \"@acme/app\"\nversion = \"0.1.0\"\ndescription = \"App.\"\n",
+        project.path(),
+    )
+    .expect("manifest parses");
+    manifest.packages[0].dependencies.push(ResolvedDependency {
+        name: PackageName::new("@acme/missing"),
+        version: None,
+        kind: DependencyKind::Sibling,
+    });
+    let externals = PackageStore::new(project.path().join("store"));
+
+    let error = build_packages(&manifest, project.path(), &externals, None)
+        .expect_err("missing sibling must be reported");
+    assert!(matches!(error, DriverError::MissingSibling { .. }));
+    assert_eq!(
+        error.to_string(),
+        "package `@acme/app` depends on missing sibling package `@acme/missing`; add its [[package]] declaration or remove the dependency"
     );
 }
 

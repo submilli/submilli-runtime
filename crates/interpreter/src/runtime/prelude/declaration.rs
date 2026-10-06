@@ -237,12 +237,12 @@ fn merge_namespaces(
     into: &mut BTreeMap<String, crate::NamespaceSymbol>,
     from: BTreeMap<String, crate::NamespaceSymbol>,
 ) {
-    for (name, ns) in from {
+    for (name, mut ns) in from {
         match into.get_mut(&name) {
             Some(existing) => {
-                existing.types.extend(ns.types);
-                existing.values.extend(ns.values);
-                merge_namespaces(&mut existing.namespaces, ns.namespaces);
+                existing.types.append(&mut ns.types);
+                existing.values.append(&mut ns.values);
+                merge_namespaces(&mut existing.namespaces, std::mem::take(&mut ns.namespaces));
             }
             None => {
                 into.insert(name, ns);

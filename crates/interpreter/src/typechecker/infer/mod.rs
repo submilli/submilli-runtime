@@ -1456,7 +1456,7 @@ fn arena_failure(error: crate::arena::ArenaError) -> CompilerFailure {
 
 /// Rejects a dependency declaration holding a type beyond the type limits
 /// before any recursive pass reads it.
-fn check_declaration_types<'d>(
+pub(crate) fn check_declaration_types<'d>(
     declarations: impl IntoIterator<Item = &'d PackageDeclaration>,
 ) -> Result<(), CompilerFailure> {
     for declaration in declarations {

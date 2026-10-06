@@ -521,6 +521,11 @@ fn compile_package_sources(
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
 ) -> Result<CompiledPackage, CompileError> {
+    // Public declarations may be constructed directly. Validate recursive
+    // metadata before cloning them into the inference registries.
+    crate::typechecker::infer::check_declaration_types(
+        dependencies.iter().chain(transitive).copied(),
+    )?;
     let mut parsed_modules = Vec::with_capacity(modules.len());
     let mut diagnostics = Vec::new();
     for module in modules {

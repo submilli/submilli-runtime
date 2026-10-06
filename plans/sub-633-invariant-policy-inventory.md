@@ -1,5 +1,9 @@
 # SUB-633: invariant policy and simplification inventory
 
+Historical execution ledger. The 2026-10-06 reset replaces the active SUB-633
+backlog with [the current panic inventory](sub-633-panic-inventory.md).
+The completed decisions and dated evidence below remain preserved.
+
 Completed inventory decisions 2026-10-05. R01–R26 and P01–P09 have final
 dispositions; T01–T06 record tracking/workflow synchronization. R25/item 32 is
 complete within the user-confirmed panic-only scope; the retained SUB-633

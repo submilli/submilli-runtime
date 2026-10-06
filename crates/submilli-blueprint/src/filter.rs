@@ -65,7 +65,12 @@ pub struct FilterEvaluation {
 /// A parsed filter expression. The grammar is `or` over `and` over `not` over
 /// comparisons and parenthesized groups; a bare comparison is a valid expression.
 #[derive(Debug, Clone, PartialEq)]
-pub enum FilterExpr {
+pub struct FilterExpr(Expr);
+
+// Only the bounded parser constructs trees. Private nodes keep the bound valid
+// for evaluation, formatting, derived clone/equality, and recursive destruction.
+#[derive(Debug, Clone, PartialEq)]
+enum Expr {
     Compare(Comparison),
     Not(Box<FilterExpr>),
     And(Box<FilterExpr>, Box<FilterExpr>),
@@ -177,15 +182,11 @@ impl FilterExpr {
     /// or whose variable is absent/uncoercible — is a non-match, never a hard
     /// error at evaluation time.
     pub fn matches_with(&self, ctx: &serde_json::Value, vars: &VarBindings) -> bool {
-        match self {
-            FilterExpr::Compare(c) => c.eval(ctx, vars),
-            FilterExpr::Not(inner) => !inner.matches_with(ctx, vars),
-            FilterExpr::And(left, right) => {
-                left.matches_with(ctx, vars) && right.matches_with(ctx, vars)
-            }
-            FilterExpr::Or(left, right) => {
-                left.matches_with(ctx, vars) || right.matches_with(ctx, vars)
-            }
+        match &self.0 {
+            Expr::Compare(c) => c.eval(ctx, vars),
+            Expr::Not(inner) => !inner.matches_with(ctx, vars),
+            Expr::And(left, right) => left.matches_with(ctx, vars) && right.matches_with(ctx, vars),
+            Expr::Or(left, right) => left.matches_with(ctx, vars) || right.matches_with(ctx, vars),
         }
     }
 
@@ -210,21 +211,21 @@ impl FilterExpr {
         wanted: bool,
         failures: &mut Vec<ComparisonFailure>,
     ) -> bool {
-        match self {
-            FilterExpr::Compare(c) => {
+        match &self.0 {
+            Expr::Compare(c) => {
                 let holds = c.eval(ctx, vars);
                 if holds != wanted {
                     failures.push(c.failure(ctx, vars, !wanted));
                 }
                 holds
             }
-            FilterExpr::Not(inner) => !inner.evaluate_all(ctx, vars, !wanted, failures),
-            FilterExpr::And(left, right) => {
+            Expr::Not(inner) => !inner.evaluate_all(ctx, vars, !wanted, failures),
+            Expr::And(left, right) => {
                 let left_holds = left.evaluate_all(ctx, vars, wanted, failures);
                 let right_holds = right.evaluate_all(ctx, vars, wanted, failures);
                 left_holds && right_holds
             }
-            FilterExpr::Or(left, right) => {
+            Expr::Or(left, right) => {
                 let left_holds = left.evaluate_all(ctx, vars, wanted, failures);
                 let right_holds = right.evaluate_all(ctx, vars, wanted, failures);
                 left_holds || right_holds
@@ -245,10 +246,10 @@ impl FilterExpr {
     }
 
     fn collect_field_matches(&self, field: &str, out: &mut Vec<FieldMatch>) {
-        match self {
-            FilterExpr::Compare(c) => c.collect_field_match(field, out),
-            FilterExpr::Not(inner) => inner.collect_field_matches(field, out),
-            FilterExpr::And(left, right) | FilterExpr::Or(left, right) => {
+        match &self.0 {
+            Expr::Compare(c) => c.collect_field_match(field, out),
+            Expr::Not(inner) => inner.collect_field_matches(field, out),
+            Expr::And(left, right) | Expr::Or(left, right) => {
                 left.collect_field_matches(field, out);
                 right.collect_field_matches(field, out);
             }
@@ -274,10 +275,10 @@ impl FilterExpr {
     }
 
     fn collect_top_level_fields<'a>(&'a self, out: &mut Vec<&'a str>) {
-        match self {
-            FilterExpr::Compare(c) => out.extend(c.path.first().map(String::as_str)),
-            FilterExpr::Not(inner) => inner.collect_top_level_fields(out),
-            FilterExpr::And(left, right) | FilterExpr::Or(left, right) => {
+        match &self.0 {
+            Expr::Compare(c) => out.extend(c.path.first().map(String::as_str)),
+            Expr::Not(inner) => inner.collect_top_level_fields(out),
+            Expr::And(left, right) | Expr::Or(left, right) => {
                 left.collect_top_level_fields(out);
                 right.collect_top_level_fields(out);
             }
@@ -285,8 +286,8 @@ impl FilterExpr {
     }
 
     fn collect_var_refs<'a>(&'a self, out: &mut Vec<&'a str>) {
-        match self {
-            FilterExpr::Compare(c) => match &c.operand {
+        match &self.0 {
+            Expr::Compare(c) => match &c.operand {
                 Operand::Var(name) => out.push(name),
                 Operand::Interp(segs) => {
                     for seg in segs {
@@ -297,8 +298,8 @@ impl FilterExpr {
                 }
                 _ => {}
             },
-            FilterExpr::Not(inner) => inner.collect_var_refs(out),
-            FilterExpr::And(left, right) | FilterExpr::Or(left, right) => {
+            Expr::Not(inner) => inner.collect_var_refs(out),
+            Expr::And(left, right) | Expr::Or(left, right) => {
                 left.collect_var_refs(out);
                 right.collect_var_refs(out);
             }
@@ -307,11 +308,11 @@ impl FilterExpr {
 
     /// Binding tightness, used only to parenthesize `Display` minimally.
     fn precedence(&self) -> u8 {
-        match self {
-            FilterExpr::Or(..) => 1,
-            FilterExpr::And(..) => 2,
-            FilterExpr::Not(_) => 3,
-            FilterExpr::Compare(_) => 4,
+        match &self.0 {
+            Expr::Or(..) => 1,
+            Expr::And(..) => 2,
+            Expr::Not(_) => 3,
+            Expr::Compare(_) => 4,
         }
     }
 }
@@ -529,18 +530,18 @@ fn glob_escape(value: &str) -> String {
 
 impl fmt::Display for FilterExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FilterExpr::Compare(c) => write!(f, "{c}"),
-            FilterExpr::Not(inner) => {
+        match &self.0 {
+            Expr::Compare(c) => write!(f, "{c}"),
+            Expr::Not(inner) => {
                 write!(f, "not ")?;
                 write_child(f, inner, 3, false)
             }
-            FilterExpr::And(left, right) => {
+            Expr::And(left, right) => {
                 write_child(f, left, 2, false)?;
                 write!(f, " and ")?;
                 write_child(f, right, 2, true)
             }
-            FilterExpr::Or(left, right) => {
+            Expr::Or(left, right) => {
                 write_child(f, left, 1, false)?;
                 write!(f, " or ")?;
                 write_child(f, right, 1, true)
@@ -1033,7 +1034,7 @@ impl<'a> Parser<'a> {
         while matches!(self.peek(), Some(Token::Or)) {
             self.pos += 1;
             let right = self.parse_and()?;
-            left = FilterExpr::Or(Box::new(left), Box::new(right));
+            left = FilterExpr(Expr::Or(Box::new(left), Box::new(right)));
         }
         Ok(left)
     }
@@ -1043,7 +1044,7 @@ impl<'a> Parser<'a> {
         while matches!(self.peek(), Some(Token::And)) {
             self.pos += 1;
             let right = self.parse_not()?;
-            left = FilterExpr::And(Box::new(left), Box::new(right));
+            left = FilterExpr(Expr::And(Box::new(left), Box::new(right)));
         }
         Ok(left)
     }
@@ -1051,7 +1052,7 @@ impl<'a> Parser<'a> {
     fn parse_not(&mut self) -> Result<FilterExpr, FilterParseError> {
         if matches!(self.peek(), Some(Token::Not)) {
             self.pos += 1;
-            return Ok(FilterExpr::Not(Box::new(self.parse_not()?)));
+            return Ok(FilterExpr(Expr::Not(Box::new(self.parse_not()?))));
         }
         self.parse_primary()
     }
@@ -1102,7 +1103,7 @@ impl<'a> Parser<'a> {
             }
         };
         let operand = self.parse_operand(op)?;
-        Ok(FilterExpr::Compare(Comparison { path, op, operand }))
+        Ok(FilterExpr(Expr::Compare(Comparison { path, op, operand })))
     }
 
     fn parse_operand(&mut self, op: CompareOp) -> Result<Operand, FilterParseError> {
@@ -1170,15 +1171,51 @@ impl<'a> Parser<'a> {
     }
 }
 
+// A syntactic operator/group budget bounds both parser frames and tree height,
+// including flat binary chains. Check it before constructing any recursive tree.
+const MAX_FILTER_STRUCTURE: usize = 128;
+const MAX_FILTER_BYTES: usize = 64 * 1024;
+
 fn parse_filter(raw: &str) -> Result<FilterExpr, FilterParseError> {
     let tokens = tokenize(raw)?;
+    let mut structure = 0;
+    for token in &tokens {
+        if matches!(
+            token.token,
+            Token::Not | Token::And | Token::Or | Token::LParen
+        ) {
+            structure += 1;
+            if structure > MAX_FILTER_STRUCTURE {
+                return Err(FilterParseError::new(
+                    format!(
+                        "filter exceeds {MAX_FILTER_STRUCTURE} operators/groups; simplify the filter"
+                    ),
+                    token.span,
+                ));
+            }
+        }
+    }
     Parser::new(&tokens, raw.len()).parse()
 }
 
 /// Parse a filter expression, rendering any error to a caret-annotated string.
 /// The crate-internal entry point used by the serde impl (and tests).
 pub(crate) fn parse(raw: &str) -> Result<FilterExpr, String> {
-    parse_filter(raw).map_err(|e| e.render(raw))
+    // Reject before tokenization or diagnostic rendering copies the input.
+    if raw.len() > MAX_FILTER_BYTES {
+        return Err(format!(
+            "filter exceeds {MAX_FILTER_BYTES} bytes; shorten the filter"
+        ));
+    }
+    let expression = parse_filter(raw).map_err(|e| e.render(raw))?;
+    // Display adds spacing and escapes. Bound the persisted spelling too so
+    // every accepted filter can be serialized and loaded again.
+    if expression.to_string().len() > MAX_FILTER_BYTES {
+        return Err(format!(
+            "formatted filter exceeds {MAX_FILTER_BYTES} bytes; shorten the filter"
+        ));
+    }
+    Ok(expression)
 }
 
 impl std::str::FromStr for FilterExpr {
