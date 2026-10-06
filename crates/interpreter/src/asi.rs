@@ -287,7 +287,12 @@ impl<'a> Asi<'a> {
     fn track_cast_angles(&mut self, kind: &TokenKind) -> bool {
         match kind {
             TokenKind::LessThan if self.cast_angle_depth > 0 => self.cast_angle_depth += 1,
-            TokenKind::LessThan if self.expects_operand() => self.cast_angle_depth = 1,
+            TokenKind::LessThan
+                if self.expects_operand()
+                    && !matches!(self.last_emitted, Some(TokenKind::LessThan)) =>
+            {
+                self.cast_angle_depth = 1;
+            }
             TokenKind::GreaterThan if self.cast_angle_depth > 0 => {
                 self.cast_angle_depth -= 1;
                 return self.cast_angle_depth == 0;
@@ -484,6 +489,11 @@ fn cannot_end_expression(kind: &TokenKind) -> bool {
             | TokenKind::LessEquals
             | TokenKind::GreaterEquals
             | TokenKind::AmpAmp
+            | TokenKind::Amp
+            | TokenKind::AmpEquals
+            | TokenKind::PipeEquals
+            | TokenKind::Caret
+            | TokenKind::CaretEquals
             | TokenKind::Pipe
             | TokenKind::PipePipe
             | TokenKind::Question
@@ -501,6 +511,7 @@ fn awaits_operand(kind: &TokenKind) -> bool {
         || matches!(
             kind,
             TokenKind::Arrow
+                | TokenKind::Tilde
                 // A class header is not a statement, so it never ends at one of its
                 // own clause keywords — prettier wraps long headers right after them.
                 | TokenKind::Extends
@@ -536,6 +547,7 @@ fn opens_value_brace(kind: &TokenKind) -> bool {
         || matches!(
             kind,
             TokenKind::LeftParen
+                | TokenKind::Tilde
                 | TokenKind::LeftBracket
                 | TokenKind::Comma
                 // A spread's operand: `{ ...{ a: 1 } }`, `[...{ … }]`.
@@ -557,6 +569,10 @@ fn opens_value_brace(kind: &TokenKind) -> bool {
 /// `as (y)` is an initialized variable followed by a call of a function named `as`, not a
 /// cast. `typeof` starts a new expression, so it is not listed either.
 fn can_continue(kind: &TokenKind) -> bool {
+    // `~` awaits its operand, but cannot continue the preceding expression.
+    if matches!(kind, TokenKind::Tilde) {
+        return false;
+    }
     awaits_operand(kind)
         || matches!(
             kind,

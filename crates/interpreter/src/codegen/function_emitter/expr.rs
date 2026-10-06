@@ -128,7 +128,7 @@ fn emit_expr_value(
             emit_binary(emitter, ctx, *op, *lhs, *rhs, &expr.ty)?;
         }
         TypedExprKind::Unary { op, operand } => {
-            emit_unary(emitter, ctx, *op, *operand)?;
+            emit_unary(emitter, ctx, *op, *operand, &expr.ty)?;
         }
         TypedExprKind::LocalRef { ident, boxed } => {
             // Function-scope binding (parameter, function-local
@@ -3056,6 +3056,17 @@ fn emit_binary(
         // operands → `f64.add`, string operands → `string_concat` from the
         // prelude. Mixed-type or other operand combinations were rejected
         // by the inferer.
+        BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::BitXor
+        | BinOp::Shl
+        | BinOp::Shr
+        | BinOp::UnsignedShr => {
+            let name = op.bitwise_name().ok_or_else(|| {
+                crate::codegen::internal_failure("missing bitwise host operation")
+            })?;
+            emit_bitwise_host(emitter, ctx, name, &[lhs, rhs], result_ty)?;
+        }
         BinOp::Add => match result_ty {
             Type::Number => {
                 emit_primitive_operand(emitter, ctx, lhs)?;
@@ -4760,11 +4771,36 @@ fn emit_typeof_tag(
     Ok(())
 }
 
+fn emit_bitwise_host(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    name: &str,
+    operands: &[ExprId],
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    for &operand in operands {
+        emit_expr(emitter, ctx, operand)?;
+        let ty = &ctx
+            .ta
+            .try_expr(operand)
+            .map_err(crate::codegen::arena_failure)?
+            .ty;
+        cast::emit_box(emitter, ctx, ty)?;
+    }
+    let mangled = crate::mangle::prelude(&format!("__value_{name}"));
+    let host = ctx.symbols.func_idx(&mangled).ok_or_else(|| {
+        crate::codegen::internal_failure(format!("missing bitwise host import: {name}"))
+    })?;
+    emitter.instruction(Instruction::Call(host));
+    cast::emit_cast_to(emitter, ctx, result_ty)
+}
+
 fn emit_unary(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     op: UnOp,
     operand: ExprId,
+    result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     if matches!(op, UnOp::Neg | UnOp::Pos)
         && try_emit_unreachable_for_never_operand(emitter, ctx, &[operand])?
@@ -4772,6 +4808,7 @@ fn emit_unary(
         return Ok(());
     }
     let _: () = match op {
+        UnOp::BitNot => emit_bitwise_host(emitter, ctx, "bitnot", &[operand], result_ty)?,
         UnOp::Neg => {
             // bigint negation routes to inline host call.
             if matches!(

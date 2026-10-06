@@ -2384,6 +2384,12 @@ pub(super) fn binary_op_text(op: BinOp) -> &'static str {
         BinOp::Div => "/",
         BinOp::Rem => "%",
         BinOp::Pow => "**",
+        BinOp::BitAnd => "&",
+        BinOp::BitOr => "|",
+        BinOp::BitXor => "^",
+        BinOp::Shl => "<<",
+        BinOp::Shr => ">>",
+        BinOp::UnsignedShr => ">>>",
         BinOp::Eq => "===",
         BinOp::NotEq => "!==",
         BinOp::Lt => "<",
@@ -2412,9 +2418,19 @@ pub(super) fn compound_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<T
     }
     match op {
         BinOp::Add => super::expr::plus_result(lt, rt),
-        BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow => {
-            super::expr::arithmetic_result(lt, rt)
+        BinOp::UnsignedShr => {
+            super::expr::arithmetic_result(lt, rt).filter(|ty| *ty == Type::Number)
         }
+        BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Rem
+        | BinOp::Pow
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::BitXor
+        | BinOp::Shl
+        | BinOp::Shr => super::expr::arithmetic_result(lt, rt),
         _ => None,
     }
 }

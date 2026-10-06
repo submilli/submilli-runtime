@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "673ffc3ffd083e3356758eb6e2f5712d13e8ccb5ac38a886fadb235c45ebc9c3"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "626dc213a7525b63d1d2b6168394a76cb0ffe091ac891dad446b512893637599"
+  confirmedAt: "2026-10-06T09:57:24.192Z"
 ---
 
 This page lists the limits on a program's run, the fixed limits inside the
@@ -42,7 +42,11 @@ gives all three forms and their precedence. A Blueprint can't raise them.
 
 Fuel counts work, at about one unit per WebAssembly instruction of the program,
 plus what the standard library charges for work it does on the program's
-behalf. Waiting on a call costs no fuel.
+behalf. Host rates differ by operation and input size. Waiting on a call
+costs no fuel. A fuel budget does not specify a duration in CPU seconds.
+
+[Set limits](/docs/server/set-limits#what-a-budget-buys) gives the
+measured workloads and wall times.
 
 The time limit starts when the first top-level statement runs, the imported
 Packages' and then the program's, and ends the run up to one second after it

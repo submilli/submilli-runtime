@@ -1,5 +1,6 @@
 ---
 import AuthorshipBadge from './AuthorshipBadge.astro';
+import PageActions from './PageActions.astro';
 /**
  * Documentation home. Renders the `hero` frontmatter of `docs/index.md` in the
  * Submilli layout: mono eyebrow, display title, lead, two actions, and a
@@ -9,6 +10,8 @@ const { entry, sidebar } = Astro.locals.starlightRoute;
 const { data } = entry;
 const { title = data.title, tagline, actions = [] } = data.hero || {};
 const { nextSteps = [] } = data;
+const slug = entry.id === 'index' ? '' : entry.id;
+const showActions = entry.id !== '404' && !entry.data.sidebar.hidden;
 
 interface Step {
 	label: string;
@@ -42,6 +45,7 @@ const steps = nextSteps.flatMap((slug) =>
 	<div class="home-hero__title">
 		<h1 id="_top" data-page-title set:html={title} />
 		<AuthorshipBadge />
+		{showActions && <PageActions slug={slug} />}
 	</div>
 	{tagline && <p class="home-hero__lead" set:html={tagline} />}
 	{
@@ -95,7 +99,7 @@ const steps = nextSteps.flatMap((slug) =>
 </div>
 
 <style>
-	.home-hero__title { display: flex; align-items: center; gap: 0.8rem; margin-bottom: 1.25rem; }
+	.home-hero__title { display: flex; align-items: center; flex-wrap: wrap; width: 100%; gap: 0.8rem; margin-bottom: 1.25rem; }
 	.home-hero {
 		position: relative;
 		display: flex;
@@ -117,12 +121,12 @@ const steps = nextSteps.flatMap((slug) =>
 		margin: 0 0 1.125rem;
 		font: 500 0.75rem/1 var(--sl-font-mono);
 		letter-spacing: 0.08em;
-		text-transform: uppercase;
+		text-transform: none;
 		color: var(--sl-color-gray-3);
 	}
 	h1 {
 		margin: 0;
-		font-size: 2.875rem;
+		font-size: 2.5rem;
 		font-weight: 800;
 		line-height: 1.06;
 		letter-spacing: -0.02em;
@@ -180,9 +184,9 @@ const steps = nextSteps.flatMap((slug) =>
 	}
 	.home-hero__section-label {
 		margin: 0 0 1rem;
-		font: 700 0.875rem/1 var(--sl-font-mono);
+		font: 600 0.875rem/1.4 var(--sl-font);
 		letter-spacing: 0.06em;
-		text-transform: uppercase;
+		text-transform: none;
 		color: var(--sl-color-gray-3);
 	}
 	.home-hero__grid {
@@ -196,8 +200,8 @@ const steps = nextSteps.flatMap((slug) =>
 		gap: 0.375rem;
 		padding: 1.25rem 1.375rem;
 		border: 1px solid var(--sub-line);
-		border-radius: 14px;
-		background: var(--sub-card);
+		border-radius: 8px;
+		background: transparent;
 		text-decoration: none;
 		color: inherit;
 		transition: border-color var(--sub-dur-base) var(--sub-ease-out);

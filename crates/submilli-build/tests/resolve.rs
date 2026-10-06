@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use submilli_build::{
-    FetchError, FetchedRepo, Lockfile, PackageStore, RepoFetcher, ResolveError, install_plan,
-    load_manifest, resolve_github_closure,
+    FetchError, FetchedRepo, Lockfile, PackageName, PackageStore, RepoFetcher, ResolveError,
+    install_plan, load_manifest, resolve_github_closure,
 };
 use tempfile::TempDir;
 
@@ -232,6 +232,43 @@ fn divergent_sha_is_a_conflict() {
     assert!(
         message.contains("@acme/b"),
         "names second requirer: {message}"
+    );
+}
+
+#[test]
+fn public_resolve_errors_format_arbitrary_utf8_shas() {
+    let fetch = ResolveError::Fetch {
+        name: PackageName::new("@acme/fetch"),
+        url: "github.com/acme/fetch".into(),
+        sha: "aaaaaaaaaaaérest".into(),
+        source: FetchError::new("offline"),
+    };
+    assert_eq!(
+        fetch.to_string(),
+        "fetch dependency @acme/fetch from github.com/acme/fetch@aaaaaaaaaaa: offline"
+    );
+
+    let missing = ResolveError::MissingPackageInRepo {
+        name: PackageName::new("@acme/requested"),
+        url: "github.com/acme/repo".into(),
+        sha: "éééééérest".into(),
+        available: vec![PackageName::new("@acme/available")],
+    };
+    assert_eq!(
+        missing.to_string(),
+        "github.com/acme/repo@éééééé does not declare package @acme/requested; it declares: @acme/available"
+    );
+
+    let conflict = ResolveError::ShaConflict {
+        name: PackageName::new("@acme/shared"),
+        first_requirer: PackageName::new("@acme/first"),
+        first_sha: "short-é".into(),
+        second_requirer: PackageName::new("@acme/second"),
+        second_sha: SHA_A.into(),
+    };
+    assert_eq!(
+        conflict.to_string(),
+        "conflicting versions of @acme/shared: @acme/first requires short-é, @acme/second requires aaaaaaaaaaaa; pin both to the same commit"
     );
 }
 

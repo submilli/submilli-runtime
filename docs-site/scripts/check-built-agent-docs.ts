@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import { films, introduction } from '../src/lib/videos.ts';
+import videoRegistry from '../src/data/videos.json' with { type: 'json' };
 import { createAgentDocs, readChapters, markdownPath } from '../src/lib/agent-docs.ts';
 
 import { legacyDocsRoutes } from '../src/lib/legacy-docs.ts';
@@ -23,6 +24,7 @@ for (const chapter of chapters) {
 	assert.equal(jsonLd[0]['@graph'].length, chapter.slug ? 2 : 1, path);
 	assert.ok(chapter.authorshipLabel, `${path}: missing confirmed authorship`);
 	assert.ok(html.includes(`${chapter.authorshipLabel}. Authorship details`), `${path}: missing authorship icon`);
+	assert.equal([...html.matchAll(/<button\b[^>]*\bdata-copy-page\b/g)].length, 1, `${path}: one page-copy control, including the docs home`);
 	assert.ok(html.includes(`rel="alternate" type="text/markdown" href="https://submilli.ai${markdown}"`), path);
 	assert.ok(html.includes('rel="describedby" href="https://submilli.ai/docs/llms.txt"'), path);
 	assert.match(html, new RegExp(`href="${markdown.replace('.', '\\.')}"[^>]*>View Markdown</a>`), path);
@@ -51,8 +53,9 @@ for (const film of films.filter((film) => film.canonicalPath?.split('#')[0] === 
   assert.ok(whyPage.includes(`data-video-id="${film.id}"`));
   assert.ok(whyPage.includes(film.embedUrl));
 }
-for (const [id, slug, heading] of [['helps', 'why', 'what-submilli-is'], ['works', 'server', 'what-happens-to-a-program'], ['using', 'quickstart', '']] as const) {
-  const film = films.find((film) => film.id === id)!;
+for (const [id, slug, heading] of [['helps', 'why', 'what-submilli-is'], ['using', 'quickstart', ''], ['packages', 'packages', ''], ['blueprints', 'blueprints', '']] as const) {
+  const film = films.find((film) => film.id === id);
+  assert.ok(film, `${id} is finalized and registered`);
   const page = await readFile(new URL(`docs/${slug}/index.html`, directory), 'utf8');
   assert.ok(page.includes(`data-video-id="${id}"`) && page.includes(film.embedUrl));
   if (heading) assert.ok(page.indexOf(`id="${heading}"`) < page.indexOf(`data-video-id="${id}"`));
@@ -71,14 +74,24 @@ for (const film of films) {
   assert.ok(legacyEmbed.includes(film.embedUrl), `${film.id} legacy embed target`);
   assert.ok(!legacyEmbed.includes('<video') && !legacyEmbed.includes('/docs/videos/releases/'), `${film.id} legacy embed has no bundled media`);
 }
+for (const id of ['works']) {
+  await assert.rejects(access(new URL(`docs/videos/embed/${id}/index.html`, directory)), { code: 'ENOENT' }, `${id} has no public embed redirect`);
+}
 const transcriptPage = await readFile(new URL('docs/videos/code-execution-introduction/index.html', directory), 'utf8');
 assert.ok(transcriptPage.includes('https://submilli-videos.onrender.com/watch/why-code/'));
 for (const file of await readdir(directory, { recursive: true })) {
   if (!file.endsWith('.html')) continue;
   const html = await readFile(new URL(file, directory), 'utf8');
+  for (const film of videoRegistry.films.filter((film) => film.status !== 'published')) {
+    assert.ok(!html.includes(film.embedUrl) && !html.includes(`data-video-id="${film.id}"`), `${file}: hidden film ${film.id}`);
+  }
   assert.ok(!html.includes('<video'), file);
+  assert.ok(!/submilli-videos\.onrender\.com\/embed\/(works)\//.test(html), `${file}: no unfinished video embed`);
   assert.ok(!html.includes('/docs/videos/releases/'), file);
   assert.ok(!/publication pending|Revision pending|pending recording|Read the complete transcript/i.test(html), file);
+}
+for (const film of videoRegistry.films.filter((film) => film.status !== 'published')) {
+  await assert.rejects(readFile(new URL(`docs/videos/embed/${film.id}/index.html`, directory)), { code: 'ENOENT' });
 }
 const oldExecutionPage = await readFile(new URL('docs/concepts/execution-model/index.html', directory), 'utf8');
 assert.ok(oldExecutionPage.includes('/docs/why/'));

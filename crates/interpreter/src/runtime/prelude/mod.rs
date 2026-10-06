@@ -13,6 +13,7 @@
 pub(crate) mod arguments;
 pub mod array;
 pub mod bigint;
+mod bitwise;
 pub mod boolean;
 pub(crate) mod closure;
 pub(crate) mod collection;

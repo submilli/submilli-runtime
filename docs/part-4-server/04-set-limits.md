@@ -2,20 +2,16 @@
 title: "Set limits"
 description: "How to set the server's limits: bound CPU work with fuel, keep a time limit as the backstop for your callers, size memory and the container, bound recursion, cap model spending and session state, and read what a program sees when it passes one."
 slug: server/set-limits
-# Written for SUB-1269 (https://linear.app/submilli/issue/SUB-1269, host
-# functions charge fuel) as fixed: the loop's fuel is measured, and the
-# host-side figures under "What a budget buys" are estimates against the
-# charging scheme SUB-1269 proposes, to be replaced by SUB-1270's
-# measurements. The `1B`-style counts (SUB-1272) and the `--report`
-# output (SUB-1271) are real, on main 10da5c4. The logfmt server
-# log line was recaptured with the release server on main 51ce450b.
+# Fuel calibration: release f9c1608b, Apple M4 Pro, macOS 26.4, 2026-10-05.
+# Reproduction: scripts/calibrate-fuel.py.
+# The logfmt server log line was captured on main 51ce450b.
 sidebar:
   order: 4
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "26481d4b9024130bd7d4a9f4d5083bf1dbfc724318a2b5d647ddb6a5c05f7234"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "8334521c5b4106dc754a1378a691ddda8df3cf218dfdf01896b4502a27ef03b6"
+  confirmedAt: "2026-10-06T09:57:24.191Z"
 ---
 
 Some of the programs an agent writes will be wrong. A loop never stops,
@@ -54,24 +50,22 @@ server](/docs/server/run-the-server). The server reads them at startup.
 
 ## Bound CPU work with fuel
 
-Fuel counts work. The program's instructions cost about one unit each,
-and a standard library function charges for what it does on the
-program's behalf. That is about one unit per character of a string it
-reads or writes, per byte of JSON or regex input, per element of an
-array or `Map` it touches, and per byte of an HTTP body it handles.
-Waiting costs nothing. A program blocked on an HTTP request, a model
-call, or an MCP tool spends no fuel while it waits, and agents' programs
-spend most of their time waiting. A server holds hundreds of such
-executions at once at no CPU cost. So set fuel first, before time. Fuel
-bounds the CPU a program may burn. It stops the same program at the same
-point however busy the server is, and it never cuts off a program for
-being slow at waiting.
+Fuel counts work. The program's WebAssembly instructions cost about one
+unit each. Standard library functions charge from the same budget for
+work such as scanning text, parsing JSON, allocating collection elements,
+and handling HTTP bodies. Their rates differ by operation, so a byte or
+an element has no single fuel cost. Waiting on an HTTP request, a model
+call, or an MCP tool costs no fuel.
+
+Use fuel to bound the work a program can request, and a time limit to
+bound how long its caller waits. A fuel budget has no fixed duration in
+CPU seconds. The conversion depends on the operations, their inputs,
+and the machine running them.
 
 ### What a budget buys
 
-Measured with `submilli run` on a laptop core, a loop of a million
-simple iterations costs 38,000,026 fuel and runs in about 110
-milliseconds:
+As a rough guide, a loop of a million simple iterations costs about
+38 million fuel and takes around 130 milliseconds to execute:
 
 ```typescript title="million.ts"
 function main(): number {
@@ -83,23 +77,40 @@ function main(): number {
 }
 ```
 
-So a billion fuel is a couple of seconds of pure computation. The
-default, a trillion, is on the order of half an hour of CPU, which makes
-it a backstop more than a budget. For the work agents' programs do:
+At that loop's measured CPU rate, a billion fuel buys about 3.4 seconds,
+and the default trillion about 57 minutes. Host work has a different
+rate. For example, parsing and stringifying the 1 MB JSON sample uses
+about 61 million fuel per CPU second, compared with the loop's 293 million.
+A trillion fuel at that JSON rate would buy about 275 minutes. These are
+extrapolations for those workloads, not CPU-time guarantees.
 
-| Work | Fuel, roughly |
-| --- | --- |
-| A loop of a million simple iterations | 40 million |
-| `toUpperCase`, `split`, `replaceAll` over 1 MB of text | 1 million |
-| Parsing 1 MB of JSON | 1 million |
-| A regex over 1 MB of text | 1 million |
-| Building a `Map` of 100,000 entries | a few million |
-| Reading and parsing a 1 MB HTTP response | 2 million |
+The table uses decimal sizes (1 MB = 1,000,000 bytes) and the fastest of
+three runs on 2026-10-05. Wall time includes CLI startup and compilation.
+Fuel includes constructing the inputs. JSON contains roughly 400 records
+per 100 KB, each with a number and a 229-character string. The HTTP sample
+reads and parses the same 1 MB JSON from a local server.
 
-A budget of ten billion, `10B`, lets a program read and process a few
-hundred megabytes, or compute for twenty seconds, before it stops. Set it
-lower when your programs are small and a runaway loop should stop within
-a second or two. Counts take a `K`, `M`, `B`, or `T` suffix:
+| Work | Input | Fuel | Wall time |
+| --- | --- | --- | --- |
+| Arithmetic loop | 1,000,000 iterations | 38,000,105 | 161 ms |
+| `toUpperCase` | 100 KB / 1 MB | 137,641 / 1,375,143 | 17 / 24 ms |
+| `replaceAll` | 100 KB / 1 MB | 197,663 / 1,975,165 | 18 / 20 ms |
+| `split` | 100 KB / 1 MB | 345,161 / 3,450,163 | 78 / 5,192 ms |
+| `JSON.parse` + `JSON.stringify` | 100 KB / 1 MB | 1,129,498 / 11,271,041 | 23 / 210 ms |
+| Global regex, 5,000 matches | 100 KB | 1,138,514 | 25 ms |
+| Build a `Map` with string keys | 10,000 / 100,000 entries | 3,407,748 / 46,335,920 | 410 / 30,119 ms |
+| Build a numeric array | 10,000 / 100,000 elements | 854,430 / 7,917,280 | 45 / 723 ms |
+| Build and numerically sort an array | 10,000 / 100,000 elements | 8,218,904 / 105,447,546 | 429 / 15,719 ms |
+| Read and parse an HTTP response | 1 MB | 10,780,683 | 132 ms |
+
+A budget of ten billion, `10B`, is about 34 seconds of this arithmetic
+loop, or the fuel for roughly 887 of the 1 MB JSON workloads. To give your
+agent roughly one minute of CPU time for Web Assembly computation, set
+`max_execution_fuel: 18B`.
+
+Collection sizes and output shapes can change the CPU cost substantially. Measure
+your programs with `--report` and set a [time limit](#keep-a-time-limit-as-the-backstop)
+as well. Counts take a `K`, `M`, `B`, or `T` suffix:
 
 ```yaml title="server.yaml (fragment)"
 max_execution_fuel: 1B
@@ -291,4 +302,3 @@ The Blueprint, not the server, limits the size of a session's files with
 state](/docs/blueprints/keep-files-and-state) covers. A named
 volume's limit is the server's, set where the volume is declared, as
 [Mount a shared volume](/docs/server/mount-a-shared-volume) shows.
-
