@@ -1,10 +1,11 @@
 ---
 import AuthorshipBadge from './AuthorshipBadge.astro';
+import PageActions from './PageActions.astro';
 
 /**
  * Article header: the sidebar group as a mono eyebrow, then the title. The
- * frontmatter description feeds the page's meta tags and search, not the
- * header.
+ * frontmatter description also serves as the restrained lead beneath the
+ * title.
  */
 const { entry, sidebar } = Astro.locals.starlightRoute;
 
@@ -18,6 +19,8 @@ function containsCurrent(entries: Entries): boolean {
 
 const group = sidebar.find((item) => item.type === 'group' && containsCurrent(item.entries));
 const eyebrow = group?.label;
+const slug = entry.id === 'index' ? '' : entry.id;
+const showActions = entry.id !== '404' && !entry.data.sidebar.hidden;
 
 ---
 
@@ -27,6 +30,8 @@ const eyebrow = group?.label;
 		<h1 id="_top">{entry.data.title}</h1>
 		<AuthorshipBadge />
 	</div>
+	{entry.data.description && <p class="page-title__description">{entry.data.description}</p>}
+	{showActions && <PageActions slug={slug} />}
 </div>
 
 <style>
@@ -51,7 +56,15 @@ const eyebrow = group?.label;
 		color: var(--sl-color-white);
 		text-wrap: balance;
 	}
-	.page-title__heading { display: flex; align-items: center; gap: 0.8rem; }
+	.page-title__heading { display: flex; align-items: center; flex-wrap: wrap; gap: 0.8rem; }
+	.page-title__description {
+		max-width: 44rem;
+		margin: 0.875rem 0 0;
+		font-size: 1.03125rem;
+		line-height: 1.55;
+		color: var(--sl-color-gray-2);
+		text-wrap: pretty;
+	}
 
 	@media (max-width: 49.99rem) {
 		.page-title__eyebrow {

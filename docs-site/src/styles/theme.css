@@ -41,14 +41,14 @@
 	--sl-nav-pad-x: 0.75rem;
 	--sl-mobile-toc-height: 2.75rem;
 	--sl-menu-button-size: 2.75rem;
-	--sl-sidebar-width: 17.5rem;
+	--sl-sidebar-width: 16rem;
 	--sl-sidebar-pad-x: 0.75rem;
-	--sl-content-width: 47.5rem;
+	--sl-content-width: 48rem;
 	--sl-content-pad-x: 1.25rem;
 
 	/* Type scale */
-	--sl-text-body: 1.0625rem;
-	--sl-line-height: 1.7;
+	--sl-text-body: 1rem;
+	--sl-line-height: 1.75;
 	--sl-line-height-headings: 1.25;
 	--sl-text-h1: 2rem;
 	--sl-text-h2: 1.375rem;
@@ -65,14 +65,14 @@
 		--sl-nav-height: 3.75rem;
 		--sl-nav-pad-x: 1.5rem;
 		--sl-sidebar-pad-x: 1rem;
-		--sl-text-h1: 2.5rem;
+		--sl-text-h1: 2.25rem;
 		--sl-text-h2: 1.5rem;
 	}
 }
 
 @media (min-width: 72rem) {
 	:root {
-		--sl-content-pad-x: 4rem;
+		--sl-content-pad-x: 2.5rem;
 	}
 }
 
@@ -148,7 +148,8 @@
 
 :root[data-theme='light'],
 .theme-light {
-	--sub-bg: var(--surface-canvas);
+	/* Docs use a neutral reading canvas; blue remains an interaction accent. */
+	--sub-bg: var(--white);
 	--sub-side: var(--surface-raised);
 	--sub-line: var(--border-subtle);
 	--sub-line-strong: var(--border-strong);
@@ -160,7 +161,7 @@
 	--sub-link-underline: rgba(43, 109, 153, 0.4);
 	--sub-accent: var(--accent);
 	--sub-accent-ink: var(--accent-ink);
-	--sub-code-bg: #f3f8fc;
+	--sub-code-bg: #f6f8fa;
 	--sub-code-hl: rgba(107, 173, 218, 0.14);
 	--sub-inline: rgba(107, 173, 218, 0.14);
 	--sub-current: rgba(107, 173, 218, 0.16);
@@ -323,6 +324,13 @@ site-search button[data-open-modal] {
 
 /* Search dialog (Pagefind, restyled) */
 site-search dialog {
+	margin: 1rem auto auto;
+	height: max-content;
+	min-height: 8rem;
+	border-radius: var(--radius-md);
+	width: min(calc(100vw - 2rem), 42.5rem);
+	max-height: calc(100dvh - 6rem);
+	overscroll-behavior: contain;
 	background: var(--sub-side);
 	border: 1px solid var(--sub-line-strong);
 	box-shadow: var(--sl-shadow-lg);
@@ -406,7 +414,7 @@ site-search dialog::backdrop {
 	padding-top: 1.5rem;
 }
 .sidebar-content ul.top-level > li + li {
-	margin-top: 0.875rem;
+	margin-top: 0.5rem;
 }
 .sidebar-content summary {
 	padding: 0.4375rem 0.625rem;
@@ -433,7 +441,7 @@ site-search dialog::backdrop {
 	gap: 0.125rem;
 	margin: 0.25rem 0 0 0.875rem;
 	padding-inline-start: 0.375rem;
-	border-inline-start: 1px solid var(--sub-line);
+	border-inline-start: 0;
 }
 .sidebar-content ul ul li {
 	margin-inline-start: 0;
@@ -462,7 +470,7 @@ site-search dialog::backdrop {
 .sidebar-content a[aria-current='page']:focus {
 	background: var(--sub-current);
 	color: var(--sl-color-text-accent);
-	font-weight: 700;
+	font-weight: 600;
 	/* A 2px accent bar just outside the item, as in the design. */
 	box-shadow: -7px 0 0 -5px var(--sl-color-accent);
 }
@@ -497,6 +505,17 @@ site-search dialog::backdrop {
 .right-sidebar {
 	border-inline-start: 0;
 }
+@media (min-width: 72rem) {
+	/* Size the sticky TOC to its column, not to the viewport. */
+	.right-sidebar {
+		position: sticky;
+		top: var(--sl-nav-height);
+		width: auto;
+		height: calc(100dvh - var(--sl-nav-height));
+		padding-top: 0;
+		overscroll-behavior: contain;
+	}
+}
 .right-sidebar-panel {
 	padding-top: 3rem;
 }
@@ -530,7 +549,7 @@ starlight-toc a:hover {
 }
 starlight-toc a[aria-current='true'] {
 	border-inline-start-color: var(--sl-color-accent);
-	color: var(--sl-color-white);
+	color: var(--sl-color-text-accent);
 	font-weight: 600;
 }
 
@@ -691,12 +710,14 @@ mobile-starlight-toc .isMobile a[aria-current='true'] {
 	color: var(--sl-color-gray-2);
 }
 
-/* Tables: hairline container, mono column labels, quiet row separators. */
+/* Reference tables use alignment and row rules rather than card chrome. */
 .sl-markdown-content table:not(:where(.not-content *)) {
-	width: fit-content;
+	width: 100%;
 	max-width: 100%;
-	border: 1px solid var(--sub-line);
-	border-radius: var(--radius-md);
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
+	border: 0;
+	border-radius: 0;
 	border-collapse: collapse;
 	font-size: 0.9375rem;
 	line-height: 1.5;
@@ -705,15 +726,15 @@ mobile-starlight-toc .isMobile a[aria-current='true'] {
 	background: var(--sub-card);
 }
 .sl-markdown-content th:not(:where(.not-content *)) {
-	padding: 0.625rem 1rem;
-	font: 600 0.6875rem/1.4 var(--sl-font-mono);
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: var(--sl-color-gray-3);
+	padding: 0.625rem 0.875rem;
+	font: 600 0.8125rem/1.4 var(--sl-font);
+	letter-spacing: 0;
+	text-transform: none;
+	color: var(--sl-color-white);
 	border-bottom: 1px solid var(--sub-line);
 }
 .sl-markdown-content td:not(:where(.not-content *)) {
-	padding: 0.75rem 1rem;
+	padding: 0.875rem;
 	vertical-align: top;
 	border-bottom: 1px solid var(--sub-line);
 }

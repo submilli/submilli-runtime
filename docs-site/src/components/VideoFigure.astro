@@ -10,8 +10,8 @@ const { film } = Astro.props;
   <figcaption>{film.description}</figcaption>
 </figure>
 <style>
-  figure { margin: 0 0 2rem; padding: 1.25rem; border: 1px solid var(--sl-color-hairline); border-radius: 12px; background: var(--sl-color-bg-sidebar); }
+  figure { margin: 0 0 2rem; padding: 0; }
   .video-heading { display: flex; flex-wrap: wrap; gap: .5rem 1rem; justify-content: space-between; }
-  .video-frame { margin-top: 1rem; border-radius: 8px; overflow: hidden; }
-  figcaption { font-size: .9375rem; margin-top: 1rem; }
+  .video-frame { margin-top: .75rem; border-radius: 8px; overflow: hidden; }
+  figcaption { font-size: .8125rem; line-height: 1.5; margin-top: .625rem; color: var(--sl-color-gray-3); }
 </style>
