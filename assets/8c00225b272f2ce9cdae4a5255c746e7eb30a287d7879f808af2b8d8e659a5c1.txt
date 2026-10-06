@@ -1,0 +1,17 @@
+1. Packages
+Submilli maintains public curated packages for common services. You can also write custom packages for your own systems. Both are Submilli code. A package gives the agent’s program a typed business operation. Here, applyCredit takes a customer ID and an amount, and returns a Credit.
+
+2. The declaration names what rules can test
+The capability annotation names the operation and declares the fields available to a blueprint rule: customer, account class, and amount. Those fields describe what this call means. The annotation is a contract, not enforcement. The explicit check is the part that asks the runtime for permission.
+
+3. Check the facts before applying the credit
+The package validates the amount, normalizes the customer ID, and looks up the account class. It passes those facts to check. The same normalized ID is used for the credit. The metadata lookup happens first; the permission check must come before the protected credit action.
+
+4. Limit access to the right customer
+The application binds Customer A's ID as trusted context. This rule allows a premium credit only when the requested customer matches that ID. Premium Customer A matches. Premium Customer B does not. The package supplies the facts; the runtime decides.
+
+5. Dependencies need permission too
+Packages use the same Submilli TypeScript subset. They build on other packages and built-in modules such as HTTP. Dependencies must be available when the package is built, and the blueprint must grant the access each caller needs. After the credit check succeeds, the billing package uses its permitted HTTP and secret access to contact the billing service. It keeps the credential internal.
+
+6. A reviewed operation from call to result
+Build checks compare the declaration with the check and derive the package’s provided capabilities and required access. Review those together. Test allowed and denied inputs, including another customer, and verify that denial prevents the credit. The package exposes a useful operation and keeps the credit action behind an explicit permission check.

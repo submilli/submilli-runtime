@@ -1,0 +1,17 @@
+1. Create the blueprint ahead of time
+A blueprint is created ahead of time, typically by a person. A coding assistant can help write it. It defines which packages an agent’s program can use, which actions are allowed, and which trusted values your application must supply. Your application selects that blueprint before the program runs.
+
+2. Deny unless explicitly allowed
+Start every blueprint with default deny, so anything not explicitly permitted is denied. Listing a package lets the program import it. Each protected capability still needs an explicit allow rule. Put those rules under main, the section that controls which operations the agent’s program can perform.
+
+3. Allow the operation under specific conditions
+A rule identifies an operation, the conditions for allowing it, and what to do when they match. Here, a credit is allowed only for a premium customer whose ID matches the customer ID bound to this session. The first matching rule decides. If no rule matches, the request is denied.
+
+4. Your application supplies the customer ID
+The program requests a customer ID. Your application supplies the authorized customer ID from trusted information, such as the signed-in account. Mark that value as required in the blueprint. The generated program cannot change the session’s binding.
+
+5. One rule separates Customer A from Customer B
+Bind Customer A’s ID, then request a credit for that same premium customer: the rule matches. Request Customer B with that binding: the customer condition fails, so default deny applies. The same blueprint decides both requests.
+
+6. What a blueprint controls
+A blueprint brings three choices together: available packages, allowed operations, and conditions such as which customer a program may access. You define the rules ahead of time. Your application supplies trusted values. At each permission check, Submilli applies those rules before the operation proceeds.

@@ -1,0 +1,152 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:04.180
+In this video we will set up Submilli with
+a coding agent,
+
+00:00:04.260 --> 00:00:06.980
+build a billing package, create its
+blueprint,
+
+00:00:07.060 --> 00:00:11.140
+and run a program. Start with the Submilli
+setup prompt for Claude
+
+00:00:11.340 --> 00:00:14.980
+Code or Codex. Ask your assistant to
+follow it:
+
+00:00:15.060 --> 00:00:19.540
+read the skill instructions, install the C
+L I and Submilli server,
+
+00:00:19.620 --> 00:00:21.860
+and set up the skill in your project.
+
+00:00:21.940 --> 00:00:24.980
+Then ask it to use the skill for this
+quickstart.
+
+00:00:26.267 --> 00:00:29.947
+Ask your coding agent to create the
+billing package using the quickstart
+
+00:00:30.027 --> 00:00:34.187
+example. The skill guides it through the
+scaffold and implementation.
+
+00:00:34.747 --> 00:00:39.147
+Our example exposes one function: list
+charges for a customer.
+
+00:00:39.627 --> 00:00:43.547
+Its capability declares the operation and
+customer ID;
+
+00:00:43.587 --> 00:00:47.867
+the check call asks the runtime for
+permission before reading any charges.
+
+00:00:48.347 --> 00:00:52.347
+In your project terminal, run the build
+check and publish-local commands
+
+00:00:52.427 --> 00:00:56.187
+shown here to build the package and
+install it in the local package
+
+00:00:56.267 --> 00:00:56.907
+store.
+
+00:00:58.167 --> 00:01:01.767
+Ask your coding agent to create the
+blueprint for that package,
+
+00:01:01.847 --> 00:01:06.087
+then review its rules. It lists the
+billing package and requires
+
+00:01:06.167 --> 00:01:08.527
+a customer ID from your application.
+
+00:01:08.727 --> 00:01:13.207
+Allow charge lookups only when the
+requested ID matches that value.
+
+00:01:13.447 --> 00:01:16.327
+Everything else is denied. Finally,
+
+00:01:16.407 --> 00:01:19.927
+run the blueprint lint command in your
+project terminal to check those
+
+00:01:20.007 --> 00:01:22.807
+rules against the package’s capability
+schema.
+
+00:01:24.100 --> 00:01:28.180
+Generate a random token with Open S S L
+and export it in your
+
+00:01:28.260 --> 00:01:32.500
+terminal. This is the shared secret your
+application will use to call
+
+00:01:32.580 --> 00:01:35.620
+the Submilli server. In that same
+terminal,
+
+00:01:35.700 --> 00:01:39.460
+start the Submilli server and register the
+blueprint using the commands
+
+00:01:39.540 --> 00:01:43.700
+shown here. Ask your coding agent to
+create the example application
+
+00:01:43.780 --> 00:01:47.620
+and program from the quickstart. The
+application reads the exported
+
+00:01:47.700 --> 00:01:51.700
+token and binds Customer A’s ID. Run the
+program with
+
+00:01:51.740 --> 00:01:56.100
+the node command shown here, and the
+permitted charge lookup succeeds.
+
+00:01:57.367 --> 00:02:01.287
+Ask your coding agent to create the
+quickstart’s second program,
+
+00:02:01.367 --> 00:02:05.527
+then run it from your terminal. It adds
+the returned charges and prints
+
+00:02:05.607 --> 00:02:08.887
+the calculated total, then asks for
+Customer B.
+
+00:02:09.367 --> 00:02:11.847
+Before the package reads protected data,
+
+00:02:11.967 --> 00:02:15.767
+its check receives that argument, the
+blueprint filter fails,
+
+00:02:15.807 --> 00:02:18.727
+and the Submilli server returns a
+permission error.
+
+00:02:18.967 --> 00:02:22.647
+The first call completed; the
+cross-customer call did not.
+
+00:02:22.887 --> 00:02:25.527
+Your application binds the request
+context,
+
+00:02:25.567 --> 00:02:29.367
+and the runtime enforces the rule around
+the code the agent wrote.

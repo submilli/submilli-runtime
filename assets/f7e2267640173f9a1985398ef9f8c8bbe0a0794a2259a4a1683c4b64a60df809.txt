@@ -1,0 +1,14 @@
+1. Set up and run your first program
+In this video we will set up Submilli with a coding agent, build a billing package, create its blueprint, and run a program. Start with the Submilli setup prompt for Claude Code or Codex. Ask your assistant to follow it: read the skill instructions, install the C L I and Submilli server, and set up the skill in your project. Then ask it to use the skill for this quickstart.
+
+2. Create a package
+Ask your coding agent to create the billing package using the quickstart example. The skill guides it through the scaffold and implementation. Our example exposes one function: list charges for a customer. Its capability declares the operation and customer ID; the check call asks the runtime for permission before reading any charges. In your project terminal, run the build check and publish-local commands shown here to build the package and install it in the local package store.
+
+3. Create a blueprint
+Ask your coding agent to create the blueprint for that package, then review its rules. It lists the billing package and requires a customer ID from your application. Allow charge lookups only when the requested ID matches that value. Everything else is denied. Finally, run the blueprint lint command in your project terminal to check those rules against the package’s capability schema.
+
+4. Run the program
+Generate a random token with Open S S L and export it in your terminal. This is the shared secret your application will use to call the Submilli server. In that same terminal, start the Submilli server and register the blueprint using the commands shown here. Ask your coding agent to create the example application and program from the quickstart. The application reads the exported token and binds Customer A’s ID. Run the program with the node command shown here, and the permitted charge lookup succeeds.
+
+5. Test the customer boundary
+Ask your coding agent to create the quickstart’s second program, then run it from your terminal. It adds the returned charges and prints the calculated total, then asks for Customer B. Before the package reads protected data, its check receives that argument, the blueprint filter fails, and the Submilli server returns a permission error. The first call completed; the cross-customer call did not. Your application binds the request context, and the runtime enforces the rule around the code the agent wrote.

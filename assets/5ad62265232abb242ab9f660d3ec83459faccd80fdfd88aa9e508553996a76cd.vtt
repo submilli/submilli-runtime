@@ -1,0 +1,130 @@
+WEBVTT
+
+00:00:00.500 --> 00:00:04.500
+Submilli maintains public curated packages
+for common services.
+
+00:00:04.980 --> 00:00:08.340
+You can also write custom packages for
+your own systems.
+
+00:00:08.580 --> 00:00:12.660
+Both are Submilli code. A package gives
+the agent’s program
+
+00:00:12.740 --> 00:00:16.900
+a typed business operation. Here,
+applyCredit takes a
+
+00:00:16.980 --> 00:00:20.420
+customer ID and an amount, and returns a
+Credit.
+
+00:00:21.700 --> 00:00:25.940
+The capability annotation names the
+operation and declares the fields
+
+00:00:26.220 --> 00:00:29.060
+available to a blueprint rule: customer,
+
+00:00:29.220 --> 00:00:33.300
+account class, and amount. Those fields
+describe what this call
+
+00:00:33.460 --> 00:00:36.500
+means. The annotation is a contract,
+
+00:00:36.620 --> 00:00:40.900
+not enforcement. The explicit check is the
+part that asks the runtime
+
+00:00:40.980 --> 00:00:41.940
+for permission.
+
+00:00:43.200 --> 00:00:47.440
+The package validates the amount,
+normalizes the customer ID,
+
+00:00:47.520 --> 00:00:51.640
+and looks up the account class. It passes
+those facts to check.
+
+00:00:51.920 --> 00:00:54.960
+The same normalized ID is used for the
+credit.
+
+00:00:55.200 --> 00:00:59.200
+The metadata lookup happens first; the
+permission check must come
+
+00:00:59.280 --> 00:01:01.440
+before the protected credit action.
+
+00:01:02.733 --> 00:01:07.533
+The application binds Customer A's ID as
+trusted context.
+
+00:01:07.613 --> 00:01:11.453
+This rule allows a premium credit only
+when the requested customer
+
+00:01:11.613 --> 00:01:15.533
+matches that ID. Premium Customer A
+matches.
+
+00:01:15.773 --> 00:01:20.333
+Premium Customer B does not. The package
+supplies the facts;
+
+00:01:20.413 --> 00:01:22.013
+the runtime decides.
+
+00:01:23.267 --> 00:01:26.747
+Packages use the same Submilli TypeScript
+subset.
+
+00:01:27.027 --> 00:01:31.267
+They build on other packages and built-in
+modules such as HTTP.
+
+00:01:31.907 --> 00:01:35.267
+Dependencies must be available when the
+package is built,
+
+00:01:35.347 --> 00:01:38.987
+and the blueprint must grant the access
+each caller needs.
+
+00:01:39.347 --> 00:01:43.427
+After the credit check succeeds, the
+billing package uses its permitted
+
+00:01:43.587 --> 00:01:47.507
+HTTP and secret access to contact the
+billing service.
+
+00:01:47.987 --> 00:01:50.067
+It keeps the credential internal.
+
+00:01:51.333 --> 00:01:54.893
+Build checks compare the declaration with
+the check and derive the
+
+00:01:54.933 --> 00:01:58.293
+package’s provided capabilities and
+required access.
+
+00:01:58.773 --> 00:02:02.853
+Review those together. Test allowed and
+denied inputs,
+
+00:02:03.093 --> 00:02:07.453
+including another customer, and verify
+that denial prevents the credit.
+
+00:02:07.733 --> 00:02:11.733
+The package exposes a useful operation and
+keeps the credit action
+
+00:02:11.813 --> 00:02:14.053
+behind an explicit permission check.
