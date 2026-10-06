@@ -175,6 +175,22 @@ pub struct ServerConfig {
     /// Code-only, like `llm_dispatch`: no flag, env var, or config-file key. `None` (the
     /// default) records nothing and changes nothing.
     pub run_recorder: Option<Arc<dyn crate::record::RunRecorderFactory>>,
+    /// Whether runs feed the process's Sentry client: a failed run's report and the
+    /// runtime metrics sink. On by default, so the server binary keeps its
+    /// opt-in telemetry; an embedder whose runs must stay on the machine, such as
+    /// the playground, turns it off whatever the process's own telemetry setting.
+    /// Code-only: no flag, env var, or config-file key.
+    pub run_telemetry: RunTelemetry,
+}
+
+/// See [`ServerConfig::run_telemetry`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RunTelemetry {
+    /// Report failed runs and runtime metrics to Sentry when a client is bound.
+    #[default]
+    Report,
+    /// Never hand run data to Sentry, even when a client is bound.
+    Off,
 }
 
 pub use submilli_shared::OAuthProvider;

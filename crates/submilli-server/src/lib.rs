@@ -29,11 +29,11 @@ pub mod volumes;
 
 pub use app::{AppState, app, route_table};
 pub use auth::{Access, ApiToken, AuthConfig, Role};
-pub use config::ServerConfig;
+pub use config::{RunTelemetry, ServerConfig};
 pub use interpreter::runtime::{
     DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, LlmLimits, NetworkPolicy, RuntimeConfig,
 };
-pub use serve::{runtime, serve};
+pub use serve::{prepare_blueprint_store, runtime, serve, serve_embedded};
 pub use submilli_shared::mcp_token::{McpTokenError, OAuthTokenManager};
 pub use submilli_shared::secret_store::{FileSecretStore, KeySource};
 pub use submilli_shared::secret_store::{SecretStore, SecretStoreError};

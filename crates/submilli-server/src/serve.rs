@@ -174,8 +174,36 @@ async fn serve_opened(
     }
 }
 
+/// Serve a state an embedder built and booted, on a listener it bound, until
+/// shutdown is requested — by `POST /v1/shutdown`, by notifying
+/// [`AppState::shutdown_signal`], or by SIGTERM or SIGINT — then drain as
+/// [`serve`] does. For an embedder that runs the server beside listeners of its
+/// own, such as the playground; the embedder owns any database it opened.
+pub async fn serve_embedded(
+    listener: tokio::net::TcpListener,
+    state: AppState,
+    shutdown_grace: Duration,
+) -> Result<()> {
+    let signals = ShutdownSignals::install()?;
+    state.set_bind_addr(listener.local_addr()?);
+    let shutdown = state.shutdown_signal();
+    let requests = state.graceful_shutdown();
+    serve_listener(
+        listener,
+        app(state),
+        signals,
+        shutdown,
+        requests,
+        shutdown_grace,
+    )
+    .await
+    .map(|_| ())
+}
+
 /// Resolve the blueprint backend and finish migration before application startup.
-async fn prepare_blueprint_store(
+/// Public so an embedder building its own [`AppState`] selects the same store
+/// [`serve`] would for its config.
+pub async fn prepare_blueprint_store(
     config: &ServerConfig,
 ) -> Result<Arc<dyn crate::blueprint::BlueprintStore>> {
     use crate::blueprint::{FileBlueprintStore, InMemoryBlueprintStore, SqliteBlueprintStore};

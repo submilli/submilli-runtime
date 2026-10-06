@@ -55,6 +55,7 @@ tokio-rustls.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+sentry = { workspace = true, features = ["test"] }
 signal-hook = "0.3"
 
 [target.'cfg(windows)'.dependencies]
@@ -71,3 +72,4 @@ submilli-blueprint = { path = "../submilli-blueprint" }
 httpmock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 libc = { workspace = true }
+sentry = { workspace = true, features = ["test"] }

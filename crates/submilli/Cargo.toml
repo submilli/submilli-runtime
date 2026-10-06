@@ -18,6 +18,7 @@ interpreter = { path = "../interpreter" }
 submilli-blueprint = { path = "../submilli-blueprint" }
 submilli-build = { path = "../submilli-build" }
 submilli-shared = { path = "../submilli-shared" }
+submilli-server = { path = "../submilli-server" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 wasmtime = { workspace = true }
@@ -36,11 +37,12 @@ dialoguer = "0.11"
 tempfile = { workspace = true }
 
 rustls.workspace = true
+axum = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+ipnet = { workspace = true }
+hmac = "0.12"
 
 [dev-dependencies]
 rcgen.workspace = true
-submilli-server = { path = "../submilli-server" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
-axum = { workspace = true }
-tower = { workspace = true, features = ["util"] }
 tempfile = { workspace = true }

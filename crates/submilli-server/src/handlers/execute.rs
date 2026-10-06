@@ -575,6 +575,7 @@ async fn prepare_and_run(
             engine: state.engine(),
             base_linker: state.base_linker(),
             config: state.runtime(),
+            telemetry: state.run_telemetry(),
         },
         vfs,
         vfs_info,

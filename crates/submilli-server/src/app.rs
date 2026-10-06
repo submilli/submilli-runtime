@@ -171,6 +171,7 @@ struct AppStateInner {
     /// Cancellers of the recorded runs in flight, by execution id. Poison means a panic
     /// interrupted a registration; AGENTS.md permits the poisoned-lock panic.
     running: Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+    run_telemetry: crate::config::RunTelemetry,
 }
 
 /// Removes a run's canceller once the run is over.
@@ -385,6 +386,7 @@ impl AppState {
                     .map(|factory| crate::record::events::EventHub::new(factory.clone())),
                 run_recorder: config.run_recorder,
                 running: Mutex::new(HashMap::new()),
+                run_telemetry: config.run_telemetry,
             }),
         })
     }
@@ -491,6 +493,10 @@ impl AppState {
 
     pub(crate) fn auth(&self) -> Arc<AuthConfig> {
         Arc::clone(&self.inner.auth)
+    }
+
+    pub(crate) fn run_telemetry(&self) -> crate::config::RunTelemetry {
+        self.inner.run_telemetry
     }
 
     pub(crate) fn engine(&self) -> &Engine {
