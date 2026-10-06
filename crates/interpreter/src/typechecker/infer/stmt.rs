@@ -790,7 +790,12 @@ impl Inferer<'_> {
             let ty = self.resolve_runtime_class_test(annotation)?;
             let is_error_class = matches!(ty.peel(), Type::ClassRef { .. })
                 && assignable(&ty, &error_class, self.resolver());
-            if is_error_class {
+            if matches!(ty.peel(), Type::Unknown) {
+                // Like an untyped catch, `unknown` binds Error: Submilli only
+                // allows Error values to be thrown. Normalize before checking
+                // arm ordering so this spelling is also a catch-all.
+                error_class.clone()
+            } else if is_error_class {
                 ty
             } else if matches!(ty, Type::Error) {
                 annotation_valid = false;
@@ -799,10 +804,10 @@ impl Inferer<'_> {
                 self.error_with_help(
                     annotation.span,
                     format!(
-                        "a `catch` binding must be `Error` or a class extending `Error`; got `{ty}`"
+                        "a `catch` binding must be `Error`, `unknown`, or a class extending `Error`; got `{ty}`"
                     ),
                     vec![
-                        "remove the annotation (or use `: Error`) to catch every thrown error; a subclass annotation catches only that error type and re-raises the rest"
+                        "remove the annotation (or use `: unknown` or `: Error`) to catch every thrown error; a subclass annotation catches only that error type and re-raises the rest"
                             .to_string(),
                     ],
                 );
