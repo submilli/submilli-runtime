@@ -6,6 +6,7 @@ import { satteri } from "@astrojs/markdown-satteri";
 import { submilliDark, submilliLight } from "./src/code-themes.mjs";
 import { securityAside } from "./src/plugins/satteri-security-aside.mjs";
 import { agentDocs } from "./src/plugins/agent-docs.ts";
+import { codeBlocks } from "./src/plugins/code-blocks.mjs";
 
 import { legacyDocsRoutes } from "./src/lib/legacy-docs.ts";
 
@@ -58,6 +59,7 @@ export default defineConfig({
         LastUpdated: "./src/components/LastUpdated.astro",
       },
       expressiveCode: {
+        plugins: [codeBlocks()],
         themes: [submilliDark, submilliLight],
         useStarlightDarkModeSwitch: true,
         useStarlightUiThemeColors: false,
@@ -94,7 +96,7 @@ export default defineConfig({
             inlineButtonBackgroundIdleOpacity: "0",
             inlineButtonBackgroundHoverOrFocusOpacity: "0",
             inlineButtonBorder: "var(--sl-color-hairline)",
-            inlineButtonBorderOpacity: "1",
+            inlineButtonBorderOpacity: "0",
             inlineButtonForeground: "var(--sl-color-gray-2)",
             tooltipSuccessBackground: "var(--sub-tip)",
             tooltipSuccessForeground: "#000000",

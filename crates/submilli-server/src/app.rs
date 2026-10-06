@@ -53,6 +53,7 @@ use crate::session_store::{
 };
 use submilli_shared::mcp::discovery::{DiscoveryAuth, DiscoveryError};
 
+#[cfg(test)]
 type McpSetup = Arc<dyn Fn() -> std::result::Result<(), DiscoveryError> + Send + Sync>;
 
 use submilli_shared::mcp_token::OAuthTokenManager;
@@ -144,7 +145,28 @@ struct AppStateInner {
     /// [`AppState::llm_provider_for`] builds the real per-blueprint HTTP one.
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
     llm_dispatch_factory: LlmDispatchFactory,
+    #[cfg(test)]
     mcp_setup: McpSetup,
+    run_recorder: Option<Arc<dyn crate::record::RunRecorderFactory>>,
+    /// Session events for a recorder that wants them.
+    event_hub: Option<Arc<crate::record::events::EventHub>>,
+    /// Cancellers of the recorded runs in flight, by execution id. Poison means a panic
+    /// interrupted a registration; AGENTS.md permits the poisoned-lock panic.
+    running: Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+}
+
+/// Removes a run's canceller once the run is over.
+pub(crate) struct RunRegistration {
+    state: AppState,
+    execution_id: String,
+}
+
+impl Drop for RunRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut running) = self.state.inner.running.lock() {
+            running.remove(&self.execution_id);
+        }
+    }
 }
 
 impl AppState {
@@ -158,15 +180,7 @@ impl AppState {
         config: ServerConfig,
         llm_dispatch_factory: LlmDispatchFactory,
     ) -> Result<Self> {
-        Self::with_setup_factories(config, llm_dispatch_factory, Arc::new(initialize_mcp))
-    }
-
-    fn with_setup_factories(
-        config: ServerConfig,
-        llm_dispatch_factory: LlmDispatchFactory,
-        mcp_setup: McpSetup,
-    ) -> Result<Self> {
-        mcp_setup().context("MCP schema initialization failed")?;
+        submilli_shared::mcp::schema_registry::initialize_builtin_packs();
         let blueprints = config.blueprints.context(
             "AppState requires a prepared blueprint store; supply ServerConfig.blueprints",
         )?;
@@ -304,7 +318,15 @@ impl AppState {
                 bind_addr: OnceLock::new(),
                 llm_dispatch: config.llm_dispatch,
                 llm_dispatch_factory,
-                mcp_setup,
+                #[cfg(test)]
+                mcp_setup: Arc::new(|| Ok(())),
+                event_hub: config
+                    .run_recorder
+                    .as_ref()
+                    .filter(|factory| factory.wants_events())
+                    .map(|factory| crate::record::events::EventHub::new(factory.clone())),
+                run_recorder: config.run_recorder,
+                running: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -362,6 +384,47 @@ impl AppState {
 
     pub fn audit(&self) -> &crate::audit::AuditLog {
         &self.inner.audit
+    }
+
+    pub(crate) fn run_recorder(&self) -> Option<&Arc<dyn crate::record::RunRecorderFactory>> {
+        self.inner.run_recorder.as_ref()
+    }
+
+    pub(crate) fn event_hub(&self) -> Option<&Arc<crate::record::events::EventHub>> {
+        self.inner.event_hub.as_ref()
+    }
+
+    /// Cancels a recorded run in flight, whoever sent it. The run ends with a
+    /// `cancelled` outcome once its workers have drained. `false` when no recorded run
+    /// with that id is running.
+    pub fn cancel_run(&self, execution_id: &str) -> bool {
+        let canceller = self
+            .inner
+            .running
+            .lock()
+            .expect("running-run registry lock poisoned")
+            .remove(execution_id);
+        canceller.is_some_and(|canceller| canceller.send(()).is_ok())
+    }
+
+    /// Registers a recorded run's canceller until the returned guard drops.
+    pub(crate) fn register_run(
+        &self,
+        execution_id: &str,
+    ) -> (RunRegistration, tokio::sync::oneshot::Receiver<()>) {
+        let (canceller, cancelled) = tokio::sync::oneshot::channel();
+        self.inner
+            .running
+            .lock()
+            .expect("running-run registry lock poisoned")
+            .insert(execution_id.to_owned(), canceller);
+        (
+            RunRegistration {
+                state: self.clone(),
+                execution_id: execution_id.to_owned(),
+            },
+            cancelled,
+        )
     }
 
     pub fn database(&self) -> Option<Arc<crate::database::ServerDatabase>> {
@@ -509,6 +572,8 @@ impl AppState {
         blueprint_name: &str,
         blueprint: &Blueprint,
     ) -> std::result::Result<Arc<McpCatalog>, DiscoveryError> {
+        // Exercise discovery-error handling without a network dependency in tests.
+        #[cfg(test)]
         (self.inner.mcp_setup)()?;
         if blueprint.mcp.is_empty() {
             return Ok(Arc::new(McpCatalog::empty()));
@@ -550,6 +615,8 @@ impl AppState {
         harness_secrets: &Arc<submilli_blueprint::HarnessSecretBindings>,
         network_policy: &Arc<interpreter::runtime::NetworkPolicy>,
     ) -> std::result::Result<Arc<McpCatalog>, DiscoveryError> {
+        // Exercise discovery-error handling without a network dependency in tests.
+        #[cfg(test)]
         (self.inner.mcp_setup)()?;
         if servers.is_empty() || blueprint.mcp.is_empty() {
             return Ok(Arc::new(McpCatalog::empty()));
@@ -1073,10 +1140,6 @@ fn selected_stdlib_declarations(names: &BTreeSet<String>) -> Vec<PackageDeclarat
         .into_iter()
         .filter(|defs| names.contains(&defs.package_name))
         .collect()
-}
-
-fn initialize_mcp() -> std::result::Result<(), DiscoveryError> {
-    submilli_shared::mcp::schema_registry::initialize_builtin_packs().map_err(DiscoveryError::from)
 }
 
 fn mcp_catalog_cache_key(blueprint_name: &str, servers: Option<&BTreeSet<String>>) -> String {

@@ -6374,7 +6374,7 @@ impl Inferer<'_> {
             && self.namespace_symbols.contains_key(&root.name)
         {
             segments.push(name.clone());
-            return self.infer_namespace_symbol_field_access(root, segments, span);
+            return Ok(self.infer_namespace_symbol_field_access(root, segments, span));
         }
 
         // namespace member in non-call position

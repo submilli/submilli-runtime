@@ -88,9 +88,13 @@ and directly affected callers and mechanisms. This includes compilation, setup,
 Rust host operations, diagnostics and cleanup, not only guest execution.
 
 - Identify explicit panic macros, panicking `unwrap`/`expect`, assertions and
-  rethrown panics. "Impossible" internal states still require errors or
-  structurally non-panicking code. Test assertions are allowed; inspect an API's
-  actual contract rather than flagging a fallible `unwrap_*` by name alone.
+  rethrown panics. Assess construction, explicit validation or API guarantees
+  before calling a site a violation; document why callers, mutation or callbacks
+  cannot invalidate an accepted invariant. Poisoned std-lock access is permitted
+  by AGENTS.md and needs its own documented disposition. "Impossible" or lack of a
+  reproducer is not proof. Keep real input/operational/resource failures fallible;
+  do not require error plumbing solely for proven invariants. Test assertions are
+  allowed; inspect contracts rather than flagging fallible `unwrap_*` by name.
 - Inspect implicit failures: indexing/slicing, arithmetic/conversions, borrowing,
   runtime-context requirements, recursion/drop, allocation sizes and dependency
   preconditions. For each finding, identify the operation and violated assumption;
@@ -108,23 +112,29 @@ Rust host operations, diagnostics and cleanup, not only guest execution.
   process-abort reproducers in bounded child processes. Request debug/release and
   production-sized-stack coverage when changing recursion or stack limits.
 
-A reachable explicit panicking operation can violate the policy without a known
-guest-input trigger: report the execution path and evidence, and label exploit
-reachability unproven when appropriate. Track unrelated pre-existing violations
+An explicit panic is not automatically a violation. Once a violation is confirmed,
+a guest-input reproducer is not required: report the execution path, missing or
+invalid guarantee, and evidence; label exploit reachability unproven when needed.
+Track unrelated pre-existing violations
 in SUB-633 as required below; do not expand every review into the full no-panic
 backlog or clear an in-scope violation merely by filing it elsewhere. Do not
 claim panic freedom from passing tests, `catch_unwind`, or a clean search alone.
 
 ### Record existing panic sites in SUB-633
 
-When a review encounters a confirmed existing production execution-path panic
-or other no-panic policy violation, the parent agent must ensure it is recorded
+When a review encounters a confirmed existing production execution-path policy
+violation, the parent agent must ensure it is recorded
 in [SUB-633](https://linear.app/submilli/issue/SUB-633/no-panic), even if fixing it
 is outside the current patch. Reviewers remain read-only. Invoking this review
 skill authorizes the parent to update SUB-633 and its attached inventory and to
 reopen it when unresolved findings require further work. This is a narrow
 exception to the external-write restrictions below, not permission to create
 other issues, change unrelated metadata, or close SUB-633.
+
+Record newly accepted invariant/poison sites and their guarantees in the matching
+ledger entry too; they are accepted sites, not removed panics. Do not reopen a
+completed item solely because an accepted operation still uses panic syntax.
+Reuse accurate existing dispositions rather than duplicating them.
 
 1. Confirm the operation and execution path, distinguish a policy violation from
    proven input reachability, and check the current integration base as well as

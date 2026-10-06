@@ -379,7 +379,7 @@ pub(crate) fn uint8_array_backing(
 }
 
 fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    type FormatOp = fn(f64, f64) -> wasmtime::Result<String>;
+    type FormatOp = fn(f64, f64) -> Result<String, String>;
     let engine = linker.engine().clone();
     let string_struct = intrinsic_string_type(&engine)?;
     let string_struct_result =
@@ -486,22 +486,10 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
         [string_struct_result],
     );
     for (name, op) in [
-        (
-            "toFixed",
-            crate::runtime::number::to_fixed_js_checked as FormatOp,
-        ),
-        (
-            "toPrecision",
-            crate::runtime::number::to_precision_js_checked,
-        ),
-        (
-            "toExponential",
-            crate::runtime::number::to_exponential_js_checked,
-        ),
-        (
-            "toStringRadix",
-            crate::runtime::number::to_string_radix_js_checked,
-        ),
+        ("toFixed", crate::runtime::number::to_fixed_js as FormatOp),
+        ("toPrecision", crate::runtime::number::to_precision_js),
+        ("toExponential", crate::runtime::number::to_exponential_js),
+        ("toStringRadix", crate::runtime::number::to_string_radix_js),
     ] {
         register_number_formatter(linker, name, format_ty.clone(), op)?;
     }
@@ -513,7 +501,7 @@ fn register_number_formatter(
     linker: &mut Linker<StoreData>,
     name: &'static str,
     ty: FuncType,
-    op: fn(f64, f64) -> wasmtime::Result<String>,
+    op: fn(f64, f64) -> Result<String, String>,
 ) -> wasmtime::Result<()> {
     register_host_fn(
         linker,
@@ -526,7 +514,8 @@ fn register_number_formatter(
             else {
                 wasmtime::bail!("number.{name} expects (f64, f64)");
             };
-            let formatted = op(f64::from_bits(*x_bits), f64::from_bits(*arg_bits))?;
+            let formatted = op(f64::from_bits(*x_bits), f64::from_bits(*arg_bits))
+                .map_err(wasmtime::Error::msg)?;
             let st = write_submilli_string_struct(caller, &formatted)?;
             *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
             Ok(())
@@ -1597,6 +1586,7 @@ pub fn register_host_fn(
     + 'static,
 ) -> wasmtime::Result<()> {
     let call_fuel = call_fuel_of(module);
+    let ends_its_calls = begins_calls(module);
     let abi = ty.clone();
     linker.func_new(
         module,
@@ -1604,8 +1594,12 @@ pub fn register_host_fn(
         ty,
         move |mut hc, params, results| {
             check_host_abi(&abi, params, results)?;
+            let marker = ends_its_calls.then(|| enter_host_call(&hc)).flatten();
             let outcome =
                 charge_host_fuel(&mut hc, call_fuel).and_then(|()| body(&mut hc, params, results));
+            if let Some(marker) = marker {
+                exit_host_call(&hc, marker, outcome.is_ok());
+            }
             match outcome {
                 Ok(()) => Ok(()),
                 // Already a thrown exception (pending on the store) — propagate as-is.
@@ -1615,6 +1609,40 @@ pub fn register_host_fn(
         },
     )?;
     Ok(())
+}
+
+/// The modules whose host functions gate capabilities, so the recorder ends a call they
+/// begin when they return. Other modules skip the recorder check entirely. A module that
+/// gates must be listed: its calls would otherwise stay open until the run ends.
+pub(crate) const CALL_MODULES: &[&str] = &[
+    crate::stdlib::fs::MODULE_NAME,
+    crate::stdlib::http::MODULE_NAME,
+    crate::stdlib::llm::MODULE_NAME,
+    crate::stdlib::session::MODULE_NAME,
+    crate::stdlib::secrets::MODULE_NAME,
+    crate::stdlib::git::MODULE_NAME,
+    crate::stdlib::code::MODULE_NAME,
+    crate::stdlib::security::MODULE_NAME,
+    super::mcp::MCP_MODULE_NAME,
+];
+
+pub(crate) fn begins_calls(module: &str) -> bool {
+    CALL_MODULES.contains(&module)
+}
+
+fn enter_host_call(store: &impl wasmtime::AsContext<Data = StoreData>) -> Option<u64> {
+    store
+        .as_context()
+        .data()
+        .security_check
+        .recorder()
+        .map(super::decision::DecisionRecorder::enter_host_call)
+}
+
+fn exit_host_call(store: &impl wasmtime::AsContext<Data = StoreData>, marker: u64, returned: bool) {
+    if let Some(recorder) = store.as_context().data().security_check.recorder() {
+        recorder.exit_host_call(marker, returned);
+    }
 }
 
 /// The flat fuel of one call into `module`. `submilli:test` is free: it only
@@ -1653,6 +1681,7 @@ where
     // a bare `&body` reference to the `Fn`'s captured state can't escape it.
     let body = std::sync::Arc::new(body);
     let call_fuel = call_fuel_of(module);
+    let ends_its_calls = begins_calls(module);
     let abi = ty.clone();
     linker.func_new_async(
         module,
@@ -1663,10 +1692,14 @@ where
             let shape = check_host_abi(&abi, params, results);
             Box::new(async move {
                 shape?;
+                let marker = ends_its_calls.then(|| enter_host_call(&hc)).flatten();
                 let outcome = match charge_host_fuel(&mut hc, call_fuel) {
                     Ok(()) => body(&mut hc, params, results).await,
                     Err(err) => Err(err),
                 };
+                if let Some(marker) = marker {
+                    exit_host_call(&hc, marker, outcome.is_ok());
+                }
                 match outcome {
                     Ok(()) => Ok(()),
                     Err(err) if err.is::<wasmtime::ThrownException>() => Err(err),
@@ -1853,33 +1886,6 @@ mod tests {
         assert_eq!(
             newest.map(|d| d.capability),
             Some(format!("cap.{MAX_THROWN_DENIALS}"))
-        );
-    }
-
-    #[tokio::test]
-    async fn legacy_number_formatter_preserves_injected_trap() {
-        let (engine, mut store, mut linker) = async_store();
-        register_number_formatter(
-            &mut linker,
-            "injected_formatter",
-            FuncType::new(&engine, [ValType::F64, ValType::F64], [ValType::I32]),
-            |_, _| Err(invariant_trap("injected formatter invariant")),
-        )
-        .unwrap();
-        let name = crate::mangle::host(NUMBER_MODULE_NAME, "injected_formatter");
-        let wasmtime::Extern::Func(function) = linker
-            .get(&mut store, NUMBER_MODULE_NAME, name.as_str())
-            .unwrap()
-        else {
-            panic!("expected formatter");
-        };
-        let error = function
-            .call_async(&mut store, &[Val::F64(0), Val::F64(0)], &mut [Val::I32(0)])
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error.downcast_ref::<wasmtime::Trap>(),
-            Some(&wasmtime::Trap::UnreachableCodeReached)
         );
     }
 

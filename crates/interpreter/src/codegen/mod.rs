@@ -188,7 +188,7 @@ fn import_value_symbol(
                 params
                     .iter()
                     .map(|param| (param.default.as_ref(), param.rest)),
-            )? {
+            ) {
                 symbols
                     .function_argument_metadata
                     .insert(value.mangled_name.clone(), metadata);
@@ -1328,7 +1328,7 @@ fn codegen_inner(
         let func_idx = next_func_idx;
         crate::codegen::next_index(&mut next_func_idx)?;
         let param_types: Vec<Type> = f.params.iter().map(|p| p.ty.clone()).collect();
-        if let Some(metadata) = call_arguments::typed_metadata(&f.params)? {
+        if let Some(metadata) = call_arguments::typed_metadata(&f.params) {
             symbols
                 .function_argument_metadata
                 .insert(f.mangled_name.clone(), metadata);

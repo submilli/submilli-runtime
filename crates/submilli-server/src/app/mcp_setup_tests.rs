@@ -34,7 +34,7 @@ impl Harness {
                         message: "injected MCP setup failure",
                     })
                 } else {
-                    initialize_mcp()
+                    Ok(())
                 }
             }) as McpSetup
         };
@@ -46,7 +46,7 @@ impl Harness {
             .unwrap(),
         );
         let ledger = Arc::new(InMemoryIdempotencyStore::default());
-        let state = AppState::with_setup_factories(
+        let mut state = AppState::with_llm_dispatch_factory(
             ServerConfig {
                 blueprints: Some(blueprints),
                 session_storage_root: Some(root.path().join("sessions")),
@@ -55,9 +55,9 @@ impl Harness {
                 ..ServerConfig::default()
             },
             Arc::new(HttpModelDispatch::new),
-            setup,
         )
         .unwrap();
+        Arc::get_mut(&mut state.inner).unwrap().mcp_setup = setup;
         fail.store(true, Ordering::SeqCst);
         attempts.store(0, Ordering::SeqCst);
         Self {
@@ -303,34 +303,6 @@ async fn mcp_setup_failure_is_internal_before_vfs_and_allows_follow_up() {
         1
     );
     harness.assert_no_ephemeral_vfs();
-}
-
-#[test]
-fn invalid_schema_assets_refuse_startup_before_filesystem_setup() {
-    let root = tempfile::tempdir().unwrap();
-    let config = ServerConfig {
-        blueprint_dir: Some(root.path().join("blueprints")),
-        ..ServerConfig::default()
-    };
-    let error = AppState::with_setup_factories(
-        config,
-        Arc::new(HttpModelDispatch::new),
-        Arc::new(|| {
-            Err(DiscoveryError::SchemaPack(
-                submilli_shared::mcp::schema_registry::SchemaPackError::MissingTools {
-                    pack: "injected",
-                },
-            ))
-        }),
-    )
-    .err()
-    .unwrap();
-    assert!(
-        error
-            .chain()
-            .any(|cause| cause.to_string().contains("injected"))
-    );
-    assert!(!root.path().join("blueprints").exists());
 }
 
 #[tokio::test]

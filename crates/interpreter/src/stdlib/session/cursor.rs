@@ -85,7 +85,9 @@ pub(super) fn encode(prefix: &[u16], resume_after: &[u16]) -> Result<String, Cur
     let mut nonce = [0u8; NONCE_LEN];
     getrandom::getrandom(&mut nonce).map_err(|_| CursorError::NoEntropy)?;
 
-    encode_with(prefix, resume_after, &nonce, || CursorCrypto::new(secret))
+    encode_with(prefix, resume_after, &nonce, || {
+        Ok(CursorCrypto::new(secret))
+    })
 }
 
 fn encode_with(
@@ -110,7 +112,7 @@ fn encode_with(
     payload.push(VERSION);
     payload.extend_from_slice(nonce);
     payload.extend_from_slice(&ciphertext);
-    payload.extend_from_slice(&crypto.tag(nonce, &ciphertext)?);
+    payload.extend_from_slice(&crypto.tag(nonce, &ciphertext));
     let length = base64::encoded_len(payload.len(), false)
         .ok_or(CursorError::Internal("cursor encoding size overflow"))?;
     let mut encoded = reserved_vec(length)?;
@@ -158,7 +160,7 @@ impl std::fmt::Display for CursorError {
 
 pub(super) fn decode(prefix: &[u16], cursor: &[u16]) -> Result<Vec<u16>, CursorError> {
     decode_with(prefix, cursor, || {
-        CursorCrypto::new(secret().ok_or(CursorError::NoEntropy)?)
+        Ok(CursorCrypto::new(secret().ok_or(CursorError::NoEntropy)?))
     })
 }
 
@@ -194,7 +196,7 @@ fn decode_with(
         .checked_sub(TAG_LEN)
         .ok_or(CursorError::Malformed)?;
     let (ciphertext, found) = rest.split_at(split);
-    if !constant_time_eq(found, &crypto.tag(nonce, ciphertext)?) {
+    if !constant_time_eq(found, &crypto.tag(nonce, ciphertext)) {
         return Err(CursorError::Malformed);
     }
 
@@ -219,17 +221,11 @@ struct CursorCrypto {
 }
 
 impl CursorCrypto {
-    fn new(secret: &[u8; 32]) -> Result<Self, CursorError> {
-        Self::from_initial(HmacSha256::new_from_slice(secret))
-    }
-
-    fn from_initial(
-        initial: Result<HmacSha256, hmac::digest::InvalidLength>,
-    ) -> Result<Self, CursorError> {
-        Ok(Self {
-            initial: initial
-                .map_err(|_| CursorError::Internal("cursor HMAC initialization failed"))?,
-        })
+    fn new(secret: &[u8; 32]) -> Self {
+        // HMAC accepts keys of any length; this process key is always 32 bytes.
+        Self {
+            initial: HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length"),
+        }
     }
 
     /// Each domain starts from the same keyed state, before any message bytes.
@@ -249,12 +245,12 @@ impl CursorCrypto {
         Ok(())
     }
 
-    fn tag(&self, nonce: &[u8], ciphertext: &[u8]) -> Result<[u8; TAG_LEN], CursorError> {
+    fn tag(&self, nonce: &[u8], ciphertext: &[u8]) -> [u8; TAG_LEN] {
         let mut mac = self.initial.clone();
         mac.update(b"submilli:session/cursor/tag");
         mac.update(nonce);
         mac.update(ciphertext);
-        truncate(&mac.finalize().into_bytes())
+        truncate(mac.finalize().into_bytes().into())
     }
 
     fn prefix_digest(&self, prefix: &[u16]) -> Result<[u8; DIGEST_LEN], CursorError> {
@@ -266,14 +262,14 @@ impl CursorCrypto {
         for unit in prefix {
             mac.update(&unit.to_be_bytes());
         }
-        truncate(&mac.finalize().into_bytes())
+        Ok(truncate(mac.finalize().into_bytes().into()))
     }
 }
 
-fn truncate<const N: usize>(full: &[u8]) -> Result<[u8; N], CursorError> {
-    full.get(..N)
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or(CursorError::Internal("cursor digest length mismatch"))
+// SHA-256 produces exactly 32 bytes. The only callers request TAG_LEN (16)
+// or DIGEST_LEN (8), so every copied index is in bounds.
+fn truncate<const N: usize>(full: [u8; 32]) -> [u8; N] {
+    std::array::from_fn(|index| full[index])
 }
 
 fn ciphertext_len(units: usize) -> Result<usize, CursorError> {
@@ -335,27 +331,21 @@ mod tests {
         encode(prefix, key).expect("this host has entropy")
     }
 
-    fn broken_crypto() -> Result<CursorCrypto, CursorError> {
-        CursorCrypto::from_initial(Err(hmac::digest::InvalidLength))
-    }
-
     #[test]
-    fn signing_initialization_failure_propagates_from_both_paths() {
-        let expected = CursorError::Internal("cursor HMAC initialization failed");
+    fn entropy_failure_propagates_from_both_paths() {
+        let no_entropy = || Err(CursorError::NoEntropy);
         assert_eq!(
-            encode_with(&[], &[], &[9; NONCE_LEN], broken_crypto),
-            Err(expected)
+            encode_with(&[], &[], &[9; NONCE_LEN], no_entropy),
+            Err(CursorError::NoEntropy)
         );
-        assert_eq!(decode_with(&[], &u("AA"), broken_crypto), Err(expected));
+        assert_eq!(
+            decode_with(&[], &u("AA"), no_entropy),
+            Err(CursorError::NoEntropy)
+        );
     }
 
     #[test]
-    fn internal_size_and_digest_failures_are_checked() {
-        assert_eq!(truncate::<2>(&[1, 2, 3]), Ok([1, 2]));
-        assert!(matches!(
-            truncate::<4>(&[1, 2, 3]),
-            Err(CursorError::Internal(_))
-        ));
+    fn internal_size_failures_are_checked() {
         assert_eq!(ciphertext_len(0), Ok(DIGEST_LEN));
         let largest = (usize::MAX - DIGEST_LEN) / 2;
         assert!(ciphertext_len(largest).is_ok());
@@ -394,12 +384,12 @@ mod tests {
         let prefix = [0x70, 0xd800];
         for (key, expected) in vectors {
             let encoded = encode_with(&prefix, &key, &[9; NONCE_LEN], || {
-                CursorCrypto::new(&[7; 32])
+                Ok(CursorCrypto::new(&[7; 32]))
             })
             .unwrap();
             assert_eq!(encoded, expected);
             assert_eq!(
-                decode_with(&prefix, &u(expected), || CursorCrypto::new(&[7; 32])).unwrap(),
+                decode_with(&prefix, &u(expected), || Ok(CursorCrypto::new(&[7; 32]))).unwrap(),
                 key
             );
         }
@@ -429,8 +419,8 @@ mod tests {
             true,
             |_, params, _| {
                 let failure = match params[0].i32().unwrap() {
-                    0 => encode_with(&[], &[], &[9; NONCE_LEN], broken_crypto).map(|_| ()),
-                    1 => decode_with(&[], &u("AA"), broken_crypto).map(|_| ()),
+                    0 => ciphertext_len(usize::MAX).map(|_| ()),
+                    1 => reserved_vec::<u8>(usize::MAX).map(|_| ()),
                     2 => Err(CursorError::Malformed),
                     3 => Err(CursorError::PrefixMismatch),
                     _ => Err(CursorError::NoEntropy),
@@ -467,7 +457,11 @@ mod tests {
                     error.downcast_ref::<wasmtime::Trap>(),
                     Some(&wasmtime::Trap::UnreachableCodeReached)
                 );
-                assert!(format!("{error:#}").contains("cursor HMAC initialization failed"));
+                assert!(format!("{error:#}").contains(if case == 0 {
+                    "cursor ciphertext size overflow"
+                } else {
+                    "cursor allocation failed"
+                }));
             } else {
                 assert_eq!(
                     result.unwrap(),

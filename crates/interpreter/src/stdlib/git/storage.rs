@@ -900,9 +900,11 @@ pub(super) fn read_bounded(dir: &Dir, path: &Path, limit: u64) -> Result<Option<
 pub(super) fn validate_metadata_path(path: &str) -> Result<()> {
     validate_path(path)?;
     let mut components = path.split('/');
+    // str::split yields at least one component, even for an empty string;
+    // validate_path additionally rejects empty or malformed repository paths.
     let root = components
         .next()
-        .ok_or_else(|| crate::runtime::host::invariant_trap("git: validated path has no root"))?;
+        .expect("splitting a string always yields a first component");
     // A filesystem may fold case or ignore Unicode characters: refuse a
     // structural name spelled any way but its own, which gix might take for
     // the name, before gix reads `.git`.

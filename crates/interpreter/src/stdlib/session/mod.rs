@@ -22,13 +22,14 @@ use std::sync::Arc;
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
 use crate::runtime::host::{register_host_fn, register_host_fn_async};
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::runtime::session_kv::{SessionKvEntry, SessionKvError, SessionKvPage, SessionKvStore};
 use crate::stdlib::abi::{self, backing_struct, f64_field, install_field_getters, string_field};
-use crate::stdlib::shared::{check_security, check_security_call};
+use crate::stdlib::shared::check_security_call;
 
 pub const MODULE_NAME: &str = "submilli:session";
 
@@ -76,15 +77,26 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "get")?;
-                gate(caller, "session.read", &key)?;
+                let ticket = gate(caller, "session.read", &key)?;
                 let store = provider(caller, "get")?;
-                let Some(payload) = store.get(&key).map_err(|e| trap(caller, None, &e))? else {
+                let found = store.get(&key).map_err(|e| trap(caller, None, &e))?;
+                record_payload(&*caller, ticket, Side::Response, || match &found {
+                    // The size is of the copy and digest's encoding: UTF-8 bytes.
+                    Some(payload) => Payload::meta(serde_json::Value::Null)
+                        .with_owned_body(String::from_utf16_lossy(payload).into_bytes()),
+                    None => Payload::meta(serde_json::json!({ "found": false })),
+                });
+                let Some(payload) = found else {
                     *abi_result(results, 0)? = Val::AnyRef(None);
                     return Ok(());
                 };
                 // Read from the store (code units, two bytes each), then
                 // parsed back into values.
-                fuel::charge(&mut *caller, fuel::IO, 2 * payload.len() as u64)?;
+                fuel::charge(
+                    &mut *caller,
+                    fuel::IO,
+                    (payload.len() as u64).saturating_mul(2),
+                )?;
                 fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
                 *abi_result(results, 0)? = value::deserialize(caller, &payload)?;
                 Ok(())
@@ -101,11 +113,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "has")?;
-                gate(caller, "session.read", &key)?;
+                let ticket = gate(caller, "session.read", &key)?;
                 let store = provider(caller, "has")?;
-                *abi_result(results, 0)? = Val::I32(i32::from(
-                    store.has(&key).map_err(|e| trap(caller, None, &e))?,
-                ));
+                let found = store.has(&key).map_err(|e| trap(caller, None, &e))?;
+                record_payload(&*caller, ticket, Side::Response, || {
+                    Payload::meta(serde_json::json!({ "found": found }))
+                });
+                *abi_result(results, 0)? = Val::I32(i32::from(found));
                 Ok(())
             })
         },
@@ -125,7 +139,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 // with no JSON form must leave the previous entry intact.
                 let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
                 // Written to the store: code units, two bytes each.
-                fuel::charge(&mut *caller, fuel::IO, 2 * payload.len() as u64)?;
+                fuel::charge(
+                    &mut *caller,
+                    fuel::IO,
+                    (payload.len() as u64).saturating_mul(2),
+                )?;
                 let store = provider(caller, "set")?;
                 store
                     .set(&key, &payload)
@@ -261,7 +279,7 @@ fn list(
 ) -> wasmtime::Result<Val> {
     let prefix = value::read_units(caller, prefix_val, "session.list (prefix)")?;
     let limit = read_limit(limit_val)?;
-    check_security(
+    let ticket = check_security_call(
         &mut *caller,
         "session.list",
         serde_json::json!({ "prefix": String::from_utf16_lossy(&prefix) }),
@@ -289,6 +307,13 @@ fn list(
             visible.push(entry);
         }
     }
+    record_payload(&*caller, ticket, Side::Response, || {
+        let keys: Vec<_> = visible
+            .iter()
+            .map(|entry| String::from_utf16_lossy(&entry.key))
+            .collect();
+        Payload::meta(serde_json::json!({ "keys": keys, "cursor": next_cursor.is_some() }))
+    });
     build_page(caller, &visible, next_cursor.as_deref())
 }
 

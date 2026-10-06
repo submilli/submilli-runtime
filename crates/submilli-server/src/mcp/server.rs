@@ -7,7 +7,8 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use interpreter::runtime::fs::{ContainError, ContentPath, guest_normalize, resolve_content};
-use interpreter::runtime::{CheckOutcome, SecurityCheck, Vfs, VfsInfo};
+use interpreter::runtime::security::AuditDecision;
+use interpreter::runtime::{CallSite, CheckOutcome, EntryPath, SecurityCheck, Vfs, VfsInfo};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
@@ -20,15 +21,13 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, schemars, tool, tool_router};
 use serde::{Deserialize, Serialize};
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VfsConfig, required_harness_secrets};
+use submilli_shared::PolicyCheck;
 use submilli_shared::library_visibility::LibraryVisibility;
-use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
 use crate::app::AppState;
 use crate::error::ExecuteError;
-use crate::handlers::execute::{blueprint_miss_message, outcome_to_parts, split_console};
+use crate::handlers::execute::{ExecuteInputs, VfsSource, blueprint_miss_message, execute_core};
 use crate::packages;
-use crate::runner;
-use crate::session::LastRun;
 use crate::session_manager::{attach_limits, build_vfs, vfs_info};
 
 const TOOL_NAME: &str = "submilli__typescript__execute";
@@ -139,6 +138,14 @@ struct ExecuteOutput {
     console: Vec<String>,
     error: Option<ExecuteError>,
 }
+
+/// The client's name from its `initialize`, for the run's record.
+#[derive(Clone)]
+struct McpClient(String);
+
+/// The client's id for the tool call, for the run's record and events.
+#[derive(Clone)]
+struct McpToolCall(String);
 
 /// The `mcp-session-id` header, present on every request in stateful mode.
 fn session_header(parts: &axum::http::request::Parts) -> Option<String> {
@@ -350,38 +357,8 @@ impl SubmilliMcp {
             }
         };
 
-        let parsed = runner::parse(&args.code).map_err(|error| {
-            audit.error(crate::error::ErrorKind::CompileError);
-            ErrorData::internal_error(error.to_string(), None)
-        })?;
-        let script_imports = parsed.imports().map_err(|message| {
-            audit.error(crate::error::ErrorKind::CompileError);
-            ErrorData::internal_error(message, None)
-        })?;
-        let network_policy = audit.network_policy(self.state.network_policy());
-        let llm_provider = self
-            .state
-            .llm_provider_for(&blueprint, &harness_secrets, &network_policy)
-            .map_err(|error| {
-                tracing::error!(error = ?error, "LLM dispatch initialization failed");
-                audit.error(crate::error::ErrorKind::RuntimeError);
-                ErrorData::internal_error(error.to_string(), None)
-            })?;
-        let mcp_catalog = self
-            .state
-            .mcp_catalog_for_imports(
-                &self.blueprint_name,
-                &blueprint,
-                &script_imports.mcp_servers,
-                &harness_secrets,
-                &network_policy,
-            )
-            .await
-            .map_err(|error| {
-                audit.error(crate::error::ErrorKind::RuntimeError);
-                mcp_discovery_error(error)
-            })?;
-
+        // The file area opens under this tool's rules (a `per_session` root needs
+        // the session id), ahead of the shared core, which does the rest.
         let (vfs, vfs_info) = self
             .acquire_vfs(
                 &blueprint,
@@ -393,93 +370,40 @@ impl SubmilliMcp {
             .inspect_err(|_| {
                 audit.error(crate::error::ErrorKind::RuntimeError);
             })?;
-
-        let manager = self.state.session_manager();
-        let http_client = manager.http_client(session_id.as_deref().unwrap_or(""));
-        let session_kv = manager.session_kv_for_execute(session_id.as_deref().unwrap_or(""));
-        let mcp_transport = Arc::new(
-            submilli_shared::mcp::transport::StreamableHttpTransport::new(
-                self.blueprint_name.clone(),
-                Arc::clone(&blueprint),
-                self.state.oauth_token_manager().cloned(),
-                self.state.secret_store().cloned(),
-                Arc::clone(&network_policy),
-            )
-            .with_harness_secrets(Arc::clone(&harness_secrets)),
-        );
-        let services = runner::HostServices {
-            audit: Some(audit.clone()),
-            git: submilli_shared::resolve_git(&blueprint, &variables)
-                .map_err(|error| error.to_string()),
-            auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
-                Arc::clone(&blueprint),
-                self.state.secret_store().cloned(),
-                Arc::clone(&harness_secrets),
-            )),
-            secret_provider: Arc::new(BlueprintSecretProvider::with_harness(
-                Arc::clone(&blueprint),
-                self.state.secret_store().cloned(),
-                Arc::clone(&harness_secrets),
-            )),
-            security_check: Arc::new(crate::audit::AuditedPolicy {
-                policy: Arc::new(PolicyCheck::with_variables(
-                    Arc::clone(&blueprint),
-                    variables,
-                )),
-                execution: audit.clone(),
-            }),
-            http_client,
-            mcp_transport,
-            session_kv,
-            llm_provider,
-            llm_budget: Some(manager.llm_budget_for_execute()),
-        };
-        let packages = self
-            .state
-            .prepared_packages_for_imports(&self.blueprint_name, &blueprint, &script_imports)
-            .map_err(|err| {
-                audit.error(crate::error::ErrorKind::PackageResolution);
-                ErrorData::internal_error(err.to_string(), None)
-            })?;
-        let outcome = runner::run(
-            &args.code,
-            parsed,
-            runner::RunnerRuntime {
-                blueprint: &self.blueprint_name,
-                session: session_id.as_deref().unwrap_or(""),
-                engine: self.state.engine(),
-                base_linker: self.state.base_linker(),
-                config: self.state.runtime(),
-            },
-            vfs,
-            vfs_info,
-            services,
-            runner::RunnerImports {
-                packages: &packages,
-                mcps: &mcp_catalog,
+        let outcome = execute_core(
+            &self.state,
+            ExecuteInputs {
+                session_id: session_id.as_deref().unwrap_or(""),
+                code: &args.code,
+                blueprint_name: &self.blueprint_name,
+                blueprint,
+                variables,
+                harness_secrets,
+                audit: Some(audit),
+                vfs_source: VfsSource::Mcp { vfs, vfs_info },
+                run_entry: crate::record::RunEntry::Mcp,
+                client: parts
+                    .extensions
+                    .get::<McpClient>()
+                    .map(|client| client.0.clone()),
+                tool_call_id: parts
+                    .extensions
+                    .get::<McpToolCall>()
+                    .map(|call| call.0.clone()),
+                idempotency_key: None,
             },
         )
         .await;
-        let console_lines = split_console(&outcome.console_raw);
-        let (result, console, error) = outcome_to_parts(&outcome, &console_lines);
-
-        // Record the full (un-suppressed) console so `lastRun` can recover it.
-        if let Some(sid) = &session_id
-            && let Err(error) = self
-                .state
-                .sessions()
-                .record(
-                    sid,
-                    LastRun {
-                        result: result.clone(),
-                        console: console_lines,
-                        error: error.clone(),
-                    },
-                )
-                .await
-        {
-            tracing::warn!(operation = "record", session = %sid, %error, "last-run storage failed");
+        let response = outcome.response;
+        if !outcome.dispatched {
+            // Nothing ran: a protocol-level failure, as it always was for MCP.
+            let message = response
+                .error
+                .map(|error| error.message)
+                .unwrap_or_default();
+            return Err(ErrorData::internal_error(message, None));
         }
+        let (result, console, error) = (response.result, response.console, response.error);
 
         structured_result(ExecuteOutput {
             result,
@@ -668,7 +592,10 @@ impl SubmilliMcp {
             &parts,
             Arc::clone(&blueprint),
             Arc::clone(&variables),
-            "fs.read",
+            FileTool {
+                name: "submilli__files__read",
+                capability: "fs.read",
+            },
             &args.path,
             None,
         ) {
@@ -727,7 +654,10 @@ impl SubmilliMcp {
             &parts,
             Arc::clone(&blueprint),
             Arc::clone(&variables),
-            "fs.list",
+            FileTool {
+                name: "submilli__files__list",
+                capability: "fs.list",
+            },
             dir,
             Some(recursive),
         ) {
@@ -776,10 +706,11 @@ impl SubmilliMcp {
         parts: &axum::http::request::Parts,
         blueprint: Arc<Blueprint>,
         variables: Arc<submilli_blueprint::VarBindings>,
-        capability: &str,
+        tool: FileTool<'_>,
         path: &str,
         recursive: Option<bool>,
     ) -> Result<(), FileToolError> {
+        let capability = tool.capability;
         let mut context = serde_json::Map::new();
         context.insert("path".into(), path.into());
         if let Some(recursive) = recursive {
@@ -792,7 +723,15 @@ impl SubmilliMcp {
             .map_err(|error| FileToolError::denied(capability, &error.to_string()))?;
         guest_normalize(config.cwd(), path)
             .map_err(|error| FileToolError::file(path, error.into()))?;
-        let policy = PolicyCheck::with_variables(blueprint.clone(), variables);
+        let recording = self.file_tool_recording(parts, &blueprint, &variables, tool.name);
+        let log = recording.as_ref().map(crate::record::Recording::log);
+        let policy: Arc<dyn SecurityCheck> =
+            Arc::new(PolicyCheck::with_variables(blueprint.clone(), variables));
+        let policy = log.as_ref().map_or(policy.clone(), |log| log.wrap(policy));
+        let call = policy.recorder().map(|recorder| {
+            let marker = recorder.enter_host_call();
+            (marker, recorder.begin_call("main", capability, None))
+        });
         let outcome = policy.check_with_cwd("main", capability, &context, config.cwd());
         let audit_context = policy.audit_context(capability, &context, config.cwd());
         self.state.audit().file_decision(
@@ -802,13 +741,145 @@ impl SubmilliMcp {
             audit_context.as_ref(),
             &outcome,
         );
-        let reason = match outcome {
-            CheckOutcome::Allow { .. } => return Ok(()),
-            CheckOutcome::Deny { reason, .. } => reason,
-            _ => "unrecognized policy outcome".to_string(),
+        let (allowed, rule, refusal) = match outcome {
+            CheckOutcome::Allow { rule } => (true, rule, None),
+            CheckOutcome::Deny { reason, rule } => (false, rule, Some(reason)),
+            _ => (false, None, Some("unrecognized policy outcome".to_string())),
         };
-        Err(FileToolError::denied(capability, &reason))
+        if let (Some(recording), Some(log), Some((marker, ticket))) = (recording, log, call) {
+            finish_file_tool_run(
+                &recording,
+                &log,
+                &FileToolCall {
+                    policy: policy.as_ref(),
+                    tool,
+                    context: &context,
+                    audit_context: audit_context.as_ref(),
+                    cwd: config.cwd(),
+                    allowed,
+                    rule,
+                    refusal: refusal.as_deref(),
+                    marker,
+                    ticket,
+                },
+            );
+        }
+        match refusal {
+            None => Ok(()),
+            Some(reason) => Err(FileToolError::denied(capability, &reason)),
+        }
     }
+
+    /// A file tool's decision is a run of its own, when runs are recorded. Nothing is
+    /// built for a server without a run recorder.
+    fn file_tool_recording(
+        &self,
+        parts: &axum::http::request::Parts,
+        blueprint: &Arc<Blueprint>,
+        variables: &Arc<submilli_blueprint::VarBindings>,
+        tool: &str,
+    ) -> Option<crate::record::Recording> {
+        crate::record::Recording::start(&self.state, || crate::record::RunStart {
+            execution_id: uuid::Uuid::new_v4().to_string(),
+            label: parts
+                .extensions
+                .get::<crate::audit::Principal>()
+                .map_or_else(|| "unauthenticated".to_owned(), |p| p.0.clone()),
+            entry: crate::record::RunEntry::McpFileTool { tool: tool.into() },
+            client: parts.extensions.get::<McpClient>().map(|c| c.0.clone()),
+            tool_call_id: parts.extensions.get::<McpToolCall>().map(|c| c.0.clone()),
+            session_id: session_header(parts),
+            idempotency_key: None,
+            blueprint_name: self.blueprint_name.clone(),
+            blueprint: Arc::clone(blueprint),
+            blueprint_hash: crate::audit::blueprint_hash(blueprint),
+            variables: Arc::clone(variables),
+            code: None,
+        })
+    }
+}
+
+/// A file tool: its name as the record gives it, and the capability it is gated by.
+#[derive(Clone, Copy)]
+struct FileTool<'a> {
+    name: &'a str,
+    capability: &'a str,
+}
+
+/// One file tool call and the policy's decision on it, with what the run's record needs.
+struct FileToolCall<'a> {
+    policy: &'a dyn SecurityCheck,
+    tool: FileTool<'a>,
+    /// The call's context as the tool built it, for the policy to explain.
+    context: &'a serde_json::Value,
+    /// The context the policy actually tested, for the record.
+    audit_context: &'a serde_json::Value,
+    cwd: &'a str,
+    allowed: bool,
+    rule: Option<usize>,
+    /// The denial's reason; `None` when allowed.
+    refusal: Option<&'a str>,
+    /// Where the call's host-call span began, and its ticket.
+    marker: u64,
+    ticket: interpreter::runtime::CallTicket,
+}
+
+/// Records the decision and finishes the run. A file tool's run is its one decision: it
+/// ends here, so the read's own I/O and its outcome are not part of it.
+fn finish_file_tool_run(
+    recording: &crate::record::Recording,
+    log: &interpreter::runtime::DecisionLog,
+    call: &FileToolCall<'_>,
+) {
+    let FileToolCall {
+        policy,
+        tool,
+        context,
+        audit_context,
+        cwd,
+        allowed,
+        rule,
+        refusal,
+        marker,
+        ticket,
+    } = *call;
+    let capability = tool.capability;
+    let explanation = policy.explain("main", capability, context, cwd);
+    policy.audit(
+        AuditDecision::new(
+            "main",
+            capability,
+            audit_context,
+            allowed,
+            "policy",
+            rule,
+            refusal,
+        )
+        .with_explanation(explanation.as_ref())
+        .with_site(CallSite::new(Some(ticket), EntryPath::FileTool)),
+    );
+    if let Some(recorder) = policy.recorder() {
+        recorder.exit_host_call(marker, allowed);
+    }
+    recording.finish(crate::record::FinishedRun {
+        dispatched: true,
+        error: refusal.map(|reason| ExecuteError {
+            kind: crate::error::ErrorKind::PermissionDenied,
+            message: FileToolError::denied(capability, reason).message,
+            diagnostics: Vec::new(),
+            denial: Some(crate::error::DenialDetails {
+                caller: "main".into(),
+                capability: capability.into(),
+                source: "policy",
+            }),
+        }),
+        result: None,
+        console: String::new(),
+        usage: interpreter::runtime::limits::ExecutionUsage::default(),
+        log: log.finish(),
+        mcp_catalog: None,
+        wall: recording.started.elapsed(),
+    });
 }
 
 /// A file tool call that failed for this call alone: a denial, a missing file, a
@@ -1026,6 +1097,99 @@ impl ServerHandler for SubmilliMcp {
 
     async fn call_tool(
         &self,
+        request: CallToolRequestParams,
+        mut context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let tool_call_id = tool_call_id(&context);
+        attach_run_context(&mut context, tool_call_id.clone());
+        let Some(hub) = self.state.event_hub().cloned() else {
+            return self.dispatch_tool(request, context).await;
+        };
+        let started = std::time::Instant::now();
+        let tool = request.name.to_string();
+        let session = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(session_header);
+        let result = self.dispatch_tool(request, context).await;
+        let (ok, bytes) = match &result {
+            Ok(result) => (
+                !result.is_error.unwrap_or(false),
+                serde_json::to_vec(result).map_or(0, |bytes| bytes.len() as u64),
+            ),
+            Err(error) => (
+                false,
+                serde_json::to_vec(error).map_or(0, |bytes| bytes.len() as u64),
+            ),
+        };
+        crate::record::events::tool_call(
+            &hub,
+            session.as_deref(),
+            tool_call_id.as_deref(),
+            &tool,
+            ok,
+            bytes,
+            started.elapsed(),
+        );
+        result
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        use submilli_shared::prompt::tools as shared;
+        let mut tools = self.tool_router.list_all();
+        let mut blueprint = self.current_blueprint().await?;
+        let session_id = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(session_header);
+        let variables = self
+            .state
+            .session_manager()
+            .variables(session_id.as_deref().unwrap_or(""));
+        blueprint.vfs = blueprint
+            .vfs
+            .resolve(&variables)
+            .map_err(|error| ErrorData::invalid_request(error.to_string(), None))?;
+        let execute = submilli_shared::prompt::execute_tool_description(
+            &blueprint,
+            submilli_shared::prompt::PromptSurface::Mcp,
+        );
+        for tool in &mut tools {
+            let description = match tool.name.as_ref() {
+                TOOL_NAME => Some(execute.clone()),
+                "submilli__typescript__packages__search" => {
+                    Some(shared::PACKAGES_SEARCH.to_string())
+                }
+                "submilli__typescript__packages__docs" => Some(shared::PACKAGES_DOCS.to_string()),
+                "submilli__typescript__builtins__list" => Some(shared::BUILTINS_LIST.to_string()),
+                "submilli__typescript__builtins__docs" => Some(shared::BUILTINS_DOCS.to_string()),
+                "submilli__typescript__last_run" => Some(shared::LAST_RUN.to_string()),
+                _ => None,
+            };
+            if let Some(description) = description {
+                tool.description = Some(Cow::Owned(description));
+            }
+        }
+        Ok(ListToolsResult {
+            tools,
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.tool_router.get(name).cloned()
+    }
+}
+
+impl SubmilliMcp {
+    /// Runs a tool call: the audit, argument normalization, and the tool itself.
+    async fn dispatch_tool(
+        &self,
         mut request: CallToolRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -1081,56 +1245,43 @@ impl ServerHandler for SubmilliMcp {
         audit.finish(success);
         with_execution_id(result, &audit.id)
     }
+}
 
-    async fn list_tools(
-        &self,
-        _request: Option<PaginatedRequestParams>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, ErrorData> {
-        use submilli_shared::prompt::tools as shared;
-        let mut tools = self.tool_router.list_all();
-        let mut blueprint = self.current_blueprint().await?;
-        let session_id = context
-            .extensions
-            .get::<axum::http::request::Parts>()
-            .and_then(session_header);
-        let variables = self
-            .state
-            .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
-        blueprint.vfs = blueprint
-            .vfs
-            .resolve(&variables)
-            .map_err(|error| ErrorData::invalid_request(error.to_string(), None))?;
-        let execute = submilli_shared::prompt::execute_tool_description(
-            &blueprint,
-            submilli_shared::prompt::PromptSurface::Mcp,
-        );
-        for tool in &mut tools {
-            let description = match tool.name.as_ref() {
-                TOOL_NAME => Some(execute.clone()),
-                "submilli__typescript__packages__search" => {
-                    Some(shared::PACKAGES_SEARCH.to_string())
-                }
-                "submilli__typescript__packages__docs" => Some(shared::PACKAGES_DOCS.to_string()),
-                "submilli__typescript__builtins__list" => Some(shared::BUILTINS_LIST.to_string()),
-                "submilli__typescript__builtins__docs" => Some(shared::BUILTINS_DOCS.to_string()),
-                "submilli__typescript__last_run" => Some(shared::LAST_RUN.to_string()),
-                _ => None,
-            };
-            if let Some(description) = description {
-                tool.description = Some(Cow::Owned(description));
-            }
-        }
-        Ok(ListToolsResult {
-            tools,
-            meta: None,
-            next_cursor: None,
-        })
+/// The longest `tool_call_id` kept. A client's id is an opaque handle of a few dozen
+/// bytes; a longer one is not an id worth carrying through every record and event, so it
+/// is dropped rather than truncated, which could make two ids collide.
+const MAX_TOOL_CALL_ID_BYTES: usize = 256;
+
+/// The client's id for this tool call, when it names a usable one: Claude Code sends
+/// `claudecode/toolUseId` in the request's `_meta`.
+fn tool_call_id(context: &RequestContext<RoleServer>) -> Option<String> {
+    context
+        .meta
+        .0
+        .get("claudecode/toolUseId")
+        .and_then(serde_json::Value::as_str)
+        .and_then(usable_tool_call_id)
+}
+
+fn usable_tool_call_id(id: &str) -> Option<String> {
+    (id.len() <= MAX_TOOL_CALL_ID_BYTES).then(|| id.to_owned())
+}
+
+/// Puts what the run's record needs of the call where the tools find it: the client's
+/// name from its `initialize` and the id of this tool call.
+fn attach_run_context(context: &mut RequestContext<RoleServer>, tool_call_id: Option<String>) {
+    let client = context
+        .peer
+        .peer_info()
+        .map(|info| McpClient(info.client_info.name.clone()));
+    let Some(parts) = context.extensions.get_mut::<axum::http::request::Parts>() else {
+        return;
+    };
+    if let Some(client) = client {
+        parts.extensions.insert(client);
     }
-
-    fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.tool_router.get(name).cloned()
+    if let Some(id) = tool_call_id {
+        parts.extensions.insert(McpToolCall(id));
     }
 }
 
@@ -1261,5 +1412,19 @@ mod tests {
         ] {
             assert_eq!(tool_call_failure(error.clone()).unwrap_err(), error);
         }
+    }
+
+    #[test]
+    fn an_overlong_tool_call_id_is_dropped() {
+        let at_cap = "a".repeat(MAX_TOOL_CALL_ID_BYTES);
+        assert_eq!(
+            usable_tool_call_id(&at_cap).as_deref(),
+            Some(at_cap.as_str())
+        );
+        assert_eq!(
+            usable_tool_call_id(&"a".repeat(MAX_TOOL_CALL_ID_BYTES + 1)),
+            None
+        );
+        assert_eq!(usable_tool_call_id("toolu_01").as_deref(), Some("toolu_01"));
     }
 }

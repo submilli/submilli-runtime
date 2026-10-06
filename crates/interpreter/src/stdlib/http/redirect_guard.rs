@@ -121,7 +121,9 @@ impl CapabilityGuard {
         }
     }
 
-    /// Begins the call for the next redirect hop, when a recorder is installed.
+    /// Begins the call for the next redirect hop, when a recorder is installed. A hop is
+    /// a timing-only call: it hands the recorder no payloads, and its decision carries the
+    /// hop's URL and its parent call.
     fn hop_site(&self, capability: &str) -> CallSite {
         let Some(recorder) = self.security_check.recorder() else {
             return CallSite::default();

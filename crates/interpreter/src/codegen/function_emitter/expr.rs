@@ -1404,7 +1404,7 @@ fn emit_closure_value(
     if let Some(local) = self_environment {
         emitter.instruction(Instruction::LocalTee(local));
     }
-    if let Some(metadata) = crate::codegen::call_arguments::typed_metadata(params)? {
+    if let Some(metadata) = crate::codegen::call_arguments::typed_metadata(params) {
         crate::codegen::call_arguments::wrap(emitter, ctx, &metadata)?;
     }
 
