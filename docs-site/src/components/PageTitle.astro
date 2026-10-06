@@ -29,9 +29,9 @@ const showActions = entry.id !== '404' && !entry.data.sidebar.hidden;
 	<div class="page-title__heading">
 		<h1 id="_top">{entry.data.title}</h1>
 		<AuthorshipBadge />
+		{showActions && <PageActions slug={slug} />}
 	</div>
 	{entry.data.description && <p class="page-title__description">{entry.data.description}</p>}
-	{showActions && <PageActions slug={slug} />}
 </div>
 
 <style>

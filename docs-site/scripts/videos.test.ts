@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { access } from 'node:fs/promises';
 import { films, introduction } from '../src/lib/videos.ts';
+import registry from '../src/data/videos.json' with { type: 'json' };
 import { readChapters } from '../src/lib/agent-docs.ts';
 
 test('the independent series has stable embeds and book destinations', async () => {
-  assert.deepEqual(films.map((film) => film.id), ['code-execution-introduction', 'challenges', 'helps', 'using', 'works']);
+  assert.deepEqual(registry.films.map((film) => film.id), ['code-execution-introduction', 'challenges', 'helps', 'using', 'works']);
+  assert.deepEqual(films.map((film) => film.id), registry.films.filter((film) => film.status === 'published').map((film) => film.id));
   for (const film of films) {
     assert.equal(film.status, 'published');
     assert.match(film.embedUrl, /^https:\/\/submilli-videos\.onrender\.com\/embed\/[a-z-]+\/$/);
