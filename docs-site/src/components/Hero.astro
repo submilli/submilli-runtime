@@ -1,6 +1,7 @@
 ---
 import AuthorshipBadge from './AuthorshipBadge.astro';
 import PageActions from './PageActions.astro';
+import AnchorHeading from '@astrojs/starlight/components/AnchorHeading.astro';
 /**
  * Documentation home. Renders the `hero` frontmatter of `docs/index.md` in the
  * Submilli layout: mono eyebrow, display title, lead, two actions, and a
@@ -81,9 +82,7 @@ const steps = nextSteps.flatMap((slug) =>
 	{
 		steps.length > 0 && (
 			<section class="home-hero__steps" aria-labelledby="next-steps">
-				<h2 id="next-steps" class="home-hero__section-label">
-					Next steps
-				</h2>
+				<AnchorHeading level={2} id="next-steps">Next steps</AnchorHeading>
 				<div class="home-hero__grid">
 					{steps.map((step, index) => (
 						<a href={step.href} class="home-hero__card">
@@ -182,13 +181,15 @@ const steps = nextSteps.flatMap((slug) =>
 	.home-hero__steps {
 		width: 100%;
 	}
-	.home-hero__section-label {
+	.home-hero__steps :global(.sl-heading-wrapper) {
 		margin: 0 0 1rem;
 		font: 600 0.875rem/1.4 var(--sl-font);
 		letter-spacing: 0.06em;
 		text-transform: none;
 		color: var(--sl-color-gray-3);
 	}
+	.home-hero__steps :global(h2) { display: inline; margin: 0; padding-inline-end: var(--sl-anchor-icon-space); font: inherit; color: inherit; }
+	.home-hero__steps :global(.sl-anchor-link) { margin-inline-start: calc(-1 * var(--sl-anchor-icon-size)); }
 	.home-hero__grid {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -253,7 +254,7 @@ const steps = nextSteps.flatMap((slug) =>
 			justify-content: center;
 			height: 2.875rem;
 		}
-		.home-hero__section-label {
+		.home-hero__steps :global(.sl-heading-wrapper) {
 			font-size: 0.75rem;
 			margin-bottom: 0.75rem;
 		}

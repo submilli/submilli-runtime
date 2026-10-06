@@ -1,10 +1,11 @@
 ---
 import { films } from '../lib/videos';
 import VideoPlayer from './VideoPlayer.astro';
+import AnchorHeading from '@astrojs/starlight/components/AnchorHeading.astro';
 ---
 <section class="video-library not-content" aria-label="Video series">
   {films.length ? films.map((film, index) => <article data-video-id={film.id} aria-labelledby={`video-${film.id}-title`}>
-    <h2 id={`video-${film.id}-title`}><span class="number">{String(index + 1).padStart(2,'0')}</span> {film.title}</h2>
+    <AnchorHeading level={2} id={`video-${film.id}-title`}><span class="number">{String(index + 1).padStart(2,'0')}</span> {film.title}</AnchorHeading>
     <figure>
       <div class="player"><VideoPlayer film={film} /></div>
       <figcaption>{film.description}</figcaption>
@@ -16,11 +17,12 @@ import VideoPlayer from './VideoPlayer.astro';
   article { min-width: 0; padding: 1rem; border: 1px solid var(--sl-color-hairline); border-radius: 12px; background: var(--sl-color-bg-sidebar); }
   figure { margin: .75rem 0 0; }
   .player { overflow: hidden; border-radius: 8px; }
-  h2 { margin: 0; font-size: 1.35rem; color: var(--sl-color-white); font-weight: 600; line-height: 1.35; }
+  article :global(.sl-heading-wrapper) { margin: 0; font-size: 1.35rem; }
+  article :global(h2) { margin: 0; font-size: inherit; color: var(--sl-color-white); font-weight: 600; line-height: 1.35; }
   .number { color: var(--sl-color-gray-2); font: .75em monospace; margin-right: .3em; }
   figcaption { margin-top: .75rem; font-size: .9375rem; line-height: 1.5; color: var(--sl-color-gray-2); }
   @media (max-width: 480px) {
     article { padding: .75rem; }
-    h2 { font-size: 1.125rem; }
+    article :global(.sl-heading-wrapper) { font-size: 1.125rem; }
   }
 </style>
