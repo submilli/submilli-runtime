@@ -614,6 +614,17 @@ Object index terms: `lookup(k) = SCAN(k) + ELEM(probes) + COPY(compared names) +
 
 ### Dynamic value operators (`__value_*`)
 
+SUB-1429 adds the following shared direct/widened bitwise hosts. `L` is the
+number of 64-bit magnitude limbs, rounded up and at least one; `prim` and result
+marshalling retain the costs described below. Host entry pays `CALL` automatically.
+
+| Host functions | Additional computation charge | Timing and bounds |
+| --- | --- | --- |
+| `__value_bitand`, `__value_bitor`, `__value_bitxor` | number: none; bigint: `ELEM(ceil((max(input bits) + 1) / 64))` | Before computation; bigint estimated magnitude is capped at 512 KiB. |
+| `__value_bitnot` | number: none; bigint: `ELEM(ceil((input bits + 1) / 64))` | Before complement; same magnitude cap. |
+| `__value_shl`, `__value_shr` | number: none; bigint: `ELEM(L(count))` plus `ELEM(L(estimated result))` | Before shifting; expanding shifts estimate input bits plus absolute count, shrinking shifts conservatively use input bits. Results are capped at 512 KiB. Zero returns after the count charge; a fully shifted-out value pays one result limb. Negative counts reverse direction. |
+| `__value_ushr` | number: none | Bigint operands are rejected with `TypeError` after primitive conversion, without shifting. |
+
 All of these first call `primitive()` (`P/value.rs:286`) on each operand: a boxed number/boolean is O(1); a **string operand is copied whole** (`COPY(len)`); a bigint operand is copied limb by limb into a `num_bigint::BigInt` (`COPY(limbs)`); any other object re-enters guest `valueOf`/`toString` (looked up by linear field-name scan, `P/value.rs:321`, `P/collection.rs:57`) or the vtable `toString` hook. Below, `prim(x)` stands for that operand cost: `COPY(len(x))` for strings/bigints, `ELEM(f) + SCAN(names)` + hook/guest fuel for objects, nothing for numbers/booleans/null.
 
 | Function | What the host does | Formula | Charge point | Notes |

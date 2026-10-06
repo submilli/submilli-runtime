@@ -392,6 +392,12 @@ fn rewrite_operation(
                 BinOp::Div => "div",
                 BinOp::Rem => "rem",
                 BinOp::Pow => "pow",
+                BinOp::BitAnd => "bitand",
+                BinOp::BitOr => "bitor",
+                BinOp::BitXor => "bitxor",
+                BinOp::Shl => "shl",
+                BinOp::Shr => "shr",
+                BinOp::UnsignedShr => "ushr",
                 BinOp::Lt => "lt",
                 BinOp::Gt => "gt",
                 BinOp::Le => "le",
@@ -407,12 +413,13 @@ fn rewrite_operation(
             };
         }
         TypedExprKind::Unary { op, operand }
-            if flow.expr_is_wide(operand) && !matches!(op, crate::UnOp::Not) =>
+            if (flow.expr_is_wide(operand) || flow.expr_is_wide(id))
+                && !matches!(op, crate::UnOp::Not) =>
         {
-            let name = if matches!(op, crate::UnOp::Neg) {
-                "neg"
-            } else {
-                "pos"
+            let name = match op {
+                crate::UnOp::Neg => "neg",
+                crate::UnOp::BitNot => "bitnot",
+                _ => "pos",
             };
             ast.try_expr_mut(id)
                 .map_err(crate::codegen::arena_failure)?

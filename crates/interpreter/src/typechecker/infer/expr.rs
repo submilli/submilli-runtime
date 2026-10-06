@@ -1105,6 +1105,12 @@ impl Inferer<'_> {
                 BinOp::Div => "/",
                 BinOp::Rem => "%",
                 BinOp::Pow => "**",
+                BinOp::BitAnd => "&",
+                BinOp::BitOr => "|",
+                BinOp::BitXor => "^",
+                BinOp::Shl => "<<",
+                BinOp::Shr => ">>",
+                BinOp::UnsignedShr => ">>>",
                 BinOp::Lt => "<",
                 BinOp::Gt => ">",
                 BinOp::Le => "<=",
@@ -1198,7 +1204,17 @@ impl Inferer<'_> {
                     result_ty,
                 ))
             }
-            BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow => {
+            BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::Pow
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::UnsignedShr => {
                 // arithmetic accepts `number × number`
                 // or `bigint × bigint`. Mixed `number ↔ bigint` falls
                 // through to the catch-all "not defined for" error.
@@ -1231,13 +1247,13 @@ impl Inferer<'_> {
                         Type::Error
                     }
                     _ => {
-                        if let Some(ty) = arithmetic_result(&lt, &rt) {
+                        if let Some(ty) = super::stmt::compound_arith_result(op, &lt, &rt) {
                             ty
                         } else {
                             let culprit = self.nullable_binary_culprit(
                                 (typed_lhs, &lt),
                                 (typed_rhs, &rt),
-                                |l, r| arithmetic_result(l, r).is_some(),
+                                |l, r| super::stmt::compound_arith_result(op, l, r).is_some(),
                             );
                             self.error_with_narrowing_hint(
                                 span,
@@ -1528,7 +1544,7 @@ impl Inferer<'_> {
                 }
                 (id, Type::Boolean)
             }
-            UnOp::Neg | UnOp::Pos => {
+            UnOp::Neg | UnOp::Pos | UnOp::BitNot => {
                 // No forced hint — the operand picks its own widened type and
                 // the result mirrors it.
                 let (id, operand_ty) = self.infer_expr(operand, None)?;
@@ -1552,7 +1568,11 @@ impl Inferer<'_> {
                 } else if let Some(ty) = unary_arith_result(op, peeled) {
                     (id, ty)
                 } else {
-                    let symbol = if matches!(op, UnOp::Neg) { "-" } else { "+" };
+                    let symbol = match op {
+                        UnOp::Neg => "-",
+                        UnOp::BitNot => "~",
+                        _ => "+",
+                    };
                     let mut help = Vec::new();
                     if peeled.contains_string() {
                         help.push(
@@ -10896,6 +10916,9 @@ fn ordering_accepts(lt: &Type, rt: &Type) -> bool {
 /// [`plus_result`] for unary `-` / `+`. `unknown` is absent because the call site
 /// answers it with its own "narrow first" diagnostic before asking this.
 fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
+    if matches!(op, UnOp::BitNot) {
+        return bitnot_result(ty);
+    }
     match ty.primitive_behavior() {
         Type::BigInt => Some(Type::BigInt),
         Type::Number | Type::NumberLiteral(_) | Type::Error => Some(Type::Number),
@@ -10905,6 +10928,19 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
         // not a conversion.
         t if matches!(op, UnOp::Pos) && t.is_string_shaped() => Some(Type::Number),
         _ => None,
+    }
+}
+
+fn bitnot_result(ty: &Type) -> Option<Type> {
+    match ty.peel() {
+        Type::Unknown | Type::Null | Type::Void => None,
+        Type::BigInt => Some(Type::BigInt),
+        Type::Never => Some(Type::Number),
+        Type::Union(members) => {
+            let results: Option<Vec<_>> = members.iter().map(bitnot_result).collect();
+            results.map(Type::union)
+        }
+        _ => Some(Type::Number),
     }
 }
 

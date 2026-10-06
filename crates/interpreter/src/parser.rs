@@ -3802,20 +3802,30 @@ impl<'a> Parser<'a> {
 
     fn parse_expression_inner(&mut self) -> Option<ExprId> {
         let written = self.parse_conditional()?;
-        if !is_assign_lookahead(&self.peek().kind) {
+        let shift_assignment = self.peek_shift().filter(|(_, _, assignment)| *assignment);
+        if !is_assign_lookahead(&self.peek().kind) && shift_assignment.is_none() {
             return Some(written);
         }
         let target_span = parse_arena_result(self.ast.try_expr(written), &mut self.fatal)?.span;
         let target = self.assignment_target(written)?;
         let op_tok = self.advance();
+        let mut op_span = op_tok.span;
+        let op = if let Some((op, count, _)) = shift_assignment {
+            for _ in 1..count {
+                op_span.end = self.advance().span.end;
+            }
+            Some(op)
+        } else {
+            compound_op_for_token(&op_tok.kind)
+        };
         let value = self.parse_expression()?;
         let value_span = parse_arena_result(self.ast.try_expr(value), &mut self.fatal)?.span;
         parse_arena_result(
             self.ast.try_push_expr(Expr {
                 kind: ExprKind::Assign {
                     target,
-                    op: compound_op_for_token(&op_tok.kind),
-                    op_span: op_tok.span,
+                    op,
+                    op_span,
                     value,
                 },
                 span: self.span(target_span.start, value_span.end),
@@ -4372,6 +4382,40 @@ impl<'a> Parser<'a> {
         self.with_recursion_limit(|parser| parser.parse_binary_inner(min_prec))
     }
 
+    /// Angle tokens stay separate for nested type arguments. Only adjacent
+    /// source tokens form a shift; whitespace and comments cannot join them.
+    fn peek_shift(&self) -> Option<(BinOp, usize, bool)> {
+        let first = self.peek();
+        let second = self.peek_at(1);
+        if first.span.end != second.span.start {
+            return None;
+        }
+        match (&first.kind, &second.kind) {
+            (TokenKind::LessThan, TokenKind::LessThan) => Some((BinOp::Shl, 2, false)),
+            (TokenKind::LessThan, TokenKind::LessEquals) => Some((BinOp::Shl, 2, true)),
+            (TokenKind::GreaterThan, TokenKind::GreaterEquals) => Some((BinOp::Shr, 2, true)),
+            (TokenKind::GreaterThan, TokenKind::GreaterThan) => {
+                let third = self.peek_at(2);
+                if second.span.end == third.span.start {
+                    match third.kind {
+                        TokenKind::GreaterThan => return Some((BinOp::UnsignedShr, 3, false)),
+                        TokenKind::GreaterEquals => return Some((BinOp::UnsignedShr, 3, true)),
+                        _ => {}
+                    }
+                }
+                Some((BinOp::Shr, 2, false))
+            }
+            _ => None,
+        }
+    }
+
+    fn peek_binary(&self) -> Option<(BinOp, u8, usize)> {
+        if let Some((op, count, assignment)) = self.peek_shift() {
+            return (!assignment).then_some((op, 8, count));
+        }
+        peek_binop(&self.peek().kind).map(|(op, prec)| (op, prec, 1))
+    }
+
     fn parse_binary_inner(&mut self, min_prec: u8) -> Option<ExprId> {
         let mut lhs = self.parse_cast()?;
         // Track the previous op to reject `a || b ?? c` / `a ?? b || c` mixes. Both
@@ -4379,7 +4423,7 @@ impl<'a> Parser<'a> {
         // `right_operand_min_prec`), so `||` / `&&` after it is left for this check.
         let mut last_op: Option<BinOp> = None;
         let mut reported_mixing = false;
-        while let Some((op, prec)) = peek_binop(&self.peek().kind) {
+        while let Some((op, prec, count)) = self.peek_binary() {
             if prec < min_prec {
                 break;
             }
@@ -4412,7 +4456,9 @@ impl<'a> Parser<'a> {
                 );
                 return None;
             }
-            self.advance();
+            for _ in 0..count {
+                self.advance();
+            }
             let rhs = self.parse_binary(right_operand_min_prec(op, prec))?;
             let lhs_span = parse_arena_result(self.ast.try_expr(lhs), &mut self.fatal)?.span;
             let rhs_span = parse_arena_result(self.ast.try_expr(rhs), &mut self.fatal)?.span;
@@ -4540,6 +4586,7 @@ impl<'a> Parser<'a> {
         }
         let op = match self.peek().kind {
             TokenKind::Bang => UnOp::Not,
+            TokenKind::Tilde => UnOp::BitNot,
             TokenKind::Minus => UnOp::Neg,
             TokenKind::Plus => UnOp::Pos,
             _ => return self.parse_postfix(),
@@ -5573,20 +5620,23 @@ fn peek_binop(kind: &TokenKind) -> Option<(BinOp, u8)> {
         TokenKind::QuestionQuestion => (BinOp::NullishCoalesce, 0),
         TokenKind::PipePipe => (BinOp::Or, 1),
         TokenKind::AmpAmp => (BinOp::And, LOGICAL_AND_PREC),
-        TokenKind::EqEqEq | TokenKind::EqEq => (BinOp::Eq, 3),
-        TokenKind::BangEqEq | TokenKind::BangEq => (BinOp::NotEq, 3),
-        TokenKind::LessThan => (BinOp::Lt, 4),
-        TokenKind::GreaterThan => (BinOp::Gt, 4),
-        TokenKind::LessEquals => (BinOp::Le, 4),
-        TokenKind::GreaterEquals => (BinOp::Ge, 4),
-        TokenKind::In => (BinOp::In, 4),
-        TokenKind::Plus => (BinOp::Add, 5),
-        TokenKind::Minus => (BinOp::Sub, 5),
-        TokenKind::Star => (BinOp::Mul, 6),
-        TokenKind::Slash => (BinOp::Div, 6),
-        TokenKind::Percent => (BinOp::Rem, 6),
+        TokenKind::Pipe => (BinOp::BitOr, 3),
+        TokenKind::Caret => (BinOp::BitXor, 4),
+        TokenKind::Amp => (BinOp::BitAnd, 5),
+        TokenKind::EqEqEq | TokenKind::EqEq => (BinOp::Eq, 6),
+        TokenKind::BangEqEq | TokenKind::BangEq => (BinOp::NotEq, 6),
+        TokenKind::LessThan => (BinOp::Lt, 7),
+        TokenKind::GreaterThan => (BinOp::Gt, 7),
+        TokenKind::LessEquals => (BinOp::Le, 7),
+        TokenKind::GreaterEquals => (BinOp::Ge, 7),
+        TokenKind::In => (BinOp::In, 7),
+        TokenKind::Plus => (BinOp::Add, 9),
+        TokenKind::Minus => (BinOp::Sub, 9),
+        TokenKind::Star => (BinOp::Mul, 10),
+        TokenKind::Slash => (BinOp::Div, 10),
+        TokenKind::Percent => (BinOp::Rem, 10),
         // `**` recurses with `prec` not `prec + 1` — that's what makes it right-associative.
-        TokenKind::StarStar => (BinOp::Pow, 7),
+        TokenKind::StarStar => (BinOp::Pow, 11),
         _ => return None,
     })
 }
@@ -5628,6 +5678,9 @@ fn compound_op_for_token(kind: &TokenKind) -> Option<BinOp> {
         TokenKind::SlashEquals => BinOp::Div,
         TokenKind::PercentEquals => BinOp::Rem,
         TokenKind::StarStarEquals => BinOp::Pow,
+        TokenKind::AmpEquals => BinOp::BitAnd,
+        TokenKind::PipeEquals => BinOp::BitOr,
+        TokenKind::CaretEquals => BinOp::BitXor,
         _ => return None,
     })
 }
@@ -6291,6 +6344,40 @@ mod tests {
             crate::ExprKind::Identifier(_)
         ));
         assert_eq!(outer.span, crate::Span::new(F, 0, 5).unwrap());
+    }
+
+    #[test]
+    fn bitwise_precedence_and_shift_adjacency() {
+        let (ast, diags) = parse_str("a | b ^ c & d == e >> f + g;");
+        assert!(diags.is_empty(), "{diags:?}");
+        let (op, _, mut rhs) = binary(expr_of_single_stmt(&ast));
+        assert_eq!(op, crate::BinOp::BitOr);
+        for expected in [
+            crate::BinOp::BitXor,
+            crate::BinOp::BitAnd,
+            crate::BinOp::Eq,
+            crate::BinOp::Shr,
+            crate::BinOp::Add,
+        ] {
+            let (op, _, next) = binary(ast.try_expr(rhs).unwrap());
+            assert_eq!(op, expected);
+            rhs = next;
+        }
+        for source in ["a > > b;", "a >/*gap*/> b;", "a < < b;"] {
+            let (_, diags) = parse_str(source);
+            assert!(!diags.is_empty(), "{source}");
+        }
+    }
+
+    #[test]
+    fn bitwise_shift_assignment_span() {
+        let (ast, diags) = parse_str("a >>>= b;");
+        assert!(diags.is_empty(), "{diags:?}");
+        let crate::StmtKind::CompoundAssign { op, op_span, .. } = single_stmt(&ast).kind else {
+            panic!("expected assignment");
+        };
+        assert_eq!(op, crate::BinOp::UnsignedShr);
+        assert_eq!(op_span, crate::Span::new(F, 2, 6).unwrap());
     }
 
     #[test]

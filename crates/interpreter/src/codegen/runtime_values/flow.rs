@@ -527,6 +527,12 @@ fn connect_expression(
                 | BinOp::Div
                 | BinOp::Rem
                 | BinOp::Pow
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::BitXor
+                | BinOp::Shl
+                | BinOp::Shr
+                | BinOp::UnsignedShr
                 | BinOp::And
                 | BinOp::Or,
             lhs,
@@ -536,6 +542,25 @@ fn connect_expression(
             flow.value(*rhs, target);
         }
         TypedExprKind::Unary { op, operand } if !matches!(op, crate::UnOp::Not) => {
+            // TypeScript gives `~object` and `~T` a number result, but an
+            // object conversion or generic instantiation can produce a bigint.
+            if matches!(op, crate::UnOp::BitNot)
+                && !matches!(
+                    ast.try_expr(*operand)
+                        .map_err(crate::codegen::arena_failure)?
+                        .ty
+                        .primitive_behavior(),
+                    Type::Number
+                        | Type::NumberLiteral(_)
+                        | Type::BigInt
+                        | Type::String
+                        | Type::StringLiteral(_)
+                        | Type::Boolean
+                        | Type::BooleanLiteral(_)
+                )
+            {
+                flow.widened.insert(target.clone());
+            }
             flow.value(*operand, target);
         }
         TypedExprKind::Narrowed { inner, .. } => flow.value(*inner, target),

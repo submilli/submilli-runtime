@@ -263,6 +263,12 @@ pub enum BinOp {
     Rem,
     /// `a ** b` — right-associative exponentiation.
     Pow,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    UnsignedShr,
     Eq,
     NotEq,
     Lt,
@@ -279,8 +285,23 @@ pub enum BinOp {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum UnOp {
     Not,
+    BitNot,
     Neg,
     Pos,
+}
+
+impl BinOp {
+    pub(crate) fn bitwise_name(self) -> Option<&'static str> {
+        match self {
+            Self::BitAnd => Some("bitand"),
+            Self::BitOr => Some("bitor"),
+            Self::BitXor => Some("bitxor"),
+            Self::Shl => Some("shl"),
+            Self::Shr => Some("shr"),
+            Self::UnsignedShr => Some("ushr"),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
