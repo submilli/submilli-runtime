@@ -24,6 +24,7 @@ for (const chapter of chapters) {
 	assert.equal(jsonLd[0]['@graph'].length, chapter.slug ? 2 : 1, path);
 	assert.ok(chapter.authorshipLabel, `${path}: missing confirmed authorship`);
 	assert.ok(html.includes(`${chapter.authorshipLabel}. Authorship details`), `${path}: missing authorship icon`);
+	assert.equal([...html.matchAll(/<button\b[^>]*\bdata-copy-page\b/g)].length, 1, `${path}: one page-copy control, including the docs home`);
 	assert.ok(html.includes(`rel="alternate" type="text/markdown" href="https://submilli.ai${markdown}"`), path);
 	assert.ok(html.includes('rel="describedby" href="https://submilli.ai/docs/llms.txt"'), path);
 	assert.match(html, new RegExp(`href="${markdown.replace('.', '\\.')}"[^>]*>View Markdown</a>`), path);

@@ -32,12 +32,12 @@ Submilli keeps its typefaces, blue accent, theme preference, content, and routes
 
 | Source | Observed pattern | Application in Submilli |
 | --- | --- | --- |
-| [Stripe: API keys](https://docs.stripe.com/keys) | A short lead and page utilities precede the article. Navigation, article, and local contents have distinct visual weights. | Surface each page's existing description; add compact Markdown/copy utilities next to the title; bound the contents panel to its own column. |
+| [Stripe: API keys](https://docs.stripe.com/keys) | A short lead and page utilities precede the article. Navigation, article, and local contents have distinct visual weights. | Surface each page's existing description; use a small copy icon beside authorship and keep Markdown in the footer; bound the contents panel to its own column. |
 | [Stripe: checkout quickstart](https://docs.stripe.com/payments/quickstart) | Instructions and a complete, downloadable example sit together. Language choices affect the example, rather than sending the reader to a different guide. | Keep commands/results visually related and keep code controls secondary. A runnable, downloadable walkthrough is a separate follow-up; this pass does not simulate one. |
 | [Stripe: authentication](https://docs.stripe.com/api/authentication) | Small code controls and predictable text/example alignment make dense reference material scannable. | Keep copy icons small, preserve authored file titles, and use alignment and row rules for reference tables. |
 | [Increase: documentation](https://increase.com/documentation) | A neutral canvas and collapsed navigation groups leave most of the screen for reading. | White light-mode canvas; quieter containers; collapse inactive technical branches by default while opening the current branch. |
 | [Increase: idempotency keys](https://increase.com/documentation/idempotency-keys) | Requests and their results are understood through sequence and proximity, without prominent Input/Output banners. | Retain the shared command box and plain result with a left rule from the preceding code-block refinement. |
-| [Increase: Accounts](https://increase.com/documentation/api/accounts) | Resource description, attributes, examples, and page-copy tools occupy stable places. On a phone the columns become a single sequence and navigation becomes a compact menu. | Show purpose before detail, keep page-copy tools near the title, and verify narrow-screen navigation, search, code, and table overflow. |
+| [Increase: Accounts](https://increase.com/documentation/api/accounts) | Resource description, attributes, examples, and page-copy tools occupy stable places. On a phone the columns become a single sequence and navigation becomes a compact menu. | Show purpose before detail, use a small copy icon beside authorship, and verify narrow-screen navigation, search, code, and table overflow. |
 
 ### Rules for the shared renderer
 
@@ -54,7 +54,8 @@ Submilli keeps its typefaces, blue accent, theme preference, content, and routes
   uses the same destination as the public website.
 - Every visible page can expose its already-published Markdown. Copy feedback is
   explicit; a failed fetch or clipboard operation must not look successful.
-  View Markdown remains usable without JavaScript.
+  Copy is a small icon beside the authorship icon. View Markdown is a footer
+  link after chapter navigation and remains usable without JavaScript.
 - Keep authorship tooltips and page-action labels out of the search index. They
   remain accessible on the page without replacing useful article excerpts.
 - Controls hidden at rest must remain discoverable through keyboard focus, with

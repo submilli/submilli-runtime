@@ -1,5 +1,6 @@
 ---
 import AuthorshipBadge from './AuthorshipBadge.astro';
+import PageActions from './PageActions.astro';
 /**
  * Documentation home. Renders the `hero` frontmatter of `docs/index.md` in the
  * Submilli layout: mono eyebrow, display title, lead, two actions, and a
@@ -9,6 +10,8 @@ const { entry, sidebar } = Astro.locals.starlightRoute;
 const { data } = entry;
 const { title = data.title, tagline, actions = [] } = data.hero || {};
 const { nextSteps = [] } = data;
+const slug = entry.id === 'index' ? '' : entry.id;
+const showActions = entry.id !== '404' && !entry.data.sidebar.hidden;
 
 interface Step {
 	label: string;
@@ -42,6 +45,7 @@ const steps = nextSteps.flatMap((slug) =>
 	<div class="home-hero__title">
 		<h1 id="_top" data-page-title set:html={title} />
 		<AuthorshipBadge />
+		{showActions && <PageActions slug={slug} />}
 	</div>
 	{tagline && <p class="home-hero__lead" set:html={tagline} />}
 	{
@@ -95,7 +99,7 @@ const steps = nextSteps.flatMap((slug) =>
 </div>
 
 <style>
-	.home-hero__title { display: flex; align-items: center; gap: 0.8rem; margin-bottom: 1.25rem; }
+	.home-hero__title { display: flex; align-items: center; flex-wrap: wrap; width: 100%; gap: 0.8rem; margin-bottom: 1.25rem; }
 	.home-hero {
 		position: relative;
 		display: flex;
