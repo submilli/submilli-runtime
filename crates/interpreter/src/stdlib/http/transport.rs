@@ -134,6 +134,23 @@ pub enum HttpError {
     Other(String),
 }
 
+impl HttpError {
+    /// A stable name for the failure, for records that must tell failures apart.
+    pub(super) fn kind(&self) -> &'static str {
+        match self {
+            HttpError::Network(_) => "network",
+            HttpError::EgressDenied(_) => "egress-denied",
+            HttpError::Internal(_) => "internal",
+            HttpError::Policy(_) => "policy",
+            HttpError::PermissionDenied(_) => "permission-denied",
+            HttpError::Timeout => "timeout",
+            HttpError::TooLarge { .. } => "too-large",
+            HttpError::UnsupportedMethod(_) => "unsupported-method",
+            HttpError::Other(_) => "other",
+        }
+    }
+}
+
 impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

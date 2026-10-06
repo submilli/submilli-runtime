@@ -9,12 +9,12 @@ use interpreter::runtime::{
     Access, BodyCopy, CallOutcome, CallRecord, CheckOutcome, DecisionAction, DecisionCause,
     DecisionExplanation, DecisionLog, DecisionLogConfig, DecisionLogOutput, DecisionRecord,
     EmbeddingBatch, EmbeddingError, EmbeddingLimits, EmbeddingModel, EmbeddingProvider,
-    EmbeddingTokenBudget, EntryPath, ExecutionTokenBudget, FailureReasonRecord, FailureRecord,
-    InMemorySessionKv, LinkedPackageModule, LlmCallError, LlmLimits, LlmModel, LlmOutcome,
-    LlmProvider, MountSpec, NearMissRecord, RecordObserver, RuleCitation, SecurityCheck,
-    SessionKvLimits, SharedTokenBudget, StoreData, Vfs, install_package_modules_async,
-    install_runtime_host_functions, install_runtime_store_bound, install_tenant_limits,
-    limits::ExecutionUsage,
+    EmbeddingTokenBudget, EntryPath, ExecutionTokenBudget, FailureReason, FailureReasonRecord,
+    FailureRecord, InMemorySessionKv, LinkedPackageModule, LlmCallError, LlmFailure, LlmLimits,
+    LlmModel, LlmOutcome, LlmProvider, MountSpec, NearMissRecord, RecordObserver, RuleCitation,
+    SecurityCheck, SessionKvLimits, SharedTokenBudget, StoreData, Vfs,
+    install_package_modules_async, install_runtime_host_functions, install_runtime_store_bound,
+    install_tenant_limits, limits::ExecutionUsage,
 };
 use interpreter::stdlib::git::GitConfig;
 use interpreter::stdlib::http::transport::{
@@ -178,6 +178,9 @@ enum Egress {
 #[async_trait::async_trait]
 impl HttpClient for Web {
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        if req.url.ends_with("/down") {
+            return Err(HttpError::Timeout);
+        }
         let denied = || HttpError::EgressDenied("blocked address".into());
         if let (Egress::Original, Some(guard)) = (self.egress, req.redirect_guard.as_ref()) {
             let url = url::Url::parse(&req.url).map_err(|e| HttpError::Other(e.to_string()))?;
@@ -460,7 +463,16 @@ impl LlmProvider for FakeLlm {
     > {
         let outcomes = prompts
             .iter()
-            .map(|_| LlmOutcome::success("answer").with_usage(Some(10), Some(10)))
+            .map(|prompt| {
+                if prompt == "refuse me" {
+                    let failure = LlmFailure::new(FailureReason::ContentFiltered, "filtered")
+                        .with_status(400)
+                        .with_finish_reason("safety");
+                    LlmOutcome::failed(failure, Some("partial")).with_usage(Some(3), None)
+                } else {
+                    LlmOutcome::success("answer").with_usage(Some(10), Some(10))
+                }
+            })
             .collect();
         Box::pin(async move { Ok(outcomes) })
     }
@@ -1805,6 +1817,85 @@ function main(): string {{
         assert_eq!(call.outcome, Some(CallOutcome::Failed), "{alias}");
         assert_eq!(call.usage, usage, "{alias}");
     }
+}
+
+#[tokio::test]
+async fn a_model_batch_keeps_each_outcomes_own_failure_and_usage() {
+    let source = r#"
+import llm from "submilli:llm";
+function main(): string {
+  const done = llm.batch("open", ["fine", "refuse me"]);
+  return done.map((c) => c.ok ? "ok" : (c.reason ?? "?")).join(",");
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            llm: Some(LlmLimits::default()),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("ok,content-filtered".to_owned()));
+    let call = outcome.call("llm.call");
+    let meta = &call.response.as_ref().expect("the reply").meta;
+    assert_eq!(meta["ok"], json!([true, false]));
+    assert_eq!(meta["failures"][0], Value::Null);
+    assert_eq!(
+        meta["failures"][1],
+        json!({
+            "kind": "content-filtered",
+            "message": "filtered",
+            "retryable": false,
+            "status": 400,
+            "finish_reason": "safety",
+        })
+    );
+    assert_eq!(
+        meta["usage"],
+        json!([
+            { "input_tokens": 10, "output_tokens": 10 },
+            { "input_tokens": 3, "output_tokens": null },
+        ])
+    );
+    let body = body_text(call.response.as_ref().unwrap().body.as_ref()).unwrap();
+    assert_eq!(body, r#"["answer","partial"]"#);
+    // The call's own usage stays the sum, absent where any prompt left a count out.
+    assert_eq!(
+        call.usage,
+        Some(interpreter::runtime::ModelUsage {
+            input_tokens: Some(13),
+            output_tokens: None,
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_failed_http_send_records_its_kind_and_message() {
+    let source = r#"
+import { get } from "submilli:http";
+function main(): string {
+  try { get("https://example.test/down"); } catch (e) { return "failed"; }
+  return "answered";
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("failed".to_owned()));
+    let call = outcome.call("http.get");
+    assert_eq!(call.outcome, Some(CallOutcome::Failed));
+    let response = call.response.as_ref().expect("the failure");
+    assert_eq!(
+        response.meta,
+        json!({ "kind": "timeout", "error": "request timed out" })
+    );
 }
 
 #[tokio::test]
