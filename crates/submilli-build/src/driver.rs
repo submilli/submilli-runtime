@@ -32,6 +32,7 @@ pub struct BuiltPackage {
     pub wasm: Vec<u8>,
     pub type_info: interpreter::TypeInfoTable,
     pub capabilities: CapabilitySchema,
+    pub authority_map: interpreter::AuthorityMap,
     pub declaration: PackageDeclaration,
     pub sources: Vec<ArtifactSource>,
     /// Rendered warning blocks (message + `--> path:line:col` + source context),
@@ -141,6 +142,7 @@ pub fn build_packages(
                 .collect(),
             wasm: compiled.wasm,
             capabilities,
+            authority_map: compiled.authority_map,
             declaration: compiled.declaration,
             sources: modules
                 .iter()

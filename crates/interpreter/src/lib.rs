@@ -5,6 +5,7 @@ pub mod arena;
 pub(crate) mod artifact_f64;
 pub mod asi;
 pub mod ast;
+pub mod authority;
 pub mod backtrace;
 pub mod capability_derivation;
 pub mod codegen;
@@ -46,6 +47,11 @@ pub use ast::{
     InterfaceMember, ObjectLiteralField, ObjectLiteralMember, ObjectPatternField, ParamDecl,
     PatternOrigin, PostfixOp, Stmt, StmtId, StmtKind, SwitchCase, SwitchDefault, TypeAnnotation,
     TypeAnnotationField, TypeAnnotationKind, TypePredicateAnnotation, UnOp, Visibility,
+};
+pub use authority::{
+    AuthorityCallable, AuthorityCallableKind, AuthorityEdge, AuthorityEffect, AuthorityExposure,
+    AuthorityMap, AuthorityPosition, AuthorityRoute, AuthorityRouteEffect, AuthoritySpan,
+    AuthorityWitnessStep,
 };
 pub use backtrace::{BacktraceMode, failure_message, render as render_backtrace};
 pub use capability_derivation::{DerivedCapability, derive_call_site_capability};
