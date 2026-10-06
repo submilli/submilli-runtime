@@ -35,6 +35,7 @@ use std::sync::Arc;
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
+use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record_usage};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::embedding::{
     EmbeddingBatch, EmbeddingBoundKind, EmbeddingError, EmbeddingLimits, EmbeddingMalformedReason,
@@ -260,6 +261,20 @@ async fn embed(
     let budget = execution_budget(caller);
     let limits = budget.limits();
     let texts = read_texts(caller, model, &elements, &limits)?;
+    // The texts are first in hand once the per-call bounds pass, so the request is
+    // recorded here: a call refused for size has no copy to keep.
+    record_payload(&*caller, ticket, Side::Request, || {
+        let body = serde_json::to_vec(&texts).unwrap_or_default();
+        let bytes: usize = texts.iter().map(String::len).sum();
+        Payload::meta(serde_json::json!({
+            "op": "embed",
+            "model": model,
+            "purpose": purpose,
+            "count": texts.len(),
+        }))
+        .with_owned_body(body)
+        .with_size(bytes as u64)
+    });
     let purpose = parse_purpose(model, purpose)?;
 
     let provider = provider(caller, model)?;
@@ -295,6 +310,25 @@ async fn embed(
     }
 
     let received = (batch.values().len() as u64).saturating_mul(4);
+    // Metadata only: vectors are large and say nothing a call log can use.
+    record_payload(&*caller, ticket, Side::Response, || {
+        Payload::meta(serde_json::json!({
+            "count": batch.count(),
+            "dimensions": batch.dimensions(),
+            "identity": batch.identity(),
+            "model": model,
+            "inputTokens": batch.input_tokens(),
+        }))
+        .with_size(received)
+    });
+    record_usage(
+        &*caller,
+        ticket,
+        ModelUsage {
+            input_tokens: batch.input_tokens(),
+            output_tokens: None,
+        },
+    );
     fuel::settle(&mut *caller, fuel::IO, received)?;
     build_embeddings(caller, batch)
 }

@@ -519,6 +519,7 @@ mod tests {
         "http.options",
         "http.download",
         "llm.call",
+        "embedding.embed",
         "mcp.<server>",
     ];
     /// The request is the decision's context; the response is kept for whole reads and
@@ -601,6 +602,10 @@ mod tests {
         (
             "src/stdlib/code/mod.rs",
             Some(crate::stdlib::code::MODULE_NAME),
+        ),
+        (
+            "src/stdlib/embedding/mod.rs",
+            Some(crate::stdlib::embedding::MODULE_NAME),
         ),
         ("src/stdlib/fs/mod.rs", Some(crate::stdlib::fs::MODULE_NAME)),
         (

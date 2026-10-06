@@ -8,10 +8,11 @@ use interpreter::runtime::security::AuditDecision;
 use interpreter::runtime::{
     Access, BodyCopy, CallOutcome, CallRecord, CheckOutcome, DecisionAction, DecisionCause,
     DecisionExplanation, DecisionLog, DecisionLogConfig, DecisionLogOutput, DecisionRecord,
-    EntryPath, ExecutionTokenBudget, FailureReasonRecord, FailureRecord, InMemorySessionKv,
-    LinkedPackageModule, LlmCallError, LlmLimits, LlmModel, LlmOutcome, LlmProvider, MountSpec,
-    NearMissRecord, RecordObserver, RuleCitation, SecurityCheck, SessionKvLimits,
-    SharedTokenBudget, StoreData, Vfs, install_package_modules_async,
+    EmbeddingBatch, EmbeddingError, EmbeddingLimits, EmbeddingModel, EmbeddingProvider,
+    EmbeddingTokenBudget, EntryPath, ExecutionTokenBudget, FailureReasonRecord, FailureRecord,
+    InMemorySessionKv, LinkedPackageModule, LlmCallError, LlmLimits, LlmModel, LlmOutcome,
+    LlmProvider, MountSpec, NearMissRecord, RecordObserver, RuleCitation, SecurityCheck,
+    SessionKvLimits, SharedTokenBudget, StoreData, Vfs, install_package_modules_async,
     install_runtime_host_functions, install_runtime_store_bound, install_tenant_limits,
     limits::ExecutionUsage,
 };
@@ -240,6 +241,8 @@ struct Setup {
     read_only_volume: bool,
     /// Installs a fake model provider (`open`, `secret`) with this token ceiling.
     llm: Option<LlmLimits>,
+    /// Installs a fake embedding provider (`open-embed`, 4 dimensions).
+    embedding: bool,
     near_miss_actual: Option<Value>,
     observer: Option<Arc<dyn RecordObserver>>,
     response_body: Option<Vec<u8>>,
@@ -365,6 +368,13 @@ async fn run(source: &str, setup: Setup) -> Outcome {
             SharedTokenBudget::new(u64::MAX),
         )));
     }
+    if setup.embedding {
+        data.embedding_provider = Some(Arc::new(FakeEmbedding));
+        data.embedding_budget = Some(Arc::new(EmbeddingTokenBudget::new(
+            EmbeddingLimits::default(),
+            SharedTokenBudget::new(u64::MAX),
+        )));
+    }
     data.security_check = policy.clone();
     if setup.git {
         data.git = Some(GitConfig {
@@ -461,6 +471,57 @@ impl LlmProvider for FakeLlm {
         Box<dyn std::future::Future<Output = Result<Vec<LlmModel>, LlmCallError>> + Send + 'a>,
     > {
         Box::pin(async { Ok(vec![LlmModel::new("open"), LlmModel::new("secret")]) })
+    }
+}
+
+/// Serves `open-embed`: four dimensions, 7 reported input tokens per batch.
+struct FakeEmbedding;
+
+impl EmbeddingProvider for FakeEmbedding {
+    fn embed<'a>(
+        &'a self,
+        alias: &'a str,
+        texts: &'a [String],
+        _purpose: interpreter::runtime::Purpose,
+        budget: &'a EmbeddingTokenBudget,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<EmbeddingBatch, EmbeddingError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let estimate = self.estimate_tokens(alias, texts);
+            budget.mark_sent(alias, estimate)?;
+            let batch = EmbeddingBatch::new(
+                vec![0.5; texts.len() * 4],
+                texts.len(),
+                4,
+                "emb1:fake:open-embed:4:01",
+                alias,
+            )
+            .expect("shape")
+            .with_input_tokens(Some(7))
+            .with_settlements(vec![interpreter::runtime::SubBatchSettlement {
+                estimate,
+                reported: 7,
+                indeterminate: 0,
+            }]);
+            Ok(batch)
+        })
+    }
+
+    fn models<'a>(
+        &'a self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<EmbeddingModel>, EmbeddingError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn max_input_bytes(&self, alias: &str) -> Option<u64> {
+        (alias == "open-embed").then_some(1024)
     }
 }
 
@@ -1630,6 +1691,58 @@ function main(): string { return llm.call("open", "what is two plus two").text ?
         Some(interpreter::runtime::ModelUsage {
             input_tokens: Some(10),
             output_tokens: Some(10),
+        })
+    );
+}
+
+#[tokio::test]
+async fn an_embed_call_keeps_its_texts_and_metadata_but_never_the_vectors() {
+    let source = r#"
+import embedding from "submilli:embedding";
+function main(): string {
+  return embedding.embed("open-embed", ["alpha", "beta"], "query").count.toString();
+}
+"#;
+    let outcome = run(
+        source,
+        Setup {
+            record: recording(),
+            embedding: true,
+            ..Setup::default()
+        },
+    )
+    .await;
+    assert_eq!(outcome.result, Ok("2".to_owned()));
+    let call = outcome.call("embedding.embed");
+    assert_eq!(call.outcome, Some(CallOutcome::Returned));
+    let request = call.request.as_ref().expect("the texts");
+    assert_eq!(
+        request.meta,
+        json!({ "op": "embed", "model": "open-embed", "purpose": "query", "count": 2 })
+    );
+    assert_eq!(
+        body_text(request.body.as_ref()),
+        Some(r#"["alpha","beta"]"#)
+    );
+    assert_eq!(request.bytes, "alphabeta".len() as u64);
+    let response = call.response.as_ref().expect("the metadata");
+    assert_eq!(
+        response.meta,
+        json!({
+            "count": 2,
+            "dimensions": 4,
+            "identity": "emb1:fake:open-embed:4:01",
+            "model": "open-embed",
+            "inputTokens": 7,
+        })
+    );
+    assert!(response.body.is_none(), "no vectors: {response:?}");
+    assert_eq!(response.bytes, 2 * 4 * 4);
+    assert_eq!(
+        call.usage,
+        Some(interpreter::runtime::ModelUsage {
+            input_tokens: Some(7),
+            output_tokens: None,
         })
     );
 }
