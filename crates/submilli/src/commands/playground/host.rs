@@ -11,10 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
-use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::header::{CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{HeaderValue, StatusCode};
@@ -32,6 +31,7 @@ use super::project::Project;
 use super::state::{APP_TOKEN, Lock, StateDir};
 use super::store::redact::WatchedSecretStore;
 use super::store::{KnownSecrets, Recorder, Store};
+use super::watch::{self, Applier, BlueprintStatus};
 use super::{Egress, ReadyRecord};
 
 /// How long in-flight requests may finish after a stop before they are dropped.
@@ -83,9 +83,8 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
         .with_context(|| format!("reading {}", options.project.blueprint.display()))?;
     let blueprint = submilli_blueprint::parse(&blueprint_yaml)
         .with_context(|| format!("parsing {}", options.project.blueprint.display()))?;
-    let admin = state_dir.admin_token()?;
     let secrets = KnownSecrets::default();
-    let store = Store::open(&state_dir.store_dir()).context("opening the run store")?;
+    let store = Arc::new(Store::open(&state_dir.store_dir()).context("opening the run store")?);
     let secret_store = Arc::new(WatchedSecretStore::new(
         crate::commands::local::open_secret_store()?,
         secrets.clone(),
@@ -95,7 +94,7 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
         &options.egress,
         tokens.clone(),
         Some(secret_store),
-        Some(Arc::new(Recorder::new(Arc::new(store), secrets))),
+        Some(Arc::new(Recorder::new(Arc::clone(&store), secrets))),
     );
     let runtime = submilli_server::runtime(&config).context("starting the async runtime")?;
     let result = runtime.block_on(run(
@@ -103,10 +102,9 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
         state_dir,
         config,
         tokens,
-        Registration {
+        Served {
             name: blueprint.name.clone(),
-            yaml: blueprint_yaml,
-            admin,
+            store,
         },
     ));
     // Teardown is bounded: a stray connection task must not keep the process up.
@@ -114,10 +112,11 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
     result
 }
 
-struct Registration {
+/// The blueprint the playground serves, by the name it had at start, and the store
+/// its versions are logged in.
+struct Served {
     name: String,
-    yaml: String,
-    admin: String,
+    store: Arc<Store>,
 }
 
 async fn run(
@@ -125,12 +124,21 @@ async fn run(
     state_dir: StateDir,
     mut config: ServerConfig,
     tokens: Vec<submilli_server::ApiToken>,
-    blueprint: Registration,
+    blueprint: Served,
 ) -> Result<()> {
     config.blueprints = Some(submilli_server::prepare_blueprint_store(&config).await?);
     let state = AppState::new(config)?;
     state.boot().await?;
-    register_blueprint(&state, &blueprint).await?;
+    // The file as it is now, then every save, through the trusted local path.
+    let applier = Arc::new(Applier::new(
+        state.clone(),
+        blueprint.store,
+        options.project.blueprint.clone(),
+        blueprint.name.clone(),
+    ));
+    applier.start().await?;
+    let blueprint_status = applier.status();
+    let _watch = watch::watch(applier, watch::DEBOUNCE)?;
 
     let server = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .await
@@ -155,6 +163,7 @@ async fn run(
         nonce: options.nonce.clone(),
         server_shutdown: state.shutdown_signal(),
         description: description.clone(),
+        blueprint_status,
     }));
     let control_stop = Arc::new(Notify::new());
     let control_task = tokio::spawn({
@@ -197,46 +206,6 @@ async fn run(
     }
     state_dir.remove_if_ours(&options.nonce);
     served
-}
-
-async fn register_blueprint(state: &AppState, blueprint: &Registration) -> Result<()> {
-    use tower::ServiceExt;
-    // Create-or-replace: a restart applies the file as it is now.
-    let mut uri = url::Url::parse("http://playground/v1/blueprints")
-        .context("building the blueprint registration")?;
-    uri.path_segments_mut()
-        .map_err(|()| anyhow::anyhow!("building the blueprint registration"))?
-        .push(&blueprint.name);
-    let request = Request::builder()
-        .method("PUT")
-        .uri(uri.path())
-        .header(CONTENT_TYPE, "application/json")
-        .header(
-            axum::http::header::AUTHORIZATION,
-            format!("Bearer {}", blueprint.admin),
-        )
-        .body(Body::from(json!({ "yaml": blueprint.yaml }).to_string()))
-        .context("building the blueprint registration")?;
-    let response = submilli_server::app(state.clone())
-        .oneshot(request)
-        .await
-        .context("registering the blueprint")?;
-    let status = response.status();
-    if status.is_success() {
-        return Ok(());
-    }
-    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
-        .await
-        .unwrap_or_default();
-    let message = serde_json::from_slice::<Value>(&body)
-        .ok()
-        .and_then(|body| body["message"].as_str().map(str::to_owned))
-        .unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned());
-    bail!(
-        "the server refused blueprint `{}` ({}): {message}",
-        blueprint.name,
-        status.as_u16()
-    )
 }
 
 fn server_config(
@@ -343,6 +312,8 @@ struct ControlInner {
     nonce: String,
     server_shutdown: Arc<Notify>,
     description: Description,
+    /// The version in force and the last refused save.
+    blueprint_status: Arc<std::sync::Mutex<BlueprintStatus>>,
 }
 
 /// The control listener's routes, by who may call them. Later steps add their
@@ -542,6 +513,13 @@ async fn status(State(state): State<ControlState>) -> Response {
             "browser_sessions".into(),
             json!(state.0.auth.browser_sessions(Instant::now())),
         );
+        let blueprint_status = state
+            .0
+            .blueprint_status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        object.insert("blueprint_status".into(), json!(blueprint_status));
     }
     Json(description).into_response()
 }

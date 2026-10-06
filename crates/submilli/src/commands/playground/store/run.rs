@@ -144,6 +144,10 @@ pub(crate) struct RunSummary {
     pub(crate) session_id: Option<String>,
     pub(crate) variables: BTreeMap<String, String>,
     pub(crate) blueprint: String,
+    /// The blueprint version the run was decided under: the playground's version
+    /// number, or the blueprint's hash for a run recorded before versions were kept.
+    #[serde(default)]
+    pub(crate) blueprint_version: Option<String>,
     pub(crate) started_at_micros: u64,
     pub(crate) wall_ms: u64,
     pub(crate) dispatched: bool,
@@ -164,6 +168,7 @@ impl RunSummary {
             session_id: run.recording.session_id.clone(),
             variables: run.recording.variables.clone(),
             blueprint: run.recording.blueprint_name.clone(),
+            blueprint_version: run.recording.blueprint_version.clone(),
             started_at_micros: run.started_at_micros,
             wall_ms: run.wall_ms,
             dispatched: run.dispatched,

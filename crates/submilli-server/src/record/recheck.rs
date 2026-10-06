@@ -24,6 +24,10 @@ pub struct RecordedRun {
     pub execution_id: String,
     pub blueprint_name: String,
     pub blueprint_hash: Option<String>,
+    /// The blueprint version the run was decided under; see
+    /// [`RunStart::blueprint_version`]. Absent from recordings made before it was kept.
+    #[serde(default)]
+    pub blueprint_version: Option<String>,
     /// The program's source; `None` for a file tool.
     pub code: Option<String>,
     /// The session the run executed in, whose files and data a test run copies.
@@ -61,6 +65,7 @@ impl RecordedRun {
             execution_id: start.execution_id.clone(),
             blueprint_name: start.blueprint_name.clone(),
             blueprint_hash: start.blueprint_hash.clone(),
+            blueprint_version: start.blueprint_version.clone(),
             code: start.code.as_deref().map(str::to_owned),
             session_id: start.session_id.clone(),
             variables: (*start.variables).clone(),

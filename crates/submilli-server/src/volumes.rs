@@ -13,22 +13,29 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use interpreter::runtime::{DiskQuota, measure_host_dir};
 use tokio::sync::OnceCell;
 
 use crate::config::{
-    Access, SizeLimit, VolumeKind, VolumeTable, default_managed_volume_root, is_managed_name,
+    Access, SizeLimit, VolumeKind, VolumeSpec, VolumeTable, default_managed_volume_root,
+    is_managed_name,
 };
 use crate::session_manager::SessionError;
 
 pub struct VolumeRegistry {
-    table: VolumeTable,
+    /// Fixed at startup, except that the operator-trusted local apply path may add
+    /// a `managed-local` volume ([`Self::declare_managed`]); nothing removes or
+    /// changes a declaration. Poison means a panic interrupted such an addition;
+    /// AGENTS.md permits the poisoned-lock panic rather than reading a table that
+    /// may be half-updated.
+    table: RwLock<VolumeTable>,
     managed_root: PathBuf,
     /// One cell per volume with a byte limit, so concurrent first users
-    /// measure it once and share the result.
-    quotas: BTreeMap<String, OnceCell<Arc<DiskQuota>>>,
+    /// measure it once and share the result. Grows with the table, under the
+    /// same poisoning rule.
+    quotas: RwLock<BTreeMap<String, Arc<OnceCell<Arc<DiskQuota>>>>>,
     /// For a volume that is a partial copy: what the source holds that the copy does not,
     /// added to the copy's own measure. `None` is a source that could not be measured.
     /// Empty for every volume of a normal run.
@@ -85,19 +92,77 @@ impl std::fmt::Display for ReferenceError {
 
 impl std::error::Error for ReferenceError {}
 
+/// Why a volume could not be declared at runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclareError {
+    /// The name cannot be one directory name under the managed root.
+    BadName { volume: String },
+}
+
+impl std::fmt::Display for DeclareError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeclareError::BadName { volume } => write!(
+                f,
+                "volume '{volume}' cannot be stored as a managed volume: a name is up to 64 \
+                 letters, digits, `.`, `_`, or `-`, starting with a letter or digit"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DeclareError {}
+
 impl VolumeRegistry {
     pub fn new(table: VolumeTable, managed_root: PathBuf) -> Self {
         let quotas = table
             .iter()
             .filter(|(_, spec)| matches!(spec.size_limit, SizeLimit::Bytes(_)))
-            .map(|(name, _)| (name.clone(), OnceCell::new()))
+            .map(|(name, _)| (name.clone(), Arc::new(OnceCell::new())))
             .collect();
         Self {
-            table,
+            table: RwLock::new(table),
             managed_root,
-            quotas,
+            quotas: RwLock::new(quotas),
             usage_offsets: BTreeMap::new(),
         }
+    }
+
+    /// Declares `volume` as a `managed-local` volume, read-write, stored at
+    /// `<managed root>/<volume>`, unless a volume of that name is already declared.
+    /// Returns whether it was added. Only the operator-trusted local apply path
+    /// calls this: a deployed server's table stays what its operator declared.
+    pub(crate) fn declare_managed(
+        &self,
+        volume: &str,
+        size_limit: SizeLimit,
+    ) -> Result<bool, DeclareError> {
+        if !is_managed_name(volume) {
+            return Err(DeclareError::BadName {
+                volume: volume.to_owned(),
+            });
+        }
+        // Lock order: the table, then the quotas, as `quota` never holds both.
+        let mut table = self.table.write().expect("volume table poisoned");
+        if table.contains_key(volume) {
+            return Ok(false);
+        }
+        if matches!(size_limit, SizeLimit::Bytes(_)) {
+            self.quotas
+                .write()
+                .expect("volume quotas poisoned")
+                .insert(volume.to_owned(), Arc::new(OnceCell::new()));
+        }
+        table.insert(volume.to_owned(), VolumeSpec::managed(size_limit));
+        Ok(true)
+    }
+
+    fn spec(&self, volume: &str) -> Option<VolumeSpec> {
+        self.table
+            .read()
+            .expect("volume table poisoned")
+            .get(volume)
+            .cloned()
     }
 
     /// Counts `offsets` against each named volume's size limit on top of what its
@@ -107,9 +172,9 @@ impl VolumeRegistry {
         self
     }
 
-    /// The declarations, by name.
-    pub fn table(&self) -> &VolumeTable {
-        &self.table
+    /// The declarations, by name, as they are now.
+    pub fn table(&self) -> VolumeTable {
+        self.table.read().expect("volume table poisoned").clone()
     }
 
     /// Whether a blueprint may name `volume` with `requested` access: the
@@ -120,7 +185,11 @@ impl VolumeRegistry {
         volume: &str,
         requested: Option<Access>,
     ) -> Result<(), ReferenceError> {
-        check_reference(&self.table, volume, requested)
+        check_reference(
+            &self.table.read().expect("volume table poisoned"),
+            volume,
+            requested,
+        )
     }
 
     /// Where `volume` lives and the access a program gets: what the blueprint
@@ -132,7 +201,7 @@ impl VolumeRegistry {
         volume: &str,
         requested: Option<Access>,
     ) -> Result<ResolvedVolume, SessionError> {
-        let Some(spec) = self.table.get(volume) else {
+        let Some(spec) = self.spec(volume) else {
             tracing::warn!(
                 volume,
                 "blueprint names a volume this server does not declare"
@@ -186,13 +255,19 @@ impl VolumeRegistry {
     /// fails is not remembered, so the next call measures again, and this call
     /// gets a limit that refuses every write that grows the volume.
     pub(crate) async fn quota(&self, volume: &str) -> Result<Option<Arc<DiskQuota>>, SessionError> {
-        let Some(spec) = self.table.get(volume) else {
+        let Some(spec) = self.spec(volume) else {
             return Err(SessionError::UnknownVolume(volume.to_string()));
         };
         let SizeLimit::Bytes(limit) = spec.size_limit else {
             return Ok(None);
         };
-        let Some(cell) = self.quotas.get(volume) else {
+        let cell = self
+            .quotas
+            .read()
+            .expect("volume quotas poisoned")
+            .get(volume)
+            .cloned();
+        let Some(cell) = cell else {
             return Err(SessionError::UnknownVolume(volume.to_string()));
         };
         let host = self.host_of(volume, &spec.kind)?;
@@ -229,7 +304,7 @@ impl VolumeRegistry {
     /// shows up in the boot log rather than on a first execute. A failure is
     /// only logged: the volume is retried when it is used.
     pub fn prepare(&self) {
-        for (name, spec) in &self.table {
+        for (name, spec) in &self.table() {
             if spec.kind != VolumeKind::ManagedLocal {
                 continue;
             }

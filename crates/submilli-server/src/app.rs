@@ -31,7 +31,7 @@ use submilli_shared::llm::{
     BlueprintLlmProvider, HttpModelDispatch, HttpModelDispatchError, ModelDispatch,
 };
 use submilli_shared::secret_store::SecretStore;
-use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::sync::{Mutex as AsyncMutex, Notify, RwLock as AsyncRwLock};
 use wasmtime::{Engine, Linker, Module};
 
 use crate::ServerConfig;
@@ -172,6 +172,12 @@ struct AppStateInner {
     /// interrupted a registration; AGENTS.md permits the poisoned-lock panic.
     running: Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
     run_telemetry: crate::config::RunTelemetry,
+    /// The opaque version tag each registered blueprint carries, by name: set by
+    /// [`AppState::apply_local_blueprint`], cleared by every other registration.
+    /// Every write to the blueprint store holds this lock for writing across the
+    /// write, and a run's lookup holds it for reading across its read, so a run
+    /// sees a blueprint and its tag from one registration.
+    blueprint_tags: AsyncRwLock<HashMap<String, String>>,
 }
 
 /// Removes a run's canceller once the run is over.
@@ -387,6 +393,7 @@ impl AppState {
                 run_recorder: config.run_recorder,
                 running: Mutex::new(HashMap::new()),
                 run_telemetry: config.run_telemetry,
+                blueprint_tags: AsyncRwLock::new(HashMap::new()),
             }),
         })
     }
@@ -515,6 +522,28 @@ impl AppState {
         &self.inner.sessions
     }
 
+    /// The blueprint a run is decided under and its version tag, read together:
+    /// a concurrent registration lands wholly before or wholly after this lookup.
+    /// The tag is `None` for a blueprint registered without one.
+    pub(crate) async fn blueprint_for_run(
+        &self,
+        name: &str,
+    ) -> std::result::Result<Option<(Blueprint, Option<String>)>, crate::blueprint::StoreError>
+    {
+        let tags = self.inner.blueprint_tags.read().await;
+        let found = self.blueprints().get(name).await?;
+        Ok(found.map(|blueprint| (blueprint, tags.get(name).cloned())))
+    }
+
+    /// Held across a write to the blueprint store, so no run reads the blueprint
+    /// and its tag from different registrations. A writer that registers without
+    /// a tag removes the name's entry.
+    pub(crate) async fn blueprint_tags_for_write(
+        &self,
+    ) -> tokio::sync::RwLockWriteGuard<'_, HashMap<String, String>> {
+        self.inner.blueprint_tags.write().await
+    }
+
     pub(crate) fn blueprints(&self) -> &Arc<dyn BlueprintStore> {
         &self.inner.blueprints
     }
@@ -619,7 +648,7 @@ impl AppState {
 
     /// The operator-declared volume table, read from the session manager so
     /// the listing endpoint and mount-time resolution share one source.
-    pub(crate) fn volumes(&self) -> &VolumeTable {
+    pub(crate) fn volumes(&self) -> VolumeTable {
         self.inner.session_manager.volumes()
     }
 
@@ -877,8 +906,9 @@ impl AppState {
     }
 
     /// Drop the discovered `@mcp/<server>` catalog so the next execute rediscovers
-    /// it against the current `mcp:` block. Called on blueprint update and removal.
-    pub(crate) fn evict_mcp_catalog(&self, name: &str) {
+    /// it against the current `mcp:` block. Called on blueprint update and removal,
+    /// including [`Self::apply_local_blueprint`].
+    pub fn evict_mcp_catalog(&self, name: &str) {
         let mut catalogs = self
             .inner
             .mcp_catalogs
@@ -894,7 +924,7 @@ impl AppState {
     /// resolves — a new transitive dependency, or an owned copy now shadowing a
     /// fallback one — and no cache key records which files a set came from, so
     /// the only sound eviction after an install is a full one.
-    pub(crate) fn evict_all_prepared_packages(&self) {
+    pub fn evict_all_prepared_packages(&self) {
         let mut cache = self
             .inner
             .prepared_packages
@@ -908,7 +938,10 @@ impl AppState {
         cache.clear();
     }
 
-    pub(crate) fn evict_prepared_packages(&self, name: &str) {
+    /// Drop the prepared package modules cached for blueprint `name`, so the next
+    /// run loads them from the package store again: after a blueprint change, or
+    /// once an embedder has rebuilt a package that blueprint uses.
+    pub fn evict_prepared_packages(&self, name: &str) {
         let mut cache = self
             .inner
             .prepared_packages
@@ -1518,3 +1551,6 @@ mod mcp_setup_tests;
 
 #[cfg(test)]
 mod blueprint_mutation_tests;
+
+#[cfg(test)]
+mod local_apply_tests;

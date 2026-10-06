@@ -43,6 +43,9 @@ ipnet = { workspace = true }
 hmac = "0.12"
 async-trait = { workspace = true }
 percent-encoding = { workspace = true }
+# The playground's blueprint watcher: one coalesced "something changed" per burst of
+# filesystem events, which is all it needs, since it re-reads the file each time.
+notify-debouncer-mini = "0.7"
 
 [dev-dependencies]
 rcgen.workspace = true

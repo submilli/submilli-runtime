@@ -140,7 +140,7 @@ pub(crate) async fn one_shot_with(
 
     // Blueprint and variables are supplied inline and validated here, before the
     // shared core runs them.
-    let found = match state.blueprints().get(&req.blueprint).await {
+    let found = match state.blueprint_for_run(&req.blueprint).await {
         Ok(found) => found,
         Err(error) => {
             return failed(
@@ -149,7 +149,7 @@ pub(crate) async fn one_shot_with(
             );
         }
     };
-    let Some(blueprint) = found else {
+    let Some((blueprint, version_tag)) = found else {
         return match blueprint_miss_message(state, &req.blueprint).await {
             Ok(message) => failed(ErrorKind::BlueprintNotFound, message),
             Err(error) => failed(
@@ -221,6 +221,7 @@ pub(crate) async fn one_shot_with(
             code: &req.code,
             blueprint_name: &req.blueprint,
             blueprint,
+            version_tag,
             variables,
             harness_secrets,
             audit,
@@ -257,6 +258,9 @@ pub(crate) struct ExecuteInputs<'a> {
     pub blueprint_name: &'a str,
     /// The blueprint the run is decided under.
     pub blueprint: Arc<Blueprint>,
+    /// The version tag read with `blueprint`, in the same lookup; `None` when it was
+    /// registered without one.
+    pub version_tag: Option<String>,
     /// The validated `${vars.NAME}` bindings.
     pub variables: Arc<VarBindings>,
     /// Trusted harness credentials for this run alone.
@@ -389,6 +393,10 @@ fn run_start(inputs: &ExecuteInputs<'_>, test: Option<&TestWorld>) -> crate::rec
         blueprint_name: inputs.blueprint_name.to_owned(),
         blueprint: Arc::clone(&inputs.blueprint),
         blueprint_hash: crate::audit::blueprint_hash(&inputs.blueprint),
+        blueprint_version: inputs
+            .version_tag
+            .clone()
+            .or_else(|| crate::audit::blueprint_hash(&inputs.blueprint)),
         variables: Arc::clone(&inputs.variables),
         harness_secrets: Arc::clone(&inputs.harness_secrets),
         code: Some(Arc::from(inputs.code)),
@@ -427,6 +435,7 @@ async fn prepare_and_run(
         code,
         blueprint_name,
         blueprint,
+        version_tag: _,
         variables,
         harness_secrets,
         audit: execution_audit,

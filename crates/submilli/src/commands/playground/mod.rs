@@ -33,6 +33,8 @@ mod project;
 mod state;
 #[cfg(unix)]
 mod store;
+#[cfg(unix)]
+mod watch;
 
 /// Not running, or a lock whose listener failed the nonce challenge.
 const EXIT_NOT_RUNNING: u8 = 6;
@@ -257,6 +259,7 @@ impl ReadyRecord {
         if let Some(object) = description.as_object_mut() {
             object.remove("running");
             object.remove("browser_sessions");
+            object.remove("blueprint_status");
             let url = object
                 .get("url")
                 .and_then(Value::as_str)
@@ -530,6 +533,17 @@ mod unix {
                     "  browsers:   {} signed in",
                     status["browser_sessions"].as_u64().unwrap_or(0)
                 );
+                let blueprint = &status["blueprint_status"];
+                if let Some(version) = blueprint["version"].as_u64() {
+                    println!("  version:    {version} in force");
+                }
+                if blueprint["refused"].is_object() {
+                    let refused = &blueprint["refused"];
+                    let line = refused["line"]
+                        .as_u64()
+                        .map_or_else(String::new, |line| format!("line {line}: "));
+                    println!("  refused:    {line}{}", super::text(&refused["message"]));
+                }
             }
         }
         Ok(ExitCode::SUCCESS)

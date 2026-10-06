@@ -14,6 +14,7 @@ mod graceful_shutdown;
 pub mod handlers;
 pub mod idempotency;
 pub mod idempotency_store;
+pub mod local_apply;
 pub mod logging;
 mod mcp;
 pub mod metrics;
@@ -33,6 +34,7 @@ pub use config::{RunTelemetry, ServerConfig};
 pub use interpreter::runtime::{
     DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, LlmLimits, NetworkPolicy, RuntimeConfig,
 };
+pub use local_apply::{LocalApplied, LocalApplyError, LocalDiagnostic};
 pub use serve::{prepare_blueprint_store, runtime, serve, serve_embedded};
 pub use submilli_shared::mcp_token::{McpTokenError, OAuthTokenManager};
 pub use submilli_shared::secret_store::{FileSecretStore, KeySource};

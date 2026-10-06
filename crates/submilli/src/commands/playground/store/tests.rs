@@ -100,6 +100,7 @@ fn run_start(execution_id: &str, session: Option<&str>) -> RunStart {
         blueprint_name: "demo".into(),
         blueprint: Arc::new(Blueprint::default()),
         blueprint_hash: Some("bphash".into()),
+        blueprint_version: None,
         variables: Arc::new(VarBindings::from([(
             "customerId".to_owned(),
             "cus_northwind".to_owned(),

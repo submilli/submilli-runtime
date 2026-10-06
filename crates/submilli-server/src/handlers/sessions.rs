@@ -175,11 +175,11 @@ pub async fn execute(
         )
             .into_response();
     };
-    let found = match state.blueprints().get(&blueprint_name).await {
+    let found = match state.blueprint_for_run(&blueprint_name).await {
         Ok(found) => found,
         Err(error) => return execution_store_failure(error),
     };
-    let Some(blueprint) = found else {
+    let Some((blueprint, version_tag)) = found else {
         // A session outlives a restart, so its blueprint may have become unrunnable
         // (rather than removed) while the session slept: `message` says which.
         let message = match blueprint_miss_message(&state, &blueprint_name).await {
@@ -227,7 +227,7 @@ pub async fn execute(
                 &state,
                 &session_id,
                 &blueprint_name,
-                blueprint,
+                (blueprint, version_tag),
                 variables,
                 harness_secrets,
                 &req.code,
@@ -272,7 +272,7 @@ pub async fn execute(
         &state,
         &session_id,
         &blueprint_name,
-        blueprint,
+        (blueprint, version_tag),
         variables,
         harness_secrets,
         &req.code,
@@ -306,7 +306,7 @@ async fn run(
     state: &AppState,
     session_id: &str,
     blueprint_name: &str,
-    blueprint: submilli_blueprint::Blueprint,
+    (blueprint, version_tag): (submilli_blueprint::Blueprint, Option<String>),
     variables: Arc<submilli_blueprint::VarBindings>,
     harness_secrets: Arc<HarnessSecretBindings>,
     code: &str,
@@ -319,6 +319,7 @@ async fn run(
             code,
             blueprint_name,
             blueprint: Arc::new(blueprint),
+            version_tag,
             variables,
             harness_secrets,
             audit: crate::audit::execution(),

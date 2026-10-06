@@ -659,7 +659,7 @@ impl SessionManager {
     }
 
     /// The declared volume table, for registration checks and listings.
-    pub(crate) fn volumes(&self) -> &VolumeTable {
+    pub(crate) fn volumes(&self) -> VolumeTable {
         self.volumes.table()
     }
 

@@ -70,6 +70,7 @@ fn recorded(variables: &[(&str, &str)], decisions: Vec<DecisionRecord>) -> Recor
         execution_id: "run-1".into(),
         blueprint_name: "bp".into(),
         blueprint_hash: None,
+        blueprint_version: None,
         code: Some("function main(): string { return \"x\"; }".into()),
         session_id: None,
         variables: variables
@@ -361,6 +362,7 @@ fn a_recorded_run_is_built_from_its_start_and_end_and_serializes() {
         blueprint_name: "bp".into(),
         blueprint: Arc::new(blueprint(DENY_ALL)),
         blueprint_hash: Some("abc".into()),
+        blueprint_version: None,
         variables: Arc::new(VarBindings::from([("a".to_owned(), "b".to_owned())])),
         harness_secrets: Arc::default(),
         code: Some(Arc::from("function main(): void {}")),
