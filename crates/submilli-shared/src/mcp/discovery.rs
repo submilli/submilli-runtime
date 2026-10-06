@@ -19,7 +19,7 @@ use interpreter::PackageDeclaration;
 use interpreter::packages::ModuleSummary;
 use interpreter::stdlib::http::NetworkPolicy;
 use rmcp::ServiceExt;
-use rmcp::model::ClientInfo;
+use rmcp::model::{ClientInfo, PaginatedRequestParams, Tool};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use serde_json::Value;
@@ -33,6 +33,7 @@ use crate::mcp_auth::{AuthState, blueprint_auth_state};
 use crate::mcp_token::OAuthTokenManager;
 use crate::secret_store::SecretStore;
 use interpreter::runtime::McpCallError;
+use interpreter::runtime::mcp::MCP_MAX_RESPONSE_BYTES;
 
 /// Local initialization or invariant failures; remote failures remain warnings.
 #[derive(Debug)]
@@ -95,6 +96,13 @@ pub struct DiscoveryAuth<'a> {
 /// `tools/list` must complete within this bound or the server is treated as
 /// unreachable — a hung endpoint can't stall blueprint binding.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Aggregate limits for one server's paginated `tools/list` result. Each decoded
+/// response is separately capped by [`MCP_MAX_RESPONSE_BYTES`]; these limits cap
+/// the data retained after that response has been decoded.
+const MAX_DISCOVERY_PAGES: usize = 128;
+const MAX_DISCOVERY_TOOLS: usize = 4_096;
+const MAX_DISCOVERY_CATALOG_BYTES: usize = MCP_MAX_RESPONSE_BYTES;
 
 /// One reachable server's virtual package. Unavailable servers (unauthenticated or
 /// unreachable) are omitted from the catalog entirely — see [`discover_all`].
@@ -388,9 +396,8 @@ async fn discover_server(
         client_factory,
     );
     let result = tokio::time::timeout(DISCOVERY_TIMEOUT, fetch).await;
-    if let Some(error) = connection.close().await {
-        return Err(response_failure(error));
-    }
+    let cleanup_error = connection.close().await.map(response_failure);
+    let result = reconcile_cleanup(result, cleanup_error);
     match result {
         Ok(Ok(tools)) => {
             // A built-in schema pack (matched by endpoint host) fills typed returns for
@@ -429,6 +436,24 @@ async fn discover_server(
             )
             .into())
         }
+    }
+}
+
+fn reconcile_cleanup<T, E>(
+    attempt: Result<Result<T, DiscoveryAttemptError>, E>,
+    cleanup: Option<DiscoveryAttemptError>,
+) -> Result<Result<T, DiscoveryAttemptError>, E> {
+    match (attempt, cleanup) {
+        (Ok(Err(DiscoveryAttemptError::Fatal(error))), _) => {
+            Ok(Err(DiscoveryAttemptError::Fatal(error)))
+        }
+        (_, Some(DiscoveryAttemptError::Fatal(error))) => {
+            Ok(Err(DiscoveryAttemptError::Fatal(error)))
+        }
+        (_, Some(DiscoveryAttemptError::Unavailable(error))) => {
+            Ok(Err(DiscoveryAttemptError::Unavailable(error)))
+        }
+        (attempt, None) => attempt,
     }
 }
 
@@ -498,26 +523,212 @@ async fn fetch_tools(
         .ok_or(DiscoveryAttemptError::Fatal(DiscoveryError::Internal {
             message: "MCP discovery client is missing",
         }))?;
-    let tools = tokio::select! {
-        result = client.list_all_tools() => {
-            match budget.error() {
-                Some(error) => Err(response_failure(error)),
-                None => result.map_err(|error| DiscoveryAttemptError::Unavailable(error.into())),
+    let mut catalog = ToolCatalogAccumulator::default();
+    let mut cursor = None;
+    loop {
+        catalog.start_page()?;
+        let page = tokio::select! {
+            result = client.list_tools(Some(PaginatedRequestParams::default().with_cursor(cursor))) => {
+                match budget.error() {
+                    Some(error) => Err(response_failure(error)),
+                    None => result.map_err(|error| DiscoveryAttemptError::Unavailable(error.into())),
+                }
             }
-        }
-        error = budget.wait() => Err(response_failure(error)),
-    };
-    let tools = tools?;
+            error = budget.wait() => Err(response_failure(error)),
+        }?;
+        catalog.push_tools(page.tools)?;
+        let Some(next_cursor) = page.next_cursor else {
+            break;
+        };
+        cursor = Some(catalog.track_cursor(next_cursor)?);
+    }
+    Ok(catalog.finish())
+}
 
-    Ok(tools
-        .into_iter()
-        .map(|t| ToolCatalogEntry {
-            name: t.name.to_string(),
-            description: t.description.map(|d| d.to_string()),
-            input_schema: Value::Object((*t.input_schema).clone()),
-            output_schema: t.output_schema.map(|s| Value::Object((*s).clone())),
+struct ToolCatalogAccumulator {
+    limits: DiscoveryLimits,
+    pages: usize,
+    retained_bytes: RetainedBytes,
+    seen_cursors: HashSet<String>,
+    tools: Vec<ToolCatalogEntry>,
+}
+
+impl Default for ToolCatalogAccumulator {
+    fn default() -> Self {
+        Self::new(DiscoveryLimits {
+            max_pages: MAX_DISCOVERY_PAGES,
+            max_tools: MAX_DISCOVERY_TOOLS,
+            max_bytes: MAX_DISCOVERY_CATALOG_BYTES,
         })
-        .collect())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DiscoveryLimits {
+    max_pages: usize,
+    max_tools: usize,
+    max_bytes: usize,
+}
+
+impl ToolCatalogAccumulator {
+    fn new(limits: DiscoveryLimits) -> Self {
+        Self {
+            limits,
+            pages: 0,
+            retained_bytes: RetainedBytes::new(limits.max_bytes),
+            seen_cursors: HashSet::new(),
+            tools: Vec::new(),
+        }
+    }
+
+    fn start_page(&mut self) -> Result<(), DiscoveryAttemptError> {
+        self.pages = self.pages.checked_add(1).ok_or_else(catalog_too_large)?;
+        if self.pages > self.limits.max_pages {
+            return Err(catalog_too_large());
+        }
+        Ok(())
+    }
+
+    fn push_tools(&mut self, tools: Vec<Tool>) -> Result<(), DiscoveryAttemptError> {
+        let total = self
+            .tools
+            .len()
+            .checked_add(tools.len())
+            .ok_or_else(catalog_too_large)?;
+        if total > self.limits.max_tools {
+            return Err(catalog_too_large());
+        }
+        self.tools
+            .try_reserve(tools.len())
+            .map_err(|_| discovery_allocation_failed())?;
+        for tool in tools {
+            self.push_tool(tool)?;
+        }
+        Ok(())
+    }
+
+    fn push_tool(&mut self, tool: Tool) -> Result<(), DiscoveryAttemptError> {
+        self.retained_bytes.add(tool.name.len())?;
+        if let Some(description) = &tool.description {
+            self.retained_bytes.add(description.len())?;
+        }
+        self.retained_bytes.add_json(tool.input_schema.as_ref())?;
+        if let Some(output_schema) = &tool.output_schema {
+            self.retained_bytes.add_json(output_schema.as_ref())?;
+        }
+
+        let name = fallible_cow_into_owned(tool.name)?;
+        let description = tool.description.map(fallible_cow_into_owned).transpose()?;
+        let input_schema = Arc::try_unwrap(tool.input_schema).map_err(|_| {
+            discovery_internal_failure("decoded MCP input schema is unexpectedly shared")
+        })?;
+        let output_schema = tool
+            .output_schema
+            .map(|schema| {
+                Arc::try_unwrap(schema).map(Value::Object).map_err(|_| {
+                    discovery_internal_failure("decoded MCP output schema is unexpectedly shared")
+                })
+            })
+            .transpose()?;
+        self.tools.push(ToolCatalogEntry {
+            name,
+            description,
+            input_schema: Value::Object(input_schema),
+            output_schema,
+        });
+        Ok(())
+    }
+
+    fn track_cursor(&mut self, cursor: String) -> Result<String, DiscoveryAttemptError> {
+        // Retain one copy for cycle detection while rmcp owns another for the
+        // next request. Count both copies against the aggregate budget.
+        self.retained_bytes.add(cursor.len())?;
+        self.retained_bytes.add(cursor.len())?;
+        self.seen_cursors
+            .try_reserve(1)
+            .map_err(|_| discovery_allocation_failed())?;
+        let retained = fallible_copy_str(&cursor)?;
+        if !self.seen_cursors.insert(retained) {
+            return Err(DiscoveryAttemptError::Unavailable(anyhow::anyhow!(
+                "MCP tools/list returned a repeated pagination cursor"
+            )));
+        }
+        Ok(cursor)
+    }
+
+    fn finish(self) -> Vec<ToolCatalogEntry> {
+        self.tools
+    }
+}
+
+struct RetainedBytes {
+    used: usize,
+    limit: usize,
+}
+
+impl RetainedBytes {
+    fn new(limit: usize) -> Self {
+        Self { used: 0, limit }
+    }
+
+    fn add(&mut self, bytes: usize) -> Result<(), DiscoveryAttemptError> {
+        let used = self.used.checked_add(bytes).ok_or_else(catalog_too_large)?;
+        if used > self.limit {
+            return Err(catalog_too_large());
+        }
+        self.used = used;
+        Ok(())
+    }
+
+    fn add_json(
+        &mut self,
+        value: &serde_json::Map<String, Value>,
+    ) -> Result<(), DiscoveryAttemptError> {
+        serde_json::to_writer(self, value).map_err(|_| catalog_too_large())
+    }
+}
+
+impl std::io::Write for RetainedBytes {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.add(buf.len())
+            .map_err(|_| std::io::Error::other("MCP discovery catalog is too large"))?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn fallible_cow_into_owned(
+    value: std::borrow::Cow<'static, str>,
+) -> Result<String, DiscoveryAttemptError> {
+    match value {
+        std::borrow::Cow::Owned(value) => Ok(value),
+        std::borrow::Cow::Borrowed(value) => fallible_copy_str(value),
+    }
+}
+
+fn fallible_copy_str(value: &str) -> Result<String, DiscoveryAttemptError> {
+    let mut copy = String::new();
+    copy.try_reserve(value.len())
+        .map_err(|_| discovery_allocation_failed())?;
+    copy.push_str(value);
+    Ok(copy)
+}
+
+fn catalog_too_large() -> DiscoveryAttemptError {
+    DiscoveryAttemptError::Unavailable(anyhow::anyhow!(
+        "MCP tools/list catalog exceeds discovery limits"
+    ))
+}
+
+fn discovery_allocation_failed() -> DiscoveryAttemptError {
+    discovery_internal_failure("could not allocate MCP discovery catalog")
+}
+
+fn discovery_internal_failure(message: &'static str) -> DiscoveryAttemptError {
+    DiscoveryAttemptError::Fatal(DiscoveryError::Internal { message })
 }
 
 /// Resolve a server's auth into the transport's `(auth_header, custom_headers)`:
@@ -697,6 +908,98 @@ mod tests {
         assert_eq!(listed.hits_async().await, 2);
     }
 
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[tokio::test]
+    async fn discovery_collects_a_paginated_tool_catalog() {
+        use httpmock::MockServer;
+        use serde_json::json;
+
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .json_body_partial(json!({"method": "initialize"}).to_string());
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "jsonrpc": "2.0", "id": 0, "result": {
+                            "protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "test", "version": "1"}
+                        }
+                    }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .json_body_partial(json!({"method": "notifications/initialized"}).to_string());
+                then.status(202);
+            })
+            .await;
+        let first_page = server
+            .mock_async(|when, then| {
+                when.method("POST")
+                    .json_body_partial(json!({"id": 1, "method": "tools/list"}).to_string());
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "jsonrpc": "2.0", "id": 1, "result": {
+                            "tools": [{
+                                "name": "first",
+                                "inputSchema": {"type": "object", "properties": {}}
+                            }],
+                            "nextCursor": "second-page"
+                        }
+                    }));
+            })
+            .await;
+        let second_page = server
+            .mock_async(|when, then| {
+                when.method("POST").json_body_partial(
+                    json!({
+                        "id": 2,
+                        "method": "tools/list",
+                        "params": {"cursor": "second-page"}
+                    })
+                    .to_string(),
+                );
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .json_body(json!({
+                        "jsonrpc": "2.0", "id": 2, "result": {"tools": [{
+                            "name": "second",
+                            "inputSchema": {"type": "object", "properties": {}}
+                        }]}
+                    }));
+            })
+            .await;
+        let blueprint = submilli_blueprint::parse(&format!(
+            "name: x\nmcp:\n  paged:\n    url: {}\n",
+            server.url("/mcp")
+        ))
+        .unwrap();
+        let policy = Arc::new(NetworkPolicy::allow_all());
+        let catalog = discover_all_local(
+            DiscoveryAuth {
+                secret_store: None,
+                oauth: None,
+                harness_secrets: None,
+                network_policy: &policy,
+            },
+            "x",
+            &blueprint,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            catalog.search("")[0].description,
+            "MCP server 'paged' (2 tools)"
+        );
+        assert_eq!(first_page.hits_async().await, 1);
+        assert_eq!(second_page.hits_async().await, 1);
+    }
+
     #[test]
     fn allocation_failure_is_fatal_but_response_limits_are_unavailability() {
         assert!(matches!(
@@ -710,6 +1013,104 @@ mod tests {
         assert!(matches!(
             response_failure(McpCallError::ResponseTooLarge),
             DiscoveryAttemptError::Unavailable(_)
+        ));
+    }
+
+    #[test]
+    fn fatal_discovery_failures_survive_nonfatal_cleanup_errors() {
+        let attempt = Err(DiscoveryAttemptError::Fatal(DiscoveryError::Internal {
+            message: "catalog allocation failed",
+        }));
+        let cleanup = Some(DiscoveryAttemptError::Unavailable(anyhow::anyhow!(
+            "response was too large"
+        )));
+        let result = reconcile_cleanup::<(), ()>(Ok(attempt), cleanup).unwrap();
+        assert!(matches!(
+            result,
+            Err(DiscoveryAttemptError::Fatal(DiscoveryError::Internal {
+                message: "catalog allocation failed"
+            }))
+        ));
+
+        let cleanup = Some(DiscoveryAttemptError::Fatal(DiscoveryError::Internal {
+            message: "cleanup allocation failed",
+        }));
+        let result = reconcile_cleanup::<(), ()>(
+            Ok(Err(DiscoveryAttemptError::Unavailable(anyhow::anyhow!(
+                "remote failure"
+            )))),
+            cleanup,
+        )
+        .unwrap();
+        assert!(matches!(result, Err(DiscoveryAttemptError::Fatal(_))));
+    }
+
+    fn discovery_limits(max_pages: usize, max_tools: usize, max_bytes: usize) -> DiscoveryLimits {
+        DiscoveryLimits {
+            max_pages,
+            max_tools,
+            max_bytes,
+        }
+    }
+
+    fn remote_tool(name: &'static str) -> Tool {
+        Tool::new(name, "", serde_json::Map::new())
+    }
+
+    #[test]
+    fn paginated_tool_catalog_accepts_exact_aggregate_limits() {
+        // Each empty-schema tool retains one name byte plus `{}`. The cursor is
+        // retained once and copied once for the next request.
+        let mut catalog = ToolCatalogAccumulator::new(discovery_limits(2, 2, 14));
+        catalog.start_page().unwrap();
+        catalog.push_tools(vec![remote_tool("a")]).unwrap();
+        assert_eq!(catalog.track_cursor("next".to_string()).unwrap(), "next");
+        catalog.start_page().unwrap();
+        catalog.push_tools(vec![remote_tool("b")]).unwrap();
+        assert_eq!(catalog.finish().len(), 2);
+    }
+
+    #[test]
+    fn paginated_tool_catalog_rejects_each_aggregate_limit() {
+        let mut pages = ToolCatalogAccumulator::new(discovery_limits(1, 1, 32));
+        pages.start_page().unwrap();
+        assert!(matches!(
+            pages.start_page(),
+            Err(DiscoveryAttemptError::Unavailable(_))
+        ));
+
+        let mut tools = ToolCatalogAccumulator::new(discovery_limits(1, 1, 32));
+        tools.start_page().unwrap();
+        assert!(matches!(
+            tools.push_tools(vec![remote_tool("a"), remote_tool("b")]),
+            Err(DiscoveryAttemptError::Unavailable(_))
+        ));
+
+        let mut bytes = ToolCatalogAccumulator::new(discovery_limits(1, 1, 2));
+        bytes.start_page().unwrap();
+        assert!(matches!(
+            bytes.push_tools(vec![remote_tool("a")]),
+            Err(DiscoveryAttemptError::Unavailable(_))
+        ));
+    }
+
+    #[test]
+    fn paginated_tool_catalog_rejects_repeated_cursors() {
+        let mut catalog = ToolCatalogAccumulator::new(discovery_limits(3, 1, 32));
+        catalog.track_cursor("again".to_string()).unwrap();
+        let error = catalog.track_cursor("again".to_string()).unwrap_err();
+        assert!(matches!(error, DiscoveryAttemptError::Unavailable(_)));
+    }
+
+    #[test]
+    fn unexpected_shared_schema_is_a_fatal_internal_failure() {
+        let shared = Arc::new(serde_json::Map::new());
+        let tool = Tool::new("a", "", Arc::clone(&shared));
+        let mut catalog = ToolCatalogAccumulator::new(discovery_limits(1, 1, 32));
+        let error = catalog.push_tools(vec![tool]).unwrap_err();
+        assert!(matches!(
+            error,
+            DiscoveryAttemptError::Fatal(DiscoveryError::Internal { .. })
         ));
     }
 

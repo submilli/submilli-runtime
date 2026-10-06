@@ -56,7 +56,7 @@ other N entries remain open. Evidence means:
 | N11 | **Fixed on branch:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
 | N12 | Bound validation frontiers before enqueueing children | Allocation amplification measured |
 | N13 | **Engine fixed; adoption pending:** bound expanded Wasm locals across a module | `submilli-wasm` commit `faacf98`; release/adoption remains |
-| N14 | Bound aggregate MCP discovery pages/tools/schemas | Inspection; remote response accumulation |
+| N14 | **Fixed on branch:** bound aggregate MCP discovery pages/tools/schemas | Paginated localhost and aggregate-limit regressions pass |
 | N15 | Bound artifact reads and retained package data before loading | Inspection; file-input allocation |
 | N16 | Admit native string-builder output before allocation | Inspection; host allocation before store limit |
 | N17 | Validate the public reaper's timer configuration | Inspection; zero interval panics |
@@ -440,6 +440,15 @@ and bounded/fallible accumulation. Account for decoded and mapped retention,
 reject repeated/nonterminating cursors appropriately, retain connection draining
 and fatal allocation classification. Test multiple individually small pages and
 normal catalogs using in-process transport where possible.
+
+**Disposition (2026-10-06): fixed on branch.** Discovery now owns pagination and
+caps each server at 128 pages, 4,096 tools and 8 MiB of retained schema/string and
+cursor data, on top of the existing per-response limit. It rejects cursor cycles,
+uses fallible retained-container growth, moves decoded schemas without cloning,
+and preserves fatal local failures through connection draining. Seventeen focused
+unit tests and a two-page localhost regression pass; formatting, workspace
+all-target Clippy and two independent review rounds pass. No external network or
+full-suite tests ran.
 
 ### N15 — Artifact loading reads whole files before resource validation
 
