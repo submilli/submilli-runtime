@@ -47,7 +47,7 @@ other N entries remain open. Evidence means:
 | N02 | **Fixed on branch:** bound package graph DFS in build and GitHub resolution | Debug/release 2 MiB stack regressions pass |
 | N03 | **Fixed on branch:** check OAuth token expiry before adding it to `Instant` | Overflow/rotation/recovery regression passes |
 | N04 | **Fixed on branch:** charge and bound variable-to-variable substitution chains | Budget and debug/release stack regressions pass |
-| N05 | Bound namespace metadata before recursive consumers | Inspection; direct metadata API |
+| N05 | **Fixed on branch:** bound namespace metadata before recursive consumers | Debug/release 2 MiB stack regressions pass |
 | N06 | Validate sibling dependencies at public build entry | Public API panic reproduced |
 | N07 | Make resolver error formatting safe for arbitrary UTF-8 | Public error formatting panic reproduced |
 | N08 | Make watchdog thread creation fallible | Inspection; OS failure |
@@ -228,6 +228,17 @@ limit, so this is specifically a direct metadata boundary finding.
 **Direction/done:** validate namespace depth, nodes and accumulated path bytes
 before recursive consumers, or make those consumers bounded and iterative.
 Test deep empty namespaces, valid imports and ownership/drop on rejection.
+
+**Disposition (2026-10-06, fixed on branch):** declaration preflight now bounds
+namespace depth (128), nodes (65,536), and aggregate qualified-path bytes
+(1 MiB) before compiler consumers. Package compilation validates direct and
+transitive declarations before cloning. Namespace destruction drains child trees
+iteratively, with an allocation-free fallback if its traversal stack cannot grow.
+Debug/release 2 MiB-stack tests cover exact bounds, a 30,000-level rejected tree,
+direct/transitive package entry points, cleanup and healthy compilation; 18
+namespace unit tests pass. Two review rounds fixed validation ordering and a
+regression-strength gap; formatting and workspace/all-target Clippy pass. No full
+suites.
 
 ### N06 — Public build entry assumes sibling validation it does not perform
 

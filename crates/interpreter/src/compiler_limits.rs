@@ -106,6 +106,12 @@ pub fn checked_closure_arity(arity: usize) -> Result<u8, UnsupportedClosureArity
     u8::try_from(arity).map_err(|_| UnsupportedClosureArity { actual: arity })
 }
 
+/// Limits on dependency namespace metadata before recursive compiler consumers.
+pub const MAX_NAMESPACE_DEPTH: usize = 128;
+pub const MAX_NAMESPACE_NODES: usize = 1 << 16;
+/// Total qualified namespace/type path bytes materialized during registration.
+pub const MAX_NAMESPACE_PATH_BYTES: usize = 1 << 20;
+
 #[cfg(test)]
 mod tests {
     use super::*;
