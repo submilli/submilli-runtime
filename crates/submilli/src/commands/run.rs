@@ -11,15 +11,20 @@ use interpreter::runtime::limits::ExecutionUsage;
 
 use anyhow::{Context, anyhow};
 use interpreter::runtime::{
-    DEFAULT_MAX_EXECUTION_TOKENS, ExecutionTokenBudget, HttpClient, LinkedPackageModule, LlmLimits,
-    McpTransport, NetworkPolicy, ReqwestHttpClient, RuntimeConfig, SharedTokenBudget, StoreData,
-    Vfs, install_package_modules_async, install_runtime_async, install_tenant_limits,
+    DEFAULT_MAX_EMBEDDING_REQUESTS, DEFAULT_MAX_EXECUTION_EMBEDDING_TOKENS,
+    DEFAULT_MAX_EXECUTION_TOKENS, EmbeddingLimits, EmbeddingTokenBudget, ExecutionTokenBudget,
+    HttpClient, LinkedPackageModule, LlmLimits, McpTransport, NetworkPolicy, ReqwestHttpClient,
+    RuntimeConfig, SharedTokenBudget, StoreData, Vfs, install_package_modules_async,
+    install_runtime_async, install_tenant_limits,
 };
 use interpreter::{
     BacktraceMode, Sources, dispatch_main_async, failure_message, instantiate_program_async,
 };
 use submilli_blueprint::{Blueprint, VarBindings, resolve_variables};
 use submilli_build::{Artifact, PackageStore};
+use submilli_shared::embedding::{
+    BlueprintEmbeddingProvider, EmbeddingDispatch, HttpEmbeddingDispatch,
+};
 use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
 use submilli_shared::llm::{BlueprintLlmProvider, HttpModelDispatch, ModelDispatch};
 use submilli_shared::mcp::StreamableHttpTransport;
@@ -88,6 +93,23 @@ pub struct Args {
     /// Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`.
     #[arg(long, value_name = "PROMPTS")]
     max_llm_concurrency: Option<usize>,
+
+    /// Tokens this run's `submilli:embedding` calls may spend in total. A call
+    /// that asks for more raises a catchable `QuotaExceededError`. [default: 2000000]
+    /// Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS`, which outranks the config file.
+    #[arg(long, value_name = "TOKENS")]
+    max_execution_embedding_tokens: Option<u64>,
+
+    /// Outbound provider requests this run's `submilli:embedding` calls may
+    /// send. [default: 1000]
+    /// Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS`, which outranks the config file.
+    #[arg(long, value_name = "REQUESTS")]
+    max_execution_embedding_requests: Option<u64>,
+
+    /// Provider requests one embedding call sends at once. [default: 4]
+    /// Env: `$SUBMILLI_MAX_EMBEDDING_CONCURRENCY`, which outranks the config file.
+    #[arg(long, value_name = "REQUESTS")]
+    max_embedding_concurrency: Option<usize>,
 }
 
 /// The CLI's rung of the same ladder the server walks: a flag, then an explicit
@@ -163,6 +185,56 @@ fn llm_settings_from(
     ))
 }
 
+/// This run's embedding ceilings and fan-out bound, off the same ladder and with
+/// the same defaults the server uses.
+fn embedding_settings(args: &Args) -> anyhow::Result<(EmbeddingLimits, usize)> {
+    embedding_settings_from(args, &|name| std::env::var(name).ok())
+}
+
+fn embedding_settings_from(
+    args: &Args,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<(EmbeddingLimits, usize)> {
+    let per_execution_tokens = env_ladder(
+        args.max_execution_embedding_tokens,
+        "SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS",
+        "a whole number of tokens",
+        lookup,
+    )?
+    .unwrap_or(DEFAULT_MAX_EXECUTION_EMBEDDING_TOKENS);
+    if per_execution_tokens == 0 {
+        anyhow::bail!("max execution embedding tokens must be at least 1, got 0");
+    }
+    let max_requests = env_ladder(
+        args.max_execution_embedding_requests,
+        "SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS",
+        "a whole number of requests",
+        lookup,
+    )?
+    .unwrap_or(DEFAULT_MAX_EMBEDDING_REQUESTS);
+    if max_requests == 0 {
+        anyhow::bail!("max execution embedding requests must be at least 1, got 0");
+    }
+    let max_concurrency = env_ladder(
+        args.max_embedding_concurrency,
+        "SUBMILLI_MAX_EMBEDDING_CONCURRENCY",
+        "a whole number of requests",
+        lookup,
+    )?
+    .unwrap_or(submilli_shared::embedding::DEFAULT_MAX_CONCURRENCY);
+    if max_concurrency == 0 {
+        anyhow::bail!("max embedding concurrency must be at least 1, got 0");
+    }
+    Ok((
+        EmbeddingLimits {
+            per_execution_tokens,
+            max_requests,
+            ..EmbeddingLimits::default()
+        },
+        max_concurrency,
+    ))
+}
+
 impl Args {
     /// Static invocation shape for metrics — which optional flags were supplied,
     /// never their (dynamic) values.
@@ -179,6 +251,18 @@ impl Args {
             (
                 "has_max_llm_concurrency",
                 self.max_llm_concurrency.is_some(),
+            ),
+            (
+                "has_max_execution_embedding_tokens",
+                self.max_execution_embedding_tokens.is_some(),
+            ),
+            (
+                "has_max_execution_embedding_requests",
+                self.max_execution_embedding_requests.is_some(),
+            ),
+            (
+                "has_max_embedding_concurrency",
+                self.max_embedding_concurrency.is_some(),
             ),
         ]
     }
@@ -200,7 +284,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     // `None` means "build the real HTTP dispatch below, once the blueprint and
     // the secret store it needs are in hand". A test passes `Some(fake)` to
     // drive `llm.call` without a socket.
-    execute_with_dispatch(args, None)
+    execute_with_dispatch(args, None, None)
 }
 
 /// `execute`, with the outbound model dispatch optionally overridden.
@@ -211,6 +295,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
 pub(crate) fn execute_with_dispatch(
     args: Args,
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
+    embedding_dispatch: Option<Arc<dyn EmbeddingDispatch>>,
 ) -> anyhow::Result<ExitCode> {
     submilli_shared::mcp::schema_registry::initialize_builtin_packs();
     // A host call that re-enters Wasm nests frames on the native stack, so the
@@ -222,7 +307,7 @@ pub(crate) fn execute_with_dispatch(
     std::thread::Builder::new()
         .name("submilli-run".into())
         .stack_size(stack_size)
-        .spawn(move || execute_on_this_thread(args, llm_dispatch))
+        .spawn(move || execute_on_this_thread(args, llm_dispatch, embedding_dispatch))
         .context("starting the thread that runs the program")?
         .join()
         .map_err(|_| anyhow::anyhow!("the thread running the program panicked"))?
@@ -231,9 +316,11 @@ pub(crate) fn execute_with_dispatch(
 fn execute_on_this_thread(
     args: Args,
     llm_dispatch: Option<Arc<dyn ModelDispatch>>,
+    embedding_dispatch: Option<Arc<dyn EmbeddingDispatch>>,
 ) -> anyhow::Result<ExitCode> {
     let started = Instant::now();
     let (llm_limits, llm_concurrency) = llm_settings(&args)?;
+    let (embedding_limits, embedding_concurrency) = embedding_settings(&args)?;
     let source = fs::read_to_string(&args.script)
         .with_context(|| format!("reading {}", args.script.display()))?;
     let filename = args.script.to_string_lossy().into_owned();
@@ -452,6 +539,31 @@ fn execute_on_this_thread(
         data.llm_provider = Some(Arc::new(
             BlueprintLlmProvider::new(bp.clone(), dispatch).with_max_concurrency(llm_concurrency),
         ));
+        // As with llm, a CLI run is one execution, so its own ceiling is the
+        // aggregate. The provider exists only when aliases are declared; the
+        // module is not offered otherwise.
+        data.embedding_budget = Some(Arc::new(EmbeddingTokenBudget::new(
+            embedding_limits,
+            SharedTokenBudget::new(embedding_limits.per_execution_tokens),
+        )));
+        if !bp.embedding.models.is_empty() {
+            let dispatch = match embedding_dispatch.clone() {
+                Some(dispatch) => dispatch,
+                None => Arc::new(
+                    HttpEmbeddingDispatch::new(
+                        bp.clone(),
+                        secret_store.clone(),
+                        Arc::clone(&network_policy),
+                    )
+                    .context("initialize embedding provider")?,
+                ),
+            };
+            data.embedding_provider = Some(Arc::new(BlueprintEmbeddingProvider::new(
+                bp,
+                dispatch,
+                embedding_concurrency,
+            )));
+        }
     }
     let mut store = cfg.store(&engine, data)?;
     install_tenant_limits(&mut store);
@@ -733,6 +845,9 @@ function main(): string {
                 vars: Vec::new(),
                 max_llm_tokens,
                 max_llm_concurrency: None,
+                max_execution_embedding_tokens: None,
+                max_execution_embedding_requests: None,
+                max_embedding_concurrency: None,
             },
         }
     }
@@ -767,8 +882,9 @@ function main(): string {
     fn a_cli_run_with_a_configured_provider_executes_a_call() {
         let calls = Arc::new(AtomicUsize::new(0));
         let f = fixture("llm_ok", None);
-        let code = execute_with_dispatch(f.args, Some(Arc::new(AlwaysOk(Arc::clone(&calls)))))
-            .expect("the run should not fail");
+        let code =
+            execute_with_dispatch(f.args, Some(Arc::new(AlwaysOk(Arc::clone(&calls)))), None)
+                .expect("the run should not fail");
 
         assert_eq!(code, ExitCode::SUCCESS);
         assert_eq!(
@@ -792,8 +908,9 @@ function main(): string {
         // One call reserves the default output cap plus its input estimate, so
         // a ceiling of 10 cannot cover it.
         let f = fixture("llm_over", Some(10));
-        let code = execute_with_dispatch(f.args, Some(Arc::new(AlwaysOk(Arc::clone(&calls)))))
-            .expect("a caught QuotaExceededError still exits cleanly");
+        let code =
+            execute_with_dispatch(f.args, Some(Arc::new(AlwaysOk(Arc::clone(&calls)))), None)
+                .expect("a caught QuotaExceededError still exits cleanly");
 
         assert_eq!(code, ExitCode::SUCCESS, "the guest caught the refusal");
         assert_eq!(
@@ -851,6 +968,174 @@ function main(): string {
             err.to_string().contains(TOKENS),
             "the error must name the variable: {err}"
         );
+    }
+
+    /// Answers every embedding request with unit vectors, counting requests.
+    struct EmbedOk(Arc<AtomicUsize>);
+
+    impl EmbeddingDispatch for EmbedOk {
+        fn dispatch<'a>(
+            &'a self,
+            request: submilli_shared::embedding::EmbeddingRequest<'a>,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            submilli_shared::embedding::DispatchResponse,
+                            submilli_shared::embedding::DispatchFailure,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            let rows = request
+                .texts
+                .iter()
+                .map(|_| submilli_shared::embedding::DispatchRow {
+                    index: None,
+                    values: vec![1.0, 0.0, 0.0, 0.0],
+                })
+                .collect();
+            Box::pin(async move {
+                Ok(submilli_shared::embedding::DispatchResponse {
+                    rows,
+                    usage: Some(1),
+                })
+            })
+        }
+    }
+
+    const EMBEDDING_BLUEPRINT: &str = r#"name: embedding-cli
+permissions:
+  main:
+    - capability: embedding.embed
+      action: allow
+embedding:
+  providers:
+    fake:
+      type: huggingface
+      base_url: https://hf.example.com
+  models:
+    docs:
+      provider: fake
+      model: bge
+      dimensions: 4
+"#;
+
+    const EMBED: &str = r#"import embedding from "submilli:embedding";
+function main(): string {
+    try {
+        return "OK:" + embedding.embed("docs", ["a text of some length"], "document").count.toString();
+    } catch (e: Error) {
+        return e.message;
+    }
+}"#;
+
+    fn embedding_fixture(name: &str, max_tokens: Option<u64>) -> Fixture {
+        let mut f = fixture(name, None);
+        std::fs::write(&f.args.script, EMBED).expect("write script");
+        let blueprint = f.args.blueprint.clone().expect("blueprint");
+        std::fs::write(&blueprint, EMBEDDING_BLUEPRINT).expect("write blueprint");
+        f.args.max_execution_embedding_tokens = max_tokens;
+        f
+    }
+
+    /// A blueprint with an `embedding:` block embeds through the injected
+    /// dispatch.
+    #[test]
+    fn a_cli_run_with_an_embedding_block_embeds_through_the_dispatch() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let f = embedding_fixture("embed_ok", None);
+        let code =
+            execute_with_dispatch(f.args, None, Some(Arc::new(EmbedOk(Arc::clone(&requests)))))
+                .expect("the run should not fail");
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
+    /// `--max-execution-embedding-tokens` refuses a call before it is sent.
+    #[test]
+    fn a_cli_run_over_its_embedding_ceiling_is_refused_before_dispatch() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        // The text estimates at 7 tokens.
+        let f = embedding_fixture("embed_over", Some(3));
+        let code =
+            execute_with_dispatch(f.args, None, Some(Arc::new(EmbedOk(Arc::clone(&requests)))))
+                .expect("a caught QuotaExceededError still exits cleanly");
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn the_embedding_settings_walk_the_flag_then_env_then_default() {
+        const TOKENS: &str = "SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS";
+        const REQUESTS: &str = "SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS";
+        const CONCURRENCY: &str = "SUBMILLI_MAX_EMBEDDING_CONCURRENCY";
+        let env = env_from(&[
+            (TOKENS, Some("200")),
+            (REQUESTS, Some("20")),
+            (CONCURRENCY, Some("2")),
+        ]);
+
+        let mut f = embedding_fixture("embed_ladder", None);
+        let (limits, concurrency) = embedding_settings_from(&f.args, &env).expect("env");
+        assert_eq!(
+            (
+                limits.per_execution_tokens,
+                limits.max_requests,
+                concurrency
+            ),
+            (200, 20, 2)
+        );
+
+        f.args.max_execution_embedding_tokens = Some(400);
+        f.args.max_execution_embedding_requests = Some(40);
+        f.args.max_embedding_concurrency = Some(4);
+        let (limits, concurrency) = embedding_settings_from(&f.args, &env).expect("flags");
+        assert_eq!(
+            (
+                limits.per_execution_tokens,
+                limits.max_requests,
+                concurrency
+            ),
+            (400, 40, 4)
+        );
+
+        f.args.max_execution_embedding_tokens = None;
+        f.args.max_execution_embedding_requests = None;
+        f.args.max_embedding_concurrency = None;
+        let (limits, concurrency) =
+            embedding_settings_from(&f.args, &env_from(&[])).expect("default");
+        assert_eq!(
+            (
+                limits.per_execution_tokens,
+                limits.max_requests,
+                concurrency
+            ),
+            (
+                DEFAULT_MAX_EXECUTION_EMBEDDING_TOKENS,
+                DEFAULT_MAX_EMBEDDING_REQUESTS,
+                submilli_shared::embedding::DEFAULT_MAX_CONCURRENCY
+            )
+        );
+    }
+
+    #[test]
+    fn zero_or_malformed_embedding_settings_are_refused() {
+        let f = embedding_fixture("embed_bad", None);
+        for name in [
+            "SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS",
+            "SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS",
+            "SUBMILLI_MAX_EMBEDDING_CONCURRENCY",
+        ] {
+            let zero = embedding_settings_from(&f.args, &env_from(&[(name, Some("0"))]))
+                .expect_err("zero is refused");
+            assert!(zero.to_string().contains("at least 1"), "{name}: {zero}");
+            let lots = embedding_settings_from(&f.args, &env_from(&[(name, Some("lots"))]))
+                .expect_err("malformed is refused");
+            assert!(lots.to_string().contains(name), "{lots}");
+        }
     }
 
     fn declaring(yaml: &str) -> Blueprint {

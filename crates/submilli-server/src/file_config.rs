@@ -29,6 +29,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use interpreter::runtime::{
+    DEFAULT_MAX_EMBEDDING_REQUESTS, DEFAULT_MAX_EXECUTION_EMBEDDING_TOKENS, EmbeddingLimits,
+};
 use ipnet::IpNet;
 use serde::Deserialize;
 use submilli_server::config::{
@@ -105,6 +108,18 @@ pub struct FileConfig {
     pub max_execution_llm_tokens: Option<u64>,
     /// Prompts one `llm.batch` dispatches at once.
     pub max_llm_concurrency: Option<usize>,
+    /// Tokens every live execution's `submilli:embedding` calls may spend in
+    /// total.
+    #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
+    pub max_embedding_tokens: Option<u64>,
+    /// Tokens a single execution's `submilli:embedding` calls may spend.
+    #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
+    pub max_execution_embedding_tokens: Option<u64>,
+    /// Outbound provider requests a single execution may send.
+    #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
+    pub max_execution_embedding_requests: Option<u64>,
+    /// Provider requests one embedding call sends at once.
+    pub max_embedding_concurrency: Option<usize>,
     #[serde(default)]
     pub network: NetworkFileConfig,
     #[serde(default)]
@@ -253,6 +268,10 @@ pub(crate) struct EnvConfig {
     max_llm_tokens: Option<String>,
     max_execution_llm_tokens: Option<String>,
     max_llm_concurrency: Option<String>,
+    max_embedding_tokens: Option<String>,
+    max_execution_embedding_tokens: Option<String>,
+    max_execution_embedding_requests: Option<String>,
+    max_embedding_concurrency: Option<String>,
     blueprint_dir: Option<PathBuf>,
     session_store_dir: Option<PathBuf>,
     database_path: Option<PathBuf>,
@@ -341,6 +360,10 @@ impl EnvConfig {
             max_llm_tokens: var("SUBMILLI_MAX_LLM_TOKENS"),
             max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
             max_llm_concurrency: var("SUBMILLI_MAX_LLM_CONCURRENCY"),
+            max_embedding_tokens: var("SUBMILLI_MAX_EMBEDDING_TOKENS"),
+            max_execution_embedding_tokens: var("SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS"),
+            max_execution_embedding_requests: var("SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS"),
+            max_embedding_concurrency: var("SUBMILLI_MAX_EMBEDDING_CONCURRENCY"),
             blueprint_dir: path("SUBMILLI_BLUEPRINT_DIR"),
             session_store_dir: path("SUBMILLI_SESSION_STORE_DIR"),
             database_path: path("SUBMILLI_DATABASE_PATH"),
@@ -476,6 +499,10 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_llm_tokens(cli, file, env)?;
     max_execution_llm_tokens(cli, file, env)?;
     max_llm_concurrency(cli, file, env)?;
+    max_embedding_tokens(cli, file, env)?;
+    max_execution_embedding_tokens(cli, file, env)?;
+    max_execution_embedding_requests(cli, file, env)?;
+    max_embedding_concurrency(cli, file, env)?;
     resolve_auth(cli, file, env)?;
     if let Some(path) = &file.github_token_file {
         GithubToken::read_file(path).map_err(|e| anyhow::anyhow!("`github_token_file`: {e}"))?;
@@ -829,6 +856,91 @@ fn max_llm_concurrency(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<
     Ok(Some(limit))
 }
 
+/// The server-wide embedding token ceiling. `None` leaves
+/// [`ServerConfig::max_embedding_tokens`] unset so the session manager's default
+/// applies.
+fn max_embedding_tokens(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<u64>> {
+    let env_tokens = parse_env_count(
+        "SUBMILLI_MAX_EMBEDDING_TOKENS",
+        env.max_embedding_tokens.as_ref(),
+    )?;
+    let Some(tokens) = explicit(
+        cli.max_embedding_tokens,
+        env_tokens,
+        file.max_embedding_tokens,
+    ) else {
+        return Ok(None);
+    };
+    if tokens == 0 {
+        anyhow::bail!("max embedding tokens must be at least 1, got 0");
+    }
+    Ok(Some(tokens))
+}
+
+/// The per-execution embedding token ceiling; unset resolves to the runtime's
+/// own default, as with the LLM counterpart.
+fn max_execution_embedding_tokens(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<u64> {
+    let env_tokens = parse_env_count(
+        "SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS",
+        env.max_execution_embedding_tokens.as_ref(),
+    )?;
+    let Some(tokens) = explicit(
+        cli.max_execution_embedding_tokens,
+        env_tokens,
+        file.max_execution_embedding_tokens,
+    ) else {
+        return Ok(DEFAULT_MAX_EXECUTION_EMBEDDING_TOKENS);
+    };
+    if tokens == 0 {
+        anyhow::bail!("max execution embedding tokens must be at least 1, got 0");
+    }
+    Ok(tokens)
+}
+
+/// The per-execution outbound request ceiling.
+fn max_execution_embedding_requests(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<u64> {
+    let env_requests = parse_env_count(
+        "SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS",
+        env.max_execution_embedding_requests.as_ref(),
+    )?;
+    let Some(requests) = explicit(
+        cli.max_execution_embedding_requests,
+        env_requests,
+        file.max_execution_embedding_requests,
+    ) else {
+        return Ok(DEFAULT_MAX_EMBEDDING_REQUESTS);
+    };
+    if requests == 0 {
+        anyhow::bail!("max execution embedding requests must be at least 1, got 0");
+    }
+    Ok(requests)
+}
+
+/// The per-call sub-batch fan-out bound. Zero is rejected for the same reason
+/// as [`max_llm_concurrency`].
+fn max_embedding_concurrency(
+    cli: &Cli,
+    file: &FileConfig,
+    env: &EnvConfig,
+) -> Result<Option<usize>> {
+    let env_limit = parse_env(
+        "SUBMILLI_MAX_EMBEDDING_CONCURRENCY",
+        "a whole number of requests",
+        env.max_embedding_concurrency.as_ref(),
+    )?;
+    let Some(limit) = explicit(
+        cli.max_embedding_concurrency,
+        env_limit,
+        file.max_embedding_concurrency,
+    ) else {
+        return Ok(None);
+    };
+    if limit == 0 {
+        anyhow::bail!("max embedding concurrency must be at least 1, got 0");
+    }
+    Ok(Some(limit))
+}
+
 /// Telemetry requires an explicit opt-in. A config-file opt-out always wins;
 /// a supplied environment value must also explicitly enable telemetry.
 fn combine_telemetry(env_setting: Option<&str>, file_setting: Option<bool>) -> bool {
@@ -876,6 +988,13 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let llm_limits = LlmLimits {
         per_execution_tokens: max_execution_llm_tokens(&cli, &file, &env)?,
         ..LlmLimits::default()
+    };
+    let max_embedding_tokens = max_embedding_tokens(&cli, &file, &env)?;
+    let max_embedding_concurrency = max_embedding_concurrency(&cli, &file, &env)?;
+    let embedding_limits = EmbeddingLimits {
+        per_execution_tokens: max_execution_embedding_tokens(&cli, &file, &env)?,
+        max_requests: max_execution_embedding_requests(&cli, &file, &env)?,
+        ..EmbeddingLimits::default()
     };
 
     let blueprint_dir = explicit(cli.blueprint_dir, env.blueprint_dir, file.blueprint_dir)
@@ -945,6 +1064,9 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         llm_limits,
         max_llm_tokens,
         max_llm_concurrency,
+        embedding_limits,
+        max_embedding_tokens,
+        max_embedding_concurrency,
         volumes: file.volumes,
         managed_volume_root: Some(managed_volume_root),
         github_token_file: file.github_token_file,
@@ -1351,6 +1473,10 @@ mod tests {
             max_llm_tokens: None,
             max_execution_llm_tokens: None,
             max_llm_concurrency: None,
+            max_embedding_tokens: None,
+            max_execution_embedding_tokens: None,
+            max_execution_embedding_requests: None,
+            max_embedding_concurrency: None,
             // Opted out so the tests about every other setting reach `merge`
             // without declaring tokens; the auth tests turn it back off.
             allow_unauthenticated: true,
@@ -2891,6 +3017,96 @@ network:
             err.to_string().contains("SUBMILLI_MAX_LLM_TOKENS"),
             "the error must name the variable: {err}"
         );
+    }
+
+    /// Each embedding setting walks flag, env var, then file, with a concrete
+    /// default for the per-execution ones and K/M suffixes on the counts.
+    #[test]
+    fn embedding_settings_walk_the_ladder() {
+        let file = FileConfig {
+            max_embedding_tokens: Some(300),
+            max_execution_embedding_tokens: Some(300),
+            max_execution_embedding_requests: Some(300),
+            max_embedding_concurrency: Some(3),
+            ..FileConfig::default()
+        };
+        let env = env_from(&[
+            ("SUBMILLI_MAX_EMBEDDING_TOKENS", "2K"),
+            ("SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS", "2K"),
+            ("SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS", "2K"),
+            ("SUBMILLI_MAX_EMBEDDING_CONCURRENCY", "6"),
+        ]);
+        let cli = Cli::try_parse_from([
+            "submilli-server",
+            "--max-embedding-tokens",
+            "4M",
+            "--max-execution-embedding-tokens",
+            "4M",
+            "--max-execution-embedding-requests",
+            "4K",
+            "--max-embedding-concurrency",
+            "9",
+        ])
+        .unwrap();
+        let read = |cli: &Cli, file: &FileConfig, env: &EnvConfig| {
+            (
+                max_embedding_tokens(cli, file, env).unwrap(),
+                max_execution_embedding_tokens(cli, file, env).unwrap(),
+                max_execution_embedding_requests(cli, file, env).unwrap(),
+                max_embedding_concurrency(cli, file, env).unwrap(),
+            )
+        };
+        assert_eq!(
+            read(&cli, &file, &env),
+            (Some(4_000_000), 4_000_000, 4_000, Some(9)),
+            "the flag wins"
+        );
+        assert_eq!(
+            read(&empty_cli(), &file, &env),
+            (Some(2_000), 2_000, 2_000, Some(6)),
+            "the env var wins over the file"
+        );
+        assert_eq!(
+            read(&empty_cli(), &file, &EnvConfig::default()),
+            (Some(300), 300, 300, Some(3)),
+            "the file wins over the default"
+        );
+        assert_eq!(
+            read(&empty_cli(), &FileConfig::default(), &EnvConfig::default()),
+            (
+                None,
+                DEFAULT_MAX_EXECUTION_EMBEDDING_TOKENS,
+                DEFAULT_MAX_EMBEDDING_REQUESTS,
+                None
+            ),
+            "unset"
+        );
+        let from_file: FileConfig = serde_yml::from_str(
+            "max_embedding_tokens: 50M\nmax_execution_embedding_tokens: 2M\nmax_execution_embedding_requests: 1K",
+        )
+        .unwrap();
+        assert_eq!(from_file.max_embedding_tokens, Some(50_000_000));
+        assert_eq!(from_file.max_execution_embedding_tokens, Some(2_000_000));
+        assert_eq!(from_file.max_execution_embedding_requests, Some(1_000));
+    }
+
+    #[test]
+    fn zero_embedding_settings_are_rejected() {
+        for name in [
+            "SUBMILLI_MAX_EMBEDDING_TOKENS",
+            "SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS",
+            "SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS",
+            "SUBMILLI_MAX_EMBEDDING_CONCURRENCY",
+        ] {
+            let env = env_from(&[(name, "0")]);
+            let cli = empty_cli();
+            let file = FileConfig::default();
+            let failed = max_embedding_tokens(&cli, &file, &env).is_err()
+                || max_execution_embedding_tokens(&cli, &file, &env).is_err()
+                || max_execution_embedding_requests(&cli, &file, &env).is_err()
+                || max_embedding_concurrency(&cli, &file, &env).is_err();
+            assert!(failed, "${name}=0 should have failed boot");
+        }
     }
 
     #[test]

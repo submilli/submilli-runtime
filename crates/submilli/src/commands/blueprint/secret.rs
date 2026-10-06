@@ -18,7 +18,7 @@ pub enum SecretCmd {
     Add(AddArgs),
     /// List the blueprint's declared secrets and their sources (never values).
     List(ListArgs),
-    /// Remove a declared secret. Refused while `auth_proxy:`, `mcp:`, or `llm:`
+    /// Remove a declared secret. Refused while `auth_proxy:`, `mcp:`, `llm:`, or `embedding:`
     /// still references it.
     Remove(RemoveArgs),
 }
@@ -116,7 +116,7 @@ fn list(args: &ListArgs) -> Result<String> {
 }
 
 /// Removal leaves the blueprint's own validation to catch a `${secrets.NAME}`
-/// still referenced from `auth_proxy:`, `mcp:`, or `llm:`: the re-parse before
+/// still referenced from `auth_proxy:`, `mcp:`, `llm:`, or `embedding:`: the re-parse before
 /// writing fails and names the reference, and the file is left untouched.
 fn remove(args: &RemoveArgs) -> Result<String> {
     let path = blueprint_path(&args.blueprint);
@@ -257,6 +257,21 @@ mod tests {
         fs::write(&path, body).unwrap();
         let err = remove(&RemoveArgs {
             name: "GH".into(),
+            blueprint: Some(path.clone()),
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("not written"), "{err}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), body);
+    }
+
+    #[test]
+    fn remove_refuses_a_secret_an_embedding_provider_references() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("blueprint.yaml");
+        let body = "name: t\nsecrets:\n  V: { store: V }\nembedding:\n  providers:\n    v: { type: voyage, api_key: \"${secrets.V}\" }\n";
+        fs::write(&path, body).unwrap();
+        let err = remove(&RemoveArgs {
+            name: "V".into(),
             blueprint: Some(path.clone()),
         })
         .unwrap_err();

@@ -35,9 +35,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use interpreter::runtime::{
-    Access as RtAccess, ExecutionTokenBudget, HttpClient, InMemorySessionKv, LlmLimits, MountError,
-    MountSpec, SessionKvLimits, SessionKvStore, SharedKvBudget, SharedTokenBudget, Vfs, VfsInfo,
-    VfsMode as RtVfsMode,
+    Access as RtAccess, EmbeddingLimits, EmbeddingTokenBudget, ExecutionTokenBudget, HttpClient,
+    InMemorySessionKv, LlmLimits, MountError, MountSpec, SessionKvLimits, SessionKvStore,
+    SharedKvBudget, SharedTokenBudget, Vfs, VfsInfo, VfsMode as RtVfsMode,
 };
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings, VfsConfig};
 use uuid::Uuid;
@@ -99,6 +99,14 @@ pub use interpreter::runtime::DEFAULT_MAX_ALL_EXECUTIONS_TOKENS;
 /// enforces it, so the bound the operator configures and the bound the semaphore
 /// takes cannot drift apart.
 pub use submilli_shared::llm::provider::DEFAULT_MAX_CONCURRENCY;
+
+/// Server-wide ceiling on `submilli:embedding` tokens across every live
+/// execution. Separate from the LLM ceiling: an embedding index build must not
+/// be able to starve `llm.call`, nor the reverse.
+pub const DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS: u64 = 50_000_000;
+
+/// Sub-batches one embedding call sends at once.
+pub use submilli_shared::embedding::DEFAULT_MAX_CONCURRENCY as DEFAULT_MAX_EMBEDDING_CONCURRENCY;
 
 #[derive(Debug)]
 pub enum SessionError {
@@ -195,6 +203,7 @@ pub struct SessionManager {
     idempotency: Arc<dyn IdempotencyStore>,
     session_kv: SessionKvSettings,
     llm: LlmSettings,
+    embedding: EmbeddingSettings,
 }
 
 /// How a session's `submilli:session` store is built. Cloned into every session
@@ -278,6 +287,44 @@ impl LlmSettings {
     }
 }
 
+/// How an execution's `submilli:embedding` budget is built: the [`LlmSettings`]
+/// shape with its own server-wide ledger, so exhausting one capability leaves
+/// the other untouched.
+#[derive(Clone)]
+pub struct EmbeddingSettings {
+    pub limits: EmbeddingLimits,
+    /// Server-wide ceiling summed across every live execution.
+    pub budget: SharedTokenBudget,
+    /// Sub-batches one call sends at once.
+    pub max_concurrency: usize,
+}
+
+impl Default for EmbeddingSettings {
+    fn default() -> Self {
+        Self::new(
+            EmbeddingLimits::default(),
+            DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS,
+            DEFAULT_MAX_EMBEDDING_CONCURRENCY,
+        )
+    }
+}
+
+impl EmbeddingSettings {
+    pub fn new(limits: EmbeddingLimits, total_tokens: u64, max_concurrency: usize) -> Self {
+        Self {
+            limits,
+            budget: SharedTokenBudget::new(total_tokens),
+            // Zero would deadlock the provider's semaphore.
+            max_concurrency: max_concurrency.max(1),
+        }
+    }
+
+    /// A fresh per-execution budget sharing this server's aggregate ceiling.
+    fn build(&self) -> Arc<EmbeddingTokenBudget> {
+        Arc::new(EmbeddingTokenBudget::new(self.limits, self.budget.clone()))
+    }
+}
+
 /// The stateful host capabilities a session's executions draw on, each carrying
 /// the aggregate it reserves against. Grouped so the manager's constructor stays
 /// readable as the set grows — the reason [`crate::runner::HostServices`] is a
@@ -286,6 +333,7 @@ impl LlmSettings {
 pub struct CapabilitySettings {
     pub session_kv: SessionKvSettings,
     pub llm: LlmSettings,
+    pub embedding: EmbeddingSettings,
 }
 
 impl SessionManager {
@@ -298,7 +346,11 @@ impl SessionManager {
         idempotency: Arc<dyn IdempotencyStore>,
         capabilities: CapabilitySettings,
     ) -> Self {
-        let CapabilitySettings { session_kv, llm } = capabilities;
+        let CapabilitySettings {
+            session_kv,
+            llm,
+            embedding,
+        } = capabilities;
         Self {
             audit: None,
             bind_lock: tokio::sync::Mutex::new(()),
@@ -314,6 +366,7 @@ impl SessionManager {
             idempotency,
             session_kv,
             llm,
+            embedding,
         }
     }
 
@@ -389,6 +442,23 @@ impl SessionManager {
     /// The fan-out bound one `batch` dispatches at (KTD4).
     pub fn llm_max_concurrency(&self) -> usize {
         self.llm.max_concurrency
+    }
+
+    /// A fresh `submilli:embedding` budget for one execution, sharing the
+    /// server-wide embedding ceiling. Per-execution for the same reason as
+    /// [`Self::llm_budget_for_execute`]: its reservation releases on `Drop`.
+    pub fn embedding_budget_for_execute(&self) -> Arc<EmbeddingTokenBudget> {
+        self.embedding.build()
+    }
+
+    /// The fan-out bound one embedding call sends sub-batches at.
+    pub fn embedding_max_concurrency(&self) -> usize {
+        self.embedding.max_concurrency
+    }
+
+    /// The server-wide embedding token budget, for operator-facing reporting.
+    pub fn embedding_budget(&self) -> &SharedTokenBudget {
+        &self.embedding.budget
     }
 
     /// The server-wide LLM token budget, for operator-facing reporting.

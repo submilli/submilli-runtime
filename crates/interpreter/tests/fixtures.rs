@@ -12,6 +12,13 @@
 //! share the single `llm.call` capability, so denying by name hides every
 //! candidate instead of selecting individual models.
 //!
+//! `// deny-embedding-model: <model>` is the same context-keyed policy for
+//! `embedding.embed`, which `models()` and `embed` share.
+//!
+//! A fixture whose path contains `embedding_` gets a canned [`FixtureEmbedding`]
+//! provider the same way (`embedding_no_provider` gets none), with tight
+//! budgets for the `budget` ones.
+//!
 //! A fixture whose name contains `llm_` also gets a canned [`FixtureLlm`]
 //! provider, and the budget-oriented ones get ceilings small enough to reach.
 //! `llm_no_provider` deliberately gets none, which is the unconfigured runtime.
@@ -26,10 +33,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use interpreter::runtime::{
+    EmbeddingBatch, EmbeddingError, EmbeddingFailureReason, EmbeddingLimits,
+    EmbeddingMalformedReason, EmbeddingModel, EmbeddingProvider, EmbeddingTokenBudget,
     ExecutionTokenBudget, FailureReason, InMemorySessionKv, LinkedPackageModule, LlmCallError,
-    LlmFailure, LlmLimits, LlmModel, LlmOutcome, LlmProvider, SharedTokenBudget, StoreData, Vfs,
-    install_package_modules_async, install_runtime_host_functions, install_runtime_store_bound,
-    install_tenant_limits,
+    LlmFailure, LlmLimits, LlmModel, LlmOutcome, LlmProvider, Purpose, SharedTokenBudget,
+    StoreData, SubBatchSettlement, Vfs, estimate_embedding_tokens, install_package_modules_async,
+    install_runtime_host_functions, install_runtime_store_bound, install_tenant_limits,
 };
 use interpreter::{
     Asi, BacktraceMode, CompiledPackage, Diagnostic, ModulePath, PackageDeclaration,
@@ -109,6 +118,7 @@ impl PreparedRuntime {
         compiled: &interpreter::compile::CompiledScript,
         deny_capabilities: &[String],
         deny_llm_models: &[String],
+        deny_embedding_models: &[String],
         fixture: &str,
     ) -> wasmtime::Result<RunResult> {
         struct Sink(Arc<Mutex<Vec<u8>>>);
@@ -127,12 +137,17 @@ impl PreparedRuntime {
         data.console = Box::new(Sink(Arc::clone(&buf)));
         data.session_kv = Some(Arc::new(InMemorySessionKv::default()));
         install_llm_fixture_support(&mut data, fixture);
+        install_embedding_fixture_support(&mut data, fixture);
         data.install_type_info(compiled.type_info.clone());
         if !deny_capabilities.is_empty() {
             data.security_check = Arc::new(FixtureDeny(deny_capabilities.to_vec()));
         }
         if !deny_llm_models.is_empty() {
             data.security_check = Arc::new(FixtureDenyLlmModel(deny_llm_models.to_vec()));
+        }
+        if !deny_embedding_models.is_empty() {
+            data.security_check =
+                Arc::new(FixtureDenyEmbeddingModel(deny_embedding_models.to_vec()));
         }
         let mut store = self.config.store_async(&self.engine, data)?;
         install_tenant_limits(&mut store);
@@ -163,6 +178,7 @@ impl PreparedRuntime {
         let mut data = StoreData::with_vfs_and_cap(Vfs::tempdir()?, self.config.max_store_bytes);
         data.session_kv = Some(Arc::new(InMemorySessionKv::default()));
         install_llm_fixture_support(&mut data, fixture);
+        install_embedding_fixture_support(&mut data, fixture);
         if !deny_capabilities.is_empty() {
             data.security_check = Arc::new(FixtureDeny(deny_capabilities.to_vec()));
         }
@@ -395,6 +411,7 @@ fn run_one(
                 &compiled,
                 &expectations.deny_capabilities,
                 &expectations.deny_llm_models,
+                &expectations.deny_embedding_models,
                 &filename,
             ));
             match outcome {
@@ -812,6 +829,7 @@ struct Expectations {
     warnings: Vec<String>,
     deny_capabilities: Vec<String>,
     deny_llm_models: Vec<String>,
+    deny_embedding_models: Vec<String>,
 }
 
 fn parse_expectations(src: &str) -> Result<Expectations, String> {
@@ -843,6 +861,12 @@ fn parse_expectations(src: &str) -> Result<Expectations, String> {
             let needle = s.trim();
             if !needle.is_empty() {
                 expectations.deny_capabilities.push(needle.to_string());
+            }
+        }
+        if let Some((_, s)) = line.split_once("// deny-embedding-model:") {
+            let needle = s.trim();
+            if !needle.is_empty() {
+                expectations.deny_embedding_models.push(needle.to_string());
             }
         }
         if let Some((_, s)) = line.split_once("// deny-llm-model:") {
@@ -1106,6 +1130,224 @@ fn install_llm_fixture_support(data: &mut StoreData, fixture: &str) {
     )));
 }
 
+/// Texts per outbound request in [`FixtureEmbedding`]: small enough that a
+/// three-text call is two requests, so settlement has more than one sub-batch
+/// to apply.
+const FIXTURE_EMBEDDING_SUB_BATCH: usize = 2;
+
+/// The canned embedding provider the `embedding_*` fixtures dispatch against.
+///
+/// A behavioral fake of the runtime-module contract: it rejects an alias it does
+/// not serve, refuses an input over the alias's byte limit, calls `mark_sent`
+/// immediately before each simulated request and records a settlement for it,
+/// and answers deterministic unit vectors. A text starting with `FAIL-` scripts
+/// a failure after the send (`FAIL-TRANSPORT`, `FAIL-MALFORMED`,
+/// `FAIL-UNAUTHORIZED`), which is how the error mapping gets exercised.
+struct FixtureEmbedding;
+
+impl FixtureEmbedding {
+    const DIMENSIONS: usize = 8;
+
+    fn catalog() -> Vec<EmbeddingModel> {
+        vec![
+            EmbeddingModel {
+                name: "fixture-embedding".to_string(),
+                description: Some("Deterministic test embeddings.".to_string()),
+                dimensions: Self::DIMENSIONS as u64,
+                max_input_tokens: Some(512),
+                // `3 x max_input_tokens`, the rule for a non-Google alias.
+                max_input_bytes: 3 * 512,
+                identity: "emb1:fixture:fixture-embedding:8:0000000000000001".to_string(),
+            },
+            // A `gemini-embedding-001` stand-in: the byte bound is the token
+            // limit less the 16 special tokens, not `3 x` the limit.
+            EmbeddingModel {
+                name: "gemini-embedding-001".to_string(),
+                description: None,
+                dimensions: Self::DIMENSIONS as u64,
+                max_input_tokens: Some(2048),
+                max_input_bytes: 2032,
+                identity: "emb1:google:gemini-embedding-001:8:0000000000000002".to_string(),
+            },
+            // The candidate a `deny-embedding-model` fixture hides.
+            EmbeddingModel {
+                name: "secret-embedding".to_string(),
+                description: Some("Operator-only.".to_string()),
+                dimensions: Self::DIMENSIONS as u64,
+                max_input_tokens: Some(512),
+                max_input_bytes: 3 * 512,
+                identity: "emb1:fixture:secret-embedding:8:0000000000000003".to_string(),
+            },
+        ]
+    }
+
+    /// A deterministic unit vector keyed on the text and purpose, so the two
+    /// purposes of one text differ the way a real provider's may.
+    fn vector(text: &str, purpose: Purpose) -> Vec<f32> {
+        let mut state: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in purpose.as_str().bytes().chain(text.bytes()) {
+            state = (state ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let mut raw = Vec::with_capacity(Self::DIMENSIONS);
+        for _ in 0..Self::DIMENSIONS {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            raw.push(((state >> 33) % 2001) as f32 / 1000.0 - 1.0 + 0.001);
+        }
+        let norm = raw.iter().map(|v| v * v).sum::<f32>().sqrt();
+        raw.into_iter().map(|v| v / norm).collect()
+    }
+}
+
+impl EmbeddingProvider for FixtureEmbedding {
+    fn embed<'a>(
+        &'a self,
+        alias: &'a str,
+        texts: &'a [String],
+        purpose: Purpose,
+        budget: &'a EmbeddingTokenBudget,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<EmbeddingBatch, EmbeddingError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let catalog = Self::catalog();
+            let Some(model) = catalog.iter().find(|m| m.name == alias) else {
+                return Err(EmbeddingError::UnknownModel {
+                    alias: alias.to_string(),
+                    available: catalog.iter().map(|m| m.name.clone()).collect(),
+                });
+            };
+            if let Some(index) = texts
+                .iter()
+                .position(|text| text.len() as u64 > model.max_input_bytes)
+            {
+                return Err(EmbeddingError::InputTooLong {
+                    alias: alias.to_string(),
+                    index: Some(index),
+                    limit: Some(model.max_input_bytes),
+                    settlements: Vec::new(),
+                });
+            }
+
+            let mut settlements = Vec::new();
+            let mut values = Vec::with_capacity(texts.len() * Self::DIMENSIONS);
+            let mut total_tokens = 0u64;
+            for chunk in texts.chunks(FIXTURE_EMBEDDING_SUB_BATCH) {
+                let estimate = self.estimate_tokens(alias, chunk);
+                budget
+                    .mark_sent(alias, estimate)
+                    .map_err(|e| e.with_settlements(settlements.clone()))?;
+                // A sent request that fails keeps its estimate held, except a
+                // 4xx-style rejection, which the provider does not bill.
+                let sent_with = |indeterminate: u64| {
+                    let mut settled = settlements.clone();
+                    settled.push(SubBatchSettlement {
+                        estimate,
+                        reported: 0,
+                        indeterminate,
+                    });
+                    settled
+                };
+                if chunk.iter().any(|t| t.starts_with("FAIL-TRANSPORT")) {
+                    return Err(EmbeddingError::Provider {
+                        alias: alias.to_string(),
+                        reason: EmbeddingFailureReason::Transport,
+                        settlements: sent_with(estimate),
+                    });
+                }
+                if chunk.iter().any(|t| t.starts_with("FAIL-UNAUTHORIZED")) {
+                    return Err(EmbeddingError::Unauthorized {
+                        alias: alias.to_string(),
+                        settlements: sent_with(0),
+                    });
+                }
+                if chunk.iter().any(|t| t.starts_with("FAIL-MALFORMED")) {
+                    return Err(EmbeddingError::Malformed {
+                        alias: alias.to_string(),
+                        reason: EmbeddingMalformedReason::DimensionMismatch,
+                        settlements: sent_with(estimate),
+                    });
+                }
+                settlements.push(SubBatchSettlement {
+                    estimate,
+                    reported: estimate,
+                    indeterminate: 0,
+                });
+                total_tokens += estimate;
+                for text in chunk {
+                    values.extend(Self::vector(text, purpose));
+                }
+            }
+
+            EmbeddingBatch::new(
+                values,
+                texts.len(),
+                Self::DIMENSIONS,
+                model.identity.clone(),
+                alias,
+            )
+            .map(|batch| {
+                batch
+                    .with_input_tokens(Some(total_tokens))
+                    .with_settlements(settlements)
+            })
+            .map_err(|_| EmbeddingError::Malformed {
+                alias: alias.to_string(),
+                reason: EmbeddingMalformedReason::InvalidBody,
+                settlements: Vec::new(),
+            })
+        })
+    }
+
+    fn models<'a>(
+        &'a self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<EmbeddingModel>, EmbeddingError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { Ok(Self::catalog()) })
+    }
+
+    fn max_input_bytes(&self, alias: &str) -> Option<u64> {
+        Self::catalog()
+            .into_iter()
+            .find(|m| m.name == alias)
+            .map(|m| m.max_input_bytes)
+    }
+
+    fn estimate_tokens(&self, _alias: &str, texts: &[String]) -> u64 {
+        texts
+            .iter()
+            .map(|text| estimate_embedding_tokens(text))
+            .sum()
+    }
+}
+
+/// Wire the provider and budget an `embedding_*` fixture wants.
+///
+/// `embedding_no_provider` gets no provider (the unconfigured runtime). The
+/// `budget` fixtures get a per-run ceiling small enough to reach; every other
+/// fixture runs unmetered with the default per-call caps.
+fn install_embedding_fixture_support(data: &mut StoreData, fixture: &str) {
+    if !fixture.contains("embedding_") || fixture.contains("no_provider") {
+        return;
+    }
+    data.embedding_provider = Some(Arc::new(FixtureEmbedding));
+    if fixture.contains("budget") {
+        data.embedding_budget = Some(Arc::new(EmbeddingTokenBudget::new(
+            EmbeddingLimits {
+                per_execution_tokens: 100,
+                ..EmbeddingLimits::default()
+            },
+            SharedTokenBudget::new(u64::MAX),
+        )));
+    }
+}
+
 /// A `model`-filtered policy: denies `llm.call` for the named models and allows
 /// everything else, keyed off the check *context* rather than the capability
 /// name.
@@ -1131,6 +1373,28 @@ impl interpreter::runtime::SecurityCheck for FixtureDenyLlmModel {
     ) -> interpreter::runtime::CheckOutcome {
         let model = context.get("model").and_then(serde_json::Value::as_str);
         if capability == "llm.call" && model.is_some_and(|m| self.0.iter().any(|d| d == m)) {
+            return interpreter::runtime::CheckOutcome::Deny {
+                rule: None,
+                reason: "denied by fixture model filter".to_string(),
+            };
+        }
+        interpreter::runtime::CheckOutcome::Allow { rule: None }
+    }
+}
+
+/// The embedding counterpart of [`FixtureDenyLlmModel`]: denies
+/// `embedding.embed` for the named aliases, keyed off the check context.
+struct FixtureDenyEmbeddingModel(Vec<String>);
+
+impl interpreter::runtime::SecurityCheck for FixtureDenyEmbeddingModel {
+    fn check(
+        &self,
+        _caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+    ) -> interpreter::runtime::CheckOutcome {
+        let model = context.get("model").and_then(serde_json::Value::as_str);
+        if capability == "embedding.embed" && model.is_some_and(|m| self.0.iter().any(|d| d == m)) {
             return interpreter::runtime::CheckOutcome::Deny {
                 rule: None,
                 reason: "denied by fixture model filter".to_string(),

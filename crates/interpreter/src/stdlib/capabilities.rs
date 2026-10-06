@@ -386,6 +386,34 @@ const MCP: &[Capability] = &[Capability {
     example_filter: "tool == \"create_issue\"",
 }];
 
+const EMBEDDING: &[Capability] = &[Capability {
+    name: "embedding.embed",
+    // No `main_denial`: main-module access is the point. The program names an
+    // alias and supplies text; the credential is resolved inside the provider
+    // and never returned.
+    main_denial: None,
+    summary: "Embed text through a declared embedding alias (embed) and enumerate the aliases \
+              it may use (models). Narrowing `model` also narrows what `models()` reveals: \
+              every candidate is filtered through this same rule, so a listing never offers \
+              an alias the caller would be denied at call time. A policy allowing no \
+              candidates returns an empty listing",
+    filter_fields: &[
+        field(
+            "model",
+            "string",
+            "Alias the call targets or the candidate being listed. The runtime preflight \
+             does not ask policy about an empty name",
+        ),
+        field(
+            "input_count",
+            "number",
+            "Texts in this call — N for embed, 0 for models. Input text is never in this \
+             context",
+        ),
+    ],
+    example_filter: "model glob \"memory-*\"",
+}];
+
 const LLM: &[Capability] = &[Capability {
     name: "llm.call",
     // No `main_denial`: main-module access is the point. A model call is not a
@@ -458,6 +486,10 @@ const SESSION: &[Capability] = &[
 ];
 
 const CATALOG: &[CapabilityGroup] = &[
+    CapabilityGroup {
+        module: "submilli:embedding",
+        capabilities: EMBEDDING,
+    },
     CapabilityGroup {
         module: "submilli:fs",
         capabilities: FS,
@@ -603,6 +635,28 @@ mod tests {
                 .field_names()
                 .collect::<Vec<_>>(),
             ["prefix"]
+        );
+    }
+
+    #[test]
+    fn embedding_group_is_cataloged() {
+        let group = catalog()
+            .iter()
+            .find(|g| g.module == "submilli:embedding")
+            .expect("submilli:embedding group");
+        let names: Vec<&str> = group.capabilities.iter().map(|cap| cap.name).collect();
+        assert_eq!(names, ["embedding.embed"]);
+        let capability = find("embedding.embed").unwrap();
+        assert_eq!(
+            capability.field_names().collect::<Vec<_>>(),
+            ["model", "input_count"]
+        );
+        assert_eq!(capability.example_filter, "model glob \"memory-*\"");
+        assert!(capability.main_denial.is_none());
+        assert!(
+            capability.summary.contains("models()"),
+            "the summary must say narrowing `model` narrows discovery: {}",
+            capability.summary
         );
     }
 

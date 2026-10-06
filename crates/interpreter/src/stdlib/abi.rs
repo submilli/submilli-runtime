@@ -43,6 +43,13 @@ pub(crate) fn i32_field() -> FieldType {
     FieldType::new(Mutability::Const, StorageType::ValType(ValType::I32))
 }
 
+/// A field holding a raw packed-`i8` byte array (the payload of a `Uint8Array`).
+/// Backing structs reach the guest only as opaque `$Object`s, so a field with no
+/// registered getter is unreachable from it.
+pub(crate) fn raw_bytes_field(intr: &IntrinsicTypes) -> FieldType {
+    ref_field(intr.raw_uint8_array.clone().into(), false)
+}
+
 pub(crate) fn externref_field() -> FieldType {
     FieldType::new(Mutability::Const, StorageType::ValType(ValType::EXTERNREF))
 }

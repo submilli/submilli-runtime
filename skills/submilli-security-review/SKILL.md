@@ -24,8 +24,8 @@ Untrusted text may have influenced every choice it makes. Do not assume that a
 caller follows documentation or uses only the package's intended entry points.
 
 A package's host permissions authorize its network, secret, filesystem, Git,
-model, and MCP operations. They do not by themselves constrain what a calling
-program may request. A package calls `check(capability, payload)` so its caller's
+model, embedding, and MCP operations. They do not by themselves constrain what a
+calling program may request. A package calls `check(capability, payload)` so its caller's
 blueprint can authorize the operation. A `@capability` comment describes the
 interface; it does not perform authorization. Ordinary package tests allow every
 check unless a separate policy harness establishes otherwise.
@@ -76,8 +76,8 @@ checks. Use it to find evidence, but return only schema-defined findings and
 coverage gaps, not the inventory itself:
 
 - List each import or dependency that can cross a trust boundary: network,
-  secrets, filesystem, code workspace, Git, model, MCP, session state, or
-  another privileged package. Include reads and metadata probes, not only
+  secrets, filesystem, code workspace, Git, model, embedding, MCP, session
+  state, or another privileged package. Include reads and metadata probes, not only
   writes.
 - List caller-to-package routes: exported functions, classes and public methods,
   constructors, re-exports, and exported mutable values. An exported helper is

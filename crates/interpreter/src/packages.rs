@@ -786,6 +786,9 @@ fn module_description(name: &str) -> &'static str {
         "submilli:code" => {
             "Workspace tools: numbered reads, search, glob, tree, anchored edits and unified diffs."
         }
+        "submilli:embedding" => {
+            "Remote text embeddings: embed batches into sealed vectors, and models() to discover aliases."
+        }
         "submilli:fs" => "Sandbox filesystem: read/write/list/stat/remove/exists/info.",
         "submilli:git" => {
             "Capability-controlled VFS repositories: history, staging, commits, branches and HTTPS fetch."

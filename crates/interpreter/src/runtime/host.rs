@@ -10,7 +10,7 @@ use wasmtime::{
 };
 
 use crate::runtime::fuel::{self, charge_host_fuel};
-use crate::runtime::intrinsic_types::build_intrinsic_types;
+use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 pub(crate) use crate::runtime::intrinsic_types::{
     intrinsic_array_type, intrinsic_bigint_type, intrinsic_string_type, intrinsic_uint8_array_type,
 };
@@ -293,6 +293,15 @@ pub(crate) fn write_uint8_array(
     bytes: &[u8],
 ) -> wasmtime::Result<Rooted<ArrayRef>> {
     fuel::charge(&mut ctx, fuel::COPY, bytes.len() as u64)?;
+    write_uint8_array_precharged(ctx, array_ty, bytes)
+}
+
+/// [`write_uint8_array`] for a caller that has already charged `COPY(len)`.
+pub(crate) fn write_uint8_array_precharged(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    array_ty: ArrayType,
+    bytes: &[u8],
+) -> wasmtime::Result<Rooted<ArrayRef>> {
     let pre = ArrayRefPre::new(&mut ctx, array_ty);
     ArrayRef::new_from_i8_slice(&mut ctx, &pre, bytes)
 }
@@ -364,6 +373,13 @@ pub(crate) fn uint8_array_backing(
     // Accept either a real `$Uint8Array` struct (field-1 payload) or a bare
     // `$rawUint8Array` array (a host package still on the raw ABI).
     let arr = if let Some(st) = any.as_struct(&mut *caller)? {
+        // Only the guest `$Uint8Array` struct carries a payload in field 1.
+        // Any other struct (a package's backing struct with a hidden byte
+        // field, say) is refused rather than read as bytes.
+        let uint8_ty = intrinsic_types(&mut *caller)?.uint8_array.clone();
+        if !st.matches_ty(&*caller, &uint8_ty)? {
+            return Err(type_error(format!("{name} expects a Uint8Array")));
+        }
         match st.field(&mut *caller, 1)? {
             Val::AnyRef(Some(inner)) => inner.unwrap_array(&mut *caller)?,
             other => {
@@ -1618,6 +1634,7 @@ pub(crate) const CALL_MODULES: &[&str] = &[
     crate::stdlib::fs::MODULE_NAME,
     crate::stdlib::http::MODULE_NAME,
     crate::stdlib::llm::MODULE_NAME,
+    crate::stdlib::embedding::MODULE_NAME,
     crate::stdlib::session::MODULE_NAME,
     crate::stdlib::secrets::MODULE_NAME,
     crate::stdlib::git::MODULE_NAME,

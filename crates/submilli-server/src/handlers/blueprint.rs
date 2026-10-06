@@ -91,6 +91,7 @@ fn parse_blueprint(yaml: &str) -> Result<Blueprint, (StatusCode, Json<ErrorRespo
             BlueprintError::InvalidGit(_) => "invalid_git",
             BlueprintError::InvalidMcp(_) => "invalid_mcp",
             BlueprintError::InvalidLlm(_) => "invalid_llm",
+            BlueprintError::InvalidEmbedding(_) => "invalid_embedding",
         };
         let diagnostics = err.fault().map(|fault| {
             vec![Diagnostic {

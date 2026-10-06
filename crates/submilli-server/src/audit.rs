@@ -163,7 +163,8 @@ pub(crate) fn settings_hash(
         default_managed_volume_root, default_package_store_dir, default_session_storage_root,
     };
     use crate::session_manager::{
-        DEFAULT_MAX_ALL_EXECUTIONS_TOKENS, DEFAULT_MAX_CONCURRENCY, DEFAULT_TOTAL_SESSION_KV_BYTES,
+        DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS, DEFAULT_MAX_ALL_EXECUTIONS_TOKENS,
+        DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_EMBEDDING_CONCURRENCY, DEFAULT_TOTAL_SESSION_KV_BYTES,
     };
     let oauth: Vec<_> = config.mcp_oauth_providers.iter().map(|provider| json!({
         "host": provider.match_host, "client_id": provider.client_id, "scopes": provider.scopes,
@@ -192,9 +193,13 @@ pub(crate) fn settings_hash(
         "max_session_state_memory": config.max_session_state_memory.unwrap_or(DEFAULT_TOTAL_SESSION_KV_BYTES),
         "max_llm_tokens": config.max_llm_tokens.unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_TOKENS),
         "max_llm_concurrency": config.max_llm_concurrency.unwrap_or(DEFAULT_MAX_CONCURRENCY),
+        "embedding_limits": format!("{:?}", config.embedding_limits),
+        "max_embedding_tokens": config.max_embedding_tokens.unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS),
+        "max_embedding_concurrency": config.max_embedding_concurrency.unwrap_or(DEFAULT_MAX_EMBEDDING_CONCURRENCY),
         "custom_sessions": config.sessions.is_some(), "custom_blueprints": config.blueprints.is_some(),
         "custom_session_store": config.session_store.is_some(), "custom_idempotency_store": config.idempotency_store.is_some(),
         "secret_store_enabled": config.secret_store.is_some(), "custom_llm_dispatch": config.llm_dispatch.is_some(),
+        "custom_embedding_dispatch": config.embedding_dispatch.is_some(),
     });
     serde_json::to_vec(&settings).ok().map(|bytes| hash(&bytes))
 }
@@ -492,7 +497,12 @@ impl ExecutionAudit {
         }
     }
 
-    pub(crate) fn result(&self, outcome: &crate::runner::RunOutcome, model_tokens: u64) {
+    pub(crate) fn result(
+        &self,
+        outcome: &crate::runner::RunOutcome,
+        model_tokens: u64,
+        embedding_tokens: u64,
+    ) {
         let Ok(mut state) = self.state.lock() else {
             report("audit execution lock poisoned");
             return;
@@ -524,6 +534,9 @@ impl ExecutionAudit {
         state
             .fields
             .insert("model_tokens".into(), json!(model_tokens));
+        state
+            .fields
+            .insert("embedding_tokens".into(), json!(embedding_tokens));
     }
 
     fn decision(&self, decision: AuditDecision<'_>) {
@@ -1075,6 +1088,10 @@ mod tests {
         let mut config = base.clone();
         config.max_llm_concurrency = Some(crate::session_manager::DEFAULT_MAX_CONCURRENCY);
         config.max_llm_tokens = Some(crate::session_manager::DEFAULT_MAX_ALL_EXECUTIONS_TOKENS);
+        config.max_embedding_concurrency =
+            Some(crate::session_manager::DEFAULT_MAX_EMBEDDING_CONCURRENCY);
+        config.max_embedding_tokens =
+            Some(crate::session_manager::DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS);
         config.max_session_state_memory =
             Some(crate::session_manager::DEFAULT_TOTAL_SESSION_KV_BYTES);
         config.session_storage_root = Some(crate::config::default_session_storage_root());

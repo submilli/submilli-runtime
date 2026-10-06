@@ -11,6 +11,7 @@ pub struct LibraryVisibility {
     code: bool,
     git: bool,
     llm: bool,
+    embedding: bool,
     session: bool,
 }
 
@@ -23,6 +24,7 @@ impl LibraryVisibility {
             code: true,
             git: false,
             llm: true,
+            embedding: true,
             session: true,
         }
     }
@@ -36,6 +38,8 @@ impl LibraryVisibility {
                 .any(|capability| has_grant(blueprint, capability)),
             git: blueprint.git.is_some(),
             llm: !blueprint.llm.models.is_empty() && has_grant(blueprint, "llm.call"),
+            embedding: !blueprint.embedding.models.is_empty()
+                && has_grant(blueprint, "embedding.embed"),
             // A store the agent can only write, or only read, holds nothing it can use.
             session: ["session.read", "session.write"]
                 .iter()
@@ -50,6 +54,7 @@ impl LibraryVisibility {
             "submilli:code" => self.code,
             "submilli:git" => self.git,
             "submilli:llm" => self.llm,
+            "submilli:embedding" => self.embedding,
             "submilli:session" => self.session,
             _ => true,
         }
@@ -161,6 +166,55 @@ mod tests {
             }
         }
         assert!(LibraryVisibility::unscoped().allows("submilli:llm"));
+    }
+
+    #[test]
+    fn embedding_needs_an_alias_and_a_non_deny_main_policy() {
+        let config = "secrets:
+  K:
+    store: k
+embedding:
+  providers:
+    test:
+      type: openai
+      api_key: ${secrets.K}
+  models:
+    docs:
+      provider: test
+      model: text-embedding-3-small
+      dimensions: 256
+";
+        for default in ["", "default: deny\n", "default: allow\n"] {
+            let blueprint = submilli_blueprint::parse(&format!("name: test\n{default}")).unwrap();
+            assert!(!LibraryVisibility::for_blueprint(&blueprint).allows("submilli:embedding"));
+        }
+        for (policy, visible) in [
+            ("", false),
+            ("default: deny\n", false),
+            ("default: allow\n", true),
+            ("default: ask-human\n", true),
+            (
+                "permissions:\n  '@acme/tools':\n    - capability: embedding.embed\n      action: allow\n",
+                false,
+            ),
+            (
+                "permissions:\n  main:\n    - capability: embedding.embed\n      action: allow\n",
+                true,
+            ),
+            (
+                "permissions:\n  main:\n    - capability: embedding.embed\n      action: deny\n",
+                false,
+            ),
+        ] {
+            let blueprint =
+                submilli_blueprint::parse(&format!("name: test\n{config}{policy}")).unwrap();
+            assert_eq!(
+                LibraryVisibility::for_blueprint(&blueprint).allows("submilli:embedding"),
+                visible,
+                "{policy}"
+            );
+        }
+        assert!(LibraryVisibility::unscoped().allows("submilli:embedding"));
     }
 
     #[test]

@@ -1802,6 +1802,20 @@ Existing limits: 128 prompts per batch and 256 KiB per prompt (`runtime/llm.rs` 
 | `submilli:llm#Model#name` | Field read | `CALL` | before | |
 | `submilli:llm#models` | Gate, list the blueprint's models, run the policy check once per model, sanitize each description, build `Model` structs and an array (`stdlib/llm/mod.rs:324`) | `CALL + (1 + m) x GATE + ELEM(m) + SCAN(sum of name and description units)` | before + output | `m` is known after `provider.models().await`, which in the shipped provider reads the blueprint and does no I/O. `sanitize_description` (`stdlib/llm/mod.rs:579`) reads the full description before cutting it to 280 chars. One backtrace capture per model (Findings (a)). |
 
+### submilli:embedding
+
+Variables: `k` = number of texts; `I` = total bytes of all texts; `d` = dimensions; `R = k x d x 4` = bytes of the result vectors; `m` = models offered.
+
+The result holds its vectors as little-endian `f32` bytes in a hidden packed-`i8` array in the GC heap (`stdlib/embedding/mod.rs` `build_embeddings`). Reading a row copies `d x 4` bytes out of it.
+
+| Function | What the host does | Formula | Charge point | Notes |
+|---|---|---|---|---|
+| `submilli:embedding#embed` | Read the text array and strings, gate, check bounds, reserve tokens, one provider request, settle, encode the vectors to bytes, allocate the GC array, build the result struct (`stdlib/embedding/mod.rs` `embed`, `build_embeddings`) | `CALL + GATE + IO(I) + IO(R) + COPY(R)` plus the input strings through `read_string_arg` and the result's identity and model strings through `write_submilli_string_struct` | `IO(I)` before the provider call; `IO(R)` and `COPY(R)` after it, `COPY(R)` before the encoding | The provider call is the effect, so `IO(R)` and `COPY(R)` use `settle` and never refuse. `COPY(R)` is charged once, up front, and the GC array is allocated without a second charge (`write_uint8_array_precharged`). `R` is known from the batch before any work. |
+| `submilli:embedding#models` | Gate, list the models, run the policy check once per model, build `EmbeddingModel` structs and an array (`stdlib/embedding/mod.rs` `models`) | `CALL + (1 + m) x GATE + ELEM(m)` plus the strings through `write_submilli_string_struct` | before + output | `m` is known after `provider.models().await`. No bytes cross the wire. |
+| `submilli:embedding#Embeddings#vector` | Copy one row out of the hidden array, widen each `f32` to a boxed number, build a `number[]` (`read_row`, `build_number_array`) | `CALL + COPY(d x 4) + ELEM(d)` plus the boxed numbers and array through their writers | before | The row is charged before it is copied. `ELEM(d)` is charged once, before any element is boxed (`write_submilli_array_struct_precharged`). The whole result is never copied. |
+| `submilli:embedding#Embeddings#bytes` | Copy one row out of the hidden array into a new `Uint8Array` (`read_row`, `write_submilli_uint8array_struct`) | `CALL + COPY(d x 4) + COPY(d x 4)` | before | One `COPY` for the read out of the result and one for the new array, charged by `write_uint8_array`. |
+| `submilli:embedding#Embeddings#count`, `#dimensions`, `#identity`, `#model`, `#inputTokens`; `EmbeddingModel` fields | Field read | `CALL` | before | Through `install_field_getters`. |
+
 ### submilli:mcp
 
 | Function | What the host does | Formula | Charge point | Notes |
