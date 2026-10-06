@@ -52,6 +52,8 @@ Submilli keeps its typefaces, blue accent, theme preference, content, and routes
 - Every visible page can expose its already-published Markdown. Copy feedback is
   explicit; a failed fetch or clipboard operation must not look successful.
   View Markdown remains usable without JavaScript.
+- Keep authorship tooltips and page-action labels out of the search index. They
+  remain accessible on the page without replacing useful article excerpts.
 - Controls hidden at rest must remain discoverable through keyboard focus, with
   visible touch targets on devices without hover. Preserve reduced-motion styles.
 - Keep long code and tables inside their own horizontal scroll area. The page
@@ -71,10 +73,12 @@ Submilli keeps its typefaces, blue accent, theme preference, content, and routes
    examples side by side. Derive endpoint/type metadata from the existing source
    pipeline before introducing that layout; do not guess structure from Markdown
    headings or rewrite human-authored explanations automatically.
-3. **Task-based search quality.** Check real queries such as permission denied,
-   install, and connect a harness against the production index. Improve titles,
-   synonyms, or indexing only from observed misses. A styled search box alone does
-   not establish search quality.
+3. **Task-based search quality.** The built index returns Permissions and Diagnose
+   a denial for `permission denied`, and Connect a harness for `connect a harness`.
+   This pass removes authorship-tooltip boilerplate observed in those excerpts.
+   Expand the query set from real support questions; improve titles, synonyms, or
+   indexing only from observed misses. These spot checks do not establish broad
+   search quality.
 4. **Editorial walkthrough.** Check that each Start here page has a clear outcome,
    prerequisites, one working path, a success check, and an obvious next step.
    Human authors own narrative revisions under `docs/WRITING.md`.
