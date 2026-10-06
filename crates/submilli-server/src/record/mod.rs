@@ -30,8 +30,8 @@ pub use events::{EVENT_SCHEMA, EventKind, SessionEvent};
 pub use program::{ProgramRun, run_program};
 pub use recheck::{RecheckReport, RecordedRun, VariableReport, recheck};
 pub use replay::{
-    Cassette, LiveReach, Miss, MissReason, RecordedHttpClient, RecordedLlmProvider,
-    RecordedMcpTransport, ReplayReport, Served,
+    Cassette, LiveReach, Miss, MissReason, RecordedEmbeddingProvider, RecordedHttpClient,
+    RecordedLlmProvider, RecordedMcpTransport, ReplayReport, Served,
 };
 pub use submilli_shared::mcp::McpCatalog;
 pub(crate) use test_run::TestWorld;

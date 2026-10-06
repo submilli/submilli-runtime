@@ -449,6 +449,15 @@ impl SessionManager {
         ))
     }
 
+    /// An embedding budget with its own aggregate, for a run that spends nothing new
+    /// ([`Self::private_llm_budget`]).
+    pub(crate) fn private_embedding_budget(&self) -> Arc<EmbeddingTokenBudget> {
+        Arc::new(EmbeddingTokenBudget::new(
+            self.embedding.limits,
+            SharedTokenBudget::new(u64::MAX),
+        ))
+    }
+
     /// The fan-out bound one `batch` dispatches at (KTD4).
     pub fn llm_max_concurrency(&self) -> usize {
         self.llm.max_concurrency
@@ -2324,6 +2333,26 @@ mod tests {
         let shared = mgr.llm_budget_for_execute();
         shared.reserve("m", 500).expect("reserves");
         assert_eq!(mgr.llm_budget().used(), 500, "a shared one is charged");
+    }
+
+    #[test]
+    fn a_private_embedding_budget_does_not_charge_the_server_aggregate() {
+        let (mgr, _root) = manager();
+        let private = mgr.private_embedding_budget();
+        private.reserve("m", 500).expect("reserves");
+        assert_eq!(private.used(), 500);
+        assert_eq!(
+            mgr.embedding_budget().used(),
+            0,
+            "the aggregate is untouched"
+        );
+        let shared = mgr.embedding_budget_for_execute();
+        shared.reserve("m", 500).expect("reserves");
+        assert_eq!(
+            mgr.embedding_budget().used(),
+            500,
+            "a shared one is charged"
+        );
     }
 
     /// Zero would deadlock the provider's fan-out semaphore, so it clamps to one

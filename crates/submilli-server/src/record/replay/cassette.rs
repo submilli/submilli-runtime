@@ -22,6 +22,8 @@ pub(super) enum Kind {
     Download,
     Mcp,
     Llm,
+    /// Only keyed, never served: a call log keeps no vectors.
+    Embedding,
 }
 
 fn kind_of(capability: &str) -> Option<Kind> {
@@ -33,6 +35,8 @@ fn kind_of(capability: &str) -> Option<Kind> {
         Some(Kind::Mcp)
     } else if capability == "llm.call" {
         Some(Kind::Llm)
+    } else if capability == "embedding.embed" {
+        Some(Kind::Embedding)
     } else {
         None
     }
@@ -145,6 +149,9 @@ pub enum MissReason {
     RecordedFailure,
     /// A download: only its size was recorded.
     Download,
+    /// An embedding call: the call log keeps its texts, never the vectors, so no recording
+    /// can answer it.
+    NotRecorded,
 }
 
 /// The recording nearest to a call that missed.
@@ -160,7 +167,7 @@ pub struct Nearest {
 /// The call a test run stopped at.
 #[derive(Debug, Clone, Serialize)]
 pub struct Miss {
-    /// The call's key: `http GET <url>`, `mcp <server>.<tool>`, or `llm <model>`.
+    /// The call's key: `http GET <url>`, `mcp <server>.<tool>`, `llm <model>`, or `embedding <model>`.
     pub key: String,
     pub reason: MissReason,
     pub detail: String,
@@ -306,6 +313,16 @@ impl Cassette {
         }
     }
 
+    /// The miss of an embedding call: embeddings are never recorded.
+    pub(super) fn embedding_miss(&self, model: &str) -> Miss {
+        Miss {
+            key: embedding_key(model),
+            reason: MissReason::NotRecorded,
+            detail: "embeddings are not recorded: the call log keeps no vectors".to_owned(),
+            nearest: None,
+        }
+    }
+
     /// Notes a call with nothing to answer it that is sent live instead.
     pub(super) fn went_live(&self, miss: Miss) {
         self.lock().went_live.push(miss);
@@ -414,6 +431,7 @@ fn key_of(kind: Kind, meta: &Value) -> Option<String> {
         Kind::Http | Kind::Download => Some(http_key(text("method")?, text("url")?)),
         Kind::Mcp => Some(mcp_key(text("server")?, text("tool")?)),
         Kind::Llm => Some(llm_key(text("model")?)),
+        Kind::Embedding => Some(embedding_key(text("model")?)),
     }
 }
 
@@ -427,6 +445,10 @@ pub(super) fn mcp_key(server: &str, tool: &str) -> String {
 
 pub(super) fn llm_key(model: &str) -> String {
     format!("llm {model}")
+}
+
+pub(super) fn embedding_key(model: &str) -> String {
+    format!("embedding {model}")
 }
 
 /// The hops the policy decided for each request, by the call that sent it, in order. A
