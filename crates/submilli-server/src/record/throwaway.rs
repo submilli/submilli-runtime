@@ -486,7 +486,7 @@ fn walk_stop(error: io::Error) -> CopyDirError {
 /// link. Stops once `bytes` passes `cap`.
 fn clone_tree(from: &Path, to: &Path, cap: u64, bytes: &mut u64) -> Result<(), CopyDirError> {
     #[cfg(target_os = "macos")]
-    if try_clone(from, to, cap, bytes)? {
+    if try_clone(to, cap, bytes, || clonefile(from, to))? {
         return Ok(());
     }
     copy_host_dir(from, to, cap, bytes)
@@ -507,27 +507,115 @@ fn clone_subtree(
         return clone_tree(from, to, cap, bytes);
     }
     #[cfg(target_os = "macos")]
-    {
-        // A clone resolves its path, so the walk that refuses links comes first.
-        if open_host_subdir(from, sub)?.is_none() {
-            std::fs::create_dir_all(to)?;
-            return Ok(());
-        }
-        if try_clone(&from.join(sub), &to.join(sub), cap, bytes)? {
-            return Ok(());
-        }
+    if clone_subdir(from, sub, to, cap, bytes)? {
+        return Ok(());
     }
     copy_host_subdir(from, sub, to, cap, bytes)
 }
 
-/// Clones `from` to `to` where the filesystem can, measuring what that took; `false` when it
-/// cannot and a copy is needed.
+/// Clones `sub` of the volume `from` to `to/sub`; `false` when a copy is needed. The clone
+/// is anchored to the opened, link-free parent of `sub`, so a link swapped in above `sub`
+/// after the walk is not followed, and one swapped in for `sub` itself is cloned as a link
+/// and removed. A `sub` that is a link is refused, one that is not there copies nothing.
 #[cfg(target_os = "macos")]
-fn try_clone(from: &Path, to: &Path, cap: u64, bytes: &mut u64) -> Result<bool, CopyDirError> {
+fn clone_subdir(
+    from: &Path,
+    sub: &Path,
+    to: &Path,
+    cap: u64,
+    bytes: &mut u64,
+) -> Result<bool, CopyDirError> {
+    use std::os::fd::AsRawFd;
+
+    let (Some(name), Some(parent_sub)) = (sub.file_name(), sub.parent()) else {
+        return Ok(false);
+    };
+    let Some(parent) = open_host_subdir(from, parent_sub)? else {
+        std::fs::create_dir_all(to)?;
+        return Ok(true);
+    };
+    let c_name = c_string(name)?;
+    // SAFETY: an all-zero `stat` is a valid out-parameter, and `c_name` is NUL-terminated.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    let status = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            c_name.as_ptr(),
+            &mut stat,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if status != 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::NotFound {
+            return Err(sub_error(sub, error).into());
+        }
+        std::fs::create_dir_all(to)?;
+        return Ok(true);
+    }
+    match stat.st_mode & libc::S_IFMT {
+        libc::S_IFDIR => {}
+        libc::S_IFLNK => {
+            return Err(sub_error(sub, io::Error::from_raw_os_error(libc::ELOOP)).into());
+        }
+        _ => return Err(sub_error(sub, io::Error::from_raw_os_error(libc::ENOTDIR)).into()),
+    }
+    let target = to.join(sub);
+    try_clone(&target, cap, bytes, || {
+        let dst_dir = std::fs::File::open(target.parent().unwrap_or(to))?;
+        let c_dst = c_string(target.file_name().unwrap_or(name))?;
+        // SAFETY: the descriptors are open and both names are NUL-terminated.
+        let cloned = unsafe {
+            libc::clonefileat(
+                parent.as_raw_fd(),
+                c_name.as_ptr(),
+                dst_dir.as_raw_fd(),
+                c_dst.as_ptr(),
+                CLONE_NOFOLLOW,
+            )
+        };
+        if cloned != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // `sub` may have become a link since the check, which the clone then took as one.
+        if !std::fs::symlink_metadata(&target)?.is_dir() {
+            std::fs::remove_file(&target)?;
+            return Err(io::Error::from_raw_os_error(libc::ELOOP));
+        }
+        Ok(())
+    })
+}
+
+/// `clonefileat`'s flag that clones a final link as a link; `libc` does not name it.
+#[cfg(target_os = "macos")]
+const CLONE_NOFOLLOW: u32 = 0x0001;
+
+#[cfg(target_os = "macos")]
+fn sub_error(sub: &Path, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{}: {error}", sub.display()))
+}
+
+#[cfg(target_os = "macos")]
+fn c_string(name: &std::ffi::OsStr) -> io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+
+    std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path holds a NUL"))
+}
+
+/// Makes `to` with `clone` where the filesystem can, measuring what that took; `false`
+/// when it cannot and a copy is needed.
+#[cfg(target_os = "macos")]
+fn try_clone(
+    to: &Path,
+    cap: u64,
+    bytes: &mut u64,
+    clone: impl FnOnce() -> io::Result<()>,
+) -> Result<bool, CopyDirError> {
     if !to
         .parent()
         .is_none_or(|parent| std::fs::create_dir_all(parent).is_ok())
-        || clonefile(from, to).is_err()
+        || clone().is_err()
     {
         return Ok(false);
     }
@@ -547,14 +635,7 @@ fn try_clone(from: &Path, to: &Path, cap: u64, bytes: &mut u64) -> Result<bool, 
 
 #[cfg(target_os = "macos")]
 fn clonefile(from: &Path, to: &Path) -> io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let c_path = |path: &Path| {
-        CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path holds a NUL"))
-    };
-    let (from, to) = (c_path(from)?, c_path(to)?);
+    let (from, to) = (c_string(from.as_os_str())?, c_string(to.as_os_str())?);
     // SAFETY: both are valid NUL-terminated strings that outlive the call.
     if unsafe { libc::clonefile(from.as_ptr(), to.as_ptr(), 0) } == 0 {
         Ok(())
@@ -1304,6 +1385,47 @@ mod tests {
         let held = kept.path().to_owned();
         drop(kept);
         assert!(!held.exists(), "the throwaway directory is deleted whole");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_clone_of_a_sub_path_lands_under_it_and_refuses_a_link_above_it() {
+        let root = tempfile::tempdir().unwrap();
+        let from = root.path().join("from");
+        std::fs::create_dir_all(from.join("users/alice")).unwrap();
+        std::fs::write(from.join("users/alice/a.txt"), "alice").unwrap();
+        std::fs::write(from.join("users/other.txt"), "other").unwrap();
+        let to = root.path().join("to");
+        let mut bytes = 0;
+        // `true` means the anchored clone itself did it, not the copy fallback.
+        assert!(clone_subdir(&from, Path::new("users/alice"), &to, 1 << 20, &mut bytes).unwrap());
+        assert_eq!(bytes, 5);
+        assert_eq!(
+            std::fs::read_to_string(to.join("users/alice/a.txt")).unwrap(),
+            "alice"
+        );
+        assert!(!to.join("users/other.txt").exists());
+
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(outside.join("alice")).unwrap();
+        std::fs::write(outside.join("alice/secret"), "secret").unwrap();
+        std::fs::create_dir_all(from.join("linked")).unwrap();
+        std::os::unix::fs::symlink(&outside, from.join("linked/via")).unwrap();
+        let refused = root.path().join("refused");
+        let result = clone_subtree(
+            &from,
+            Path::new("linked/via/alice"),
+            &refused,
+            1 << 20,
+            &mut 0,
+        );
+        assert!(matches!(result, Err(CopyDirError::Io(_))));
+        assert!(!refused.join("linked/via/alice/secret").exists());
+        let result = clone_subtree(&from, Path::new("linked/via"), &refused, 1 << 20, &mut 0);
+        assert!(matches!(result, Err(CopyDirError::Io(_))));
+        let missing = root.path().join("missing");
+        clone_subtree(&from, Path::new("users/bob"), &missing, 1 << 20, &mut 0).unwrap();
+        assert!(missing.is_dir() && !missing.join("users/bob").exists());
     }
 
     fn user_blueprint(sub_path: &str) -> Blueprint {
