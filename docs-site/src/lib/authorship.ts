@@ -7,7 +7,7 @@ export const authorshipLabels = {
 	},
 	'ai-assisted': {
 		label: 'AI-assisted',
-		description: 'The prose includes both human and AI contributions.',
+		description: 'This page includes both human and AI contributions.',
 	},
 	'ai-generated': {
 		label: 'AI-generated',
