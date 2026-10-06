@@ -53,7 +53,7 @@ other N entries remain open. Evidence means:
 | N08 | Make watchdog thread creation fallible | Inspection; OS failure |
 | N09 | Handle blocking-pool thread admission failures | Inspection; dependency OS failure |
 | N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
-| N11 | Bound lexer diagnostic collection before rendering | Source-controlled accumulation reproduced |
+| N11 | **Fixed on branch:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
 | N12 | Bound validation frontiers before enqueueing children | Allocation amplification measured |
 | N13 | Bound expanded Wasm locals across a module | Inspection; engine compilation allocation |
 | N14 | Bound aggregate MCP discovery pages/tools/schemas | Inspection; remote response accumulation |
@@ -365,6 +365,14 @@ reproduction. The outer pipeline retains and sometimes clones collected diagnost
 outcome and early stop. Preserve useful first errors and fatal-vs-language-error
 semantics. Test repeated invalid bytes, multibyte errors, boundaries and a later
 healthy compilation.
+
+**Disposition (2026-10-06, fixed on branch):** the lexer retains at most the
+first 20 diagnostics, matching the parser cap, and skips per-byte message
+formatting after that limit. Tokenization still advances normally, so compilation
+returns source errors rather than partial output. Direct 10,000-byte and public
+checked-compile 100,000-byte regressions pass, including the parser's separate
+EOF diagnostic and healthy follow-up. Three independent reviewers report no
+findings; formatting and workspace/all-target Clippy pass. No full suites.
 
 ### N12 — Validation allocates an entire child frontier before checking its budget
 

@@ -10,6 +10,9 @@ const VALID_ESCAPES: &str =
 
 /// UTF-8 encoding of U+FEFF, which many editors write at the start of a file.
 const BOM: &[u8] = "\u{feff}".as_bytes();
+/// Match the parser's diagnostic cap so malformed source cannot allocate one
+/// owned diagnostic per byte before the parser gets control.
+const MAX_LEXER_DIAGNOSTICS: usize = 20;
 
 pub struct Lexer<'a> {
     source: &'a str,
@@ -209,6 +212,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn error(&mut self, span: Span, message: impl Into<String>) {
+        if self.diagnostics.len() >= MAX_LEXER_DIAGNOSTICS {
+            return;
+        }
         self.diagnostics.push(Diagnostic {
             severity: Severity::Error,
             span,
@@ -219,6 +225,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn error_with_help(&mut self, span: Span, message: impl Into<String>, help: Vec<String>) {
+        if self.diagnostics.len() >= MAX_LEXER_DIAGNOSTICS {
+            return;
+        }
         self.diagnostics.push(Diagnostic {
             severity: Severity::Error,
             span,
@@ -229,6 +238,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn diagnose_unexpected_byte(&mut self, b: u8) {
+        if self.diagnostics.len() >= MAX_LEXER_DIAGNOSTICS {
+            return;
+        }
         let span = self.span(self.pos, self.pos + 1);
         let message = if b.is_ascii() && !b.is_ascii_control() {
             format!("unexpected character `{}`", b as char)
@@ -239,6 +251,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn diagnose_unexpected_char(&mut self, c: char) {
+        if self.diagnostics.len() >= MAX_LEXER_DIAGNOSTICS {
+            return;
+        }
         let len = c.len_utf8() as u32;
         self.error(
             self.span(self.pos, self.pos + len),
@@ -2966,6 +2981,20 @@ mod tests {
             diags[0].message.contains("unexpected character"),
             "got: {}",
             diags[0].message
+        );
+    }
+
+    #[test]
+    fn malformed_bytes_stop_accumulating_diagnostics_at_the_cap() {
+        let source = "@".repeat(10_000);
+        let mut lexer = Lexer::new(&source, F);
+        assert!(matches!(lexer.next_token().kind, TokenKind::Eof));
+        let diagnostics = lexer.finish().unwrap();
+        assert_eq!(diagnostics.len(), super::MAX_LEXER_DIAGNOSTICS);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.message.contains("unexpected character"))
         );
     }
 
