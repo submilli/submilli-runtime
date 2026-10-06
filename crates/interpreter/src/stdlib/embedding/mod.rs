@@ -294,8 +294,10 @@ async fn embed(
             // Settled before the error becomes a throw, or a fatal one, so the
             // sent sub-batches stay charged either way.
             budget.settle(estimate, error.settlements());
-            // What the sent sub-batches reported is real spend; record it as
-            // success does, and nothing when no sub-batch reported any.
+            // What the sent sub-batches reported is real spend; record it, and
+            // nothing when no sub-batch reported any. Unlike success, which is
+            // all-or-nothing, this is a lower bound: unreported sub-batches
+            // add nothing to it.
             let reported: u64 = error
                 .settlements()
                 .iter()
