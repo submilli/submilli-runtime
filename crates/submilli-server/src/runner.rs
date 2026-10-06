@@ -111,6 +111,9 @@ pub struct HostServices {
     pub(crate) recording: Option<crate::record::Recording>,
     /// Fires when someone other than the caller asks to cancel the run.
     pub(crate) cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
+    /// A test run's throwaway copies. The owner task holds them until the run is done, so
+    /// a caller that gives up on the run cannot delete files a worker still uses.
+    pub(crate) throwaway: Option<Arc<crate::record::Throwaway>>,
 }
 
 pub(crate) struct RunnerImports<'a> {
@@ -160,6 +163,8 @@ pub(crate) async fn run(
     // This task owns the store independently of the request. Dropping the
     // request signals cancellation; the owner drains workers before exiting.
     let owner = tokio::spawn(async move {
+        let mut services = services;
+        let throwaway = services.throwaway.take();
         let audit = services.audit.clone();
         let budget = services.llm_budget.clone();
         let log = owner_recording.as_ref().map(crate::record::Recording::log);
@@ -205,6 +210,8 @@ pub(crate) async fn run(
             });
         }
         log_execution(&blueprint, &session, started, &outcome);
+        // Dropped here, once the run is done; deleting the copies is kept off this worker.
+        drop(throwaway);
         outcome
     });
     let outcome = match owner.await {
@@ -1020,6 +1027,7 @@ mod tests {
             embedding_budget: None,
             recording: None,
             cancel_requested: None,
+            throwaway: None,
         };
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();

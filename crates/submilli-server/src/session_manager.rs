@@ -2569,9 +2569,6 @@ mod tests {
         );
     }
 
-    /// Zero would deadlock the provider's fan-out semaphore, so it clamps to one
-    /// here as well as at the provider — an operator who writes 0 gets serial
-    /// dispatch, not a hang.
     #[test]
     fn a_private_budget_holds_a_run_without_charging_the_server_aggregate() {
         let (mgr, _root) = manager();
@@ -2584,6 +2581,9 @@ mod tests {
         assert_eq!(mgr.llm_budget().used(), 500, "a shared one is charged");
     }
 
+    /// Zero would deadlock the provider's fan-out semaphore, so it clamps to one
+    /// here as well as at the provider — an operator who writes 0 gets serial
+    /// dispatch, not a hang.
     #[test]
     fn a_zero_concurrency_bound_clamps_to_one() {
         let settings = LlmSettings::new(LlmLimits::default(), 1_000, 0);

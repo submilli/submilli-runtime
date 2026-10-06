@@ -1002,6 +1002,12 @@ pub fn describe_error_chain(err: &dyn std::error::Error) -> String {
     }
 }
 
+/// Whether an error chain (as [`describe_error_chain`] renders it) is the network policy
+/// refusing the destination, which reaches a client builder's caller as a connect error.
+pub fn is_policy_refusal(chain: &str) -> bool {
+    chain.contains("blocked by network policy")
+}
+
 pub fn default_http_client() -> Arc<dyn HttpClient> {
     Arc::new(ReqwestHttpClient::default())
 }

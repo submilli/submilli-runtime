@@ -4,15 +4,20 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use base64::Engine as _;
 use interpreter::runtime::mcp::request_digest;
-use interpreter::runtime::{BodyCopy, McpCallError, McpOutcome, McpResponse, McpTransport};
+use interpreter::runtime::{McpCallError, McpOutcome, McpResponse, McpTransport};
 use serde_json::Value;
+use submilli_blueprint::Blueprint;
+use submilli_shared::mcp::transport::callable_server;
 
-use super::cassette::{Cassette, Entry, Kind, Miss, Unusable, mcp_key};
+use super::cassette::{Cassette, Entry, Kind, Miss, Unusable, decoded_body, mcp_key};
 
 /// An [`McpTransport`] that answers from a recorded run: the next unused recording of the
 /// same server, tool and arguments.
+///
+/// A server the current blueprint does not declare, or declares over `stdio`, is refused
+/// as the live transport refuses it, whatever was recorded: the recording answers a call,
+/// not a declaration.
 ///
 /// A recorded response is admitted through [`McpResponse::take`], the bounded path a live
 /// response takes. A recorded failure is raised again from its kind.
@@ -21,13 +26,16 @@ use super::cassette::{Cassette, Entry, Kind, Miss, Unusable, mcp_key};
 /// transport instead of stopping the run.
 pub struct RecordedMcpTransport {
     cassette: Arc<Cassette>,
+    blueprint: Arc<Blueprint>,
     live: Option<Arc<dyn McpTransport>>,
 }
 
 impl RecordedMcpTransport {
-    pub fn new(cassette: Arc<Cassette>) -> Self {
+    /// Answers for the servers `blueprint` declares.
+    pub fn new(cassette: Arc<Cassette>, blueprint: Arc<Blueprint>) -> Self {
         Self {
             cassette,
+            blueprint,
             live: None,
         }
     }
@@ -37,9 +45,7 @@ impl RecordedMcpTransport {
         self.live = Some(live);
         self
     }
-}
 
-impl RecordedMcpTransport {
     /// A call with nothing recorded: sent live when this transport may, else it stops the run.
     async fn unanswered(
         &self,
@@ -72,6 +78,13 @@ impl McpTransport for RecordedMcpTransport {
         args_json: &'a str,
     ) -> Pin<Box<dyn Future<Output = McpOutcome> + Send + 'a>> {
         Box::pin(async move {
+            if let Err(refused) = callable_server(&self.blueprint, server) {
+                return McpOutcome {
+                    result: Err(refused),
+                    received_bytes: 0,
+                    parsed_bytes: 0,
+                };
+            }
             let digest = request_digest(server, tool, args_json);
             let key = mcp_key(server, tool);
             match self.cassette.serve(Kind::Mcp, &key, &[digest], answer) {
@@ -83,15 +96,7 @@ impl McpTransport for RecordedMcpTransport {
 }
 
 fn answer(entry: &Entry) -> Result<McpOutcome, Unusable> {
-    let response = entry
-        .response
-        .as_ref()
-        .ok_or_else(|| Unusable::incomplete("the recorded call never finished"))?;
-    if response.truncated {
-        return Err(Unusable::incomplete(
-            "the recorded response was cut by the recorder's caps",
-        ));
-    }
+    let response = entry.finished_response()?;
     if response.meta.is_object() {
         return Ok(McpOutcome {
             result: Err(failure(&response.meta)?),
@@ -99,17 +104,7 @@ fn answer(entry: &Entry) -> Result<McpOutcome, Unusable> {
             parsed_bytes: 0,
         });
     }
-    let body = match &response.body {
-        Some(BodyCopy::Text(text)) => text.clone().into_bytes(),
-        Some(BodyCopy::Base64(data)) => base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|_| Unusable::incomplete("the recorded response is unreadable"))?,
-        None => {
-            return Err(Unusable::incomplete(
-                "the recorder kept the digest of the response, not its value",
-            ));
-        }
-    };
+    let body = decoded_body(response, "value")?;
     let mut value: Value = serde_json::from_slice(&body)
         .map_err(|_| Unusable::incomplete("the recorded response is unreadable"))?;
     Ok(McpOutcome {
@@ -119,35 +114,48 @@ fn answer(entry: &Entry) -> Result<McpOutcome, Unusable> {
     })
 }
 
-/// The failure a recording kept, raised again from its kind.
+/// The failure a recording kept, raised again from its kind: only an answer from outside,
+/// the server's or the wire's. Every `McpCallError::record()` kind:
+///
+/// | kind                 | class                                                     |
+/// |----------------------|-----------------------------------------------------------|
+/// | `mcp`                | outside: the server's tool or JSON-RPC error; served      |
+/// | `upstream`           | outside: the token endpoint's non-2xx answer; served, but a 401 or 403 is the credential it ran with, so a miss |
+/// | `response-too-large` | outside: the response passed the fixed bound; served      |
+/// | `transport`          | outside: the connection or token endpoint failed; served  |
+/// | `local`              | local: credentials, network policy, header config; miss   |
+/// | `auth-expired`       | local: the credential's state, today's decides; miss      |
+/// | `internal`           | local: host setup failure; miss                           |
+///
+/// A kind not listed, or none, is a miss too. `upstream` is only ever the token endpoint's
+/// answer, never the server's own status. `transport` is outside only because the
+/// transport records its local refusals (credential state, network policy, a secret that
+/// will not resolve) as `local`.
 fn failure(meta: &Value) -> Result<McpCallError, Unusable> {
-    let kind = meta
-        .get("kind")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Unusable::failure("the recorded failure kept no kind"))?;
+    let kind = meta.get("kind").and_then(Value::as_str);
     let message = meta
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
     match kind {
-        "response-too-large" => Ok(McpCallError::ResponseTooLarge),
-        "auth-expired" => Ok(McpCallError::AuthExpired),
-        "mcp" => Ok(McpCallError::Mcp { message }),
-        "transport" => Ok(McpCallError::Transport(message)),
-        "upstream" => {
+        Some("response-too-large") => Ok(McpCallError::ResponseTooLarge),
+        Some("mcp") => Ok(McpCallError::Mcp { message }),
+        Some("transport") => Ok(McpCallError::Transport(message)),
+        Some("upstream") => {
             let status = meta
                 .get("status")
                 .and_then(Value::as_u64)
                 .and_then(|status| u16::try_from(status).ok())
                 .ok_or_else(|| Unusable::failure("the recorded upstream failure kept no status"))?;
+            if matches!(status, 401 | 403) {
+                return Err(Unusable::decided_today(kind));
+            }
             Ok(McpCallError::Upstream {
                 status,
                 body: message,
             })
         }
-        other => Err(Unusable::failure(format!(
-            "a recorded `{other}` failure cannot be raised again"
-        ))),
+        other => Err(Unusable::decided_today(other)),
     }
 }

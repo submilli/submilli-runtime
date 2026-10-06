@@ -54,7 +54,7 @@ pub use policy::NetworkPolicy;
 pub use transport::{
     AuthProxy, AuthProxyError, EgressAt, HttpClient, HttpError, HttpRequest, HttpResponse,
     NoopAuthProxy, RecordedRequest, RedirectDenied, RedirectGuard, RedirectHop, ReqwestHttpClient,
-    default_auth_proxy, default_http_client, describe_error_chain,
+    default_auth_proxy, default_http_client, describe_error_chain, is_policy_refusal,
 };
 pub use transport_policy::{HttpTransportPolicy, TransportPolicyError};
 
