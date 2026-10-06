@@ -30,13 +30,13 @@ pub use events::{EVENT_SCHEMA, EventKind, SessionEvent};
 pub use program::{ProgramRun, run_program};
 pub use recheck::{RecheckReport, RecordedRun, VariableReport, recheck};
 pub use replay::{
-    Cassette, Miss, MissReason, RecordedHttpClient, RecordedLlmProvider, RecordedMcpTransport,
-    ReplayReport, Served,
+    Cassette, LiveReach, Miss, MissReason, RecordedHttpClient, RecordedLlmProvider,
+    RecordedMcpTransport, ReplayReport, Served,
 };
 pub use submilli_shared::mcp::McpCatalog;
 pub(crate) use test_run::TestWorld;
 pub use test_run::{
-    ServedCall, Stop, TestError, TestMode, TestOutcome, TestReport, TestRun, test_program,
+    LiveCall, ServedCall, Stop, TestError, TestMode, TestOutcome, TestReport, TestRun, test_program,
 };
 pub use throwaway::{
     ForkedSessionKv, LOCAL_STATE_CAP_BYTES, LocalState, Throwaway, ThrowawayError,
