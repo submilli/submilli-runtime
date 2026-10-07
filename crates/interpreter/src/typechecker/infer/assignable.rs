@@ -1018,7 +1018,7 @@ fn type_args_relate(
 /// Whether `actual` is a `readonly` array or tuple and `expected` a mutable one.
 /// The element types still decide assignability everywhere else: `readonly` is
 /// shallow and otherwise covariant, like the array it wraps.
-pub(super) fn drops_readonly(actual: &Type, expected: &Type) -> bool {
+pub(crate) fn drops_readonly(actual: &Type, expected: &Type) -> bool {
     actual.is_readonly_array()
         && !expected.is_readonly_array()
         && matches!(expected.peel(), Type::Array(_) | Type::Tuple(_))

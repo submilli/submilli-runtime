@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
 use crate::typechecker::infer::assignable::{
-    TypeResolver, assignable, expand_alias_ref, expand_interface_data_shape, rest_function_accepts,
+    TypeResolver, assignable, drops_readonly, expand_alias_ref, expand_interface_data_shape,
+    rest_function_accepts,
 };
 use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
 use crate::typechecker::infer::variance::Variance;
@@ -415,6 +416,20 @@ impl<'a> Unifier<'a> {
         // A type variable still binds to a readonly argument as readonly, or the
         // call's result would hand back a writable view of it.
         let bindable_arg = arg_ty.peel_preserving_readonly();
+        // A readonly array never stands for a mutable one; in a callback's
+        // parameter the slot's array is the one passed to the callback.
+        let drops_readonly = if self.contravariant {
+            drops_readonly(param_ty, arg_ty)
+        } else {
+            drops_readonly(arg_ty, param_ty)
+        };
+        if drops_readonly {
+            return Err(UnifyError::Mismatch {
+                expected: param_ty.clone(),
+                got: arg_ty.clone(),
+            });
+        }
+        let unpeeled_arg = arg_ty;
         let param_ty = param_ty.peel();
         let arg_ty = arg_ty.peel();
         if matches!(param_ty, Type::Error) || matches!(arg_ty, Type::Error) {
@@ -687,9 +702,12 @@ impl<'a> Unifier<'a> {
             }
             // Union param against a single (non-union) arg: try each member.
             (Type::Union(pa), _) => {
+                // Each member sees the argument as written: a readonly array
+                // must not fit a mutable member.
+                let arg_ty = unpeeled_arg;
                 // Bottom fits every arm. Give an unbound variable a chance to
                 // infer from it before accepting an unrelated concrete arm.
-                if matches!(arg_ty, Type::Never) && self.subtype_widening {
+                if matches!(arg_ty.peel(), Type::Never) && self.subtype_widening {
                     let snap = self.snapshot();
                     if self
                         .without_subtype_widening(|u| u.unify(param_ty, arg_ty))
@@ -698,6 +716,9 @@ impl<'a> Unifier<'a> {
                         return Ok(());
                     }
                     self.restore(snap);
+                }
+                if self.infer_from_readonly_into_mutable_member(pa, arg_ty) {
+                    return Ok(());
                 }
                 if self.unify_by_lone_type_var_rule(pa, arg_ty) {
                     return Ok(());
@@ -1066,6 +1087,28 @@ impl<'a> Unifier<'a> {
         others
             .iter()
             .any(|other| self.unifies_or_rolls_back(other, arg))
+    }
+
+    /// tsc infers from a readonly array argument through a mutable array
+    /// member, as `readonly Mode[]` binds `T` to `Mode` in `T | T[]`, and then
+    /// rejects the argument, which no member takes. Infer the same way and
+    /// leave the argument to be reported once inference is done.
+    fn infer_from_readonly_into_mutable_member(&mut self, params: &[Type], arg: &Type) -> bool {
+        if !self.infers_from_covariant_argument() || !arg.is_readonly_array() {
+            return false;
+        }
+        let Some(member) = params.iter().find(|member| {
+            matches!(member.peel(), Type::Array(_) | Type::Tuple(_))
+                && !member.is_readonly_array()
+                && super::infer::expr::type_contains_type_var(member)
+        }) else {
+            return false;
+        };
+        if !self.unifies_or_rolls_back(member, arg.peel()) {
+            return false;
+        }
+        self.record_close_match(params, member, arg);
+        true
     }
 
     /// Record that `arg` must fit the union parameter `params` once
