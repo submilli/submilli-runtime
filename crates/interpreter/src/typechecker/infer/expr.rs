@@ -4968,6 +4968,63 @@ impl Inferer<'_> {
     /// still checked against the selected variant's field, so it is rejected
     /// rather than mistyped. `None` (defer to the caller's single-shape scan)
     /// for ambiguity or no match.
+    /// The hint an object literal takes against a union with a member that has
+    /// an index signature, which no field name can rule out: each field the
+    /// literal writes is hinted with every type a member gives that name. The
+    /// literal is then checked against the union itself. `None` when no member
+    /// has an index signature.
+    fn dictionary_union_hint(
+        &self,
+        members: &[Type],
+        literal: &[crate::ObjectLiteralMember],
+    ) -> Option<Type> {
+        if !members
+            .iter()
+            .any(|member| self.resolver().index_signature(member).is_some())
+        {
+            return None;
+        }
+        let shapes: Vec<(ObjectFields, Option<Type>)> = members
+            .iter()
+            .filter(|member| !matches!(member.peel(), Type::Null))
+            .map(|member| {
+                let index = self
+                    .resolver()
+                    .index_signature(member)
+                    .map(|index| *index.value);
+                (self.member_shape(member).unwrap_or_default(), index)
+            })
+            .collect();
+        let fields = literal
+            .iter()
+            .filter_map(|member| match member {
+                crate::ObjectLiteralMember::Field(field) => Some(field.name.name.as_str()),
+                _ => None,
+            })
+            .filter_map(|name| {
+                let types: Vec<Type> = shapes
+                    .iter()
+                    .filter_map(|(fields, index)| {
+                        fields
+                            .get(name)
+                            .map(|field| field.ty.clone())
+                            .or_else(|| index.clone())
+                    })
+                    .collect();
+                (!types.is_empty()).then(|| {
+                    (
+                        name.to_string(),
+                        crate::ObjectField::required(Type::union(types)),
+                    )
+                })
+            })
+            .collect();
+        Some(Type::Object {
+            index: None,
+            fields,
+        })
+    }
+
     fn select_union_variant<'a>(
         &self,
         members: &'a [Type],
@@ -5000,7 +5057,14 @@ impl Inferer<'_> {
                 return Ok(members.get(idx.0 as usize));
             }
         }
-        if has_spread {
+        // A member with an index signature takes any names, so the names alone
+        // can't choose between it and another member: `{ a: "on" }` may suit
+        // `{ [k: string]: string }` though `{ a: number }` names `a`.
+        if has_spread
+            || members
+                .iter()
+                .any(|member| self.resolver().index_signature(member).is_some())
+        {
             return Ok(None);
         }
 
@@ -5072,10 +5136,16 @@ impl Inferer<'_> {
         // (`http.download(url, path, { overwrite: true })` against
         // `options: DownloadOptions | null`) the same way it flows
         // into a non-nullable interface param.
+        let dictionary_hint = match peeled {
+            Some(Type::Union(union_members)) => self.dictionary_union_hint(union_members, &members),
+            _ => None,
+        };
         let peeled = match peeled {
             Some(Type::Union(union_members)) => {
                 if let Some(variant) = self.select_union_variant(union_members, &members)? {
                     Some(variant.peel())
+                } else if let Some(hint) = &dictionary_hint {
+                    Some(hint)
                 } else {
                     let mut shape_match: Option<&Type> = None;
                     for m in union_members {
