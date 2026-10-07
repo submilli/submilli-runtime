@@ -844,6 +844,13 @@ pub fn truthy_part(ty: &Type) -> Type {
     Type::union(kept)
 }
 
+/// Whether no value of `ty` is falsy.
+pub fn is_never_falsy(ty: &Type) -> bool {
+    union_members(ty)
+        .into_iter()
+        .all(|m| truthiness_class(m) == TruthinessClass::AlwaysTruthy)
+}
+
 /// The type of `x` where `x` is known falsy: keep `null` and falsy literals,
 /// collapse `string` to `""` and `boolean` to `false`, drop never-falsy
 /// reference types. `number` stays `number` — a `0` literal would be unsound

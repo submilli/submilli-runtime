@@ -1,2 +1,2 @@
-line 5 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a` is always falsy
+line 5 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a` is always falsy
 line 6, 10 type: by-design spec §1.6 an assignment that may not run installs no narrowing, so the variable keeps its declared type

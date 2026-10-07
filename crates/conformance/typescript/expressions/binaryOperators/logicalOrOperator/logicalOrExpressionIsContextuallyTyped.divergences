@@ -3,3 +3,6 @@ types: 4 of 14 tsc entries compared, 1 differ
 line 7: { a: '', b: 123 } || { a: '', b: true }
   tsc:  { a: string; b: number; }
   ours: { a: string; b: number } | { a: string; b: boolean }
+
+errors:
+line 7: tsc TS2872: This kind of expression is always truthy. (we accept)

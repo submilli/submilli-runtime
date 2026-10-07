@@ -619,9 +619,7 @@ impl Inferer<'_> {
                 }
                 self.resolve_ident(ident, span)
             }
-            ExprKind::Binary { op, lhs, rhs } => {
-                self.infer_binary(op, lhs, rhs, expected, keeps_literal, span)
-            }
+            ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
             ExprKind::Unary { op, operand } => {
                 self.infer_unary_keeping_literals(op, operand, expected, keeps_literal)
             }
@@ -711,7 +709,7 @@ impl Inferer<'_> {
                 substitution_spans,
             } => self.lower_template_literal(parts, exprs, substitution_spans, expected, span),
             ExprKind::Ternary { cond, then_, else_ } => {
-                self.infer_ternary(cond, then_, else_, expected, keeps_literal, span)
+                self.infer_ternary(cond, then_, else_, expected, span)
             }
             ExprKind::OptionalChain { base, parts } => {
                 self.infer_optional_chain(base, parts, expected, span)
@@ -1128,7 +1126,6 @@ impl Inferer<'_> {
         lhs: ExprId,
         rhs: ExprId,
         expected: Option<&Type>,
-        keeps_literal: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // human-readable operator symbol for diagnostics.
@@ -1184,7 +1181,7 @@ impl Inferer<'_> {
         // its own typed-AST node so codegen and the type-result rule
         // (`union(strip_null(lhs), rhs)`) can be specialised cleanly.
         if matches!(op, BinOp::NullishCoalesce) {
-            return self.infer_nullish_coalesce(lhs, rhs, keeps_literal, span);
+            return self.infer_nullish_coalesce(lhs, rhs, span);
         }
         match op {
             BinOp::Add => {
@@ -1427,8 +1424,7 @@ impl Inferer<'_> {
                 // type is TS-style: the branch that keeps the LHS
                 // contributes only the values that can short-circuit
                 // there (`falsy_part` for `&&`, `truthy_part` for `||`).
-                let (typed_lhs, lhs_ty) =
-                    self.infer_expr_keeping_literals(lhs, None, keeps_literal)?;
+                let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
                 let mut condition_error = false;
                 if matches!(lhs_ty.peel(), Type::Unknown) {
                     // `&&`/`||` on un-narrowed `unknown`
@@ -1457,8 +1453,12 @@ impl Inferer<'_> {
                     BinOp::Or => false_env,
                     _ => return Err(super::inference_failure("matched And | Or above")),
                 };
+                // `a || b` is `a` when `a` is never falsy, so only `a` meets
+                // what is expected of it.
+                let lhs_decides = op == BinOp::Or && super::narrowing::is_never_falsy(&lhs_ty);
+                let rhs_expected = if lhs_decides { None } else { expected };
                 let (typed_rhs, rhs_ty) =
-                    self.infer_conditional_operand(rhs, &rhs_env, expected, keeps_literal)?;
+                    self.infer_conditional_operand(rhs, &rhs_env, rhs_expected, true)?;
                 if matches!(rhs_ty.peel(), Type::Void | Type::Never)
                     && !self.is_condition_value(typed_rhs, &rhs_ty)?
                 {
@@ -1475,6 +1475,12 @@ impl Inferer<'_> {
                 };
                 let result_ty = if condition_error {
                     Type::Error
+                } else if lhs_decides
+                    && assignable(&rhs_ty, &lhs_kept.widen_literal(), self.resolver())
+                {
+                    // The right side is compiled though it never runs, so it
+                    // must fit the left side's representation.
+                    lhs_kept
                 } else if let Some(joined) =
                     empty_literal_join(self.ast, (lhs, &lhs_kept), (rhs, &rhs_ty))?
                 {
@@ -1548,7 +1554,7 @@ impl Inferer<'_> {
     }
 
     /// [`infer_unary`](Self::infer_unary), giving a negated literal its literal
-    /// type where the literal itself would keep one: `const n = -1n` is `-1n`, as
+    /// type where the literal itself would keep one: `const n = -1` is `-1`, as
     /// TypeScript has it. Only a literal written right after the `-` counts.
     fn infer_unary_keeping_literals(
         &mut self,
@@ -1561,20 +1567,26 @@ impl Inferer<'_> {
         if !matches!(op, UnOp::Neg) {
             return Ok((kind, ty));
         }
-        let literal = match &self
+        let ty = match &self
             .ast
             .try_expr(operand)
             .map_err(super::arena_failure)?
             .kind
         {
             ExprKind::BigInt(digits) => {
-                Type::BigIntLiteral(crate::types::negate_bigint_digits(digits))
+                let literal = Type::BigIntLiteral(crate::types::negate_bigint_digits(digits));
+                self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::BigIntLiteral(_))
+                })
             }
-            _ => return Ok((kind, ty)),
+            ExprKind::Number(value) => {
+                let literal = number_literal_type(-value);
+                self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::NumberLiteral(_))
+                })
+            }
+            _ => ty,
         };
-        let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
-            matches!(t, Type::BigIntLiteral(_))
-        });
         Ok((kind, ty))
     }
 
@@ -8680,7 +8692,6 @@ impl Inferer<'_> {
         then_: ExprId,
         else_: ExprId,
         expected: Option<&Type>,
-        keeps_literal: bool,
         _span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
@@ -8690,12 +8701,12 @@ impl Inferer<'_> {
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
         let (typed_then, then_ty) =
-            self.infer_conditional_operand(then_, &true_env, expected, keeps_literal)?;
+            self.infer_conditional_operand(then_, &true_env, expected, true)?;
         let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span)?;
 
         let (typed_else, else_ty) =
-            self.infer_conditional_operand(else_, &false_env, expected, keeps_literal)?;
+            self.infer_conditional_operand(else_, &false_env, expected, true)?;
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
@@ -8720,14 +8731,12 @@ impl Inferer<'_> {
         &mut self,
         lhs: ExprId,
         rhs: ExprId,
-        keeps_literal: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, keeps_literal)?;
+        let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
         // The right side runs only where the left is `null`.
         let rhs_env = self.null_operand_env(typed_lhs)?;
-        let (typed_rhs, rhs_ty) =
-            self.infer_conditional_operand(rhs, &rhs_env, None, keeps_literal)?;
+        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, None, true)?;
         let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
         let typed_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
 

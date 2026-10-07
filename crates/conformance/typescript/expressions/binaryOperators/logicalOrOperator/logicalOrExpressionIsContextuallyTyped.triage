@@ -1,1 +1,2 @@
 line 7 type: by-design spec §1.6 the result of `||` or `??` includes the right operand's type, even when the left can't fall through to it
+line 7 missed: bug SUB-1154 tsc rejects a condition that is always truthy or always falsy
