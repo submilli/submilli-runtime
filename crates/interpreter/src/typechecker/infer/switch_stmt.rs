@@ -360,9 +360,10 @@ impl Inferer<'_> {
 
         for case in cases {
             let case_span = case.span;
-            let mut typed_values: Vec<TypedSwitchValue> = Vec::new();
+            // Each label with its own type, which an enum member's test keeps.
+            let mut labels: Vec<(TypedSwitchValue, Type)> = Vec::new();
             for value_expr in &case.values {
-                let Some(label) =
+                let Some((label, label_ty)) =
                     self.infer_case_label(&case_discriminant, *value_expr, case_span)?
                 else {
                     continue;
@@ -388,10 +389,10 @@ impl Inferer<'_> {
                     });
                     continue;
                 }
-                typed_values.push(label);
+                labels.push((label, label_ty));
             }
 
-            let true_env = self.case_true_env(typed_disc, disc_source_span, &typed_values)?;
+            let true_env = self.case_true_env(typed_disc, disc_source_span, &labels)?;
 
             let body_span = self
                 .ast
@@ -413,7 +414,7 @@ impl Inferer<'_> {
             any_arm_reachable_exit |= body_reachable;
 
             typed_cases.push(TypedSwitchCase {
-                values: typed_values,
+                values: labels.into_iter().map(|(value, _)| value).collect(),
                 body: typed_body,
                 span: case_span,
             });
@@ -496,19 +497,20 @@ impl Inferer<'_> {
     }
 
     /// Type one `case` label and check it against the discriminant: a literal
-    /// label, or an expression label compared at run time. `None` after an error.
+    /// label, or an expression label compared at run time, with the label's type.
+    /// `None` after an error.
     fn infer_case_label(
         &mut self,
         discriminant: &CaseDiscriminant<'_>,
         value_expr: ExprId,
         case_span: Span,
-    ) -> Result<Option<TypedSwitchValue>, CompilerFailure> {
+    ) -> Result<Option<(TypedSwitchValue, Type)>, CompilerFailure> {
         let value_span = self
             .ast
             .try_expr(value_expr)
             .map_err(super::arena_failure)?
             .span;
-        let (typed_val, _) = self.infer_expr(value_expr, None)?;
+        let (typed_val, label_ty) = self.infer_expr(value_expr, None)?;
         let case_operand = self.comparison_operand(value_expr, typed_val)?;
         if !super::comparison_operand::operands_comparable(
             &case_operand,
@@ -525,10 +527,11 @@ impl Inferer<'_> {
             return Ok(None);
         }
         if let Some(literal) = self.literal_case_label(value_expr, typed_val, value_span)? {
-            return Ok(Some(literal));
+            return Ok(Some((literal, label_ty)));
         }
-        self.expression_case_label(discriminant, typed_val, &case_operand.ty, case_span)
-            .map(Some)
+        let label =
+            self.expression_case_label(discriminant, typed_val, &case_operand.ty, case_span)?;
+        Ok(Some((label, label_ty)))
     }
 
     /// A label spelled as a literal: `"a"`, `1`, `null`, `E.A`, or a signed number,
@@ -617,12 +620,12 @@ impl Inferer<'_> {
         &mut self,
         typed_disc: ExprId,
         disc_source_span: Span,
-        values: &[TypedSwitchValue],
+        labels: &[(TypedSwitchValue, Type)],
     ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
-        let mut literal_values: Vec<TypedSwitchValue> = Vec::new();
-        for value in values {
+        let mut literal_values: Vec<(TypedSwitchValue, Type)> = Vec::new();
+        for (value, value_ty) in labels {
             let TypedSwitchValue::Expr { label, span, .. } = value else {
-                literal_values.push(value.clone());
+                literal_values.push((value.clone(), value_ty.clone()));
                 continue;
             };
             // A label of literal type narrows to its literals; any other leaves
@@ -639,25 +642,30 @@ impl Inferer<'_> {
             literal_values.extend(
                 literals
                     .into_iter()
-                    .map(|literal| literal_switch_value(literal, *span)),
+                    .map(|literal| (literal_switch_value(literal, *span), label_ty.clone())),
             );
         }
         let mut iter = literal_values.iter();
-        let Some(first) = iter.next() else {
+        let Some((first, first_ty)) = iter.next() else {
             return Ok(narrowing::NarrowEnv::new());
         };
-        let mut acc = self.predicate_env_for_case_value(typed_disc, disc_source_span, first)?;
-        for value in iter {
-            let next = self.predicate_env_for_case_value(typed_disc, disc_source_span, value)?;
+        let mut acc =
+            self.predicate_env_for_case_value(typed_disc, disc_source_span, first, first_ty)?;
+        for (value, value_ty) in iter {
+            let next =
+                self.predicate_env_for_case_value(typed_disc, disc_source_span, value, value_ty)?;
             let (joined, _) = narrowing::union_envs(acc, BTreeSet::new(), next, BTreeSet::new());
             acc = joined;
         }
         Ok(acc)
     }
 
+    /// The label as an expression for the synthesized `disc === label` test. An
+    /// enum member keeps the label's own type (`E`), as its `case` reads in source.
     fn push_switch_value_expr(
         &mut self,
         value: &TypedSwitchValue,
+        label_ty: &Type,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let (kind, ty, span) = match value {
             TypedSwitchValue::String { value, span } => (
@@ -687,7 +695,7 @@ impl Inferer<'_> {
                         variant: member.clone(),
                         value: *n,
                     },
-                    Type::NumberLiteral(crate::types::LiteralF64(*n)),
+                    label_ty.clone(),
                     *span,
                 ),
                 EnumVariantPayload::String(s) => (
@@ -696,7 +704,7 @@ impl Inferer<'_> {
                         variant: member.clone(),
                         value: s.clone(),
                     },
-                    Type::StringLiteral(s.clone()),
+                    label_ty.clone(),
                     *span,
                 ),
             },
@@ -711,8 +719,9 @@ impl Inferer<'_> {
         typed_disc: ExprId,
         disc_source_span: Span,
         value: &TypedSwitchValue,
+        label_ty: &Type,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
-        let lit_expr_id = self.push_switch_value_expr(value)?;
+        let lit_expr_id = self.push_switch_value_expr(value, label_ty)?;
         let synth = self
             .typed_ast
             .try_push_expr(TypedExpr {

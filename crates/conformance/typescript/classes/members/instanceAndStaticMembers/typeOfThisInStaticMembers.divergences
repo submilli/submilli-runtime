@@ -98,11 +98,11 @@ line 33: t2
 
 errors:
 line 4: ours: a static field must be initialized (tsc accepts)
-line 5: ours: unresolved identifier `C` (tsc accepts)
+line 5: ours: `C` is a class, not a value, so `typeof` has no type to take (tsc accepts)
 line 7: ours: `this` is not available in a static member (tsc accepts)
 line 8: ours: `this` is not available in a static member (tsc accepts)
 line 19: ours: a static field must be initialized (tsc accepts)
 line 21: ours: a static field must be initialized (tsc accepts)
-line 22: ours: unresolved identifier `C2` (tsc accepts)
+line 22: ours: `C2` is a class, not a value, so `typeof` has no type to take (tsc accepts)
 line 24: ours: `this` is not available in a static member (tsc accepts)
 line 25: ours: `this` is not available in a static member (tsc accepts)

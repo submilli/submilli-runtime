@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "5aba9133290caf3096a607922be251dd63f31376eb9bd935ab38595d9efc8715"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "ffe41afabeb58c5d4e3ff610db92e3ca9e38026fd363262f1abb2e98fd2111cc"
+  confirmedAt: "2026-10-05T17:33:06.426Z"
 ---
 
 Built-ins are the globals in scope in every program without an `import`. They
@@ -278,7 +278,7 @@ The built-in error class.
 | `static isError(value: unknown): boolean` | Returns `true` when `value` is an `Error` instance (including subclasses). |
 | `message: string` | The human-readable message passed to `new Error(message)`. |
 | `name: string` | The error class name. |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `Map`
 
@@ -383,7 +383,7 @@ A budget refusal (`extends Error`): filesystem space, model tokens, or session s
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `RangeError`
 
@@ -391,7 +391,7 @@ The built-in range-error class (`extends Error`, `name` = `"RangeError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `Record`
 
@@ -525,7 +525,7 @@ The built-in syntax-error class (`extends Error`, `name` = `"SyntaxError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `TextDecoder`
 
@@ -573,7 +573,7 @@ The built-in type-error class (`extends Error`, `name` = `"TypeError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `Uint8Array`
 
