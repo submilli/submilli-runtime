@@ -105,6 +105,7 @@ fn install_prelude(
         quota_exceeded_vtable: error_host.quota_exceeded_vtable,
         type_error_vtable: error_host.type_vtable,
         syntax_error_vtable: error_host.syntax_vtable,
+        uri_error_vtable: error_host.uri_vtable,
         permission_denied_vtable: error_host.permission_denied_vtable,
         error_field_names: error_host.field_names,
         permission_denied_field_names: error_host.permission_denied_field_names,
@@ -774,6 +775,7 @@ pub struct HostAbi {
     pub(crate) quota_exceeded_vtable: Global,
     pub(crate) type_error_vtable: Global,
     pub(crate) syntax_error_vtable: Global,
+    pub(crate) uri_error_vtable: Global,
     pub(crate) permission_denied_vtable: Global,
     pub(crate) error_field_names: Global,
     pub(crate) permission_denied_field_names: Global,
@@ -790,6 +792,7 @@ pub(crate) struct HostAbiHandles {
     pub quota_exceeded_vtable: Global,
     pub type_error_vtable: Global,
     pub syntax_error_vtable: Global,
+    pub uri_error_vtable: Global,
     pub permission_denied_vtable: Global,
     pub error_field_names: Global,
     pub permission_denied_field_names: Global,
@@ -810,6 +813,7 @@ pub(crate) fn error_abi(caller: &Caller<'_, StoreData>) -> wasmtime::Result<Host
         quota_exceeded_vtable: abi.quota_exceeded_vtable,
         type_error_vtable: abi.type_error_vtable,
         syntax_error_vtable: abi.syntax_error_vtable,
+        uri_error_vtable: abi.uri_error_vtable,
         permission_denied_vtable: abi.permission_denied_vtable,
         error_field_names: abi.error_field_names,
         permission_denied_field_names: abi.permission_denied_field_names,
@@ -1115,6 +1119,24 @@ pub fn syntax_error(message: impl Into<String>) -> wasmtime::Error {
 }
 
 /// Marker for a host failure that should surface to the guest as the built-in
+/// `URIError` subclass — same contract as [`RangeError`].
+#[derive(Debug)]
+pub struct UriError(pub String);
+
+impl std::fmt::Display for UriError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for UriError {}
+
+/// A host failure that throws the built-in `URIError` at the guest boundary.
+pub fn uri_error(message: impl Into<String>) -> wasmtime::Error {
+    wasmtime::Error::new(UriError(message.into()))
+}
+
+/// Marker for a host failure that should surface to the guest as the built-in
 /// `TypeError` subclass — same contract as [`RangeError`]. Used for
 /// argument-boundary type mismatches (a null or wrong-typed value where the
 /// ABI promised another type) and for spec-`TypeError` conditions (invalid
@@ -1345,6 +1367,8 @@ fn builtin_class_of(err: &wasmtime::Error) -> super::prelude::error::BuiltinErro
         super::prelude::error::BuiltinErrorClass::Type
     } else if err.downcast_ref::<SyntaxError>().is_some() {
         super::prelude::error::BuiltinErrorClass::Syntax
+    } else if err.downcast_ref::<UriError>().is_some() {
+        super::prelude::error::BuiltinErrorClass::Uri
     } else if err.downcast_ref::<PermissionDenied>().is_some() {
         super::prelude::error::BuiltinErrorClass::PermissionDenied
     } else {

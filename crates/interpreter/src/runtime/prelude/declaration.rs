@@ -389,6 +389,7 @@ mod tests {
                 "TextEncoder",
                 "TextEncoderConstructor",
                 "TypeError",
+                "URIError",
                 "Uint8Array",
                 "Uint8ArrayConstructor",
             ]
@@ -413,6 +414,7 @@ mod tests {
                     | "RangeError"
                     | "TypeError"
                     | "SyntaxError"
+                    | "URIError"
                     | "PermissionDeniedError"
             ) {
                 assert!(matches!(&defs.types[*name].kind, TypeKind::Class { .. }));

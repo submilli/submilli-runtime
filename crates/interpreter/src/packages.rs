@@ -3204,6 +3204,7 @@ mod tests {
             "RangeError",
             "TypeError",
             "SyntaxError",
+            "URIError",
             "PermissionDeniedError",
         ] {
             assert!(

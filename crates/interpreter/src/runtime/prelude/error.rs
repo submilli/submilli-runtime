@@ -15,7 +15,7 @@
 //! and `name` at slot 1. Construction is host-only — guests call the imported
 //! constructor; a user subclass's `super(...)` calls the self-first ctor-init.
 //!
-//! `RangeError`, `TypeError`, and `SyntaxError` are the host-implemented
+//! `RangeError`, `TypeError`, `SyntaxError`, and `URIError` are the host-implemented
 //! `Error` subclasses:
 //! same layout, one shared `(rec $Subclass_vtable $Subclass)` pair subtyping
 //! the `$Error` pair (canonical identity includes the supertype, so consumers'
@@ -55,15 +55,17 @@ pub(crate) enum BuiltinErrorClass {
     QuotaExceeded,
     Type,
     Syntax,
+    Uri,
     PermissionDenied,
 }
 
 impl BuiltinErrorClass {
-    const SUBCLASSES: [Self; 5] = [
+    const SUBCLASSES: [Self; 6] = [
         Self::Range,
         Self::QuotaExceeded,
         Self::Type,
         Self::Syntax,
+        Self::Uri,
         Self::PermissionDenied,
     ];
 
@@ -74,6 +76,7 @@ impl BuiltinErrorClass {
             Self::QuotaExceeded => "QuotaExceededError",
             Self::Type => "TypeError",
             Self::Syntax => "SyntaxError",
+            Self::Uri => "URIError",
             Self::PermissionDenied => "PermissionDeniedError",
         }
     }
@@ -84,7 +87,12 @@ impl BuiltinErrorClass {
     /// trailing params follow the same order.
     fn own_fields(self) -> &'static [&'static str] {
         match self {
-            Self::Error | Self::Range | Self::QuotaExceeded | Self::Type | Self::Syntax => &[],
+            Self::Error
+            | Self::Range
+            | Self::QuotaExceeded
+            | Self::Type
+            | Self::Syntax
+            | Self::Uri => &[],
             Self::PermissionDenied => &["caller", "capability", "reason"],
         }
     }
@@ -96,15 +104,19 @@ impl BuiltinErrorClass {
             Self::QuotaExceeded => handles.quota_exceeded_vtable,
             Self::Type => handles.type_error_vtable,
             Self::Syntax => handles.syntax_error_vtable,
+            Self::Uri => handles.uri_error_vtable,
             Self::PermissionDenied => handles.permission_denied_vtable,
         }
     }
 
     fn field_names(self, handles: &crate::runtime::host::HostAbiHandles) -> Global {
         match self {
-            Self::Error | Self::Range | Self::QuotaExceeded | Self::Type | Self::Syntax => {
-                handles.error_field_names
-            }
+            Self::Error
+            | Self::Range
+            | Self::QuotaExceeded
+            | Self::Type
+            | Self::Syntax
+            | Self::Uri => handles.error_field_names,
             Self::PermissionDenied => handles.permission_denied_field_names,
         }
     }
@@ -116,6 +128,7 @@ impl BuiltinErrorClass {
             | Self::QuotaExceeded
             | Self::Type
             | Self::Syntax
+            | Self::Uri
             | Self::PermissionDenied => handles.error_subclass_type.clone(),
         }
     }
@@ -129,6 +142,7 @@ pub(crate) struct ErrorHost {
     pub quota_exceeded_vtable: Global,
     pub type_vtable: Global,
     pub syntax_vtable: Global,
+    pub uri_vtable: Global,
     pub permission_denied_vtable: Global,
     pub field_names: Global,
     pub permission_denied_field_names: Global,
@@ -330,6 +344,7 @@ pub(crate) fn install_store_bound(
         quota_exceeded_vtable,
         type_vtable,
         syntax_vtable,
+        uri_vtable,
         permission_denied_vtable,
     ] = BuiltinErrorClass::SUBCLASSES.map(|class| {
         install_subclass_vtable(
@@ -348,6 +363,7 @@ pub(crate) fn install_store_bound(
         quota_exceeded_vtable: quota_exceeded_vtable?,
         type_vtable: type_vtable?,
         syntax_vtable: syntax_vtable?,
+        uri_vtable: uri_vtable?,
         permission_denied_vtable: permission_denied_vtable?,
         field_names,
         permission_denied_field_names,
@@ -552,6 +568,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         BuiltinErrorClass::QuotaExceeded,
         BuiltinErrorClass::Type,
         BuiltinErrorClass::Syntax,
+        BuiltinErrorClass::Uri,
         BuiltinErrorClass::PermissionDenied,
     ] {
         let mut init_params = vec![object_ref.clone()];
@@ -1056,6 +1073,34 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 implements: Vec::new(),
                 doc: doc(
                     "/** The built-in syntax-error class (`extends Error`, `name` = `\"SyntaxError\"`). Thrown by the runtime when text fails to parse: `JSON.parse` of malformed JSON, `BigInt()` of an invalid literal string, `Uint8Array.fromHex`/`fromBase64` of malformed input, `new RegExp()` of an invalid pattern or flags. Catch selectively with `catch (e: SyntaxError)`. */",
+                ),
+            },
+        },
+    );
+
+    defs.types.insert(
+        "URIError".to_string(),
+        TypeSymbol {
+            name: "URIError".to_string(),
+            mangled_name: crate::mangle::prelude("URIError"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Class {
+                generics: Vec::new(),
+                // No own fields — `message`/`name` are inherited from `Error`.
+                fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
+                methods: BTreeMap::new(),
+                method_visibility: BTreeMap::new(),
+                accessors: Vec::new(),
+                constructor: vec![Param::new("message", Type::String)],
+                constructor_visibility: crate::Visibility::Public,
+                statics: BTreeMap::new(),
+                static_visibility: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                extends: Some(crate::ClassExtends::plain(crate::mangle::prelude("Error"))),
+                implements: Vec::new(),
+                doc: doc(
+                    "/** The built-in URI-error class (`extends Error`, `name` = `\"URIError\"`). Thrown by `decodeURI`/`decodeURIComponent` on a malformed escape and by `encodeURI`/`encodeURIComponent` on a lone surrogate. Catch selectively with `catch (e: URIError)`. */",
                 ),
             },
         },
