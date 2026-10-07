@@ -1222,15 +1222,14 @@ impl Inferer<'_> {
         })
     }
 
-    /// The type parameters in `inferred` that type at most one of the fields
-    /// the object literal `arg` gives, counted in the object shape of
-    /// `param_ty` where that type parameter types the most of them. Only
-    /// those keep the literals a function value returns, as tsc's common
-    /// supertype of two such values (`{ v: () => 1, w: () => 2 }`) widens
-    /// what they return to `() => number`. A plain literal (`w: 2`) can't be
-    /// such a supertype, so it doesn't count.
-    /// Every one of `inferred` when `arg` is not an object literal or
-    /// `param_ty` has no object shape.
+    /// The type parameters in `inferred` that keep the literals a function
+    /// value returns. For each, count the fields of the object literal `arg`
+    /// it types in each object shape of `param_ty`, leaving out plain values
+    /// (`w: 2`), and keep it when the largest count is at most one: tsc's
+    /// common supertype of two function values (`{ v: () => 1, w: () => 2 }`)
+    /// widens what they return to `() => number`. None when `arg` spreads
+    /// another object; every one of `inferred` when `arg` is not an object
+    /// literal or `param_ty` has no object shape.
     fn type_params_of_one_field(
         &self,
         arg: ExprId,
@@ -1248,11 +1247,16 @@ impl Inferer<'_> {
         }
         let mut given_fields = Vec::new();
         for member in members {
-            let crate::ObjectLiteralMember::Field(field) = member else {
-                continue;
-            };
-            if !self.is_plain_literal(field.value)? {
-                given_fields.push(field.name.name.as_str());
+            match member {
+                // A spread may give any field, and so a second function
+                // value for any type parameter.
+                crate::ObjectLiteralMember::Spread { .. } => return Ok(Vec::new()),
+                crate::ObjectLiteralMember::Field(field)
+                    if !self.is_plain_value(field.value)? =>
+                {
+                    given_fields.push(field.name.name.as_str());
+                }
+                _ => {}
             }
         }
         // Each object shape of the parameter (`{ kind: "a"; get: T; fallback:
@@ -1277,24 +1281,38 @@ impl Inferer<'_> {
             .collect())
     }
 
-    /// Whether `expr`, inside any parentheses, is a literal that can never be a
-    /// function: a primitive, an object or an array literal.
-    fn is_plain_literal(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
-        let mut expr = expr;
-        loop {
-            let kind = &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind;
-            match kind {
-                ExprKind::Paren(inner) => expr = *inner,
-                ExprKind::Number(_)
-                | ExprKind::BigInt(_)
-                | ExprKind::String(_)
-                | ExprKind::Boolean(_)
-                | ExprKind::Null
-                | ExprKind::ObjectLiteral { .. }
-                | ExprKind::ArrayLiteral { .. } => return Ok(true),
-                _ => return Ok(false),
+    /// Whether `expr` can never be a function, whatever its operands: a
+    /// literal, an operator that yields a primitive, or a choice between such
+    /// values. Values of other forms (a name, a call, a cast) may be one.
+    fn is_plain_value(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        let kind = &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind;
+        Ok(match kind {
+            ExprKind::Paren(inner) => self.is_plain_value(*inner)?,
+            ExprKind::Binary {
+                op: crate::BinOp::And | crate::BinOp::Or | crate::BinOp::NullishCoalesce,
+                lhs,
+                rhs,
+            } => self.is_plain_value(*lhs)? && self.is_plain_value(*rhs)?,
+            ExprKind::Ternary { then_, else_, .. } => {
+                self.is_plain_value(*then_)? && self.is_plain_value(*else_)?
             }
-        }
+            ExprKind::Number(_)
+            | ExprKind::BigInt(_)
+            | ExprKind::String(_)
+            | ExprKind::Boolean(_)
+            | ExprKind::Null
+            | ExprKind::ObjectLiteral { .. }
+            | ExprKind::ArrayLiteral { .. }
+            | ExprKind::TemplateLiteral { .. }
+            | ExprKind::Regex { .. }
+            | ExprKind::Binary { .. }
+            | ExprKind::Unary { .. }
+            | ExprKind::PostfixUnary { .. }
+            | ExprKind::Typeof { .. }
+            | ExprKind::Delete { .. }
+            | ExprKind::InstanceOf { .. } => true,
+            _ => false,
+        })
     }
 
     /// The object shapes of `ty`: an object type, an interface with the
@@ -2857,8 +2875,9 @@ fn bind_remaining(
     Ok(())
 }
 
-/// Whether `ty` is the type parameter `name` or a union with it as a member
-/// (`T | number`), where a value the parameter takes is a candidate for it.
+/// Whether `ty` is the type parameter `name` or a union with it directly as a
+/// member (`T | number`): a value given for a field of that type may be a
+/// candidate for `name`.
 fn is_or_has_type_var(ty: &Type, name: &str) -> bool {
     let is_var = |ty: &Type| matches!(ty.peel(), Type::TypeVar(var) if var == name);
     match ty.peel() {

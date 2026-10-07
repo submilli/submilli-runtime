@@ -1,10 +1,11 @@
-// Two values that may be functions, however written, widen what a type
-// parameter's function values return to `() => number`, as tsc's common
-// supertype does; a plain literal beside one function leaves the function's
-// literal return in place.
+// Two values that may be functions (a parenthesized arrow, a const, a spread
+// object's field) widen what a type parameter's function values return to
+// `() => number`, as tsc's common supertype does. A plain value beside one
+// function (a literal, an operator's result) leaves its literal return.
 // expect-error: expected `() => 1`, got `() => number`
 // expect-error: expected `1`, got `2`
-// expect-error-count: 2
+// expect-error: expected `() => 1`, got `() => number`
+// expect-error-count: 3
 function pick<T>(o: { v: T; w: T | number }): T {
   return o.v;
 }
@@ -17,5 +18,10 @@ function main(): void {
   assert(one() === 1, "the function keeps its literal return");
   const widened = pick({ v: (() => 1), w: alsoOne });
   const stillOne: () => 1 = widened;
+  const negated = pick({ v: () => 1, w: Math.random() < 2 ? -2 : 3 });
+  const stillOneToo: () => 1 = negated;
+  assert(stillOneToo() === 1, "an operator's value is no function");
+  const spread = pick({ v: () => 1, ...{ w: alsoOne } });
+  const spreadOne: () => 1 = spread;
   const two: 1 = 2;
 }
