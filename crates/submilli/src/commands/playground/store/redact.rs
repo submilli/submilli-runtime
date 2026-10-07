@@ -105,12 +105,13 @@ const CUT_MARKER_END: &str = " bytes kept]";
 
 impl KnownSecrets {
     /// Learns a value, and its trimmed form too when that differs (a secret file's
-    /// trailing newline, say, that a program strips before using it). A value, or trimmed
-    /// form, shorter than [`MIN_SECRET_BYTES`] is ignored, and so is a value of only
-    /// whitespace: redacting it would cut ordinary indentation.
+    /// trailing newline, say, that a program strips before using it). A value whose
+    /// trimmed form is shorter than [`MIN_SECRET_BYTES`] is ignored in every form, a
+    /// value of only whitespace among them: padding does not make `"      ab"` worth
+    /// cutting, and redacting it would cut ordinary indentation.
     pub(crate) fn add(&self, value: &str) {
         let trimmed = value.trim();
-        if trimmed.is_empty() {
+        if trimmed.len() < MIN_SECRET_BYTES {
             return;
         }
         let mut patterns = self.inner.write().unwrap_or_else(PoisonError::into_inner);
@@ -954,6 +955,15 @@ mod tests {
         assert_eq!(known.redact_text(text), text);
         let value = redact(&known, serde_json::json!({ "code": text }));
         assert_eq!(value["code"], text);
+    }
+
+    #[test]
+    fn a_short_value_padded_past_the_minimum_is_not_treated_as_a_secret() {
+        let known = KnownSecrets::default();
+        known.add("      ab");
+        let text = "if x {\n      ab();\n}";
+        assert_eq!(known.redact_text(text), text);
+        assert_eq!(known.redact_text("ab"), "ab");
     }
 
     #[test]

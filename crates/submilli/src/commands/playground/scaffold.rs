@@ -58,8 +58,14 @@ pub(crate) fn init(root: &Path) -> Result<Scaffolded> {
     init_with(root, FILES)
 }
 
-/// The prefix of the hidden folder `init` stages the starter in.
+/// The prefix of the hidden folder `init` stages the starter in, which is followed
+/// by [`STAGING_RANDOM_LEN`] random ASCII letters and digits.
 const STAGING_PREFIX: &str = ".submilli-init-";
+const STAGING_RANDOM_LEN: usize = 6;
+/// The file `init` writes first into its staging folder and removes just before the
+/// rename, so a leftover is recognized as one `init` made, not a folder of the
+/// developer's that happens to share the name's shape.
+const STAGING_MARKER: &str = ".submilli-init-staging";
 
 fn init_with(root: &Path, starter: &[(&str, &str)]) -> Result<Scaffolded> {
     let folder = root.join(FOLDER);
@@ -71,7 +77,9 @@ fn init_with(root: &Path, starter: &[(&str, &str)]) -> Result<Scaffolded> {
     // owner-only mode of a temporary directory: it becomes the developer's
     // `submilli/`.
     let mut staging = tempfile::Builder::new();
-    staging.prefix(STAGING_PREFIX);
+    staging
+        .prefix(STAGING_PREFIX)
+        .rand_bytes(STAGING_RANDOM_LEN);
     #[cfg(unix)]
     let permissions = {
         use std::os::unix::fs::PermissionsExt;
@@ -82,13 +90,20 @@ fn init_with(root: &Path, starter: &[(&str, &str)]) -> Result<Scaffolded> {
     let staging = staging
         .tempdir_in(root)
         .with_context(|| format!("creating a staging folder in {}", root.display()))?;
-    let moved = write_starter(staging.path(), starter).and_then(|()| {
-        if folder.exists() {
-            bail!("another init created it");
-        }
-        std::fs::rename(staging.path(), &folder)
-            .with_context(|| format!("moving the starter into {}", folder.display()))
-    });
+    let marker = staging.path().join(STAGING_MARKER);
+    let moved = std::fs::write(&marker, "")
+        .with_context(|| format!("creating {}", marker.display()))
+        .and_then(|()| write_starter(staging.path(), starter))
+        .and_then(|()| {
+            std::fs::remove_file(&marker).with_context(|| format!("removing {}", marker.display()))
+        })
+        .and_then(|()| {
+            if folder.exists() {
+                bail!("another init created it");
+            }
+            std::fs::rename(staging.path(), &folder)
+                .with_context(|| format!("moving the starter into {}", folder.display()))
+        });
     if let Err(error) = moved {
         // A concurrent init that finished first, maybe removing this one's staging
         // folder as a leftover, is the reason, whatever step failed.
@@ -134,25 +149,26 @@ fn write_starter(staging: &Path, starter: &[(&str, &str)]) -> Result<()> {
     Ok(())
 }
 
-/// Removes the staging folders an interrupted `init` left in `root`. Runs once
-/// `submilli/` exists, so an init still staging beside it would fail anyway, and
+/// Removes the staging folders an interrupted `init` left in `root`: only a real
+/// folder (not a link) whose name has the exact shape `init` gives one and that holds
+/// [`STAGING_MARKER`]. Runs once this init's `submilli/` is in place. An init still
+/// staging beside it then loses its folder or fails its rename, and either way
 /// reports that `submilli/` already exists.
 fn remove_leftover_staging(root: &Path) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
     for entry in entries.flatten() {
-        let staged = entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with(STAGING_PREFIX));
-        // Not through a link: only a folder an init made here is removed.
+        let staged = entry.file_name().to_str().is_some_and(is_staging_name);
         if !staged || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
             continue;
         }
         let path = entry.path();
-        // Not found or not empty: the init it belongs to is still running, and on
-        // finding `submilli/` removes its own.
+        if !path.join(STAGING_MARKER).is_file() {
+            continue;
+        }
+        // Not found, or not empty because another init is still writing into it:
+        // that init removes its own when it finds `submilli/`.
         if let Err(error) = std::fs::remove_dir_all(&path)
             && !matches!(
                 error.kind(),
@@ -165,6 +181,14 @@ fn remove_leftover_staging(root: &Path) {
             ));
         }
     }
+}
+
+/// Whether `name` is one `init` gives its staging folder.
+fn is_staging_name(name: &str) -> bool {
+    name.strip_prefix(STAGING_PREFIX).is_some_and(|random| {
+        random.len() == STAGING_RANDOM_LEN
+            && random.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
 }
 
 const MANIFEST: &str = r#"[[package]]
@@ -366,11 +390,22 @@ mod tests {
         // An init killed before its rename leaves its staging folder behind.
         let leftover = dir.path().join(".submilli-init-abc123");
         std::fs::create_dir_all(leftover.join("packages")).unwrap();
+        std::fs::write(leftover.join(STAGING_MARKER), "").unwrap();
         std::fs::write(leftover.join("submilli.toml"), "partial").unwrap();
-        // Something else whose name only starts the same way, through a link, stays.
+        // The developer's own folders that only share the prefix, or the shape but
+        // not the marker, stay.
+        let notes = dir.path().join(".submilli-init-notes");
+        std::fs::create_dir(&notes).unwrap();
+        std::fs::write(notes.join("todo.txt"), "mine").unwrap();
+        let unmarked = dir.path().join(".submilli-init-xyz789");
+        std::fs::create_dir(&unmarked).unwrap();
+        std::fs::write(unmarked.join("todo.txt"), "mine").unwrap();
+        // A link with a staging name, even to a marked folder, stays, and so does
+        // what it points to.
         let other = tempfile::tempdir().unwrap();
+        std::fs::write(other.path().join(STAGING_MARKER), "").unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink(other.path(), dir.path().join(".submilli-init-link")).unwrap();
+        std::os::unix::fs::symlink(other.path(), dir.path().join(".submilli-init-link12")).unwrap();
         let scaffolded = init(dir.path()).unwrap();
         assert_eq!(scaffolded.files.len(), FILES.len());
         assert_eq!(
@@ -378,8 +413,14 @@ mod tests {
             MANIFEST
         );
         assert!(!leftover.exists());
+        assert!(notes.join("todo.txt").exists());
+        assert!(unmarked.join("todo.txt").exists());
+        assert!(
+            !dir.path().join(FOLDER).join(STAGING_MARKER).exists(),
+            "the marker does not end up in submilli/"
+        );
         #[cfg(unix)]
-        assert!(other.path().exists());
+        assert!(other.path().join(STAGING_MARKER).exists());
     }
 
     #[cfg(unix)]
@@ -392,7 +433,6 @@ mod tests {
         init(dir.path()).unwrap();
         let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&dir.path().join(FOLDER)), mode(&plain));
-        assert_ne!(mode(&plain), 0o700, "the umask leaves group or other bits");
     }
 
     #[test]

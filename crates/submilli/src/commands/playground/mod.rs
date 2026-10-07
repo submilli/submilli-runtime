@@ -422,7 +422,7 @@ mod unix {
     use serde_json::json;
 
     use super::client::{self, Busy, Probe};
-    use super::host::{self, HostOptions, Status};
+    use super::host::{self, HostOptions, Served, Status};
     use super::packages::ProjectPackages;
     use super::project::{self, DiscoveryError, Project};
     use super::scaffold;
@@ -497,14 +497,27 @@ mod unix {
         }
         let nonce = random_hex(32)?;
         if args.foreground {
-            host::serve(HostOptions {
+            let served = host::serve(HostOptions {
                 project,
                 egress,
                 nonce,
                 start_lock: Some(start_lock),
                 print: Some(output),
             })?;
-            return Ok(ExitCode::SUCCESS);
+            return Ok(match served {
+                Served::Drained => ExitCode::SUCCESS,
+                Served::StoppedWhileStarting { signal } => {
+                    match output {
+                        Output::Json => {
+                            println!("{}", json!({ "stopped_while_starting": true }));
+                        }
+                        Output::Text => eprintln!("{STOPPED_WHILE_STARTING}"),
+                    }
+                    // As the shell reports a process the signal ended; a stop that
+                    // came another way is the SIGTERM `stop` sends.
+                    ExitCode::from(interrupt::exit_code(signal.unwrap_or(libc::SIGTERM)))
+                }
+            });
         }
         let timeout = args
             .ready_timeout_ms
@@ -526,20 +539,22 @@ mod unix {
             Probe::Running(running) => {
                 let status = running.status()?;
                 if status.stopping {
-                    eprintln!("{STOPPED_WHILE_STARTING}");
-                    return Ok(ExitCode::from(1));
+                    return Ok(stopped_while_starting());
                 }
                 print_ready(&running, &status, output, false)
             }
-            Probe::Busy(busy) if busy.is_stopping() => {
-                eprintln!("{STOPPED_WHILE_STARTING}");
-                Ok(ExitCode::from(1))
-            }
+            Probe::Busy(busy) if busy.is_stopping() => Ok(stopped_while_starting()),
             Probe::NotRunning | Probe::Stale(_) | Probe::Busy(_) => {
                 eprintln!("the playground started but does not answer its control listener");
                 Ok(ExitCode::from(1))
             }
         }
+    }
+
+    /// What a start whose instance was stopped before it was ready says and exits with.
+    fn stopped_while_starting() -> ExitCode {
+        eprintln!("{STOPPED_WHILE_STARTING}");
+        ExitCode::from(1)
     }
 
     /// Build the blueprint's project packages and resolve its closure, as the child
@@ -733,6 +748,24 @@ mod unix {
             // Its own process group, so a Ctrl-C meant for the caller's terminal
             // does not reach the playground.
             .process_group(0);
+        // An ignored SIGTERM or SIGINT survives exec, and the child leaves a signal it
+        // inherits ignored alone, so a caller that ignores them (a `trap '' TERM`
+        // script) would leave a playground `stop` cannot end. The child is detached
+        // and has its own group, so it takes both by default; only `--foreground`,
+        // which is the caller's own process, keeps an inherited ignore.
+        // SAFETY: the closure runs in the forked child before exec and only calls
+        // `signal`, which is async-signal-safe, with constant arguments; it touches
+        // no memory shared with the parent and allocates nothing.
+        unsafe {
+            command.pre_exec(|| {
+                for signal in [libc::SIGTERM, libc::SIGINT] {
+                    if libc::signal(signal, libc::SIG_DFL) == libc::SIG_ERR {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
         let deadline = Instant::now()
             .checked_add(timeout)
             .with_context(|| format!("a ready timeout of {}s is too long", timeout.as_secs()))?;
@@ -897,15 +930,25 @@ mod unix {
                 };
             }
             Probe::Busy(Busy::Stopping { pid: Some(pid) }) => {
-                wait_for_exit(&state, pid, None)?;
+                if !wait_for_exit(&state, pid, None)? {
+                    bail!("{}", did_not_stop(pid));
+                }
                 return stopped(output, Some(pid), "stopped");
             }
             Probe::Busy(busy) => return busy_exit(output, &busy),
             Probe::Running(running) => running,
         };
-        running.stop()?;
         let record = running.record.clone();
-        wait_for_exit(&state, record.pid, Some(&record.nonce))?;
+        // The pid the lock's holder goes by, read before the stop: the instance's
+        // own record may name it in another PID namespace, which is no holder here.
+        let holder_pid = state
+            .instance_holder()?
+            .and_then(|holder| holder.pid())
+            .unwrap_or(record.pid);
+        running.stop()?;
+        if !wait_for_exit(&state, holder_pid, Some(&record.nonce))? {
+            bail!("{}", did_not_stop(record.pid));
+        }
         state.remove_if_ours(&record.nonce);
         stopped(output, Some(record.pid), "stopped")
     }
@@ -943,14 +986,23 @@ mod unix {
                 return Err(error).with_context(|| format!("signaling the playground (pid {pid})"));
             }
         }
-        wait_for_exit(state, pid, None)?;
+        if !wait_for_exit(state, pid, None)? {
+            // It took the signal, so it ends before it announces itself; a startup
+            // step that does not watch for it (a slow package build) runs out first.
+            bail!(
+                "{}; it was told to stop while starting and will exit, without serving, once \
+                 its current startup step finishes",
+                did_not_stop(pid)
+            );
+        }
         stopped(output, Some(pid), "stopped")
     }
 
-    /// Wait until `pid` no longer holds the instance lock. The lock goes when the
-    /// process ends, however it ends; a lock file with a nonce other than `nonce`
-    /// is a new instance, which is not this stop's to wait for.
-    fn wait_for_exit(state: &StateDir, pid: u32, nonce: Option<&str>) -> Result<()> {
+    /// Wait until `pid` (as [`Holder::pid`] names it) no longer holds the instance
+    /// lock: `true` once it does not, `false` after [`STOP_TIMEOUT`]. The lock goes
+    /// when the process ends, however it ends; a lock file with a nonce other than
+    /// `nonce` is a new instance, which is not this stop's to wait for.
+    fn wait_for_exit(state: &StateDir, pid: u32, nonce: Option<&str>) -> Result<bool> {
         let deadline = Instant::now()
             .checked_add(STOP_TIMEOUT)
             .context("the clock cannot represent the stop deadline")?;
@@ -966,16 +1018,20 @@ mod unix {
                     .is_some_and(|current| current.nonce != nonce)
             });
             if gone || replaced {
-                return Ok(());
+                return Ok(true);
             }
             if Instant::now() >= deadline {
-                bail!(
-                    "the playground (pid {pid}) did not stop within {}s",
-                    STOP_TIMEOUT.as_secs()
-                );
+                return Ok(false);
             }
             std::thread::sleep(POLL);
         }
+    }
+
+    fn did_not_stop(pid: u32) -> String {
+        format!(
+            "the playground (pid {pid}) did not stop within {}s",
+            STOP_TIMEOUT.as_secs()
+        )
     }
 
     /// A process serves the project but cannot be reached: said, and exit 6, with

@@ -9,7 +9,7 @@ use std::fs::File;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -112,9 +112,18 @@ pub(crate) struct Status {
 const START_DELAY_ENV: &str = "SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS";
 const START_DELAY_CAP: Duration = Duration::from_secs(60);
 
+/// How serving ended, when it ended without an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Served {
+    /// It announced itself, served, and drained.
+    Drained,
+    /// It was stopped before it announced itself, by `signal` when one did it.
+    StoppedWhileStarting { signal: Option<libc::c_int> },
+}
+
 /// Serve until a stop, a signal, or `POST /v1/shutdown`, then drain and remove
 /// the instance record and the ready file. Refused while another process serves the project.
-pub(crate) fn serve(options: HostOptions) -> Result<()> {
+pub(crate) fn serve(options: HostOptions) -> Result<Served> {
     restrict_new_files();
     let state_dir = StateDir::for_project(&options.project.root);
     state_dir.create()?;
@@ -203,6 +212,8 @@ struct HeldInstance {
     /// Dropped only when the process exits.
     instance: InstanceLock,
     stopping: AtomicBool,
+    /// The signal that began the stop, or 0 when none did.
+    stopped_by: AtomicI32,
 }
 
 impl HeldInstance {
@@ -210,12 +221,25 @@ impl HeldInstance {
         Self {
             instance,
             stopping: AtomicBool::new(false),
+            stopped_by: AtomicI32::new(0),
         }
+    }
+
+    /// Note that `signal` arrived, then begin stopping.
+    fn signaled(&self, signal: libc::c_int) {
+        let _ = self
+            .stopped_by
+            .compare_exchange(0, signal, Ordering::SeqCst, Ordering::SeqCst);
+        self.begin_stopping();
+    }
+
+    fn stopped_by(&self) -> Option<libc::c_int> {
+        Some(self.stopped_by.load(Ordering::SeqCst)).filter(|signal| *signal != 0)
     }
 
     fn begin_stopping(&self) {
         if !self.stopping.swap(true, Ordering::SeqCst)
-            && let Err(error) = self.instance.record(true)
+            && let Err(error) = self.instance.write_holder(true)
         {
             warn(&format!("{error:#}"));
         }
@@ -233,7 +257,7 @@ async fn run(
     mut config: ServerConfig,
     tokens: Vec<submilli_server::ApiToken>,
     serving: Serving,
-) -> Result<()> {
+) -> Result<Served> {
     // Before anything announces this instance: a signal from then on drains it
     // rather than killing it with its record on disk.
     let signals = submilli_server::EmbeddedSignals::install()?;
@@ -312,7 +336,9 @@ async fn run(
         // finds a record of, or a link to, an instance that is already going.
         if held.is_stopping() {
             super::log::note("the playground was stopped while it was starting");
-            return Ok(());
+            return Ok(Served::StoppedWhileStarting {
+                signal: held.stopped_by(),
+            });
         }
         // The record first, so the ready file never names an instance without one.
         state_dir.write_record(&record)?;
@@ -322,7 +348,9 @@ async fn run(
             let code = auth.mint_login_code(Now::current())?;
             ReadyRecord::new(&description, None, &code, false).print(output);
         }
-        submilli_server::serve_embedded(server, state, SHUTDOWN_GRACE, signals).await
+        submilli_server::serve_embedded(server, state, SHUTDOWN_GRACE, signals)
+            .await
+            .map(|()| Served::Drained)
     }
     .await;
 
@@ -344,36 +372,19 @@ async fn run(
 /// signal this process ignores is left ignored, as [`submilli_server::EmbeddedSignals`]
 /// leaves it.
 fn note_signals(held: Arc<HeldInstance>) -> Result<impl Future<Output = ()>> {
-    use tokio::signal::unix::{Signal, SignalKind, signal};
-    let watch = |number: libc::c_int, kind: SignalKind, name: &str| -> Result<Option<Signal>> {
-        if submilli_server::EmbeddedSignals::is_ignored(number)
-            .with_context(|| format!("reading the {name} handler"))?
-        {
-            return Ok(None);
-        }
-        signal(kind)
-            .map(Some)
-            .with_context(|| format!("watching for {name}"))
-    };
-    let mut terminate = watch(libc::SIGTERM, SignalKind::terminate(), "SIGTERM")?;
-    let mut interrupt = watch(libc::SIGINT, SignalKind::interrupt(), "SIGINT")?;
+    use submilli_server::WatchedSignal;
+    use tokio::signal::unix::SignalKind;
+    let mut terminate =
+        WatchedSignal::unless_ignored(SignalKind::terminate()).context("watching for SIGTERM")?;
+    let mut interrupt =
+        WatchedSignal::unless_ignored(SignalKind::interrupt()).context("watching for SIGINT")?;
     Ok(async move {
-        tokio::select! {
-            () = next(&mut terminate) => {}
-            () = next(&mut interrupt) => {}
-        }
-        held.begin_stopping();
+        let signal = tokio::select! {
+            () = terminate.next() => libc::SIGTERM,
+            () = interrupt.next() => libc::SIGINT,
+        };
+        held.signaled(signal);
     })
-}
-
-/// The next delivery of a watched signal; never, for one left ignored.
-async fn next(signal: &mut Option<tokio::signal::unix::Signal>) {
-    match signal {
-        Some(signal) => {
-            signal.recv().await;
-        }
-        None => std::future::pending().await,
-    }
 }
 
 /// Test-only, hidden: how long a serving process waits once its signal handlers

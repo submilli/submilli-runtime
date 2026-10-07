@@ -101,7 +101,7 @@ impl InstanceLock {
     /// Write this process's pid, and whether it is stopping, into the file, through
     /// the descriptor that holds the lock (opening another would release it): one
     /// positional write of a fixed-width record, never a truncation.
-    pub(crate) fn record(&self, stopping: bool) -> Result<()> {
+    pub(crate) fn write_holder(&self, stopping: bool) -> Result<()> {
         use std::os::unix::fs::FileExt;
         let bytes = holder_record_bytes(&HolderRecord {
             pid: std::process::id(),
@@ -198,7 +198,7 @@ impl StateDir {
             }
         }
         own_real_dir(parent)?;
-        if let Some(note) = refuse_others_writing(parent)? {
+        if let Some(note) = clear_others_write_bits(parent)? {
             super::log::note(&note);
         }
         for dir in [
@@ -277,8 +277,10 @@ impl StateDir {
         write_private(&self.ready_path(), &serde_json::to_vec(record)?)
     }
 
-    /// Remove the lock and the ready file if they belong to the instance started
-    /// with `nonce`, so one instance never removes another's.
+    /// Remove the instance record (the file named `lock`) and the ready file if they
+    /// belong to the instance started with `nonce`, so one instance never removes
+    /// another's. `instance.lock` is not touched: it is held, not removed, and goes
+    /// with the process that holds it.
     pub(crate) fn remove_if_ours(&self, nonce: &str) {
         for path in [self.ready_path(), self.record_path()] {
             if read_instance_record(&path)
@@ -331,7 +333,7 @@ impl StateDir {
         file.set_len(HOLDER_RECORD_WIDTH as u64)
             .with_context(|| format!("sizing {}", path.display()))?;
         let instance = InstanceLock { file, path };
-        instance.record(false)?;
+        instance.write_holder(false)?;
         Ok(Some(instance))
     }
 
@@ -390,7 +392,7 @@ fn conflicting_lock(file: &File, path: &Path) -> Result<Option<libc::flock>> {
 /// Clear the group and world write bits of `dir`, which would let others swap what
 /// is inside it, keeping the rest of its mode. What changed, for the developer, or
 /// `None` when nothing did.
-fn refuse_others_writing(dir: &Path) -> Result<Option<String>> {
+fn clear_others_write_bits(dir: &Path) -> Result<Option<String>> {
     let mode = fs::symlink_metadata(dir)
         .with_context(|| format!("checking {}", dir.display()))?
         .permissions()
@@ -679,7 +681,7 @@ mod tests {
         assert_eq!(read().pid, std::process::id());
         assert!(!read().stopping);
         assert_eq!(bytes().len(), HOLDER_RECORD_WIDTH);
-        held.record(true).unwrap();
+        held.write_holder(true).unwrap();
         assert!(read().stopping);
         assert_eq!(bytes().len(), HOLDER_RECORD_WIDTH);
     }
@@ -713,11 +715,11 @@ mod tests {
         let dot = dir.path().join(".submilli");
         fs::create_dir_all(&dot).unwrap();
         fs::set_permissions(&dot, fs::Permissions::from_mode(0o775)).unwrap();
-        let note = refuse_others_writing(&dot).unwrap().expect("a note");
+        let note = clear_others_write_bits(&dot).unwrap().expect("a note");
         assert_eq!(mode(&dot), 0o755);
         assert!(note.contains(&dot.display().to_string()), "{note}");
         assert!(note.contains("0755") && note.contains("0775"), "{note}");
-        assert_eq!(refuse_others_writing(&dot).unwrap(), None);
+        assert_eq!(clear_others_write_bits(&dot).unwrap(), None);
 
         fs::set_permissions(&dot, fs::Permissions::from_mode(0o777)).unwrap();
         StateDir::for_project(dir.path()).create().unwrap();

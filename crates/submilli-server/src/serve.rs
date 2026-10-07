@@ -428,59 +428,76 @@ async fn forced_stop(
 /// `None` for a signal left ignored ([`EmbeddedSignals`]), which never arrives.
 #[cfg(unix)]
 struct ShutdownSignals {
-    terminate: Option<tokio::signal::unix::Signal>,
-    interrupt: Option<tokio::signal::unix::Signal>,
+    terminate: WatchedSignal,
+    interrupt: WatchedSignal,
 }
 
 #[cfg(unix)]
 impl ShutdownSignals {
     fn install() -> Result<Self> {
-        use tokio::signal::unix::{SignalKind, signal};
+        use tokio::signal::unix::SignalKind;
         Ok(Self {
-            terminate: Some(signal(SignalKind::terminate())?),
-            interrupt: Some(signal(SignalKind::interrupt())?),
+            terminate: WatchedSignal::always(SignalKind::terminate())?,
+            interrupt: WatchedSignal::always(SignalKind::interrupt())?,
         })
     }
 
     /// [`Self::install`], leaving a signal this process ignores alone.
     fn install_unless_ignored() -> Result<Self> {
-        use tokio::signal::unix::{SignalKind, signal};
-        let watch = |number: libc::c_int, kind: SignalKind| -> Result<_> {
-            if EmbeddedSignals::is_ignored(number)? {
-                return Ok(None);
-            }
-            Ok(Some(signal(kind)?))
-        };
+        use tokio::signal::unix::SignalKind;
         Ok(Self {
-            terminate: watch(libc::SIGTERM, SignalKind::terminate())?,
-            interrupt: watch(libc::SIGINT, SignalKind::interrupt())?,
+            terminate: WatchedSignal::unless_ignored(SignalKind::terminate())?,
+            interrupt: WatchedSignal::unless_ignored(SignalKind::interrupt())?,
         })
     }
 
     async fn recv(&mut self, shutdown: Arc<Notify>) {
         tokio::select! {
             () = shutdown.notified() => tracing::info!("shutdown requested via /v1/shutdown"),
-            () = next(&mut self.terminate) => tracing::info!("SIGTERM received"),
-            () = next(&mut self.interrupt) => tracing::info!("SIGINT received"),
+            () = self.terminate.next() => tracing::info!("SIGTERM received"),
+            () = self.interrupt.next() => tracing::info!("SIGINT received"),
         }
     }
 
     async fn recv_signal(&mut self) {
         tokio::select! {
-            () = next(&mut self.terminate) => {},
-            () = next(&mut self.interrupt) => {},
+            () = self.terminate.next() => {},
+            () = self.interrupt.next() => {},
         }
     }
 }
 
-/// The next delivery of a watched signal; never, for one not watched.
+/// One signal, held as a stream registered when it is made, or not watched at all
+/// when this process ignores it and should keep ignoring it ([`EmbeddedSignals`]).
 #[cfg(unix)]
-async fn next(signal: &mut Option<tokio::signal::unix::Signal>) {
-    match signal {
-        Some(signal) => {
-            signal.recv().await;
+pub struct WatchedSignal(Option<tokio::signal::unix::Signal>);
+
+#[cfg(unix)]
+impl WatchedSignal {
+    /// Watch `kind`, replacing whatever handling the process had for it. Needs a
+    /// Tokio runtime with signal support.
+    fn always(kind: tokio::signal::unix::SignalKind) -> Result<Self> {
+        Ok(Self(Some(tokio::signal::unix::signal(kind)?)))
+    }
+
+    /// Watch `kind` unless this process ignores it now, which is then left ignored:
+    /// a background job of a non-interactive shell ignores SIGINT, and installing a
+    /// handler would undo that. Needs a Tokio runtime with signal support.
+    pub fn unless_ignored(kind: tokio::signal::unix::SignalKind) -> Result<Self> {
+        if EmbeddedSignals::is_ignored(kind.as_raw_value())? {
+            return Ok(Self(None));
         }
-        None => std::future::pending().await,
+        Self::always(kind)
+    }
+
+    /// The next delivery of the signal; never, for one left ignored.
+    pub async fn next(&mut self) {
+        match &mut self.0 {
+            Some(signal) => {
+                signal.recv().await;
+            }
+            None => std::future::pending().await,
+        }
     }
 }
 

@@ -105,9 +105,7 @@ pub(crate) fn discover(from: &Path, blueprint: Option<&Path>) -> Result<Project,
         Some(path) => canonical(path)?,
         None => canonical(&only_blueprint(&root, &package_dir)?)?,
     };
-    if let Some(state_dir) =
-        holding_state_dir(&root, &blueprint, |state, path| path.starts_with(state))
-    {
+    if let Some(state_dir) = inside_state_dir(&root, &blueprint) {
         return Err(DiscoveryError::InStateDir {
             blueprint,
             state_dir,
@@ -193,63 +191,74 @@ pub(crate) fn volumes(project: &Project) -> VolumeTable {
         return volumes;
     };
     for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_symlink() && path.is_dir() {
-            warn(&format!(
-                "{} is a symlink, so it is not served as volume `{name}`; copy the files \
-                 into a directory there instead",
-                path.display()
-            ));
-            continue;
+        if let Some((name, spec)) = served_volume(&entry, project) {
+            volumes.insert(name, spec);
         }
-        if !file_type.is_dir() || !is_managed_name(&name) {
-            continue;
-        }
-        let Ok(resolved) = path.canonicalize() else {
-            continue;
-        };
-        // `volumes/` itself may be a link: a volume that holds the state directory
-        // would serve the playground's tokens and lock file to programs.
-        if holding_state_dir(&project.root, &resolved, |state, path| {
-            state.starts_with(path) || path.starts_with(state)
-        })
-        .is_some()
-        {
-            warn(&format!(
-                "{} holds the playground's state directory, so it is not served as volume \
-                 `{name}`",
-                path.display()
-            ));
-            continue;
-        }
-        volumes.insert(
-            name,
-            VolumeSpec::local_path(resolved).with_access(Access::ReadOnly),
-        );
     }
     volumes
 }
 
-/// The playground's state directory under `root`, as written and as resolved, when
-/// `overlaps` holds for it and the canonical `path`.
-fn holding_state_dir(
-    root: &Path,
-    path: &Path,
-    overlaps: impl Fn(&Path, &Path) -> bool,
-) -> Option<PathBuf> {
+/// The volume `entry` under `submilli/volumes/` serves, by name: `None` for an entry
+/// that is not a directory with a managed name, or is one that must not be served.
+fn served_volume(entry: &std::fs::DirEntry, project: &Project) -> Option<(String, VolumeSpec)> {
+    let path = entry.path();
+    let name = entry.file_name().to_str()?.to_owned();
+    let file_type = entry.file_type().ok()?;
+    if file_type.is_symlink() && path.is_dir() {
+        warn(&format!(
+            "{} is a symlink, so it is not served as volume `{name}`; copy the files \
+             into a directory there instead",
+            path.display()
+        ));
+        return None;
+    }
+    if !file_type.is_dir() || !is_managed_name(&name) {
+        return None;
+    }
+    let resolved = path.canonicalize().ok()?;
+    // `volumes/` itself may be a link: a volume that holds the state directory
+    // would serve the playground's tokens and lock file to programs.
+    if overlaps_state_dir(&project.root, &resolved).is_some() {
+        warn(&format!(
+            "{} holds the playground's state directory, so it is not served as volume \
+             `{name}`",
+            path.display()
+        ));
+        return None;
+    }
+    Some((
+        name,
+        VolumeSpec::local_path(resolved).with_access(Access::ReadOnly),
+    ))
+}
+
+/// The playground's state directory under `root`, as written, when the canonical
+/// `path` is inside it (as written or as resolved).
+fn inside_state_dir(root: &Path, path: &Path) -> Option<PathBuf> {
+    let (state_dir, candidates) = state_dir_candidates(root);
+    candidates
+        .iter()
+        .any(|state| path.starts_with(state))
+        .then_some(state_dir)
+}
+
+/// The playground's state directory under `root`, as written, when the canonical
+/// `path` is inside it or holds it (as written or as resolved).
+fn overlaps_state_dir(root: &Path, path: &Path) -> Option<PathBuf> {
+    let (state_dir, candidates) = state_dir_candidates(root);
+    candidates
+        .iter()
+        .any(|state| path.starts_with(state) || state.starts_with(path))
+        .then_some(state_dir)
+}
+
+/// The playground's state directory under `root` as written, and the forms of it a
+/// canonical path is compared with: as written, and resolved when it exists.
+fn state_dir_candidates(root: &Path) -> (PathBuf, Vec<PathBuf>) {
     let state_dir = StateDir::for_project(root).root().to_path_buf();
-    let resolved = state_dir.canonicalize().ok();
-    let overlapping = [Some(&state_dir), resolved.as_ref()]
-        .into_iter()
-        .flatten()
-        .any(|state| overlaps(state, path));
-    overlapping.then_some(state_dir)
+    let mut candidates = vec![state_dir.clone()];
+    candidates.extend(state_dir.canonicalize().ok());
+    (state_dir, candidates)
 }
 
 fn canonical(path: &Path) -> Result<PathBuf, DiscoveryError> {

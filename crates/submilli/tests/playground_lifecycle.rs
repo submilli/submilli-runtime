@@ -1511,6 +1511,121 @@ mod unix {
 
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
+    fn a_detached_playground_started_with_signals_ignored_can_still_be_stopped() {
+        use std::os::unix::process::CommandExt;
+        let project = Project::new();
+        let mut command = project.command(&["start", "--json"]);
+        command
+            .env("SUBMILLI_PLAYGROUND_TEST_ANNOUNCE_DELAY_MS", "30000")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        // A caller that ignores them, as `trap '' TERM INT` does.
+        // SAFETY: only async-signal-safe calls between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                libc::signal(libc::SIGTERM, libc::SIG_IGN);
+                libc::signal(libc::SIGINT, libc::SIG_IGN);
+                Ok(())
+            });
+        }
+        let mut start = command.spawn().unwrap();
+        let log = project.state().join("playground.log");
+        wait_until(
+            "the child to wait with its signal handlers in",
+            Duration::from_secs(60),
+            || {
+                std::fs::read_to_string(&log)
+                    .is_ok_and(|log| log.contains("waiting before announcing"))
+            },
+        );
+        let child = instance_holder(&project).expect("the starting child");
+
+        let output = project.stop();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(parse(&output)["pid"], json!(child));
+        let (exit, err) = wait_exit(&mut start, "start did not end once its child stopped");
+        assert_eq!(exit.code(), Some(1), "{err}");
+        assert!(err.contains("stopped while it was starting"), "{err}");
+        assert!(!instance_held(&project));
+        assert!(!project.lock().exists());
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn a_foreground_playground_stopped_before_announcing_exits_as_the_signal_says() {
+        use std::io::BufRead;
+        let project = Project::new();
+        for (json, code) in [(true, 143), (false, 130)] {
+            let args: &[&str] = if json {
+                &["start", "--foreground", "--json"]
+            } else {
+                &["start", "--foreground"]
+            };
+            let mut serving = project
+                .command(args)
+                .env("SUBMILLI_PLAYGROUND_TEST_ANNOUNCE_DELAY_MS", "30000")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let err = Arc::new(Mutex::new(String::new()));
+            let reader = std::thread::spawn({
+                let err = Arc::clone(&err);
+                let pipe = serving.stderr.take().unwrap();
+                move || {
+                    for line in std::io::BufReader::new(pipe).lines() {
+                        let line = line.unwrap();
+                        let mut err = err.lock().unwrap();
+                        err.push_str(&line);
+                        err.push('\n');
+                    }
+                }
+            });
+            wait_until(
+                "the playground to wait with its signal handlers in",
+                Duration::from_secs(60),
+                || err.lock().unwrap().contains("waiting before announcing"),
+            );
+            if json {
+                // `stop` sends a starting instance SIGTERM.
+                let output = project.stop();
+                assert!(output.status.success(), "{}", stderr(&output));
+            } else {
+                Command::new("kill")
+                    .args(["-INT", &serving.id().to_string()])
+                    .status()
+                    .unwrap();
+            }
+            let (exit, _) = wait_exit(&mut serving, "the foreground playground did not stop");
+            reader.join().unwrap();
+            let err = err.lock().unwrap().clone();
+            assert_eq!(exit.code(), Some(code), "{err}");
+            let mut out = String::new();
+            serving
+                .stdout
+                .take()
+                .unwrap()
+                .read_to_string(&mut out)
+                .unwrap();
+            assert!(!out.contains("#login="), "{out}");
+            if json {
+                let printed: Value = serde_json::from_str(out.trim()).unwrap();
+                assert_eq!(printed, json!({ "stopped_while_starting": true }));
+            } else {
+                assert!(out.is_empty(), "{out}");
+                assert!(
+                    err.contains("the playground was stopped while it was starting (`submilli"),
+                    "{err}"
+                );
+            }
+            assert!(!instance_held(&project));
+            assert!(!project.lock().exists());
+            assert!(!project.ready_file().exists());
+        }
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
     fn a_foreground_playground_started_with_sigint_ignored_keeps_ignoring_it() {
         use std::os::unix::process::CommandExt;
         let project = Project::new();
