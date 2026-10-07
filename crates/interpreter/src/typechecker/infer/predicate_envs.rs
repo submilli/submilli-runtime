@@ -648,6 +648,7 @@ impl<'a> Inferer<'a> {
         let Some(path) = self.expr_to_reference_path(path_expr)? else {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         };
+        let exclusions = self.known_exclusions(&path);
         if self.path_root_is_captured_mutator(&path) {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
@@ -696,7 +697,7 @@ impl<'a> Inferer<'a> {
                         narrowing::RULED_OUT
                     },
                     facts: narrowing::TypeFacts::EQ_NULL,
-                    excluded_literals: std::collections::BTreeSet::new(),
+                    excluded_literals: exclusions.clone(),
                     binding: self.mint_narrow_binding(path_span)?,
                     source: source_eq,
                 },
@@ -713,7 +714,7 @@ impl<'a> Inferer<'a> {
             narrowing::NarrowedView {
                 narrowed_ty: non_null_ty,
                 facts: narrowing::TypeFacts::NE_NULL,
-                excluded_literals: std::collections::BTreeSet::new(),
+                excluded_literals: exclusions.clone(),
                 binding: self.mint_narrow_binding(path_span)?,
                 source: source_neq,
             },
@@ -1701,10 +1702,7 @@ impl<'a> Inferer<'a> {
             Type::Union(members) => members.as_slice(),
             ty => std::slice::from_ref(ty),
         };
-        let mut excluded: std::collections::BTreeSet<narrowing::LiteralValue> = self
-            .lookup_narrowed_view(&path)
-            .map(|view| view.excluded_literals.clone())
-            .unwrap_or_default();
+        let mut excluded = self.known_exclusions(&path);
         excluded.insert(literal.clone());
         let mut matched: Vec<Type> = Vec::new();
         let mut remaining: Vec<Type> = Vec::new();
@@ -1972,6 +1970,7 @@ impl<'a> Inferer<'a> {
         let Some(path) = self.expr_to_reference_path(value_expr)? else {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         };
+        let exclusions = self.known_exclusions(&path);
         if self.path_root_is_captured_mutator(&path) {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
@@ -2013,7 +2012,7 @@ impl<'a> Inferer<'a> {
             narrowing::NarrowedView {
                 narrowed_ty: true_ty,
                 facts: true_facts,
-                excluded_literals: std::collections::BTreeSet::new(),
+                excluded_literals: exclusions.clone(),
                 binding: self.mint_narrow_binding(value_span)?,
                 source: source_true,
             },
@@ -2023,7 +2022,7 @@ impl<'a> Inferer<'a> {
             narrowing::NarrowedView {
                 narrowed_ty: false_ty,
                 facts: false_facts,
-                excluded_literals: std::collections::BTreeSet::new(),
+                excluded_literals: exclusions.clone(),
                 binding: self.mint_narrow_binding(value_span)?,
                 source: source_false,
             },
@@ -2227,7 +2226,7 @@ impl<'a> Inferer<'a> {
                 narrowing::NarrowedView {
                     narrowed_ty: ty,
                     facts,
-                    excluded_literals: std::collections::BTreeSet::new(),
+                    excluded_literals: self.known_exclusions(&path),
                     binding: self.mint_narrow_binding(span)?,
                     source,
                 },
@@ -2486,6 +2485,17 @@ impl<'a> Inferer<'a> {
     /// rules out every value (its view [`narrowing::RULED_OUT`]) reads as `never`, as in
     /// TypeScript, where [`Self::rules_out_to_never`] allows: no value
     /// reaches the read, and codegen emits a trap for it.
+    /// The literals `path` is already known not to hold, which a further
+    /// narrowing of it keeps: `s !== S.X` still holds inside `s !== null`.
+    fn known_exclusions(
+        &self,
+        path: &narrowing::ReferencePath,
+    ) -> std::collections::BTreeSet<narrowing::LiteralValue> {
+        self.lookup_narrowed_view(path)
+            .map(|view| view.excluded_literals.clone())
+            .unwrap_or_default()
+    }
+
     pub(super) fn narrowed_read(
         &self,
         path: narrowing::ReferencePath,
