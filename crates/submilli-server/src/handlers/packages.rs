@@ -357,7 +357,7 @@ pub async fn install(
     let token_file = state.github_token_file().map(std::path::Path::to_path_buf);
     let installer_state = state.clone();
     let audit = crate::audit::mutation_owner();
-    tokio::task::spawn_blocking(move || {
+    crate::blocking_task::run(move || {
         let install = || install_with_server_token(&store, req, token_file);
         let outcome = match compiler_thread::run(install) {
             Ok(outcome) => outcome,
@@ -637,6 +637,37 @@ fn map_install_error(err: InstallError) -> InstallFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rejected_install_admission_returns_internal_error_without_mutation() {
+        let root = tempfile::tempdir().unwrap();
+        let packages = root.path().join("packages");
+        let state = AppState::new(crate::ServerConfig {
+            blueprints: Some(std::sync::Arc::new(
+                crate::blueprint::InMemoryBlueprintStore::default(),
+            )),
+            package_store_root: Some(packages.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        let request: InstallRequest = serde_json::from_str(r#"{"url":"invalid"}"#).unwrap();
+        let error = crate::blocking_task::reject_next_admission(install(
+            State(state.clone()),
+            Json(request),
+        ))
+        .await
+        .unwrap_err();
+        assert_eq!(error.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.1.0.error, "internal_error");
+        assert!(!packages.exists());
+
+        // An invalid URL fails locally, without contacting GitHub. Reaching
+        // its validation proves the next install was admitted successfully.
+        let request: InstallRequest = serde_json::from_str(r#"{"url":"invalid"}"#).unwrap();
+        let error = install(State(state), Json(request)).await.unwrap_err();
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert!(!packages.exists());
+    }
 
     #[test]
     fn github_failures_map_to_their_codes() {

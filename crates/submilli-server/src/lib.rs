@@ -4,6 +4,7 @@ pub mod audit;
 
 pub mod app;
 pub mod auth;
+mod blocking_task;
 pub mod blueprint;
 mod compiler_thread;
 pub mod config;

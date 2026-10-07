@@ -349,7 +349,7 @@ impl VolumeRegistry {
         let offset = self.usage_offsets.get(volume).copied();
         let measured = cell
             .get_or_try_init(|| async move {
-                let mut used = tokio::task::spawn_blocking(move || measure_host_dir(&host))
+                let mut used = crate::blocking_task::run(move || measure_host_dir(&host))
                     .await
                     .map_err(|err| std::io::Error::other(err.to_string()))??;
                 match offset {
@@ -460,6 +460,35 @@ mod tests {
 
     fn registry(root: &Path, table: VolumeTable) -> VolumeRegistry {
         VolumeRegistry::new(table, root.join("volumes"))
+    }
+
+    #[tokio::test]
+    async fn rejected_quota_measurement_opens_full_without_caching_failure() {
+        let root = tempfile::tempdir().unwrap();
+        let registry = registry(
+            root.path(),
+            VolumeTable::from([(
+                "data".to_string(),
+                VolumeSpec::managed(SizeLimit::Bytes(100)),
+            )]),
+        );
+        let host = registry.resolve("data", None).unwrap().host;
+        std::fs::write(host.join("file"), [0; 30]).unwrap();
+        let full = crate::blocking_task::reject_next_admission(registry.quota("data"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(full.is_unmeasured());
+        assert!(full.reserve(1).is_err());
+        assert!(!registry.quotas.read().unwrap()["data"].initialized());
+
+        let measured = registry.quota("data").await.unwrap().unwrap();
+        assert!(!measured.is_unmeasured());
+        assert_eq!(measured.used(), 30);
+        assert!(Arc::ptr_eq(
+            &measured,
+            &registry.quota("data").await.unwrap().unwrap()
+        ));
     }
 
     #[test]

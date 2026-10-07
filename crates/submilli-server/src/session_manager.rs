@@ -1337,7 +1337,7 @@ async fn attach_size_limit(vfs: Vfs, blueprint: &Blueprint) -> Result<Vfs, Sessi
         return Ok(vfs);
     };
     let mode = blueprint.vfs.mode_str();
-    let (vfs, unmeasurable) = tokio::task::spawn_blocking(move || {
+    let (vfs, unmeasurable) = crate::blocking_task::run(move || {
         let measured = vfs.measure_usage();
         let used = measured.as_ref().ok().copied();
         (vfs.with_measured_limit(limit, used), measured.err())
@@ -1465,6 +1465,33 @@ mod tests {
 
     const TINY: Duration = Duration::from_millis(1);
     const HOUR: Duration = Duration::from_secs(3600);
+
+    #[tokio::test]
+    async fn rejected_workspace_measurement_reports_io_and_releases_workspace() {
+        let blueprint = Blueprint {
+            vfs: VfsConfig::Ephemeral {
+                size_limit: Some(100),
+                mounts: Default::default(),
+                cwd: None,
+            },
+            ..Default::default()
+        };
+        let vfs = Vfs::tempdir().unwrap();
+        let root = vfs.root().to_path_buf();
+        let result =
+            crate::blocking_task::reject_next_admission(attach_size_limit(vfs, &blueprint)).await;
+        assert!(matches!(result, Err(SessionError::Io(ref message))
+            if message.contains("measuring the ephemeral workspace failed")));
+        assert!(
+            !root.exists(),
+            "rejected work must release its temporary directory"
+        );
+        assert!(
+            attach_size_limit(Vfs::tempdir().unwrap(), &blueprint)
+                .await
+                .is_ok()
+        );
+    }
 
     #[tokio::test]
     async fn reaper_rejects_invalid_intervals_then_starts_once() {

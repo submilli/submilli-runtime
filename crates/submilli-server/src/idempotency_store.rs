@@ -366,7 +366,7 @@ where
     F: FnOnce() -> io::Result<T> + Send + 'static,
     T: Send + 'static,
 {
-    match tokio::task::spawn_blocking(work).await {
+    match crate::blocking_task::run(work).await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(e)) => Err(StoreError::Io(e.to_string())),
         Err(e) => Err(StoreError::Io(format!(
@@ -553,6 +553,24 @@ fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rejected_admission_leaves_no_reservation_and_allows_retry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store(tmp.path());
+        let entry = LedgerEntry::reserved("sid", "key", code_fingerprint("main"));
+        let error = crate::blocking_task::reject_next_admission(store.put(entry.clone()))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Io(ref message)
+            if message.contains("idempotency store task failed")));
+        assert!(!store.session_dir_cell(&hex_encode("sid")).initialized());
+        assert!(!store.root.join(hex_encode("sid")).exists());
+        assert_eq!(store.load("sid", "key").await.unwrap(), None);
+
+        store.put(entry.clone()).await.unwrap();
+        assert_eq!(store.load("sid", "key").await.unwrap(), Some(entry));
+    }
 
     fn store(dir: &Path) -> FileIdempotencyStore {
         FileIdempotencyStore::new(dir.join("ledger")).expect("file ledger")

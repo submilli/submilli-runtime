@@ -53,7 +53,7 @@ fixed on this branch. Evidence means:
 | N06 | **Fixed on main:** validate sibling dependencies at public build entry | Typed-error regression passes |
 | N07 | **Fixed on main:** make resolver error formatting safe for arbitrary UTF-8 | Public formatting regression passes |
 | N08 | **Fixed on main:** make watchdog thread creation fallible | Injected setup failure, recovery and timer lifecycle regressions |
-| N09 | Handle blocking-pool thread admission failures | Inspection; dependency OS failure |
+| N09 | **Implemented locally:** gate blocking-pool work until admission succeeds | Injected admission failures, caller recovery and cancellation regressions |
 | N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
 | N11 | **Fixed on main:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
 | N12 | **Fixed on main:** traverse validation children lazily with fallible ancestor frames | Wide-input and allocation-failure regressions |
@@ -331,25 +331,53 @@ network package files were skipped.
 
 ### N09 — Tokio blocking-pool admission can panic before a join exists
 
-**Sites:** `crates/submilli-server/src/idempotency_store.rs:369`,
-`session_manager.rs:1164`, `volumes.rs:189`, `handlers/packages.rs:360`.
+**Sites:** `crates/submilli-server/src/idempotency_store.rs` (`blocking`),
+`session_manager.rs` (`attach_size_limit`), `volumes.rs` (`quota`),
+`handlers/packages.rs` (`install`); shared boundary in `blocking_task.rs`.
 Dependency: Tokio 1.52.3 `src/runtime/blocking/pool.rs:320–325`.
 
-These server preparation/storage paths call `tokio::task::spawn_blocking`.
+These server preparation/storage paths previously called `tokio::task::spawn_blocking` directly.
 Tokio panics on `SpawnError::NoThreads`; handling the returned `JoinError` does
 not handle a panic during admission. A configured runtime and a pool ceiling do
 not guarantee OS thread availability. This finding concerns those concrete direct
 calls; implicit Tokio filesystem/DNS worker admission is a residual dependency
 coverage limitation, not a claim it was fully audited.
 
-**Evidence:** pinned dependency source and first-party callers inspected; no OS
-failure injection. `runtime::BlockingWork` demonstrates existing fallible native
+**Initial evidence:** pinned dependency source and first-party callers inspected;
+the initial audit did not inject OS failures. `runtime::BlockingWork` demonstrates existing fallible native
 worker creation with bounded admission, but changes must respect caller ownership.
 
-**Direction/done:** arrange fallible worker admission for these operations or a
-narrow error boundary for this documented admission failure. Preserve completed
-writes and drain ownership. Test setup failure, operation errors and a healthy
-follow-up; do not broaden this into a cancellation redesign.
+**Implemented locally (N09):** a shared private helper queues only a channel
+receiver, retaining the operation and its resources until admission succeeds.
+Tokio queues before attempting thread creation; rejected admission closes the
+channel without publishing work, so even a retained wrapper cannot perform a
+delayed write. A capacity-one channel publishes the operation without waiting
+for a worker or introducing an async cancellation point. Once admitted, work
+retains Tokio's existing cancellation and shutdown ownership.
+
+The synchronous admission boundary translates only the pinned dependency's
+formatted `OS can't spawn worker thread: …` string payload into a typed error.
+Other panic payloads resume unwinding; this does not declare their originating
+sites safe or resolved. Worker panics remain join errors, and returned operation
+errors keep their caller mappings. The panic hook still runs; Tokio upgrades
+must recheck this narrow contract. No interpreter worker or general cancellation
+redesign is included.
+
+**Verification:** a current-thread Tokio runtime with an impossible blocking-worker
+stack size exercises the actual pinned OS-thread admission failure, verifies local
+resource release, and is followed by successful work on a healthy runtime.
+Additional deterministic injected failures cover rejection before queuing,
+a retained wrapper, and a started wrapper, with resource release and healthy
+follow-ups. Caller regressions cover durable reservation refusal/retry, workspace
+cleanup, uncached fail-closed volume quotas and install HTTP 500 without mutation.
+Helper tests cover returned operation errors, worker panics, unavailable runtime,
+shutdown rejection/draining and continued work/cleanup after waiter cancellation.
+The 88 distinct affected unit tests and focused server integration checks pass;
+two session API checks needed host filesystem access for their default storage
+directory. Independent clean-code, correctness and edge-case review found no
+defects. OS thread exhaustion has not been induced. Full post-rebase PR
+verification is deferred; this entry does not claim publication or completion
+of SUB-633.
 
 ### N10 — UUID generation panics if OS entropy fails
 
