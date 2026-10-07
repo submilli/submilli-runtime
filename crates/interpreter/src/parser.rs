@@ -74,6 +74,7 @@ pub fn parse_checked(
         function_expression_body_depth: 0,
         recursion_depth: 0,
         recursion_limit_span: None,
+        last_as_type_end: None,
         eof,
         fatal: None,
     };
@@ -153,6 +154,10 @@ pub(crate) struct Parser<'a> {
     function_expression_body_depth: u32,
     recursion_depth: usize,
     recursion_limit_span: Option<Span>,
+    /// End offset of the type in the most recent `x as T`. A statement ending there
+    /// may end at a line break, since the type stops at one (see
+    /// [`Parser::at_statement_end`]).
+    last_as_type_end: Option<u32>,
     eof: Token,
     fatal: Option<CompilerFailure>,
 }
@@ -241,7 +246,7 @@ impl<'a> Parser<'a> {
     fn parse_expression_statement(&mut self) -> Option<StmtId> {
         let expr_id = self.parse_expression()?;
         let expr_span = parse_arena_result(self.ast.try_expr(expr_id), &mut self.fatal)?.span;
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+        if !self.at_statement_end() {
             let what = if matches!(
                 parse_arena_result(self.ast.try_expr(expr_id), &mut self.fatal)?.kind,
                 ExprKind::Assign { .. }
@@ -253,8 +258,8 @@ impl<'a> Parser<'a> {
             self.error_at_peek(format!("expected `;` after {what}"));
             return None;
         }
-        let semi = self.advance();
-        let span = self.span(expr_span.start, semi.span.end);
+        let end = self.finish_statement();
+        let span = self.span(expr_span.start, end);
         let kind = self.statement_kind_for(expr_id)?;
         parse_arena_result(self.ast.try_push_stmt(Stmt { kind, span }), &mut self.fatal)
     }
@@ -362,13 +367,13 @@ impl<'a> Parser<'a> {
 
         let value = self.parse_expression()?;
 
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+        if !self.at_statement_end() {
             self.error_at_peek("expected `;` after declaration");
             return None;
         }
-        let semi = self.advance();
+        let end = self.finish_statement();
 
-        let span = self.span(kw.span.start, semi.span.end);
+        let span = self.span(kw.span.start, end);
         let kind = match (binding, name) {
             (Some(binding), _) => {
                 if is_const {
@@ -2741,16 +2746,16 @@ impl<'a> Parser<'a> {
             Some(self.parse_expression()?)
         };
 
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+        if !self.at_statement_end() {
             self.error_at_peek("expected `;` after return");
             return None;
         }
-        let semi = self.advance();
+        let end = self.finish_statement();
 
         parse_arena_result(
             self.ast.try_push_stmt(Stmt {
                 kind: StmtKind::Return(value),
-                span: self.span(kw.span.start, semi.span.end),
+                span: self.span(kw.span.start, end),
             }),
             &mut self.fatal,
         )
@@ -2769,16 +2774,16 @@ impl<'a> Parser<'a> {
 
         let value = self.parse_expression()?;
 
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+        if !self.at_statement_end() {
             self.error_at_peek("expected `;` after `throw`");
             return None;
         }
-        let semi = self.advance();
+        let end = self.finish_statement();
 
         parse_arena_result(
             self.ast.try_push_stmt(Stmt {
                 kind: StmtKind::Throw { value },
-                span: self.span(kw.span.start, semi.span.end),
+                span: self.span(kw.span.start, end),
             }),
             &mut self.fatal,
         )
@@ -3053,7 +3058,10 @@ impl<'a> Parser<'a> {
                         path.push(self.type_name(seg.span)?);
                     }
                 }
-                let (args, end) = if matches!(self.peek().kind, TokenKind::LessThan) {
+                // Type arguments, like the `[]` suffix, must start on the type's line.
+                let (args, end) = if matches!(self.peek().kind, TokenKind::LessThan)
+                    && !self.line_break_before_peek()
+                {
                     self.parse_type_argument_list()?
                 } else {
                     (Vec::new(), path_end)
@@ -4490,6 +4498,7 @@ impl<'a> Parser<'a> {
             let kind = if is_instanceof {
                 ExprKind::InstanceOf { value: expr, ty }
             } else {
+                self.last_as_type_end = Some(end);
                 ExprKind::As { expr, ty }
             };
             expr = parse_arena_result(
@@ -5421,6 +5430,25 @@ impl<'a> Parser<'a> {
             .is_some_and(|gap| gap.contains(['\n', '\r']))
     }
 
+    /// Whether the statement being parsed ends here: at a `;`, or at a line break
+    /// right after an `as T`. ASI keeps a `[` or `(` on the next line attached, but
+    /// the type already stopped at the break (see `parse_type_array_inner`), and no
+    /// expression continues past a type, so TypeScript ends the statement there.
+    fn at_statement_end(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::Semicolon)
+            || (self.last_as_type_end == Some(self.prev_token_end())
+                && self.line_break_before_peek())
+    }
+
+    /// Consumes the `;` that [`Parser::at_statement_end`] found, if there is one, and
+    /// returns the statement's end offset.
+    fn finish_statement(&mut self) -> u32 {
+        if matches!(self.peek().kind, TokenKind::Semicolon) {
+            return self.advance().span.end;
+        }
+        self.prev_token_end()
+    }
+
     /// End offset of the most recently consumed token (the body of the file's first
     /// token if nothing has been consumed yet).
     fn prev_token_end(&self) -> u32 {
@@ -5863,6 +5891,7 @@ mod tests {
             function_expression_body_depth: 0,
             recursion_depth: 0,
             recursion_limit_span: None,
+            last_as_type_end: None,
             eof: Token::new(
                 TokenKind::Eof,
                 crate::Span::new(F, source.len() as u32, source.len() as u32).unwrap(),
