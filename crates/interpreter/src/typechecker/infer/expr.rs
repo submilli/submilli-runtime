@@ -5582,6 +5582,15 @@ impl Inferer<'_> {
     ) -> Result<Option<SpreadFields>, crate::compiler_error::CompilerFailure> {
         let mut alternatives = Vec::new();
         self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives)?;
+        if alternatives.iter().all(is_definitely_falsy)
+            && let Some(first) = alternatives.first()
+        {
+            self.error(
+                span,
+                format!("cannot spread `{first}` into an object literal"),
+            );
+            return Ok(None);
+        }
         let mut objects: Vec<SpreadAlternative> = Vec::new();
         for alternative in alternatives {
             let index_value = self
@@ -5590,6 +5599,10 @@ impl Inferer<'_> {
                 .map(|index| *index.value);
             let fields = match alternative {
                 Type::Object { fields, .. } => fields,
+                // A spread copies nothing from a value that is always falsy, as
+                // `c && { a: 1 }` is when `c` is false, or from `null`, when
+                // another alternative is an object (as in tsc).
+                ref falsy if is_definitely_falsy(falsy) => ObjectFields::new(),
                 Type::InterfaceRef {
                     ref mangled,
                     ref name,
@@ -11151,6 +11164,17 @@ fn bitnot_result(ty: &Type) -> Option<Type> {
             results.map(Type::union)
         }
         _ => Some(Type::Number),
+    }
+}
+
+/// Whether every value of `ty` is falsy: `null`, `false`, `0`, `""`. tsc
+/// spreads such a value as `{}`, as JavaScript copies nothing from it.
+fn is_definitely_falsy(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Null | Type::BooleanLiteral(false) => true,
+        Type::NumberLiteral(value) => value.0 == 0.0,
+        Type::StringLiteral(value) => value.is_empty(),
+        _ => false,
     }
 }
 

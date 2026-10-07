@@ -2599,7 +2599,9 @@ fn emit_object_spread(
         .prelude_func_idx("ObjectConstructor##spread")
         .ok_or_else(|| crate::codegen::internal_failure("spread helper collected"))?;
     emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+    let null_object = Instruction::RefNull(HeapType::Concrete(intrinsics.object));
     for (index, source) in sources.iter().enumerate() {
+        let last = index + 1 == sources.len();
         // A source `runtime_values` widened may no longer hold what its
         // narrowed type said; `emit_receiver` checks it against that type,
         // which the stash and the mask then read in place of `unknown`.
@@ -2608,22 +2610,103 @@ fn emit_object_spread(
             .ta
             .source_type(source.expr_id())
             .map_err(crate::codegen::arena_failure)?;
+        // A source that may hold `null` or a falsy primitive copies nothing
+        // when it does: the merge then takes no source, which still applies
+        // the final shape.
+        let accumulator = if may_hold_non_object(narrowed_ty) {
+            Some(emit_object_source_test(
+                emitter,
+                ctx,
+                narrowed_ty,
+                intrinsics.object,
+                intrinsics.object_shape,
+            )?)
+        } else {
+            None
+        };
         let source_local =
             stash_receiver_as_object_shape(emitter, narrowed_ty, intrinsics.object_shape)?;
         emitter.instruction(Instruction::LocalGet(source_local));
-        if index + 1 == sources.len() {
+        if last {
             emit_spread_shape(emitter, ctx, shape);
         } else {
-            emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+            emitter.instruction(null_object.clone());
         }
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
             emit_spread_mask(emitter, ctx, source_local, source.expr_id(), shape)?;
         } else {
-            emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+            emitter.instruction(null_object.clone());
         }
         emitter.instruction(Instruction::Call(merge));
+        if let Some(accumulator) = accumulator {
+            emitter.emit_else();
+            emitter.instruction(Instruction::LocalGet(accumulator));
+            emitter.instruction(null_object.clone());
+            if last {
+                emit_spread_shape(emitter, ctx, shape);
+            } else {
+                emitter.instruction(null_object.clone());
+            }
+            emitter.instruction(null_object.clone());
+            emitter.instruction(Instruction::Call(merge));
+            emitter.emit_end();
+        }
     }
     Ok(())
+}
+
+/// Whether a spread source of type `ty` may hold a value with no fields to
+/// copy: `null`, or a falsy primitive such as the `false` of `c && { … }`.
+fn may_hold_non_object(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members.iter().any(may_hold_non_object),
+        Type::Null
+        | Type::Boolean
+        | Type::BooleanLiteral(_)
+        | Type::Number
+        | Type::NumberLiteral(_)
+        | Type::String
+        | Type::StringLiteral(_) => true,
+        _ => false,
+    }
+}
+
+/// With the accumulator and then the source on the stack, opens an `if` on
+/// whether the source is an object, whose result is the merged object. Inside
+/// it, the accumulator and the source, as an `$ObjectShape`, are on the stack.
+/// Returns the local holding the accumulator, for the `else` arm.
+fn emit_object_source_test(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    source_ty: &Type,
+    object: u32,
+    object_shape: u32,
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    let source_type = match ctx.symbols.value_type(source_ty)? {
+        ValType::Ref(reference) => ValType::Ref(RefType {
+            nullable: true,
+            ..reference
+        }),
+        other => other,
+    };
+    let source = emitter.add_anonymous_local(source_type)?;
+    emitter.instruction(Instruction::LocalSet(source));
+    let accumulator = emitter.add_anonymous_local(object_ref(object))?;
+    emitter.instruction(Instruction::LocalSet(accumulator));
+    emitter.instruction(Instruction::LocalGet(source));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        object_shape,
+    )));
+    emitter.emit_if(BlockType::Result(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(object_shape),
+    })));
+    emitter.instruction(Instruction::LocalGet(accumulator));
+    emitter.instruction(Instruction::LocalGet(source));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        object_shape,
+    )));
+    Ok(accumulator)
 }
 
 /// Union sources may carry a known field with an incompatible hidden value.
