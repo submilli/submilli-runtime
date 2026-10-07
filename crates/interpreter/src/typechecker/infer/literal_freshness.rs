@@ -610,6 +610,14 @@ impl Inferer<'_> {
                     pending.push(*receiver);
                     self.method_result_is_declared(*receiver, &name.name, &expr.ty)?
                 }
+                // A generic call's literal types are declared but for those
+                // it may have inferred from a fresh literal (`create(phase)`
+                // with `phase: Phase` is a `Machine<Phase>` whose `state`
+                // keeps `Phase`).
+                TypedExprKind::GenericCall { .. } | TypedExprKind::GenericMethodCall { .. } => {
+                    let fresh = self.inferable_fresh_literals(id)?;
+                    deep_literals(&expr.ty).is_disjoint(&fresh)
+                }
                 // An element's own literal types are nested in the array.
                 TypedExprKind::ArrayLiteral { elements, .. } => {
                     let mut regular = true;
