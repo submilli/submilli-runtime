@@ -7992,7 +7992,16 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         let (mut value, mut value_ty) = self.infer_expr(operand, None)?;
-        if let Some(path) = self.null_narrowed_path(value, &value_ty)? {
+        // Only a reference right under the `!` reads at its declared type, as
+        // in TypeScript: `(x)!` keeps the narrowing.
+        let parenthesized = matches!(
+            self.ast
+                .try_expr(operand)
+                .map_err(super::arena_failure)?
+                .kind,
+            ExprKind::Paren(_)
+        );
+        if !parenthesized && let Some(path) = self.null_narrowed_path(value, &value_ty)? {
             // As in TypeScript: a reference narrowed to `null` reads at its
             // declared type under `!`, which then throws at run time.
             let outer = self.declared_read.replace(path);
@@ -8697,7 +8706,12 @@ impl Inferer<'_> {
         // `infer_conditional_operand`.
         let mut short_circuit_span: Option<Span> = None;
 
-        for part in parts {
+        // A step right under a `!` reads at its declared type, as a reference
+        // under a `!` outside a chain does.
+        let asserted: Vec<bool> = (0..parts.len())
+            .map(|index| matches!(parts.get(index + 1), Some(ChainPart::NonNull { .. })))
+            .collect();
+        for (part, asserted) in parts.into_iter().zip(asserted) {
             if part.is_optional() && short_circuit_span.is_none() {
                 short_circuit_span = Some(part.span());
                 self.push_narrow_frame(super::narrowing::NarrowEnv::new());
@@ -8752,6 +8766,7 @@ impl Inferer<'_> {
             receiver_ty = self.narrow_step_result(
                 step_path.as_ref(),
                 &pending_method,
+                asserted,
                 &mut typed_part,
                 next_ty,
             );
@@ -9463,10 +9478,14 @@ impl Inferer<'_> {
     ///
     /// Literal index steps consume the same path narrowing as ordinary element
     /// reads. Computed indices have no reference path and remain conservative.
+    ///
+    /// A step a `!` follows (`asserted`) keeps its declared type where a guard
+    /// left it only `null`, as a reference under `!` does outside a chain.
     fn narrow_step_result(
         &self,
         result_path: Option<&super::narrowing::ReferencePath>,
         pending_method: &Option<ChainMethod>,
+        asserted: bool,
         part: &mut TypedChainPart,
         step_ty: Type,
     ) -> Type {
@@ -9476,6 +9495,9 @@ impl Inferer<'_> {
         let Some(view) = result_path.and_then(|p| self.lookup_narrowed_view(p)) else {
             return step_ty;
         };
+        if asserted && matches!(view.narrowed_ty.peel(), Type::Null) {
+            return step_ty;
+        }
         let narrowed = view.narrowed_ty.clone();
         part.set_result_ty(narrowed.clone());
         narrowed

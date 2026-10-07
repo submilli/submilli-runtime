@@ -15,6 +15,13 @@ function field(b: Box): string {
   b.v = null;
   return b.v!.slice(0);
 }
+function chained(b: Box): string {
+  if (b.v === null) {
+    const sliced = b?.v!.slice(0);
+    return sliced ?? "absent";
+  }
+  return "skipped";
+}
 function tryIt(f: () => string): string {
   try { return f(); } catch (e) { return e instanceof TypeError ? "TypeError" : "other"; }
 }
@@ -22,4 +29,5 @@ function main(): void {
   assert(tryIt(local) === "TypeError");
   assert(tryIt(global) === "TypeError");
   assert(tryIt(() => field({ v: "x" })) === "TypeError");
+  assert(tryIt(() => chained({ v: null })) === "TypeError");
 }
