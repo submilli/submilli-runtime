@@ -1,1 +1,0 @@
-line 4, 6 type: bug SUB-1213 `?.` on a receiver that can't be `null` still adds `| null`

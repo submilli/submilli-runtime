@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "5aba9133290caf3096a607922be251dd63f31376eb9bd935ab38595d9efc8715"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "1d9d81fe279a91540d8d637622b2ca26a7c2fb9af61e31cea1c7c546a521df92"
+  confirmedAt: "2026-10-05T17:33:06.426Z"
 ---
 
 Built-ins are the globals in scope in every program without an `import`. They
@@ -23,7 +23,7 @@ modules are on [Standard library](/docs/reference/standard-library).
 `submilli builtins` prints the catalog:
 
 ```text
-Types: Array, BigInt, Boolean, Error, Map, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, Record, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TypeError, Uint8Array
+Types: Array, BigInt, Boolean, Error, Map, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, Record, ReferenceError, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TypeError, URIError, Uint8Array
 Namespaces: JSON, Math, Temporal
 ```
 
@@ -45,6 +45,8 @@ Namespaces: JSON, Math, Temporal
 | `TypeError` | Error class | Failed runtime type checks: a failed `as` cast, `x!` on `null`, invalid UTF-8, an invalid URL |
 | `RangeError` | Error class | Out-of-range values: an array index, bigint division by zero, invalid Temporal values, and argument-size caps |
 | `SyntaxError` | Error class | Text that fails to parse: `JSON.parse`, `BigInt()`, `Uint8Array.fromHex`, `new RegExp()` |
+| `URIError` | Error class | A malformed `%` escape in `decodeURI`, or a lone surrogate in `encodeURI` |
+| `ReferenceError` | Error class | Reading or writing a module variable or static field before its declaration has run |
 | `PermissionDeniedError` | Error class | A denied capability, with fields `caller`, `capability`, `reason` ([Permissions](/docs/reference/permissions)) |
 | `QuotaExceededError` | Error class | A budget refusal: filesystem space, model tokens, or session state ([Errors and limits](/docs/reference/errors-and-limits)) |
 | `JSON` | Namespace | `JSON.parse`, returning `unknown`, and `JSON.stringify` |
@@ -101,8 +103,8 @@ These globals are in scope and are not in the `submilli builtins` catalog.
 | `parseInt(string, radix = 10)` | Parses an integer prefix, or returns `NaN` when there are no digits |
 | `parseFloat(string)` | Parses a decimal number, or returns `NaN` when the text is not one |
 | `isNaN(value)`, `isFinite(value)` | Number tests |
-| `encodeURIComponent(uri)`, `encodeURI(uri)` | Percent-encoding |
-| `decodeURIComponent(uri)`, `decodeURI(uri)` | Percent-decoding. Throws `Error` (`"URI malformed"`) on an invalid escape |
+| `encodeURIComponent(uri)`, `encodeURI(uri)` | Percent-encoding. Throws `URIError` on a lone surrogate |
+| `decodeURIComponent(uri)`, `decodeURI(uri)` | Percent-decoding. Throws `URIError` (`"URI malformed"`) on an invalid escape |
 | `NaN`, `Infinity` | Number constants |
 
 ## Not available
@@ -278,7 +280,7 @@ The built-in error class.
 | `static isError(value: unknown): boolean` | Returns `true` when `value` is an `Error` instance (including subclasses). |
 | `message: string` | The human-readable message passed to `new Error(message)`. |
 | `name: string` | The error class name. |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `Map`
 
@@ -383,7 +385,7 @@ A budget refusal (`extends Error`): filesystem space, model tokens, or session s
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `RangeError`
 
@@ -391,7 +393,7 @@ The built-in range-error class (`extends Error`, `name` = `"RangeError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `Record`
 
@@ -525,7 +527,7 @@ The built-in syntax-error class (`extends Error`, `name` = `"SyntaxError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `TextDecoder`
 
@@ -573,7 +575,7 @@ The built-in type-error class (`extends Error`, `name` = `"TypeError"`).
 
 | Member | Description |
 | --- | --- |
-| `constructor(message: string)` |  |
+| `constructor(message?: string)` |  |
 
 ## `Uint8Array`
 

@@ -737,6 +737,12 @@ impl<'a> Unifier<'a> {
                     return Ok(());
                 }
                 if a.len() != b.len() || !a.keys().eq(b.keys()) {
+                    // A shape with nothing left to infer is a plain assignability
+                    // check, so a wider argument fits it: `Array.from(al)` with
+                    // `al: { length: number; extra: number }`.
+                    if self.accepts_as_concrete_supertype_of(arg_ty, param_ty) {
+                        return Ok(());
+                    }
                     return Err(UnifyError::Mismatch {
                         expected: param_ty.clone(),
                         got: arg_ty.clone(),
@@ -1140,6 +1146,14 @@ impl<'a> Unifier<'a> {
         let known_param = self.sub.apply_or_record(param, self.limits);
         !super::infer::expr::type_contains_type_var(&known_param)
             && assignable(&known_param, arg, types)
+    }
+
+    /// Whether `param`, with no type variable left to bind, accepts `arg` by
+    /// assignability.
+    fn accepts_as_concrete_supertype_of(&self, arg: &Type, param: &Type) -> bool {
+        let known_param = self.sub.apply_or_record(param, self.limits);
+        !super::infer::expr::type_contains_type_var(&known_param)
+            && self.accepts_as_subtype(arg, &known_param)
     }
 
     /// Unify within a function type's parameter: subtype-widening stops (see

@@ -111,10 +111,20 @@ fn completion(
                 ..
             } => switch_completion(ta, declarations, *discriminant, cases, *default)?,
             TypedStmtKind::NarrowRegion { body, .. } => completion(ta, declarations, *body)?,
-            TypedStmtKind::While { .. }
-            | TypedStmtKind::For { .. }
-            | TypedStmtKind::ForOf { .. }
-            | TypedStmtKind::DoWhile { .. }
+            TypedStmtKind::While { condition, body } => {
+                let runs_forever = is_static_true(ta, *condition)?;
+                loop_completion(ta, declarations, *body, runs_forever)?
+            }
+            TypedStmtKind::For {
+                condition, body, ..
+            } => {
+                let runs_forever = condition.map_or(Ok(true), |c| is_static_true(ta, c))?;
+                loop_completion(ta, declarations, *body, runs_forever)?
+            }
+            TypedStmtKind::DoWhile { body, condition } => {
+                do_while_completion(ta, declarations, *body, *condition)?
+            }
+            TypedStmtKind::ForOf { .. }
             | TypedStmtKind::ReboxLocal { .. }
             | TypedStmtKind::Let { .. }
             | TypedStmtKind::Const { .. }
@@ -125,6 +135,59 @@ fn completion(
             | TypedStmtKind::Expr(_) => falls,
         },
     )
+}
+
+/// A `while`/`for` loop ends normally when its condition can fail, or when its
+/// body breaks out of it. A `break` inside a nested loop or `switch` is that
+/// statement's own, so it never reaches here.
+fn loop_completion(
+    ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
+    body: StmtId,
+    runs_forever: bool,
+) -> Result<Completion, crate::compiler_error::CompilerFailure> {
+    let breaks = completion(ta, declarations, body)?.breaks;
+    Ok(Completion {
+        falls: !runs_forever || breaks,
+        ..Default::default()
+    })
+}
+
+/// A `do … while` ends normally when its body breaks out, or when a pass reaches
+/// the condition and the condition can fail.
+fn do_while_completion(
+    ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
+    body: StmtId,
+    condition: crate::ExprId,
+) -> Result<Completion, crate::compiler_error::CompilerFailure> {
+    let pass = completion(ta, declarations, body)?;
+    let reaches_condition = pass.falls || pass.continues;
+    let exits_by_condition = reaches_condition && !is_static_true(ta, condition)?;
+    Ok(Completion {
+        falls: exits_by_condition || pass.breaks,
+        ..Default::default()
+    })
+}
+
+/// Whether a loop condition is the literal `true`, as the inferer's
+/// reachability also treats it, seen through any narrowing wrappers.
+fn is_static_true(
+    ta: &TypedAst,
+    condition: crate::ExprId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let mut id = condition;
+    loop {
+        match &ta
+            .try_expr(id)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        {
+            TypedExprKind::Boolean(value) => return Ok(*value),
+            TypedExprKind::Narrowed { inner, .. } => id = *inner,
+            _ => return Ok(false),
+        }
+    }
 }
 
 fn try_completion(
@@ -192,6 +255,9 @@ fn switch_is_exhaustive(
     discriminant: crate::ExprId,
     cases: &[TypedSwitchCase],
 ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    if ta.exhaustive_switches.contains(&discriminant) {
+        return Ok(true);
+    }
     let mut seen: std::collections::BTreeSet<narrowing::LiteralValue> =
         std::collections::BTreeSet::new();
     for case in cases {
@@ -209,7 +275,15 @@ fn switch_is_exhaustive(
     if let Type::NumberEnum { mangled, name, .. } | Type::StringEnum { mangled, name, .. } =
         disc_expr.ty.peel()
     {
-        return Ok(enum_is_covered(declarations, mangled, name, &seen));
+        // A bare literal names no member, as in TypeScript: `case 0` leaves
+        // `E.A` unmatched.
+        let named: std::collections::BTreeSet<narrowing::LiteralValue> = cases
+            .iter()
+            .flat_map(|case| &case.values)
+            .filter(|value| matches!(value, TypedSwitchValue::Enum { .. }))
+            .filter_map(literal_value_of)
+            .collect();
+        return Ok(enum_is_covered(declarations, mangled, name, &named));
     }
     if let TypedExprKind::FieldAccess { receiver, name } = &disc_expr.kind
         && let Type::Union(members) = ta
@@ -252,6 +326,7 @@ fn literal_value_of(value: &TypedSwitchValue) -> Option<narrowing::LiteralValue>
         )),
         TypedSwitchValue::Boolean { value, .. } => Some(narrowing::LiteralValue::Boolean(*value)),
         TypedSwitchValue::Null { .. } => None,
+        TypedSwitchValue::Expr { literal, .. } => literal.clone(),
         TypedSwitchValue::Enum { value, .. } => match value {
             EnumVariantPayload::Number(n) => Some(narrowing::LiteralValue::Number(
                 crate::types::LiteralF64(*n),

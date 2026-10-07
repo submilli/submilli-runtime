@@ -1,0 +1,7 @@
+# A function read as a value is one closure across packages, as in JavaScript:
+# the package that defines it exports the closure cache, and every package
+# that reads the function imports the cache instead of keeping its own.
+# name        dir   deps                  root
+@test/lib     lib   -
+@test/mid     mid   @test/lib
+main          app   @test/lib,@test/mid   root

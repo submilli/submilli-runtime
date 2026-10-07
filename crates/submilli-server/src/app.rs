@@ -31,7 +31,7 @@ use submilli_shared::llm::{
     BlueprintLlmProvider, HttpModelDispatch, HttpModelDispatchError, ModelDispatch,
 };
 use submilli_shared::secret_store::SecretStore;
-use tokio::sync::{Mutex as AsyncMutex, Notify};
+use tokio::sync::{Mutex as AsyncMutex, Notify, RwLock as AsyncRwLock};
 use wasmtime::{Engine, Linker, Module};
 
 use crate::ServerConfig;
@@ -171,6 +171,14 @@ struct AppStateInner {
     /// Cancellers of the recorded runs in flight, by execution id. Poison means a panic
     /// interrupted a registration; AGENTS.md permits the poisoned-lock panic.
     running: Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+    run_telemetry: crate::config::RunTelemetry,
+    pre_execute: Option<Arc<dyn crate::config::PreExecuteHook>>,
+    /// The opaque version tag each registered blueprint carries, by name: set by
+    /// [`AppState::apply_local_blueprint`], cleared by every other registration.
+    /// Every write to the blueprint store holds this lock for writing across the
+    /// write, and a run's lookup holds it for reading across its read, so a run
+    /// sees a blueprint and its tag from one registration.
+    blueprint_tags: AsyncRwLock<HashMap<String, String>>,
 }
 
 /// Removes a run's canceller once the run is over.
@@ -385,12 +393,16 @@ impl AppState {
                     .map(|factory| crate::record::events::EventHub::new(factory.clone())),
                 run_recorder: config.run_recorder,
                 running: Mutex::new(HashMap::new()),
+                run_telemetry: config.run_telemetry,
+                pre_execute: config.pre_execute,
+                blueprint_tags: AsyncRwLock::new(HashMap::new()),
             }),
         })
     }
 
     /// Rehydrate persisted sessions and sweep orphan directories. Await once
     /// before serving so reconnects resolve and stale directories are reclaimed.
+    /// The executing Tokio runtime must have its time driver enabled.
     pub async fn boot(&self) -> Result<(), crate::session_manager::BootError> {
         if self.inner.booted.load(Ordering::Acquire) {
             return Ok(());
@@ -401,7 +413,7 @@ impl AppState {
         }
         self.inner.session_manager.boot().await?;
         self.inner.session_manager.volume_registry().prepare();
-        self.inner.session_manager.spawn_reaper(REAP_INTERVAL);
+        self.start_reaper();
         self.inner.booted.store(true, Ordering::Release);
         Ok(())
     }
@@ -416,10 +428,20 @@ impl AppState {
         }
         if !self.inner.booted.load(Ordering::Acquire) {
             self.inner.session_manager.validate_stores().await?;
-            self.inner.session_manager.spawn_reaper(REAP_INTERVAL);
+            self.start_reaper();
         }
         self.inner.router_ready.store(true, Ordering::Release);
         Ok(())
+    }
+
+    fn start_reaper(&self) {
+        // This private caller always supplies the fixed 30-second constant;
+        // configuration and callbacks cannot replace it. Public startup/router
+        // entry points require a timer-enabled Tokio runtime.
+        self.inner
+            .session_manager
+            .spawn_reaper(REAP_INTERVAL)
+            .expect("fixed 30-second reaper interval fits the timer deadline");
     }
 
     pub(crate) fn graceful_shutdown(&self) -> Arc<GracefulShutdownTracker> {
@@ -442,6 +464,10 @@ impl AppState {
 
     pub fn audit(&self) -> &crate::audit::AuditLog {
         &self.inner.audit
+    }
+
+    pub(crate) fn pre_execute(&self) -> Option<&Arc<dyn crate::config::PreExecuteHook>> {
+        self.inner.pre_execute.as_ref()
     }
 
     pub(crate) fn run_recorder(&self) -> Option<&Arc<dyn crate::record::RunRecorderFactory>> {
@@ -493,6 +519,10 @@ impl AppState {
         Arc::clone(&self.inner.auth)
     }
 
+    pub(crate) fn run_telemetry(&self) -> crate::config::RunTelemetry {
+        self.inner.run_telemetry
+    }
+
     pub(crate) fn engine(&self) -> &Engine {
         &self.inner.engine
     }
@@ -507,6 +537,29 @@ impl AppState {
 
     pub(crate) fn sessions(&self) -> &Arc<dyn SessionStore> {
         &self.inner.sessions
+    }
+
+    /// The blueprint a run is decided under and its version tag, read together:
+    /// a concurrent registration lands wholly before or wholly after this lookup.
+    pub(crate) async fn blueprint_for_run(
+        &self,
+        name: &str,
+    ) -> std::result::Result<Option<BlueprintForRun>, crate::blueprint::StoreError> {
+        let tags = self.inner.blueprint_tags.read().await;
+        let found = self.blueprints().get(name).await?;
+        Ok(found.map(|blueprint| BlueprintForRun {
+            blueprint,
+            version_tag: tags.get(name).cloned(),
+        }))
+    }
+
+    /// Held across a write to the blueprint store, so no run reads the blueprint
+    /// and its tag from different registrations. A writer that registers without
+    /// a tag removes the name's entry.
+    pub(crate) async fn blueprint_tags_for_write(
+        &self,
+    ) -> tokio::sync::RwLockWriteGuard<'_, HashMap<String, String>> {
+        self.inner.blueprint_tags.write().await
     }
 
     pub(crate) fn blueprints(&self) -> &Arc<dyn BlueprintStore> {
@@ -613,7 +666,7 @@ impl AppState {
 
     /// The operator-declared volume table, read from the session manager so
     /// the listing endpoint and mount-time resolution share one source.
-    pub(crate) fn volumes(&self) -> &VolumeTable {
+    pub(crate) fn volumes(&self) -> VolumeTable {
         self.inner.session_manager.volumes()
     }
 
@@ -871,8 +924,9 @@ impl AppState {
     }
 
     /// Drop the discovered `@mcp/<server>` catalog so the next execute rediscovers
-    /// it against the current `mcp:` block. Called on blueprint update and removal.
-    pub(crate) fn evict_mcp_catalog(&self, name: &str) {
+    /// it against the current `mcp:` block. Called on blueprint update and removal,
+    /// including [`Self::apply_local_blueprint`].
+    pub fn evict_mcp_catalog(&self, name: &str) {
         let mut catalogs = self
             .inner
             .mcp_catalogs
@@ -888,7 +942,7 @@ impl AppState {
     /// resolves — a new transitive dependency, or an owned copy now shadowing a
     /// fallback one — and no cache key records which files a set came from, so
     /// the only sound eviction after an install is a full one.
-    pub(crate) fn evict_all_prepared_packages(&self) {
+    pub fn evict_all_prepared_packages(&self) {
         let mut cache = self
             .inner
             .prepared_packages
@@ -902,7 +956,10 @@ impl AppState {
         cache.clear();
     }
 
-    pub(crate) fn evict_prepared_packages(&self, name: &str) {
+    /// Drop the prepared package modules cached for blueprint `name`, so the next
+    /// run loads them from the package store again: after a blueprint change, or
+    /// once an embedder has rebuilt a package that blueprint uses.
+    pub fn evict_prepared_packages(&self, name: &str) {
         let mut cache = self
             .inner
             .prepared_packages
@@ -1015,6 +1072,8 @@ fn layered_package_store(root: Option<PathBuf>, fallback: Option<PathBuf>) -> Pa
     }
 }
 
+/// Build the server router. Requests must run on a Tokio runtime with its time
+/// driver enabled; first-request initialization starts the session reaper.
 pub fn app(state: AppState) -> Router {
     let boot_state = state.clone();
     let graceful_shutdown = state.graceful_shutdown();
@@ -1257,6 +1316,14 @@ fn join_key_parts(parts: &BTreeSet<String>) -> String {
 fn cache_key_belongs_to_blueprint(key: &str, blueprint_name: &str) -> bool {
     key.starts_with(&format!("mcp:{blueprint_name}:"))
         || key.starts_with(&format!("pkg:{blueprint_name}:"))
+}
+
+/// A blueprint as a run reads it: the blueprint and its version tag, from one lookup.
+#[derive(Clone, Debug)]
+pub(crate) struct BlueprintForRun {
+    pub(crate) blueprint: Blueprint,
+    /// `None` for a blueprint registered without one; the run then records its hash.
+    pub(crate) version_tag: Option<String>,
 }
 
 #[cfg(test)]
@@ -1512,3 +1579,6 @@ mod mcp_setup_tests;
 
 #[cfg(test)]
 mod blueprint_mutation_tests;
+
+#[cfg(test)]
+mod local_apply_tests;

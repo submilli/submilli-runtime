@@ -135,6 +135,7 @@ Ast {
         ),
     ],
     pattern_origins: {},
+    tuple_pattern_sources: {},
     for_of_pattern_bindings: {},
     exported_decls: [],
 }

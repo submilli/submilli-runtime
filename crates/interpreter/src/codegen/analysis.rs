@@ -104,6 +104,19 @@ impl CodegenAnalysis {
         for g in &ta.globals {
             analysis.visit_type_at(&g.ty, g.span)?;
         }
+        let init_guards = super::init_guard::guarded_globals(ta)?;
+        if !init_guards.is_empty() {
+            analysis
+                .dependency_usage
+                .note_type(crate::mangle::prelude("ReferenceError"));
+        }
+        for guard in init_guards {
+            analysis
+                .string_pool
+                .intern_text(&super::init_guard::before_initialization_message(
+                    &guard.binding,
+                ));
+        }
 
         for f in &ta.functions {
             for p in &f.params {
@@ -386,6 +399,12 @@ impl CodegenAnalysis {
                 ..
             } => {
                 self.walk_expr(ta, *discriminant)?;
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
+                    self.walk_expr(ta, comparison)?;
+                }
                 for case in cases {
                     self.walk_stmt(ta, case.body)?;
                 }
@@ -924,6 +943,13 @@ impl CodegenAnalysis {
                         &crate::mangle::prelude("ObjectConstructor"),
                         "#spread",
                     ));
+                }
+                for member in members {
+                    if let crate::TypedObjectMember::Spread { source, .. } = member
+                        && let Some(omitted) = ta.spread_omitted_fields.get(source)
+                    {
+                        self.extra_field_names.extend(omitted.iter().cloned());
+                    }
                 }
                 for field in fields {
                     let mut source = Some(&field.source);

@@ -1245,8 +1245,12 @@ impl TypeText<'_> {
         self.union_text().map(FieldType::Typed)
     }
 
-    /// Index parameter names are labels; their key types remain significant.
+    /// Index parameter names are labels; their key types remain significant. A
+    /// name that isn't an identifier is quoted, as both printers write `"a b"`.
     fn object_member_name(&mut self) -> Option<String> {
+        if self.rest().starts_with('"') {
+            return self.string_literal();
+        }
         if !self.eat("[") {
             return self.word();
         }
@@ -1469,6 +1473,10 @@ fn normalizing_equates_equivalent_spellings() {
     assert_eq!(
         normalize_type("{ p: string; m(): number; }"),
         normalize_type("{ m: () => number; p: string }")
+    );
+    assert_eq!(
+        normalize_type(r#"{ "a b": number; readonly x: string; }"#),
+        normalize_type(r#"{ readonly x: string; "a b": number }"#)
     );
     assert_eq!(
         normalize_type(r#""a\"b" | "c""#),

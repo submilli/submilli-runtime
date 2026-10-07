@@ -160,7 +160,11 @@ fn enumerate(
     if let Some((names, values)) = shape_arrays(caller, obj)? {
         let len = field_count(caller, obj)?;
         elems.reserve(len as usize);
+        let error_slots = super::error::non_enumerable_slots(caller, obj)?;
         for i in 0..len {
+            if error_slots.as_ref().is_some_and(|hidden| hidden.hides(i)) {
+                continue;
+            }
             let name = names.get(&mut *caller, i)?;
             let value = values.get(&mut *caller, i)?;
             if !field_is_present(caller, &name, &value)? || is_accessor_slot(caller, &name)? {

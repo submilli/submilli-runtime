@@ -1,6 +1,6 @@
 // Object literals with different fields in one array literal hold tsc's
 // normalized union: each member gains the fields only others declare, as
-// optional `null`, so every field reads from any element. A field holding
+// optional `never` (read as `null`), so every field reads from any element. A field holding
 // objects is normalized the same way one level down.
 function show(value: string | number | boolean | null): string {
   return value === null ? "null" : String(value);
@@ -64,5 +64,11 @@ function main(): void {
     alternating.map((v) => show(v.p.x ?? null) + show(v.p.y ?? null) + show(v.p.z ?? null)).join(",") ===
       "1nullnull,22null,3nullnull,nullnull5",
     "nested shapes alternating after the element type became a union",
+  );
+
+  const middleLacks = [{ id: 1 }, { id: 2, meta: { a: 1 } }, { id: 3, meta: { a: 2, b: "x" } }];
+  assert(
+    middleLacks.map((v) => (v.meta ? show(v.meta.b ?? null) : "none")).join(",") === "none,null,x",
+    "a nested field normalizes when an element lacks the outer field",
   );
 }

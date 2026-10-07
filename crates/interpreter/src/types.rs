@@ -99,6 +99,10 @@ pub struct ObjectField {
     /// freshly-synthesized shapes are writable (`false`); only an explicit `readonly`
     /// modifier on an object-type/interface property sets this.
     pub readonly: bool,
+    /// A method rather than a function-typed property. `tsc` compares a method's
+    /// parameters bivariantly and a property's contravariantly.
+    #[serde(default)]
+    pub method: bool,
 }
 
 impl ObjectField {
@@ -107,6 +111,7 @@ impl ObjectField {
             ty,
             optional: false,
             readonly: false,
+            method: false,
         }
     }
     pub fn optional(ty: Type) -> Self {
@@ -114,6 +119,7 @@ impl ObjectField {
             ty,
             optional: true,
             readonly: false,
+            method: false,
         }
     }
 
@@ -509,6 +515,24 @@ impl Type {
             })
             .collect::<Option<Vec<_>>>()?;
         Some(Type::union(elements))
+    }
+
+    /// The arrays and tuples of a union of strings with arrays or tuples, and
+    /// nothing else, as their own union. Such a union has no shared
+    /// representation, so each use tests `typeof` and takes the string's or the
+    /// array's path.
+    pub fn string_or_array_union_arrays(&self) -> Option<Type> {
+        let Type::Union(members) = self.peel() else {
+            return None;
+        };
+        let (strings, arrays): (Vec<Type>, Vec<Type>) = members
+            .iter()
+            .cloned()
+            .partition(|member| member.peel().is_string_shaped());
+        let all_arrays = arrays
+            .iter()
+            .all(|member| matches!(member.peel(), Type::Array(_) | Type::Tuple(_)));
+        (!strings.is_empty() && !arrays.is_empty() && all_arrays).then(|| Type::union(arrays))
     }
 
     /// The array a union of arrays and tuples reads as: see

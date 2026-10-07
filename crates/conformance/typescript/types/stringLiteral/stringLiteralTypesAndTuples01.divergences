@@ -1,8 +1,4 @@
-types: 19 of 34 tsc entries compared, 3 differ
-
-line 6: ["Hello", "Brave", "New", "World"]
-  tsc:  [string, string, string, string]
-  ours: string[]
+types: 19 of 34 tsc entries compared, 2 differ
 
 line 9: ['I\'m', 'a', 't-rex']
   tsc:  ["I'm", "a", "t-rex"]

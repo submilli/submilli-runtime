@@ -1,3 +1,2 @@
 line 15 extra: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough
-line 34 extra: bug SUB-1208 `new Error()` without a message is rejected
 line 19 type: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough

@@ -164,6 +164,12 @@ impl Collector<'_> {
                 ..
             } => {
                 self.walk_expr(*discriminant)?;
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
+                    self.walk_expr(comparison)?;
+                }
                 for case in cases {
                     self.walk_stmt(case.body)?;
                 }
@@ -208,6 +214,9 @@ impl Collector<'_> {
             } => {
                 self.walk_stmt(*body)?;
                 for c in catches {
+                    if c.boxed {
+                        self.note(&c.ty)?;
+                    }
                     self.walk_stmt(c.body)?;
                 }
                 if let Some(f) = finally {

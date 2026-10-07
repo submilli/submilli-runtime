@@ -78,6 +78,7 @@ async fn tls_downgrades_require_permission_and_never_forward_proxy_credentials()
             decompress: false,
             transport_policy: policy,
             redirect_guard: None,
+            recorded_as: None,
         };
         for download in [false, true] {
             let result = if download {

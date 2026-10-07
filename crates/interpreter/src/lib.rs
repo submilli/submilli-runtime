@@ -49,9 +49,9 @@ pub use ast::{
     TypeAnnotationField, TypeAnnotationKind, TypePredicateAnnotation, UnOp, Visibility,
 };
 pub use authority::{
-    AuthorityCallable, AuthorityCallableKind, AuthorityEdge, AuthorityEffect, AuthorityExposure,
-    AuthorityMap, AuthorityPosition, AuthorityRoute, AuthorityRouteEffect, AuthoritySpan,
-    AuthorityWitnessStep,
+    AuthorityCallable, AuthorityCallableKind, AuthorityControlStep, AuthorityEdge, AuthorityEffect,
+    AuthorityExposure, AuthorityGuardEvidence, AuthorityGuardStatus, AuthorityMap,
+    AuthorityPosition, AuthorityRoute, AuthorityRouteEffect, AuthoritySpan, AuthorityWitnessStep,
 };
 pub use backtrace::{BacktraceMode, failure_message, render as render_backtrace};
 pub use capability_derivation::{DerivedCapability, derive_call_site_capability};

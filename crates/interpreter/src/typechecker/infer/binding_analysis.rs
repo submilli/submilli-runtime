@@ -13,7 +13,16 @@ pub(super) struct Analysis {
     /// Names a function body writes that no enclosing block declares: the
     /// module-level bindings functions write.
     pub(super) function_written_globals: HashSet<String>,
+    /// Locals, by declaration, that arithmetic is written back to: `x += 1`,
+    /// `x++`, `x = x * 2`.
+    pub(super) arithmetic_targets: HashSet<(String, Span)>,
+    /// Module-level names arithmetic is written back to anywhere.
+    pub(super) arithmetic_written_globals: HashSet<String>,
     pub(super) last_assignments: HashMap<Span, u32>,
+    /// Declarations, by name span, of the bindings code later reassigns or
+    /// adds elements to (`x = …`, `x.push(…)`, `x[i] = …`). An unannotated
+    /// `[]` bound to one is an array tsc types from those writes.
+    pub(super) grown_bindings: HashSet<Span>,
     /// Nested function declarations, by name span, whose bodies read or write a
     /// `let`/`const` of the block they are declared in, with the last declared
     /// of those. Their closure can exist only once it is declared; any other is
@@ -78,9 +87,24 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) -> Result<(), CompilerF
             .push(ast.try_stmt(id).map_err(super::arena_failure)?.span);
     }
     match &ast.try_stmt(id).map_err(super::arena_failure)?.kind {
-        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+        StmtKind::Assign { target, value } => {
             out.read(target);
             out.write(target);
+            out.grow_binding(target);
+            if writes_back_arithmetic(ast, None, *value)? {
+                out.write_arithmetic(target);
+            }
+            visit_expr(ast, *value, out)?;
+        }
+        StmtKind::CompoundAssign {
+            target, op, value, ..
+        } => {
+            out.read(target);
+            out.write(target);
+            out.grow_binding(target);
+            if writes_back_arithmetic(ast, Some(*op), *value)? {
+                out.write_arithmetic(target);
+            }
             visit_expr(ast, *value, out)?;
         }
         StmtKind::Let { name, value, .. } | StmtKind::Const { name, value, .. } => {
@@ -225,6 +249,7 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) -> Result<(), CompilerF
             value,
             ..
         } => {
+            out.grow(ast, *receiver)?;
             visit_expr(ast, *receiver, out)?;
             visit_expr(ast, *index, out)?;
             visit_expr(ast, *value, out)?;
@@ -304,17 +329,27 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) -> Result<(), CompilerF
                     &ast.try_expr(*operand).map_err(super::arena_failure)?.kind
             {
                 out.write(ident);
+                out.write_arithmetic(ident);
             }
             visit_expr(ast, *operand, out)?;
         }
-        ExprKind::Assign { target, value, .. } => {
-            if let ExprKind::Identifier(ident) =
-                &ast.try_expr(*target).map_err(super::arena_failure)?.kind
-            {
-                out.read(ident);
-                out.write(ident);
-            } else {
-                visit_expr(ast, *target, out)?;
+        ExprKind::Assign {
+            target, op, value, ..
+        } => {
+            match &ast.try_expr(*target).map_err(super::arena_failure)?.kind {
+                ExprKind::Identifier(ident) => {
+                    out.read(ident);
+                    out.write(ident);
+                    out.grow(ast, *target)?;
+                    if writes_back_arithmetic(ast, *op, *value)? {
+                        out.write_arithmetic(ident);
+                    }
+                }
+                ExprKind::IndexAccess { receiver, .. } => {
+                    out.grow(ast, *receiver)?;
+                    visit_expr(ast, *target, out)?;
+                }
+                _ => visit_expr(ast, *target, out)?,
             }
             visit_expr(ast, *value, out)?;
         }
@@ -348,6 +383,12 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) -> Result<(), CompilerF
             scan_function_body(ast, params, *body, out)?;
         }
         ExprKind::Call { callee, args, .. } | ExprKind::New { callee, args, .. } => {
+            if let ExprKind::FieldAccess { receiver, name } =
+                &ast.try_expr(*callee).map_err(super::arena_failure)?.kind
+                && matches!(name.name.as_str(), "push" | "unshift" | "splice" | "fill")
+            {
+                out.grow(ast, *receiver)?;
+            }
             visit_expr(ast, *callee, out)?;
             for &a in args {
                 visit_expr(ast, a, out)?;
@@ -562,6 +603,36 @@ impl Analysis {
         });
     }
 
+    /// Records that `receiver`, when it names a binding, is reassigned or gains
+    /// elements.
+    fn grow(&mut self, ast: &Ast, receiver: ExprId) -> Result<(), CompilerFailure> {
+        if let crate::ExprKind::Identifier(ident) =
+            &ast.try_expr(receiver).map_err(super::arena_failure)?.kind
+        {
+            self.grow_binding(ident);
+        }
+        Ok(())
+    }
+
+    fn grow_binding(&mut self, ident: &Ident) {
+        if let Some((_, binding)) = self.lookup(&ident.name) {
+            self.grown_bindings.insert(binding.span);
+        }
+    }
+
+    fn write_arithmetic(&mut self, ident: &Ident) {
+        match self.lookup(&ident.name) {
+            Some((_, binding)) => {
+                let declaration = binding.span;
+                self.arithmetic_targets
+                    .insert((ident.name.clone(), declaration));
+            }
+            None => {
+                self.arithmetic_written_globals.insert(ident.name.clone());
+            }
+        }
+    }
+
     fn write(&mut self, ident: &Ident) {
         let Some((_, binding)) = self.resolve_use(ident) else {
             if self.function_depth > 0 {
@@ -587,6 +658,35 @@ impl Analysis {
             .entry(declaration)
             .and_modify(|last| *last = (*last).max(end))
             .or_insert(end);
+    }
+}
+
+/// Whether a write of `value`, compound with `op` when `op` is set, is
+/// arithmetic written back, which TypeScript checks against the base type of
+/// the target's literal types: any compound arithmetic, and a plain `=` of an
+/// operator binding at least as tightly as a shift.
+fn writes_back_arithmetic(
+    ast: &Ast,
+    op: Option<crate::BinOp>,
+    value: ExprId,
+) -> Result<bool, CompilerFailure> {
+    use crate::BinOp::*;
+    use crate::ExprKind;
+    if let Some(op) = op {
+        return Ok(!matches!(op, And | Or | NullishCoalesce));
+    }
+    let mut value = value;
+    loop {
+        match &ast.try_expr(value).map_err(super::arena_failure)?.kind {
+            ExprKind::Paren(inner) => value = *inner,
+            ExprKind::Binary { op, .. } => {
+                return Ok(matches!(
+                    op,
+                    Add | Sub | Mul | Div | Rem | Pow | Shl | Shr | UnsignedShr
+                ));
+            }
+            _ => return Ok(false),
+        }
     }
 }
 

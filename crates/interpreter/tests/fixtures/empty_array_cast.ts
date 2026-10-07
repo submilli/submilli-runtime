@@ -55,6 +55,16 @@ function main(): void {
   const column = [] as number[] | string[];
   assert(column.length === 0, "first array member of a union of arrays");
 
+  const branch = (counts.size > 0 ? [] : [4]) as number[];
+  assert(branch[0] === 4, "an empty ternary branch inside the cast");
+
+  const nested = [[], [5]] as number[][];
+  nested[0].push(6);
+  assert(JSON.stringify(nested) === "[[6],[5]]", "an empty array nested in the cast");
+
+  const columns = (counts.size > 0 ? [] : ["x"]) as number[] | string[];
+  assert(columns.length === 1, "an empty branch under a union of arrays");
+
   assert(orEmpty([] as string[]).length === 0, "argument position");
   assert(orEmpty<number>(null).length === 0, "generic element type");
 }

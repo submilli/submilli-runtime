@@ -260,9 +260,28 @@ mod tests {
         );
     }
 
+    /// A `while (true)` that never breaks can only leave by its `return`, as tsc
+    /// also concludes.
     #[test]
-    fn while_with_return_inside_diagnoses() {
+    fn while_true_with_return_inside_returns_on_all_paths() {
         let diags = run("function f(): number { while (true) { return 1; } }");
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    #[test]
+    fn while_true_that_breaks_diagnoses() {
+        let diags =
+            run("function f(b: boolean): number { while (true) { if (b) { break; } return 1; } }");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(
+            diags[0].message,
+            "function `f` does not return a value on all paths"
+        );
+    }
+
+    #[test]
+    fn while_with_a_condition_diagnoses() {
+        let diags = run("function f(b: boolean): number { while (b) { return 1; } }");
         assert_eq!(diags.len(), 1);
         assert_eq!(
             diags[0].message,
@@ -413,9 +432,9 @@ mod tests {
         assert!(diags.is_empty(), "{diags:?}");
         let resolved = crate::typechecker::rules::check_script(&ta, &[&dependency]).unwrap();
         assert!(resolved.is_empty(), "{resolved:?}");
-        // Without the declaration the enum's variants are unknown.
+        // Inference saw the enum's members, so the check needs no declaration.
         let unresolved = crate::check(&ta).unwrap();
-        assert_eq!(unresolved.len(), 1, "{unresolved:?}");
+        assert!(unresolved.is_empty(), "{unresolved:?}");
     }
 
     #[test]

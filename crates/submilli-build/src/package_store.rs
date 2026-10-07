@@ -447,7 +447,12 @@ impl fmt::Display for PackageStoreError {
                     "package `{name}` was not found in {}",
                     join_roots(searched_roots)
                 )?;
-                write_available(f, available)
+                write_available(f, available)?;
+                write!(
+                    f,
+                    "; install it with `submilli install <github-url>`, or run \
+                     `submilli build publish-local` in the project that provides `{name}`"
+                )
             }
             PackageStoreError::Artifact {
                 name,

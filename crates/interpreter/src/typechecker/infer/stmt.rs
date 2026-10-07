@@ -21,6 +21,19 @@ pub(super) enum StaticWrite {
     },
 }
 
+/// `ty` with its literal types widened to their base types, through aliases.
+/// A type with none keeps its spelling.
+fn widen_literal_members(ty: Type) -> Type {
+    fn widen(ty: &Type) -> Type {
+        match ty.peel() {
+            Type::Union(members) => Type::union(members.iter().map(widen).collect()),
+            peeled => peeled.widen_literal(),
+        }
+    }
+    let widened = widen(&ty);
+    if widened == *ty.peel() { ty } else { widened }
+}
+
 impl Inferer<'_> {
     /// Returns `None` for type-space-only declarations (`interface`, `type`, `import`);
     /// callers `filter_map` those away.
@@ -37,6 +50,11 @@ impl Inferer<'_> {
         // As in `infer_expr`: a limit pending before this statement belongs to
         // whatever enclosing check met it.
         let limit_was_pending = self.type_limits.limit_reached();
+        // The flag describes only the dead code right after the switch; a
+        // statement that runs ends it.
+        if self.reachable {
+            self.unreachable_by_exhaustive_switch = false;
+        }
         // Propagate once after dispatch: per-arm `?` creates large temporary
         // results that inflate every recursive frame in debug builds.
         let typed_kind = (match stmt.kind {
@@ -257,27 +275,13 @@ impl Inferer<'_> {
                 doc,
             } => {
                 let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-                let (typed_value, source_ty) = self.infer_expr(source, hint.as_ref())?;
-                let narrowed = match source_ty.clone() {
-                    Type::Object { mut fields, .. } => {
-                        for excl in &exclude {
-                            fields.remove(&excl.name);
-                        }
-                        Type::Object {
-                            index: None,
-                            fields,
-                        }
-                    }
-                    other => {
-                        self.error(
-                            span,
-                            format!(
-                                "object rest can only destructure an object with a known shape; \
-                                 source has type `{other}`",
-                            ),
-                        );
-                        other
-                    }
+                let (typed_source, source_ty) = self.infer_expr(source, hint.as_ref())?;
+                let rest = self.object_rest(typed_source, &source_ty, &exclude, span)?;
+                let (typed_value, narrowed) = if let Some(rest) = rest {
+                    rest
+                } else {
+                    self.report_unshaped_rest_source(&source_ty, span);
+                    (typed_source, Type::Error)
                 };
                 self.scopes
                     .insert(name.name.clone(), narrowed.clone(), true, name.span);
@@ -302,6 +306,19 @@ impl Inferer<'_> {
                 })
                 .map_err(crate::typechecker::arena_failure)?,
         ))
+    }
+
+    fn report_unshaped_rest_source(&mut self, source_ty: &Type, span: Span) {
+        if matches!(source_ty.peel(), Type::Error) {
+            return;
+        }
+        self.error(
+            span,
+            format!(
+                "object rest can only destructure an object with a known shape; source has \
+                 type `{source_ty}`",
+            ),
+        );
     }
 
     fn infer_return(
@@ -363,6 +380,31 @@ impl Inferer<'_> {
         Ok(null)
     }
 
+    /// The type a variable declared `declared` holds. Arithmetic written back
+    /// (`x += 1`, `x++`, `x = x * 2`) is checked against the base type of the
+    /// variable's literal types, as in TypeScript, so its value can leave them.
+    /// Closures, other functions and loop heads read the variable as declared,
+    /// so it holds that base type everywhere.
+    pub(super) fn local_storage_ty(&self, name: &Ident, declared: Type) -> Type {
+        if self
+            .arithmetic_targets
+            .contains(&(name.name.clone(), name.span))
+        {
+            widen_literal_members(declared)
+        } else {
+            declared
+        }
+    }
+
+    /// [`local_storage_ty`](Self::local_storage_ty) for a module variable.
+    pub(super) fn global_storage_ty(&self, name: &str, declared: Type) -> Type {
+        if self.arithmetic_written_globals.contains(name) {
+            widen_literal_members(declared)
+        } else {
+            declared
+        }
+    }
+
     fn infer_let_statement(
         &mut self,
         name: Ident,
@@ -376,6 +418,7 @@ impl Inferer<'_> {
         // narrowing: `let done = false` reads as `false` until reassigned.
         let (typed_value, value_ty) =
             self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
+        let value_ty = self.reject_evolving_empty_array(&name, hint.is_some(), value, value_ty)?;
         // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
         // let b = a;` binds `number`, not `1`. A literal type the value got from
         // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
@@ -385,6 +428,7 @@ impl Inferer<'_> {
             None => self.widen_fresh_literals(typed_value, &value_ty)?,
         };
         let bound = self.pattern_binding_storage_type(value, bound)?;
+        let bound = self.local_storage_ty(&name, bound);
         // Reject a void binding; poison the slot so codegen never
         // sees a void value-type.
         let bound = if self.reject_void_binding(&bound, span) {
@@ -402,7 +446,7 @@ impl Inferer<'_> {
         );
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
-            None => self.assigned_flow_type(&bound, typed_value, value_ty)?,
+            None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
         };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Let {
@@ -430,6 +474,7 @@ impl Inferer<'_> {
         let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
         let (typed_value, value_ty) =
             self.infer_expr_keeping_literals(value, hint.as_ref(), hint.is_none())?;
+        let value_ty = self.reject_evolving_empty_array(&name, hint.is_some(), value, value_ty)?;
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());
         let bound = self.pattern_binding_storage_type(value, bound)?;
@@ -455,7 +500,7 @@ impl Inferer<'_> {
         }
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
-            None => self.assigned_flow_type(&bound, typed_value, value_ty)?,
+            None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
         };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Const {
@@ -464,6 +509,41 @@ impl Inferer<'_> {
             value: typed_value,
             doc,
         })
+    }
+
+    /// An unannotated `[]` bound to a variable the code later reassigns or adds
+    /// elements to is, in tsc, an array typed by those writes. Submilli types
+    /// a value where it is declared, so it asks for the element type there.
+    /// Any other unannotated `[]` holds nothing, as its `never[]` says.
+    fn reject_evolving_empty_array(
+        &mut self,
+        name: &Ident,
+        annotated: bool,
+        value: ExprId,
+        value_ty: Type,
+    ) -> Result<Type, CompilerFailure> {
+        if annotated || !self.grown_bindings.contains(&name.span) {
+            return Ok(value_ty);
+        }
+        let value = self.ast.try_expr(value).map_err(super::arena_failure)?;
+        let crate::ExprKind::ArrayLiteral { elements } = &value.kind else {
+            return Ok(value_ty);
+        };
+        if !elements.is_empty() {
+            return Ok(value_ty);
+        }
+        self.error_with_help(
+            value.span,
+            format!(
+                "cannot infer the element type of `{}` from an empty array",
+                name.name
+            ),
+            vec![format!(
+                "`{}` is reassigned or gains elements later; annotate its element type, as in `{}: T[] = []`",
+                name.name, name.name
+            )],
+        );
+        Ok(Type::Array(Box::new(Type::Error)))
     }
 
     fn infer_if_statement(
@@ -610,6 +690,7 @@ impl Inferer<'_> {
         // carry to the next iteration's entry.
         let body_scope_floor = self.scopes.next_scope_id();
         self.scopes.push();
+        let bound_ty = self.local_storage_ty(&name, bound_ty);
         let origin = self.element_literal_origin(ann.is_some(), typed_iter)?;
         self.scopes.insert_with_literal_origin(
             name.name.clone(),
@@ -718,10 +799,11 @@ impl Inferer<'_> {
         for clause in catches {
             let clause_ty = self.infer_catch_type(&clause, &mut prior)?;
             self.scopes.push();
+            // A `catch` binding is an ordinary mutable local, as in TypeScript.
             self.scopes.insert(
                 clause.binding.name.clone(),
                 clause_ty.clone(),
-                true,
+                false,
                 clause.binding.span,
             );
             let outcome =
@@ -1051,7 +1133,7 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             (id, ty.clone())
         };
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty.widen_literal()))?;
         let result_ty =
             self.check_compound_arith(op, (synth_lhs, &lhs_ty), (typed_value, &value_ty), op_span)?;
         let synth_binary = self
@@ -1310,6 +1392,7 @@ impl Inferer<'_> {
                         ty: *i.value,
                         optional: false,
                         readonly: i.readonly,
+                        method: false,
                     })
             });
             if let Some(field) = field_lookup {
@@ -1408,7 +1491,7 @@ impl Inferer<'_> {
         if matches!(written, Type::Error) || !assignable(&written, &declared, self.resolver()) {
             return Ok(());
         }
-        let written = self.assigned_flow_type(&declared, value, written)?;
+        let written = self.assigned_flow_type(&declared, true, value, written)?;
         let narrowed_ty = self.assignment_narrowed_ty(&declared, written);
         if narrowed_ty == declared {
             return Ok(());
@@ -1430,6 +1513,30 @@ impl Inferer<'_> {
         };
         self.install_joined_narrowings([(path, view)].into_iter().collect(), name.span)?;
         Ok(())
+    }
+
+    /// A write through a key that names a declared field (`o[key] = v` after
+    /// `const key = "a"`) narrows that field as `o.a = v` does.
+    fn narrow_keyed_field_after_write(
+        &mut self,
+        receiver: ExprId,
+        index: ExprId,
+        receiver_ty: &Type,
+        value: ExprId,
+        span: Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let kind = TypedExprKind::IndexAccess { receiver, index };
+        let Some(path) = self.kind_to_reference_path(&kind)? else {
+            return Ok(());
+        };
+        let Some(narrowing::PathElem::Field(name)) = path.chain.last() else {
+            return Ok(());
+        };
+        let name = Ident {
+            name: name.clone(),
+            span,
+        };
+        self.narrow_field_after_write(path, receiver, receiver_ty, &name, value)
     }
 
     pub(super) fn infer_assign_index(
@@ -1478,10 +1585,14 @@ impl Inferer<'_> {
                 help,
             );
         }
-        self.invalidate_index_write(
+        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+        self.invalidate_index_write(typed_receiver, typed_index, index_span)?;
+        self.narrow_keyed_field_after_write(
             typed_receiver,
             typed_index,
-            self.ast.try_expr(index).map_err(super::arena_failure)?.span,
+            &receiver_ty,
+            typed_value,
+            index_span,
         )?;
         Ok(TypedStmtKind::AssignIndex {
             receiver: typed_receiver,
@@ -1772,7 +1883,8 @@ impl Inferer<'_> {
                     format!("expected `{}`, got `{}`", entry.ty, value_ty),
                 );
             }
-            let flow_ty = self.assigned_flow_type(&entry.ty, typed_value, value_ty)?;
+            let annotated = self.is_local_annotated(&target.name);
+            let flow_ty = self.assigned_flow_type(&entry.ty, annotated, typed_value, value_ty)?;
             let narrowed_shadow_ty =
                 self.renarrow_local_after_write(&target, entry.decl_scope, &entry.ty, flow_ty)?;
             return Ok(TypedStmtKind::AssignLocal {
@@ -1797,7 +1909,8 @@ impl Inferer<'_> {
                     if !reported && !assignable(&value_ty, &ty, self.resolver()) {
                         self.error(value_span, format!("expected `{ty}`, got `{value_ty}`"));
                     }
-                    let flow_ty = self.assigned_flow_type(&ty, typed_value, value_ty)?;
+                    let annotated = self.is_global_annotated(&mangled);
+                    let flow_ty = self.assigned_flow_type(&ty, annotated, typed_value, value_ty)?;
                     self.renarrow_global_after_write(&target, &mangled, &ty, flow_ty)?;
                     TypedStmtKind::AssignGlobal {
                         ident: target,
@@ -1910,7 +2023,7 @@ impl Inferer<'_> {
                     .map_err(crate::typechecker::arena_failure)?;
                 (id, target_ty.clone())
             };
-            let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty))?;
+            let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty.widen_literal()))?;
             let result_ty = self.check_compound_arith(
                 op,
                 (synth_lhs, &lhs_ty),
@@ -2130,6 +2243,7 @@ impl Inferer<'_> {
                         ty: *index.value,
                         optional: true,
                         readonly: index.readonly,
+                        method: false,
                     })
             }) {
                 if field.readonly {
@@ -2204,7 +2318,7 @@ impl Inferer<'_> {
         stmt_span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&rw.read))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&rw.read.widen_literal()))?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2298,7 +2412,7 @@ impl Inferer<'_> {
             elem_ty.clone()
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty.widen_literal()))?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2413,6 +2527,19 @@ pub(super) fn binary_op_text(op: BinOp) -> &'static str {
 /// must ask exactly what the failure asked, or it recommends a fix that doesn't
 /// apply to the site.
 pub(super) fn compound_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<Type> {
+    if matches!(lt.peel(), Type::Error) || matches!(rt.peel(), Type::Error) {
+        return Some(Type::Error);
+    }
+    // A `never` target can't take the result back, so the read-modify-write has no
+    // rule even where the binary operator accepts the pair.
+    if matches!(lt.peel(), Type::Never) {
+        return None;
+    }
+    binary_arith_result(op, lt, rt)
+}
+
+/// The result of the arithmetic or bitwise binary operator `op` on `lt` and `rt`.
+pub(super) fn binary_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<Type> {
     if matches!(lt.peel(), Type::Error) || matches!(rt.peel(), Type::Error) {
         return Some(Type::Error);
     }
@@ -2655,8 +2782,11 @@ fn next_pass_falsifies(
     view: &narrowing::NarrowedView,
     post: Option<&narrowing::NarrowedView>,
 ) -> bool {
+    // A literal the entry view rules out that the next pass doesn't rule
+    // out disproves it too, though its type may hold the same members.
     post.is_none_or(|post| {
         Type::union(vec![view.narrowed_ty.clone(), post.narrowed_ty.clone()]) != view.narrowed_ty
+            || !post.excluded_literals.is_superset(&view.excluded_literals)
     })
 }
 
@@ -3212,9 +3342,19 @@ impl Inferer<'_> {
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
             // A union of arrays and tuples is one `$Array` at runtime too. It
             // follows the string arm, which takes unions of string literals.
-            Type::Union(_) => iter_ty
-                .array_like_union_element()
-                .map(|element| (element, crate::ForOfKind::Array)),
+            Type::Union(_) => {
+                if let Some(element) = iter_ty.array_like_union_element() {
+                    return Some((element, crate::ForOfKind::Array));
+                }
+                // A union of strings with arrays has no shared representation;
+                // the desugar picks the string's or the array's iterator.
+                let arrays = iter_ty.string_or_array_union_arrays()?;
+                let (element, _) = self.classify_for_of_source(&arrays)?;
+                Some((
+                    Type::union(vec![Type::String, element]),
+                    crate::ForOfKind::Iterable,
+                ))
+            }
             // Exact-name match keeps Iterator<U> on its own desugar path
             // (it declares `next()`, not `iterator()`, so it fails the structural check below).
             Type::InterfaceRef { name, args, .. } if name == "Iterator" && args.len() == 1 => {

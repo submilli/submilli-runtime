@@ -1,6 +1,5 @@
 ---
 source: crates/interpreter/src/parser.rs
-assertion_line: 6993
 expression: ast
 ---
 Ast {
@@ -210,6 +209,7 @@ Ast {
         ),
     ],
     pattern_origins: {},
+    tuple_pattern_sources: {},
     for_of_pattern_bindings: {},
     exported_decls: [],
 }

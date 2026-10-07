@@ -141,6 +141,7 @@ async fn get_ok(http: &Arc<dyn HttpClient>, url: &str) -> Option<Vec<u8>> {
         decompress: false,
         transport_policy: None,
         redirect_guard: None,
+        recorded_as: None,
     };
     let resp = http.send(&req).await.ok()?;
     (resp.status == 200).then_some(resp.body)
@@ -221,6 +222,7 @@ pub async fn register_client(
         decompress: false,
         transport_policy: None,
         redirect_guard: None,
+        recorded_as: None,
     };
     let resp = http
         .send(&req)
@@ -278,6 +280,7 @@ pub async fn exchange_code(
         decompress: false,
         transport_policy: None,
         redirect_guard: None,
+        recorded_as: None,
     };
     let resp = http
         .send(&req)

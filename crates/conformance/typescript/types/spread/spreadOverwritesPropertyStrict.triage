@@ -1,4 +1,3 @@
 line 5, 11, 26 missed: bug SUB-1153 a property a later spread always overwrites
-line 14 extra: bug SUB-1196 (spreading a falsy or nullable value) spreading `c && {…}` or a nullable value is rejected
 line 17 type: by-design spec §2.5 a spread of a union merges its members into one object type with optional fields
 line 26 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type

@@ -1,7 +1,7 @@
 //! Shared emission for raising a catchable `Error`: the native-`throw` tail
 //! used by every wasm throw site (user `throw`, array bounds, `as` cast
-//! mismatch, JSON shape mismatch), plus the `TypeError` raise built on it and
-//! its messages.
+//! mismatch, JSON shape mismatch), plus the `TypeError` and `ReferenceError`
+//! raises built on it and their messages.
 //!
 //! A throw whose message belongs to one subsystem keeps its constructor and
 //! constant there — `bounds::emit_index_oob_throw` does. What lands here is
@@ -34,6 +34,25 @@ pub(crate) fn emit_type_error_throw(
     ctx: &CodegenCtx,
     message: &str,
 ) {
+    emit_builtin_error_throw(emitter, ctx, "TypeError#constructor", message);
+}
+
+/// Raise a `ReferenceError` carrying `message`, under the same interning
+/// contract as [`emit_type_error_throw`].
+pub(crate) fn emit_reference_error_throw(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    message: &str,
+) {
+    emit_builtin_error_throw(emitter, ctx, "ReferenceError#constructor", message);
+}
+
+fn emit_builtin_error_throw(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    constructor: &str,
+    message: &str,
+) {
     if ctx
         .latch(emit_const_string_by_text(emitter, ctx, message))
         .is_none()
@@ -41,8 +60,8 @@ pub(crate) fn emit_type_error_throw(
         return;
     }
     let Some(new_idx) = ctx.require(
-        ctx.symbols.prelude_func_idx("TypeError#constructor"),
-        "TypeError#constructor imported from prelude",
+        ctx.symbols.prelude_func_idx(constructor),
+        "built-in error constructor imported from prelude",
     ) else {
         return;
     };

@@ -26,6 +26,7 @@ fn request(url: String, policy: Option<Arc<HttpTransportPolicy>>) -> HttpRequest
         decompress: false,
         transport_policy: policy,
         redirect_guard: None,
+        recorded_as: None,
     }
 }
 

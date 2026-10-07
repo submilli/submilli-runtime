@@ -265,6 +265,15 @@ fn auth_refusal(audit: &crate::audit::AuditLog, request: &Request, reason: &str)
     audit.emit("auth", fields);
 }
 
+/// The configured token a request presents in `Authorization: Bearer`, if any.
+///
+/// The check the route guard makes, for an embedder that serves its own listener
+/// under the same tokens, as the playground's control listener does: the same
+/// header parsing and the same constant-time digest comparison.
+pub fn authenticate<'a>(tokens: &'a [ApiToken], headers: &HeaderMap) -> Option<&'a ApiToken> {
+    bearer_token(headers).and_then(|presented| token_of(tokens, presented))
+}
+
 fn token_of<'a>(tokens: &'a [ApiToken], presented: &str) -> Option<&'a ApiToken> {
     let presented = digest(presented);
     let mut found = None;
@@ -295,7 +304,7 @@ fn role_of(tokens: &[ApiToken], presented: &str) -> Option<Role> {
 /// The token from `Authorization: Bearer <token>`. Anything else — a second
 /// `Authorization` header, another scheme, an empty or non-ASCII token — is no
 /// token at all, rather than a best-effort guess at which part the caller meant.
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let mut values = headers.get_all(AUTHORIZATION).iter();
     let value = values.next()?;
     if values.next().is_some() {
@@ -386,6 +395,18 @@ mod tests {
         assert_eq!(role_of(&tokens, USER), Some(Role::User));
         assert_eq!(role_of(&tokens, "not-a-configured-token"), None);
         assert_eq!(role_of(&tokens, ""), None);
+    }
+
+    #[test]
+    fn authenticate_names_the_token_a_request_presents() {
+        let tokens = tokens();
+        let admin = authenticate(&tokens, &headers(&[&format!("Bearer {ADMIN}")]));
+        assert_eq!(admin.map(ApiToken::name), Some("ops"));
+        let user = authenticate(&tokens, &headers(&[&format!("bearer {USER}")]));
+        assert_eq!(user.map(ApiToken::role), Some(Role::User));
+        assert!(authenticate(&tokens, &headers(&["Bearer not-a-configured-token"])).is_none());
+        assert!(authenticate(&tokens, &headers(&[ADMIN])).is_none());
+        assert!(authenticate(&tokens, &headers(&[])).is_none());
     }
 
     #[test]

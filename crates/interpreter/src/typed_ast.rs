@@ -741,9 +741,32 @@ pub struct TypedSwitchCase {
     pub span: Span,
 }
 
-/// Non-literals are rejected at typecheck. `span` anchors fallthrough and duplicate-case diagnostics.
+impl TypedSwitchCase {
+    /// The run-time comparisons of the clause's labels that aren't literals, which
+    /// run before any clause body does.
+    pub fn label_comparisons(&self) -> impl Iterator<Item = ExprId> + '_ {
+        self.values.iter().filter_map(|value| match value {
+            TypedSwitchValue::Expr { comparison, .. } => Some(*comparison),
+            _ => None,
+        })
+    }
+}
+
+/// A `case` label. `span` anchors fallthrough and duplicate-case diagnostics.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypedSwitchValue {
+    /// A label that isn't a literal, such as `case one:`, compared at run time.
+    /// Walkers visit `comparison`, which holds `label`.
+    Expr {
+        label: ExprId,
+        /// `discriminant === label`. The discriminant is read from the
+        /// temporary the inferer binds it to, so the label can't re-run it.
+        comparison: ExprId,
+        /// The one value the label can have, when its type is a single literal:
+        /// it then counts toward exhaustiveness as a literal label would.
+        literal: Option<crate::typechecker::infer::narrowing::LiteralValue>,
+        span: Span,
+    },
     String {
         value: String,
         span: Span,
@@ -814,6 +837,13 @@ pub struct TypedAst {
     /// the types they give it, an index signature's value type included.
     pub spread_mask_fields:
         std::collections::BTreeMap<ExprId, std::collections::BTreeMap<String, Type>>,
+    /// For each spread source of an object rest, the names the rest leaves out
+    /// whatever their value.
+    pub spread_omitted_fields:
+        std::collections::BTreeMap<ExprId, std::collections::BTreeSet<String>>,
+    /// The discriminants of the `switch`es without a `default` whose cases the
+    /// typechecker found match every value the discriminant can hold.
+    pub exhaustive_switches: std::collections::BTreeSet<ExprId>,
     /// Module name used for mangling. Defaults to `USER_PACKAGE` (`"main"`).
     pub package_name: String,
     exprs: Vec<TypedExpr>,

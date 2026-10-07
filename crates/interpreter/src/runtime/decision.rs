@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::StoreData;
@@ -30,7 +30,7 @@ use super::security::{AuditDecision, CheckOutcome, SecurityCheck};
 
 /// What the policy decided. `AskHuman` is a denial today (the approval flow is deferred),
 /// kept distinct so a record can say "deferred".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DecisionAction {
     Allow,
@@ -39,14 +39,14 @@ pub enum DecisionAction {
 }
 
 /// A rule located by caller block and zero-based position.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleCitation {
     pub caller: String,
     pub index: usize,
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum DecisionCause {
     /// A rule matched.
@@ -61,7 +61,7 @@ pub enum DecisionCause {
     Unexplained,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind", content = "variable")]
 pub enum FailureReasonRecord {
     FieldMissing,
@@ -70,7 +70,7 @@ pub enum FailureReasonRecord {
 }
 
 /// One comparison that kept a rule's filter from matching.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FailureRecord {
     pub comparison: String,
     pub actual: Option<Value>,
@@ -80,7 +80,7 @@ pub struct FailureRecord {
 }
 
 /// A rule that named the capability but whose filter rejected the call.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NearMissRecord {
     pub rule: RuleCitation,
     pub filter: String,
@@ -96,7 +96,7 @@ pub struct DecisionExplanation {
 }
 
 /// Which seam produced a decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum EntryPath {
     /// A gated standard-library operation.
@@ -115,7 +115,7 @@ pub enum EntryPath {
 }
 
 /// A position in the submitted program.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceLine {
     pub line: u32,
     pub column: Option<u32>,
@@ -196,7 +196,7 @@ pub trait RecordObserver: Send + Sync {
     fn call_finished(&self, _call: &CallRecord) {}
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionRecord {
     pub call_index: u64,
     pub seq: u64,

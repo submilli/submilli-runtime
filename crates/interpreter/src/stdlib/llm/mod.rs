@@ -258,11 +258,7 @@ async fn dispatch(
 ) -> wasmtime::Result<Vec<LlmOutcome>> {
     let ticket = gate(caller, model, prompts.len())?;
     record_payload(&*caller, ticket, Side::Request, || {
-        let body = serde_json::to_vec(&prompts).unwrap_or_default();
-        let bytes = sent_bytes(&prompts, schema.as_deref());
-        Payload::meta(serde_json::json!({ "op": op, "model": model, "schema": schema }))
-            .with_owned_body(body)
-            .with_size(bytes)
+        request_payload(op, model, &prompts, schema.as_deref())
     });
 
     let budget = budget(caller);
@@ -303,7 +299,20 @@ async fn dispatch(
             record_payload(&*caller, ticket, Side::Response, || {
                 let texts: Vec<_> = outcomes.iter().map(|outcome| &outcome.text).collect();
                 let ok: Vec<_> = outcomes.iter().map(|outcome| outcome.ok).collect();
-                Payload::meta(serde_json::json!({ "ok": ok }))
+                let failures: Vec<_> = outcomes
+                    .iter()
+                    .map(|outcome| outcome.failure.as_ref().map(failure_record))
+                    .collect();
+                let usage: Vec<_> = outcomes
+                    .iter()
+                    .map(|outcome| {
+                        serde_json::json!({
+                            "input_tokens": outcome.input_tokens,
+                            "output_tokens": outcome.output_tokens,
+                        })
+                    })
+                    .collect();
+                Payload::meta(serde_json::json!({ "ok": ok, "failures": failures, "usage": usage }))
                     .with_owned_body(serde_json::to_vec(&texts).unwrap_or_default())
                     .with_size(received as u64)
             });
@@ -317,6 +326,9 @@ async fn dispatch(
             if let Some(budget) = budget.as_deref() {
                 budget.release(reservation);
             }
+            record_payload(&*caller, ticket, Side::Response, || {
+                Payload::meta(serde_json::json!({ "call_error": call_error_record(&error) }))
+            });
             if error.is_budget_exceeded()
                 && let Err(denial) =
                     audit_quota_denial(caller, ticket, CAPABILITY, model, QUOTA_REASON)
@@ -326,6 +338,66 @@ async fn dispatch(
             Err(throw(op, error))
         }
     }
+}
+
+/// A call's request as the recorder keeps it.
+fn request_payload(
+    op: &str,
+    model: &str,
+    prompts: &[String],
+    schema: Option<&str>,
+) -> Payload<'static> {
+    let body = serde_json::to_vec(prompts).unwrap_or_default();
+    Payload::meta(serde_json::json!({ "op": op, "model": model, "schema": schema }))
+        .with_owned_body(body)
+        .with_size(sent_bytes(prompts, schema))
+}
+
+/// The ops a request is recorded under, `call` and `batch`. The provider is not told
+/// which one a request came from.
+pub const OPS: [&str; 2] = ["call", "batch"];
+
+/// The digest the call log records for a request of this `op`.
+pub fn request_digest(op: &str, model: &str, prompts: &[String], schema: Option<&str>) -> String {
+    request_payload(op, model, prompts, schema).digest()
+}
+
+/// A whole-call failure as the call log keeps it: a stable kind, the model, and what a
+/// connector needs to raise the same error again. Never a prompt or a provider body.
+fn call_error_record(error: &LlmCallError) -> serde_json::Value {
+    let model = error.model();
+    match error {
+        LlmCallError::NotConfigured { .. } => {
+            serde_json::json!({ "kind": "not-configured", "model": model })
+        }
+        LlmCallError::UnknownModel { available, .. } => {
+            serde_json::json!({ "kind": "unknown-model", "model": model, "available": available })
+        }
+        LlmCallError::BudgetExceeded { .. } => {
+            serde_json::json!({ "kind": "budget-exceeded", "model": model })
+        }
+        LlmCallError::PromptBoundsExceeded { .. } => {
+            serde_json::json!({ "kind": "prompt-bounds-exceeded", "model": model })
+        }
+        LlmCallError::Unauthorized { .. } => {
+            serde_json::json!({ "kind": "unauthorized", "model": model })
+        }
+        LlmCallError::Transport { detail, .. } => {
+            serde_json::json!({ "kind": "transport", "model": model, "detail": detail })
+        }
+    }
+}
+
+/// An outcome's failure as the call log keeps it: the closed-set kind and the degraded
+/// message, which never echoes a prompt or a provider body.
+fn failure_record(failure: &crate::runtime::llm::LlmFailure) -> serde_json::Value {
+    serde_json::json!({
+        "kind": if failure.local { "local" } else { failure.reason.as_str() },
+        "message": failure.message,
+        "retryable": failure.retryable,
+        "status": failure.status,
+        "finish_reason": failure.finish_reason,
+    })
 }
 
 /// The bytes a dispatch sends: its prompts and schema.

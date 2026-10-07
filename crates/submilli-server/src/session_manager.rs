@@ -53,6 +53,14 @@ use crate::volumes::VolumeRegistry;
 /// concrete reqwest type.
 pub type HttpClientFactory = Arc<dyn Fn() -> Arc<dyn HttpClient> + Send + Sync>;
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ReaperStartError {
+    #[error("reaper interval must be nonzero")]
+    ZeroInterval,
+    #[error("reaper interval exceeds the representable timer deadline")]
+    DeadlineOverflow,
+}
+
 #[derive(Debug)]
 pub enum BootError {
     Sessions(StoreError),
@@ -439,6 +447,25 @@ impl SessionManager {
         self.llm.build()
     }
 
+    /// A per-execution token budget with its own aggregate: it holds a run to the
+    /// per-execution ceiling without charging the server-wide one, for a run whose usage
+    /// is not new spend (a test run answered from a recording).
+    pub(crate) fn private_llm_budget(&self) -> Arc<ExecutionTokenBudget> {
+        Arc::new(ExecutionTokenBudget::new(
+            self.llm.limits,
+            SharedTokenBudget::new(u64::MAX),
+        ))
+    }
+
+    /// An embedding budget with its own aggregate, for a run that spends nothing new
+    /// ([`Self::private_llm_budget`]).
+    pub(crate) fn private_embedding_budget(&self) -> Arc<EmbeddingTokenBudget> {
+        Arc::new(EmbeddingTokenBudget::new(
+            self.embedding.limits,
+            SharedTokenBudget::new(u64::MAX),
+        ))
+    }
+
     /// The fan-out bound one `batch` dispatches at (KTD4).
     pub fn llm_max_concurrency(&self) -> usize {
         self.llm.max_concurrency
@@ -640,7 +667,7 @@ impl SessionManager {
     }
 
     /// The declared volume table, for registration checks and listings.
-    pub(crate) fn volumes(&self) -> &VolumeTable {
+    pub(crate) fn volumes(&self) -> VolumeTable {
         self.volumes.table()
     }
 
@@ -815,6 +842,35 @@ impl SessionManager {
     ) -> Result<(Vfs, VfsInfo), SessionError> {
         let (vfs, info) = self.session_vfs_with_variables(session_id, blueprint, variables)?;
         Ok((attach_limits(vfs, blueprint, &self.volumes).await?, info))
+    }
+
+    /// The directory a `per_session` session's files live in, when it has one.
+    pub(crate) fn session_vfs_root(&self, session_id: &str) -> Option<PathBuf> {
+        self.lock().sessions.get(session_id)?.vfs_root.clone()
+    }
+
+    /// [`vfs_for_execute_with_variables`](Self::vfs_for_execute_with_variables) over roots
+    /// the caller supplies instead of a session's own: `session_root` for a `per_session`
+    /// workspace, and `volumes` to resolve named volumes through. A test run's throwaway
+    /// copies are opened this way.
+    pub async fn vfs_over_roots(
+        &self,
+        blueprint: &Blueprint,
+        variables: &VarBindings,
+        session_root: Option<&Path>,
+        volumes: &VolumeRegistry,
+    ) -> Result<(Vfs, VfsInfo), SessionError> {
+        let vfs = build_vfs(
+            blueprint,
+            variables,
+            session_root,
+            self.ephemeral_root.as_deref(),
+            volumes,
+        )?;
+        Ok((
+            attach_limits(vfs, blueprint, volumes).await?,
+            vfs_info(blueprint),
+        ))
     }
 
     /// Mark execute activity, keeping the session alive and resetting idle.
@@ -1029,26 +1085,76 @@ impl SessionManager {
 
     /// Spawn a background reaper if a tokio runtime is available. The sweep
     /// interval is coarse; expiry is wall-clock, so a session is wiped within
-    /// one interval of its deadline.
-    pub fn spawn_reaper(self: &Arc<Self>, interval: Duration) {
+    /// one interval of its deadline. Without a runtime this is a no-op. With a
+    /// runtime, invalid intervals are rejected even if the reaper already runs.
+    ///
+    /// # Panics
+    /// An entered runtime must have its time driver enabled (via `enable_time`
+    /// or `enable_all`). Timer construction checks that contract before startup
+    /// is published; the timer remains attached to that same runtime afterward.
+    pub fn spawn_reaper(self: &Arc<Self>, interval: Duration) -> Result<(), ReaperStartError> {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
+            return Ok(());
         };
+        if interval.is_zero() {
+            return Err(ReaperStartError::ZeroInterval);
+        }
+        let deadline = tokio::time::Instant::now();
+        Self::next_reaper_deadline(deadline, interval)?;
+        if self.reaper_started.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        // The caller supplies a timer-enabled runtime under the documented API
+        // contract. No callbacks or runtime changes intervene before spawning.
+        let timer = tokio::time::sleep_until(deadline);
         if self
             .reaper_started
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            return;
+            return Ok(());
         }
         let manager = Arc::clone(self);
-        handle.spawn(async move {
-            let mut ticker = tokio::time::interval(interval);
-            loop {
-                ticker.tick().await;
-                manager.reap_now().await;
+        handle.spawn(manager.run_reaper(interval, deadline, timer));
+        Ok(())
+    }
+
+    async fn run_reaper(
+        self: Arc<Self>,
+        interval: Duration,
+        mut deadline: tokio::time::Instant,
+        timer: tokio::time::Sleep,
+    ) {
+        tokio::pin!(timer);
+        loop {
+            timer.as_mut().await;
+            self.reap_now().await;
+            // Advance from the scheduled tick, preserving burst catch-up without
+            // Tokio Interval's unchecked addition on its missed-tick path.
+            match Self::next_reaper_deadline(deadline, interval) {
+                Ok(next) => deadline = next,
+                Err(error) => {
+                    tracing::error!(%error, "session reaper stopped");
+                    self.reaper_started.store(false, Ordering::Release);
+                    return;
+                }
             }
-        });
+            timer.as_mut().reset(deadline);
+        }
+    }
+
+    fn next_reaper_deadline(
+        deadline: tokio::time::Instant,
+        interval: Duration,
+    ) -> Result<tokio::time::Instant, ReaperStartError> {
+        let next = deadline
+            .checked_add(interval)
+            .ok_or(ReaperStartError::DeadlineOverflow)?;
+        // Tokio rounds registration deadlines up by 999,999 ns. Keep one
+        // millisecond of headroom so Sleep::reset cannot overflow internally.
+        next.checked_add(Duration::from_millis(1))
+            .ok_or(ReaperStartError::DeadlineOverflow)?;
+        Ok(next)
     }
 
     /// Write a record through to the durable store. A failure is logged, not
@@ -1359,6 +1465,203 @@ mod tests {
 
     const TINY: Duration = Duration::from_millis(1);
     const HOUR: Duration = Duration::from_secs(3600);
+
+    #[tokio::test]
+    async fn reaper_rejects_invalid_intervals_then_starts_once() {
+        let (manager, _root) = manager();
+        let manager = Arc::new(manager);
+        assert_eq!(
+            manager.spawn_reaper(Duration::ZERO),
+            Err(ReaperStartError::ZeroInterval)
+        );
+        assert_eq!(
+            manager.spawn_reaper(Duration::MAX),
+            Err(ReaperStartError::DeadlineOverflow)
+        );
+        assert!(!manager.reaper_started.load(Ordering::Acquire));
+        assert_eq!(Arc::strong_count(&manager), 1);
+        manager.spawn_reaper(HOUR).expect("healthy startup");
+        assert!(manager.reaper_started.load(Ordering::Acquire));
+        manager.spawn_reaper(HOUR).expect("repeat startup");
+        assert_eq!(Arc::strong_count(&manager), 2);
+        assert_eq!(
+            manager.spawn_reaper(Duration::ZERO),
+            Err(ReaperStartError::ZeroInterval)
+        );
+    }
+
+    #[test]
+    fn reaper_without_runtime_leaves_startup_available() {
+        let (manager, _root) = manager();
+        let manager = Arc::new(manager);
+        manager.spawn_reaper(HOUR).expect("no runtime is a no-op");
+        assert!(!manager.reaper_started.load(Ordering::Acquire));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("timer runtime");
+        let _entered = runtime.enter();
+        manager.spawn_reaper(HOUR).expect("healthy startup");
+        assert!(manager.reaper_started.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn reaper_timer_contract_is_checked_before_startup_state() {
+        let (manager, _root) = manager();
+        let manager = Arc::new(manager);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime without timers");
+        {
+            let _entered = runtime.enter();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                manager.spawn_reaper(HOUR)
+            }));
+            assert!(result.is_err(), "violating the timer contract may panic");
+        }
+        assert!(!manager.reaper_started.load(Ordering::Acquire));
+        assert_eq!(Arc::strong_count(&manager), 1);
+        let healthy_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("timer runtime");
+        let _entered = healthy_runtime.enter();
+        manager.spawn_reaper(HOUR).expect("healthy follow-up");
+        assert!(manager.reaper_started.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn reaper_deadlines_preserve_burst_catch_up_and_check_overflow() {
+        let overdue = tokio::time::Instant::now()
+            .checked_sub(HOUR)
+            .expect("past deadline");
+        let next = SessionManager::next_reaper_deadline(overdue, TINY).unwrap();
+        assert_eq!(next.duration_since(overdue), TINY);
+        assert!(next < tokio::time::Instant::now());
+        assert_eq!(
+            SessionManager::next_reaper_deadline(overdue, Duration::MAX),
+            Err(ReaperStartError::DeadlineOverflow)
+        );
+    }
+
+    #[test]
+    fn reaper_deadlines_reserve_timer_rounding_headroom() {
+        let start = tokio::time::Instant::now();
+        let duration = |nanos: u128| {
+            Duration::new(
+                (nanos / 1_000_000_000).try_into().unwrap(),
+                (nanos % 1_000_000_000).try_into().unwrap(),
+            )
+        };
+        // Locate the platform boundary rather than assuming Instant's range is
+        // identical on macOS, Linux and Windows.
+        let mut valid = 0;
+        let mut invalid = Duration::MAX.as_nanos();
+        assert!(start.checked_add(duration(invalid)).is_none());
+        while invalid - valid > 1 {
+            let midpoint = valid + (invalid - valid) / 2;
+            if start.checked_add(duration(midpoint)).is_some() {
+                valid = midpoint;
+            } else {
+                invalid = midpoint;
+            }
+        }
+        let last = start.checked_add(duration(valid)).unwrap();
+        let previous = last.checked_sub(TINY).unwrap();
+        assert_eq!(previous.checked_add(TINY), Some(last));
+        assert_eq!(
+            SessionManager::next_reaper_deadline(previous, TINY),
+            Err(ReaperStartError::DeadlineOverflow)
+        );
+        let safe = previous.checked_sub(TINY).unwrap();
+        assert_eq!(
+            SessionManager::next_reaper_deadline(safe, TINY),
+            Ok(previous)
+        );
+    }
+
+    #[tokio::test]
+    async fn reaper_deadline_overflow_clears_startup_state() {
+        let (manager, _root) = manager();
+        let manager = Arc::new(manager);
+        manager.reaper_started.store(true, Ordering::Release);
+        let deadline = tokio::time::Instant::now();
+        // Inject a schedule rejected by the public API to exercise the task's
+        // later-overflow branch without advancing the platform clock centuries.
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            Arc::clone(&manager).run_reaper(
+                Duration::MAX,
+                deadline,
+                tokio::time::sleep_until(deadline),
+            ),
+        )
+        .await
+        .expect("overflow must stop the task");
+        assert!(!manager.reaper_started.load(Ordering::Acquire));
+        manager.spawn_reaper(HOUR).expect("healthy follow-up");
+    }
+
+    #[tokio::test]
+    async fn reaper_sweeps_immediately_and_on_later_ticks() {
+        let (mgr, _root) = manager();
+        let mgr = Arc::new(mgr);
+        let blueprint = per_session(HOUR);
+        let first = mgr
+            .create(&blueprint, Arc::new(VarBindings::new()), no_secrets())
+            .await
+            .unwrap();
+        mgr.lock().sessions.get_mut(&first).unwrap().last_activity = UNIX_EPOCH;
+        // A long period demonstrates that the first sweep does not wait for it.
+        mgr.spawn_reaper(HOUR).expect("start reaper");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while mgr.contains(&first) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("immediate sweep");
+
+        let (later_manager, _later_root) = manager();
+        let later_manager = Arc::new(later_manager);
+        let initial = later_manager
+            .create(&blueprint, Arc::new(VarBindings::new()), no_secrets())
+            .await
+            .unwrap();
+        later_manager
+            .lock()
+            .sessions
+            .get_mut(&initial)
+            .unwrap()
+            .last_activity = UNIX_EPOCH;
+        later_manager
+            .spawn_reaper(TINY)
+            .expect("start periodic reaper");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while later_manager.contains(&initial) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("initial sweep before adding another session");
+        let later = later_manager
+            .create(&blueprint, Arc::new(VarBindings::new()), no_secrets())
+            .await
+            .unwrap();
+        later_manager
+            .lock()
+            .sessions
+            .get_mut(&later)
+            .unwrap()
+            .last_activity = UNIX_EPOCH;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while later_manager.contains(&later) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("subsequent sweep");
+    }
 
     /// A `per_session` mount failure is the one path that still reached the client with
     /// the server's own storage layout in it — the volume paths were redacted, this one
@@ -2272,6 +2575,38 @@ mod tests {
             mgr.llm_budget().used(),
             1_000,
             "dropping one execution must release its reservation and no one else's"
+        );
+    }
+
+    #[test]
+    fn a_private_budget_holds_a_run_without_charging_the_server_aggregate() {
+        let (mgr, _root) = manager();
+        let private = mgr.private_llm_budget();
+        private.reserve("m", 500).expect("reserves");
+        assert_eq!(private.used(), 500);
+        assert_eq!(mgr.llm_budget().used(), 0, "the aggregate is untouched");
+        let shared = mgr.llm_budget_for_execute();
+        shared.reserve("m", 500).expect("reserves");
+        assert_eq!(mgr.llm_budget().used(), 500, "a shared one is charged");
+    }
+
+    #[test]
+    fn a_private_embedding_budget_does_not_charge_the_server_aggregate() {
+        let (mgr, _root) = manager();
+        let private = mgr.private_embedding_budget();
+        private.reserve("m", 500).expect("reserves");
+        assert_eq!(private.used(), 500);
+        assert_eq!(
+            mgr.embedding_budget().used(),
+            0,
+            "the aggregate is untouched"
+        );
+        let shared = mgr.embedding_budget_for_execute();
+        shared.reserve("m", 500).expect("reserves");
+        assert_eq!(
+            mgr.embedding_budget().used(),
+            500,
+            "a shared one is charged"
         );
     }
 

@@ -10,10 +10,11 @@ use wasmtime::{
 };
 
 use super::{
-    RangeError, Str, at_index, cmp, code_point, concat, ends_with_window, from_char_code,
-    from_code_point, includes, index_of, is_well_formed, last_index_of, normalize, pad_end,
-    pad_start, repeat, slice_range, starts_with_window, substring_range, to_lower_case,
-    to_upper_case, to_well_formed, trim, trim_end, trim_start, unit_index,
+    AdmittedStr, RangeError, Str, at_index, cmp, code_point, concat, concat_length,
+    ends_with_window, from_char_code, from_code_point, includes, index_of, is_well_formed,
+    last_index_of, normalize, pad_end, pad_length, pad_start, repeat, repeat_length, slice_range,
+    starts_with_window, substring_range, to_lower_case, to_upper_case, to_well_formed, trim,
+    trim_end, trim_start, unit_index,
 };
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
@@ -23,6 +24,7 @@ use crate::runtime::host::{
     write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
+use crate::runtime::limits::TenantLimits;
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -232,10 +234,19 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [s.clone(), s.clone()], [s.clone()]),
         true,
         move |caller, params, results| {
-            let recv = concat_abi.read(caller, abi_arg(params, 0)?, "string_concat")?;
-            let other = concat_abi.read(caller, abi_arg(params, 1)?, "string_concat")?;
-            *abi_result(results, 0)? =
-                concat_abi.write(caller, recv.vtable, &concat(&recv.value, &other.value))?;
+            let recv = concat_abi.read_admitted(caller, abi_arg(params, 0)?, "string_concat")?;
+            let other = concat_abi.read_admitted(caller, abi_arg(params, 1)?, "string_concat")?;
+            fuel::charge(
+                &mut *caller,
+                fuel::COPY,
+                concat_length(recv.value.as_str().len(), other.value.as_str().len())? as u64,
+            )?;
+            let out = concat(
+                recv.value.as_str(),
+                other.value.as_str(),
+                &caller.data().tenant_limits,
+            )?;
+            *abi_result(results, 0)? = concat_abi.write_precharged(caller, recv.vtable, &out)?;
             Ok(())
         },
     )?;
@@ -616,7 +627,7 @@ fn reg_str_num_to_str_fallible(
     engine: &wasmtime::Engine,
     abi: &StringAbi,
     name: &'static str,
-    op: fn(&Str, f64) -> super::Result<Str>,
+    op: fn(&Str, f64, &TenantLimits) -> wasmtime::Result<AdmittedStr>,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
     let abi = abi.clone();
@@ -627,10 +638,15 @@ fn reg_str_num_to_str_fallible(
         FuncType::new(engine, [s.clone(), ValType::F64], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
+            let recv = abi.read_admitted(caller, abi_arg(params, 0)?, name)?;
             let arg = number(abi_arg(params, 1)?, name)?;
-            let out = op(&recv.value, arg).map_err(throw)?;
-            *abi_result(results, 0)? = abi.write(caller, recv.vtable, &out)?;
+            fuel::charge(
+                &mut *caller,
+                fuel::COPY,
+                repeat_length(recv.value.as_str().len(), arg).map_err(throw)? as u64,
+            )?;
+            let out = op(recv.value.as_str(), arg, &caller.data().tenant_limits)?;
+            *abi_result(results, 0)? = abi.write_precharged(caller, recv.vtable, &out)?;
             Ok(())
         },
     )
@@ -787,7 +803,7 @@ fn reg_str_str_to_str(
     engine: &wasmtime::Engine,
     abi: &StringAbi,
     name: &'static str,
-    op: fn(&Str, &Str) -> Str,
+    op: fn(&Str, &Str, &TenantLimits) -> wasmtime::Result<AdmittedStr>,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
     let abi = abi.clone();
@@ -798,10 +814,19 @@ fn reg_str_str_to_str(
         FuncType::new(engine, [s.clone(), s.clone()], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
-            let other = abi.read(caller, abi_arg(params, 1)?, name)?;
-            *abi_result(results, 0)? =
-                abi.write(caller, recv.vtable, &op(&recv.value, &other.value))?;
+            let recv = abi.read_admitted(caller, abi_arg(params, 0)?, name)?;
+            let other = abi.read_admitted(caller, abi_arg(params, 1)?, name)?;
+            fuel::charge(
+                &mut *caller,
+                fuel::COPY,
+                concat_length(recv.value.as_str().len(), other.value.as_str().len())? as u64,
+            )?;
+            let out = op(
+                recv.value.as_str(),
+                other.value.as_str(),
+                &caller.data().tenant_limits,
+            )?;
+            *abi_result(results, 0)? = abi.write_precharged(caller, recv.vtable, &out)?;
             Ok(())
         },
     )
@@ -813,7 +838,7 @@ fn reg_str_num_str_to_str(
     engine: &wasmtime::Engine,
     abi: &StringAbi,
     name: &'static str,
-    op: fn(&Str, f64, &Str) -> super::Result<Str>,
+    op: fn(&Str, f64, &Str, &TenantLimits) -> wasmtime::Result<AdmittedStr>,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
     let abi = abi.clone();
@@ -824,11 +849,22 @@ fn reg_str_num_str_to_str(
         FuncType::new(engine, [s.clone(), ValType::F64, s.clone()], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read(caller, abi_arg(params, 0)?, name)?;
+            let recv = abi.read_admitted(caller, abi_arg(params, 0)?, name)?;
             let target = number(abi_arg(params, 1)?, name)?;
-            let pad = abi.read(caller, abi_arg(params, 2)?, name)?;
-            let out = op(&recv.value, target, &pad.value).map_err(throw)?;
-            *abi_result(results, 0)? = abi.write(caller, recv.vtable, &out)?;
+            let pad = abi.read_admitted(caller, abi_arg(params, 2)?, name)?;
+            fuel::charge(
+                &mut *caller,
+                fuel::COPY,
+                pad_length(recv.value.as_str().len(), target, pad.value.as_str().len())
+                    .map_err(throw)? as u64,
+            )?;
+            let out = op(
+                recv.value.as_str(),
+                target,
+                pad.value.as_str(),
+                &caller.data().tenant_limits,
+            )?;
+            *abi_result(results, 0)? = abi.write_precharged(caller, recv.vtable, &out)?;
             Ok(())
         },
     )
@@ -963,6 +999,11 @@ struct Receiver {
     value: Str,
 }
 
+struct AdmittedReceiver {
+    vtable: Val,
+    value: AdmittedStr,
+}
+
 /// A `$string` receiver kept where it is: its payload array and length, for
 /// accessors that read a few units or a range rather than the whole string.
 struct Payload {
@@ -1009,6 +1050,24 @@ impl StringAbi {
         })
     }
 
+    fn read_admitted(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        val: &Val,
+        name: &str,
+    ) -> wasmtime::Result<AdmittedReceiver> {
+        let payload = self.payload(caller, val, name)?;
+        let native = super::admit_units(&caller.data().tenant_limits, payload.len)?;
+        let value = payload.read_all(caller, name)?;
+        Ok(AdmittedReceiver {
+            vtable: payload.vtable,
+            value: AdmittedStr {
+                value,
+                _native: native,
+            },
+        })
+    }
+
     fn payload(
         &self,
         caller: &mut Caller<'_, StoreData>,
@@ -1044,6 +1103,26 @@ impl StringAbi {
         s: &Str,
     ) -> wasmtime::Result<Val> {
         fuel::charge(&mut *caller, fuel::COPY, s.units().len() as u64)?;
+        self.write_units(caller, vtable, s)
+    }
+
+    /// Builder wrappers charge output fuel before allocating native output.
+    /// The guarded string remains admitted throughout the additional GC copy.
+    fn write_precharged(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        vtable: Val,
+        s: &AdmittedStr,
+    ) -> wasmtime::Result<Val> {
+        self.write_units(caller, vtable, s.as_str())
+    }
+
+    fn write_units(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        vtable: Val,
+        s: &Str,
+    ) -> wasmtime::Result<Val> {
         let pre = ArrayRefPre::new(&mut *caller, self.payload_ty.clone());
         let payload = ArrayRef::new_from_i16_slice(&mut *caller, &pre, s.units())?;
         let pre = StructRefPre::new(&mut *caller, self.string_ty.clone());

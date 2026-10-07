@@ -26,9 +26,9 @@ use toml::Spanned;
 
 pub use artifact::{
     ARTIFACT_SCHEMA_VERSION, Artifact, ArtifactDependency, ArtifactError, ArtifactMetadata,
-    ArtifactSource, GithubSource, PackageSource, read_package_artifact, write_capabilities_file,
-    write_package_artifact, write_package_artifact_with_docs,
-    write_package_artifact_with_docs_and_sources,
+    ArtifactSource, GithubSource, InstalledSources, PackageSource, read_installed_sources,
+    read_package_artifact, write_capabilities_file, write_package_artifact,
+    write_package_artifact_with_docs, write_package_artifact_with_docs_and_sources,
 };
 pub use capabilities::{
     CapabilitySchema, ProvidedCapability, ProvidedField, RequiredCapability,
@@ -37,7 +37,7 @@ pub use capabilities::{
 pub use doc_examples::{
     DocExample, compile_check_doc_example, compile_doc_example_warnings, extract_doc_examples,
 };
-pub use driver::{BuiltPackage, DriverError, build_packages, install_packages};
+pub use driver::{BuiltPackage, DriverError, build_packages, install_packages, package_sources};
 pub use install::{
     InstallConflict, InstallError, InstallPreparation, InstallReport, InstalledPackage,
     install_from_dir, install_plan,

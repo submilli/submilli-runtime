@@ -9,6 +9,7 @@ pub mod http;
 pub mod install;
 pub mod local;
 pub mod mcp;
+pub mod playground;
 pub mod run;
 pub mod search;
 pub mod secret;

@@ -288,6 +288,19 @@ pub(super) fn type_admits_null(ty: &Type, types: TypeResolver<'_>) -> bool {
     walk(ty, types, &mut BTreeSet::new())
 }
 
+/// Whether a value of `ty` may be `null`. Unlike `type_admits_null`, a type
+/// parameter counts, since a caller may instantiate it with `null`.
+fn may_hold_null(ty: &Type, types: TypeResolver<'_>) -> bool {
+    fn has_type_param(ty: &Type) -> bool {
+        match ty.peel() {
+            Type::TypeVar(_) | Type::GenericParam { .. } => true,
+            Type::Union(members) => members.iter().any(has_type_param),
+            _ => false,
+        }
+    }
+    type_admits_null(ty, types) || has_type_param(ty)
+}
+
 /// What to tell someone who wrote `?.` on a namespace when there is no fix to
 /// spell: an index step has none, since index signatures are out of scope and
 /// `Number[…]` would not compile either.
@@ -599,7 +612,12 @@ impl Inferer<'_> {
                 return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
             }
             ExprKind::ObjectLiteral { members } => {
-                self.infer_object_literal(expr_id, members, expected, span)
+                self.infer_object_literal_expr(expr_id, members, expected, span)
+            }
+            ExprKind::ArrayLiteral { elements }
+                if expected.is_none() && self.ast.tuple_pattern_sources.contains(&expr_id) =>
+            {
+                self.infer_pattern_tuple_literal(expr_id, elements, span)
             }
             ExprKind::ArrayLiteral { elements } => {
                 self.infer_array_literal(expr_id, elements, expected, span)
@@ -1256,13 +1274,13 @@ impl Inferer<'_> {
                         Type::Error
                     }
                     _ => {
-                        if let Some(ty) = super::stmt::compound_arith_result(op, &lt, &rt) {
+                        if let Some(ty) = super::stmt::binary_arith_result(op, &lt, &rt) {
                             ty
                         } else {
                             let culprit = self.nullable_binary_culprit(
                                 (typed_lhs, &lt),
                                 (typed_rhs, &rt),
-                                |l, r| super::stmt::compound_arith_result(op, l, r).is_some(),
+                                |l, r| super::stmt::binary_arith_result(op, l, r).is_some(),
                             );
                             self.error_with_narrowing_hint(
                                 span,
@@ -1361,6 +1379,9 @@ impl Inferer<'_> {
                             lhs_operand.label, rhs_operand.label
                         ),
                     );
+                }
+                if self.is_global_nan(typed_lhs)? || self.is_global_nan(typed_rhs)? {
+                    self.error_nan_comparison(op, span);
                 }
                 // `void` has no runtime value to compare, and the comparison
                 // otherwise typechecks clean and panics in codegen.
@@ -4618,7 +4639,7 @@ impl Inferer<'_> {
 
     /// Wrap an already-typed interpolation expression in a
     /// `MethodCall { name: "toString" }` unless its type is already
-    /// `Type::String`. Uses the exact valid-types allowlist /
+    /// `Type::String`; a `never` value converts as `"" + value`. Uses the exact valid-types allowlist /
     /// diagnostic shape as the `String(x)` coercion call, so `String(x)` and
     /// `${x}` route through the same dispatch path at codegen time.
     ///
@@ -4637,16 +4658,22 @@ impl Inferer<'_> {
         substitution_span: Span,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let peeled = ty.primitive_behavior();
-        // A `never` value is never read: the code holding it doesn't run.
-        if matches!(peeled, Type::String | Type::StringLiteral(_) | Type::Never) {
+        if matches!(peeled, Type::String | Type::StringLiteral(_)) {
             return Ok(expr_id);
+        }
+        // A `never` value has no `toString` to call, yet a read of a `never[]`
+        // an alias filled holds a value.
+        if matches!(peeled, Type::Never) {
+            return self.concatenated_onto_empty_string(expr_id, substitution_span);
         }
         let method_name = crate::Ident {
             name: "toString".to_string(),
             span: expr_span,
         };
         // A union of arrays answers `toString` as an array, through its joined view.
-        if !has_to_string(peeled) && !peeled.is_array_like_union() {
+        let converts = (has_to_string(peeled) || peeled.is_array_like_union())
+            && !self.is_static_interface_value(peeled);
+        if !converts {
             let nullable = matches!(peeled, Type::Null)
                 || matches!(
                     peeled,
@@ -4735,6 +4762,29 @@ impl Inferer<'_> {
                 },
             })
             .map_err(crate::typechecker::arena_failure)
+    }
+
+    /// `"" + value`, the string `value` converts to.
+    fn concatenated_onto_empty_string(
+        &mut self,
+        value: ExprId,
+        span: Span,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+        let empty =
+            self.push_synthetic_expr(TypedExprKind::String(String::new()), Type::String, span)?;
+        let kind = TypedExprKind::Binary {
+            op: BinOp::Add,
+            lhs: empty,
+            rhs: value,
+        };
+        self.push_synthetic_expr(kind, Type::String, span)
+    }
+
+    /// A static-dispatch interface's value is an inert null, so it has no
+    /// `toString` to call.
+    fn is_static_interface_value(&self, ty: &Type) -> bool {
+        matches!(ty, Type::InterfaceRef { mangled, name, .. }
+            if self.resolver().is_static_interface(mangled, name))
     }
 
     /// The value of an object literal's field when it is spelled as a literal.
@@ -5004,7 +5054,10 @@ impl Inferer<'_> {
                 return Ok(members.get(idx.0 as usize));
             }
         }
-        if has_spread {
+        // A member with an index signature takes any names, so the names alone
+        // can't choose between it and another member: `{ a: "on" }` may suit
+        // `{ [k: string]: string }` though `{ a: number }` names `a`.
+        if has_spread || self.has_index_signature_member(members) {
             return Ok(None);
         }
 
@@ -5039,6 +5092,29 @@ impl Inferer<'_> {
             }
         }
         Ok(selected)
+    }
+
+    /// An object literal, with a lone spread of a union retyped to `expected`
+    /// when each of its alternatives fits (see `spread_as_its_alternatives`).
+    fn infer_object_literal_expr(
+        &mut self,
+        literal: ExprId,
+        members: Vec<crate::ObjectLiteralMember>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let lone_spread = matches!(
+            members.as_slice(),
+            [crate::ObjectLiteralMember::Spread { .. }]
+        );
+        let errors_before = self.error_count();
+        let (kind, ty) = self.infer_object_literal(literal, members, expected, span)?;
+        match expected {
+            Some(expected) if lone_spread && self.error_count() == errors_before => {
+                self.spread_as_its_alternatives(kind, ty, expected, span)
+            }
+            _ => Ok((kind, ty)),
+        }
     }
 
     fn infer_object_literal(
@@ -5076,10 +5152,16 @@ impl Inferer<'_> {
         // (`http.download(url, path, { overwrite: true })` against
         // `options: DownloadOptions | null`) the same way it flows
         // into a non-nullable interface param.
+        let dictionary_hint = match peeled {
+            Some(Type::Union(union_members)) => self.dictionary_union_hint(union_members, &members),
+            _ => None,
+        };
         let peeled = match peeled {
             Some(Type::Union(union_members)) => {
                 if let Some(variant) = self.select_union_variant(union_members, &members)? {
                     Some(variant.peel())
+                } else if let Some(hint) = &dictionary_hint {
+                    Some(hint)
                 } else {
                     let mut shape_match: Option<&Type> = None;
                     for m in union_members {
@@ -5591,6 +5673,125 @@ impl Inferer<'_> {
         ))
     }
 
+    /// The hint an object literal takes against a union with a member that has
+    /// an index signature, which no field name can rule out: each field the
+    /// literal writes is hinted with every type a member gives that name. The
+    /// literal is then checked against the union itself. `None` when no member
+    /// has an index signature.
+    fn dictionary_union_hint(
+        &self,
+        members: &[Type],
+        literal: &[crate::ObjectLiteralMember],
+    ) -> Option<Type> {
+        if !self.has_index_signature_member(members) {
+            return None;
+        }
+        let shapes: Vec<(ObjectFields, Option<Type>)> = members
+            .iter()
+            .filter(|member| !matches!(member.peel(), Type::Null))
+            .map(|member| {
+                let index = self
+                    .resolver()
+                    .index_signature(member)
+                    .map(|index| *index.value);
+                (self.member_shape(member).unwrap_or_default(), index)
+            })
+            .collect();
+        let fields = literal
+            .iter()
+            .filter_map(|member| match member {
+                crate::ObjectLiteralMember::Field(field) => Some(field.name.name.as_str()),
+                _ => None,
+            })
+            .filter_map(|name| {
+                let types: Vec<Type> = shapes
+                    .iter()
+                    .filter_map(|(fields, index)| {
+                        fields
+                            .get(name)
+                            .map(|field| field.ty.clone())
+                            .or_else(|| index.clone())
+                    })
+                    .collect();
+                (!types.is_empty()).then(|| {
+                    (
+                        name.to_string(),
+                        crate::ObjectField::required(Type::union(types)),
+                    )
+                })
+            })
+            .collect();
+        Some(Type::Object {
+            index: None,
+            fields,
+        })
+    }
+
+    /// `{ ...x }` checked against `expected`, where `x` is a union or a
+    /// conditional. Its alternatives merge into one object type, which may not
+    /// fit `expected` though each alternative does: `{ ...x }` with
+    /// `x: Dict | { a: string }` is a copy of whichever `x` holds. tsc types the
+    /// copy as the union of its alternatives; here the merged object is cast to
+    /// `expected` when every alternative fits it.
+    fn spread_as_its_alternatives(
+        &mut self,
+        kind: TypedExprKind,
+        ty: Type,
+        expected: &Type,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let TypedExprKind::ObjectLiteral { members, .. } = &kind else {
+            return Ok((kind, ty));
+        };
+        let [crate::TypedObjectMember::Spread { source, .. }] = members.as_slice() else {
+            return Ok((kind, ty));
+        };
+        if assignable(&ty, expected, self.resolver()) {
+            return Ok((kind, ty));
+        }
+        let source_ty = self
+            .typed_ast
+            .try_expr(*source)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let mut alternatives = Vec::new();
+        self.collect_spread_alternatives(*source, &source_ty, &mut alternatives)?;
+        // A falsy alternative copies nothing, so it stands for `{}`.
+        let (falsy, copying): (Vec<&Type>, Vec<&Type>) = alternatives
+            .iter()
+            .partition(|alternative| is_definitely_falsy(alternative));
+        let empty = Type::Object {
+            index: None,
+            fields: ObjectFields::new(),
+        };
+        let every_alternative_fits = copying.len() > 1
+            && copying
+                .iter()
+                .all(|alternative| assignable(alternative, expected, self.resolver()))
+            && (falsy.is_empty() || assignable(&empty, expected, self.resolver()));
+        if !every_alternative_fits {
+            return Ok((kind, ty));
+        }
+        let copy = self.push_synthetic_expr(kind, ty, span)?;
+        Ok((
+            TypedExprKind::Cast {
+                value: copy,
+                target_ty: expected.clone(),
+                check: None,
+            },
+            expected.clone(),
+        ))
+    }
+
+    /// Whether a member of a union has an index signature, which backs any
+    /// field name.
+    fn has_index_signature_member(&self, members: &[Type]) -> bool {
+        members
+            .iter()
+            .any(|member| self.resolver().index_signature(member).is_some())
+    }
+
     /// The fields a spread copies, and whether they must be found by name at
     /// run time (`by_name`). A conditional contributes each branch rather than
     /// their join — `c ? a : {}` joins to `{}`, which would copy nothing when `a`
@@ -5607,6 +5808,15 @@ impl Inferer<'_> {
     ) -> Result<Option<SpreadFields>, crate::compiler_error::CompilerFailure> {
         let mut alternatives = Vec::new();
         self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives)?;
+        if alternatives.iter().all(is_definitely_falsy)
+            && let Some(first) = alternatives.first()
+        {
+            self.error(
+                span,
+                format!("cannot spread `{first}` into an object literal"),
+            );
+            return Ok(None);
+        }
         let mut objects: Vec<SpreadAlternative> = Vec::new();
         for alternative in alternatives {
             let index_value = self
@@ -5615,6 +5825,10 @@ impl Inferer<'_> {
                 .map(|index| *index.value);
             let fields = match alternative {
                 Type::Object { fields, .. } => fields,
+                // A spread copies nothing from a value that is always falsy, as
+                // `c && { a: 1 }` is when `c` is false, or from `null`, when
+                // another alternative is an object (as in tsc).
+                ref falsy if is_definitely_falsy(falsy) => ObjectFields::new(),
                 Type::InterfaceRef {
                     ref mangled,
                     ref name,
@@ -5672,6 +5886,102 @@ impl Inferer<'_> {
             fields,
             by_name: true,
         }))
+    }
+
+    /// The object `const { a, ...rest } = source` binds to `rest`: a copy of
+    /// `source` without the names `exclude` lists, built as the spread
+    /// `{ ...source }` that leaves them out. `None` when `source` can't be
+    /// spread: a source that isn't an object, a union of objects, or a
+    /// dictionary.
+    pub(super) fn object_rest(
+        &mut self,
+        typed_source: ExprId,
+        source_ty: &Type,
+        exclude: &[Ident],
+        span: Span,
+    ) -> Result<Option<(ExprId, Type)>, CompilerFailure> {
+        if !self.spreads_as_rest_source(typed_source, source_ty)? {
+            return Ok(None);
+        }
+        let index_value = self.spread_source_index(typed_source, source_ty)?;
+        let Some(SpreadFields { mut fields, .. }) =
+            self.spread_source_fields(typed_source, source_ty, span)?
+        else {
+            return Ok(None);
+        };
+        let omitted: std::collections::BTreeSet<String> =
+            exclude.iter().map(|name| name.name.clone()).collect();
+        fields.retain(|name, _| !omitted.contains(name));
+        // Every rest is read by name, so its mask can leave the excluded names
+        // out; a lone object's fields need no value check.
+        let checked = self
+            .typed_ast
+            .spread_mask_fields
+            .entry(typed_source)
+            .or_default();
+        checked.retain(|name, _| !omitted.contains(name));
+        self.typed_ast
+            .spread_omitted_fields
+            .insert(typed_source, omitted);
+        let origin_ty = Type::Object {
+            index: None,
+            fields: fields.clone(),
+        };
+        let origins = fields
+            .iter()
+            .map(|(name, field)| crate::TypedObjectFieldOrigin {
+                name: Ident {
+                    name: name.clone(),
+                    span,
+                },
+                source: crate::TypedObjectFieldSource::Spread {
+                    source_index: 0,
+                    field_name: name.clone(),
+                    source_ty: origin_ty.clone(),
+                    fallback: None,
+                },
+                optional: field.optional,
+                ty: field.ty.clone(),
+            })
+            .collect();
+        let index = index_value.map(|value| crate::IndexSignature {
+            value: Box::new(Type::union(
+                std::iter::once(value)
+                    .chain(fields.values().map(|field| field.ty.clone()))
+                    .collect(),
+            )),
+            readonly: false,
+        });
+        let ty = Type::Object { index, fields };
+        let rest = self.push_synthetic_expr(
+            TypedExprKind::ObjectLiteral {
+                members: vec![crate::TypedObjectMember::Spread {
+                    source: typed_source,
+                    by_name: true,
+                }],
+                fields: origins,
+            },
+            ty.clone(),
+            span,
+        )?;
+        Ok(Some((rest, ty)))
+    }
+
+    /// Whether every alternative of a rest source is an object type or a
+    /// dictionary, which a spread copies; other sources keep the rest's own
+    /// diagnostic rather than a spread's.
+    fn spreads_as_rest_source(
+        &self,
+        typed_source: ExprId,
+        source_ty: &Type,
+    ) -> Result<bool, CompilerFailure> {
+        let mut alternatives = Vec::new();
+        self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives)?;
+        Ok(!alternatives.is_empty()
+            && alternatives.iter().all(|alternative| {
+                matches!(alternative.peel(), Type::Object { .. })
+                    || self.resolver().index_signature(alternative).is_some()
+            }))
     }
 
     pub(super) fn spread_source_index(
@@ -5759,6 +6069,16 @@ impl Inferer<'_> {
             if candidates.len() > 1 && candidates.iter().any(|ty| matches!(ty, Type::Tuple(_))) {
                 return self.infer_tuple_union_literal(elements, candidates);
             }
+            if candidates.len() > 1 {
+                let element_types = candidates
+                    .iter()
+                    .filter_map(|member| match member {
+                        Type::Array(element) => Some((**element).clone()),
+                        _ => None,
+                    })
+                    .collect();
+                return self.infer_array_union_literal(literal, elements, element_types, span);
+            }
         }
 
         let expected_elem: Option<&Type> = match expected {
@@ -5767,17 +6087,9 @@ impl Inferer<'_> {
         };
 
         if elements.is_empty() {
-            // Empty `[]` requires an expected hint to know the element
-            // type. Without one, we can't pick a concrete `Type::Array(T)`.
-            let elem_ty = if let Some(t) = expected_elem {
-                t.clone()
-            } else {
-                self.error(
-                    span,
-                    "cannot infer element type of empty array; add a `: T[]` annotation".into(),
-                );
-                Type::Error
-            };
+            // Without a hint, `[]` holds no element, so it is `never[]`, as in
+            // tsc, and fits any array type it is later used as.
+            let elem_ty = expected_elem.cloned().unwrap_or(Type::Never);
             return Ok((
                 TypedExprKind::ArrayLiteral {
                     elements: Vec::new(),
@@ -5802,6 +6114,14 @@ impl Inferer<'_> {
             expected_elem,
             Some(t) if !type_contains_type_var(t)
         );
+        let errors_before = self.error_count();
+        let object_literals = elements
+            .iter()
+            .map(|element| match element {
+                crate::ArrayLiteralElement::Value(id) => is_object_literal(self.ast, *id),
+                crate::ArrayLiteralElement::Spread { .. } => Ok(false),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut typed_elements: Vec<crate::TypedArrayElement> = Vec::with_capacity(elements.len());
         let mut element_ty: Option<Type> = if hint_pins_element_ty {
             expected_elem.cloned()
@@ -5818,6 +6138,12 @@ impl Inferer<'_> {
         } else {
             None
         };
+        // Arrays of object literals type themselves, as their literals would:
+        // `[[{ a: 1 }], [{ a: 2, b: 3 }]]` checks no literal against another's
+        // fields, and the arrays then join by type.
+        let arrays_of_object_literals = open_element_type
+            && normalization.is_none()
+            && every_array_of_object_literals(self.ast, &elements)?;
         // Whether the running element type is still the first element's, which
         // mismatch messages name.
         let mut running_is_first = true;
@@ -5837,12 +6163,15 @@ impl Inferer<'_> {
                     // Such a literal still takes the expected element type, which only
                     // reaches here when it holds an unbound type parameter: its empty
                     // arrays and callbacks need that context, as in tsc.
-                    let hint = if open_element_type && types_itself {
+                    // An empty array's `never[]` says nothing of what later elements
+                    // hold, so it hints none: `[[], [1]]` holds `number[]`.
+                    let running_hint = element_ty.as_ref().filter(|t| !holds_no_element(t));
+                    let hint = if open_element_type && (types_itself || arrays_of_object_literals) {
                         None
                     } else if open_element_type && lacks_running_shape {
                         expected_elem
                     } else {
-                        element_ty.as_ref().or(expected_elem)
+                        running_hint.or(expected_elem)
                     };
                     let ValueOperand {
                         typed_expr: typed_id,
@@ -5919,6 +6248,8 @@ impl Inferer<'_> {
                     match spread_element_type(&peeled_source) {
                         // A `Type::Error` source was already reported by inner inference.
                         None if matches!(peeled_source, Type::Error) => {}
+                        // An empty source adds no element, as a `never` value doesn't.
+                        Some(Type::Never) => saw_never = true,
                         None => self.error(
                             spread_span,
                             format!("expected an array to spread, got `{peeled_source}`"),
@@ -5975,6 +6306,10 @@ impl Inferer<'_> {
         // `"hello"[]`.
         let element_ty = if hint_pins_element_ty {
             element_ty
+        } else if normalization.is_none() && self.error_count() == errors_before {
+            let element_ty =
+                self.best_common_element_type(element_ty, &typed_elements, &object_literals)?;
+            self.kept_element_type(element_ty, &typed_elements)?
         } else {
             self.kept_element_type(element_ty, &typed_elements)?
         };
@@ -5986,6 +6321,92 @@ impl Inferer<'_> {
             },
             Type::Array(Box::new(element_ty)),
         ))
+    }
+
+    /// An array literal expected as a union of array types, as tsc types it: each
+    /// element takes any member's element type as its context, and the literal
+    /// is the first member whose element type every element fits. `[]` is the
+    /// first member, as its `never[]` in tsc fits them all. When no member fits
+    /// every element, the literal keeps the union of the elements' context, which
+    /// the caller then reports against the union.
+    fn infer_array_union_literal(
+        &mut self,
+        literal: ExprId,
+        elements: Vec<crate::ArrayLiteralElement>,
+        member_elements: Vec<Type>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let context = if elements.is_empty() {
+            member_elements.first().cloned().unwrap_or(Type::Error)
+        } else {
+            Type::union(member_elements.clone())
+        };
+        let errors_before = self.error_count();
+        let (kind, ty) = self.infer_array_literal(
+            literal,
+            elements,
+            Some(&Type::Array(Box::new(context))),
+            span,
+        )?;
+        let TypedExprKind::ArrayLiteral { elements, .. } = kind else {
+            return Ok((kind, ty));
+        };
+        let element_types = self.array_literal_element_types(&elements)?;
+        let fitting = member_elements.into_iter().find(|member| {
+            element_types
+                .iter()
+                .all(|element| assignable(element, member, self.resolver()))
+        });
+        // An element that failed its context was reported already, and the
+        // literal as a whole needn't be again.
+        let element_ty = match (fitting, ty) {
+            (Some(member), _) => member,
+            _ if self.error_count() > errors_before => Type::Error,
+            (None, Type::Array(element)) => *element,
+            (None, _) => Type::Error,
+        };
+        Ok((
+            TypedExprKind::ArrayLiteral {
+                elements,
+                element_ty: element_ty.clone(),
+            },
+            Type::Array(Box::new(element_ty)),
+        ))
+    }
+
+    /// The type each element of a typed array literal holds: a value's own type,
+    /// and the element type of a spread's source.
+    fn array_literal_element_types(
+        &self,
+        elements: &[crate::TypedArrayElement],
+    ) -> Result<Vec<Type>, CompilerFailure> {
+        let mut types = Vec::with_capacity(elements.len());
+        for element in elements {
+            let ty = &self
+                .typed_ast
+                .try_expr(element.expr_id())
+                .map_err(crate::typechecker::arena_failure)?
+                .ty;
+            match element {
+                crate::TypedArrayElement::Value(_) => types.push(ty.clone()),
+                // A spread literal took the union's context too, so its own
+                // elements say what it holds: `[...[1, 2], 3]` holds numbers.
+                crate::TypedArrayElement::Spread(source) => {
+                    match &self
+                        .typed_ast
+                        .try_expr(*source)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .kind
+                    {
+                        TypedExprKind::ArrayLiteral { elements, .. } => {
+                            types.extend(self.array_literal_element_types(elements)?);
+                        }
+                        _ => types.extend(spread_element_type(ty.peel())),
+                    }
+                }
+            }
+        }
+        Ok(types)
     }
 
     fn report_array_element_mismatch(
@@ -6035,7 +6456,7 @@ impl Inferer<'_> {
         // Object literals with differing fields, or the same fields neither of
         // which fits the other, join as tsc's normalized union:
         // `[{ a: 0 }, { a: 1, b: "x" }]` holds
-        // `{ a: number; b?: null } | { a: number; b: string }`.
+        // `{ a: number; b?: never } | { a: number; b: string }`.
         let nested_fields = join.normalization?;
         normalized_object_union(running, &elem_ty.widen_literal(), nested_fields)
     }
@@ -6052,9 +6473,28 @@ impl Inferer<'_> {
                     self.is_fully_annotated_function(id)?
                 }
                 ExprKind::ObjectLiteral { .. } => !self.needs_hint(id)?,
+                ExprKind::New {
+                    callee, type_args, ..
+                } => type_args.is_some() || self.names_non_generic_class(*callee)?,
                 _ => false,
             },
         )
+    }
+
+    /// Whether `callee` names a class without type parameters, whose `new`
+    /// takes nothing from a hint.
+    fn names_non_generic_class(&self, callee: ExprId) -> Result<bool, CompilerFailure> {
+        let ExprKind::Identifier(ident) = &self
+            .ast
+            .try_expr(callee)
+            .map_err(super::arena_failure)?
+            .kind
+        else {
+            return Ok(false);
+        };
+        Ok(self.lookup_named_type(&ident.name).is_some_and(|symbol| {
+            matches!(&symbol.kind, crate::TypeKind::Class { generics, .. } if generics.is_empty())
+        }))
     }
 
     /// Whether an expression needs a hint to be typed. Leaves that type themselves
@@ -6306,6 +6746,33 @@ impl Inferer<'_> {
             } else {
                 Type::Tuple(slots)
             },
+        ))
+    }
+
+    /// An unannotated array literal that an array pattern destructures: a tuple
+    /// of its elements' widened types, as TypeScript infers from the pattern.
+    fn infer_pattern_tuple_literal(
+        &mut self,
+        literal: ExprId,
+        elements: Vec<crate::ArrayLiteralElement>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let mut typed_elements = Vec::with_capacity(elements.len());
+        let mut element_types = Vec::with_capacity(elements.len());
+        for element in &elements {
+            let crate::ArrayLiteralElement::Value(id) = element else {
+                return self.infer_array_literal(literal, elements, None, span);
+            };
+            let (typed_id, ty) = self.infer_expr(*id, None)?;
+            element_types.push(self.widen_fresh_literals(typed_id, &ty)?);
+            typed_elements.push(typed_id);
+        }
+        Ok((
+            TypedExprKind::TupleLiteral {
+                elements: typed_elements,
+                element_types: element_types.clone(),
+            },
+            Type::Tuple(element_types),
         ))
     }
 
@@ -6635,6 +7102,11 @@ impl Inferer<'_> {
         {
             return Ok(read);
         }
+        if name.name == "length"
+            && let Some(arrays) = receiver_ty.string_or_array_union_arrays()
+        {
+            return self.string_or_array_length(typed_receiver, arrays, name, span);
+        }
         // interface-property dispatch lands here BEFORE the
         // user-object field path. `lookup_interface_property` returns `None`
         // for `Object` so user-object reads aren't shadowed by a hypothetical
@@ -6812,6 +7284,85 @@ impl Inferer<'_> {
             },
             field_ty,
         ))
+    }
+
+    /// `u.length` where `u` is a union of strings with arrays or tuples, which
+    /// have no shared representation: `typeof u === "string"` picks the
+    /// string's length or the array's, with `u` evaluated once.
+    fn string_or_array_length(
+        &mut self,
+        typed_receiver: ExprId,
+        arrays: Type,
+        name: Ident,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let mut stmts = Vec::new();
+        let held = self.hold_in_temp(typed_receiver, "length_receiver", &mut stmts)?;
+        let is_string = self.push_synthetic_expr(
+            TypedExprKind::TypeofTag {
+                value: held,
+                tag: crate::TypeofTagKind::String,
+            },
+            Type::Boolean,
+            span,
+        )?;
+        let string_length = self.narrowed_length(held, Type::String, &name, span)?;
+        let array_length = self.narrowed_length(held, arrays, &name, span)?;
+        let result = self.push_synthetic_expr(
+            TypedExprKind::Ternary {
+                cond: is_string,
+                then_: string_length,
+                else_: array_length,
+            },
+            Type::Number,
+            span,
+        )?;
+        Ok((TypedExprKind::Sequence { stmts, result }, Type::Number))
+    }
+
+    /// `(held as narrowed).length`, for a `held` known to hold `narrowed`.
+    fn narrowed_length(
+        &mut self,
+        held: ExprId,
+        narrowed: Type,
+        name: &Ident,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        let Some((_, _, iface, _)) = self.lookup_interface_property(&narrowed, &name.name) else {
+            return Err(super::inference_failure(&format!(
+                "`{narrowed}` has no `length` property"
+            )));
+        };
+        let value = self.reread_temp(held)?;
+        let receiver = self.push_synthetic_expr(
+            TypedExprKind::Cast {
+                value,
+                target_ty: narrowed.clone(),
+                check: None,
+            },
+            narrowed,
+            span,
+        )?;
+        self.push_synthetic_expr(
+            TypedExprKind::InterfacePropertyAccess {
+                receiver,
+                iface,
+                name: name.clone(),
+            },
+            Type::Number,
+            span,
+        )
+    }
+
+    fn push_synthetic_expr(
+        &mut self,
+        kind: TypedExprKind,
+        ty: Type,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        self.typed_ast
+            .try_push_expr(TypedExpr { kind, span, ty })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     fn infer_index_access(
@@ -7384,13 +7935,15 @@ impl Inferer<'_> {
                 .insert(name.name.clone(), signature, true, name.span);
         }
         let previous_hint = self.object_this_hint.take();
+        // With neither a `this` annotation nor an object literal to bind it,
+        // `this` has no receiver to name, so a use is rejected as it is
+        // outside a class (tsc: implicitly `any`).
         let receiver = this_type
             .as_ref()
             .map(|ty| self.resolve_type(ty))
             .transpose()?
-            .or_else(|| previous_hint.clone())
-            .unwrap_or(Type::Unknown);
-        let previous_this = self.function_this.replace(receiver.clone());
+            .or_else(|| previous_hint.clone());
+        let previous_this = std::mem::replace(&mut self.function_this, receiver.clone());
         let previous_class = self.current_class.take();
         let previous_static = self.current_static.take();
         self.next_function_keeps_returned_literals = keeps_returned_literals;
@@ -7400,7 +7953,9 @@ impl Inferer<'_> {
         self.current_class = previous_class;
         self.current_static = previous_static;
         self.scopes.pop();
-        self.typed_ast.closure_this.insert(id, receiver);
+        self.typed_ast
+            .closure_this
+            .insert(id, receiver.unwrap_or(Type::Unknown));
         if let Some(name) = name {
             self.typed_ast.closure_names.insert(id, name);
         }
@@ -7733,12 +8288,13 @@ impl Inferer<'_> {
             // A parameter typed only by the expected function type takes
             // whatever literals that type was inferred with, so its literal
             // types count as fresh.
+            let body_ty = self.local_storage_ty(&p.name, p.ty.clone());
             if decl.ty.is_some() {
                 self.scopes
-                    .insert_annotated_param(p.name.name.clone(), p.ty.clone(), p.name.span);
+                    .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
             } else {
                 self.scopes
-                    .insert(p.name.name.clone(), p.ty.clone(), false, p.name.span);
+                    .insert(p.name.name.clone(), body_ty, false, p.name.span);
             }
         }
         // Fresh narrowing stack for the body, seeded with the `const`-rooted
@@ -7751,7 +8307,7 @@ impl Inferer<'_> {
             immediately_invoked && super::iife::returns_before_end(self.ast, &body)?;
         let narrow_seed = self.enter_closure_narrow_boundary(span, immediately_invoked)?;
         // The body's own `return`s end its flow, not the enclosing one's.
-        let prev_reachable = std::mem::replace(&mut self.reachable, true);
+        let prev_reachable = self.enter_body_reachability();
         // Nor can its `break`/`continue` reach a loop or switch outside it.
         let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let prev_switch_depth = std::mem::replace(&mut self.switch_depth, 0);
@@ -7818,6 +8374,10 @@ impl Inferer<'_> {
                     // annotated `unknown` body may. A body with no `return`
                     // stays `void`.
                     Type::Unknown
+                } else if collected.is_empty() && !self.reachable {
+                    // No `return`, and the end of the body can't be reached: the
+                    // closure only throws, so it never returns, as tsc infers.
+                    Type::Never
                 } else {
                     self.unify_returns(&self.returned_types(collected))
                 };
@@ -7830,7 +8390,7 @@ impl Inferer<'_> {
         }
         // Restore frames.
         self.exit_closure_narrow_boundary()?;
-        self.reachable = prev_reachable;
+        self.restore_reachability(prev_reachable);
         self.loop_depth = prev_loop_depth;
         self.switch_depth = prev_switch_depth;
         self.in_nested_function = prev_nested;
@@ -8070,9 +8630,49 @@ impl Inferer<'_> {
             .try_expr(operand)
             .map_err(super::arena_failure)?
             .span;
-        let (value, value_ty) = self.infer_expr(operand, None)?;
+        let (mut value, mut value_ty) = self.infer_expr(operand, None)?;
+        // Only a reference right under the `!` reads at its declared type, as
+        // in TypeScript: `(x)!` keeps the narrowing.
+        let parenthesized = matches!(
+            self.ast
+                .try_expr(operand)
+                .map_err(super::arena_failure)?
+                .kind,
+            ExprKind::Paren(_)
+        );
+        if !parenthesized && let Some(path) = self.null_narrowed_path(value, &value_ty)? {
+            // As in TypeScript: a reference narrowed to `null` reads at its
+            // declared type under `!`, which then throws at run time.
+            let outer = self.declared_read.replace(path);
+            let reread = self.infer_expr(operand, None);
+            self.declared_read = outer;
+            (value, value_ty) = reread?;
+        }
         let result_ty = self.check_non_null_assert(&value_ty, operand_span);
         Ok((TypedExprKind::NonNullAssert { value }, result_ty))
+    }
+
+    /// The path of `value` when a narrowing left it only `null` and its
+    /// declared type holds more.
+    fn null_narrowed_path(
+        &self,
+        value: ExprId,
+        value_ty: &Type,
+    ) -> Result<Option<narrowing::ReferencePath>, CompilerFailure> {
+        if !matches!(value_ty.peel(), Type::Null) {
+            return Ok(None);
+        }
+        let typed = self
+            .typed_ast
+            .try_expr(value)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(path) = self.expr_to_reference_path(typed)? else {
+            return Ok(None);
+        };
+        let declared_holds_more = self
+            .declared_path_ty(&path)
+            .is_some_and(|declared| !matches!(declared.peel(), Type::Null));
+        Ok(declared_holds_more.then_some(path))
     }
 
     /// The type `!` yields for an operand of `value_ty`. An operand that is
@@ -8305,6 +8905,7 @@ impl Inferer<'_> {
                         ty: *index.value,
                         optional: true,
                         readonly: index.readonly,
+                        method: false,
                     })
             }) {
                 if field.readonly {
@@ -8685,7 +9286,7 @@ impl Inferer<'_> {
             parts.pop();
             asserts_chain = true;
         }
-        let (kind, ty) = self.infer_chain_steps(base, parts)?;
+        let (kind, ty) = self.infer_chain_steps(base, parts, asserts_chain)?;
         if !asserts_chain {
             return Ok((kind, ty));
         }
@@ -8710,10 +9311,12 @@ impl Inferer<'_> {
     /// `Type::InterfaceRef`; `Index` on `Type::Array`; `Call` on a
     /// closure-typed receiver; `Call` directly after a `Field` resolving to an
     /// interface method (lowered to `MethodCall`); `NonNull` anywhere.
+    /// `asserts_tail`: a `!` follows the chain's last step.
     fn infer_chain_steps(
         &mut self,
         base: ExprId,
         parts: Vec<ChainPart>,
+        asserts_tail: bool,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_base, base_ty) = self.infer_expr(base, None)?;
         // The namespace rejection subsumes the redundancy warning — a namespace
@@ -8745,7 +9348,22 @@ impl Inferer<'_> {
         // `infer_conditional_operand`.
         let mut short_circuit_span: Option<Span> = None;
 
-        for part in parts {
+        // A step right under a `!` reads at its declared type, as a reference
+        // under a `!` outside a chain does.
+        let asserted: Vec<bool> = (0..parts.len())
+            .map(|index| match parts.get(index + 1) {
+                Some(next) => matches!(next, ChainPart::NonNull { .. }),
+                None => asserts_tail,
+            })
+            .collect();
+        for (part, asserted) in parts.into_iter().zip(asserted) {
+            // A `?.` whose receiver can't be `null` never short-circuits, so it
+            // is the plain step and adds no `| null`, as in tsc.
+            let part = if part.is_optional() && !may_hold_null(&receiver_ty, self.resolver()) {
+                part.as_plain_step()
+            } else {
+                part
+            };
             if part.is_optional() && short_circuit_span.is_none() {
                 short_circuit_span = Some(part.span());
                 self.push_narrow_frame(super::narrowing::NarrowEnv::new());
@@ -8800,6 +9418,7 @@ impl Inferer<'_> {
             receiver_ty = self.narrow_step_result(
                 step_path.as_ref(),
                 &pending_method,
+                asserted,
                 &mut typed_part,
                 next_ty,
             );
@@ -8816,9 +9435,11 @@ impl Inferer<'_> {
 
         // A void-tailed chain has no value on either branch, so it stays
         // `void` rather than widening to `void | null` (void is a return
-        // type only — see `reject_void_binding`).
-        let final_ty = if matches!(receiver_ty.peel(), Type::Void) {
-            Type::Void
+        // type only — see `reject_void_binding`). A chain with no step left
+        // that can short-circuit has no `null` branch to add.
+        let can_short_circuit = short_circuit_span.is_some();
+        let final_ty = if matches!(receiver_ty.peel(), Type::Void) || !can_short_circuit {
+            receiver_ty
         } else {
             Type::union(vec![receiver_ty, Type::Null])
         };
@@ -9233,7 +9854,7 @@ impl Inferer<'_> {
         }
         // A poisoned receiver has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
-        if type_admits_null(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
+        if may_hold_null(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
             return;
         }
         self.diagnostics.push(crate::Diagnostic {
@@ -9511,10 +10132,14 @@ impl Inferer<'_> {
     ///
     /// Literal index steps consume the same path narrowing as ordinary element
     /// reads. Computed indices have no reference path and remain conservative.
+    ///
+    /// A step a `!` follows (`asserted`) keeps its declared type where a guard
+    /// left it only `null`, as a reference under `!` does outside a chain.
     fn narrow_step_result(
         &self,
         result_path: Option<&super::narrowing::ReferencePath>,
         pending_method: &Option<ChainMethod>,
+        asserted: bool,
         part: &mut TypedChainPart,
         step_ty: Type,
     ) -> Type {
@@ -9524,6 +10149,9 @@ impl Inferer<'_> {
         let Some(view) = result_path.and_then(|p| self.lookup_narrowed_view(p)) else {
             return step_ty;
         };
+        if asserted && matches!(view.narrowed_ty.peel(), Type::Null) {
+            return step_ty;
+        }
         let narrowed = view.narrowed_ty.clone();
         part.set_result_ty(narrowed.clone());
         narrowed
@@ -9661,10 +10289,11 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let target_ty = self.resolve_type(&ty)?;
         // An empty `[]` has no element type of its own, so it takes the target's
-        // array element type, as under an annotation. Other operands infer
-        // unhinted: a hint is enforced (an object literal rejects fields the target
-        // lacks), while a cast only needs one type assignable to the other.
-        let operand_hint = if is_empty_array_literal(self.ast, inner)? {
+        // array element type, as under an annotation, also as a ternary branch or
+        // nested in an array literal. Other operands infer unhinted: a hint is
+        // enforced (an object literal rejects fields the target lacks), while a
+        // cast only needs one type assignable to the other.
+        let operand_hint = if holds_empty_array_literal(self.ast, inner)? {
             empty_array_cast_hint(&target_ty)
         } else {
             None
@@ -9709,7 +10338,11 @@ impl Inferer<'_> {
         let target_to_inner = assignable(&shape, &inner_ty, self.resolver());
         let target_to_widened =
             assignable(&shape, &widen_assertion_source(&inner_ty), self.resolver());
-        if !inner_to_target && !target_to_inner && !target_to_widened {
+        if !inner_to_target
+            && !target_to_inner
+            && !target_to_widened
+            && !self.union_members_overlap(&inner_ty, &shape)
+        {
             let blockers = optional_vs_required_blockers(&inner_ty, &shape, self.resolver());
             if let Some(first) = blockers.first() {
                 let (subj, verb) = if blockers.len() == 1 {
@@ -9757,6 +10390,7 @@ impl Inferer<'_> {
         let check = if inner_to_target {
             None
         } else {
+            let shape = self.reduce_enums_to_members(&shape);
             if let Some(reason) =
                 unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
             {
@@ -9782,6 +10416,36 @@ impl Inferer<'_> {
             },
             target_ty,
         ))
+    }
+
+    /// Whether some member of `source` and some member of `target` pass one of the
+    /// assertion directions [`infer_as`](Self::infer_as) asks of the whole types.
+    /// This is tsc's comparability for a union on either side, at the top level
+    /// only (a union inside a field or an element still needs a whole-type match):
+    /// `str as S[] | S` is accepted for `type S = "a" | "b"` because `string`
+    /// overlaps `S`, and `(number | boolean) as string | number` because `number`
+    /// overlaps `number`.
+    fn union_members_overlap(&self, source: &Type, target: &Type) -> bool {
+        if !matches!(source.peel(), Type::Union(_)) && !matches!(target.peel(), Type::Union(_)) {
+            return false;
+        }
+        // An already-reported error inside the source (an empty `[]` with no
+        // element type) relates to anything, so it can't show an overlap.
+        if has_error_component(source) {
+            return false;
+        }
+        let resolver = self.resolver();
+        let target_members = narrowing::union_members(target);
+        narrowing::union_members(source)
+            .into_iter()
+            .any(|source_member| {
+                let widened = widen_assertion_source(source_member);
+                target_members.iter().any(|target_member| {
+                    assignable(source_member, target_member, resolver)
+                        || assignable(target_member, source_member, resolver)
+                        || assignable(target_member, &widened, resolver)
+                })
+            })
     }
 
     /// `x instanceof Foo` — a runtime class test. `Foo` must name a class (interfaces aren't
@@ -10120,7 +10784,7 @@ impl Inferer<'_> {
     /// interfaces: a re-encountered interface is left as `InterfaceRef`. Leftover
     /// `InterfaceRef`s are rejected by `unsupported_cast_target_reason` when a runtime
     /// check is actually needed.
-    fn reduce_interfaces_to_shapes(&self, ty: &Type) -> Type {
+    pub(super) fn reduce_interfaces_to_shapes(&self, ty: &Type) -> Type {
         let mut budget = self.type_limits.budget();
         self.type_limits.type_or_error(self.reduce_interfaces_rec(
             ty,
@@ -10169,6 +10833,7 @@ impl Inferer<'_> {
                                 ty: self.reduce_interfaces_rec(&f.ty, seen, child, budget)?,
                                 optional: f.optional,
                                 readonly: f.readonly,
+                                method: f.method,
                             },
                         ))
                     })
@@ -10203,6 +10868,30 @@ impl Inferer<'_> {
                 Ok(other.clone())
             }
         }
+    }
+
+    /// Replace every enum in a cast's runtime check with the union of its
+    /// variant values: a value is one of the enum's members exactly when it
+    /// equals one of them. Relatedness is decided before this, against the
+    /// enum itself, because a member literal is not assignable to its enum.
+    fn reduce_enums_to_members(&self, ty: &Type) -> Type {
+        let peeled = ty.peel_preserving_readonly();
+        if let Some(members) = self.enum_runtime_members(peeled) {
+            return members;
+        }
+        if !matches!(
+            peeled,
+            Type::Object { .. }
+                | Type::Array(_)
+                | Type::Readonly(_)
+                | Type::Tuple(_)
+                | Type::Union(_)
+        ) {
+            return ty.clone();
+        }
+        crate::type_size::map_children_infallible(peeled, |inner| {
+            self.reduce_enums_to_members(inner)
+        })
     }
 
     /// regex literal inference. Runs the JS→regex-crate
@@ -10427,6 +11116,8 @@ fn unsupported_cast_target_reason(
             }
             unsupported_cast_target_reason(&expanded, types, seen)
         }
+        // Infer reduces an enum to its variant values before asking, so one
+        // left here sits behind a recursive alias it doesn't expand.
         Type::NumberEnum { .. } | Type::StringEnum { .. } => {
             Some("enum targets need a per-variant value check at runtime")
         }
@@ -10560,6 +11251,23 @@ fn empty_literal_join(
     Ok(None)
 }
 
+/// Whether `ty` is the type of an array that holds no element at any depth:
+/// `never[]`, `never[][]`, as an empty literal is typed.
+fn holds_no_element(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Array(element) => matches!(element.peel(), Type::Never) || holds_no_element(element),
+        _ => false,
+    }
+}
+
+fn is_object_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
+    let id = peel_parens(ast, expr)?;
+    Ok(matches!(
+        &ast.try_expr(id).map_err(super::arena_failure)?.kind,
+        ExprKind::ObjectLiteral { .. }
+    ))
+}
+
 fn is_empty_object_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
     let id = peel_parens(ast, expr)?;
     Ok(matches!(
@@ -10576,11 +11284,18 @@ fn has_only_optional_fields(ty: &Type) -> bool {
 }
 
 /// The hint an empty array literal cast to `ty` takes its element type from: `ty`
-/// itself when it is an array, or a union's first array member, which the empty
-/// literal then satisfies as it would any other.
+/// itself when it is an array or a union of arrays, which an array literal is
+/// typed against as under an annotation. Otherwise a union's first array member,
+/// which the empty literal then satisfies as it would any other.
 fn empty_array_cast_hint(ty: &Type) -> Option<&Type> {
     match ty.peel() {
         Type::Array(_) => Some(ty),
+        Type::Union(members) if !members.iter().any(|m| matches!(m.peel(), Type::Tuple(_))) => {
+            members
+                .iter()
+                .any(|member| matches!(member.peel(), Type::Array(_)))
+                .then_some(ty)
+        }
         Type::Union(members) => members
             .iter()
             .find(|member| matches!(member.peel(), Type::Array(_))),
@@ -10614,7 +11329,7 @@ struct ElementMismatch {
 }
 
 /// The expression inside any parentheses around `expr`.
-fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
+pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
     loop {
         match &ast.try_expr(expr).map_err(super::arena_failure)?.kind {
             ExprKind::Paren(inner) => expr = *inner,
@@ -10638,10 +11353,10 @@ fn object_literal_normalization(
         let crate::ArrayLiteralElement::Value(id) = element else {
             return Ok(None);
         };
-        let Some(fields) = fresh_object_fields(ast, *id)? else {
+        let Some(literals) = fresh_object_choices(ast, *id)? else {
             return Ok(None);
         };
-        for field in fields {
+        for field in literals.into_iter().flatten() {
             let names = if is_fresh_object(ast, field.value)? {
                 &mut fresh
             } else {
@@ -10671,6 +11386,52 @@ fn fresh_object_fields(
             _ => None,
         })
         .collect())
+}
+
+/// Whether every element is a non-empty array literal whose elements are all
+/// fresh object literals, or conditionals choosing between them.
+fn every_array_of_object_literals(
+    ast: &crate::Ast,
+    elements: &[crate::ArrayLiteralElement],
+) -> Result<bool, CompilerFailure> {
+    for element in elements {
+        let crate::ArrayLiteralElement::Value(id) = element else {
+            return Ok(false);
+        };
+        let id = peel_parens(ast, *id)?;
+        let ExprKind::ArrayLiteral { elements: inner } =
+            &ast.try_expr(id).map_err(super::arena_failure)?.kind
+        else {
+            return Ok(false);
+        };
+        if inner.is_empty() || object_literal_normalization(ast, inner)?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The fields of each fresh object literal `expr` may evaluate to: itself, or
+/// each branch of a conditional choosing between such literals. `None` when it
+/// may evaluate to anything else.
+fn fresh_object_choices(
+    ast: &crate::Ast,
+    expr: ExprId,
+) -> Result<Option<Vec<Vec<&crate::ObjectLiteralField>>>, CompilerFailure> {
+    let id = peel_parens(ast, expr)?;
+    if let ExprKind::Ternary { then_, else_, .. } =
+        &ast.try_expr(id).map_err(super::arena_failure)?.kind
+    {
+        let (Some(mut choices), Some(others)) = (
+            fresh_object_choices(ast, *then_)?,
+            fresh_object_choices(ast, *else_)?,
+        ) else {
+            return Ok(None);
+        };
+        choices.extend(others);
+        return Ok(Some(choices));
+    }
+    Ok(fresh_object_fields(ast, id)?.map(|fields| vec![fields]))
 }
 
 /// Whether the object literal `expr` names exactly the fields of `running`, a
@@ -10776,9 +11537,10 @@ fn nested_field_types<'a>(
 }
 
 /// tsc's normalized union of object literal types: each member gains, as an
-/// optional `null` field, every field only other members declare, so any of
-/// them reads from the union. Each of `nested_fields` that holds objects in
-/// every member that has it is normalized the same way, one level down.
+/// optional `never` field (tsc's `?: undefined`), every field only other
+/// members declare, so any of them reads from the union. Each of
+/// `nested_fields` that holds objects in every member that has it is
+/// normalized the same way, one level down.
 /// `None` unless both sides are index-free objects.
 fn normalized_object_union(
     left: &Type,
@@ -10854,11 +11616,11 @@ fn nested_object_field_names(
 /// says nothing about the field's type, so it doesn't stop the field from
 /// holding objects.
 fn is_added_missing_field(field: &crate::ObjectField) -> bool {
-    field.optional && field.ty == Type::Null
+    field.optional && field.ty == Type::Never
 }
 
 /// Each object member of `ty` with the fields of `names` it lacks added as
-/// optional `null`.
+/// optional `never`, which reads as `null`.
 fn type_with_missing_fields(ty: &Type, names: &BTreeSet<String>) -> Type {
     let Some(members) = object_members(ty) else {
         return ty.clone();
@@ -10884,17 +11646,32 @@ fn fields_with_missing<'a>(
     for name in names {
         fields
             .entry(name.clone())
-            .or_insert_with(|| crate::ObjectField::optional(Type::Null));
+            .or_insert_with(|| crate::ObjectField::optional(Type::Never));
     }
     fields
 }
 
-fn is_empty_array_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
+/// Whether `expr` is an empty `[]`, or holds one as a ternary branch or an
+/// array literal's element, where it would take its type from `expr`'s hint.
+fn holds_empty_array_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
     let id = peel_parens(ast, expr)?;
-    Ok(matches!(
-        &ast.try_expr(id).map_err(super::arena_failure)?.kind,
-        ExprKind::ArrayLiteral { elements } if elements.is_empty()
-    ))
+    Ok(
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::ArrayLiteral { elements } if elements.is_empty() => true,
+            ExprKind::ArrayLiteral { elements } => {
+                for element in elements {
+                    if holds_empty_array_literal(ast, element.value())? {
+                        return Ok(true);
+                    }
+                }
+                false
+            }
+            ExprKind::Ternary { then_, else_, .. } => {
+                holds_empty_array_literal(ast, *then_)? || holds_empty_array_literal(ast, *else_)?
+            }
+            _ => false,
+        },
+    )
 }
 
 fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> Result<bool, CompilerFailure> {
@@ -10947,6 +11724,11 @@ pub(super) fn literal_comparison_type(
 /// the `+` arm and the narrowing hint it emits: a hint may only claim a guard is the
 /// fix when the guarded pair is one this accepts.
 pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
+    match never_operand_result(lt, rt, NeverPartners::NumericOrString) {
+        NeverOperand::Accepted(result) => return Some(result),
+        NeverOperand::Rejected => return None,
+        NeverOperand::Absent => {}
+    }
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
         // A literal operand behaves as its base and yields the base, never a
         // literal: `1 + 1` is `number`, not `2`. Same rule as `ordering_accepts`.
@@ -10968,6 +11750,11 @@ pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
 
 /// [`plus_result`] for `-`, `*`, `/`, `%`, `**` — same role, no string arm.
 pub(super) fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
+    match never_operand_result(lt, rt, NeverPartners::NumericOnly) {
+        NeverOperand::Accepted(result) => return Some(result),
+        NeverOperand::Rejected => return None,
+        NeverOperand::Absent => {}
+    }
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
         (Type::Number | Type::NumberLiteral(_), Type::Number | Type::NumberLiteral(_)) => {
             Some(Type::Number)
@@ -10980,6 +11767,13 @@ pub(super) fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
 /// [`plus_result`] for `<`, `>`, `<=`, `>=`, which always yield `boolean` — strings
 /// compare lexicographically, and literal types order as their widened base.
 fn ordering_accepts(lt: &Type, rt: &Type) -> bool {
+    // A `never` operand orders against numbers and bigints only: tsc rejects
+    // `never < string`, unlike `never + string`.
+    match never_operand_result(lt, rt, NeverPartners::NumericOnly) {
+        NeverOperand::Accepted(_) => return true,
+        NeverOperand::Rejected => return false,
+        NeverOperand::Absent => {}
+    }
     matches!(
         (lt.primitive_behavior(), rt.primitive_behavior()),
         (
@@ -11001,13 +11795,51 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
     }
     match ty.primitive_behavior() {
         Type::BigInt => Some(Type::BigInt),
-        Type::Number | Type::NumberLiteral(_) | Type::Error => Some(Type::Number),
+        Type::Number | Type::NumberLiteral(_) | Type::Never | Type::Error => Some(Type::Number),
         // `+s` is JS's explicit string→number coercion and the one TS keeps; it
         // lowers to the same parse `Number(s)` does (`NaN` when the text isn't a
         // number). Unary `-` on a string stays rejected: it reads as arithmetic,
         // not a conversion.
         t if matches!(op, UnOp::Pos) && t.is_string_shaped() => Some(Type::Number),
         _ => None,
+    }
+}
+
+/// What a binary operator makes of a `never` operand.
+enum NeverOperand {
+    /// Neither operand is `never`; the operator's ordinary rules apply.
+    Absent,
+    Accepted(Type),
+    Rejected,
+}
+
+/// Which partners of a `never` operand an operator accepts besides numbers and
+/// bigints.
+#[derive(Clone, Copy)]
+enum NeverPartners {
+    NumericOnly,
+    /// `+`, which also concatenates.
+    NumericOrString,
+}
+
+/// A `never` value can't exist, so the operator is accepted whenever some operand type
+/// would be, and its result comes from the other operand as tsc's does: `never + string`
+/// is `string`, `never - bigint` is `bigint`, and `never` with `never` is `number`.
+fn never_operand_result(lt: &Type, rt: &Type, partners: NeverPartners) -> NeverOperand {
+    let other = match (lt.peel(), rt.peel()) {
+        (Type::Never, _) => rt,
+        (_, Type::Never) => lt,
+        _ => return NeverOperand::Absent,
+    };
+    match (other.primitive_behavior(), partners) {
+        (Type::Never | Type::Number | Type::NumberLiteral(_), _) => {
+            NeverOperand::Accepted(Type::Number)
+        }
+        (Type::BigInt, _) => NeverOperand::Accepted(Type::BigInt),
+        (Type::String | Type::StringLiteral(_), NeverPartners::NumericOrString) => {
+            NeverOperand::Accepted(Type::String)
+        }
+        _ => NeverOperand::Rejected,
     }
 }
 
@@ -11024,6 +11856,17 @@ fn bitnot_result(ty: &Type) -> Option<Type> {
     }
 }
 
+/// Whether every value of `ty` is falsy: `null`, `false`, `0`, `""`. tsc
+/// spreads such a value as `{}`, as JavaScript copies nothing from it.
+fn is_definitely_falsy(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Null | Type::BooleanLiteral(false) => true,
+        Type::NumberLiteral(value) => value.0 == 0.0,
+        Type::StringLiteral(value) => value.is_empty(),
+        _ => false,
+    }
+}
+
 /// Types whose values reach a `toString` — the receivers `String(x)` and `${x}` accept.
 fn has_to_string(ty: &Type) -> bool {
     matches!(
@@ -11036,10 +11879,16 @@ fn has_to_string(ty: &Type) -> bool {
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Array(_)
+            // A tuple is an array at runtime, and answers `toString` as one.
+            | Type::Tuple(_)
             | Type::Object { .. }
             // Class instances answer `toString` through vtable slot 0
             // (a user method fills it, else "[object Object]").
             | Type::ClassRef { .. }
+            // An interface value is an object, whose vtable answers `toString`
+            // whether the interface declares it as a method, a function-typed
+            // property, or not at all.
+            | Type::InterfaceRef { .. }
             | Type::TypeVar(_)
             | Type::GenericParam { .. }
             | Type::Unknown
@@ -11118,6 +11967,7 @@ fn merge_spread_field_type(
         ty: Type::union(vec![earlier.ty, field.ty]),
         optional: earlier.optional,
         readonly: false,
+        method: false,
     }
 }
 
@@ -11175,6 +12025,7 @@ fn merge_spread_alternatives(alternatives: &[SpreadAlternative]) -> ObjectFields
                     ty,
                     optional,
                     readonly: false,
+                    method: false,
                 },
             )
         })
@@ -11874,12 +12725,18 @@ mod tests {
     }
 
     #[test]
-    fn empty_array_without_hint_diagnoses() {
-        let (_, d) = run("function main(): void { let xs = []; }");
+    fn empty_array_without_hint_is_never_array() {
+        let (_, d) = run("function main(): void { let xs = []; console.log(xs.length); }");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn empty_array_that_grows_without_hint_diagnoses() {
+        let (_, d) = run("function main(): void { let xs = []; xs.push(1); }");
         assert!(
             d.iter().any(|x| x
                 .message
-                .contains("cannot infer element type of empty array")),
+                .contains("cannot infer the element type of `xs` from an empty array")),
             "expected empty-array diag, got: {d:?}"
         );
     }
@@ -13238,5 +14095,15 @@ mod invariant_tests {
                 Err(CompilerFailure::Internal { .. })
             ));
         });
+    }
+}
+
+/// Whether `ty` holds an error type anywhere a cast compares, as `<error>[]` does.
+fn has_error_component(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Error => true,
+        Type::Array(inner) => has_error_component(inner),
+        Type::Tuple(members) | Type::Union(members) => members.iter().any(has_error_component),
+        _ => false,
     }
 }

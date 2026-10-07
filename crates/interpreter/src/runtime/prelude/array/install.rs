@@ -810,6 +810,7 @@ fn array_like_type() -> Type {
                 ty: Type::Number,
                 optional: false,
                 readonly: true,
+                method: false,
             },
         )]),
         index: None,

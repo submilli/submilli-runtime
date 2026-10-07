@@ -26,7 +26,7 @@ line 20: e
 
 line 23: e
   tsc:  unknown
-  ours: never
+  ours: Error
 
 line 26: e
   tsc:  unknown
@@ -39,5 +39,5 @@ line 27: e
 errors:
 line 8: ours: cannot read field `toUpperCase` on non-object type `never` (tsc accepts)
 line 12: ours: cannot read field `toUpperCase` on non-object type `never` (tsc accepts)
-line 20: ours: cannot assign to const binding `e` (tsc accepts)
+line 20: ours: expected `Error`, got `number` (tsc accepts)
 line 27: ours: cannot read field `toUpperCase` on non-object type `never` (tsc accepts)

@@ -1,4 +1,4 @@
-types: 83 of 223 tsc entries compared, 13 differ
+types: 83 of 223 tsc entries compared, 12 differ
 
 line 7: !!true
   tsc:  true
@@ -8,41 +8,37 @@ line 7: !true
   tsc:  false
   ours: boolean
 
-line 12: x
-  tsc:  never
-  ours: 1 | 2
-
 line 43: E.A
   tsc:  E.A
-  ours: 0
+  ours: E
 
 line 44: E.B
   tsc:  E.B
-  ours: 1
+  ours: E
 
 line 104: MyEnum.A
   tsc:  MyEnum.A
-  ours: 0
+  ours: MyEnum
 
 line 105: MyEnum.B
   tsc:  MyEnum.B
-  ours: 1
+  ours: MyEnum
 
 line 113: MyEnum.A
   tsc:  MyEnum.A
-  ours: 0
+  ours: MyEnum
 
 line 114: MyEnum.B
   tsc:  MyEnum.B
-  ours: 1
+  ours: MyEnum
 
 line 122: MyEnum.A
   tsc:  MyEnum.A
-  ours: 0
+  ours: MyEnum
 
 line 123: MyEnum.B
   tsc:  MyEnum.B
-  ours: 1
+  ours: MyEnum
 
 line 240: k
   tsc:  keyof O

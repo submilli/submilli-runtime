@@ -559,11 +559,26 @@ fn emit_expr_value(
     };
     // A `never` expression doesn't complete, so what an enclosing expression
     // would do with its value is unreachable: `"a" + fail()` never concatenates.
-    if matches!(expr.ty, Type::Never) && !matches!(expr.kind, TypedExprKind::LocalNarrowRef { .. })
-    {
+    // A read does complete: a `never[]` an alias filled holds elements, as
+    // TypeScript's types allow, so reading one yields what it holds.
+    if matches!(expr.ty, Type::Never) && !completes_when_never(&expr.kind) {
         emitter.instruction(Instruction::Unreachable);
     }
     Ok(())
+}
+
+/// Whether a `never`-typed `kind` still yields a value or settles its own
+/// reachability. A field or element read yields what the object or array
+/// holds; a narrowed reference emits its own `unreachable` when it is `never`.
+/// A `never` binding stays unreachable: its initializer or the call that bound
+/// it diverged.
+fn completes_when_never(kind: &TypedExprKind) -> bool {
+    matches!(
+        kind,
+        TypedExprKind::LocalNarrowRef { .. }
+            | TypedExprKind::FieldAccess { .. }
+            | TypedExprKind::IndexAccess { .. }
+    )
 }
 
 fn emit_global_ref(
@@ -596,6 +611,7 @@ fn emit_global_ref(
         }
         return Ok(());
     }
+    crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
     let idx = ctx.symbols.global_idx(mangled).ok_or_else(|| {
         crate::codegen::internal_failure("top-level let/const recorded during codegen")
     })?;
@@ -662,7 +678,13 @@ fn emit_function_ref(
     emitter.instruction(Instruction::GlobalSet(closure_global_idx));
     emitter.emit_end();
     emitter.instruction(Instruction::GlobalGet(closure_global_idx));
-    emitter.instruction(Instruction::RefAsNonNull);
+    if ctx.symbols.is_shared_closure_global(mangled) {
+        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+            closure_struct_idx,
+        )));
+    } else {
+        emitter.instruction(Instruction::RefAsNonNull);
+    }
 
     Ok(())
 }
@@ -1072,6 +1094,7 @@ fn emit_object_literal(
                             ty: f.ty.clone(),
                             optional: f.optional,
                             readonly: false,
+                            method: false,
                         },
                     )
                 })
@@ -1851,6 +1874,7 @@ fn emit_postfix_unary(
                 crate::codegen::internal_failure("Inferer guarantees the binding exists")
             })?;
             let old = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?)?;
+            crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
             emitter.instruction(Instruction::GlobalGet(idx));
             // Reference globals start as null before module initialization.
             if let ValType::Ref(RefType {
@@ -2598,8 +2622,10 @@ fn emit_object_spread(
         .symbols
         .prelude_func_idx("ObjectConstructor##spread")
         .ok_or_else(|| crate::codegen::internal_failure("spread helper collected"))?;
-    emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+    let null_object = Instruction::RefNull(HeapType::Concrete(intrinsics.object));
+    emitter.instruction(null_object.clone());
     for (index, source) in sources.iter().enumerate() {
+        let final_shape = (index + 1 == sources.len()).then_some(shape);
         // A source `runtime_values` widened may no longer hold what its
         // narrowed type said; `emit_receiver` checks it against that type,
         // which the stash and the mask then read in place of `unknown`.
@@ -2608,22 +2634,109 @@ fn emit_object_spread(
             .ta
             .source_type(source.expr_id())
             .map_err(crate::codegen::arena_failure)?;
+        // A source that may hold `null` or a falsy primitive copies nothing
+        // when it does: the merge then takes no source, which still applies
+        // the final shape.
+        let accumulator = if may_hold_non_object(narrowed_ty) {
+            Some(emit_object_source_test(
+                emitter,
+                ctx,
+                narrowed_ty,
+                intrinsics.object,
+                intrinsics.object_shape,
+            )?)
+        } else {
+            None
+        };
         let source_local =
             stash_receiver_as_object_shape(emitter, narrowed_ty, intrinsics.object_shape)?;
         emitter.instruction(Instruction::LocalGet(source_local));
-        if index + 1 == sources.len() {
-            emit_spread_shape(emitter, ctx, shape);
-        } else {
-            emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
-        }
+        emit_spread_shape_argument(emitter, ctx, final_shape, &null_object);
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
             emit_spread_mask(emitter, ctx, source_local, source.expr_id(), shape)?;
         } else {
-            emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+            emitter.instruction(null_object.clone());
         }
         emitter.instruction(Instruction::Call(merge));
+        if let Some(accumulator) = accumulator {
+            emitter.emit_else();
+            emitter.instruction(Instruction::LocalGet(accumulator));
+            emitter.instruction(null_object.clone());
+            emit_spread_shape_argument(emitter, ctx, final_shape, &null_object);
+            emitter.instruction(null_object.clone());
+            emitter.instruction(Instruction::Call(merge));
+            emitter.emit_end();
+        }
     }
     Ok(())
+}
+
+/// The merge's shape argument: the result shape on the last merge, which
+/// restores its optional markers, and null before it.
+fn emit_spread_shape_argument(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    final_shape: Option<&Type>,
+    null_object: &Instruction<'static>,
+) {
+    match final_shape {
+        Some(shape) => emit_spread_shape(emitter, ctx, shape),
+        None => emitter.instruction(null_object.clone()),
+    }
+}
+
+/// Whether a spread source of type `ty` may hold a value with no fields to
+/// copy: `null`, or a falsy primitive such as the `false` of `c && { … }`.
+fn may_hold_non_object(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members.iter().any(may_hold_non_object),
+        Type::Null
+        | Type::Boolean
+        | Type::BooleanLiteral(_)
+        | Type::Number
+        | Type::NumberLiteral(_)
+        | Type::String
+        | Type::StringLiteral(_) => true,
+        _ => false,
+    }
+}
+
+/// With the accumulator and then the source on the stack, opens an `if` on
+/// whether the source is an object, whose result is the merged object. Inside
+/// it, the accumulator and the source, as an `$ObjectShape`, are on the stack.
+/// Returns the local holding the accumulator, for the `else` arm.
+fn emit_object_source_test(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    source_ty: &Type,
+    object: u32,
+    object_shape: u32,
+) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    let source_type = match ctx.symbols.value_type(source_ty)? {
+        ValType::Ref(reference) => ValType::Ref(RefType {
+            nullable: true,
+            ..reference
+        }),
+        other => other,
+    };
+    let source = emitter.add_anonymous_local(source_type)?;
+    emitter.instruction(Instruction::LocalSet(source));
+    let accumulator = emitter.add_anonymous_local(object_ref(object))?;
+    emitter.instruction(Instruction::LocalSet(accumulator));
+    emitter.instruction(Instruction::LocalGet(source));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        object_shape,
+    )));
+    emitter.emit_if(BlockType::Result(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(object_shape),
+    })));
+    emitter.instruction(Instruction::LocalGet(accumulator));
+    emitter.instruction(Instruction::LocalGet(source));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        object_shape,
+    )));
+    Ok(accumulator)
 }
 
 /// Union sources may carry a known field with an incompatible hidden value.
@@ -2636,11 +2749,19 @@ fn emit_spread_mask(
     source_expr: crate::ExprId,
     shape: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let fields = ctx
+    let checked = ctx
         .ta
         .spread_mask_fields
         .get(&source_expr)
         .ok_or_else(|| crate::codegen::internal_failure("by-name spread fields recorded"))?;
+    // A name an object rest leaves out is masked whatever its value; any other
+    // is masked when its value isn't of the field's type.
+    let omitted = ctx.ta.spread_omitted_fields.get(&source_expr);
+    let fields: Vec<(&String, Option<&Type>)> = checked
+        .iter()
+        .map(|(name, ty)| (name, Some(ty)))
+        .chain(omitted.into_iter().flatten().map(|name| (name, None)))
+        .collect();
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -2650,7 +2771,7 @@ fn emit_spread_mask(
         .vtable_global_idx(shape)
         .ok_or_else(|| crate::codegen::internal_failure("spread shape vtable collected"))?;
     emitter.instruction(Instruction::GlobalGet(vtable));
-    for name in fields.keys() {
+    for (name, _) in &fields {
         let global = ctx
             .symbols
             .field_name_string_global_idx(name)
@@ -2661,11 +2782,15 @@ fn emit_spread_mask(
         array_type_index: intrinsics.field_names,
         array_size: crate::codegen::wasm_u32(fields.len())?,
     });
-    for (name, ty) in fields {
+    for (name, ty) in fields.iter().copied() {
         let global = ctx
             .symbols
             .field_name_string_global_idx(name)
             .ok_or_else(|| crate::codegen::internal_failure("spread name collected"))?;
+        let Some(ty) = ty else {
+            emitter.instruction(Instruction::GlobalGet(global));
+            continue;
+        };
         let index = emitter.add_anonymous_local(ValType::I32)?;
         let value = emitter.add_anonymous_local(object_ref(intrinsics.object))?;
         emit_object_field_index_by_name(emitter, ctx, source, global);
@@ -3035,6 +3160,22 @@ fn emit_binary(
     rhs: ExprId,
     result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let admits_never_operand = matches!(
+        op,
+        BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::Pow
+            | BinOp::Lt
+            | BinOp::Gt
+            | BinOp::Le
+            | BinOp::Ge
+    );
+    if admits_never_operand && try_emit_unreachable_for_never_operand(emitter, ctx, &[lhs, rhs])? {
+        return Ok(());
+    }
     let _: () = match op {
         // `+` dispatches on the result type the typechecker chose: numeric
         // operands → `f64.add`, string operands → `string_concat` from the
@@ -3461,6 +3602,35 @@ fn emit_logical(
     }
     emitter.emit_end();
     Ok(())
+}
+
+/// Evaluates `operands` in order and ends in `unreachable` when any of them is
+/// `never`, returning whether it did. The typechecker accepts arithmetic on a
+/// `never` operand because no value of it exists, but that operand's slot is a
+/// reference no numeric instruction takes, so the operator itself isn't emitted.
+fn try_emit_unreachable_for_never_operand(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    operands: &[ExprId],
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let mut has_never_operand = false;
+    for &operand in operands {
+        let ty = &ctx
+            .ta
+            .try_expr(operand)
+            .map_err(crate::codegen::arena_failure)?
+            .ty;
+        has_never_operand |= matches!(ty.peel(), Type::Never);
+    }
+    if !has_never_operand {
+        return Ok(false);
+    }
+    for &operand in operands {
+        emit_expr(emitter, ctx, operand)?;
+        emitter.instruction(Instruction::Drop);
+    }
+    emitter.instruction(Instruction::Unreachable);
+    Ok(true)
 }
 
 fn emit_primitive_operand(
@@ -4757,6 +4927,11 @@ fn emit_unary(
     operand: ExprId,
     result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if matches!(op, UnOp::Neg | UnOp::Pos)
+        && try_emit_unreachable_for_never_operand(emitter, ctx, &[operand])?
+    {
+        return Ok(());
+    }
     let _: () = match op {
         UnOp::BitNot => emit_bitwise_host(emitter, ctx, "bitnot", &[operand], result_ty)?,
         UnOp::Neg => {

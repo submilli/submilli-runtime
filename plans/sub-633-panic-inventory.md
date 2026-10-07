@@ -30,9 +30,9 @@ by [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 ## Active work
 
-Entries marked **fixed on main** were merged in PR #151, PR #152 or PR #163. Entries marked **fixed
+Entries marked **fixed on main** were merged in PR #151, PR #152, PR #163 or PR #169. Entries marked **fixed
 on branch** have completed focused verification and review; other N entries
-remain open. Five N entries remain open, eleven are fixed on main, and N08 is
+remain open. Four N entries remain open, twelve are fixed on main, and N17 is
 fixed on this branch. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
@@ -52,7 +52,7 @@ fixed on this branch. Evidence means:
 | N05 | **Fixed on main:** bound namespace metadata before recursive consumers | Debug/release 2 MiB stack regressions pass |
 | N06 | **Fixed on main:** validate sibling dependencies at public build entry | Typed-error regression passes |
 | N07 | **Fixed on main:** make resolver error formatting safe for arbitrary UTF-8 | Public formatting regression passes |
-| N08 | **Fixed on branch:** make watchdog thread creation fallible | Injected setup failure, recovery and timer lifecycle regressions |
+| N08 | **Fixed on main:** make watchdog thread creation fallible | Injected setup failure, recovery and timer lifecycle regressions |
 | N09 | Handle blocking-pool thread admission failures | Inspection; dependency OS failure |
 | N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
 | N11 | **Fixed on main:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
@@ -61,7 +61,7 @@ fixed on this branch. Evidence means:
 | N14 | **Fixed on main:** bound aggregate MCP discovery pages/tools/schemas | Paginated localhost and aggregate-limit regressions pass |
 | N15 | **Fixed on main:** bound artifact reads and retained package data before loading | File and wide-closure regressions pass |
 | N16 | Admit native string-builder output before allocation | Inspection; host allocation before store limit |
-| N17 | Validate the public reaper's timer configuration | Inspection; zero interval panics |
+| N17 | **Fixed on branch:** validate reaper configuration and check timer deadlines | Invalid setup/recovery, timer contract and sweep regressions |
 
 | ID | Investigation | Exit condition |
 | --- | --- | --- |
@@ -313,8 +313,8 @@ is not an invariant. This concerns CLI/direct timeout setup; the server's separa
 execution. Preserve timer ownership/disarming. Inject a spawn failure and verify
 a later successful run; do not silently disable a requested timeout.
 
-**Disposition (N08 follow-up):** fixed on `codex/fallible-watchdog`, against
-integration base `6358bd85`. `watchdog::arm` returns `std::io::Result<Watchdog>`
+**Disposition (N08 follow-up):** merged as `38f29096` in PR #169; developed on
+`codex/fallible-watchdog` against integration base `6358bd85`. `watchdog::arm` returns `std::io::Result<Watchdog>`
 from `Builder::spawn`; `RuntimeConfig::arm_timeout` returns
 `wasmtime::Result<Option<Watchdog>>` with watchdog startup context and its I/O
 cause. Direct, CLI, package-test and harness callers propagate failure. Production
@@ -325,7 +325,9 @@ unchanged. This is an injected OS-failure check, not induced thread exhaustion.
 Focused evidence: five watchdog tests cover failure cause, healthy follow-up,
 failure before guest top-level execution, disabled timeout, interruption and
 disarming. Caller regressions, formatting, Clippy and review results are recorded
-in the working handoff; full verification is deferred to the post-rebase PR gate.
+in the working handoff. Final workspace tests and 134 package/documentation
+checks passed before PR #169; HTTP/nightly-only coverage was excluded and 35
+network package files were skipped.
 
 ### N09 — Tokio blocking-pool admission can panic before a join exists
 
@@ -543,24 +545,69 @@ Keep UTF-16 units and real user range errors. Verify small tenant budgets reject
 large outputs before native growth, boundaries still work, and accounting refunds
 on error. Include concat and the named shared wrappers in the same fix.
 
-### N17 — Public reaper accepts a zero timer interval
+**Disposition (2026-10-07): implemented in the working tree.** Repeat, both
+padding methods, concat and the `string_concat` operator now admit native input
+copies and output against tenant memory before allocation. Output reservation is
+fallible and owned by a guarded result through GC marshalling; dropping its
+buffer precedes refunding its bytes. GC retains its separate accounting for the
+simultaneously live copy. Existing UTF-16 semantics, repeat/padding ceilings and
+catchable range errors are preserved. Allocation failures terminate execution;
+memory-cap refusals remain uncatchable. Output COPY fuel is prepaid before
+construction and is not charged again by the GC writer. The Rust helpers now
+accept tenant limits and return guarded, fallible results.
 
-**Site:** `crates/submilli-server/src/session_manager.rs:963–978`
-(`SessionManager::spawn_reaper`).
+Focused coverage includes exact admission bounds, refusal without native output
+growth, deterministic capacity-layout failure and refunds, UTF-16 edge cases,
+all five runtime entry points, and GC-copy failure cleanup. The new allocator
+measurement is nightly-only and was selected explicitly for development.
 
-The public method accepts any `Duration`, sets `reaper_started`, then creates
-`tokio::time::interval(interval)` inside its spawned task. Tokio rejects zero by
-panicking. The normal `AppState` callers pass fixed nonzero `REAP_INTERVAL`, so
-those calls have a genuine local guarantee; arbitrary direct callers do not.
-A failed task also leaves the started flag set. An entered runtime alone does not
-prove its timer driver is enabled.
+**Residual dependency limitation:** the pinned `submilli-wasm` 0.1.10 GC
+writer's `value/gc_aggregate.rs:616` (`i16_body`) still constructs its admitted
+body with infallible iterator collection. Engine admission and checked packed
+lengths precede this unchanged allocation. N16 fixes first-party native builders;
+it does not establish transitive allocator-abort freedom.
 
-**Evidence:** source/dependency contract inspection; no direct API execution.
+**Accepted exception:** the new string-allocation measurement accesses the
+shared `TEST_LOCK` with `expect`: a prior panic may have interrupted the protected
+measurement state. Poisoned access is permitted under the repository policy; this
+is an accepted poisoned-lock panic, not a removed or unresolved N16 violation.
 
-**Direction/done:** establish the interval/runtime preconditions at the public
-boundary before publishing started state, preferably structurally or through a
-fallible start API. Test zero and supported nonzero configuration; decide and
-document the timer-enabled runtime contract. No general reaper/lifecycle redesign.
+### N17 — Public reaper timer configuration
+
+**Original site:** `crates/submilli-server/src/session_manager.rs`
+(`SessionManager::spawn_reaper`); still unresolved on integration base `38f29096`.
+Zero intervals panic inside Tokio's interval task after the started flag is set.
+Tokio 1.52.3 also adds the interval unchecked on its missed-tick path and
+rounds timer-registration deadlines up with unchecked addition. Both boundaries
+require checked headroom for caller-supplied durations.
+
+**Disposition:** fixed on `codex/validated-reaper`. The public API now returns
+`Result<(), ReaperStartError>` for zero intervals and unrepresentable deadlines.
+Timer construction precedes publishing startup state. Checked `sleep_until`
+deadlines reserve one millisecond for Tokio registration rounding and preserve the immediate first sweep and burst catch-up. Later deadline
+overflow logs a failure and clears startup state after completing the sweep.
+No-runtime calls remain no-ops; invalid configuration is rejected in a runtime
+even when a reaper already runs. General task cancellation/restart is unchanged.
+
+**Accepted invariants:** entered runtimes must have their time driver enabled;
+this is documented on `spawn_reaper`, `AppState::boot` and `app`. The timer is
+constructed in that runtime before spawning, without intervening callbacks, and
+remains attached to it. Repository server/CLI runtime builders enable timers.
+Violation of this explicit embedding contract may panic; it is not a removed
+panic. AppState's private startup helper uses `expect` on the returned interval
+error because its immutable 30-second constant is nonzero and representable;
+configuration and callbacks cannot substitute a different duration.
+
+**Verification:** seven reaper regressions cover invalid intervals and healthy
+follow-up, no-runtime behavior, timer-disabled contract violation before state
+publication, checked/catch-up deadlines, platform-specific timer-rounding
+headroom, an injected later-overflow schedule and
+state recovery, and immediate/subsequent expiry sweeps. AppState boot/router
+regressions pass (nine tests selected by `reaper`, two by `direct_router`,
+with one overlap). Formatting and workspace Clippy pass. Two independent
+three-role review rounds completed: the first found missing Tokio rounding
+headroom, now fixed; the second found no issues. Full verification is deferred
+to the PR gate.
 
 ## Questions requiring a scoped follow-up
 
@@ -630,7 +677,7 @@ caller exemption to a whole module.
 | A06 | Fixed embedded schemas and closed serializer inputs | Schema registry parses only the compiled-in tested asset. Blueprint's supported serialization graph and plain filter strings have no unsupported serializer shape; JSON Values/fixed generated maps serialize to memory. Recursive filter formatting is explicitly N01, not exempted. |
 | A07 | Local dispatch/path construction | `str::split` yields an initial component. Scaffold callers validate UTF-8 path components. Sync skill handling returns before target dispatch. MCP client ID is pinned/provided or registration assigns it before access. |
 | A08 | Poisoned `std::sync` locks | Potentially partly updated protected state may panic on poisoned access, including cleanup, under AGENTS.md. The initiating panic needs independent justification; double-panic abort remains possible. No poison-only fallible plumbing requested. |
-| A09 | Fixed host ABI slots and local collection indexes | Host registration validates argument/result signatures before body dispatch. Indexes derived immediately from bounds/iteration and immutable tables are structural invariants. This does not cover arbitrary guest indexes or the public manifest membership gap N06. |
+| A09 | Fixed host ABI slots and local collection indexes | Host registration validates argument/result signatures before body dispatch. Indexes derived immediately from bounds/iteration and immutable tables are structural invariants. This does not cover arbitrary guest indexes or the public manifest membership gap N06. SUB-1422 adds accepted same-graph worklist access in `crates/interpreter/src/authority/guards.rs`: the entry state is initialized before enqueue, every successor is initialized before enqueue, graph indexes come only from append-only CFG construction, and the local input vector is never resized or exposed to callbacks. The `queued flow node has an input state` expectation and graph-index accesses are construction invariants; nesting/work/observation exhaustion remains a typed compiler failure. |
 | A10 | Existing structural/resource guards | Parser recursion/array suffix bounds, checked arena edges/cycles, closure arity, type/function limits, bounded rendering, Git pack/copy traversal, session JSON bounds and MCP schema depth checks remain useful. Recursive compiler work additionally needs its documented compiler-sized stack. These guards do not imply global memory safety (N04/N05/N11–N16, Q01–Q04). |
 
 ### Current explicit-site ledger

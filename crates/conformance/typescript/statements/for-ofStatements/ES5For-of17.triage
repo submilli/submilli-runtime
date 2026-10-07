@@ -1,2 +1,2 @@
-line 2 extra: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected
-line 3, 5 type: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected
+line 6 extra: bug SUB-1453 `++` on a `never` value is rejected
+line 4, 5 type: artifact the inner `v` is read in its own initializer, which tsc types as `any` for the circular reference
