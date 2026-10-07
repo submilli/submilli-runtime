@@ -1,1 +1,1 @@
-line 13, 41, 42 extra: bug SUB-1205 `typeof` of a class or enum name is unresolved
+line 13, 41 extra: by-design spec §1.2 a class or a whole enum is a type, not a value, so `typeof` has nothing to take

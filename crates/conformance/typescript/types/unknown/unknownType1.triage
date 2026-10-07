@@ -1,1 +1,0 @@
-line 46 extra: bug SUB-1205 `keyof` over a type parameter or `unknown` is rejected

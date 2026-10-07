@@ -1,16 +1,4 @@
-types: 5 of 11 tsc entries compared, 3 differ
-
-line 4: test
-  tsc:  (names: string[]) => string[]
-  ours: (arg0: string[]) => null | string[]
-
-line 4: (names: string[]) => // single-line comment names?.filter(x => x)
-  tsc:  (names: string[]) => string[]
-  ours: (arg0: string[]) => null | string[]
-
-line 6: names?.filter(x => x)
-  tsc:  string[]
-  ours: null | string[]
+types: 5 of 11 tsc entries compared, 0 differ
 
 errors:
 line 6: ours: expected `boolean`, got `string` (tsc accepts)

@@ -391,6 +391,7 @@ impl AppState {
 
     /// Rehydrate persisted sessions and sweep orphan directories. Await once
     /// before serving so reconnects resolve and stale directories are reclaimed.
+    /// The executing Tokio runtime must have its time driver enabled.
     pub async fn boot(&self) -> Result<(), crate::session_manager::BootError> {
         if self.inner.booted.load(Ordering::Acquire) {
             return Ok(());
@@ -401,7 +402,7 @@ impl AppState {
         }
         self.inner.session_manager.boot().await?;
         self.inner.session_manager.volume_registry().prepare();
-        self.inner.session_manager.spawn_reaper(REAP_INTERVAL);
+        self.start_reaper();
         self.inner.booted.store(true, Ordering::Release);
         Ok(())
     }
@@ -416,10 +417,20 @@ impl AppState {
         }
         if !self.inner.booted.load(Ordering::Acquire) {
             self.inner.session_manager.validate_stores().await?;
-            self.inner.session_manager.spawn_reaper(REAP_INTERVAL);
+            self.start_reaper();
         }
         self.inner.router_ready.store(true, Ordering::Release);
         Ok(())
+    }
+
+    fn start_reaper(&self) {
+        // This private caller always supplies the fixed 30-second constant;
+        // configuration and callbacks cannot replace it. Public startup/router
+        // entry points require a timer-enabled Tokio runtime.
+        self.inner
+            .session_manager
+            .spawn_reaper(REAP_INTERVAL)
+            .expect("fixed 30-second reaper interval fits the timer deadline");
     }
 
     pub(crate) fn graceful_shutdown(&self) -> Arc<GracefulShutdownTracker> {
@@ -1015,6 +1026,8 @@ fn layered_package_store(root: Option<PathBuf>, fallback: Option<PathBuf>) -> Pa
     }
 }
 
+/// Build the server router. Requests must run on a Tokio runtime with its time
+/// driver enabled; first-request initialization starts the session reaper.
 pub fn app(state: AppState) -> Router {
     let boot_state = state.clone();
     let graceful_shutdown = state.graceful_shutdown();

@@ -630,6 +630,10 @@ path = "other"
             && route["effects"].as_array().is_some_and(|effects| {
                 effects.iter().any(|effect| {
                     effect["effect"]["capability"] == "http.get"
+                        && effect["guard"]["status"] == "unguarded"
+                        && effect["guard"]["path"]
+                            .as_array()
+                            .is_some_and(|path| !path.is_empty())
                         && effect["witness"]
                             .as_array()
                             .is_some_and(|witness| witness.len() == 1)
@@ -2092,6 +2096,19 @@ export function op(customer: string): void {
  * @returns The response body.
  */
 export function op(): string { return get("https://api.example.com/data").body; }
+"#,
+        ),
+        (
+            "without a successful direct semantic check on every path",
+            r#"import { get } from "submilli:http";
+import { check } from "submilli:security";
+/** Fetch data.
+ * @capability acme.fetch {}
+ */
+export function op(): void {
+    try { check("acme.fetch", {}); } catch {}
+    get("https://api.example.com/data");
+}
 "#,
         ),
         (

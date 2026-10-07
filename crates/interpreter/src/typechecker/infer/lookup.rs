@@ -135,7 +135,10 @@ impl<'a> Inferer<'a> {
                 dispatch,
                 ..
             } => {
-                let mut sig = methods.get(name)?.clone();
+                let Some(sig) = methods.get(name) else {
+                    return self.undeclared_interface_to_string(sym, name, *dispatch);
+                };
+                let mut sig = sig.clone();
                 if array_view.is_some() {
                     sig = restrict_to_reads(sig, generics)?;
                 }
@@ -181,6 +184,43 @@ impl<'a> Inferer<'a> {
             }
             _ => None,
         }
+    }
+
+    /// `toString` on a value of a program-declared interface that doesn't declare it.
+    ///
+    /// Every non-null value answers `toString` (spec §1.6). Such a value is an
+    /// object, so the call dispatches as `Object`'s does, through vtable slot 0: the
+    /// value's own `toString`, else `"[object Object]"`. An interface whose
+    /// `toString` is a property keeps that property's rules, so an optional one
+    /// still needs a guard. The runtime's own interfaces stay out: their host
+    /// values would print `[object Object]` where JS names the class.
+    fn undeclared_interface_to_string(
+        &self,
+        sym: &crate::TypeSymbol,
+        name: &str,
+        dispatch: crate::Dispatch,
+    ) -> Option<(
+        MethodSig,
+        BTreeMap<String, Type>,
+        crate::MangledName,
+        crate::Dispatch,
+    )> {
+        let TypeKind::Interface { properties, .. } = &sym.kind else {
+            return None;
+        };
+        let is_runtime_interface = sym.mangled_name.as_str().starts_with("submilli:");
+        if name != "toString"
+            || dispatch != crate::Dispatch::VTable
+            || is_runtime_interface
+            || properties.contains_key(name)
+        {
+            return None;
+        }
+        let object = Type::Object {
+            fields: BTreeMap::new(),
+            index: None,
+        };
+        self.find_method(&object, name)
     }
 
     /// Resolve an interface property regardless of dispatch kind. VTable

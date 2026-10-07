@@ -879,7 +879,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![Param::new("message", Type::String)],
+                constructor: vec![optional_message_param()],
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::from([(
                     "isError".to_string(),
@@ -921,7 +921,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![Param::new("message", Type::String)],
+                constructor: vec![optional_message_param()],
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -949,7 +949,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![Param::new("message", Type::String)],
+                constructor: vec![optional_message_param()],
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -977,7 +977,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![Param::new("message", Type::String)],
+                constructor: vec![optional_message_param()],
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -1075,7 +1075,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::new(),
                 method_visibility: BTreeMap::new(),
                 accessors: Vec::new(),
-                constructor: vec![Param::new("message", Type::String)],
+                constructor: vec![optional_message_param()],
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::new(),
                 static_visibility: BTreeMap::new(),
@@ -1144,6 +1144,16 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
+}
+
+/// `message` defaults to `""`, as JS's error constructors do: `new Error()` has an
+/// empty message.
+fn optional_message_param() -> crate::Param {
+    crate::Param::with_default(
+        "message",
+        crate::Type::String,
+        crate::DefaultValue::String(String::new()),
+    )
 }
 
 #[cfg(test)]

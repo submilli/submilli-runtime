@@ -1,3 +1,3 @@
 line 9 extra: by-design spec §Excluded-Features `Symbol` is excluded
-line 30, 32 extra: bug SUB-1205 `Iterable` rejects tsc's second type argument
+line 30, 32 extra: by-design spec §1.5 `Iterable` takes only the element type
 line 9 type: by-design spec §Excluded-Features `Symbol` is excluded
