@@ -738,6 +738,10 @@ fn assignable_rec(
         (Type::NumberLiteral(a), Type::NumberLiteral(b)) => a == b,
         (Type::NumberLiteral(_) | Type::NumberEnum { .. }, Type::Number) => true,
         (Type::Number, Type::NumberLiteral(_)) => false,
+        // An enum's identity is its declaration: an aliased import
+        // (`import { E as G }`) names the same enum under another `name`.
+        (Type::NumberEnum { mangled: a, .. }, Type::NumberEnum { mangled: b, .. })
+        | (Type::StringEnum { mangled: a, .. }, Type::StringEnum { mangled: b, .. }) => a == b,
         (Type::BooleanLiteral(a), Type::BooleanLiteral(b)) => a == b,
         (Type::BooleanLiteral(_), Type::Boolean) => true,
         (Type::Boolean, Type::BooleanLiteral(_)) => false,
