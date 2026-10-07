@@ -599,7 +599,18 @@ impl Inferer<'_> {
                 return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
             }
             ExprKind::ObjectLiteral { members } => {
-                self.infer_object_literal(expr_id, members, expected, span)
+                let lone_spread = matches!(
+                    members.as_slice(),
+                    [crate::ObjectLiteralMember::Spread { .. }]
+                );
+                let errors_before = self.error_count();
+                let (kind, ty) = self.infer_object_literal(expr_id, members, expected, span)?;
+                match expected {
+                    Some(expected) if lone_spread && self.error_count() == errors_before => {
+                        self.spread_as_its_alternatives(kind, ty, expected, span)
+                    }
+                    _ => Ok((kind, ty)),
+                }
             }
             ExprKind::ArrayLiteral { elements } => {
                 self.infer_array_literal(elements, expected, span)
@@ -4968,6 +4979,55 @@ impl Inferer<'_> {
     /// still checked against the selected variant's field, so it is rejected
     /// rather than mistyped. `None` (defer to the caller's single-shape scan)
     /// for ambiguity or no match.
+    /// `{ ...x }` checked against `expected`, where `x` is a union or a
+    /// conditional. Its alternatives merge into one object type, which may not
+    /// fit `expected` though each alternative does: `{ ...x }` with
+    /// `x: Dict | { a: string }` is a copy of whichever `x` holds. tsc types the
+    /// copy as the union of its alternatives; here the merged object is cast to
+    /// `expected` when every alternative fits it.
+    fn spread_as_its_alternatives(
+        &mut self,
+        kind: TypedExprKind,
+        ty: Type,
+        expected: &Type,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let TypedExprKind::ObjectLiteral { members, .. } = &kind else {
+            return Ok((kind, ty));
+        };
+        let [crate::TypedObjectMember::Spread { source, .. }] = members.as_slice() else {
+            return Ok((kind, ty));
+        };
+        if assignable(&ty, expected, self.resolver()) {
+            return Ok((kind, ty));
+        }
+        let source_ty = self
+            .typed_ast
+            .try_expr(*source)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let mut alternatives = Vec::new();
+        self.collect_spread_alternatives(*source, &source_ty, &mut alternatives)?;
+        alternatives.retain(|alternative| !is_definitely_falsy(alternative));
+        let every_alternative_fits = alternatives.len() > 1
+            && alternatives
+                .iter()
+                .all(|alternative| assignable(alternative, expected, self.resolver()));
+        if !every_alternative_fits {
+            return Ok((kind, ty));
+        }
+        let copy = self.push_synthetic_expr(kind, ty, span)?;
+        Ok((
+            TypedExprKind::Cast {
+                value: copy,
+                target_ty: expected.clone(),
+                check: None,
+            },
+            expected.clone(),
+        ))
+    }
+
     /// The hint an object literal takes against a union with a member that has
     /// an index signature, which no field name can rule out: each field the
     /// literal writes is hinted with every type a member gives that name. The
