@@ -1727,7 +1727,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a `{ a, b as c }` specifier list shared by `import` and re-`export`.
-    /// `what` names the construct in diagnostics. Returns the specifiers (possibly
+    /// `list` says whether the specifiers bind local names (an import) and names the
+    /// construct in diagnostics. Returns the specifiers (possibly
     /// empty — callers reject empty with construct-specific help) and the span of
     /// the opening brace.
     fn parse_specifier_list(
@@ -3623,8 +3624,9 @@ impl<'a> Parser<'a> {
     }
 
     /// Whether the next tokens start a declaration (`function f`, `class C`, `type T`,
-    /// …), which no type member can: a keyword is a member name only before `:`, `?`
-    /// or `(`. A member list that reaches one was left unclosed, so it stops there
+    /// …, optionally after `export`, `declare`, `async` or `abstract`) or an export
+    /// statement (`export {`, `export *`, `export default`), which no type member can:
+    /// a keyword is a member name only before `:`, `?` or `(`. A member list that reaches one was left unclosed, so it stops there
     /// and leaves the declaration to be parsed.
     fn peek_starts_declaration(&self) -> bool {
         if matches!(self.peek().kind, TokenKind::Export)
