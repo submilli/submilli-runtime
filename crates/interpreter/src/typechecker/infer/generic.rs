@@ -1222,12 +1222,14 @@ impl Inferer<'_> {
         })
     }
 
-    /// The type parameters in `inferred` that type at most one of the fields
-    /// the object literal `arg` gives for `param_ty`. Only those fields keep
-    /// the literals a function value returns, as tsc's common supertype of
-    /// two such values (`{ v: () => 1, w: () => 2 }`) widens what they return
-    /// to `() => number`. Every one of `inferred` when `arg` is not an object
-    /// literal or `param_ty` has no single object shape.
+    /// The type parameters in `inferred` that type at most one of the function
+    /// values the object literal `arg` gives for `param_ty`, in whichever of
+    /// its object shapes types the most. Only those keep the literals a
+    /// function value returns, as tsc's common supertype of two such values
+    /// (`{ v: () => 1, w: () => 2 }`) widens what they return to
+    /// `() => number`; a plain value (`w: 2`) is no supertype of either.
+    /// Every one of `inferred` when `arg` is not an object literal or
+    /// `param_ty` has no object shape.
     fn type_params_of_one_field(
         &self,
         arg: ExprId,
@@ -1243,20 +1245,29 @@ impl Inferer<'_> {
         if shapes.is_empty() {
             return Ok(inferred.to_vec());
         }
-        let given: Vec<&str> = members
-            .iter()
-            .filter_map(|member| match member {
-                crate::ObjectLiteralMember::Field(field) => Some(field.name.name.as_str()),
-                _ => None,
-            })
-            .collect();
+        let mut given_function_fields = Vec::new();
+        for member in members {
+            let crate::ObjectLiteralMember::Field(field) = member else {
+                continue;
+            };
+            let value = self
+                .ast
+                .try_expr(field.value)
+                .map_err(super::arena_failure)?;
+            if matches!(
+                value.kind,
+                ExprKind::Arrow { .. } | ExprKind::FunctionExpression { .. }
+            ) {
+                given_function_fields.push(field.name.name.as_str());
+            }
+        }
         // Each object shape of the parameter (`{ kind: "a"; get: T; fallback:
         // T } | { kind: "b"; get: T }`) may be the one the literal fits.
-        let fields_typed_by = |name: &str| {
+        let most_fields_typed_by = |name: &str| {
             shapes
                 .iter()
                 .map(|fields| {
-                    given
+                    given_function_fields
                         .iter()
                         .filter_map(|field| fields.get(*field))
                         .filter(
@@ -1269,7 +1280,7 @@ impl Inferer<'_> {
         };
         Ok(inferred
             .iter()
-            .filter(|name| fields_typed_by(name) <= 1)
+            .filter(|name| most_fields_typed_by(name) <= 1)
             .cloned()
             .collect())
     }
