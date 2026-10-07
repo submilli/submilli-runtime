@@ -801,6 +801,8 @@ fn assignable_rec(
                 types.class_args_at_ancestor(ma, aa, me)
             };
             match actual_at_expected {
+                // Classes are nominal and have no member fallback, so arguments
+                // the members might accept still leave them unrelated.
                 Some(at) => match args_relate_at_variances(me, ne, &at, ae, types, seen) {
                     Some(relation) => relation == ArgsRelation::Related,
                     None => args_relate_covariantly(&at, ae, types, seen),

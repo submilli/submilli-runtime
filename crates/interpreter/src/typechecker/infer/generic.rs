@@ -1222,12 +1222,13 @@ impl Inferer<'_> {
         })
     }
 
-    /// The type parameters in `inferred` that type at most one of the function
-    /// values the object literal `arg` gives for `param_ty`, in whichever of
-    /// its object shapes types the most. Only those keep the literals a
-    /// function value returns, as tsc's common supertype of two such values
-    /// (`{ v: () => 1, w: () => 2 }`) widens what they return to
-    /// `() => number`; a plain value (`w: 2`) is no supertype of either.
+    /// The type parameters in `inferred` that type at most one of the fields
+    /// the object literal `arg` gives, counted in the object shape of
+    /// `param_ty` where that type parameter types the most of them. Only
+    /// those keep the literals a function value returns, as tsc's common
+    /// supertype of two such values (`{ v: () => 1, w: () => 2 }`) widens
+    /// what they return to `() => number`. A plain literal (`w: 2`) can't be
+    /// such a supertype, so it doesn't count.
     /// Every one of `inferred` when `arg` is not an object literal or
     /// `param_ty` has no object shape.
     fn type_params_of_one_field(
@@ -1245,20 +1246,13 @@ impl Inferer<'_> {
         if shapes.is_empty() {
             return Ok(inferred.to_vec());
         }
-        let mut given_function_fields = Vec::new();
+        let mut given_fields = Vec::new();
         for member in members {
             let crate::ObjectLiteralMember::Field(field) = member else {
                 continue;
             };
-            let value = self
-                .ast
-                .try_expr(field.value)
-                .map_err(super::arena_failure)?;
-            if matches!(
-                value.kind,
-                ExprKind::Arrow { .. } | ExprKind::FunctionExpression { .. }
-            ) {
-                given_function_fields.push(field.name.name.as_str());
+            if !self.is_plain_literal(field.value)? {
+                given_fields.push(field.name.name.as_str());
             }
         }
         // Each object shape of the parameter (`{ kind: "a"; get: T; fallback:
@@ -1267,12 +1261,10 @@ impl Inferer<'_> {
             shapes
                 .iter()
                 .map(|fields| {
-                    given_function_fields
+                    given_fields
                         .iter()
                         .filter_map(|field| fields.get(*field))
-                        .filter(
-                            |field| matches!(field.ty.peel(), Type::TypeVar(var) if var == name),
-                        )
+                        .filter(|field| is_or_has_type_var(&field.ty, name))
                         .count()
                 })
                 .max()
@@ -1283,6 +1275,26 @@ impl Inferer<'_> {
             .filter(|name| most_fields_typed_by(name) <= 1)
             .cloned()
             .collect())
+    }
+
+    /// Whether `expr`, inside any parentheses, is a literal that can never be a
+    /// function: a primitive, an object or an array literal.
+    fn is_plain_literal(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        let mut expr = expr;
+        loop {
+            let kind = &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind;
+            match kind {
+                ExprKind::Paren(inner) => expr = *inner,
+                ExprKind::Number(_)
+                | ExprKind::BigInt(_)
+                | ExprKind::String(_)
+                | ExprKind::Boolean(_)
+                | ExprKind::Null
+                | ExprKind::ObjectLiteral { .. }
+                | ExprKind::ArrayLiteral { .. } => return Ok(true),
+                _ => return Ok(false),
+            }
+        }
     }
 
     /// The object shapes of `ty`: an object type, an interface with the
@@ -2843,6 +2855,16 @@ fn bind_remaining(
         }
     }
     Ok(())
+}
+
+/// Whether `ty` is the type parameter `name` or a union with it as a member
+/// (`T | number`), where a value the parameter takes is a candidate for it.
+fn is_or_has_type_var(ty: &Type, name: &str) -> bool {
+    let is_var = |ty: &Type| matches!(ty.peel(), Type::TypeVar(var) if var == name);
+    match ty.peel() {
+        Type::Union(members) => members.iter().any(is_var),
+        _ => is_var(ty),
+    }
 }
 
 #[cfg(test)]
