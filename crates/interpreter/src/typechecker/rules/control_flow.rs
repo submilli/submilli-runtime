@@ -212,7 +212,15 @@ fn switch_is_exhaustive(
     if let Type::NumberEnum { mangled, name, .. } | Type::StringEnum { mangled, name, .. } =
         disc_expr.ty.peel()
     {
-        return Ok(enum_is_covered(declarations, mangled, name, &seen));
+        // A bare literal names no member, as in TypeScript: `case 0` leaves
+        // `E.A` unmatched.
+        let named: std::collections::BTreeSet<narrowing::LiteralValue> = cases
+            .iter()
+            .flat_map(|case| &case.values)
+            .filter(|value| matches!(value, TypedSwitchValue::Enum { .. }))
+            .filter_map(literal_value_of)
+            .collect();
+        return Ok(enum_is_covered(declarations, mangled, name, &named));
     }
     if let TypedExprKind::FieldAccess { receiver, name } = &disc_expr.kind
         && let Type::Union(members) = ta

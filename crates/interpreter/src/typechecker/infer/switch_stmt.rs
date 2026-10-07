@@ -448,9 +448,17 @@ impl Inferer<'_> {
             });
         }
 
-        let covered: BTreeSet<narrowing::LiteralValue> = seen.keys().cloned().collect();
-        let (residual, site) =
-            self.compute_switch_residual(typed_disc, &disc_ty, &covered, saw_null.is_some())?;
+        let covered = CaseCoverage {
+            literals: seen.keys().cloned().collect(),
+            named_members: typed_cases
+                .iter()
+                .flat_map(|case| &case.values)
+                .filter(|value| matches!(value, TypedSwitchValue::Enum { .. }))
+                .filter_map(switch_value_to_literal_value)
+                .collect(),
+            null: saw_null.is_some(),
+        };
+        let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered)?;
 
         let typed_default = if let Some(d) = default {
             let body_span = self
@@ -601,8 +609,7 @@ impl Inferer<'_> {
         &self,
         typed_disc: ExprId,
         disc_ty: &Type,
-        covered: &BTreeSet<narrowing::LiteralValue>,
-        covers_null: bool,
+        covered: &CaseCoverage,
     ) -> Result<(Type, ResidualSite), crate::compiler_error::CompilerFailure> {
         let disc_expr = self
             .typed_ast
@@ -625,9 +632,9 @@ impl Inferer<'_> {
                     .filter(|(_, field_ty)| {
                         !field_ty.as_ref().is_some_and(|ty| {
                             narrowing::is_covered_by_literals(
-                                &self.enums_as_literals(ty),
-                                covered,
-                                covers_null,
+                                &self.enums_as_literals(ty, &covered.named_members),
+                                &covered.literals,
+                                covered.null,
                             )
                         })
                     })
@@ -666,7 +673,7 @@ impl Inferer<'_> {
                     .enumerate()
                     .filter(|(idx, _)| {
                         !table.iter().any(|(lit, variant)| {
-                            variant.0 as usize == *idx && covered.contains(lit)
+                            variant.0 as usize == *idx && covered.literals.contains(lit)
                         })
                     })
                     .map(|(_, m)| m.clone())
@@ -687,12 +694,14 @@ impl Inferer<'_> {
         }
         // An enum leaves only when the cases name every member, since it has
         // no type for the members left.
-        let enum_covered =
-            narrowing::subtract_literals(&self.enums_as_literals(disc_ty), covered) == Type::Never;
+        let enum_covered = narrowing::subtract_literals(
+            &self.enums_as_literals(disc_ty, &covered.named_members),
+            &covered.literals,
+        ) == Type::Never;
         let residual = if enum_covered {
             Type::Never
         } else {
-            narrowing::subtract_literals(disc_ty, covered)
+            narrowing::subtract_literals(disc_ty, &covered.literals)
         };
         Ok(
             if let Some(path) = self.expr_to_reference_path(disc_expr)? {
@@ -703,19 +712,20 @@ impl Inferer<'_> {
         )
     }
 
-    /// `ty` with each enum in it spelled as the literals its members hold.
-    fn enums_as_literals(&self, ty: &Type) -> Type {
+    /// `ty` with each enum whose members the cases all name spelled as the
+    /// literals those members hold. A bare literal names no member, as in
+    /// TypeScript: `case 0` leaves `E.A` unmatched.
+    fn enums_as_literals(&self, ty: &Type, named: &BTreeSet<narrowing::LiteralValue>) -> Type {
         Type::union(
             narrowing::union_members(ty)
                 .into_iter()
                 .map(|member| {
-                    super::comparable::enum_literal_values(member.peel(), self.resolver())
-                        .map_or_else(
-                            || member.clone(),
-                            |values| {
-                                Type::union(values.iter().map(narrowing::literal_type).collect())
-                            },
-                        )
+                    match super::comparable::enum_literal_values(member.peel(), self.resolver()) {
+                        Some(values) if values.iter().all(|value| named.contains(value)) => {
+                            Type::union(values.iter().map(narrowing::literal_type).collect())
+                        }
+                        _ => member.clone(),
+                    }
                 })
                 .collect(),
         )
@@ -895,6 +905,14 @@ fn classify_switch_case_value(kind: &TypedExprKind, span: Span) -> Option<TypedS
 }
 
 /// Null uses `saw_null` separately because there's no `LiteralValue::Null` variant.
+/// The values a `switch`'s cases match.
+struct CaseCoverage {
+    literals: BTreeSet<narrowing::LiteralValue>,
+    /// The values of the enum members the cases name.
+    named_members: BTreeSet<narrowing::LiteralValue>,
+    null: bool,
+}
+
 fn duplicate_key(
     value: &TypedSwitchValue,
     seen: &mut BTreeMap<narrowing::LiteralValue, Span>,
