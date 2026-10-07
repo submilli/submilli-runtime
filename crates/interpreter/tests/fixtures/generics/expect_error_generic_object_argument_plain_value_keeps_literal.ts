@@ -1,11 +1,13 @@
-// Two values that may be functions (a parenthesized arrow, a const, a spread
-// object's field) widen what a type parameter's function values return to
-// `() => number`, as tsc's common supertype does. A plain value beside one
-// function (a literal, an operator's result) leaves its literal return.
+// Two values that may be functions (a parenthesized arrow, a const, an
+// asserted one, a spread object's field) widen what a type parameter's
+// function values return to `() => number`, as tsc's common supertype does.
+// A plain value beside one function (a literal, an operator's result)
+// leaves its literal return.
 // expect-error: expected `() => 1`, got `() => number`
 // expect-error: expected `1`, got `2`
 // expect-error: expected `() => 1`, got `() => number`
-// expect-error-count: 3
+// expect-error: expected `() => 1`, got `() => number`
+// expect-error-count: 4
 function pick<T>(o: { v: T; w: T | number }): T {
   return o.v;
 }
@@ -23,5 +25,8 @@ function main(): void {
   assert(stillOneToo() === 1, "an operator's value is no function");
   const spread = pick({ v: () => 1, ...{ w: alsoOne } });
   const spreadOne: () => 1 = spread;
+  const maybe: (() => 1) | null = alsoOne;
+  const asserted = pick({ v: () => 1, w: maybe! });
+  const assertedOne: () => 1 = asserted;
   const two: 1 = 2;
 }

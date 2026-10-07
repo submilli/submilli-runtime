@@ -1227,7 +1227,7 @@ impl Inferer<'_> {
     /// it types in each object shape of `param_ty`, leaving out plain values
     /// (`w: 2`), and keep it when the largest count is at most one: tsc's
     /// common supertype of two function values (`{ v: () => 1, w: () => 2 }`)
-    /// widens what they return to `() => number`. None when `arg` spreads
+    /// widens what they return to `() => number`. An empty list when `arg` spreads
     /// another object; every one of `inferred` when `arg` is not an object
     /// literal or `param_ty` has no object shape.
     fn type_params_of_one_field(
@@ -1245,18 +1245,21 @@ impl Inferer<'_> {
         if shapes.is_empty() {
             return Ok(inferred.to_vec());
         }
+        // A spread may give any field, and so a second function value for any
+        // type parameter.
+        if members
+            .iter()
+            .any(|member| matches!(member, crate::ObjectLiteralMember::Spread { .. }))
+        {
+            return Ok(Vec::new());
+        }
         let mut given_fields = Vec::new();
         for member in members {
-            match member {
-                // A spread may give any field, and so a second function
-                // value for any type parameter.
-                crate::ObjectLiteralMember::Spread { .. } => return Ok(Vec::new()),
-                crate::ObjectLiteralMember::Field(field)
-                    if !self.is_plain_value(field.value)? =>
-                {
-                    given_fields.push(field.name.name.as_str());
-                }
-                _ => {}
+            let crate::ObjectLiteralMember::Field(field) = member else {
+                continue;
+            };
+            if !self.is_plain_value(field.value)? {
+                given_fields.push(field.name.name.as_str());
             }
         }
         // Each object shape of the parameter (`{ kind: "a"; get: T; fallback:
@@ -1287,7 +1290,13 @@ impl Inferer<'_> {
     fn is_plain_value(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         let kind = &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind;
         Ok(match kind {
-            ExprKind::Paren(inner) => self.is_plain_value(*inner)?,
+            ExprKind::Paren(inner)
+            | ExprKind::PostfixUnary {
+                op: crate::PostfixOp::NonNullAssert,
+                operand: inner,
+            } => self.is_plain_value(*inner)?,
+            // These yield an operand rather than a primitive, so they come
+            // before the other operators below.
             ExprKind::Binary {
                 op: crate::BinOp::And | crate::BinOp::Or | crate::BinOp::NullishCoalesce,
                 lhs,
