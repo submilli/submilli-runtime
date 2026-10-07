@@ -1,13 +1,1 @@
-types: 43 of 88 tsc entries compared, 3 differ
-
-line 13: E.a
-  tsc:  E.a
-  ours: E
-
-line 24: E.a
-  tsc:  E.a
-  ours: E
-
-line 35: E.a
-  tsc:  E.a
-  ours: E
+types: 43 of 88 tsc entries compared, 0 differ

@@ -1,8 +1,35 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::mangle::MangledName;
 use serde::{Deserialize, Serialize};
+
+/// One member of an enum, as the member literal type `E.A` names it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct EnumMember<V> {
+    pub name: String,
+    pub value: V,
+    /// How many members the enum has, so a union naming them all folds into
+    /// the enum, as TypeScript reduces `E.A | E.B` to `E`.
+    pub member_count: usize,
+}
+
+impl<V> EnumMember<V> {
+    pub fn new(name: &str, value: V, member_count: usize) -> Self {
+        EnumMember {
+            name: name.to_string(),
+            value,
+            member_count,
+        }
+    }
+}
+
+/// The value an enum member holds.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EnumValue {
+    Number(LiteralF64),
+    String(String),
+}
 
 /// `f64` wrapper for total ordering and bit-pattern equality — bare `f64` lacks `Eq`/`Ord`,
 /// which would break the derived impls on [`Type`]. Construction must canonicalize `-0.0 → 0.0`;
@@ -270,15 +297,21 @@ pub enum Type {
         args: Vec<Type>,
     },
     /// Distinct from `StringEnum` so codegen knows the `i32` representation without consulting the type namespace.
+    ///
+    /// `member` narrows the enum to one member's literal type, `E.A`, which is
+    /// what a member read has, as in TypeScript. It shares the enum's runtime
+    /// representation; [`Type::widen_literal`] drops it back to the enum.
     NumberEnum {
         mangled: MangledName,
         package: Package,
         name: String,
+        member: Option<EnumMember<LiteralF64>>,
     },
     StringEnum {
         mangled: MangledName,
         package: Package,
         name: String,
+        member: Option<EnumMember<String>>,
     },
     /// Canonical union: sorted, deduplicated, no nested unions, no `Error` members, always ≥2
     /// members. Build *only* via [`Type::union`].
@@ -361,6 +394,7 @@ impl Type {
             mangled,
             package,
             name: name.into(),
+            member: None,
         }
     }
 
@@ -369,6 +403,107 @@ impl Type {
             mangled,
             package,
             name: name.into(),
+            member: None,
+        }
+    }
+
+    /// The member literal type `E.A` of the enum type `self`, which has
+    /// `member_count` members. `self` must be a `NumberEnum` holding a number
+    /// or a `StringEnum` holding a string. As in TypeScript, the one member of
+    /// an enum has the enum's own type.
+    pub fn with_enum_member(
+        &self,
+        member_name: &str,
+        value: EnumValue,
+        member_count: usize,
+    ) -> Type {
+        if member_count < 2 {
+            return self.without_enum_member();
+        }
+        match (self.clone(), value) {
+            (
+                Type::NumberEnum {
+                    mangled,
+                    package,
+                    name,
+                    ..
+                },
+                EnumValue::Number(value),
+            ) => Type::NumberEnum {
+                mangled,
+                package,
+                name,
+                member: Some(EnumMember::new(member_name, value, member_count)),
+            },
+            (
+                Type::StringEnum {
+                    mangled,
+                    package,
+                    name,
+                    ..
+                },
+                EnumValue::String(value),
+            ) => Type::StringEnum {
+                mangled,
+                package,
+                name,
+                member: Some(EnumMember::new(member_name, value, member_count)),
+            },
+            (ty, _) => ty,
+        }
+    }
+
+    /// The enum a member literal type `E.A` belongs to; any other type unchanged.
+    pub fn without_enum_member(&self) -> Type {
+        match self {
+            Type::NumberEnum {
+                mangled,
+                package,
+                name,
+                member: Some(_),
+            } => Type::number_enum(package.clone(), name.clone(), mangled.clone()),
+            Type::StringEnum {
+                mangled,
+                package,
+                name,
+                member: Some(_),
+            } => Type::string_enum(package.clone(), name.clone(), mangled.clone()),
+            _ => self.clone(),
+        }
+    }
+
+    /// Whether this is one literal type, what TypeScript calls a unit type:
+    /// `1`, `"a"`, `true`, `1n` or an enum member `E.A`.
+    pub fn is_literal_type(&self) -> bool {
+        matches!(
+            self,
+            Type::NumberLiteral(_)
+                | Type::StringLiteral(_)
+                | Type::BooleanLiteral(_)
+                | Type::BigIntLiteral(_)
+                | Type::NumberEnum {
+                    member: Some(_),
+                    ..
+                }
+                | Type::StringEnum {
+                    member: Some(_),
+                    ..
+                }
+        )
+    }
+
+    /// The value an enum member literal type `E.A` holds.
+    pub fn enum_member_value(&self) -> Option<EnumValue> {
+        match self.peel() {
+            Type::NumberEnum {
+                member: Some(member),
+                ..
+            } => Some(EnumValue::Number(member.value)),
+            Type::StringEnum {
+                member: Some(member),
+                ..
+            } => Some(EnumValue::String(member.value.clone())),
+            _ => None,
         }
     }
 
@@ -618,15 +753,22 @@ impl Type {
     /// an object-literal property, a generic argument. `const a = 1` is `1`, but
     /// `let b = a` is `number`, matching TypeScript.
     ///
-    /// Enums are left alone: `NumberEnum`/`StringEnum` are nominal types, not literals,
-    /// and widening them would discard the identity their members are checked against.
-    /// Use [`primitive_behavior`](Self::primitive_behavior) for that.
+    /// An enum member literal type `E.A` widens to its enum `E`, not to the
+    /// enum's primitive: the enum is a nominal type whose identity its members
+    /// are checked against. Use [`primitive_behavior`](Self::primitive_behavior)
+    /// for the primitive.
     pub fn widen_literal(&self) -> Type {
         match self {
             Type::NumberLiteral(_) => Type::Number,
             Type::StringLiteral(_) => Type::String,
             Type::BooleanLiteral(_) => Type::Boolean,
             Type::BigIntLiteral(_) => Type::BigInt,
+            Type::NumberEnum {
+                member: Some(_), ..
+            }
+            | Type::StringEnum {
+                member: Some(_), ..
+            } => self.without_enum_member(),
             // A union widens memberwise, which also collapses it when the members
             // share a base: `1 | 2` is `number`, not `number | number`, because
             // `Type::union` deduplicates.
@@ -709,6 +851,7 @@ impl Type {
         });
         flat.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
         fold_boolean_literals(&mut flat);
+        fold_enum_members(&mut flat);
         if flat.len() > 1 {
             return Type::Union(flat);
         }
@@ -891,6 +1034,77 @@ fn fold_boolean_literals(members: &mut Vec<Type>) {
         let at = members.partition_point(|m| m.without_aliases() < &Type::Boolean);
         members.insert(at, Type::Boolean);
     }
+}
+
+/// Reduces enum types as TypeScript does: a member beside its enum is absorbed
+/// by it, members naming every member of their enum are the enum, and an enum
+/// or member beside its primitive (`E | number`) is absorbed by the primitive.
+/// Leaves `members` sorted and deduplicated.
+fn fold_enum_members(members: &mut Vec<Type>) {
+    let has = |base: &Type| members.iter().any(|m| m.without_aliases() == base);
+    let (has_number, has_string) = (has(&Type::Number), has(&Type::String));
+    members.retain(|m| match m.without_aliases() {
+        Type::NumberEnum { .. } => !has_number,
+        Type::StringEnum { .. } => !has_string,
+        _ => true,
+    });
+    let mut named: BTreeMap<&MangledName, (usize, BTreeSet<&str>)> = BTreeMap::new();
+    let mut plain: BTreeSet<&MangledName> = BTreeSet::new();
+    for member in members.iter() {
+        match member.without_aliases() {
+            Type::NumberEnum {
+                mangled,
+                member: Some(m),
+                ..
+            } => {
+                let names = named
+                    .entry(mangled)
+                    .or_insert((m.member_count, BTreeSet::new()));
+                names.1.insert(m.name.as_str());
+            }
+            Type::StringEnum {
+                mangled,
+                member: Some(m),
+                ..
+            } => {
+                let names = named
+                    .entry(mangled)
+                    .or_insert((m.member_count, BTreeSet::new()));
+                names.1.insert(m.name.as_str());
+            }
+            Type::NumberEnum {
+                mangled,
+                member: None,
+                ..
+            }
+            | Type::StringEnum {
+                mangled,
+                member: None,
+                ..
+            } => {
+                plain.insert(mangled);
+            }
+            _ => {}
+        }
+    }
+    let folded: BTreeSet<MangledName> = named
+        .into_iter()
+        .filter(|(mangled, (count, names))| plain.contains(mangled) || names.len() >= *count)
+        .map(|(mangled, _)| mangled.clone())
+        .collect();
+    if folded.is_empty() {
+        return;
+    }
+    for member in members.iter_mut() {
+        if let Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. } =
+            member.without_aliases()
+            && folded.contains(mangled)
+        {
+            *member = member.without_aliases().without_enum_member();
+        }
+    }
+    members.sort_by(|a, b| a.without_aliases().cmp(b.without_aliases()));
+    members.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
 }
 
 impl Type {

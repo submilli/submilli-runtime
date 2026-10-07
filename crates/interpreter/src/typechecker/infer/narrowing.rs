@@ -133,6 +133,16 @@ pub enum LiteralValue {
     Boolean(bool),
 }
 
+impl LiteralValue {
+    /// The value an enum member literal type `E.A` holds.
+    pub fn of_enum_member(ty: &Type) -> Option<Self> {
+        Some(match ty.enum_member_value()? {
+            crate::types::EnumValue::Number(value) => LiteralValue::Number(value),
+            crate::types::EnumValue::String(value) => LiteralValue::String(value),
+        })
+    }
+}
+
 /// Bitmask over narrowing predicates, modeled on TypeScript's `TypeFacts`.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeFacts(pub u16);
@@ -478,7 +488,7 @@ pub(super) fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
         Type::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
         Type::NumberLiteral(n) => Some(LiteralValue::Number(*n)),
         Type::BooleanLiteral(b) => Some(LiteralValue::Boolean(*b)),
-        _ => None,
+        other => LiteralValue::of_enum_member(other),
     }
 }
 
@@ -740,6 +750,14 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
                 AlwaysTruthy
             }
         }
+        Type::NumberEnum {
+            member: Some(member),
+            ..
+        } => truthiness_class(&Type::NumberLiteral(member.value)),
+        Type::StringEnum {
+            member: Some(member),
+            ..
+        } => truthiness_class(&Type::StringLiteral(member.value.clone())),
         Type::NumberEnum { .. } => NumberLike,
         Type::StringEnum { .. } => StringLike,
         // `{}` admits every value but `null` and `undefined`, falsy primitives

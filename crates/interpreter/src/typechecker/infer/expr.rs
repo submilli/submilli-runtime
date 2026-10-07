@@ -23,6 +23,7 @@ use super::stmt::StaticWrite;
 use super::void_value::{ValueOperand, ValuePosition};
 use crate::did_you_mean;
 use crate::type_size::{TypeBudget, TypeTooLarge, map_children};
+use crate::types::{EnumValue, LiteralF64};
 
 use super::type_aliases::alias_ref_body;
 use super::{Inferer, assignable, narrowing};
@@ -184,6 +185,14 @@ fn is_tag_type(ty: &Type) -> bool {
                 | Type::BooleanLiteral(_)
                 | Type::Boolean
                 | Type::Null
+                | Type::NumberEnum {
+                    member: Some(_),
+                    ..
+                }
+                | Type::StringEnum {
+                    member: Some(_),
+                    ..
+                }
         )
     }
     match ty.peel() {
@@ -205,6 +214,17 @@ fn tag_fits(ty: &Type, value: &TagValue) -> bool {
         (Type::StringLiteral(s), TagValue::Literal(LiteralValue::String(v))) => s == v,
         (Type::NumberLiteral(n), TagValue::Literal(LiteralValue::Number(v))) => n == v,
         (Type::BooleanLiteral(b), TagValue::Literal(LiteralValue::Boolean(v))) => b == v,
+        (
+            member @ (Type::NumberEnum {
+                member: Some(_), ..
+            }
+            | Type::StringEnum {
+                member: Some(_), ..
+            }),
+            _,
+        ) => {
+            matches!(value, TagValue::Literal(v) if LiteralValue::of_enum_member(member).as_ref() == Some(v))
+        }
         (other, _) => !is_primitive(other),
     }
 }
@@ -554,8 +574,16 @@ impl Inferer<'_> {
             ExprKind::Number(v) => {
                 let canonical = if v == 0.0 { 0.0 } else { v };
                 let literal = Type::NumberLiteral(crate::types::LiteralF64(canonical));
+                // A numeric enum member type takes a number literal of its value.
                 let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
-                    matches!(t, Type::NumberLiteral(_))
+                    matches!(
+                        t,
+                        Type::NumberLiteral(_)
+                            | Type::NumberEnum {
+                                member: Some(_),
+                                ..
+                            }
+                    )
                 });
                 Ok((TypedExprKind::Number(v), ty))
             }
@@ -6577,10 +6605,15 @@ impl Inferer<'_> {
                             return Ok((
                                 TypedExprKind::NumberEnumMember {
                                     enum_mangled: enum_mangled.clone(),
-                                    variant: name,
+                                    variant: name.clone(),
                                     value: *value,
                                 },
-                                Type::number_enum(enum_package, recv_name, enum_mangled),
+                                Type::number_enum(enum_package, recv_name, enum_mangled)
+                                    .with_enum_member(
+                                        &name.name,
+                                        EnumValue::Number(LiteralF64(*value)),
+                                        variants.len(),
+                                    ),
                             ));
                         }
                         let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
@@ -6608,10 +6641,15 @@ impl Inferer<'_> {
                             return Ok((
                                 TypedExprKind::StringEnumMember {
                                     enum_mangled: enum_mangled.clone(),
-                                    variant: name,
+                                    variant: name.clone(),
                                     value: value.clone(),
                                 },
-                                Type::string_enum(enum_package, recv_name, enum_mangled),
+                                Type::string_enum(enum_package, recv_name, enum_mangled)
+                                    .with_enum_member(
+                                        &name.name,
+                                        EnumValue::String(value.clone()),
+                                        variants.len(),
+                                    ),
                             ));
                         }
                         let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
@@ -10581,7 +10619,7 @@ fn unsupported_cast_target_reason(
 /// diagnostic. Returns an empty help block when the enum has no
 /// variants (which only happens on a malformed decl that already
 /// emitted its own diagnostic).
-fn enum_variant_help<'a>(
+pub(super) fn enum_variant_help<'a>(
     enum_name: &str,
     variant_names: impl Iterator<Item = &'a String>,
 ) -> Vec<String> {

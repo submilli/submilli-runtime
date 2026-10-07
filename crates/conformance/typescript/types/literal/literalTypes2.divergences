@@ -1,28 +1,8 @@
-types: 107 of 202 tsc entries compared, 12 differ
-
-line 51: c3
-  tsc:  true | E.A | 123
-  ours: 123 | true | E
-
-line 51: cond ? E.A : cond ? true : 123
-  tsc:  true | E.A | 123
-  ours: 123 | true | E
-
-line 51: E.A
-  tsc:  E.A
-  ours: E
+types: 107 of 202 tsc entries compared, 6 differ
 
 line 55: [1, "bar"]
   tsc:  [1, "bar"]
   ours: [1 | 2, "bar" | "foo"]
-
-line 59: x3
-  tsc:  number | boolean
-  ours: number | boolean | E
-
-line 59: c3
-  tsc:  true | E.A | 123
-  ours: 123 | true | E
 
 line 94: c1
   tsc:  (string | number)[]
@@ -39,10 +19,6 @@ line 97: x1
 line 97: [1, "foo"]
   tsc:  (string | number)[]
   ours: number[]
-
-line 137: E.C
-  tsc:  E.C
-  ours: E
 
 line 179: append(aa, 1)
   tsc:  Bit[]

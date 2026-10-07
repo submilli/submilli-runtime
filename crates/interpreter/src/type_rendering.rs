@@ -142,8 +142,30 @@ fn write_node<'a>(
         Type::Never => out.push("never"),
         Type::TypeVar(name)
         | Type::GenericParam { name, .. }
-        | Type::NumberEnum { name, .. }
-        | Type::StringEnum { name, .. } => out.push(name),
+        | Type::NumberEnum {
+            name, member: None, ..
+        }
+        | Type::StringEnum {
+            name, member: None, ..
+        } => out.push(name),
+        Type::NumberEnum {
+            name,
+            member: Some(member),
+            ..
+        } => {
+            out.push(name)?;
+            out.push(".")?;
+            out.push(&member.name)
+        }
+        Type::StringEnum {
+            name,
+            member: Some(member),
+            ..
+        } => {
+            out.push(name)?;
+            out.push(".")?;
+            out.push(&member.name)
+        }
         Type::Function {
             params,
             ret,
@@ -453,11 +475,13 @@ fn copied_text_bytes(ty: &Type) -> Result<usize, RenderError> {
             mangled,
             package,
             name,
+            ..
         }
         | Type::StringEnum {
             mangled,
             package,
             name,
+            ..
         } => {
             add(mangled.as_str())?;
             add(package.as_str())?;

@@ -107,7 +107,13 @@ impl super::Inferer<'_> {
         Ok(ComparisonOperand {
             ty,
             member_of: enum_name(&typed.ty).cloned(),
-            label: format!("{}.{}", typed.ty, variant.name),
+            // A member read's type names the member already; a default
+            // argument's is its parameter's enum.
+            label: if typed.ty.enum_member_value().is_some() {
+                typed.ty.to_string()
+            } else {
+                format!("{}.{}", typed.ty, variant.name)
+            },
         })
     }
 

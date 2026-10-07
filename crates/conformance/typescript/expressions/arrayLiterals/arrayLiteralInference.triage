@@ -1,2 +1,1 @@
-line 26 type: bug SUB-1196 (enum member types) an enum member has its enum's type, where tsc gives it a member literal type; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
-line 27, 28, 29 type: bug SUB-1196 (enum member types) an enum member has its enum's type, where tsc gives it a member literal type
+line 26, 27, 28, 29 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type

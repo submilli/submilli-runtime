@@ -455,11 +455,15 @@ fn enum_base(ty: &Type) -> &Type {
 /// Whether `enum_ty` has a member whose value is `literal`, when `enum_ty` is an
 /// enum and `literal` a literal of its kind: `Color` and `0` share no value when
 /// no member of `Color` is `0`.
+/// An enum member type `E.A` has its own value only.
 pub(super) fn enum_admits_literal(
     enum_ty: &Type,
     literal: &Type,
     types: TypeResolver,
 ) -> Option<bool> {
+    if let Some(value) = super::narrowing::LiteralValue::of_enum_member(enum_ty) {
+        return Some(super::narrowing::unit_literal_value(literal) == Some(value));
+    }
     match (enum_ty, literal) {
         (Type::NumberEnum { mangled, name, .. }, Type::NumberLiteral(value)) => {
             match &types.lookup(mangled, name)?.kind {
@@ -477,6 +481,44 @@ pub(super) fn enum_admits_literal(
                 _ => None,
             }
         }
+        _ => None,
+    }
+}
+
+/// An enum type's members, as their member literal types `E.A`.
+pub(super) fn enum_member_types(enum_ty: &Type, types: TypeResolver) -> Option<Vec<Type>> {
+    use crate::types::{EnumValue, LiteralF64};
+    match enum_ty {
+        Type::NumberEnum { mangled, name, .. } => match &types.lookup(mangled, name)?.kind {
+            TypeKind::NumberEnum { variants, .. } => Some(
+                variants
+                    .iter()
+                    .map(|(member, value)| {
+                        enum_ty.with_enum_member(
+                            member,
+                            EnumValue::Number(LiteralF64(*value)),
+                            variants.len(),
+                        )
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        },
+        Type::StringEnum { mangled, name, .. } => match &types.lookup(mangled, name)?.kind {
+            TypeKind::StringEnum { variants, .. } => Some(
+                variants
+                    .iter()
+                    .map(|(member, value)| {
+                        enum_ty.with_enum_member(
+                            member,
+                            EnumValue::String(value.clone()),
+                            variants.len(),
+                        )
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        },
         _ => None,
     }
 }

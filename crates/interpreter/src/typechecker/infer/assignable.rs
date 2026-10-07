@@ -610,6 +610,58 @@ pub(crate) fn rest_function_accepts(
         && past_fixed.iter().all(|passed| accepts(passed, element))
 }
 
+/// Whether a value of an enum, or of its member `actual`, is one of `expected`:
+/// the whole enum, or that same member.
+fn enum_member_fits<V>(
+    actual: Option<&crate::types::EnumMember<V>>,
+    expected: Option<&crate::types::EnumMember<V>>,
+) -> bool {
+    match (actual, expected) {
+        (_, None) => true,
+        (Some(actual), Some(expected)) => actual.name == expected.name,
+        (None, Some(_)) => false,
+    }
+}
+
+/// The members of the enum `actual` as member literal types, when the union
+/// `expected` names one of them: only then can it need them all.
+fn enum_as_member_union(
+    actual: &Type,
+    expected: &[Type],
+    types: TypeResolver,
+) -> Option<Vec<Type>> {
+    let (Type::NumberEnum {
+        mangled: enum_mangled,
+        member: None,
+        ..
+    }
+    | Type::StringEnum {
+        mangled: enum_mangled,
+        member: None,
+        ..
+    }) = actual.peel()
+    else {
+        return None;
+    };
+    let names_member = expected.iter().any(|m| match m.peel() {
+        Type::NumberEnum {
+            mangled,
+            member: Some(_),
+            ..
+        }
+        | Type::StringEnum {
+            mangled,
+            member: Some(_),
+            ..
+        } => mangled == enum_mangled,
+        _ => false,
+    });
+    if !names_member {
+        return None;
+    }
+    super::comparable::enum_member_types(actual.peel(), types)
+}
+
 pub(crate) fn assignable(actual: &Type, expected: &Type, types: TypeResolver) -> bool {
     // Coinductive assumption set for recursive-alias (`AliasRef`)
     // expansion: a pair re-encountered mid-proof is assumed to hold, so
@@ -655,6 +707,13 @@ fn assignable_rec(
         return ms.iter().all(|m| assignable_rec(m, expected, types, seen));
     }
     if let Type::Union(ms) = expected.peel() {
+        // An enum is the union of its members, so `E` fits `E.A | E.B` when
+        // that names every member.
+        if let Some(members) = enum_as_member_union(actual, ms, types) {
+            return members
+                .iter()
+                .all(|member| ms.iter().any(|m| assignable_rec(member, m, types, seen)));
+        }
         return ms.iter().any(|m| assignable_rec(actual, m, types, seen));
     }
     if drops_readonly(actual, expected) {
@@ -754,13 +813,59 @@ fn assignable_rec(
         (Type::BigIntLiteral(a), Type::BigIntLiteral(b)) => a == b,
         (Type::BigIntLiteral(_), Type::BigInt) => true,
         (Type::BigInt, Type::BigIntLiteral(_)) => false,
-        // An enum's identity is its declaration: an aliased import
-        // (`import { E as G }`) names the same enum under another `name`.
-        (Type::NumberEnum { mangled: a, .. }, Type::NumberEnum { mangled: b, .. })
-        | (Type::StringEnum { mangled: a, .. }, Type::StringEnum { mangled: b, .. }) => a == b,
         (Type::BooleanLiteral(a), Type::BooleanLiteral(b)) => a == b,
         (Type::BooleanLiteral(_), Type::Boolean) => true,
         (Type::Boolean, Type::BooleanLiteral(_)) => false,
+        // An enum's identity is its declaration: an aliased import
+        // (`import { E as G }`) names the same enum under another `name`. An
+        // enum member literal type `E.A` is its enum's and its value's.
+        (
+            Type::NumberEnum {
+                mangled: ma,
+                member: am,
+                ..
+            },
+            Type::NumberEnum {
+                mangled: me,
+                member: em,
+                ..
+            },
+        ) => ma == me && enum_member_fits(am.as_ref(), em.as_ref()),
+        (
+            Type::StringEnum {
+                mangled: ma,
+                member: am,
+                ..
+            },
+            Type::StringEnum {
+                mangled: me,
+                member: em,
+                ..
+            },
+        ) => ma == me && enum_member_fits(am.as_ref(), em.as_ref()),
+        (
+            Type::NumberEnum {
+                member: Some(member),
+                ..
+            },
+            Type::NumberLiteral(value),
+        ) => member.value == *value,
+        (
+            Type::StringEnum {
+                member: Some(member),
+                ..
+            },
+            Type::StringLiteral(value),
+        ) => member.value == *value,
+        // TypeScript lets a number literal stand for the numeric member that
+        // holds its value, but no string literal for a string member.
+        (
+            Type::NumberLiteral(value),
+            Type::NumberEnum {
+                member: Some(member),
+                ..
+            },
+        ) => member.value == *value,
         (Type::Array(ae), Type::Array(ee)) => assignable_rec(ae, ee, types, seen),
         (Type::Tuple(aa), Type::Tuple(ae)) => {
             aa.len() == ae.len()

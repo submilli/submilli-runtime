@@ -182,7 +182,8 @@ mod tests {
             Shape::from_type(&Type::NumberEnum {
                 mangled: crate::mangle::package_symbol(crate::mangle::USER_PACKAGE, "D"),
                 package: crate::Package::user(),
-                name: "D".to_string()
+                name: "D".to_string(),
+                member: None,
             })
             .is_none()
         );
@@ -190,7 +191,8 @@ mod tests {
             Shape::from_type(&Type::StringEnum {
                 mangled: crate::mangle::package_symbol(crate::mangle::USER_PACKAGE, "C"),
                 package: crate::Package::user(),
-                name: "C".to_string()
+                name: "C".to_string(),
+                member: None,
             })
             .is_none()
         );

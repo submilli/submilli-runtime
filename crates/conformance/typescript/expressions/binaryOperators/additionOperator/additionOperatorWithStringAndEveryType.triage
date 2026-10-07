@@ -1,3 +1,2 @@
 line 17, 18, 26, 27, 35, 37, 38 extra: by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand
 line 39 extra: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected; also by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand
-line 35 type: bug SUB-1196 (enum member types) an enum member has its enum's type, where tsc gives it a member literal type

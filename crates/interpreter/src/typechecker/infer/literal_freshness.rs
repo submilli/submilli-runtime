@@ -551,6 +551,8 @@ impl Inferer<'_> {
                 | TypedExprKind::String(_)
                 | TypedExprKind::Boolean(_)
                 | TypedExprKind::BigInt(_)
+                | TypedExprKind::NumberEnumMember { .. }
+                | TypedExprKind::StringEnumMember { .. }
                 | TypedExprKind::Unary { .. }
                 | TypedExprKind::Binary { op: BinOp::Add, .. } => {
                     fresh.extend(literal_members(&expr.ty));
@@ -1150,13 +1152,7 @@ fn call_operands(
 
 /// Whether `ty` is one literal type, what tsc calls a unit type.
 fn is_single_literal(ty: &Type) -> bool {
-    matches!(
-        ty.peel(),
-        Type::NumberLiteral(_)
-            | Type::StringLiteral(_)
-            | Type::BooleanLiteral(_)
-            | Type::BigIntLiteral(_)
-    )
+    ty.peel().is_literal_type()
 }
 
 /// Whether `ty` is made only of `string`, `number`, `boolean`, `null` and
@@ -1316,11 +1312,8 @@ fn flattened_union_members(ty: &Type) -> Vec<&Type> {
 /// The literal types `ty` is made of: itself, or its union members.
 fn literal_members(ty: &Type) -> BTreeSet<Type> {
     match ty.peel() {
-        literal @ (Type::NumberLiteral(_)
-        | Type::StringLiteral(_)
-        | Type::BooleanLiteral(_)
-        | Type::BigIntLiteral(_)) => BTreeSet::from([literal.clone()]),
         Type::Union(members) => members.iter().flat_map(literal_members).collect(),
+        literal if literal.is_literal_type() => BTreeSet::from([literal.clone()]),
         _ => BTreeSet::new(),
     }
 }
@@ -1369,11 +1362,8 @@ fn deep_literals(ty: &Type) -> BTreeSet<Type> {
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         match ty {
-            Type::NumberLiteral(_)
-            | Type::StringLiteral(_)
-            | Type::BooleanLiteral(_)
-            | Type::BigIntLiteral(_) => {
-                literals.insert(ty.clone());
+            literal if literal.is_literal_type() => {
+                literals.insert(literal.clone());
             }
             Type::Union(members) | Type::Tuple(members) => pending.extend(members),
             Type::Array(inner) | Type::Readonly(inner) => pending.push(inner),
@@ -1408,14 +1398,7 @@ fn deep_literals(ty: &Type) -> BTreeSet<Type> {
 /// declared.
 fn widen_only(ty: &Type, fresh: &BTreeSet<Type>) -> Type {
     match ty {
-        Type::NumberLiteral(_)
-        | Type::StringLiteral(_)
-        | Type::BooleanLiteral(_)
-        | Type::BigIntLiteral(_)
-            if fresh.contains(ty) =>
-        {
-            ty.widen_literal()
-        }
+        literal if literal.is_literal_type() && fresh.contains(literal) => literal.widen_literal(),
         Type::Union(members) => without_absorbed_literals(
             members
                 .iter()
@@ -1439,14 +1422,7 @@ fn widen_only(ty: &Type, fresh: &BTreeSet<Type>) -> Type {
 /// [`Type::widen_literal`], keeping the literal members in `regular`.
 fn widen_unless_regular(ty: &Type, regular: &BTreeSet<Type>) -> Type {
     match ty {
-        Type::NumberLiteral(_)
-        | Type::StringLiteral(_)
-        | Type::BooleanLiteral(_)
-        | Type::BigIntLiteral(_)
-            if regular.contains(ty) =>
-        {
-            ty.clone()
-        }
+        literal if literal.is_literal_type() && regular.contains(literal) => literal.clone(),
         Type::Union(members) => without_absorbed_literals(
             members
                 .iter()
@@ -1463,21 +1439,22 @@ fn widen_unless_regular(ty: &Type, regular: &BTreeSet<Type>) -> Type {
 fn without_absorbed_literals(members: Vec<Type>) -> Type {
     let bases: BTreeSet<Type> = members
         .iter()
-        .filter(|member| matches!(member, Type::String | Type::Number | Type::Boolean))
+        .filter(|member| {
+            matches!(
+                member,
+                Type::String
+                    | Type::Number
+                    | Type::Boolean
+                    | Type::NumberEnum { member: None, .. }
+                    | Type::StringEnum { member: None, .. }
+            )
+        })
         .cloned()
         .collect();
     Type::union(
         members
             .into_iter()
-            .filter(|member| {
-                !matches!(
-                    member,
-                    Type::NumberLiteral(_)
-                        | Type::StringLiteral(_)
-                        | Type::BooleanLiteral(_)
-                        | Type::BigIntLiteral(_)
-                ) || !bases.contains(&member.widen_literal())
-            })
+            .filter(|member| !member.is_literal_type() || !bases.contains(&member.widen_literal()))
             .collect(),
     )
 }

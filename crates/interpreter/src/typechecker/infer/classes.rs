@@ -2076,6 +2076,16 @@ impl<'a> Inferer<'a> {
         let (Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. }) = ty else {
             return None;
         };
+        // A member type `E.A` holds its own value alone.
+        match ty.enum_member_value() {
+            Some(crate::types::EnumValue::Number(value)) => {
+                return Some(Type::NumberLiteral(value));
+            }
+            Some(crate::types::EnumValue::String(value)) => {
+                return Some(Type::StringLiteral(value));
+            }
+            None => {}
+        }
         let symbol = self
             .type_registry
             .lookup(mangled)

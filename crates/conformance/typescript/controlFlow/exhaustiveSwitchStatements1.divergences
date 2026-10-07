@@ -1,36 +1,4 @@
-types: 83 of 223 tsc entries compared, 10 differ
-
-line 43: E.A
-  tsc:  E.A
-  ours: 0
-
-line 44: E.B
-  tsc:  E.B
-  ours: 1
-
-line 104: MyEnum.A
-  tsc:  MyEnum.A
-  ours: 0
-
-line 105: MyEnum.B
-  tsc:  MyEnum.B
-  ours: 1
-
-line 113: MyEnum.A
-  tsc:  MyEnum.A
-  ours: 0
-
-line 114: MyEnum.B
-  tsc:  MyEnum.B
-  ours: 1
-
-line 122: MyEnum.A
-  tsc:  MyEnum.A
-  ours: 0
-
-line 123: MyEnum.B
-  tsc:  MyEnum.B
-  ours: 1
+types: 83 of 223 tsc entries compared, 2 differ
 
 line 240: k
   tsc:  keyof O

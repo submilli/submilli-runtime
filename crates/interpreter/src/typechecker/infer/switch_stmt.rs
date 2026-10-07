@@ -539,12 +539,11 @@ impl Inferer<'_> {
         typed_val: ExprId,
         value_span: Span,
     ) -> Result<Option<TypedSwitchValue>, CompilerFailure> {
-        let kind = &self
+        let typed = self
             .typed_ast
             .try_expr(typed_val)
-            .map_err(crate::typechecker::arena_failure)?
-            .kind;
-        if let Some(literal) = classify_switch_case_value(kind, value_span) {
+            .map_err(crate::typechecker::arena_failure)?;
+        if let Some(literal) = classify_switch_case_value(typed, value_span) {
             return Ok(Some(literal));
         }
         // A template of constants is the string it spells, as `tsc` has it.
@@ -686,6 +685,7 @@ impl Inferer<'_> {
                 enum_name,
                 member,
                 value,
+                ty,
                 span,
             } => match value {
                 EnumVariantPayload::Number(n) => (
@@ -694,7 +694,7 @@ impl Inferer<'_> {
                         variant: member.clone(),
                         value: *n,
                     },
-                    Type::NumberLiteral(crate::types::LiteralF64(*n)),
+                    ty.clone(),
                     *span,
                 ),
                 EnumVariantPayload::String(s) => (
@@ -703,7 +703,7 @@ impl Inferer<'_> {
                         variant: member.clone(),
                         value: s.clone(),
                     },
-                    Type::StringLiteral(s.clone()),
+                    ty.clone(),
                     *span,
                 ),
             },
@@ -825,10 +825,9 @@ impl Inferer<'_> {
     }
 
     /// The values of `ty` no case matches, less `null`, which the caller
-    /// handles. An enum leaves only when the cases name every member, since it
-    /// has no type for the members left.
+    /// handles.
     fn unmatched_values(&self, ty: &Type, covered: &CaseCoverage) -> Type {
-        narrowing::subtract_literals(&self.without_named_enums(ty, covered), &covered.literals)
+        narrowing::subtract_literals(&self.without_named_members(ty, covered), &covered.literals)
     }
 
     /// The members of a union switched on its discriminant field that the
@@ -907,15 +906,29 @@ impl Inferer<'_> {
         })
     }
 
-    /// `ty` without the enums whose members the cases all name.
-    fn without_named_enums(&self, ty: &Type, covered: &CaseCoverage) -> Type {
-        Type::union(
-            narrowing::union_members(ty)
-                .into_iter()
-                .filter(|member| !self.names_every_member(member, covered))
-                .cloned()
-                .collect(),
-        )
+    /// `ty` without the enum members the cases name: an enum leaves the
+    /// members no case names, as their member types.
+    fn without_named_members(&self, ty: &Type, covered: &CaseCoverage) -> Type {
+        let is_named = |member: &Type| match member.peel() {
+            Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. } => {
+                narrowing::LiteralValue::of_enum_member(member)
+                    .is_some_and(|value| covered.named_members.contains(&(mangled.clone(), value)))
+            }
+            _ => false,
+        };
+        let mut left = Vec::new();
+        for member in narrowing::union_members(ty) {
+            match super::comparable::enum_member_types(member.peel(), self.resolver()) {
+                Some(members) if member.peel().enum_member_value().is_none() => {
+                    if !self.names_every_member(member, covered) {
+                        left.extend(members.into_iter().filter(|m| !is_named(m)));
+                    }
+                }
+                _ if is_named(member) => {}
+                _ => left.push(member.clone()),
+            }
+        }
+        Type::union(left)
     }
 
     fn names_every_member(&self, ty: &Type, covered: &CaseCoverage) -> bool {
@@ -1070,8 +1083,8 @@ fn format_one_literal(ty: &Type) -> Option<String> {
     }
 }
 
-fn classify_switch_case_value(kind: &TypedExprKind, span: Span) -> Option<TypedSwitchValue> {
-    match kind {
+fn classify_switch_case_value(typed: &TypedExpr, span: Span) -> Option<TypedSwitchValue> {
+    match &typed.kind {
         TypedExprKind::String(s) => Some(TypedSwitchValue::String {
             value: s.clone(),
             span,
@@ -1087,6 +1100,7 @@ fn classify_switch_case_value(kind: &TypedExprKind, span: Span) -> Option<TypedS
             enum_name: enum_mangled.clone(),
             member: variant.clone(),
             value: EnumVariantPayload::Number(*value),
+            ty: typed.ty.clone(),
             span,
         }),
         TypedExprKind::StringEnumMember {
@@ -1097,6 +1111,7 @@ fn classify_switch_case_value(kind: &TypedExprKind, span: Span) -> Option<TypedS
             enum_name: enum_mangled.clone(),
             member: variant.clone(),
             value: EnumVariantPayload::String(value.clone()),
+            ty: typed.ty.clone(),
             span,
         }),
         _ => None,

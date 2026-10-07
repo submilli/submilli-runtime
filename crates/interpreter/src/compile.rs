@@ -1034,6 +1034,7 @@ mod importless_library_tests {
                     mangled: crate::mangle::package_symbol(SYNTH, "Color"),
                     package: Package(SYNTH.to_string()),
                     name: "Color".to_string(),
+                    member: None,
                 },
             ),
         );
