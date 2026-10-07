@@ -11,5 +11,6 @@ function main(): void {
 
   assert(Infinity > 1e308, "Infinity exceeds every finite number");
   assert(-Infinity < -1e308, "-Infinity undercuts every finite number");
-  assert(NaN !== NaN, "NaN compares unequal to itself");
+  const nan = 0 / 0;
+  assert(nan !== nan, "NaN compares unequal to itself");
 }

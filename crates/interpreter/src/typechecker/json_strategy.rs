@@ -413,6 +413,7 @@ mod tests {
                     ty: ty.clone(),
                     optional: *optional,
                     readonly: false,
+                    method: false,
                 },
             );
         }

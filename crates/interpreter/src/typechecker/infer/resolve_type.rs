@@ -717,6 +717,7 @@ impl<'a> Inferer<'a> {
                             ty,
                             optional: field.optional,
                             readonly: field.readonly,
+                            method: field.method,
                         });
                 }
                 let index = index

@@ -263,6 +263,12 @@ pub(super) fn collect_from_stmt(
         } => {
             c.collect(discriminant_ty);
             collect_from_expr(ast, *discriminant, c)?;
+            for comparison in cases
+                .iter()
+                .flat_map(crate::TypedSwitchCase::label_comparisons)
+            {
+                collect_from_expr(ast, comparison, c)?;
+            }
             for case in cases {
                 collect_from_stmt(ast, case.body, c)?;
             }
@@ -422,6 +428,7 @@ pub(super) fn collect_from_expr(
                                 ty: f.ty.clone(),
                                 optional: f.optional,
                                 readonly: false,
+                                method: false,
                             },
                         )
                     })

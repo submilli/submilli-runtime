@@ -1,5 +1,7 @@
 //! Deterministic package authority call graphs.
 
+mod guards;
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 
@@ -125,6 +127,36 @@ pub struct AuthorityRoute {
 pub struct AuthorityRouteEffect {
     pub effect: AuthorityEffect,
     pub witness: Vec<AuthorityWitnessStep>,
+    #[serde(default)]
+    pub guard: AuthorityGuardEvidence,
+}
+
+/// Ordering evidence only: selector correspondence and result confinement are
+/// separate analyses. `checked` never claims either of those properties, nor
+/// that an effect's target has been resolved: discovery and ordering are independent.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorityGuardEvidence {
+    pub status: AuthorityGuardStatus,
+    pub capabilities: Vec<String>,
+    pub checks: Vec<AuthoritySpan>,
+    pub path: Vec<AuthorityControlStep>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthorityGuardStatus {
+    Checked,
+    Unguarded,
+    Lookup,
+    Unreachable,
+    #[default]
+    Unproven,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorityControlStep {
+    pub span: AuthoritySpan,
+    pub description: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1414,7 +1446,9 @@ impl<'a> Builder<'a> {
                 .cloned()
                 .collect();
         }
-        let (mut routes, mut warnings) = self.build_routes(&propagation.adjacency)?;
+        let guard_analysis = guards::analyse(&self)?;
+        let (mut routes, mut warnings) =
+            self.build_routes(&propagation.adjacency, &guard_analysis)?;
         let edges = self.export_edges();
         let mut callables: Vec<_> = self.nodes.into_iter().map(|node| node.callable).collect();
         callables.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1508,6 +1542,7 @@ impl<'a> Builder<'a> {
     fn build_routes(
         &self,
         adjacency: &[Vec<(usize, usize)>],
+        guard_analysis: &guards::Analysis,
     ) -> Result<(Vec<AuthorityRoute>, Vec<Diagnostic>), CompilerFailure> {
         let mut routes = Vec::new();
         let mut warnings = Vec::new();
@@ -1537,9 +1572,11 @@ impl<'a> Builder<'a> {
                 effects.push(AuthorityRouteEffect {
                     effect: effect.clone(),
                     witness: witness.steps,
+                    guard: AuthorityGuardEvidence::default(),
                 });
             }
             if !node.has_direct_semantic_check
+                && !guard_analysis.has_lookup(route)
                 && let Some((effect, edge_indices)) = representative
             {
                 for (route_name, label_span) in &node.semantic_routes {
@@ -1564,6 +1601,7 @@ impl<'a> Builder<'a> {
                     )?);
                 }
             }
+            guard_analysis.apply(route, &mut effects, &mut warnings);
             routes.push(AuthorityRoute {
                 callable: node.callable.id.clone(),
                 effects,
@@ -2862,7 +2900,7 @@ mod tests {
         compile_output(modules, dependencies).authority_map
     }
 
-    fn compile_output(
+    pub(super) fn compile_output(
         modules: &[(&str, &str)],
         dependencies: &[&PackageDeclaration],
     ) -> CompiledPackage {
@@ -2882,7 +2920,7 @@ mod tests {
         .unwrap_or_else(|diagnostics| panic!("compile failed: {diagnostics:#?}"))
     }
 
-    fn route<'a>(map: &'a AuthorityMap, suffix: &str) -> &'a AuthorityRoute {
+    pub(super) fn route<'a>(map: &'a AuthorityMap, suffix: &str) -> &'a AuthorityRoute {
         map.routes
             .iter()
             .find(|route| route.callable.ends_with(suffix))

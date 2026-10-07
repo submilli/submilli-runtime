@@ -5728,6 +5728,12 @@ function main(): void {
                 ..
             } => {
                 box_walk_expr(ta, discriminant, names);
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
+                    box_walk_expr(ta, comparison, names);
+                }
                 for case in cases {
                     box_walk_stmt(ta, case.body, names);
                 }

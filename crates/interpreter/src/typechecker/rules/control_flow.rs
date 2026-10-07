@@ -263,6 +263,7 @@ fn literal_value_of(value: &TypedSwitchValue) -> Option<narrowing::LiteralValue>
         )),
         TypedSwitchValue::Boolean { value, .. } => Some(narrowing::LiteralValue::Boolean(*value)),
         TypedSwitchValue::Null { .. } => None,
+        TypedSwitchValue::Expr { literal, .. } => literal.clone(),
         TypedSwitchValue::Enum { value, .. } => match value {
             EnumVariantPayload::Number(n) => Some(narrowing::LiteralValue::Number(
                 crate::types::LiteralF64(*n),

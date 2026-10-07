@@ -741,9 +741,32 @@ pub struct TypedSwitchCase {
     pub span: Span,
 }
 
-/// Non-literals are rejected at typecheck. `span` anchors fallthrough and duplicate-case diagnostics.
+impl TypedSwitchCase {
+    /// The run-time comparisons of the clause's labels that aren't literals, which
+    /// run before any clause body does.
+    pub fn label_comparisons(&self) -> impl Iterator<Item = ExprId> + '_ {
+        self.values.iter().filter_map(|value| match value {
+            TypedSwitchValue::Expr { comparison, .. } => Some(*comparison),
+            _ => None,
+        })
+    }
+}
+
+/// A `case` label. `span` anchors fallthrough and duplicate-case diagnostics.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypedSwitchValue {
+    /// A label that isn't a literal, such as `case one:`, compared at run time.
+    /// Walkers visit `comparison`, which holds `label`.
+    Expr {
+        label: ExprId,
+        /// `discriminant === label`. The discriminant is read from the
+        /// temporary the inferer binds it to, so the label can't re-run it.
+        comparison: ExprId,
+        /// The one value the label can have, when its type is a single literal:
+        /// it then counts toward exhaustiveness as a literal label would.
+        literal: Option<crate::typechecker::infer::narrowing::LiteralValue>,
+        span: Span,
+    },
     String {
         value: String,
         span: Span,
