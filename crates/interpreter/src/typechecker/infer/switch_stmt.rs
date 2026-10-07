@@ -339,7 +339,7 @@ impl Inferer<'_> {
         let entry_reachable = self.reachable;
         self.push_pending_join_frame(narrowing::PendingJoinKind::Switch);
         let mut typed_cases: Vec<TypedSwitchCase> = Vec::new();
-        let mut seen: BTreeMap<narrowing::LiteralValue, Span> = BTreeMap::new();
+        let mut seen: BTreeMap<CaseKey, Span> = BTreeMap::new();
         let mut saw_null: Option<Span> = None;
         let mut all_assigned: BTreeSet<narrowing::ReferencePath> = BTreeSet::new();
         let mut any_arm_reachable_exit = false;
@@ -392,7 +392,10 @@ impl Inferer<'_> {
                     );
                     continue;
                 };
-                if let Some(prev) = duplicate_key(&lit, &mut seen, &mut saw_null) {
+                if matches!(lit, TypedSwitchValue::Null { .. }) {
+                    saw_null.get_or_insert(value_span);
+                }
+                if let Some(prev) = seen.insert(case_key(&lit), value_span) {
                     self.diagnostics.push(Diagnostic {
                         severity: Severity::Error,
                         span: value_span,
@@ -615,24 +618,7 @@ impl Inferer<'_> {
                 && let Some(field_tys) = self.discriminant_field_types(members, &name.name)
             {
                 let disc_key = name.name.clone();
-                // A member leaves only when the cases cover every value its
-                // discriminant can hold, as in TypeScript.
-                let kept: Vec<Type> = members
-                    .iter()
-                    .zip(field_tys)
-                    .filter(|(_, field_ty)| {
-                        !field_ty.as_ref().is_some_and(|ty| {
-                            let rest = self.without_named_enums(ty, covered);
-                            rest == Type::Never
-                                || narrowing::is_covered_by_literals(
-                                    &rest,
-                                    &covered.literals,
-                                    covered.null,
-                                )
-                        })
-                    })
-                    .map(|(m, _)| m.clone())
-                    .collect();
+                let kept = self.members_left_unmatched(members, &field_tys, covered);
                 let residual =
                     narrowing::with_source_refinement(&receiver_expr.ty, Type::union(kept));
                 if let Some(receiver_path) = self.expr_to_reference_path(receiver_expr)? {
@@ -685,16 +671,13 @@ impl Inferer<'_> {
                 return Ok((residual, ResidualSite::Anonymous));
             }
         }
-        // An enum leaves only when the cases name every member, since it has
-        // no type for the members left.
-        let enum_covered = narrowing::subtract_literals(
-            &self.without_named_enums(disc_ty, covered),
-            &covered.literals,
-        ) == Type::Never;
-        let residual = if enum_covered {
+        let residual = self.unmatched_values(disc_ty, covered);
+        // A `case null` leaves `null` out only of the default's view, so the
+        // residual keeps it; a residual of only `null` it matched is empty.
+        let residual = if covered.null && matches!(residual.peel(), Type::Null) {
             Type::Never
         } else {
-            narrowing::subtract_literals(disc_ty, &covered.literals)
+            residual
         };
         Ok(
             if let Some(path) = self.expr_to_reference_path(disc_expr)? {
@@ -703,6 +686,83 @@ impl Inferer<'_> {
                 (residual, ResidualSite::Anonymous)
             },
         )
+    }
+
+    /// The values of `ty` no case matches, less `null`, which the caller
+    /// handles. An enum leaves only when the cases name every member, since it
+    /// has no type for the members left.
+    fn unmatched_values(&self, ty: &Type, covered: &CaseCoverage) -> Type {
+        narrowing::subtract_literals(&self.without_named_enums(ty, covered), &covered.literals)
+    }
+
+    /// The members of a union switched on its discriminant field that the
+    /// cases leave, as in TypeScript: the field's values no case matches are
+    /// gathered over every member, and a member stays when its field can hold
+    /// one of them. `{ tag: S }` stays beside `{ tag: "p" }` though cases name
+    /// every member of `S`, since `S.P` holds `"p"`.
+    fn members_left_unmatched(
+        &self,
+        members: &[Type],
+        field_tys: &[Option<Type>],
+        covered: &CaseCoverage,
+    ) -> Vec<Type> {
+        let unmatched: Vec<Option<Type>> = field_tys
+            .iter()
+            .map(|field_ty| {
+                field_ty
+                    .as_ref()
+                    .map(|ty| self.unmatched_values(ty, covered))
+            })
+            .collect();
+        let all_unmatched = Type::union(unmatched.iter().flatten().cloned().collect());
+        let unmatched_null = !covered.null
+            && narrowing::union_members(&all_unmatched)
+                .iter()
+                .any(|m| matches!(m.peel(), Type::Null));
+        let values_left = without_null(&all_unmatched);
+        members
+            .iter()
+            .zip(field_tys.iter().zip(&unmatched))
+            .filter(|(_, (field_ty, unmatched))| {
+                let (Some(field_ty), Some(unmatched)) = (field_ty, unmatched) else {
+                    return true;
+                };
+                let own = without_null(unmatched);
+                own != Type::Never
+                    || (unmatched_null
+                        && narrowing::union_members(field_ty)
+                            .iter()
+                            .any(|m| matches!(m.peel(), Type::Null)))
+                    || self.shares_a_value(field_ty, &values_left)
+            })
+            .map(|(member, _)| member.clone())
+            .collect()
+    }
+
+    /// Whether a value of `field_ty` can be one of `values`, as TypeScript's
+    /// comparability decides it for a discriminant: an enum shares a value
+    /// with its own members' literals, never with another enum.
+    fn shares_a_value(&self, field_ty: &Type, values: &Type) -> bool {
+        let types = self.resolver();
+        narrowing::union_members(field_ty).into_iter().any(|field| {
+            narrowing::union_members(values).into_iter().any(|value| {
+                match (field.peel(), value.peel()) {
+                    (Type::Null, _) | (_, Type::Null | Type::Never) => false,
+                    (
+                        Type::NumberEnum { mangled: a, .. } | Type::StringEnum { mangled: a, .. },
+                        Type::NumberEnum { mangled: b, .. } | Type::StringEnum { mangled: b, .. },
+                    ) => a == b,
+                    (enum_ty, literal) | (literal, enum_ty)
+                        if super::comparable::enum_admits_literal(enum_ty, literal, types)
+                            .is_some() =>
+                    {
+                        super::comparable::enum_admits_literal(enum_ty, literal, types)
+                            == Some(true)
+                    }
+                    (field, value) => super::comparable::comparable(field, value, types),
+                }
+            })
+        })
     }
 
     /// `ty` without the enums whose members the cases all name.
@@ -901,6 +961,16 @@ fn classify_switch_case_value(kind: &TypedExprKind, span: Span) -> Option<TypedS
     }
 }
 
+fn without_null(ty: &Type) -> Type {
+    Type::union(
+        narrowing::union_members(ty)
+            .into_iter()
+            .filter(|member| !matches!(member.peel(), Type::Null))
+            .cloned()
+            .collect(),
+    )
+}
+
 /// The values a `switch`'s cases match. A case naming an enum member matches
 /// only that enum's member, and a bare literal case no member, as in
 /// TypeScript: `case 0` leaves `E.A` unmatched, and `case E.A` leaves `0`.
@@ -936,30 +1006,23 @@ impl CaseCoverage {
     }
 }
 
-/// Null uses `saw_null` separately because there's no `LiteralValue::Null` variant.
-fn duplicate_key(
-    value: &TypedSwitchValue,
-    seen: &mut BTreeMap<narrowing::LiteralValue, Span>,
-    saw_null: &mut Option<Span>,
-) -> Option<Span> {
-    let key = switch_value_to_literal_value(value);
-    let span = match value {
-        TypedSwitchValue::String { span, .. }
-        | TypedSwitchValue::Number { span, .. }
-        | TypedSwitchValue::Boolean { span, .. }
-        | TypedSwitchValue::Null { span }
-        | TypedSwitchValue::Enum { span, .. } => *span,
-    };
-    if let Some(k) = key {
-        if let Some(prev) = seen.insert(k, span) {
-            return Some(prev);
-        }
-        None
-    } else {
-        if let Some(prev) = saw_null.replace(span) {
-            return Some(prev);
-        }
-        None
+/// What makes two `case` labels the same: a member of an enum, or a literal
+/// value. `case E.A` beside `case 0` or `case F.X` of the same value is no
+/// duplicate, as each matches a value the other doesn't name.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum CaseKey {
+    Member(crate::MangledName, String),
+    Literal(narrowing::LiteralValue),
+    Null,
+}
+
+fn case_key(value: &TypedSwitchValue) -> CaseKey {
+    match value {
+        TypedSwitchValue::Enum {
+            enum_name, member, ..
+        } => CaseKey::Member(enum_name.clone(), member.name.clone()),
+        TypedSwitchValue::Null { .. } => CaseKey::Null,
+        _ => switch_value_to_literal_value(value).map_or(CaseKey::Null, CaseKey::Literal),
     }
 }
 
