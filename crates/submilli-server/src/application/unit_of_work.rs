@@ -1,6 +1,7 @@
 //! Transactional queries and writes for application use cases.
 use crate::application::error::StoreError;
 use crate::domain::session::Session;
+use std::time::SystemTime;
 
 #[async_trait::async_trait]
 pub(crate) trait UnitOfWorkFactory: Send + Sync {
@@ -14,6 +15,10 @@ pub(crate) trait UnitOfWorkFactory: Send + Sync {
 #[async_trait::async_trait]
 pub(crate) trait UnitOfWork: Send {
     async fn get_session(&mut self, id: &str) -> Result<Option<Session>, StoreError>;
+    async fn sessions_due_for_expiry(
+        &mut self,
+        now: SystemTime,
+    ) -> Result<Vec<Session>, StoreError>;
     async fn list_sessions(&mut self) -> Result<Vec<Session>, StoreError>;
     async fn sessions_for_blueprint(&mut self, name: &str) -> Result<Vec<Session>, StoreError>;
     async fn save_session(&mut self, session: Session) -> Result<(), StoreError>;

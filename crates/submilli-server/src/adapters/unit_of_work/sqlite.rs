@@ -2,6 +2,7 @@ use crate::adapters::session::repository::{persist_session, restore_domain};
 use crate::domain::session::Session;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::future::BoxFuture;
 use sqlx::SqliteConnection;
@@ -142,6 +143,29 @@ impl UnitOfWork for SqliteUnitOfWork {
         record
             .map(|record| restore_domain(&record, &self.session_root))
             .transpose()
+    }
+
+    async fn sessions_due_for_expiry(
+        &mut self,
+        now: SystemTime,
+    ) -> Result<Vec<Session>, StoreError> {
+        let now = i64::try_from(
+            now.duration_since(UNIX_EPOCH)
+                .map_err(|_| StoreError::Io("invalid expiry clock".into()))?
+                .as_millis(),
+        )
+        .map_err(|_| StoreError::Io("expiry clock overflow".into()))?;
+        let records = self
+            .query(move |connection| {
+                Box::pin(
+                    crate::adapters::session::sqlite::records::expiry_candidates(connection, now),
+                )
+            })
+            .await?;
+        records
+            .into_iter()
+            .map(|record| restore_domain(&record, &self.session_root))
+            .collect()
     }
 
     async fn list_sessions(&mut self) -> Result<Vec<Session>, StoreError> {

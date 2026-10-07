@@ -3,6 +3,7 @@ use crate::domain::session::Session;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::adapters::session::credentials::CredentialCodec;
 use crate::application::unit_of_work::{UnitOfWork, UnitOfWorkFactory};
@@ -84,6 +85,29 @@ impl UnitOfWork for StoreUnitOfWork {
         record
             .map(|record| restore_domain(&record, &self.session_root))
             .transpose()
+    }
+
+    async fn sessions_due_for_expiry(
+        &mut self,
+        now: SystemTime,
+    ) -> Result<Vec<Session>, StoreError> {
+        let mut records: BTreeMap<_, _> = self
+            .sessions
+            .expiry_candidates(now)
+            .await?
+            .into_iter()
+            .map(|record| (record.session_id.clone(), record))
+            .collect();
+        records.extend(self.saved_sessions.clone());
+        let mut sessions = Vec::new();
+        for (id, record) in records {
+            let session = restore_domain(&record, &self.session_root)?;
+            if session.status() == SessionStatus::Active && session.lifetime().expired_at(now) {
+                self.original.entry(id).or_insert(record);
+                sessions.push(session);
+            }
+        }
+        Ok(sessions)
     }
 
     async fn list_sessions(&mut self) -> Result<Vec<Session>, StoreError> {

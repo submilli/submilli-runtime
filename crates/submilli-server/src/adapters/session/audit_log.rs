@@ -22,6 +22,14 @@ impl AuditLog for SessionAuditLog<'_> {
                 "rebound",
                 serde_json::json!({"blueprint": blueprint, "vars": crate::audit::bindings(&variables)}),
             ),
+            SessionEvent::Found { blueprint } => {
+                ("found", serde_json::json!({"blueprint": blueprint}))
+            }
+            SessionEvent::BlueprintRemoved { blueprint } => (
+                "evicted",
+                serde_json::json!({"blueprint": blueprint, "reason": "blueprint_deleted"}),
+            ),
+            SessionEvent::Expired => ("expired", serde_json::json!({"reason": "idle_timeout"})),
             SessionEvent::CredentialsReplaced => ("rebound", serde_json::json!({})),
             SessionEvent::Deleted => ("deleted", serde_json::json!({})),
         };

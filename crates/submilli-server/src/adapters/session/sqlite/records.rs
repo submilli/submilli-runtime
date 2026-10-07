@@ -40,7 +40,7 @@ pub(crate) async fn for_blueprint(
     Ok(records)
 }
 
-pub(super) async fn expiry_candidates(
+pub(crate) async fn expiry_candidates(
     connection: &mut SqliteConnection,
     now: i64,
 ) -> Result<Vec<SessionRecord>, DatabaseError> {

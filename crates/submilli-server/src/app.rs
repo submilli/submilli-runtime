@@ -1006,6 +1006,7 @@ impl AppState {
     ) -> Result<bool, crate::application::blueprints::remove::RemoveBlueprintError> {
         crate::application::blueprints::remove::RemoveBlueprint::new(
             self.inner.unit_of_work.as_ref(),
+            &crate::adapters::session::audit_log::SessionAuditLog(Some(self.audit())),
             self,
             self,
             self,

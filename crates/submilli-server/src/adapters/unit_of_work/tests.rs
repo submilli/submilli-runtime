@@ -564,3 +564,106 @@ async fn unknown_closure_survives_transactional_round_trip() {
     }
     fixture.database.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn reaping_ignores_closed_history_and_its_unreadable_protocol_state() {
+    let fixture = Fixture::new().await;
+    fixture.database.transaction(|connection| Box::pin(async move {
+        sqlx::query("WITH RECURSIVE history(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM history WHERE n<2048) INSERT INTO sessions(session_id,record_version,status,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type) SELECT 'old-'||n,1,'closed','test',0,0,'none' FROM history")
+            .execute(&mut *connection).await?;
+        // Inject protocol data that cannot be decoded. Expiry must never hydrate
+        // historical protocol state, even though these are valid JSON/SQL rows.
+        sqlx::query("INSERT INTO session_mcp(session_id,protocol_version,client_name,client_version,client_icons_present,capabilities_json) SELECT session_id,'2025-03-26','old','1',0,'false' FROM sessions")
+            .execute(connection).await?;
+        Ok(())
+    })).await.unwrap();
+    assert!(fixture.sessions.load("old-1").await.is_err());
+    assert_eq!(fixture.state.session_manager().reap_now().await.unwrap(), 0);
+    fixture.session("live").await;
+    assert_eq!(fixture.state.session_manager().reap_now().await.unwrap(), 0);
+    assert!(
+        fixture
+            .state
+            .session_manager()
+            .contains("live")
+            .await
+            .unwrap()
+    );
+    fixture.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn expiry_queries_observe_pending_activity_and_closure() {
+    use crate::adapters::unit_of_work::{SqliteUnitOfWorkFactory, StoreUnitOfWorkFactory};
+    use crate::blueprint::InMemoryBlueprintStore;
+    use crate::domain::session::{RootVfs, Session, SessionBinding, SessionId, SessionLifetime};
+    use crate::session_store::InMemoryDurableSessionStore;
+    let fixture = Fixture::new().await;
+    let factories: Vec<Box<dyn UnitOfWorkFactory>> = vec![
+        Box::new(SqliteUnitOfWorkFactory {
+            database: fixture.database.clone(),
+            session_root: fixture.root.path().join("workspaces"),
+            cipher: None,
+        }),
+        Box::new(StoreUnitOfWorkFactory {
+            blueprints: Arc::new(InMemoryBlueprintStore::default()),
+            sessions: Arc::new(InMemoryDurableSessionStore::default()),
+            session_root: fixture.root.path().join("workspaces"),
+            cipher: None,
+        }),
+    ];
+    let now = std::time::UNIX_EPOCH
+        + Duration::from_millis(
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+                .try_into()
+                .unwrap(),
+        );
+    let timeout = Duration::from_secs(3600);
+    for factory in factories {
+        let mut unit = factory.begin().await.unwrap();
+        let session = Session::create(
+            SessionId::parse("candidate".into()).unwrap(),
+            SessionBinding::new("test".into(), Default::default()).unwrap(),
+            RootVfs::None,
+            SessionLifetime::new(timeout, now),
+        )
+        .unwrap();
+        unit.save_session(session).await.unwrap();
+        assert!(unit.sessions_due_for_expiry(now).await.unwrap().is_empty());
+        assert!(
+            unit.sessions_due_for_expiry(now + timeout)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let due = now + timeout + Duration::from_millis(1);
+        let mut session = unit
+            .sessions_due_for_expiry(due)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        session
+            .record_execution_completed(now + Duration::from_secs(1))
+            .unwrap();
+        unit.save_session(session).await.unwrap();
+        assert!(unit.sessions_due_for_expiry(due).await.unwrap().is_empty());
+        let mut session = unit.get_session("candidate").await.unwrap().unwrap();
+        session.close(ClosedReason::Deleted);
+        unit.save_session(session).await.unwrap();
+        assert!(
+            unit.sessions_due_for_expiry(due + timeout)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        // Neither the newly saved row nor its closure escapes a dropped unit.
+        drop(unit);
+        let mut fresh = factory.begin().await.unwrap();
+        assert!(fresh.get_session("candidate").await.unwrap().is_none());
+    }
+    fixture.database.close().await.unwrap();
+}

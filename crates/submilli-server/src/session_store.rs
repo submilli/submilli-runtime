@@ -227,8 +227,8 @@ pub trait DurableSessionStore: Send + Sync + 'static {
     }
 
     async fn complete_cleanup(&self, id: &str) -> Result<(), StoreError>;
-    /// Every persisted record. Malformed entries are skipped, not fatal — one
-    /// bad file must not stop the server from booting.
+    /// Enumerate persisted records, propagating storage and decoding failures.
+    /// Compatibility file adapters may skip malformed JSON entries.
     async fn load_all(&self) -> Result<Vec<SessionRecord>, StoreError>;
     async fn active_count(&self) -> Result<usize, StoreError> {
         Ok(self

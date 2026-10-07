@@ -12,7 +12,7 @@ pub enum StoreError {
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Database(error) => write!(f, "blueprint database failed: {error}"),
+            Self::Database(error) => write!(f, "database failed: {error}"),
             Self::AlreadyExists => f.write_str("blueprint already exists"),
             Self::Io(message) => write!(f, "store I/O failed: {message}"),
             Self::Credentials(message) => f.write_str(message),

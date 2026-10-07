@@ -208,6 +208,8 @@ impl DurableSessionStore for FileDurableSessionStore {
         }
     }
 
+    // Skip malformed JSON files so one bad legacy file does not prevent boot.
+    // I/O failures and invalid decoded records still propagate.
     async fn load_all(&self) -> Result<Vec<SessionRecord>, StoreError> {
         let entries = fs::read_dir(&self.dir).map_err(|e| StoreError::Io(e.to_string()))?;
         let mut records = Vec::new();

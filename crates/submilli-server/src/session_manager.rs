@@ -724,6 +724,7 @@ impl SessionManager {
         self.store.load_all().await.map_err(BootError::Sessions)?;
         crate::application::sessions::recover::RecoverSessions::new(
             self.unit_of_work.as_ref(),
+            &SessionAuditLog(self.audit.as_ref()),
             &self.workspaces(),
             &StoredIdempotencyRecords(self.idempotency.as_ref()),
             &StoredSessionCleanupQueue(self.store.as_ref()),
@@ -1263,6 +1264,48 @@ mod tests {
         })
         .await
         .expect("subsequent sweep");
+    }
+
+    #[tokio::test]
+    async fn recovery_and_reaping_audit_the_session_lifecycle() {
+        let (manager, root) = manager();
+        let audit_path = root.path().join("audit.log");
+        let manager = manager.with_audit(crate::audit::AuditLog::new(
+            crate::audit::AuditConfig {
+                file: Some(audit_path.clone()),
+                ..Default::default()
+            },
+            None,
+        ));
+        let blueprint = per_session(HOUR);
+        manager.ensure("expired-at-boot", &blueprint).await.unwrap();
+        manager.ensure("active-at-boot", &blueprint).await.unwrap();
+        set_last_activity(&manager, "expired-at-boot", UNIX_EPOCH).await;
+        manager.boot().await.unwrap();
+        set_last_activity(&manager, "active-at-boot", UNIX_EPOCH).await;
+        assert_eq!(manager.reap_now().await.unwrap(), 1);
+        assert_eq!(manager.reap_now().await.unwrap(), 0);
+        let audit = std::fs::read_to_string(audit_path).unwrap();
+        for id in ["expired-at-boot", "active-at-boot"] {
+            let lines: Vec<_> = audit
+                .lines()
+                .filter(|line| line.contains(&format!("session_id={id}")))
+                .collect();
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|line| line.contains("event=found"))
+                    .count(),
+                1
+            );
+            let expired: Vec<_> = lines
+                .iter()
+                .filter(|line| line.contains("event=expired"))
+                .collect();
+            assert_eq!(expired.len(), 1);
+            assert!(expired[0].contains("reason=idle_timeout"));
+            assert!(!lines.iter().any(|line| line.contains("event=deleted")));
+        }
     }
 
     async fn set_last_activity(manager: &SessionManager, id: &str, time: SystemTime) {

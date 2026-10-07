@@ -93,6 +93,7 @@ impl SecretCipher {
         OsRng
             .try_fill_bytes(&mut nonce_bytes)
             .map_err(|_| SecretStoreError::Crypto("secure randomness unavailable".into()))?;
+        // XChaCha20 uses exactly NONCE_LEN bytes, fixed by the array above.
         let nonce = XNonce::from_slice(&nonce_bytes);
         let ciphertext = self
             .cipher
@@ -114,6 +115,7 @@ impl SecretCipher {
         let (nonce, ciphertext) = blob
             .split_at_checked(NONCE_LEN)
             .ok_or_else(|| SecretStoreError::Crypto("sealed blob too short".into()))?;
+        // The checked split guarantees exactly NONCE_LEN bytes for XNonce.
         self.cipher
             .decrypt(
                 XNonce::from_slice(nonce),

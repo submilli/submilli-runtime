@@ -1,4 +1,6 @@
-use super::ports::{IdempotencyRecords, SessionCleanupQueue, SessionWorkspaces};
+use super::ports::{
+    AuditLog, IdempotencyRecords, SessionCleanupQueue, SessionEvent, SessionWorkspaces,
+};
 use crate::application::error::StoreError;
 use crate::application::sessions::error::BootError;
 use crate::application::sessions::ports::SessionCleanup;
@@ -8,6 +10,7 @@ use std::collections::HashSet;
 
 pub(crate) struct RecoverSessions<'a> {
     unit_of_work: &'a dyn UnitOfWorkFactory,
+    audit: &'a dyn AuditLog,
     workspaces: &'a dyn SessionWorkspaces,
     idempotency: &'a dyn IdempotencyRecords,
     cleanup_queue: &'a dyn SessionCleanupQueue,
@@ -15,12 +18,14 @@ pub(crate) struct RecoverSessions<'a> {
 impl<'a> RecoverSessions<'a> {
     pub fn new(
         unit_of_work: &'a dyn UnitOfWorkFactory,
+        audit: &'a dyn AuditLog,
         workspaces: &'a dyn SessionWorkspaces,
         idempotency: &'a dyn IdempotencyRecords,
         cleanup_queue: &'a dyn SessionCleanupQueue,
     ) -> Self {
         Self {
             unit_of_work,
+            audit,
             workspaces,
             idempotency,
             cleanup_queue,
@@ -42,12 +47,22 @@ impl<'a> RecoverSessions<'a> {
             .map_err(BootError::Sessions)?;
         let sessions = unit.list_sessions().await.map_err(BootError::Sessions)?;
         let now = std::time::SystemTime::now();
+        let mut events = Vec::new();
         let mut known = HashSet::new();
         let mut active = HashSet::new();
         for mut session in sessions {
             let id = session.id().as_str().to_owned();
             known.insert(id.clone());
+            if session.status() == SessionStatus::Active {
+                events.push((
+                    id.clone(),
+                    SessionEvent::Found {
+                        blueprint: session.binding().blueprint().to_owned(),
+                    },
+                ));
+            }
             if session.recover(now) {
+                events.push((id.clone(), SessionEvent::Expired));
                 unit.save_session(session)
                     .await
                     .map_err(BootError::Sessions)?;
@@ -56,6 +71,9 @@ impl<'a> RecoverSessions<'a> {
             }
         }
         unit.commit().await.map_err(BootError::Sessions)?;
+        for (id, event) in events {
+            self.audit.record(&id, event);
+        }
         for id in ledger {
             if !known.contains(&id) {
                 self.cleanup_queue

@@ -13,6 +13,13 @@ pub(crate) enum SessionEvent {
         blueprint: String,
         variables: VarBindings,
     },
+    Found {
+        blueprint: String,
+    },
+    BlueprintRemoved {
+        blueprint: String,
+    },
+    Expired,
     CredentialsReplaced,
     Deleted,
 }

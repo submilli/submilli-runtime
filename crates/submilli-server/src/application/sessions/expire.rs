@@ -18,7 +18,7 @@ impl<'a> ExpireSessions<'a> {
     pub async fn execute(&self, now: SystemTime) -> Result<usize, SessionError> {
         let mut unit = self.unit_of_work.begin().await?;
         let mut expired = Vec::new();
-        let sessions = unit.list_sessions().await?;
+        let sessions = unit.sessions_due_for_expiry(now).await?;
         for mut session in sessions {
             if session.expire(now) {
                 expired.push(session.id().as_str().to_owned());
@@ -27,7 +27,7 @@ impl<'a> ExpireSessions<'a> {
         }
         unit.commit().await?;
         for id in &expired {
-            self.audit.record(id, super::ports::SessionEvent::Deleted);
+            self.audit.record(id, super::ports::SessionEvent::Expired);
         }
         Ok(expired.len())
     }

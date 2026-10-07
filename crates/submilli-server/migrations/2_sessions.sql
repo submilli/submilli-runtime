@@ -20,6 +20,7 @@ CREATE TABLE session_cleanup (
     session_id TEXT PRIMARY KEY NOT NULL,
     folder_path TEXT
 );
+CREATE INDEX active_sessions_by_activity ON sessions(last_activity_unix_ms) WHERE status='active';
 CREATE INDEX sessions_by_blueprint ON sessions(blueprint_name, status);
 CREATE TABLE session_variables (
     session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
