@@ -7990,9 +7990,40 @@ impl Inferer<'_> {
             .try_expr(operand)
             .map_err(super::arena_failure)?
             .span;
-        let (value, value_ty) = self.infer_expr(operand, None)?;
+        let (mut value, mut value_ty) = self.infer_expr(operand, None)?;
+        if let Some(path) = self.null_narrowed_path(value, &value_ty)? {
+            // As in TypeScript: a reference narrowed to `null` reads at its
+            // declared type under `!`, which then throws at run time.
+            let outer = self.declared_read.replace(path);
+            let reread = self.infer_expr(operand, None);
+            self.declared_read = outer;
+            (value, value_ty) = reread?;
+        }
         let result_ty = self.check_non_null_assert(&value_ty, operand_span);
         Ok((TypedExprKind::NonNullAssert { value }, result_ty))
+    }
+
+    /// The path of `value` when a narrowing left it only `null` and its
+    /// declared type holds more.
+    fn null_narrowed_path(
+        &self,
+        value: ExprId,
+        value_ty: &Type,
+    ) -> Result<Option<narrowing::ReferencePath>, CompilerFailure> {
+        if !matches!(value_ty.peel(), Type::Null) {
+            return Ok(None);
+        }
+        let typed = self
+            .typed_ast
+            .try_expr(value)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(path) = self.expr_to_reference_path(typed)? else {
+            return Ok(None);
+        };
+        let declared_holds_more = self
+            .declared_path_ty(&path)
+            .is_some_and(|declared| !matches!(declared.peel(), Type::Null));
+        Ok(declared_holds_more.then_some(path))
     }
 
     /// The type `!` yields for an operand of `value_ty`. An operand that is

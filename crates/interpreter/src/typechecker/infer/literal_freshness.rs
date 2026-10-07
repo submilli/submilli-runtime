@@ -1044,7 +1044,7 @@ impl Inferer<'_> {
 
     /// The declared type of the narrowable `path`, read through the declared
     /// types of its root and of each field or element on the way.
-    fn declared_path_ty(&self, path: &narrowing::ReferencePath) -> Option<Type> {
+    pub(super) fn declared_path_ty(&self, path: &narrowing::ReferencePath) -> Option<Type> {
         let mut ty = self.declared_root_ty(path)?;
         for elem in &path.chain {
             ty = match elem {

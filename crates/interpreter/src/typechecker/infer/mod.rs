@@ -139,6 +139,7 @@ pub fn infer_with_transitive_checked<'a>(
         nested_function_bodies: Vec::new(),
         reachable: true,
         unreachable_by_exhaustive_switch: false,
+        declared_read: None,
         next_narrow_counter: 0,
         current_return: None,
         current_class: None,
@@ -410,6 +411,7 @@ pub fn infer_package_checked<'a>(
         nested_function_bodies: Vec::new(),
         reachable: true,
         unreachable_by_exhaustive_switch: false,
+        declared_read: None,
         next_narrow_counter: 0,
         current_return: None,
         current_class: None,
@@ -762,6 +764,9 @@ pub(super) struct Inferer<'a> {
     /// such code and narrows there, while code after a `return`, `throw`,
     /// `break`, `continue` or endless loop reads declared types.
     pub(super) unreachable_by_exhaustive_switch: bool,
+    /// A path read at its declared type despite a narrowing: the operand of
+    /// a `!` narrowed to `null`, which TypeScript types by its declaration.
+    pub(super) declared_read: Option<narrowing::ReferencePath>,
     /// All clause writes, including terminating branches, for exceptional entry.
     pub(super) clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
     /// Writes carried by normal flow and used when joining branch exits.

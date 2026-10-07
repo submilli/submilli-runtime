@@ -2461,6 +2461,9 @@ impl<'a> Inferer<'a> {
         &self,
         path: narrowing::ReferencePath,
     ) -> Option<(crate::TypedExprKind, Type)> {
+        if self.declared_read.as_ref() == Some(&path) {
+            return None;
+        }
         let view = self.innermost_narrowing(&path)?;
         let narrowed_ty = if !narrowing::is_ruled_out(&view.narrowed_ty) {
             view.narrowed_ty.clone()
