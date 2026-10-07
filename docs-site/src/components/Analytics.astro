@@ -4,7 +4,7 @@ const enabled = Boolean(import.meta.env.PUBLIC_POSTHOG_KEY && import.meta.env.PU
 
 {enabled && <>
 	<aside id="analytics-choice" hidden aria-label="Analytics preferences">
-		<span>Allow usage analytics to help us improve these docs?</span>
+		<span>Usage analytics helps us improve these docs. Choose your preference.</span>
 		<button type="button" data-consent="granted">Allow analytics</button>
 		<button type="button" data-consent="denied">No thanks</button>
 	</aside>

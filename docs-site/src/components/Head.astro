@@ -1,6 +1,5 @@
 ---
 import DefaultHead from '@astrojs/starlight/components/Head.astro';
-import Analytics from './Analytics.astro';
 import { DOCS_INDEX, DOCS_ORIGIN, markdownPath } from '../lib/agent-docs';
 
 import { documentationSchema, serializeStructuredData } from '../lib/structured-data';
@@ -10,7 +9,6 @@ const slug = entry.id === 'index' ? '' : entry.id;
 ---
 
 <DefaultHead />
-<Analytics />
 {entry.id !== '404' && !entry.data.sidebar.hidden && (
 	<>
 		<script type="application/ld+json" is:inline set:html={serializeStructuredData(documentationSchema({ slug, title: entry.data.title, description: entry.data.description || entry.data.title }))} />

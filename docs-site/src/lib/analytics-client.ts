@@ -8,6 +8,11 @@ const attributionKey = 'submilli.attribution.v1';
 let active = false;
 let initialized = false;
 let lastPageviewUrl: string | undefined;
+let isTest = new URLSearchParams(location.search).get('analytics_test') === '1';
+try {
+	if (isTest) sessionStorage.setItem('submilli.analytics-test', '1');
+	isTest ||= sessionStorage.getItem('submilli.analytics-test') === '1';
+} catch {}
 
 function readStorage(storageKey: string) {
 	try {
@@ -41,7 +46,7 @@ function capture(event: string, properties: Record<string, unknown> = {}) {
 	try {
 		posthog.capture(event, {
 			schema_version: 1,
-			is_test: new URLSearchParams(location.search).get('analytics_test') === '1',
+			is_test: isTest,
 			...properties,
 		});
 	} catch {
@@ -77,11 +82,19 @@ function instrumentClicks() {
 				destination,
 				external: url.host !== location.host,
 			});
+			if (cta === 'meeting') {
+				capture('booking_cta_clicked', {
+					cta_location: 'docs',
+					booking_provider: 'google_calendar',
+					destination,
+					external: url.host !== location.host,
+				});
+			}
 		}
 	});
 }
 
-function start() {
+function start(explicitConsent = false) {
 	if (active || !key || !host) return;
 	if (!initialized) {
 		posthog.init(key, {
@@ -113,6 +126,7 @@ function start() {
 			persistence: 'localStorage',
 			before_send(event) {
 				if (!event) return event;
+				event.properties.is_test = isTest;
 				for (const field of ['$current_url', '$referrer']) {
 					if (event.properties[field]) event.properties[field] = safeUrl(event.properties[field]);
 				}
@@ -121,7 +135,8 @@ function start() {
 		});
 		initialized = true;
 	}
-	posthog.opt_in_capturing({ captureEventName: false });
+	if (explicitConsent) posthog.opt_in_capturing({ captureEventName: false });
+	if (posthog.has_opted_out_capturing()) return;
 	active = true;
 	let previous: { first?: unknown; latest?: unknown } | null = null;
 	try {
@@ -139,15 +154,16 @@ if (key && host) {
 	const choice = document.getElementById('analytics-choice');
 	const settings = document.getElementById('analytics-settings');
 	if (settings) settings.hidden = false;
-	if (readStorage(consentKey) === 'granted') start();
-	else if (!readStorage(consentKey) && choice) choice.hidden = false;
+	if (readStorage(consentKey) !== 'denied') start();
 	settings?.addEventListener('click', () => { if (choice) choice.hidden = false; });
 	document.querySelectorAll<HTMLButtonElement>('[data-consent]').forEach(button => {
 		button.addEventListener('click', () => {
 			const consent = button.dataset.consent;
 			if (!consent) return;
 			writeStorage(consentKey, consent);
-			if (consent === 'granted') start();
+			if (consent === 'granted') {
+				start(true);
+			}
 			else {
 				active = false;
 				if (initialized) posthog.opt_out_capturing();

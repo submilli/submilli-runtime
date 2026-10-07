@@ -1,4 +1,5 @@
 ---
+import Analytics from './Analytics.astro';
 import Search from '@astrojs/starlight/components/Search.astro';
 import DiscordLink from './DiscordLink.astro';
 import GitHubLink from './GitHubLink.astro';
@@ -8,6 +9,8 @@ import ThemeSelect from './ThemeSelect.astro';
 
 const WEBSITE_URL = 'https://submilli.ai';
 ---
+
+<Analytics />
 
 <div class="docs-header">
 	<div class="title-wrapper">
