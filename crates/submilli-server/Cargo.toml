@@ -71,3 +71,4 @@ submilli-blueprint = { path = "../submilli-blueprint" }
 httpmock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 libc = { workspace = true }
+sentry = { workspace = true, features = ["test"] }

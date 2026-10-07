@@ -27,7 +27,7 @@ use super::replay::{
 };
 use super::throwaway::{LocalState, Throwaway, ThrowawayError};
 use super::{FinishedRun, McpCatalog, RecordedRun, RunEntry, RunRecorder};
-use crate::app::AppState;
+use crate::app::{AppState, BlueprintForRun};
 use crate::handlers::execute::{
     ExecuteRequest, ExecuteResponse, RunWorld, WorldContext, one_shot_with, open_session,
     outside_clients,
@@ -191,8 +191,10 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
     let Some(code) = recorded.code.clone() else {
         return Err(TestError::NoProgram { source_run });
     };
-    let blueprint = match state.blueprints().get(&recorded.blueprint_name).await {
-        Ok(Some(blueprint)) => blueprint,
+    // Looked up once, with its version tag: the variables, the local-state copy, and
+    // the run itself all use this blueprint, whatever registers meanwhile.
+    let found = match state.blueprint_for_run(&recorded.blueprint_name).await {
+        Ok(Some(found)) => found,
         Ok(None) => return Err(TestError::BlueprintNotFound(recorded.blueprint_name)),
         Err(error) => {
             return Err(TestError::Store(
@@ -200,10 +202,11 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
             ));
         }
     };
-    let variables = reconcile_variables(&blueprint, &bindings, &recorded.variables);
+    let blueprint = &found.blueprint;
+    let variables = reconcile_variables(blueprint, &bindings, &recorded.variables);
     let supplied = variables.bindings();
     let resolved = variables
-        .resolve(&blueprint)
+        .resolve(blueprint)
         .map_err(|error| TestError::InvalidVariables(error.to_string()))?;
     // Refused before anything is copied, as the run would refuse them.
     resolve_harness_secrets(&blueprint.secrets, &secrets.clone().unwrap_or_default())
@@ -211,7 +214,7 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
     let local = Throwaway::copy(
         state.session_manager(),
         recorded.session_id.as_deref(),
-        &blueprint,
+        blueprint,
         &resolved,
     )
     .await
@@ -221,23 +224,25 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
     let (cancel, cancel_requested) = oneshot::channel();
     let cassette = Cassette::new(&recorded, cancel);
     let tap = Arc::new(CallTap::default());
+    // Only the servers today's blueprint declares can be imported, as a normal run's
+    // discovery would have it.
+    let mcp_catalog = Arc::new(
+        recorded
+            .mcp_catalog
+            .as_deref()
+            .map_or_else(McpCatalog::empty, |catalog| {
+                catalog.restricted_to(|server| blueprint.mcp.contains_key(server))
+            }),
+    );
     let world = TestWorld {
         source_run: source_run.clone(),
         mode,
         cassette: Arc::clone(&cassette),
         cancel: cancel_requested,
-        // Only the servers today's blueprint declares can be imported, as a normal run's
-        // discovery would have it.
-        mcp_catalog: Arc::new(
-            recorded
-                .mcp_catalog
-                .as_deref()
-                .map_or_else(McpCatalog::empty, |catalog| {
-                    catalog.restricted_to(|server| blueprint.mcp.contains_key(server))
-                }),
-        ),
+        mcp_catalog,
         local: Arc::new(local),
         tap: Arc::clone(&tap),
+        blueprint: found,
     };
     let audit = crate::audit::ExecutionAudit::new(state.audit().clone(), &label, "test", None);
     let request = ExecuteRequest {
@@ -286,6 +291,9 @@ pub(crate) struct TestWorld {
     mcp_catalog: Arc<McpCatalog>,
     local: Arc<Throwaway>,
     tap: Arc<CallTap>,
+    /// The blueprint the test was prepared under, which the run uses rather than a
+    /// second lookup.
+    blueprint: BlueprintForRun,
 }
 
 impl TestWorld {
@@ -295,6 +303,10 @@ impl TestWorld {
 
     pub(crate) fn tap(&self) -> &Arc<CallTap> {
         &self.tap
+    }
+
+    pub(crate) fn blueprint(&self) -> &BlueprintForRun {
+        &self.blueprint
     }
 
     /// The run's world in place of a normal run's: the catalog its source compiled

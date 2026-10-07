@@ -127,6 +127,7 @@ pub(crate) struct RunnerRuntime<'a> {
     pub engine: &'a Engine,
     pub base_linker: &'a Linker<StoreData>,
     pub config: &'a RuntimeConfig,
+    pub telemetry: crate::config::RunTelemetry,
 }
 
 /// Run `code` against a caller-provided VFS. Ownership of `vfs` lives outside:
@@ -149,6 +150,7 @@ pub(crate) async fn run(
     let engine = runtime.engine.clone();
     let linker = runtime.base_linker.clone();
     let config = runtime.config.clone();
+    let telemetry = runtime.telemetry;
     let packages = Arc::clone(imports.packages);
     let mcps = Arc::clone(imports.mcps);
     let (request, caller_gone) = tokio::sync::oneshot::channel();
@@ -178,6 +180,7 @@ pub(crate) async fn run(
                 engine: &engine,
                 base_linker: &linker,
                 config: &config,
+                telemetry,
             },
             (vfs, vfs_info),
             services,
@@ -230,7 +233,9 @@ pub(crate) async fn run(
         None => "success",
         Some(error) => error_kind_tag(error.kind),
     });
-    if let Some(error) = &outcome.error {
+    if let Some(error) = &outcome.error
+        && telemetry == crate::config::RunTelemetry::Report
+    {
         report_to_sentry(code, error);
     }
     outcome
@@ -313,7 +318,9 @@ async fn run_inner(
     data.llm_budget = services.llm_budget;
     data.embedding_provider = services.embedding_provider;
     data.embedding_budget = services.embedding_budget;
-    data.metrics = Arc::new(crate::metrics::SentryMetricsSink);
+    if runtime.telemetry == crate::config::RunTelemetry::Report {
+        data.metrics = Arc::new(crate::metrics::SentryMetricsSink);
+    }
     data.console = Box::new(Sink(buf.clone()));
     data.install_type_info(compiled.type_info.clone());
 
@@ -1055,6 +1062,7 @@ mod tests {
                 engine: &engine,
                 base_linker: &linker,
                 config: &config,
+                telemetry: crate::config::RunTelemetry::Report,
             },
             vfs,
             defaults.vfs_info,

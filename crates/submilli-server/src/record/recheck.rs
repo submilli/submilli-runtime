@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use interpreter::runtime::{CallRecord, DecisionRecord, EntryPath, SourceLine};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use submilli_blueprint::{
     Action, Blueprint, Resolution, ResolutionCause, VarBindings, VariableError, resolve_variables,
 };
@@ -19,11 +19,15 @@ use super::{FinishedRun, McpCatalog, RunStart};
 
 /// A recorded run, as an embedder keeps it and hands it back: what [`recheck`] reads, and
 /// what a test run is built from.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RecordedRun {
     pub execution_id: String,
     pub blueprint_name: String,
     pub blueprint_hash: Option<String>,
+    /// The blueprint version the run was decided under; see
+    /// [`RunStart::blueprint_version`]. Absent from recordings made before it was kept.
+    #[serde(default)]
+    pub blueprint_version: Option<String>,
     /// The program's source; `None` for a file tool.
     pub code: Option<String>,
     /// The session the run executed in, whose files and data a test run copies.
@@ -34,7 +38,10 @@ pub struct RecordedRun {
     pub calls: Vec<CallRecord>,
     /// The recorder's caps cut the decisions or calls: some are missing.
     pub log_truncated: bool,
-    #[serde(serialize_with = "serialize_catalog")]
+    #[serde(
+        serialize_with = "serialize_catalog",
+        deserialize_with = "deserialize_catalog"
+    )]
     pub mcp_catalog: Option<Arc<McpCatalog>>,
 }
 
@@ -45,6 +52,12 @@ fn serialize_catalog<S: Serializer>(
     catalog.as_deref().serialize(serializer)
 }
 
+fn deserialize_catalog<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Arc<McpCatalog>>, D::Error> {
+    Ok(Option::<McpCatalog>::deserialize(deserializer)?.map(Arc::new))
+}
+
 impl RecordedRun {
     /// The run `start` describes, as it ended in `finished`.
     pub fn from_parts(start: &RunStart, finished: &FinishedRun) -> Self {
@@ -52,6 +65,7 @@ impl RecordedRun {
             execution_id: start.execution_id.clone(),
             blueprint_name: start.blueprint_name.clone(),
             blueprint_hash: start.blueprint_hash.clone(),
+            blueprint_version: start.blueprint_version.clone(),
             code: start.code.as_deref().map(str::to_owned),
             session_id: start.session_id.clone(),
             variables: (*start.variables).clone(),

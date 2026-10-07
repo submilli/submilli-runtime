@@ -306,6 +306,54 @@ impl FilterExpr {
         }
     }
 
+    /// The top-level `and` operands, flattened: `a and (b and c)` yields `a`, `b`,
+    /// `c`. A filter that is not an `and` is its own single conjunct.
+    pub(crate) fn conjuncts(&self) -> Vec<&FilterExpr> {
+        let mut out = Vec::new();
+        self.collect_flat(&mut out, |expr| match expr {
+            Expr::And(left, right) => Some((left, right)),
+            _ => None,
+        });
+        out
+    }
+
+    /// The top-level `or` operands, flattened like [`Self::conjuncts`].
+    pub(crate) fn disjuncts(&self) -> Vec<&FilterExpr> {
+        let mut out = Vec::new();
+        self.collect_flat(&mut out, |expr| match expr {
+            Expr::Or(left, right) => Some((left, right)),
+            _ => None,
+        });
+        out
+    }
+
+    fn collect_flat<'a>(
+        &'a self,
+        out: &mut Vec<&'a FilterExpr>,
+        split: fn(&'a Expr) -> Option<(&'a FilterExpr, &'a FilterExpr)>,
+    ) {
+        match split(&self.0) {
+            Some((left, right)) => {
+                left.collect_flat(out, split);
+                right.collect_flat(out, split);
+            }
+            None => out.push(self),
+        }
+    }
+
+    /// `(field path, variable)` when this expression is exactly
+    /// `field == ${vars.NAME}`: the shape that pins a rule to a session variable.
+    pub(crate) fn as_pin(&self) -> Option<(String, &str)> {
+        match &self.0 {
+            Expr::Compare(Comparison {
+                path,
+                op: CompareOp::Eq,
+                operand: Operand::Var(name),
+            }) => Some((path.join("."), name.as_str())),
+            _ => None,
+        }
+    }
+
     /// Binding tightness, used only to parenthesize `Display` minimally.
     fn precedence(&self) -> u8 {
         match &self.0 {

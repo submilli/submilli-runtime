@@ -2,6 +2,7 @@
 
 mod auth_proxy;
 mod diag;
+pub mod diff;
 mod embedding;
 mod endpoint;
 mod filter;

@@ -24,7 +24,7 @@ use submilli_blueprint::{Blueprint, HarnessSecretBindings, VfsConfig, required_h
 use submilli_shared::PolicyCheck;
 use submilli_shared::library_visibility::LibraryVisibility;
 
-use crate::app::AppState;
+use crate::app::{AppState, BlueprintForRun};
 use crate::error::ExecuteError;
 use crate::handlers::execute::{ExecuteInputs, VfsSource, blueprint_miss_message, execute_core};
 use crate::packages;
@@ -209,6 +209,25 @@ impl SubmilliMcp {
         }
     }
 
+    /// [`Self::require_blueprint`] with the version tag read in the same lookup, for
+    /// a run to record.
+    async fn require_blueprint_for_run(&self) -> Result<BlueprintForRun, ErrorData> {
+        match self
+            .state
+            .blueprint_for_run(&self.blueprint_name)
+            .await
+            .map_err(blueprint_store_error)?
+        {
+            Some(found) => Ok(found),
+            None => Err(ErrorData::invalid_request(
+                blueprint_miss_message(&self.state, &self.blueprint_name)
+                    .await
+                    .map_err(blueprint_store_error)?,
+                None,
+            )),
+        }
+    }
+
     /// The current blueprint, re-fetched from the store so a mid-session update is
     /// reflected; falls back to the build-time snapshot if it was removed.
     async fn current_blueprint(&self) -> Result<Blueprint, ErrorData> {
@@ -312,13 +331,20 @@ impl SubmilliMcp {
         parts: axum::http::request::Parts,
         audit: Arc<crate::audit::ExecutionAudit>,
     ) -> Result<CallToolResult, ErrorData> {
-        let blueprint = Arc::new(self.require_blueprint().await.inspect_err(|error| {
-            audit.error(if error.code == ErrorCode::INTERNAL_ERROR {
-                crate::error::ErrorKind::RuntimeError
-            } else {
-                crate::error::ErrorKind::BlueprintNotFound
-            });
-        })?);
+        let BlueprintForRun {
+            blueprint,
+            version_tag,
+        } = self
+            .require_blueprint_for_run()
+            .await
+            .inspect_err(|error| {
+                audit.error(if error.code == ErrorCode::INTERNAL_ERROR {
+                    crate::error::ErrorKind::RuntimeError
+                } else {
+                    crate::error::ErrorKind::BlueprintNotFound
+                });
+            })?;
+        let blueprint = Arc::new(blueprint);
 
         // Stateful transport: every connection has a session id (rmcp rejects a
         // non-initialize request without one before we get here).
@@ -377,6 +403,7 @@ impl SubmilliMcp {
                 code: &args.code,
                 blueprint_name: &self.blueprint_name,
                 blueprint,
+                version_tag,
                 variables,
                 harness_secrets,
                 audit: Some(audit),
@@ -794,7 +821,11 @@ impl SubmilliMcp {
             blueprint_name: self.blueprint_name.clone(),
             blueprint: Arc::clone(blueprint),
             blueprint_hash: crate::audit::blueprint_hash(blueprint),
+            // A file tool reads the blueprint without its tag.
+            blueprint_version: crate::audit::blueprint_hash(blueprint),
             variables: Arc::clone(variables),
+            // A file tool runs no program and reads no secret.
+            harness_secrets: Arc::default(),
             code: None,
         })
     }

@@ -12,7 +12,7 @@ use submilli_blueprint::{
 };
 use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
-use crate::app::AppState;
+use crate::app::{AppState, BlueprintForRun};
 use crate::error::{ErrorKind, ExecuteError};
 use crate::record::{RunEntry, TestWorld};
 use interpreter::runtime::{Vfs, VfsInfo};
@@ -140,7 +140,13 @@ pub(crate) async fn one_shot_with(
 
     // Blueprint and variables are supplied inline and validated here, before the
     // shared core runs them.
-    let found = match state.blueprints().get(&req.blueprint).await {
+    // A test run was prepared under a blueprint it already looked up; it runs under
+    // that one.
+    let found = match test.as_ref().map(TestWorld::blueprint) {
+        Some(found) => Ok(Some(found.clone())),
+        None => state.blueprint_for_run(&req.blueprint).await,
+    };
+    let found = match found {
         Ok(found) => found,
         Err(error) => {
             return failed(
@@ -149,7 +155,11 @@ pub(crate) async fn one_shot_with(
             );
         }
     };
-    let Some(blueprint) = found else {
+    let Some(BlueprintForRun {
+        blueprint,
+        version_tag,
+    }) = found
+    else {
         return match blueprint_miss_message(state, &req.blueprint).await {
             Ok(message) => failed(ErrorKind::BlueprintNotFound, message),
             Err(error) => failed(
@@ -221,6 +231,7 @@ pub(crate) async fn one_shot_with(
             code: &req.code,
             blueprint_name: &req.blueprint,
             blueprint,
+            version_tag,
             variables,
             harness_secrets,
             audit,
@@ -257,6 +268,9 @@ pub(crate) struct ExecuteInputs<'a> {
     pub blueprint_name: &'a str,
     /// The blueprint the run is decided under.
     pub blueprint: Arc<Blueprint>,
+    /// The version tag read with `blueprint`, in the same lookup; `None` when it was
+    /// registered without one.
+    pub version_tag: Option<String>,
     /// The validated `${vars.NAME}` bindings.
     pub variables: Arc<VarBindings>,
     /// Trusted harness credentials for this run alone.
@@ -389,7 +403,12 @@ fn run_start(inputs: &ExecuteInputs<'_>, test: Option<&TestWorld>) -> crate::rec
         blueprint_name: inputs.blueprint_name.to_owned(),
         blueprint: Arc::clone(&inputs.blueprint),
         blueprint_hash: crate::audit::blueprint_hash(&inputs.blueprint),
+        blueprint_version: inputs
+            .version_tag
+            .clone()
+            .or_else(|| crate::audit::blueprint_hash(&inputs.blueprint)),
         variables: Arc::clone(&inputs.variables),
+        harness_secrets: Arc::clone(&inputs.harness_secrets),
         code: Some(Arc::from(inputs.code)),
     }
 }
@@ -426,6 +445,7 @@ async fn prepare_and_run(
         code,
         blueprint_name,
         blueprint,
+        version_tag: _,
         variables,
         harness_secrets,
         audit: execution_audit,
@@ -466,6 +486,27 @@ async fn prepare_and_run(
         Ok(imports) => imports,
         Err(message) => return fail_to_parse(message),
     };
+    // Every entry point reaches here before anything is compiled, so the embedder's
+    // check runs for every run, whoever sent it.
+    if let Some(hook) = state.pre_execute() {
+        let packages: BTreeSet<String> = script_imports
+            .registry_packages
+            .iter()
+            .filter(|package| blueprint.packages.contains(*package))
+            .cloned()
+            .collect();
+        let checked = hook
+            .before_execute(crate::config::PreExecute {
+                state,
+                blueprint_name,
+                blueprint: &blueprint,
+                packages: &packages,
+            })
+            .await;
+        if let Err(refusal) = checked {
+            return fail(ErrorKind::PackageResolution, refusal.message);
+        }
+    }
 
     let network_policy = execution_audit.as_ref().map_or_else(
         || state.network_policy().clone(),
@@ -575,6 +616,7 @@ async fn prepare_and_run(
             engine: state.engine(),
             base_linker: state.base_linker(),
             config: state.runtime(),
+            telemetry: state.run_telemetry(),
         },
         vfs,
         vfs_info,

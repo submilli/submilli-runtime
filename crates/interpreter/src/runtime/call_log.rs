@@ -20,7 +20,7 @@
 use std::borrow::Cow;
 
 use base64::Engine as _;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -28,7 +28,7 @@ use super::StoreData;
 use super::decision::{CallTicket, SourceLine};
 
 /// How a call ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CallOutcome {
     /// The host function returned a value.
@@ -55,7 +55,7 @@ impl PayloadRecord {
 }
 
 /// A copy of a payload body, kept as text when it is UTF-8.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "encoding", content = "data")]
 pub enum BodyCopy {
     Text(String),
@@ -63,7 +63,7 @@ pub enum BodyCopy {
 }
 
 /// One side of a call: what it sent, or what came back.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayloadRecord {
     /// The structured part: a method and URL, a tool, a model, a status. Capped like a
     /// decision's context, with credential-bearing headers masked.
@@ -82,7 +82,7 @@ pub struct PayloadRecord {
 }
 
 /// Token counts a model provider reported for one call. Absent when not reported.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
@@ -91,7 +91,7 @@ pub struct ModelUsage {
 }
 
 /// One host call. Times are microseconds measured from the recorder's start.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallRecord {
     /// Run-wide, in call order; the same index the call's decisions carry.
     pub call_index: u64,

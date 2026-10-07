@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{DecisionLogConfig, DecisionLogOutput, RecordObserver};
-use submilli_blueprint::{Blueprint, VarBindings};
+use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings};
 
 use crate::error::ExecuteError;
 
@@ -84,7 +84,14 @@ pub struct RunStart {
     pub blueprint: Arc<Blueprint>,
     /// The audit's hash of that blueprint.
     pub blueprint_hash: Option<String>,
+    /// The version the run is decided under: the version tag the blueprint was
+    /// registered with, read in the same lookup as the blueprint, or
+    /// [`Self::blueprint_hash`] when it was registered without one.
+    pub blueprint_version: Option<String>,
     pub variables: Arc<VarBindings>,
+    /// The harness secrets the request supplied for this run, so a recorder can keep
+    /// their values out of what it stores. A recorder must never store or log them.
+    pub harness_secrets: Arc<HarnessSecretBindings>,
     /// The program's source; `None` for a file tool.
     pub code: Option<Arc<str>>,
 }
@@ -431,7 +438,9 @@ mod tests {
             blueprint_name: "bp".into(),
             blueprint: Arc::new(Blueprint::default()),
             blueprint_hash: None,
+            blueprint_version: None,
             variables: Arc::new(VarBindings::default()),
+            harness_secrets: Arc::default(),
             code: None,
         }
     }

@@ -172,3 +172,94 @@ async fn check_mutations(cancel: bool) {
         database.close().await.unwrap();
     }
 }
+
+/// Writes that fail once `failing` is set; reads always pass through.
+struct FailingWrites {
+    inner: InMemoryBlueprintStore,
+    failing: AtomicBool,
+}
+
+impl FailingWrites {
+    fn check(&self) -> Result<(), StoreError> {
+        if self.failing.load(Ordering::Acquire) {
+            return Err(StoreError::Io("disk full".into()));
+        }
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl BlueprintStore for FailingWrites {
+    async fn add_yaml(&self, value: StoredBlueprint) -> Result<(), StoreError> {
+        self.check()?;
+        self.inner.add_yaml(value).await
+    }
+    async fn upsert_yaml(&self, value: StoredBlueprint) -> Result<bool, StoreError> {
+        self.check()?;
+        self.inner.upsert_yaml(value).await
+    }
+    async fn remove(&self, name: &str) -> Result<bool, StoreError> {
+        self.check()?;
+        self.inner.remove(name).await
+    }
+    async fn get(&self, name: &str) -> Result<Option<Blueprint>, StoreError> {
+        self.inner.get(name).await
+    }
+    async fn get_yaml(&self, name: &str) -> Result<Option<String>, StoreError> {
+        self.inner.get_yaml(name).await
+    }
+    async fn list(&self) -> Result<Vec<String>, StoreError> {
+        self.inner.list().await
+    }
+    async fn list_blueprints(&self) -> Result<Vec<Blueprint>, StoreError> {
+        self.inner.list_blueprints().await
+    }
+}
+
+/// A replace or remove the store refuses leaves the blueprint's version tag: its
+/// runs still record the version that is still in force.
+#[tokio::test]
+async fn a_failed_http_write_keeps_the_version_tag() {
+    let store = Arc::new(FailingWrites {
+        inner: InMemoryBlueprintStore::default(),
+        failing: AtomicBool::new(false),
+    });
+    let state = AppState::new(ServerConfig {
+        blueprints: Some(Arc::clone(&store) as Arc<dyn BlueprintStore>),
+        ..Default::default()
+    })
+    .unwrap();
+    state
+        .apply_local_blueprint("name: demo\n", "v1")
+        .await
+        .unwrap();
+    store.failing.store(true, Ordering::Release);
+    let router = app(state.clone());
+    for (method, body) in [
+        (
+            "PUT",
+            serde_json::json!({ "yaml": "name: demo\ndefault: allow\n" }).to_string(),
+        ),
+        ("DELETE", String::new()),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(method)
+                    .uri("/v1/blueprints/demo")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "{method}"
+        );
+        let found = state.blueprint_for_run("demo").await.unwrap().unwrap();
+        assert_eq!(found.version_tag.as_deref(), Some("v1"), "{method}");
+    }
+}
