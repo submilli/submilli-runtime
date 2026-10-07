@@ -76,7 +76,7 @@ impl ErrorResponse {
 }
 
 /// Parse YAML into a `Blueprint`, mapping each failure to its HTTP response.
-fn parse_blueprint(yaml: &str) -> Result<Blueprint, (StatusCode, Json<ErrorResponse>)> {
+pub(crate) fn parse_blueprint(yaml: &str) -> Result<Blueprint, (StatusCode, Json<ErrorResponse>)> {
     submilli_blueprint::parse(yaml).map_err(|err| {
         let error = match err {
             BlueprintError::Empty | BlueprintError::Parse(_) => "parse_error",
@@ -116,7 +116,7 @@ fn parse_blueprint(yaml: &str) -> Result<Blueprint, (StatusCode, Json<ErrorRespo
 /// Verify, at apply/add time, that every declared secret currently resolves on
 /// this server (present in the secret store).
 /// Point-in-time only — see `submilli_blueprint::verify_secrets`.
-async fn verify_secrets(
+pub(crate) async fn verify_secrets(
     state: &AppState,
     blueprint: &Blueprint,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
@@ -199,7 +199,7 @@ fn reject_unusable_volume_reference(
     })
 }
 
-fn verify_packages(
+pub(crate) fn verify_packages(
     state: &AppState,
     blueprint: &Blueprint,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
@@ -238,12 +238,18 @@ pub async fn add(
     Json(req): Json<AddRequest>,
 ) -> Result<(StatusCode, Json<AddResponse>), (StatusCode, Json<ErrorResponse>)> {
     let blueprint = parse_blueprint(&req.yaml)?;
-    reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
+    reject_unusable_volume_reference(&blueprint, &state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
     verify_packages(&state, &blueprint)?;
     let name = blueprint.name.clone();
     crate::audit::annotate(serde_json::json!({"name": name,
         "new_hash": crate::audit::blueprint_hash(&blueprint)}));
+    // An add never replaces, so there is no tag to clear; the lock keeps a run's
+    // lookup from seeing the new blueprint beside a tag a local apply sets meanwhile.
+    let _tags = state.blueprint_tags_for_write().await;
+    // Again under the lock: a local apply may have declared a volume the check above
+    // saw and then withdrawn it when its own write failed.
+    reject_unusable_volume_reference(&blueprint, &state.session_manager().volumes())?;
     let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
     state
         .blueprints()
@@ -282,7 +288,7 @@ pub async fn apply(
     crate::audit::annotate(
         serde_json::json!({"new_hash": crate::audit::blueprint_hash(&blueprint)}),
     );
-    reject_unusable_volume_reference(&blueprint, state.session_manager().volumes())?;
+    reject_unusable_volume_reference(&blueprint, &state.session_manager().volumes())?;
     verify_secrets(&state, &blueprint).await?;
     verify_packages(&state, &blueprint)?;
     let previous = state.blueprints().get(&name).await.map_err(store_error)?;
@@ -301,12 +307,23 @@ pub async fn apply(
             ),
         ));
     }
-    let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
-    let created = state
-        .blueprints()
-        .upsert_yaml(stored)
-        .await
-        .map_err(store_error)?;
+    let created = {
+        // Registered without a tag: its runs record the blueprint's hash. The tag
+        // goes only once the write succeeds, so a failed write leaves both as they were.
+        let mut tags = state.blueprint_tags_for_write().await;
+        // Again under the lock: a local apply may have declared a volume the check
+        // above saw and then withdrawn it when its own write failed.
+        reject_unusable_volume_reference(&blueprint, &state.session_manager().volumes())?;
+        let stored =
+            StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
+        let created = state
+            .blueprints()
+            .upsert_yaml(stored)
+            .await
+            .map_err(store_error)?;
+        tags.remove(&name);
+        created
+    };
     state.evict_mcp_catalog(&name);
     // Another apply may have committed since the audit read above.
     state.evict_prepared_packages(&name);
@@ -406,11 +423,19 @@ pub async fn remove(
     };
     crate::audit::annotate(serde_json::json!({"name": name,
         "old_hash": previous.as_ref().map(crate::audit::blueprint_hash)}));
-    let removed = state
-        .blueprints()
-        .remove(&name)
-        .await
-        .map_err(store_error)?;
+    let removed = {
+        let mut tags = state.blueprint_tags_for_write().await;
+        let removed = state
+            .blueprints()
+            .remove(&name)
+            .await
+            .map_err(store_error)?;
+        // Only once the store no longer holds it, so a failed remove keeps its tag.
+        if removed {
+            tags.remove(&name);
+        }
+        removed
+    };
     if !removed {
         return Err(not_found(name));
     }

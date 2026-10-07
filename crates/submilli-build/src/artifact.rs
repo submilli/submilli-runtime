@@ -443,6 +443,38 @@ pub fn read_package_artifact(dir: impl AsRef<Path>) -> Result<Artifact, Artifact
     read_package_artifact_with_budget(dir, &mut budget)
 }
 
+/// What an installed package was built from: its metadata, documentation, and
+/// source modules. Reads only those files, not the wasm, so a caller can compare an
+/// installed package with its source tree cheaply.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstalledSources {
+    pub metadata: ArtifactMetadata,
+    pub documentation: String,
+    pub sources: Vec<ArtifactSource>,
+}
+
+/// Read an installed package's [`InstalledSources`] from its directory.
+pub fn read_installed_sources(dir: impl AsRef<Path>) -> Result<InstalledSources, ArtifactError> {
+    let dir = dir.as_ref();
+    let mut budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
+    budget.begin_package(dir)?;
+    let metadata_path = dir.join(METADATA_FILE);
+    let metadata: ArtifactMetadata = read_json(&metadata_path, &mut budget)?;
+    if metadata.schema_version != ARTIFACT_SCHEMA_VERSION {
+        return Err(ArtifactError::UnsupportedSchema {
+            path: metadata_path,
+            found: metadata.schema_version,
+        });
+    }
+    let documentation = read_optional_text(dir.join(DOCS_README_FILE), &mut budget)?;
+    let sources = read_optional_json(dir.join(SOURCES_FILE), &mut budget)?.unwrap_or_default();
+    Ok(InstalledSources {
+        metadata,
+        documentation,
+        sources,
+    })
+}
+
 pub(crate) fn read_package_artifact_with_budget(
     dir: impl AsRef<Path>,
     budget: &mut ArtifactReadBudget,

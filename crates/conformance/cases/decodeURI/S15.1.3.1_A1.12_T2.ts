@@ -1,6 +1,4 @@
 // test262: test/built-ins/decodeURI/S15.1.3.1_A1.12_T2.js
-// URIError is erased to the base Error (README: no error subclasses); the
-// "throws URIError" checks become "throws".
 
 const interval: number[][] = [
   [0x00, 0x2F],
@@ -20,8 +18,8 @@ function main(): void {
       let threw = false;
       try {
         decodeURI("%F0" + "%A0%" + String.fromCharCode(indexJ, indexJ) + "%A0");
-      } catch (e: Error) {
-        threw = true;
+      } catch (e) {
+        threw = e instanceof URIError;
       }
       if (!threw) {
         result = false;

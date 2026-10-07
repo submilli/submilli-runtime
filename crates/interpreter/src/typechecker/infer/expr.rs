@@ -614,6 +614,11 @@ impl Inferer<'_> {
             ExprKind::ObjectLiteral { members } => {
                 self.infer_object_literal(expr_id, members, expected, span)
             }
+            ExprKind::ArrayLiteral { elements }
+                if expected.is_none() && self.ast.tuple_pattern_sources.contains(&expr_id) =>
+            {
+                self.infer_pattern_tuple_literal(elements, span)
+            }
             ExprKind::ArrayLiteral { elements } => {
                 self.infer_array_literal(elements, expected, span)
             }
@@ -6305,6 +6310,32 @@ impl Inferer<'_> {
             } else {
                 Type::Tuple(slots)
             },
+        ))
+    }
+
+    /// An unannotated array literal that an array pattern destructures: a tuple
+    /// of its elements' widened types, as TypeScript infers from the pattern.
+    fn infer_pattern_tuple_literal(
+        &mut self,
+        elements: Vec<crate::ArrayLiteralElement>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let mut typed_elements = Vec::with_capacity(elements.len());
+        let mut element_types = Vec::with_capacity(elements.len());
+        for element in &elements {
+            let crate::ArrayLiteralElement::Value(id) = element else {
+                return self.infer_array_literal(elements, None, span);
+            };
+            let (typed_id, ty) = self.infer_expr(*id, None)?;
+            element_types.push(self.widen_fresh_literals(typed_id, &ty)?);
+            typed_elements.push(typed_id);
+        }
+        Ok((
+            TypedExprKind::TupleLiteral {
+                elements: typed_elements,
+                element_types: element_types.clone(),
+            },
+            Type::Tuple(element_types),
         ))
     }
 

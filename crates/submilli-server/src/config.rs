@@ -175,6 +175,61 @@ pub struct ServerConfig {
     /// Code-only, like `llm_dispatch`: no flag, env var, or config-file key. `None` (the
     /// default) records nothing and changes nothing.
     pub run_recorder: Option<Arc<dyn crate::record::RunRecorderFactory>>,
+    /// Whether runs feed the process's Sentry client: a failed run's report and the
+    /// runtime metrics sink. On by default, so the server binary keeps its
+    /// opt-in telemetry; an embedder whose runs must stay on the machine, such as
+    /// the playground, turns it off whatever the process's own telemetry setting.
+    /// Code-only: no flag, env var, or config-file key.
+    pub run_telemetry: RunTelemetry,
+    /// Called before every program is compiled, whoever sent it, so an embedder can
+    /// bring the packages the run imports up to date first; the playground rebuilds a
+    /// package whose source changed since it was installed. A refusal fails the run
+    /// as a package-resolution error. Code-only, like `run_recorder`. `None` (the
+    /// default) checks nothing.
+    pub pre_execute: Option<Arc<dyn PreExecuteHook>>,
+}
+
+/// What a [`PreExecuteHook`] is told about the run about to be compiled.
+pub struct PreExecute<'a> {
+    pub state: &'a crate::AppState,
+    pub blueprint_name: &'a str,
+    pub blueprint: &'a Arc<submilli_blueprint::Blueprint>,
+    /// The registry packages the program imports that the blueprint lists: what the
+    /// run will load from the package store, before their dependencies.
+    pub packages: &'a std::collections::BTreeSet<String>,
+}
+
+/// Why a [`PreExecuteHook`] stopped a run: reported to the caller, and recorded, as a
+/// package-resolution error with this message, which should name the package and how
+/// to fix it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreExecuteRefusal {
+    pub message: String,
+}
+
+impl fmt::Display for PreExecuteRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for PreExecuteRefusal {}
+
+/// See [`ServerConfig::pre_execute`]. Called from the async worker running the
+/// request: work that blocks belongs on a blocking thread.
+#[async_trait::async_trait]
+pub trait PreExecuteHook: Send + Sync {
+    async fn before_execute(&self, run: PreExecute<'_>) -> Result<(), PreExecuteRefusal>;
+}
+
+/// See [`ServerConfig::run_telemetry`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RunTelemetry {
+    /// Report failed runs and runtime metrics to Sentry when a client is bound.
+    #[default]
+    Report,
+    /// Never hand run data to Sentry, even when a client is bound.
+    Off,
 }
 
 pub use submilli_shared::OAuthProvider;

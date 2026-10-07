@@ -1,8 +1,6 @@
 // test262: test/built-ins/decodeURI/S15.1.3.1_A1.13_T2.js
 // The Test262Error range reporting (indexO/indexP) becomes one assert naming
 // the first failing value and the failure count.
-// URIError is erased to the base Error (README: no error subclasses); the
-// "throws URIError" checks become "throws".
 
 // test262 harness helpers (harness/decimalToHexString.js).
 const HEX: string = "0123456789ABCDEF";
@@ -37,8 +35,8 @@ function main(): void {
       let threw = false;
       try {
         decodeURI(hexB + hexC);
-      } catch (e: Error) {
-        threw = true;
+      } catch (e) {
+        threw = e instanceof URIError;
       }
       if (threw) {
         continue;

@@ -64,7 +64,7 @@ function main(): void {
   assert(onClass === mapMessage, "a Map as a class field");
 
   // `toString` does not share `toJson`'s problem — it never reads the payload.
-  assert(String(m) === "[object Object]", "String() answers without misreading the backing");
+  assert(String(m) === "[object Map]", "String() answers without misreading the backing");
 
   // The conversion the message names actually works.
   assert(JSON.stringify(Array.from(m)) === "[[\"a\",1]]", "entries serialize");

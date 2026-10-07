@@ -1802,6 +1802,8 @@ impl<'a> Parser<'a> {
         match &tok.kind {
             TokenKind::NumberLiteral(n) => {
                 let value = if neg.is_some() { -n } else { *n };
+                // tsc constant-folds enum initializers, which turns `-0` into `0`.
+                let value = if value == 0.0 { 0.0 } else { value };
                 let start = neg.as_ref().map_or(tok.span.start, |t| t.span.start);
                 Some(EnumInitializer::Number {
                     value,

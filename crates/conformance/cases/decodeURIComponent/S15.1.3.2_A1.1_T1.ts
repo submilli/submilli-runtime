@@ -1,14 +1,12 @@
 // test262: test/built-ins/decodeURIComponent/S15.1.3.2_A1.1_T1.js
-// URIError is erased to the base Error (README: no error subclasses); the
-// "throws URIError" checks become "throws".
 
 function main(): void {
   let result = true;
   let threw = false;
   try {
     decodeURIComponent("%");
-  } catch (e: Error) {
-    threw = true;
+  } catch (e) {
+    threw = e instanceof URIError;
   }
   if (!threw) {
     result = false;
@@ -16,8 +14,8 @@ function main(): void {
   let threw2 = false;
   try {
     decodeURIComponent("%A");
-  } catch (e: Error) {
-    threw2 = true;
+  } catch (e) {
+    threw2 = e instanceof URIError;
   }
   if (!threw2) {
     result = false;
@@ -25,8 +23,8 @@ function main(): void {
   let threw3 = false;
   try {
     decodeURIComponent("%1");
-  } catch (e: Error) {
-    threw3 = true;
+  } catch (e) {
+    threw3 = e instanceof URIError;
   }
   if (!threw3) {
     result = false;
@@ -34,8 +32,8 @@ function main(): void {
   let threw4 = false;
   try {
     decodeURIComponent("% ");
-  } catch (e: Error) {
-    threw4 = true;
+  } catch (e) {
+    threw4 = e instanceof URIError;
   }
   if (!threw4) {
     result = false;

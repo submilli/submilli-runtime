@@ -31,6 +31,23 @@ pub struct HttpRequest {
     /// Custom transports must consult it before sending every redirect hop; the
     /// initial URL is already authorized.
     pub redirect_guard: Option<Arc<dyn RedirectGuard>>,
+    /// What the call log recorded for the program's own request, before the auth proxy
+    /// changed it. Set only for a client that asks ([`HttpClient::wants_recorded_request`]),
+    /// and by the host functions alone: an auth proxy that builds a new request instead
+    /// of changing this one drops it.
+    pub recorded_as: Option<RecordedRequest>,
+}
+
+/// How the call log keys and digests a request: its masked URL, and the digest of its
+/// masked meta and body. The auth proxy may rewrite the URL and headers (a credential
+/// injected into the query or a header, in another position), so a transport that must
+/// recognize a request it saw recorded reads this instead of deriving it again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedRequest {
+    /// [`mask_url`](crate::runtime::call_log::mask_url) of the program's URL.
+    pub masked_url: String,
+    /// The `digest` of the request's payload record.
+    pub digest: String,
 }
 
 /// Authorizes one redirect hop before any byte of it is sent.
@@ -134,6 +151,23 @@ pub enum HttpError {
     Other(String),
 }
 
+impl HttpError {
+    /// A stable name for the failure, for records that must tell failures apart.
+    pub(super) fn kind(&self) -> &'static str {
+        match self {
+            HttpError::Network(_) => "network",
+            HttpError::EgressDenied(_) => "egress-denied",
+            HttpError::Internal(_) => "internal",
+            HttpError::Policy(_) => "policy",
+            HttpError::PermissionDenied(_) => "permission-denied",
+            HttpError::Timeout => "timeout",
+            HttpError::TooLarge { .. } => "too-large",
+            HttpError::UnsupportedMethod(_) => "unsupported-method",
+            HttpError::Other(_) => "other",
+        }
+    }
+}
+
 impl std::fmt::Display for HttpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -219,6 +253,12 @@ impl std::io::Write for ReceivedWriter<'_> {
 /// `HttpError::Internal` as a fatal host failure.
 #[async_trait::async_trait]
 pub trait HttpClient: Send + Sync {
+    /// Whether this client reads [`HttpRequest::recorded_as`]. The host functions
+    /// compute it only for a client that does.
+    fn wants_recorded_request(&self) -> bool {
+        false
+    }
+
     async fn send(&self, req: &HttpRequest) -> Result<HttpResponse, HttpError>;
 
     /// Sends `req` to exactly its URL, never following a redirect, even on
@@ -960,6 +1000,12 @@ pub fn describe_error_chain(err: &dyn std::error::Error) -> String {
         Some(reason) if !top.contains(&reason) => format!("{top}: {reason}"),
         _ => top,
     }
+}
+
+/// Whether an error chain (as [`describe_error_chain`] renders it) is the network policy
+/// refusing the destination, which reaches a client builder's caller as a connect error.
+pub fn is_policy_refusal(chain: &str) -> bool {
+    chain.contains("blocked by network policy")
 }
 
 pub fn default_http_client() -> Arc<dyn HttpClient> {

@@ -207,6 +207,11 @@ pub enum ProviderFailure {
     },
     /// The credential was rejected, or none was resolvable.
     Unauthorized,
+    /// Refused by this host's configuration or network policy before anything was sent: a
+    /// provider the blueprint does not describe, or an endpoint the policy blocks. `detail`
+    /// is a fixed classification string. The guest sees the same transport failure as for
+    /// [`Self::Transport`]; the call log records it as `local`.
+    Local { detail: String },
     /// The connection failed with no status ever observed. `detail` is a fixed
     /// classification string — "connection reset", "dns lookup failed" — never a
     /// body and never an echo.
@@ -412,9 +417,11 @@ fn classify_failure(mut failure: ProviderFailure) -> LlmOutcome {
             // transport death — the cause is on this side, not the wire.
             ProviderFailure::Abort => failed(FailureReason::Cancelled, None::<String>),
 
-            ProviderFailure::Unauthorized => failed(FailureReason::RequestRejected, None::<String>),
+            ProviderFailure::Unauthorized => refused_locally(FailureReason::RequestRejected),
 
             ProviderFailure::Transport { .. } => failed(FailureReason::Transport, None::<String>),
+
+            ProviderFailure::Local { .. } => refused_locally(FailureReason::Transport),
 
             // Step 3 on the structured-output path. The object path never consults
             // the stop reason itself, so a `content-filter` stop arrives as an
@@ -526,6 +533,14 @@ fn is_context_length_exceeded(message: &str, body: Option<&str>) -> bool {
 
 fn failed(reason: FailureReason, text: Option<impl Into<String>>) -> LlmOutcome {
     LlmOutcome::failed(LlmFailure::new(reason, reason.default_message()), text)
+}
+
+/// [`failed`], for a refusal by this host: flagged so the call log records it as local.
+fn refused_locally(reason: FailureReason) -> LlmOutcome {
+    LlmOutcome::failed(
+        LlmFailure::new(reason, reason.default_message()).refused_locally(),
+        None::<String>,
+    )
 }
 
 #[cfg(test)]

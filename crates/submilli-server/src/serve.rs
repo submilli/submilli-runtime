@@ -174,8 +174,71 @@ async fn serve_opened(
     }
 }
 
+/// SIGTERM and SIGINT, registered for [`serve_embedded`]. An embedder installs them
+/// before it announces itself (writes a lock, prints an address), as [`serve`] does
+/// before it binds, so a signal sent once it is visible is held for the drain rather
+/// than killing the process mid-start.
+///
+/// A signal this process inherited as ignored (a background job of a
+/// non-interactive shell ignores SIGINT; `nohup` ignores SIGHUP) stays ignored: it
+/// is not watched, so it neither drains the server nor stops being ignored.
+pub struct EmbeddedSignals(ShutdownSignals);
+
+impl EmbeddedSignals {
+    /// Register the handlers. Needs a Tokio runtime with signal support.
+    pub fn install() -> Result<Self> {
+        ShutdownSignals::install_unless_ignored().map(Self)
+    }
+
+    /// Whether `signal` is ignored in this process now, as inherited or set. Read
+    /// before a handler is installed for it, which would replace the ignoring.
+    #[cfg(unix)]
+    pub fn is_ignored(signal: libc::c_int) -> Result<bool> {
+        // SAFETY: a zeroed sigaction is a valid value for the kernel to fill in; the
+        // new action is null, so sigaction only reads the current one into `current`.
+        let (read, current) = unsafe {
+            let mut current: libc::sigaction = std::mem::zeroed();
+            let read = libc::sigaction(signal, std::ptr::null(), &raw mut current);
+            (read, current)
+        };
+        if read != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(current.sa_sigaction == libc::SIG_IGN)
+    }
+}
+
+/// Serve a state an embedder built and booted, on a listener it bound, until
+/// shutdown is requested — by `POST /v1/shutdown`, by notifying
+/// [`AppState::shutdown_signal`], or by one of `signals` — then drain as
+/// [`serve`] does. For an embedder that runs the server beside listeners of its
+/// own, such as the playground; the embedder owns any database it opened.
+pub async fn serve_embedded(
+    listener: tokio::net::TcpListener,
+    state: AppState,
+    shutdown_grace: Duration,
+    signals: EmbeddedSignals,
+) -> Result<()> {
+    let EmbeddedSignals(signals) = signals;
+    state.set_bind_addr(listener.local_addr()?);
+    let shutdown = state.shutdown_signal();
+    let requests = state.graceful_shutdown();
+    serve_listener(
+        listener,
+        app(state),
+        signals,
+        shutdown,
+        requests,
+        shutdown_grace,
+    )
+    .await
+    .map(|_| ())
+}
+
 /// Resolve the blueprint backend and finish migration before application startup.
-async fn prepare_blueprint_store(
+/// Public so an embedder building its own [`AppState`] selects the same store
+/// [`serve`] would for its config.
+pub async fn prepare_blueprint_store(
     config: &ServerConfig,
 ) -> Result<Arc<dyn crate::blueprint::BlueprintStore>> {
     use crate::blueprint::{FileBlueprintStore, InMemoryBlueprintStore, SqliteBlueprintStore};
@@ -362,34 +425,78 @@ async fn forced_stop(
 
 /// The signals that mean "shut down", held as streams so they are registered
 /// before the server starts accepting rather than on first poll.
+/// `None` for a signal left ignored ([`EmbeddedSignals`]), which never arrives.
 #[cfg(unix)]
 struct ShutdownSignals {
-    terminate: tokio::signal::unix::Signal,
-    interrupt: tokio::signal::unix::Signal,
+    terminate: WatchedSignal,
+    interrupt: WatchedSignal,
 }
 
 #[cfg(unix)]
 impl ShutdownSignals {
     fn install() -> Result<Self> {
-        use tokio::signal::unix::{SignalKind, signal};
+        use tokio::signal::unix::SignalKind;
         Ok(Self {
-            terminate: signal(SignalKind::terminate())?,
-            interrupt: signal(SignalKind::interrupt())?,
+            terminate: WatchedSignal::always(SignalKind::terminate())?,
+            interrupt: WatchedSignal::always(SignalKind::interrupt())?,
+        })
+    }
+
+    /// [`Self::install`], leaving a signal this process ignores alone.
+    fn install_unless_ignored() -> Result<Self> {
+        use tokio::signal::unix::SignalKind;
+        Ok(Self {
+            terminate: WatchedSignal::unless_ignored(SignalKind::terminate())?,
+            interrupt: WatchedSignal::unless_ignored(SignalKind::interrupt())?,
         })
     }
 
     async fn recv(&mut self, shutdown: Arc<Notify>) {
         tokio::select! {
             () = shutdown.notified() => tracing::info!("shutdown requested via /v1/shutdown"),
-            _ = self.terminate.recv() => tracing::info!("SIGTERM received"),
-            _ = self.interrupt.recv() => tracing::info!("SIGINT received"),
+            () = self.terminate.next() => tracing::info!("SIGTERM received"),
+            () = self.interrupt.next() => tracing::info!("SIGINT received"),
         }
     }
 
     async fn recv_signal(&mut self) {
         tokio::select! {
-            _ = self.terminate.recv() => {},
-            _ = self.interrupt.recv() => {},
+            () = self.terminate.next() => {},
+            () = self.interrupt.next() => {},
+        }
+    }
+}
+
+/// One signal, held as a stream registered when it is made, or not watched at all
+/// when this process ignores it and should keep ignoring it ([`EmbeddedSignals`]).
+#[cfg(unix)]
+pub struct WatchedSignal(Option<tokio::signal::unix::Signal>);
+
+#[cfg(unix)]
+impl WatchedSignal {
+    /// Watch `kind`, replacing whatever handling the process had for it. Needs a
+    /// Tokio runtime with signal support.
+    fn always(kind: tokio::signal::unix::SignalKind) -> Result<Self> {
+        Ok(Self(Some(tokio::signal::unix::signal(kind)?)))
+    }
+
+    /// Watch `kind` unless this process ignores it now, which is then left ignored:
+    /// a background job of a non-interactive shell ignores SIGINT, and installing a
+    /// handler would undo that. Needs a Tokio runtime with signal support.
+    pub fn unless_ignored(kind: tokio::signal::unix::SignalKind) -> Result<Self> {
+        if EmbeddedSignals::is_ignored(kind.as_raw_value())? {
+            return Ok(Self(None));
+        }
+        Self::always(kind)
+    }
+
+    /// The next delivery of the signal; never, for one left ignored.
+    pub async fn next(&mut self) {
+        match &mut self.0 {
+            Some(signal) => {
+                signal.recv().await;
+            }
+            None => std::future::pending().await,
         }
     }
 }
@@ -403,6 +510,10 @@ struct ShutdownSignals;
 #[cfg(not(unix))]
 impl ShutdownSignals {
     fn install() -> Result<Self> {
+        Ok(Self)
+    }
+
+    fn install_unless_ignored() -> Result<Self> {
         Ok(Self)
     }
 

@@ -2,6 +2,7 @@
 
 mod auth_proxy;
 mod diag;
+pub mod diff;
 mod embedding;
 mod endpoint;
 mod filter;
@@ -334,6 +335,9 @@ pub type Mounts = BTreeMap<String, MountConfig>;
 pub struct NamedReference<'a> {
     pub mount: Option<&'a str>,
     pub volume: &'a str,
+    /// The directory of the volume the reference is limited to, as written: `${vars.X}`
+    /// components are filled only on a resolved config.
+    pub sub_path: Option<&'a str>,
     pub access: Option<Access>,
 }
 
@@ -411,10 +415,17 @@ impl VfsConfig {
     /// each mount in path order.
     pub fn named_references(&self) -> Vec<NamedReference<'_>> {
         let mut references = Vec::new();
-        if let VfsConfig::Named { volume, access, .. } = self {
+        if let VfsConfig::Named {
+            volume,
+            sub_path,
+            access,
+            ..
+        } = self
+        {
             references.push(NamedReference {
                 mount: None,
                 volume,
+                sub_path: sub_path.as_deref(),
                 access: *access,
             });
         }
@@ -422,6 +433,7 @@ impl VfsConfig {
             references.push(NamedReference {
                 mount: Some(path),
                 volume: &mount.volume,
+                sub_path: mount.sub_path.as_deref(),
                 access: mount.access,
             });
         }

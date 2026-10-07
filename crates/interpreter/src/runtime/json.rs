@@ -17,9 +17,9 @@ use crate::runtime::fuel;
 use crate::runtime::host::{
     host_array_vtable, host_boxed_boolean_vtable, host_boxed_number_vtable, host_object_vtable,
     host_string_vtable, read_string_arg, register_host_fn, register_host_fn_async,
-    write_submilli_string,
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
+pub(crate) use crate::runtime::json_text::JsonValue;
 use crate::runtime::prelude::vtable::serialization::Output;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
@@ -47,22 +47,22 @@ pub(super) fn install_json_module(
         ty,
         /* deterministic = */ true,
         move |caller, params, results| -> wasmtime::Result<()> {
-            let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, "json.parse")?;
-            fuel::charge(&mut *caller, fuel::PARSE, s.len() as u64)?;
-            // Invalid JSON raises a catchable SyntaxError carrying serde's
+            let raw = match *abi_arg(params, 0)? {
+                Val::AnyRef(Some(raw)) => raw.unwrap_array(&mut *caller)?,
+                _ => {
+                    return Err(super::host::fatal_host_error(
+                        "json.parse: invalid string payload",
+                    ));
+                }
+            };
+            let text = super::host::read_code_units(&mut *caller, raw, "json.parse")?;
+            fuel::charge(&mut *caller, fuel::PARSE, text.len() as u64)?;
+            // Invalid JSON raises a catchable SyntaxError carrying the
             // position/expectation detail, rather than trapping uncatchably.
             // Returning an `Err` is enough: the `register_host_fn` wrapper turns
-            // it into a catchable exception (via `throw_error`). A number
-            // literal past f64 range is a `RangeError`; serde_json doesn't
-            // expose its error code, so match its stable message text.
-            let value: serde_json::Value = serde_json::from_str(&s).map_err(|e| {
-                let msg = format!("JSON.parse: {e}");
-                if e.to_string().starts_with("number out of range") {
-                    crate::runtime::host::range_error(msg)
-                } else {
-                    crate::runtime::host::syntax_error(msg)
-                }
-            })?;
+            // it into a catchable exception (via `throw_error`).
+            let value = super::json_text::parse(&text)
+                .map_err(|e| json_parse_error(&format!("JSON.parse: {}", e.message()), &e))?;
             let allocator = JsonUnknownAllocator::new(&mut *caller)?;
             *abi_result(results, 0)? = allocator.allocate(&mut *caller, &value)?;
             Ok(())
@@ -850,16 +850,20 @@ pub(crate) fn parse_json_as_unknown(
     context: &str,
 ) -> wasmtime::Result<Val> {
     fuel::charge(&mut *caller, fuel::PARSE, text.len() as u64)?;
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
-        let msg = format!("{context}: {e}");
-        if e.to_string().starts_with("number out of range") {
-            crate::runtime::host::range_error(msg)
-        } else {
-            crate::runtime::host::syntax_error(msg)
-        }
-    })?;
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let value = super::json_text::parse(&units)
+        .map_err(|e| json_parse_error(&format!("{context}: {}", e.message()), &e))?;
     let allocator = JsonUnknownAllocator::new(&mut *caller)?;
     allocator.allocate(&mut *caller, &value)
+}
+
+/// The language error for a refused document: a number literal past the `f64`
+/// range is a `RangeError`, anything else a `SyntaxError`.
+fn json_parse_error(message: &str, error: &super::json_text::JsonError) -> wasmtime::Error {
+    match error {
+        super::json_text::JsonError::Range(_) => crate::runtime::host::range_error(message),
+        super::json_text::JsonError::Syntax(_) => crate::runtime::host::syntax_error(message),
+    }
 }
 
 pub(crate) fn boxed_struct(
@@ -994,13 +998,13 @@ impl JsonUnknownAllocator {
     pub(crate) fn allocate(
         &self,
         ctx: &mut impl AsContextMut<Data = StoreData>,
-        value: &serde_json::Value,
+        value: &JsonValue,
     ) -> wasmtime::Result<Val> {
         // One GC value per node; strings and arrays charge their own copies.
         fuel::charge(&mut *ctx, fuel::ELEM, 1)?;
         match value {
-            serde_json::Value::Null => Ok(Val::AnyRef(None)),
-            serde_json::Value::Bool(b) => {
+            JsonValue::Null => Ok(Val::AnyRef(None)),
+            JsonValue::Bool(b) => {
                 let object = StructRef::new(
                     &mut *ctx,
                     &self.boxed_boolean_pre,
@@ -1008,10 +1012,7 @@ impl JsonUnknownAllocator {
                 )?;
                 Ok(Val::AnyRef(Some(object.to_anyref())))
             }
-            serde_json::Value::Number(n) => {
-                let f = n
-                    .as_f64()
-                    .ok_or_else(|| wasmtime::Error::msg("JSON.parse: number out of f64 range"))?;
+            JsonValue::Number(f) => {
                 let object = StructRef::new(
                     &mut *ctx,
                     &self.boxed_number_pre,
@@ -1019,8 +1020,8 @@ impl JsonUnknownAllocator {
                 )?;
                 Ok(Val::AnyRef(Some(object.to_anyref())))
             }
-            serde_json::Value::String(s) => {
-                let raw = write_submilli_string(&mut *ctx, s)?;
+            JsonValue::String(units) => {
+                let raw = super::host::write_code_units(&mut *ctx, units)?;
                 let object = StructRef::new(
                     &mut *ctx,
                     &self.string_pre,
@@ -1032,7 +1033,7 @@ impl JsonUnknownAllocator {
                 )?;
                 Ok(Val::AnyRef(Some(object.to_anyref())))
             }
-            serde_json::Value::Array(items) => {
+            JsonValue::Array(items) => {
                 let mut elements = Vec::new();
                 elements
                     .try_reserve_exact(items.len())
@@ -1052,7 +1053,7 @@ impl JsonUnknownAllocator {
                 )?;
                 Ok(Val::AnyRef(Some(object.to_anyref())))
             }
-            serde_json::Value::Object(map) => {
+            JsonValue::Object(map) => {
                 let mut names = Vec::new();
                 let mut values = Vec::new();
                 names
@@ -1062,7 +1063,7 @@ impl JsonUnknownAllocator {
                     .try_reserve_exact(map.len())
                     .map_err(crate::runtime::host::fatal_host_error)?;
                 for (name, item) in map {
-                    let raw_name = write_submilli_string(&mut *ctx, name)?;
+                    let raw_name = super::host::write_code_units(&mut *ctx, &name.0)?;
                     let name_object = StructRef::new(
                         &mut *ctx,
                         &self.string_pre,

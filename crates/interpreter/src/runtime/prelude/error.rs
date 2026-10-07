@@ -15,12 +15,12 @@
 //! and `name` at slot 1. Construction is host-only — guests call the imported
 //! constructor; a user subclass's `super(...)` calls the self-first ctor-init.
 //!
-//! `RangeError`, `TypeError`, and `SyntaxError` are the host-implemented
-//! `Error` subclasses:
-//! same layout, one shared `(rec $Subclass_vtable $Subclass)` pair subtyping
-//! the `$Error` pair (canonical identity includes the supertype, so consumers'
-//! imported-class reconstruction produces the same engine types — and all
-//! subclasses canonicalize to the same pair), and per-class vtable singletons
+//! `RangeError`, `TypeError`, `SyntaxError`, `URIError`, and `ReferenceError`
+//! are the host-implemented `Error` subclasses: same layout, one shared
+//! `(rec $Subclass_vtable $Subclass)` pair subtyping the `$Error` pair
+//! (canonical identity includes the supertype, so consumers' imported-class
+//! reconstruction produces the same engine types — and all subclasses
+//! canonicalize to the same pair), and per-class vtable singletons
 //! whose parent link is the `Error` vtable — the nominal-identity chain
 //! `instanceof` and typed catch walk.
 
@@ -55,15 +55,19 @@ pub(crate) enum BuiltinErrorClass {
     QuotaExceeded,
     Type,
     Syntax,
+    Uri,
+    Reference,
     PermissionDenied,
 }
 
 impl BuiltinErrorClass {
-    const SUBCLASSES: [Self; 5] = [
+    const SUBCLASSES: [Self; 7] = [
         Self::Range,
         Self::QuotaExceeded,
         Self::Type,
         Self::Syntax,
+        Self::Uri,
+        Self::Reference,
         Self::PermissionDenied,
     ];
 
@@ -74,6 +78,8 @@ impl BuiltinErrorClass {
             Self::QuotaExceeded => "QuotaExceededError",
             Self::Type => "TypeError",
             Self::Syntax => "SyntaxError",
+            Self::Uri => "URIError",
+            Self::Reference => "ReferenceError",
             Self::PermissionDenied => "PermissionDeniedError",
         }
     }
@@ -84,7 +90,13 @@ impl BuiltinErrorClass {
     /// trailing params follow the same order.
     fn own_fields(self) -> &'static [&'static str] {
         match self {
-            Self::Error | Self::Range | Self::QuotaExceeded | Self::Type | Self::Syntax => &[],
+            Self::Error
+            | Self::Range
+            | Self::QuotaExceeded
+            | Self::Type
+            | Self::Syntax
+            | Self::Uri
+            | Self::Reference => &[],
             Self::PermissionDenied => &["caller", "capability", "reason"],
         }
     }
@@ -96,15 +108,21 @@ impl BuiltinErrorClass {
             Self::QuotaExceeded => handles.quota_exceeded_vtable,
             Self::Type => handles.type_error_vtable,
             Self::Syntax => handles.syntax_error_vtable,
+            Self::Uri => handles.uri_error_vtable,
+            Self::Reference => handles.reference_error_vtable,
             Self::PermissionDenied => handles.permission_denied_vtable,
         }
     }
 
     fn field_names(self, handles: &crate::runtime::host::HostAbiHandles) -> Global {
         match self {
-            Self::Error | Self::Range | Self::QuotaExceeded | Self::Type | Self::Syntax => {
-                handles.error_field_names
-            }
+            Self::Error
+            | Self::Range
+            | Self::QuotaExceeded
+            | Self::Type
+            | Self::Syntax
+            | Self::Uri
+            | Self::Reference => handles.error_field_names,
             Self::PermissionDenied => handles.permission_denied_field_names,
         }
     }
@@ -116,6 +134,8 @@ impl BuiltinErrorClass {
             | Self::QuotaExceeded
             | Self::Type
             | Self::Syntax
+            | Self::Uri
+            | Self::Reference
             | Self::PermissionDenied => handles.error_subclass_type.clone(),
         }
     }
@@ -129,6 +149,8 @@ pub(crate) struct ErrorHost {
     pub quota_exceeded_vtable: Global,
     pub type_vtable: Global,
     pub syntax_vtable: Global,
+    pub uri_vtable: Global,
+    pub reference_vtable: Global,
     pub permission_denied_vtable: Global,
     pub field_names: Global,
     pub permission_denied_field_names: Global,
@@ -330,6 +352,8 @@ pub(crate) fn install_store_bound(
         quota_exceeded_vtable,
         type_vtable,
         syntax_vtable,
+        uri_vtable,
+        reference_vtable,
         permission_denied_vtable,
     ] = BuiltinErrorClass::SUBCLASSES.map(|class| {
         install_subclass_vtable(
@@ -348,6 +372,8 @@ pub(crate) fn install_store_bound(
         quota_exceeded_vtable: quota_exceeded_vtable?,
         type_vtable: type_vtable?,
         syntax_vtable: syntax_vtable?,
+        uri_vtable: uri_vtable?,
+        reference_vtable: reference_vtable?,
         permission_denied_vtable: permission_denied_vtable?,
         field_names,
         permission_denied_field_names,
@@ -552,6 +578,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         BuiltinErrorClass::QuotaExceeded,
         BuiltinErrorClass::Type,
         BuiltinErrorClass::Syntax,
+        BuiltinErrorClass::Uri,
+        BuiltinErrorClass::Reference,
         BuiltinErrorClass::PermissionDenied,
     ] {
         let mut init_params = vec![object_ref.clone()];
@@ -602,38 +630,38 @@ fn error_equals(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
     Rooted::ref_eq(&*caller, a, b)
 }
 
-/// Which of an Error instance's inherited `message`/`name` slots JSON leaves
-/// out, as JavaScript does: `message` is not an own enumerable property, and
-/// `name` is one only when the instance assigned it. An assigned `name` can't
-/// be told from the one the constructor stored, so a `name` equal to a built-in
-/// error class's is taken as the constructor's. Likewise a subclass that
-/// redeclares `message` as a class field still has it left out. `None` for a
-/// non-Error value.
-pub(crate) fn json_hidden_slots(
+/// Which of an Error instance's inherited `message`/`name` slots are not own
+/// enumerable properties, so `Object.keys` and JSON leave them out, as
+/// JavaScript does: `message` never is, and `name` is one only when the
+/// instance assigned it. An assigned `name` can't be told from the one the
+/// constructor stored, so a `name` equal to a built-in error class's is taken
+/// as the constructor's. Likewise a subclass that redeclares `message` as a
+/// class field still has it left out. `None` for a non-Error value.
+pub(crate) fn non_enumerable_slots(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
-) -> wasmtime::Result<Option<ErrorJsonSlots>> {
+) -> wasmtime::Result<Option<ErrorHiddenSlots>> {
     let class_vtable = super::super::intrinsic_types::intrinsic_types(&mut *caller)?
         .class_vtable
         .clone();
     if !is_error(caller, value, &class_vtable)? {
         return Ok(None);
     }
-    let name = payload_units(caller, value, NAME_SLOT, "JSON.stringify")?;
+    let name = payload_units(caller, value, NAME_SLOT, "Error own properties")?;
     let name_is_builtin = std::iter::once(BuiltinErrorClass::Error)
         .chain(BuiltinErrorClass::SUBCLASSES)
         .any(|class| name.iter().copied().eq(class.name_text().encode_utf16()));
-    Ok(Some(ErrorJsonSlots {
+    Ok(Some(ErrorHiddenSlots {
         hides_name: name_is_builtin,
     }))
 }
 
-/// The payload slots of an Error instance that JSON serialization skips.
-pub(crate) struct ErrorJsonSlots {
+/// The payload slots of an Error instance that enumeration skips.
+pub(crate) struct ErrorHiddenSlots {
     hides_name: bool,
 }
 
-impl ErrorJsonSlots {
+impl ErrorHiddenSlots {
     pub(crate) fn hides(&self, slot: u32) -> bool {
         slot == MESSAGE_SLOT || (self.hides_name && slot == NAME_SLOT)
     }
@@ -1056,6 +1084,62 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 implements: Vec::new(),
                 doc: doc(
                     "/** The built-in syntax-error class (`extends Error`, `name` = `\"SyntaxError\"`). Thrown by the runtime when text fails to parse: `JSON.parse` of malformed JSON, `BigInt()` of an invalid literal string, `Uint8Array.fromHex`/`fromBase64` of malformed input, `new RegExp()` of an invalid pattern or flags. Catch selectively with `catch (e: SyntaxError)`. */",
+                ),
+            },
+        },
+    );
+
+    defs.types.insert(
+        "URIError".to_string(),
+        TypeSymbol {
+            name: "URIError".to_string(),
+            mangled_name: crate::mangle::prelude("URIError"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Class {
+                generics: Vec::new(),
+                // No own fields — `message`/`name` are inherited from `Error`.
+                fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
+                methods: BTreeMap::new(),
+                method_visibility: BTreeMap::new(),
+                accessors: Vec::new(),
+                constructor: vec![Param::new("message", Type::String)],
+                constructor_visibility: crate::Visibility::Public,
+                statics: BTreeMap::new(),
+                static_visibility: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                extends: Some(crate::ClassExtends::plain(crate::mangle::prelude("Error"))),
+                implements: Vec::new(),
+                doc: doc(
+                    "/** The built-in URI-error class (`extends Error`, `name` = `\"URIError\"`). Thrown by `decodeURI`/`decodeURIComponent` on a malformed escape and by `encodeURI`/`encodeURIComponent` on a lone surrogate. Catch selectively with `catch (e: URIError)`. */",
+                ),
+            },
+        },
+    );
+
+    defs.types.insert(
+        "ReferenceError".to_string(),
+        TypeSymbol {
+            name: "ReferenceError".to_string(),
+            mangled_name: crate::mangle::prelude("ReferenceError"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Class {
+                generics: Vec::new(),
+                // No own fields — `message`/`name` are inherited from `Error`.
+                fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
+                methods: BTreeMap::new(),
+                method_visibility: BTreeMap::new(),
+                accessors: Vec::new(),
+                constructor: vec![Param::new("message", Type::String)],
+                constructor_visibility: crate::Visibility::Public,
+                statics: BTreeMap::new(),
+                static_visibility: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                extends: Some(crate::ClassExtends::plain(crate::mangle::prelude("Error"))),
+                implements: Vec::new(),
+                doc: doc(
+                    "/** The built-in reference-error class (`extends Error`, `name` = `\"ReferenceError\"`). Thrown when code reads or writes a module variable before its declaration has run. Catch selectively with `catch (e: ReferenceError)`. */",
                 ),
             },
         },
