@@ -12,6 +12,7 @@ TypedAst {
     runtime_chain_types: {},
     spread_mask_fields: {},
     spread_omitted_fields: {},
+    exhaustive_switches: {},
     package_name: "main",
     exprs: [
         TypedExpr {

@@ -256,25 +256,32 @@ impl Inferer<'_> {
     /// The type a binding declared `declared_ty` narrows to on being
     /// initialized with, or assigned, `value` of type `flow`.
     ///
-    /// A literal known to be fresh that the declared type doesn't name widens
-    /// first, as in TypeScript: `let x: string | null = c1` reads as `string`,
-    /// not `"hello"`, so a later `x === "other"` is still a comparison that can
-    /// be true, while `let done = false` reads as `false`, a member of the
-    /// `boolean` it declares. A literal of unknown origin keeps its literal
-    /// type, since widening it could reject a read the narrowing allowed.
+    /// A literal the declared type doesn't name widens to the declared member
+    /// that holds it, as TypeScript's assignment narrowing reduces to declared
+    /// members: `let x: string | null = c1` reads as `string`, not `"hello"`,
+    /// so a later `x === "other"` is still a comparison that can be true, while
+    /// `let done = false` reads as `false`, a member of the `boolean` it
+    /// declares. When the type is `annotated`, a literal from a narrowing widens
+    /// too: after `if (k === 2) { x = k; }`, the `number` of `x: string | number`
+    /// holds any number. An inferred type may have widened a literal TypeScript
+    /// keeps, so there only a literal known to be fresh widens.
     pub(super) fn assigned_flow_type(
         &self,
         declared_ty: &Type,
+        annotated: bool,
         value: ExprId,
         flow: Type,
     ) -> Result<Type, CompilerFailure> {
-        let mut fresh = self.known_fresh_literals(value)?;
-        if fresh.is_empty() {
+        let mut widened = self.known_fresh_literals(value)?;
+        if annotated {
+            widened.extend(literal_members(&flow));
+        }
+        if widened.is_empty() {
             return Ok(flow);
         }
         let named = declared_literals(declared_ty);
-        fresh.retain(|literal| !named.contains(literal));
-        Ok(widen_only(&flow, &fresh))
+        widened.retain(|literal| !named.contains(literal));
+        Ok(widen_only(&flow, &widened))
     }
 
     /// The origin of the literal types of a binding initialized with `value`:
@@ -1044,7 +1051,7 @@ impl Inferer<'_> {
 
     /// The declared type of the narrowable `path`, read through the declared
     /// types of its root and of each field or element on the way.
-    fn declared_path_ty(&self, path: &narrowing::ReferencePath) -> Option<Type> {
+    pub(super) fn declared_path_ty(&self, path: &narrowing::ReferencePath) -> Option<Type> {
         let mut ty = self.declared_root_ty(path)?;
         for elem in &path.chain {
             ty = match elem {
@@ -1080,6 +1087,21 @@ impl Inferer<'_> {
             narrowing::BindingId::Global(mangled) => self.global_literal_origin(mangled),
             narrowing::BindingId::This => None,
         }
+    }
+
+    /// Whether the local `name` has an annotated type.
+    pub(super) fn is_local_annotated(&self, name: &str) -> bool {
+        self.scopes
+            .get(name)
+            .is_some_and(|entry| matches!(entry.literal_origin, LiteralOrigin::Declared))
+    }
+
+    /// Whether the module variable `mangled` has an annotated type.
+    pub(super) fn is_global_annotated(&self, mangled: &MangledName) -> bool {
+        matches!(
+            self.literal_freshness.globals.get(mangled),
+            Some(LiteralOrigin::Declared)
+        )
     }
 
     fn global_literal_origin(&self, mangled: &MangledName) -> Option<(LiteralOrigin, Type)> {

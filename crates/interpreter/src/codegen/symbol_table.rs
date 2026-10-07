@@ -50,6 +50,7 @@ pub struct SymbolTable {
     funcs: BTreeMap<MangledName, u32>,
     globals: BTreeMap<MangledName, u32>,
     global_types: BTreeMap<MangledName, Type>,
+    init_guards: BTreeMap<MangledName, crate::codegen::init_guard::InitFlag>,
     intrinsic_type_indices: Option<IntrinsicTypeIndices>,
     pub(crate) this_environment_type: Option<u32>,
     pub(crate) call_metadata_type: Option<u32>,
@@ -108,6 +109,9 @@ pub struct SymbolTable {
     error_tag_idx: Option<u32>,
     adapter_func_idx: BTreeMap<MangledName, u32>,
     adapter_closure_global_idx: BTreeMap<MangledName, u32>,
+    /// The closure caches typed `anyref` because the function's package exports
+    /// them, so its consumers share one closure; see `function_adapters`.
+    shared_closure_globals: BTreeSet<MangledName>,
     /// Runtime validator helpers keyed by recursive alias or interface back-edges.
     runtime_validator_idx: BTreeMap<Type, u32>,
     generic_runtime_validators: BTreeMap<MangledName, (Vec<String>, u32)>,
@@ -215,6 +219,13 @@ impl SymbolTable {
 
     pub fn global_type(&self, mangled: &MangledName) -> Option<&Type> {
         self.global_types.get(mangled)
+    }
+
+    pub fn init_guard(
+        &self,
+        global: &MangledName,
+    ) -> Option<&crate::codegen::init_guard::InitFlag> {
+        self.init_guards.get(global)
     }
 
     pub fn prelude_func_idx(&self, symbol: &str) -> Option<u32> {
@@ -492,6 +503,10 @@ impl SymbolTable {
         self.adapter_closure_global_idx.get(mangled).copied()
     }
 
+    pub fn is_shared_closure_global(&self, mangled: &MangledName) -> bool {
+        self.shared_closure_globals.contains(mangled)
+    }
+
     /// Whether a `value`-typed ref already satisfies a `slot` by WasmGC
     /// subtyping, so a coercion needs no instruction.
     ///
@@ -672,6 +687,11 @@ impl SymbolTable {
         self.adapter_closure_global_idx.insert(mangled, idx);
     }
 
+    pub fn record_shared_closure_global_idx(&mut self, mangled: MangledName, idx: u32) {
+        self.shared_closure_globals.insert(mangled.clone());
+        self.adapter_closure_global_idx.insert(mangled, idx);
+    }
+
     pub fn record_class_guard_layout(
         &mut self,
         class: MangledName,
@@ -790,6 +810,15 @@ impl SymbolTable {
 
     pub fn record_global(&mut self, mangled: MangledName, idx: u32) {
         self.globals.insert(mangled, idx);
+    }
+
+    /// A guarded module global's initialization flag; see `init_guard`.
+    pub fn record_init_guard(
+        &mut self,
+        global: MangledName,
+        flag: crate::codegen::init_guard::InitFlag,
+    ) {
+        self.init_guards.insert(global, flag);
     }
 
     /// Language globals retain their declared type for checked narrowed reads.

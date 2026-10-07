@@ -146,19 +146,19 @@ impl HttpModelDispatch {
             // undeclared model before reaching here, so this is unreachable
             // through the normal path — reported rather than panicked on
             // because a `Blueprint` can also be built in memory.
-            ProviderFailure::Transport {
+            ProviderFailure::Local {
                 detail: "provider is not declared".to_string(),
             },
         )?;
 
         let Some(kind) = ProviderKind::from_type(&decl.provider_type) else {
-            return Err(ProviderFailure::Transport {
+            return Err(ProviderFailure::Local {
                 detail: "provider type is not supported".to_string(),
             });
         };
 
         let Some(base_url) = decl.base_url.as_deref().or_else(|| kind.default_base_url()) else {
-            return Err(ProviderFailure::Transport {
+            return Err(ProviderFailure::Local {
                 detail: "provider declares no endpoint".to_string(),
             });
         };
@@ -186,7 +186,7 @@ impl HttpModelDispatch {
 
         self.policy
             .check_literal_host(&wire_request.url)
-            .map_err(|detail| ProviderFailure::Transport { detail })?;
+            .map_err(|detail| ProviderFailure::Local { detail })?;
         let mut builder = self
             .client
             .post(&wire_request.url)
@@ -252,6 +252,13 @@ impl ModelDispatch for HttpModelDispatch {
 
 impl From<TransportFailure> for ProviderFailure {
     fn from(failure: TransportFailure) -> Self {
+        // A refusal on this side (network policy, a request that could not be built) is
+        // recorded as local, so a replay does not serve it as the provider's answer.
+        if failure.local {
+            return ProviderFailure::Local {
+                detail: failure.detail,
+            };
+        }
         ProviderFailure::Transport {
             detail: failure.detail,
         }

@@ -1,4 +1,4 @@
-types: 118 of 200 tsc entries compared, 12 differ
+types: 121 of 200 tsc entries compared, 6 differ
 
 line 13: { none: '' }
   tsc:  { none: string; }
@@ -23,32 +23,3 @@ line 50: x.slice
 line 83: !x
   tsc:  true
   ours: boolean
-
-line 114: x!
-  tsc:  string
-  ours: never
-
-line 114: x
-  tsc:  string | null
-  ours: null
-
-line 116: x!
-  tsc:  string
-  ours: never
-
-line 116: x
-  tsc:  string | null
-  ours: null
-
-line 118: x!
-  tsc:  string
-  ours: never
-
-line 118: x
-  tsc:  string | null
-  ours: null
-
-errors:
-line 114: ours: cannot read field `slice` on non-object type `never` (tsc accepts)
-line 116: ours: cannot read field `slice` on non-object type `never` (tsc accepts)
-line 118: ours: cannot read field `slice` on non-object type `never` (tsc accepts)

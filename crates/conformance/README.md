@@ -97,7 +97,7 @@ matches `NaN`, `+0` differs from `-0`):
 
 `assertThrows` catches any `Error`, so it erases test262's
 `TypeError`/`RangeError` distinction. The built-in subclasses `RangeError`,
-`TypeError`, and `SyntaxError` do exist (spec.md §1.8), but a class isn't a
+`TypeError`, `SyntaxError`, and `URIError` do exist (spec.md §1.8), but a class isn't a
 value and can't be passed to the shim. When the distinction is the point of
 the test, write the `try` with a typed `catch (e: RangeError)` clause in the
 case itself. Otherwise, note in the case that the distinction was erased.

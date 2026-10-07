@@ -20,7 +20,7 @@ use submilli_blueprint::{
     HarnessSecretBindings, required_harness_secrets, resolve_harness_secrets, resolve_variables,
 };
 
-use crate::app::AppState;
+use crate::app::{AppState, BlueprintForRun};
 use crate::handlers::execute::{self, ExecuteInputs, SESSION_HEADER, blueprint_miss_message};
 use crate::idempotency::{Refusal, Reservation};
 use crate::idempotency_store::RecordedOutcome;
@@ -175,11 +175,11 @@ pub async fn execute(
         )
             .into_response();
     };
-    let found = match state.blueprints().get(&blueprint_name).await {
+    let found = match state.blueprint_for_run(&blueprint_name).await {
         Ok(found) => found,
         Err(error) => return execution_store_failure(error),
     };
-    let Some(blueprint) = found else {
+    let Some(found) = found else {
         // A session outlives a restart, so its blueprint may have become unrunnable
         // (rather than removed) while the session slept: `message` says which.
         let message = match blueprint_miss_message(&state, &blueprint_name).await {
@@ -199,11 +199,12 @@ pub async fn execute(
             .into_response();
     };
 
+    let blueprint = &found.blueprint;
     let variables = state.session_manager().variables(&session_id);
     if let Some(audit) = crate::audit::execution() {
-        audit.annotate(&req.code, &blueprint_name, Some(&blueprint), &variables);
+        audit.annotate(&req.code, &blueprint_name, Some(blueprint), &variables);
     }
-    let harness_secrets = execution_secrets(&state, &session_id, &blueprint);
+    let harness_secrets = execution_secrets(&state, &session_id, blueprint);
     let Some(harness_secrets) = harness_secrets else {
         return (
             StatusCode::CONFLICT,
@@ -227,7 +228,7 @@ pub async fn execute(
                 &state,
                 &session_id,
                 &blueprint_name,
-                blueprint,
+                found,
                 variables,
                 harness_secrets,
                 &req.code,
@@ -272,7 +273,7 @@ pub async fn execute(
         &state,
         &session_id,
         &blueprint_name,
-        blueprint,
+        found,
         variables,
         harness_secrets,
         &req.code,
@@ -306,7 +307,7 @@ async fn run(
     state: &AppState,
     session_id: &str,
     blueprint_name: &str,
-    blueprint: submilli_blueprint::Blueprint,
+    found: BlueprintForRun,
     variables: Arc<submilli_blueprint::VarBindings>,
     harness_secrets: Arc<HarnessSecretBindings>,
     code: &str,
@@ -318,7 +319,8 @@ async fn run(
             session_id,
             code,
             blueprint_name,
-            blueprint: Arc::new(blueprint),
+            blueprint: Arc::new(found.blueprint),
+            version_tag: found.version_tag,
             variables,
             harness_secrets,
             audit: crate::audit::execution(),

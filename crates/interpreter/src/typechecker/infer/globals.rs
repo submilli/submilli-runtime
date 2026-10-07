@@ -57,6 +57,7 @@ impl<'a> Inferer<'a> {
                         Some(hint) => hint,
                         None => self.widen_fresh_literals(typed_value, &value_ty)?,
                     };
+                    let bound = self.global_storage_ty(&name.name, bound);
                     self.finish_later_global(&name, &bound)?;
                     self.bind_top(
                         &name,
@@ -80,7 +81,15 @@ impl<'a> Inferer<'a> {
                         doc,
                         span,
                     })?;
-                    self.narrow_global_initializer(&name, &mangled, &bound, typed_value, value_ty)?;
+                    let annotated = ty.is_some();
+                    self.narrow_global_initializer(
+                        &name,
+                        &mangled,
+                        &bound,
+                        annotated,
+                        typed_value,
+                        value_ty,
+                    )?;
                     let assign_id = self
                         .typed_ast
                         .try_push_stmt(TypedStmt {
@@ -160,12 +169,14 @@ impl<'a> Inferer<'a> {
     }
 
     /// A module `let` declared as a union starts narrowed to its initializer,
-    /// as a local one does, unless the initializer was rejected.
+    /// as a local one does, unless the initializer was rejected. `annotated`
+    /// tells whether `declared` was written or inferred.
     fn narrow_global_initializer(
         &mut self,
         name: &crate::Ident,
         mangled: &crate::MangledName,
         declared: &crate::Type,
+        annotated: bool,
         value: crate::ExprId,
         value_ty: crate::Type,
     ) -> Result<(), CompilerFailure> {
@@ -174,7 +185,7 @@ impl<'a> Inferer<'a> {
         {
             return Ok(());
         }
-        let flow_ty = self.assigned_flow_type(declared, value, value_ty)?;
+        let flow_ty = self.assigned_flow_type(declared, annotated, value, value_ty)?;
         let narrowed = self.initializer_narrowed_ty(declared, flow_ty);
         self.renarrow_global_after_write(name, mangled, declared, narrowed)
     }

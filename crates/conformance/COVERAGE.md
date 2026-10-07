@@ -26,7 +26,7 @@ line, a name it declares, or the type `tsc` printed. It is approximate, and
 `COVERAGE_SAMPLE=<feature>` prints what it counted. It shows a feature that
 pruning nearly removed.
 
-Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 657 test262 cases.
+Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 test262 cases.
 
 ## Types
 
@@ -194,7 +194,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 657 te
 | `TextEncoder` / `TextDecoder` | §1.2 | n/a | — | — | — | — | — | — | — | — | WHATWG Encoding, not ECMAScript: test262 has no tests for it |
 | `Boolean` | §1.6 | done | — | — | — | — | — | — | 5 | 15 |  |
 | `Number` and numeric globals | §1.6 | done | — | — | — | — | — | — | 48 | 297 |  |
-| URI functions | §1.6 | done | — | — | — | — | — | — | 121 | 221 |  |
+| URI functions | §1.6 | done | — | — | — | — | — | — | 129 | 219 |  |
 | `Object` statics | §1.6 | done | — | — | — | — | — | — | 24 | 105 |  |
 | `JSON` | §1.6 | done | — | — | — | — | — | — | 26 | 59 |  |
 | `Math` | §1.10 | done | — | — | — | — | — | — | 60 | 234 |  |

@@ -13,6 +13,7 @@ pub mod gc_singleton;
 pub mod host;
 pub mod intrinsic_types;
 pub mod json;
+pub(crate) mod json_text;
 pub mod limits;
 pub mod llm;
 pub mod mcp;
@@ -72,7 +73,9 @@ pub use session_kv::{
     SessionKvPage, SessionKvStore, SharedKvBudget,
 };
 pub use vfs::{
-    Access, MountError, MountSpec, Vfs, VfsMode, measure_dir, measure_host_dir, regular_files,
+    Access, CopyDirError, MAX_MEASURED_DEPTH, MountError, MountSpec, Vfs, VfsMode, copy_host_dir,
+    copy_host_subdir, measure_dir, measure_host_dir, measure_host_dir_skipping_vanished,
+    measure_host_subdir_skipping_vanished, open_host_subdir, regular_files,
 };
 pub use watchdog::Watchdog;
 

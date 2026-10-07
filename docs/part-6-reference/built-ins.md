@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ffe41afabeb58c5d4e3ff610db92e3ca9e38026fd363262f1abb2e98fd2111cc"
+  contentHash: "1d9d81fe279a91540d8d637622b2ca26a7c2fb9af61e31cea1c7c546a521df92"
   confirmedAt: "2026-10-05T17:33:06.426Z"
 ---
 
@@ -23,7 +23,7 @@ modules are on [Standard library](/docs/reference/standard-library).
 `submilli builtins` prints the catalog:
 
 ```text
-Types: Array, BigInt, Boolean, Error, Map, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, Record, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TypeError, Uint8Array
+Types: Array, BigInt, Boolean, Error, Map, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, Record, ReferenceError, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TypeError, URIError, Uint8Array
 Namespaces: JSON, Math, Temporal
 ```
 
@@ -45,6 +45,8 @@ Namespaces: JSON, Math, Temporal
 | `TypeError` | Error class | Failed runtime type checks: a failed `as` cast, `x!` on `null`, invalid UTF-8, an invalid URL |
 | `RangeError` | Error class | Out-of-range values: an array index, bigint division by zero, invalid Temporal values, and argument-size caps |
 | `SyntaxError` | Error class | Text that fails to parse: `JSON.parse`, `BigInt()`, `Uint8Array.fromHex`, `new RegExp()` |
+| `URIError` | Error class | A malformed `%` escape in `decodeURI`, or a lone surrogate in `encodeURI` |
+| `ReferenceError` | Error class | Reading or writing a module variable or static field before its declaration has run |
 | `PermissionDeniedError` | Error class | A denied capability, with fields `caller`, `capability`, `reason` ([Permissions](/docs/reference/permissions)) |
 | `QuotaExceededError` | Error class | A budget refusal: filesystem space, model tokens, or session state ([Errors and limits](/docs/reference/errors-and-limits)) |
 | `JSON` | Namespace | `JSON.parse`, returning `unknown`, and `JSON.stringify` |
@@ -101,8 +103,8 @@ These globals are in scope and are not in the `submilli builtins` catalog.
 | `parseInt(string, radix = 10)` | Parses an integer prefix, or returns `NaN` when there are no digits |
 | `parseFloat(string)` | Parses a decimal number, or returns `NaN` when the text is not one |
 | `isNaN(value)`, `isFinite(value)` | Number tests |
-| `encodeURIComponent(uri)`, `encodeURI(uri)` | Percent-encoding |
-| `decodeURIComponent(uri)`, `decodeURI(uri)` | Percent-decoding. Throws `Error` (`"URI malformed"`) on an invalid escape |
+| `encodeURIComponent(uri)`, `encodeURI(uri)` | Percent-encoding. Throws `URIError` on a lone surrogate |
+| `decodeURIComponent(uri)`, `decodeURI(uri)` | Percent-decoding. Throws `URIError` (`"URI malformed"`) on an invalid escape |
 | `NaN`, `Infinity` | Number constants |
 
 ## Not available

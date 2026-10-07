@@ -521,17 +521,15 @@ impl Inferer<'_> {
             let stored_return = sig_ret_type.clone();
             self.scopes.push();
             for (p, body_ty) in params.iter().zip(body_param_types.iter()) {
-                self.scopes.insert_annotated_param(
-                    p.name.name.clone(),
-                    body_ty.clone(),
-                    p.name.span,
-                );
+                let body_ty = self.local_storage_ty(&p.name, body_ty.clone());
+                self.scopes
+                    .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
             }
             let prev_return = self.current_return.replace(body_ret_type.clone());
             // Reset to `true`: a previous function that ended unreachable would
             // otherwise taint this body's reachability joins, dropping post-if
             // narrowings.
-            let prev_reachable = std::mem::replace(&mut self.reachable, true);
+            let prev_reachable = self.enter_body_reachability();
             let prev_predicate = self.current_type_predicate.take();
             if let Some(pred) = &resolved_predicate {
                 let idx = pred.parameter_index as usize;
@@ -550,7 +548,7 @@ impl Inferer<'_> {
                 })?;
             self.current_return = prev_return;
             self.current_type_predicate = prev_predicate;
-            self.reachable = prev_reachable;
+            self.restore_reachability(prev_reachable);
             self.scopes.pop();
             self.pop_body_generics();
             for id in self
@@ -794,6 +792,9 @@ impl Inferer<'_> {
             && sub.get(element).is_none()
         {
             sub.insert(element.clone(), Type::Unknown);
+        }
+        if array_from_mapper {
+            self.reject_array_like_element_annotation(&typed_args, mapper_type.as_ref())?;
         }
         if array_from_mapper
             && mapper_type
@@ -1487,6 +1488,65 @@ impl Inferer<'_> {
                 _ => false,
             },
         )
+    }
+
+    /// `Array.from({ length }, mapFn)` calls `mapFn` with `undefined` for each
+    /// element, which has no type here: the element arrives as `null`. A
+    /// callback whose element type doesn't admit `null` would read that
+    /// `null` as its declared type (`v: number` gives `null + i`, not
+    /// JavaScript's `NaN`), so it is refused rather than run with a wrong value.
+    fn reject_array_like_element_annotation(
+        &mut self,
+        typed_args: &[ExprId],
+        mapper_type: Option<&Type>,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let (Some(source), Some(mapper)) = (typed_args.first(), typed_args.get(1)) else {
+            return Ok(());
+        };
+        let source_ty = self
+            .typed_ast
+            .try_expr(*source)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let Type::Object { fields, .. } = source_ty.peel() else {
+            return Ok(());
+        };
+        if !fields.contains_key("length") {
+            return Ok(());
+        }
+        let Some(Type::Function { params, .. }) = mapper_type.map(Type::peel) else {
+            return Ok(());
+        };
+        let Some(element) = params.first() else {
+            return Ok(());
+        };
+        let admits_null = match element.peel() {
+            Type::Unknown | Type::Error | Type::Null => true,
+            Type::Union(members) => members.iter().any(|m| m.peel() == &Type::Null),
+            _ => false,
+        };
+        if admits_null {
+            return Ok(());
+        }
+        let span = self
+            .typed_ast
+            .try_expr(*mapper)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        self.error_with_help(
+            span,
+            format!(
+                "`Array.from` of an array-like `{{ length }}` has no elements, so the callback's \
+                 element parameter receives `undefined`, not a `{element}`"
+            ),
+            vec![
+                "declare the element parameter as `unknown` or a type that admits `null`, or \
+                 leave it unannotated, and build the value from the index"
+                    .to_string(),
+            ],
+        );
+        Ok(())
     }
 
     /// Handle an argument that didn't unify with its parameter: a structural

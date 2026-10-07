@@ -134,12 +134,16 @@ pub fn infer_with_transitive_checked<'a>(
         invoked_body_exit: None,
         captured_mutators: bindings.mutators,
         function_written_globals: bindings.function_written_globals,
+        arithmetic_targets: bindings.arithmetic_targets,
+        arithmetic_written_globals: bindings.arithmetic_written_globals,
         last_assignments: bindings.last_assignments,
         grown_bindings: bindings.grown_bindings,
         nested_function_creation_points: bindings.nested_function_creation_points,
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
         reachable: true,
+        unreachable_by_exhaustive_switch: false,
+        declared_read: None,
         next_narrow_counter: 0,
         current_return: None,
         current_class: None,
@@ -405,12 +409,16 @@ pub fn infer_package_checked<'a>(
         invoked_body_exit: None,
         captured_mutators: Default::default(),
         function_written_globals: Default::default(),
+        arithmetic_targets: Default::default(),
+        arithmetic_written_globals: Default::default(),
         last_assignments: Default::default(),
         grown_bindings: Default::default(),
         nested_function_creation_points: Default::default(),
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
         reachable: true,
+        unreachable_by_exhaustive_switch: false,
+        declared_read: None,
         next_narrow_counter: 0,
         current_return: None,
         current_class: None,
@@ -749,6 +757,10 @@ pub(super) struct Inferer<'a> {
     /// Module-level names some function body writes; top-level code may call
     /// that function between a guard on the name and its use.
     pub(super) function_written_globals: std::collections::HashSet<String>,
+    /// From the binding analysis: the variables arithmetic is written back
+    /// to. See `storage_ty`.
+    pub(super) arithmetic_targets: std::collections::HashSet<(String, Span)>,
+    pub(super) arithmetic_written_globals: std::collections::HashSet<String>,
     pub(super) last_assignments: std::collections::HashMap<Span, u32>,
     /// See `binding_analysis::Analysis::grown_bindings`.
     pub(super) grown_bindings: std::collections::HashSet<Span>,
@@ -760,6 +772,14 @@ pub(super) struct Inferer<'a> {
     /// The nested functions whose bodies are being inferred, outermost first.
     pub(super) nested_function_bodies: Vec<usize>,
     pub(super) reachable: bool,
+    /// Whether the code is unreachable only because a `switch` without a
+    /// `default` covered every value. TypeScript's flow analysis still reaches
+    /// such code and narrows there, while code after a `return`, `throw`,
+    /// `break`, `continue` or endless loop reads declared types.
+    pub(super) unreachable_by_exhaustive_switch: bool,
+    /// A path read at its declared type despite a narrowing: the operand of
+    /// a `!` narrowed to `null`, which TypeScript types by its declaration.
+    pub(super) declared_read: Option<narrowing::ReferencePath>,
     /// All clause writes, including terminating branches, for exceptional entry.
     pub(super) clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
     /// Writes carried by normal flow and used when joining branch exits.
@@ -920,7 +940,30 @@ pub(super) struct Inferer<'a> {
     pub(super) diagnostic_failure: std::cell::Cell<Option<crate::rendering::RenderError>>,
 }
 
+/// The enclosing flow's reachability while a nested body is inferred.
+#[derive(Clone, Copy)]
+pub(super) struct SavedReachability {
+    reachable: bool,
+    unreachable_by_exhaustive_switch: bool,
+}
+
 impl<'a> Inferer<'a> {
+    /// Start a nested function body, whose flow is its own, and give the
+    /// enclosing flow's reachability to restore after it.
+    pub(super) fn enter_body_reachability(&mut self) -> SavedReachability {
+        SavedReachability {
+            reachable: std::mem::replace(&mut self.reachable, true),
+            unreachable_by_exhaustive_switch: std::mem::take(
+                &mut self.unreachable_by_exhaustive_switch,
+            ),
+        }
+    }
+
+    pub(super) fn restore_reachability(&mut self, saved: SavedReachability) {
+        self.reachable = saved.reachable;
+        self.unreachable_by_exhaustive_switch = saved.unreachable_by_exhaustive_switch;
+    }
+
     /// Fails with a type limit recorded since the last checkpoint, reported at
     /// `span`: the source being inferred when an oversized type was met where
     /// no error could be returned.
@@ -981,12 +1024,15 @@ impl<'a> Inferer<'a> {
         let bindings = binding_analysis::analyze(ast)?;
         self.captured_mutators = bindings.mutators;
         self.function_written_globals = bindings.function_written_globals;
+        self.arithmetic_targets = bindings.arithmetic_targets;
+        self.arithmetic_written_globals = bindings.arithmetic_written_globals;
         self.last_assignments = bindings.last_assignments;
         self.grown_bindings = bindings.grown_bindings;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
         self.nested_functions.clear();
         self.diagnostics.extend(bindings.diagnostics);
         self.reachable = true;
+        self.unreachable_by_exhaustive_switch = false;
         self.next_narrow_counter = 0;
         self.current_return = None;
         self.current_class = None;

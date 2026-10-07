@@ -1,1 +1,0 @@
-line 55 type: bug SUB-1210 a narrowing that rules out every member keeps a type instead of `never`

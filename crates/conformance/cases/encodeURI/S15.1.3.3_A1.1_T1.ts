@@ -1,0 +1,27 @@
+// test262: test/built-ins/encodeURI/S15.1.3.3_A1.1_T1.js
+// The Test262Error range reporting (indexO/indexP) becomes one assert naming
+// the first failing value and the failure count.
+
+function throwsUriError(s: string): boolean {
+  try {
+    encodeURI(s);
+  } catch (e) {
+    return e instanceof URIError;
+  }
+  return false;
+}
+
+function main(): void {
+  let errorCount = 0;
+  let first = -1;
+  for (let index = 0xDC00; index <= 0xDFFF; index++) {
+    if (throwsUriError(String.fromCharCode(index))) {
+      continue;
+    }
+    if (first < 0) {
+      first = index;
+    }
+    errorCount++;
+  }
+  assert(errorCount === 0, "a lone low surrogate must throw URIError; first failure at " + String(first) + ", " + String(errorCount) + " failures");
+}

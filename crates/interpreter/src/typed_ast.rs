@@ -841,6 +841,9 @@ pub struct TypedAst {
     /// whatever their value.
     pub spread_omitted_fields:
         std::collections::BTreeMap<ExprId, std::collections::BTreeSet<String>>,
+    /// The discriminants of the `switch`es without a `default` whose cases the
+    /// typechecker found match every value the discriminant can hold.
+    pub exhaustive_switches: std::collections::BTreeSet<ExprId>,
     /// Module name used for mangling. Defaults to `USER_PACKAGE` (`"main"`).
     pub package_name: String,
     exprs: Vec<TypedExpr>,

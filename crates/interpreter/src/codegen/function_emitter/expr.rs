@@ -611,6 +611,7 @@ fn emit_global_ref(
         }
         return Ok(());
     }
+    crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
     let idx = ctx.symbols.global_idx(mangled).ok_or_else(|| {
         crate::codegen::internal_failure("top-level let/const recorded during codegen")
     })?;
@@ -677,7 +678,13 @@ fn emit_function_ref(
     emitter.instruction(Instruction::GlobalSet(closure_global_idx));
     emitter.emit_end();
     emitter.instruction(Instruction::GlobalGet(closure_global_idx));
-    emitter.instruction(Instruction::RefAsNonNull);
+    if ctx.symbols.is_shared_closure_global(mangled) {
+        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+            closure_struct_idx,
+        )));
+    } else {
+        emitter.instruction(Instruction::RefAsNonNull);
+    }
 
     Ok(())
 }
@@ -1867,6 +1874,7 @@ fn emit_postfix_unary(
                 crate::codegen::internal_failure("Inferer guarantees the binding exists")
             })?;
             let old = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?)?;
+            crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
             emitter.instruction(Instruction::GlobalGet(idx));
             // Reference globals start as null before module initialization.
             if let ValType::Ref(RefType {

@@ -53,8 +53,8 @@ pub use declaration::package_declaration;
 pub use policy::NetworkPolicy;
 pub use transport::{
     AuthProxy, AuthProxyError, EgressAt, HttpClient, HttpError, HttpRequest, HttpResponse,
-    NoopAuthProxy, RedirectDenied, RedirectGuard, RedirectHop, ReqwestHttpClient,
-    default_auth_proxy, default_http_client, describe_error_chain,
+    NoopAuthProxy, RecordedRequest, RedirectDenied, RedirectGuard, RedirectHop, ReqwestHttpClient,
+    default_auth_proxy, default_http_client, describe_error_chain, is_policy_refusal,
 };
 pub use transport_policy::{HttpTransportPolicy, TransportPolicyError};
 
@@ -394,6 +394,7 @@ async fn perform_request(
     record_payload(&*caller, ticket, Side::Request, || {
         request_payload(method, url, &headers, &body)
     });
+    let recorded_as = recorded_request(&*caller, || request_payload(method, url, &headers, &body));
 
     let (who, guard) = request_principal(
         caller,
@@ -412,6 +413,7 @@ async fn perform_request(
         decompress: false,
         transport_policy: None,
         redirect_guard: None,
+        recorded_as,
     };
     let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
     let http_client = std::sync::Arc::clone(&caller.data().http_client);
@@ -442,6 +444,23 @@ async fn perform_request(
         response_payload(&send_result)
     });
     settle_response(caller, send_result, method)
+}
+
+/// The request's key and digest as the call log records them, when the transport reads
+/// them. Computed from the program's own request, before the auth proxy changes it.
+fn recorded_request<'a>(
+    caller: &Caller<'_, StoreData>,
+    payload: impl FnOnce() -> Payload<'a>,
+) -> Option<RecordedRequest> {
+    if !caller.data().http_client.wants_recorded_request() {
+        return None;
+    }
+    let payload = payload();
+    let masked_url = payload.meta["url"].as_str().map(str::to_owned)?;
+    Some(RecordedRequest {
+        masked_url,
+        digest: payload.digest(),
+    })
 }
 
 /// A request as the recorder keeps it: credential headers and URL credentials masked.
@@ -475,8 +494,13 @@ fn response_payload(result: &std::result::Result<HttpResponse, HttpError>) -> Pa
             .with_body(&resp.body)
             .with_masked(masked)
         }
-        Err(error) => Payload::meta(serde_json::json!({ "error": error.to_string() })),
+        Err(error) => Payload::meta(failure_meta(error)),
     }
+}
+
+/// A transport failure as the recorder keeps it: a stable kind beside the message.
+fn failure_meta(error: &HttpError) -> serde_json::Value {
+    serde_json::json!({ "kind": error.kind(), "error": error.to_string() })
 }
 
 fn settle_response(
@@ -704,6 +728,9 @@ async fn perform_download(
     record_payload(&*caller, ticket, Side::Request, || {
         request_payload("GET", &url, &options.headers, &[]).with_size(0)
     });
+    let recorded_as = recorded_request(&*caller, || {
+        request_payload("GET", &url, &options.headers, &[])
+    });
     let req = HttpRequest {
         method: "GET".to_string(),
         url: url.clone(),
@@ -714,6 +741,7 @@ async fn perform_download(
         decompress: options.decompress,
         transport_policy: None,
         redirect_guard: None,
+        recorded_as,
     };
     let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
     let mut req = auth_proxy
@@ -745,8 +773,11 @@ async fn perform_download(
                 "path": guest_path,
                 "bytes_written": streamed.meta.bytes_written,
             }),
-            Err(DownloadFailure::Transport(_, message) | DownloadFailure::Full(_, message)) => {
-                serde_json::json!({ "error": message })
+            Err(DownloadFailure::Transport(error, message)) => {
+                serde_json::json!({ "kind": error.kind(), "error": message })
+            }
+            Err(DownloadFailure::Full(_, message)) => {
+                serde_json::json!({ "kind": "full", "error": message })
             }
             Err(DownloadFailure::Fs(error)) => serde_json::json!({ "error": error.to_string() }),
         };

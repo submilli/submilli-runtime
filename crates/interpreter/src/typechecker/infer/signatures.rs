@@ -317,6 +317,81 @@ impl<'a> Inferer<'a> {
         Ok(skip)
     }
 
+    /// `toString` and `toJson` fill the universal vtable slots that `String(x)`,
+    /// string interpolation and `JSON.stringify` call, whose shape is fixed at
+    /// `(): string`, so a class or interface may declare them only so.
+    pub(super) fn check_conversion_method(
+        &mut self,
+        owner: &str,
+        name: &Ident,
+        params: &[Param],
+        generics: &[String],
+        ret: &crate::Type,
+    ) {
+        if !matches!(name.name.as_str(), "toString" | "toJson") {
+            return;
+        }
+        if params.is_empty() && generics.is_empty() && self.returns_string(ret) {
+            return;
+        }
+        self.error_with_help(
+            name.span,
+            format!(
+                "{owner} method `{}` must have signature `(): string`",
+                name.name
+            ),
+            vec![format!(
+                "`{}` overrides the built-in conversion used by `String(x)`, \
+                 string interpolation, and `JSON.stringify`; declare it as \
+                 `{}(): string` or pick another method name",
+                name.name, name.name
+            )],
+        );
+    }
+
+    /// An interface property named `toString` or `toJson` is called by the
+    /// same conversions as the method, so it must have exactly the method's
+    /// type. It may be optional: an object without it converts as a plain
+    /// object.
+    fn check_conversion_property(&mut self, name: &Ident, ty: &crate::Type) {
+        let Some(expected) = super::reserved::override_field_signature(&name.name) else {
+            return;
+        };
+        if self.is_conversion_function(ty) {
+            return;
+        }
+        self.error(
+            name.span,
+            format!(
+                "interface property `{}` must have type `{expected}` (got `{ty}`)",
+                name.name
+            ),
+        );
+    }
+
+    /// Whether `ty` is a function the conversions can call: no parameters and
+    /// a return that is always a string.
+    fn is_conversion_function(&self, ty: &crate::Type) -> bool {
+        let crate::Type::Function {
+            params,
+            ret,
+            has_rest: false,
+            ..
+        } = ty.peel()
+        else {
+            return false;
+        };
+        params.is_empty() && self.returns_string(ret)
+    }
+
+    /// Whether a conversion returning `ret` always yields a string. Any string
+    /// subtype qualifies, as it does for an assignment; a type parameter
+    /// doesn't, since an instance may bind it to a non-string.
+    fn returns_string(&self, ret: &crate::Type) -> bool {
+        !mentions_generic_param(ret)
+            && super::assignable(ret, &crate::Type::String, self.resolver())
+    }
+
     pub(super) fn bind_interface(
         &mut self,
         name: Ident,
@@ -406,6 +481,13 @@ impl<'a> Inferer<'a> {
                     if shadow_rejected {
                         continue;
                     }
+                    self.check_conversion_method(
+                        "interface",
+                        &m_name,
+                        &resolved_params,
+                        &m_generic_names,
+                        &resolved_ret,
+                    );
                     let typed_params: Vec<crate::TypedParam> = params
                         .iter()
                         .zip(resolved_params.iter())
@@ -457,13 +539,14 @@ impl<'a> Inferer<'a> {
                         });
                         continue;
                     }
-                    // As on object types: `String(x)` and `${x}` call an override
-                    // field through the vtable, which an absent one would leave null.
-                    if optional && super::reserved::override_field_signature(&p_name.name).is_some()
-                    {
+                    // `JSON.stringify` calls `toJson` through the vtable, which an
+                    // absent one would leave null. An absent `toString` falls back
+                    // to `[object Object]`, as JavaScript does.
+                    if optional && p_name.name == "toJson" {
                         self.error(p_name.span, format!("`{}` cannot be optional", p_name.name));
                     }
                     let resolved_ty = self.resolve_value_type(&ty, ValuePosition::FieldType)?;
+                    self.check_conversion_property(&p_name, &resolved_ty);
                     typed_members.push(crate::TypedInterfaceMember::Property {
                         name: p_name.clone(),
                         ty: resolved_ty.clone(),
@@ -929,6 +1012,15 @@ fn without_type_vars(ty: &Type) -> Option<Type> {
             (!concrete.is_empty()).then(|| Type::union(concrete))
         }
         _ => Some(ty.clone()),
+    }
+}
+
+/// Whether `ty` is a type parameter or a union with one among its members.
+fn mentions_generic_param(ty: &crate::Type) -> bool {
+    match ty.peel() {
+        crate::Type::TypeVar(_) | crate::Type::GenericParam { .. } => true,
+        crate::Type::Union(members) => members.iter().any(mentions_generic_param),
+        _ => false,
     }
 }
 

@@ -99,6 +99,41 @@ fn reason_of(outcome: &LlmOutcome) -> FailureReason {
         .reason
 }
 
+/// A local refusal reads to the guest as the transport failure it always did, and is told
+/// apart only by the flag the call log records it by.
+#[tokio::test]
+async fn a_local_refusal_reads_as_a_transport_failure_and_is_flagged_local() {
+    let local = one(Err(ProviderFailure::Local {
+        detail: "provider is not declared".into(),
+    }))
+    .await;
+    let wire = one(Err(ProviderFailure::Transport {
+        detail: "connection reset".into(),
+    }))
+    .await;
+    let (local, wire) = (
+        local.failure.expect("failure"),
+        wire.failure.expect("failure"),
+    );
+    assert!(local.local && !wire.local);
+    assert_eq!(
+        LlmFailure {
+            local: false,
+            ..local
+        },
+        wire
+    );
+}
+
+/// A credential refused for one element is this host's own state: `request-rejected` for the
+/// guest, flagged local for the call log.
+#[tokio::test]
+async fn a_per_element_unauthorized_is_flagged_local() {
+    let outcome = one(Err(ProviderFailure::Unauthorized)).await;
+    assert_eq!(reason_of(&outcome), FailureReason::RequestRejected);
+    assert!(outcome.failure.expect("failure").local);
+}
+
 /// KTD1: `ok` keys off a natural stop, not off "nothing threw". Every one of the
 /// nine per-element reasons is reachable, and each maps to exactly one outcome.
 #[tokio::test]

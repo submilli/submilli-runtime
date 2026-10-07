@@ -100,6 +100,9 @@ impl<'a> Inferer<'a> {
                 let Some(element) = self.index_path_elem(*index)? else {
                     return Ok(None);
                 };
+                let element = self
+                    .constant_key_field(&element, &receiver_expr.ty)
+                    .unwrap_or(element);
                 state.path.chain.push(element);
                 Some(state)
             }
@@ -144,6 +147,34 @@ impl<'a> Inferer<'a> {
             narrowing::KeyKind::Element
         };
         Ok(Some(narrowing::PathElem::Key(root, kind)))
+    }
+
+    /// The field a string key names, when it is a literal or a constant holding
+    /// one, and the receiver declares that field: TypeScript reads `o["a"]`, and
+    /// `o[key]` after `const key = "a"`, as `o.a`, so a guard or write through
+    /// either spelling is one through the other.
+    fn constant_key_field(
+        &self,
+        element: &narrowing::PathElem,
+        receiver_ty: &Type,
+    ) -> Option<narrowing::PathElem> {
+        let name = match element {
+            narrowing::PathElem::Index(narrowing::LiteralValue::String(name)) => name.clone(),
+            narrowing::PathElem::Key(root, narrowing::KeyKind::Property) => {
+                let Type::StringLiteral(name) = self.constant_root_type(root)?.peel().clone()
+                else {
+                    return None;
+                };
+                name
+            }
+            _ => return None,
+        };
+        let Type::Object { fields, .. } = receiver_ty.peel() else {
+            return None;
+        };
+        fields
+            .contains_key(&name)
+            .then_some(narrowing::PathElem::Field(name))
     }
 
     pub(super) fn type_has_getter(&self, ty: &Type, field: &str) -> bool {
@@ -617,6 +648,7 @@ impl<'a> Inferer<'a> {
         let Some(path) = self.expr_to_reference_path(path_expr)? else {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         };
+        let exclusions = self.known_exclusions(&path);
         if self.path_root_is_captured_mutator(&path) {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
@@ -627,13 +659,13 @@ impl<'a> Inferer<'a> {
         let can_be_null = super::assignable(&Type::Null, &path_ty, self.resolver());
         let path_span = path_expr.span;
         let fallback_kind = path_expr.kind.clone();
+        let (mut eq_env, mut neq_env) =
+            self.null_discriminant_envs(&path, &fallback_kind, path_span)?;
 
         // Prefer un-narrowed source so NarrowRegion materialization avoids dangling chain shadows.
         let source_kind = self
             .synthesize_unnarrowed_source(&path, path_span)?
             .unwrap_or(fallback_kind);
-        let mut eq_env = narrowing::NarrowEnv::new();
-        let mut neq_env = narrowing::NarrowEnv::new();
         let source_eq = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -653,7 +685,7 @@ impl<'a> Inferer<'a> {
         // A local whose type can't hold `null` is `never` where it equals
         // `null`. A type parameter can hold anything, so it narrows nothing.
         let never_null = !can_be_null
-            && narrowing::rules_out_to_never(&path)
+            && self.rules_out_to_never(&path)
             && !narrowing::has_erased_member(&path_ty);
         if can_be_null || never_null {
             eq_env.insert(
@@ -665,7 +697,7 @@ impl<'a> Inferer<'a> {
                         narrowing::RULED_OUT
                     },
                     facts: narrowing::TypeFacts::EQ_NULL,
-                    excluded_literals: std::collections::BTreeSet::new(),
+                    excluded_literals: exclusions.clone(),
                     binding: self.mint_narrow_binding(path_span)?,
                     source: source_eq,
                 },
@@ -674,9 +706,7 @@ impl<'a> Inferer<'a> {
         // A field that is `null` reads as `never` once proven otherwise, but
         // re-reads its live value: an alias may have written it.
         let non_null_ty = match narrowing::strip_null(&path_ty) {
-            ty if narrowing::is_ruled_out(&ty) && !narrowing::rules_out_to_never(&path) => {
-                Type::Never
-            }
+            ty if narrowing::is_ruled_out(&ty) && !self.rules_out_to_never(&path) => Type::Never,
             ty => ty,
         };
         neq_env.insert(
@@ -684,7 +714,7 @@ impl<'a> Inferer<'a> {
             narrowing::NarrowedView {
                 narrowed_ty: non_null_ty,
                 facts: narrowing::TypeFacts::NE_NULL,
-                excluded_literals: std::collections::BTreeSet::new(),
+                excluded_literals: exclusions.clone(),
                 binding: self.mint_narrow_binding(path_span)?,
                 source: source_neq,
             },
@@ -699,6 +729,42 @@ impl<'a> Inferer<'a> {
                 ));
             }
         })
+    }
+
+    /// The views `s.kind === null` puts on `s` when `kind` is a discriminant
+    /// some member types `null`: as for a literal, the members whose `kind` may
+    /// be `null` where it is, and the rest where it isn't. Empty otherwise.
+    fn null_discriminant_envs(
+        &mut self,
+        path: &narrowing::ReferencePath,
+        path_kind: &crate::TypedExprKind,
+        path_span: Span,
+    ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
+    {
+        let none = (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
+        if path.chain.is_empty() {
+            return Ok(none);
+        }
+        let Some(root) = self.discriminant_root(path, path_kind, path_span)? else {
+            return Ok(none);
+        };
+        let DiscriminantKey::Field(key) = &root.key else {
+            return Ok(none);
+        };
+        let Type::Union(members) = root.ty.peel() else {
+            return Ok(none);
+        };
+        let Some(split) = self.discriminant_split(members, key, &Type::Null) else {
+            return Ok(none);
+        };
+        self.root_discriminant_envs(
+            crate::BinOp::Eq,
+            root.path,
+            root.ty,
+            root.span,
+            root.kind,
+            split,
+        )
     }
 
     /// A non-null chain result proves every optional receiver was present.
@@ -1236,24 +1302,16 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    fn narrow_literal_discriminant(
+    /// The object a discriminant read `path` tests, with the key it reads:
+    /// `s.kind` tests `s` by its `kind` field, and `t[0]` tests `t` by position.
+    fn discriminant_root(
         &mut self,
-        op: crate::BinOp,
-        path: narrowing::ReferencePath,
-        path_ty: Type,
-        path_kind: crate::TypedExprKind,
+        path: &narrowing::ReferencePath,
+        path_kind: &crate::TypedExprKind,
         path_span: Span,
-        literal: narrowing::LiteralValue,
-    ) -> Result<
-        Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
-        crate::compiler_error::CompilerFailure,
-    > {
+    ) -> Result<Option<DiscriminantRoot>, crate::compiler_error::CompilerFailure> {
         use crate::TypedExprKind;
-        enum DiscKey {
-            Field(String),
-            Position(usize),
-        }
-        let (root_path, root_ty, root_span, root_kind, disc_key_from_path) = match &path_kind {
+        Ok(Some(match path_kind {
             TypedExprKind::FieldAccess { receiver, name } => {
                 let receiver_expr = self
                     .typed_ast
@@ -1268,13 +1326,13 @@ impl<'a> Inferer<'a> {
                 let root_kind = self
                     .synthesize_unnarrowed_source(&root_path, receiver_span)?
                     .unwrap_or(fallback_kind);
-                (
-                    root_path,
-                    receiver_ty,
-                    receiver_span,
-                    root_kind,
-                    DiscKey::Field(name.name.clone()),
-                )
+                DiscriminantRoot {
+                    path: root_path,
+                    ty: receiver_ty,
+                    span: receiver_span,
+                    kind: root_kind,
+                    key: DiscriminantKey::Field(name.name.clone()),
+                }
             }
             TypedExprKind::IndexAccess { receiver, index } => {
                 let receiver_expr = self
@@ -1299,24 +1357,24 @@ impl<'a> Inferer<'a> {
                 ) else {
                     return Ok(None);
                 };
-                (
-                    root_path,
-                    receiver_ty,
-                    receiver_span,
-                    root_kind,
-                    DiscKey::Position(position),
-                )
+                DiscriminantRoot {
+                    path: root_path,
+                    ty: receiver_ty,
+                    span: receiver_span,
+                    kind: root_kind,
+                    key: DiscriminantKey::Position(position),
+                }
             }
             TypedExprKind::LocalNarrowRef { .. } => {
                 let disc_key = match match path.chain.last().cloned() {
                     Some(value) => value,
                     None => return Ok(None),
                 } {
-                    narrowing::PathElem::Field(name) => DiscKey::Field(name),
+                    narrowing::PathElem::Field(name) => DiscriminantKey::Field(name),
                     narrowing::PathElem::Index(narrowing::LiteralValue::Number(n))
                         if n.0.is_finite() && n.0.fract() == 0.0 && n.0 >= 0.0 =>
                     {
-                        DiscKey::Position(n.0 as usize)
+                        DiscriminantKey::Position(n.0 as usize)
                     }
                     _ => return Ok(None),
                 };
@@ -1326,9 +1384,39 @@ impl<'a> Inferer<'a> {
                 else {
                     return Ok(None);
                 };
-                (root_path, root_ty, path_span, root_kind, disc_key)
+                DiscriminantRoot {
+                    path: root_path,
+                    ty: root_ty,
+                    span: path_span,
+                    kind: root_kind,
+                    key: disc_key,
+                }
             }
             _ => return Ok(None),
+        }))
+    }
+
+    fn narrow_literal_discriminant(
+        &mut self,
+        op: crate::BinOp,
+        path: narrowing::ReferencePath,
+        path_ty: Type,
+        path_kind: crate::TypedExprKind,
+        path_span: Span,
+        literal: narrowing::LiteralValue,
+    ) -> Result<
+        Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
+        crate::compiler_error::CompilerFailure,
+    > {
+        let Some(DiscriminantRoot {
+            path: root_path,
+            ty: root_ty,
+            span: root_span,
+            kind: root_kind,
+            key: disc_key_from_path,
+        }) = self.discriminant_root(&path, &path_kind, path_span)?
+        else {
+            return Ok(None);
         };
 
         // Peel aliases so `type Shape = A | B` pattern-matches as union.
@@ -1336,14 +1424,14 @@ impl<'a> Inferer<'a> {
             return Ok(None);
         };
         let (matching, remaining) = match &disc_key_from_path {
-            DiscKey::Field(key_field) => {
+            DiscriminantKey::Field(key_field) => {
                 let literal_ty = narrowing::literal_type(&literal);
                 let Some(split) = self.discriminant_split(members, key_field, &literal_ty) else {
                     return Ok(None);
                 };
                 split
             }
-            DiscKey::Position(pos) => {
+            DiscriminantKey::Position(pos) => {
                 let Some((disc_pos, table)) = narrowing::tuple_union_discriminant(members) else {
                     return Ok(None);
                 };
@@ -1614,34 +1702,32 @@ impl<'a> Inferer<'a> {
             Type::Union(members) => members.as_slice(),
             ty => std::slice::from_ref(ty),
         };
-        let literal_ty = literal_to_type(&literal);
+        let mut excluded = self.known_exclusions(&path);
+        excluded.insert(literal.clone());
         let mut matched: Vec<Type> = Vec::new();
         let mut remaining: Vec<Type> = Vec::new();
-        for m in members {
-            if m.peel() == &literal_ty {
-                matched.push(m.clone());
-            } else if let (Type::Boolean, narrowing::LiteralValue::Boolean(value)) =
-                (m.peel(), &literal)
-            {
-                // `boolean` is `true | false`: `b === true` leaves `false`.
-                matched.push(literal_ty.clone());
-                remaining.push(Type::BooleanLiteral(!value));
-            } else {
-                if matches!(m.peel(), Type::Unknown) || m.peel() == &literal_ty.widen_literal() {
-                    matched.push(literal_ty.clone());
-                }
-                remaining.push(m.clone());
-            }
+        for member in members {
+            let (equal, unequal) = self.split_by_literal(member, &literal, &excluded);
+            matched.extend(equal);
+            remaining.extend(unequal);
         }
         if matched.is_empty() {
             // Predicate is statically false — typechecker accepted
             // the comparison anyway. Skip narrowing.
             return Ok(None);
         }
-        let matched_ty = Type::union(matched);
+        // A side that keeps every member keeps the type as written, alias
+        // included.
+        let matched_ty = if matched == members {
+            path_ty.clone()
+        } else {
+            Type::union(matched)
+        };
         // Unequal, a path that can only be the literal holds no value.
         let remaining_ty = if remaining.is_empty() {
             narrowing::RULED_OUT
+        } else if remaining == members {
+            path_ty.clone()
         } else {
             Type::union(remaining)
         };
@@ -1682,12 +1768,10 @@ impl<'a> Inferer<'a> {
             .map_err(crate::typechecker::arena_failure)?;
         let mut true_env = narrowing::NarrowEnv::new();
         let mut false_env = narrowing::NarrowEnv::new();
-        let mut false_excluded = std::collections::BTreeSet::new();
-        false_excluded.insert(literal);
         let (true_excluded, false_excluded) = if op == BinOp::NotEq {
-            (false_excluded, std::collections::BTreeSet::new())
+            (excluded, std::collections::BTreeSet::new())
         } else {
-            (std::collections::BTreeSet::new(), false_excluded)
+            (std::collections::BTreeSet::new(), excluded)
         };
         true_env.insert(
             path.clone(),
@@ -1710,6 +1794,50 @@ impl<'a> Inferer<'a> {
             },
         );
         Ok(Some((true_env, false_env)))
+    }
+
+    /// What `member` leaves when the value equals `literal`, and when it
+    /// doesn't, given the literals already ruled out with it (`excluded`).
+    fn split_by_literal(
+        &self,
+        member: &Type,
+        literal: &narrowing::LiteralValue,
+        excluded: &std::collections::BTreeSet<narrowing::LiteralValue>,
+    ) -> (Option<Type>, Option<Type>) {
+        let literal_ty = literal_to_type(literal);
+        if let Some(values) = super::comparable::enum_literal_values(member.peel(), self.resolver())
+            && values.contains(literal)
+        {
+            // An enum has no type for one member: equal, the value keeps the
+            // enum's type, and unequal, it leaves once every member's value
+            // has been ruled out.
+            let all_excluded = values.iter().all(|value| excluded.contains(value));
+            return (
+                Some(member.clone()),
+                (!all_excluded).then(|| member.clone()),
+            );
+        }
+        if member.peel() == &literal_ty {
+            return (Some(member.clone()), None);
+        }
+        if let (Type::Boolean, narrowing::LiteralValue::Boolean(value)) = (member.peel(), literal) {
+            // `boolean` is `true | false`: `b === true` leaves `false`.
+            return (Some(literal_ty), Some(Type::BooleanLiteral(!value)));
+        }
+        let equal = if matches!(member.peel(), Type::Unknown)
+            || member.peel() == &literal_ty.widen_literal()
+        {
+            Some(literal_ty)
+        } else if !narrowing::has_erased_member(member)
+            && super::comparable::comparable(member, &literal_ty, self.resolver())
+        {
+            // As in TypeScript, a member that can be compared with the literal
+            // (a weak object type a string matches) stays.
+            Some(member.clone())
+        } else {
+            None
+        };
+        (equal, Some(member.clone()))
     }
 
     fn predicate_envs_typeof_tag(
@@ -1842,6 +1970,7 @@ impl<'a> Inferer<'a> {
         let Some(path) = self.expr_to_reference_path(value_expr)? else {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         };
+        let exclusions = self.known_exclusions(&path);
         if self.path_root_is_captured_mutator(&path) {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
@@ -1883,7 +2012,7 @@ impl<'a> Inferer<'a> {
             narrowing::NarrowedView {
                 narrowed_ty: true_ty,
                 facts: true_facts,
-                excluded_literals: std::collections::BTreeSet::new(),
+                excluded_literals: exclusions.clone(),
                 binding: self.mint_narrow_binding(value_span)?,
                 source: source_true,
             },
@@ -1893,7 +2022,7 @@ impl<'a> Inferer<'a> {
             narrowing::NarrowedView {
                 narrowed_ty: false_ty,
                 facts: false_facts,
-                excluded_literals: std::collections::BTreeSet::new(),
+                excluded_literals: exclusions.clone(),
                 binding: self.mint_narrow_binding(value_span)?,
                 source: source_false,
             },
@@ -2042,10 +2171,11 @@ impl<'a> Inferer<'a> {
         let true_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::TRUTHY);
         let false_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::FALSY);
         // An outcome a local's type can't take makes it `never` there (a
-        // ruled-out view), when the type lists every value the local can hold.
+        // ruled-out view), when every member of the type is always truthy or
+        // always falsy: an object is never falsy, as `null` is never truthy.
         let assigns = matches!(fallback_kind, crate::TypedExprKind::Sequence { .. });
         let empty_is_never =
-            narrowing::rules_out_to_never(&path) && narrowing::is_unit_union(&from_ty) && !assigns;
+            self.rules_out_to_never(&path) && narrowing::has_known_truthiness(&from_ty) && !assigns;
         // An assignment tested for truthiness (`c && (x = 10)`) narrows its
         // target to the assigned value where the test holds, even when the
         // test itself rules nothing out: an operand that may not run doesn't
@@ -2096,7 +2226,7 @@ impl<'a> Inferer<'a> {
                 narrowing::NarrowedView {
                     narrowed_ty: ty,
                     facts,
-                    excluded_literals: std::collections::BTreeSet::new(),
+                    excluded_literals: self.known_exclusions(&path),
                     binding: self.mint_narrow_binding(span)?,
                     source,
                 },
@@ -2351,14 +2481,28 @@ impl<'a> Inferer<'a> {
             .filter(|view| !narrowing::is_ruled_out(&view.narrowed_ty))
     }
 
+    /// The literals `path` is already known not to hold, which a further
+    /// narrowing of it keeps: `s !== S.X` still holds inside `s !== null`.
+    fn known_exclusions(
+        &self,
+        path: &narrowing::ReferencePath,
+    ) -> std::collections::BTreeSet<narrowing::LiteralValue> {
+        self.lookup_narrowed_view(path)
+            .map(|view| view.excluded_literals.clone())
+            .unwrap_or_default()
+    }
+
     /// A read of `path` under the narrowing that holds there. A guard that
     /// rules out every value (its view [`narrowing::RULED_OUT`]) reads as `never`, as in
-    /// TypeScript, where [`narrowing::rules_out_to_never`] allows: no value
+    /// TypeScript, where [`Self::rules_out_to_never`] allows: no value
     /// reaches the read, and codegen emits a trap for it.
     pub(super) fn narrowed_read(
         &self,
         path: narrowing::ReferencePath,
     ) -> Option<(crate::TypedExprKind, Type)> {
+        if self.declared_read.as_ref() == Some(&path) {
+            return None;
+        }
         let view = self.innermost_narrowing(&path)?;
         let narrowed_ty = if !narrowing::is_ruled_out(&view.narrowed_ty) {
             view.narrowed_ty.clone()
@@ -2377,8 +2521,11 @@ impl<'a> Inferer<'a> {
     /// Whether a guard that ruled out every value of `path` makes it read as
     /// `never`. A type parameter or `unknown` hides values a guard can't see
     /// ruled out, so `typeof x === "object"` on a `T` is not a contradiction.
+    /// Code that never runs by its syntax reads the declared type, as in
+    /// TypeScript.
     fn reads_as_never(&self, path: &narrowing::ReferencePath) -> bool {
-        narrowing::rules_out_to_never(path)
+        (self.reachable || self.unreachable_by_exhaustive_switch)
+            && self.rules_out_to_never(path)
             && self.declared_root_ty(path).is_some_and(|declared| {
                 !narrowing::has_erased_member(&declared)
                     && !matches!(declared.peel(), Type::Unknown)
@@ -2459,6 +2606,9 @@ fn comparison_literal(
     let expr = ast
         .try_expr(id)
         .map_err(crate::typechecker::arena_failure)?;
+    if let Some(value) = enum_member_literal(&expr.kind) {
+        return Ok(Some(value));
+    }
     literal_value_of(&expr.kind).map_or_else(
         || {
             Ok::<_, crate::compiler_error::CompilerFailure>({
@@ -2472,6 +2622,20 @@ fn comparison_literal(
         },
         |value| Ok(Some(value)),
     )
+}
+
+/// The value an enum member reference holds, which is what comparing with
+/// it tests, as a `case` label with it does.
+fn enum_member_literal(kind: &crate::TypedExprKind) -> Option<narrowing::LiteralValue> {
+    match kind {
+        crate::TypedExprKind::NumberEnumMember { value, .. } => Some(
+            narrowing::LiteralValue::Number(crate::types::LiteralF64(*value)),
+        ),
+        crate::TypedExprKind::StringEnumMember { value, .. } => {
+            Some(narrowing::LiteralValue::String(value.clone()))
+        }
+        _ => None,
+    }
 }
 
 /// Whether the operand is a literal written in the source, not a reference
@@ -2590,4 +2754,20 @@ fn add_missing_views(env: &mut narrowing::NarrowEnv, extra: narrowing::NarrowEnv
             env.insert(path, view);
         }
     }
+}
+
+/// What a discriminant read tests the object it reads from by.
+enum DiscriminantKey {
+    Field(String),
+    Position(usize),
+}
+
+/// The object a discriminant read tests: its path, declared type, span, a
+/// source that reads it, and the key the read takes.
+struct DiscriminantRoot {
+    path: narrowing::ReferencePath,
+    ty: Type,
+    span: Span,
+    kind: crate::TypedExprKind,
+    key: DiscriminantKey,
 }

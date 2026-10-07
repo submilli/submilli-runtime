@@ -614,6 +614,11 @@ impl Inferer<'_> {
             ExprKind::ObjectLiteral { members } => {
                 self.infer_object_literal_expr(expr_id, members, expected, span)
             }
+            ExprKind::ArrayLiteral { elements }
+                if expected.is_none() && self.ast.tuple_pattern_sources.contains(&expr_id) =>
+            {
+                self.infer_pattern_tuple_literal(elements, span)
+            }
             ExprKind::ArrayLiteral { elements } => {
                 self.infer_array_literal(elements, expected, span)
             }
@@ -6713,6 +6718,32 @@ impl Inferer<'_> {
         ))
     }
 
+    /// An unannotated array literal that an array pattern destructures: a tuple
+    /// of its elements' widened types, as TypeScript infers from the pattern.
+    fn infer_pattern_tuple_literal(
+        &mut self,
+        elements: Vec<crate::ArrayLiteralElement>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let mut typed_elements = Vec::with_capacity(elements.len());
+        let mut element_types = Vec::with_capacity(elements.len());
+        for element in &elements {
+            let crate::ArrayLiteralElement::Value(id) = element else {
+                return self.infer_array_literal(elements, None, span);
+            };
+            let (typed_id, ty) = self.infer_expr(*id, None)?;
+            element_types.push(self.widen_fresh_literals(typed_id, &ty)?);
+            typed_elements.push(typed_id);
+        }
+        Ok((
+            TypedExprKind::TupleLiteral {
+                elements: typed_elements,
+                element_types: element_types.clone(),
+            },
+            Type::Tuple(element_types),
+        ))
+    }
+
     /// array-literal expression interpreted as a tuple. Caller
     /// has already established that `expected` is `Type::Tuple`. Each
     /// source element is inferred against its position's expected type;
@@ -8178,12 +8209,13 @@ impl Inferer<'_> {
             // A parameter typed only by the expected function type takes
             // whatever literals that type was inferred with, so its literal
             // types count as fresh.
+            let body_ty = self.local_storage_ty(&p.name, p.ty.clone());
             if decl.ty.is_some() {
                 self.scopes
-                    .insert_annotated_param(p.name.name.clone(), p.ty.clone(), p.name.span);
+                    .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
             } else {
                 self.scopes
-                    .insert(p.name.name.clone(), p.ty.clone(), false, p.name.span);
+                    .insert(p.name.name.clone(), body_ty, false, p.name.span);
             }
         }
         // Fresh narrowing stack for the body, seeded with the `const`-rooted
@@ -8196,7 +8228,7 @@ impl Inferer<'_> {
             immediately_invoked && super::iife::returns_before_end(self.ast, &body)?;
         let narrow_seed = self.enter_closure_narrow_boundary(span, immediately_invoked)?;
         // The body's own `return`s end its flow, not the enclosing one's.
-        let prev_reachable = std::mem::replace(&mut self.reachable, true);
+        let prev_reachable = self.enter_body_reachability();
         // Nor can its `break`/`continue` reach a loop or switch outside it.
         let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let prev_switch_depth = std::mem::replace(&mut self.switch_depth, 0);
@@ -8279,7 +8311,7 @@ impl Inferer<'_> {
         }
         // Restore frames.
         self.exit_closure_narrow_boundary()?;
-        self.reachable = prev_reachable;
+        self.restore_reachability(prev_reachable);
         self.loop_depth = prev_loop_depth;
         self.switch_depth = prev_switch_depth;
         self.in_nested_function = prev_nested;
@@ -8512,9 +8544,49 @@ impl Inferer<'_> {
             .try_expr(operand)
             .map_err(super::arena_failure)?
             .span;
-        let (value, value_ty) = self.infer_expr(operand, None)?;
+        let (mut value, mut value_ty) = self.infer_expr(operand, None)?;
+        // Only a reference right under the `!` reads at its declared type, as
+        // in TypeScript: `(x)!` keeps the narrowing.
+        let parenthesized = matches!(
+            self.ast
+                .try_expr(operand)
+                .map_err(super::arena_failure)?
+                .kind,
+            ExprKind::Paren(_)
+        );
+        if !parenthesized && let Some(path) = self.null_narrowed_path(value, &value_ty)? {
+            // As in TypeScript: a reference narrowed to `null` reads at its
+            // declared type under `!`, which then throws at run time.
+            let outer = self.declared_read.replace(path);
+            let reread = self.infer_expr(operand, None);
+            self.declared_read = outer;
+            (value, value_ty) = reread?;
+        }
         let result_ty = self.check_non_null_assert(&value_ty, operand_span);
         Ok((TypedExprKind::NonNullAssert { value }, result_ty))
+    }
+
+    /// The path of `value` when a narrowing left it only `null` and its
+    /// declared type holds more.
+    fn null_narrowed_path(
+        &self,
+        value: ExprId,
+        value_ty: &Type,
+    ) -> Result<Option<narrowing::ReferencePath>, CompilerFailure> {
+        if !matches!(value_ty.peel(), Type::Null) {
+            return Ok(None);
+        }
+        let typed = self
+            .typed_ast
+            .try_expr(value)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(path) = self.expr_to_reference_path(typed)? else {
+            return Ok(None);
+        };
+        let declared_holds_more = self
+            .declared_path_ty(&path)
+            .is_some_and(|declared| !matches!(declared.peel(), Type::Null));
+        Ok(declared_holds_more.then_some(path))
     }
 
     /// The type `!` yields for an operand of `value_ty`. An operand that is
@@ -9128,7 +9200,7 @@ impl Inferer<'_> {
             parts.pop();
             asserts_chain = true;
         }
-        let (kind, ty) = self.infer_chain_steps(base, parts)?;
+        let (kind, ty) = self.infer_chain_steps(base, parts, asserts_chain)?;
         if !asserts_chain {
             return Ok((kind, ty));
         }
@@ -9153,10 +9225,12 @@ impl Inferer<'_> {
     /// `Type::InterfaceRef`; `Index` on `Type::Array`; `Call` on a
     /// closure-typed receiver; `Call` directly after a `Field` resolving to an
     /// interface method (lowered to `MethodCall`); `NonNull` anywhere.
+    /// `asserts_tail`: a `!` follows the chain's last step.
     fn infer_chain_steps(
         &mut self,
         base: ExprId,
         parts: Vec<ChainPart>,
+        asserts_tail: bool,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_base, base_ty) = self.infer_expr(base, None)?;
         // The namespace rejection subsumes the redundancy warning — a namespace
@@ -9188,7 +9262,15 @@ impl Inferer<'_> {
         // `infer_conditional_operand`.
         let mut short_circuit_span: Option<Span> = None;
 
-        for part in parts {
+        // A step right under a `!` reads at its declared type, as a reference
+        // under a `!` outside a chain does.
+        let asserted: Vec<bool> = (0..parts.len())
+            .map(|index| match parts.get(index + 1) {
+                Some(next) => matches!(next, ChainPart::NonNull { .. }),
+                None => asserts_tail,
+            })
+            .collect();
+        for (part, asserted) in parts.into_iter().zip(asserted) {
             // A `?.` whose receiver can't be `null` never short-circuits, so it
             // is the plain step and adds no `| null`, as in tsc.
             let part = if part.is_optional() && !may_hold_null(&receiver_ty, self.resolver()) {
@@ -9250,6 +9332,7 @@ impl Inferer<'_> {
             receiver_ty = self.narrow_step_result(
                 step_path.as_ref(),
                 &pending_method,
+                asserted,
                 &mut typed_part,
                 next_ty,
             );
@@ -9963,10 +10046,14 @@ impl Inferer<'_> {
     ///
     /// Literal index steps consume the same path narrowing as ordinary element
     /// reads. Computed indices have no reference path and remain conservative.
+    ///
+    /// A step a `!` follows (`asserted`) keeps its declared type where a guard
+    /// left it only `null`, as a reference under `!` does outside a chain.
     fn narrow_step_result(
         &self,
         result_path: Option<&super::narrowing::ReferencePath>,
         pending_method: &Option<ChainMethod>,
+        asserted: bool,
         part: &mut TypedChainPart,
         step_ty: Type,
     ) -> Type {
@@ -9976,6 +10063,9 @@ impl Inferer<'_> {
         let Some(view) = result_path.and_then(|p| self.lookup_narrowed_view(p)) else {
             return step_ty;
         };
+        if asserted && matches!(view.narrowed_ty.peel(), Type::Null) {
+            return step_ty;
+        }
         let narrowed = view.narrowed_ty.clone();
         part.set_result_ty(narrowed.clone());
         narrowed
@@ -11153,7 +11243,7 @@ struct ElementMismatch {
 }
 
 /// The expression inside any parentheses around `expr`.
-fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
+pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
     loop {
         match &ast.try_expr(expr).map_err(super::arena_failure)?.kind {
             ExprKind::Paren(inner) => expr = *inner,
