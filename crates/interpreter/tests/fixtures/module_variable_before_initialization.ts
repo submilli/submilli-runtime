@@ -34,12 +34,18 @@ class Later {
   static value: number = 7;
 }
 
-// A class is initialized before its static initializers run, so they can read
-// its later statics, which still hold their defaults.
+// A static initializer reads its class's earlier statics, and a later one
+// throws: JavaScript would read `undefined`, which a `number` can't hold.
 class SelfInit {
   static first: number = 1;
   static sum: number = SelfInit.add();
-  static add(): number { return SelfInit.first + SelfInit.later; }
+  static add(): number {
+    try {
+      return SelfInit.first + SelfInit.later;
+    } catch (e) {
+      return e instanceof ReferenceError ? SelfInit.first - 10 : 0;
+    }
+  }
   static later: number = 5;
 }
 
@@ -54,7 +60,7 @@ function main(): void {
   assert(laterNumber === 5, "the failed write left the initializer's value");
   assert(readNumber() === 5 && readString() === "s" && readObject().a === 1, "reads after initialization");
   assert(readStatic() === 7, "a static read after initialization");
-  assert(SelfInit.sum === 1, "a static initializer reads a later static's default");
+  assert(SelfInit.sum === -9 && SelfInit.add() === 6, "a later static throws until its initializer runs");
   writeNumber();
   bumpNumber();
   assert(laterNumber === 4, "writes after initialization");

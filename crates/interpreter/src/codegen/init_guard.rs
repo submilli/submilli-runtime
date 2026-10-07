@@ -6,18 +6,18 @@
 //! so a guarded global gets an `i32` flag that the start function sets once its
 //! binding is initialized; every other access checks the flag first.
 //!
-//! A `let` or `const` is initialized once its declaration stores its value. A
-//! static field's binding is its class, which JavaScript initializes before any
-//! static initializer runs, so the statics of one class share a flag set before
-//! the first of them; a static read during the class's own static
-//! initialization finds the field's default, where JavaScript finds
-//! `undefined`.
+//! Each guarded global is initialized once its declaration stores its value.
+//! A static field is guarded field by field, so a function that runs during
+//! its class's static initialization reads an earlier static and throws on a
+//! later one. JavaScript would find `undefined` there, which a typed Wasm slot
+//! can't hold, and its default would be a wrong value or a null reference. The
+//! message names the class, as Node's does for a class not yet initialized.
 //!
 //! Only a global declared after some top-level code that could call a function
 //! is guarded. Before that point nothing can reach a function body, so the
 //! global is always initialized by the time any function reads it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use wasm_encoder::{BlockType, ConstExpr, GlobalSection, GlobalType, Instruction, ValType};
 
@@ -27,32 +27,21 @@ use crate::codegen::symbol_table::SymbolTable;
 use crate::compiler_error::CompilerFailure;
 use crate::{MangledName, StmtId, TypedAst, TypedExprKind, TypedStmtKind};
 
-/// One guarded global, and how its binding is marked initialized.
+/// One guarded global and the top-level statement that declares it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InitGuard {
     pub global: MangledName,
-    /// What the flag stands for: the variable, or a static field's class.
+    /// The name the `ReferenceError` reports: the variable, or a static
+    /// field's class.
     pub binding: String,
-    /// The top-level statement that marks the binding initialized.
-    pub marked_by: StmtId,
-    pub mark: Mark,
-}
-
-/// When the marking statement sets the flag.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mark {
-    /// Before the statement computes its value: a class's statics.
-    BeforeValue,
-    /// After the statement stores its value: a `let` or `const`.
-    AfterStore,
+    pub declared_by: StmtId,
 }
 
 /// A guarded global's flag, as codegen allocated it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InitFlag {
     pub flag_idx: u32,
-    pub marked_by: StmtId,
-    pub mark: Mark,
+    pub declared_by: StmtId,
     pub message: String,
 }
 
@@ -60,7 +49,6 @@ pub struct InitFlag {
 pub fn guarded_globals(ta: &TypedAst) -> Result<Vec<InitGuard>, CompilerFailure> {
     let declared: BTreeSet<&MangledName> = ta.globals.iter().map(|g| &g.mangled_name).collect();
     let mut seen = BTreeSet::new();
-    let mut class_marks: BTreeMap<String, StmtId> = BTreeMap::new();
     let mut code_may_have_run = false;
     let mut guards = Vec::new();
     for &stmt_id in &ta.top_level_statements {
@@ -79,31 +67,24 @@ pub fn guarded_globals(ta: &TypedAst) -> Result<Vec<InitGuard>, CompilerFailure>
         };
         // The initializer runs before its own binding is initialized.
         code_may_have_run |= !is_inert(ta, *value)?;
-        if !declared.contains(mangled) {
+        if !declared.contains(mangled) || !seen.insert(mangled) || !code_may_have_run {
             continue;
         }
-        if !seen.insert(mangled) {
-            continue;
-        }
-        if !code_may_have_run {
-            continue;
-        }
-        guards.push(match ident.name.split_once('.') {
-            Some((class, _)) => InitGuard {
-                global: mangled.clone(),
-                binding: class.to_string(),
-                marked_by: *class_marks.entry(class.to_string()).or_insert(stmt_id),
-                mark: Mark::BeforeValue,
-            },
-            None => InitGuard {
-                global: mangled.clone(),
-                binding: ident.name.clone(),
-                marked_by: stmt_id,
-                mark: Mark::AfterStore,
-            },
+        guards.push(InitGuard {
+            global: mangled.clone(),
+            binding: reported_binding(&ident.name).to_string(),
+            declared_by: stmt_id,
         });
     }
     Ok(guards)
+}
+
+/// Static fields are lowered to globals named `Class.field`; the binding a
+/// read of one needs is its class.
+fn reported_binding(global_name: &str) -> &str {
+    global_name
+        .split_once('.')
+        .map_or(global_name, |(class, _)| class)
 }
 
 /// The `ReferenceError` message for a binding, worded as Node words it.
@@ -111,7 +92,7 @@ pub fn before_initialization_message(binding: &str) -> String {
     format!("Cannot access '{binding}' before initialization")
 }
 
-/// Allocates one flag per guarded binding, starting unset. Returns how many
+/// Allocates one flag per guarded global, starting unset. Returns how many
 /// globals were added.
 pub fn allocate_flags(
     ta: &TypedAst,
@@ -119,36 +100,27 @@ pub fn allocate_flags(
     symbols: &mut SymbolTable,
     next_global_idx: &mut u32,
 ) -> Result<u32, CompilerFailure> {
-    let mut flags: BTreeMap<String, u32> = BTreeMap::new();
-    for guard in guarded_globals(ta)? {
-        let flag_idx = match flags.get(&guard.binding) {
-            Some(&idx) => idx,
-            None => {
-                globals.global(
-                    GlobalType {
-                        val_type: ValType::I32,
-                        mutable: true,
-                        shared: false,
-                    },
-                    &ConstExpr::i32_const(0),
-                );
-                let idx = *next_global_idx;
-                crate::codegen::next_index(next_global_idx)?;
-                flags.insert(guard.binding.clone(), idx);
-                idx
-            }
-        };
+    let guards = guarded_globals(ta)?;
+    for guard in &guards {
+        globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i32_const(0),
+        );
         symbols.record_init_guard(
-            guard.global,
+            guard.global.clone(),
             InitFlag {
-                flag_idx,
-                marked_by: guard.marked_by,
-                mark: guard.mark,
+                flag_idx: *next_global_idx,
+                declared_by: guard.declared_by,
                 message: before_initialization_message(&guard.binding),
             },
         );
+        crate::codegen::next_index(next_global_idx)?;
     }
-    crate::codegen::wasm_u32(flags.len())
+    crate::codegen::wasm_u32(guards.len())
 }
 
 /// Before an access to a guarded global, throw unless its binding is
@@ -164,13 +136,12 @@ pub(crate) fn emit_check(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, global
     emitter.emit_end();
 }
 
-/// When `stmt`, a write to `global`, marks the global's binding initialized:
-/// `None` when it doesn't, and the write is checked instead.
-pub(crate) fn mark_at(ctx: &CodegenCtx, global: &MangledName, stmt: StmtId) -> Option<Mark> {
+/// Whether `stmt`, a write to `global`, is its declaration, which marks it
+/// initialized; any other write is checked.
+pub(crate) fn is_declaration(ctx: &CodegenCtx, global: &MangledName, stmt: StmtId) -> bool {
     ctx.symbols
         .init_guard(global)
-        .filter(|flag| flag.marked_by == stmt)
-        .map(|flag| flag.mark)
+        .is_some_and(|flag| flag.declared_by == stmt)
 }
 
 pub(crate) fn emit_mark_initialized(
@@ -195,6 +166,7 @@ fn is_inert(ta: &TypedAst, expr: crate::ExprId) -> Result<bool, CompilerFailure>
         | TypedExprKind::Boolean(_)
         | TypedExprKind::Null
         | TypedExprKind::FunctionRef { .. } => true,
+        // An operator on an object can call its `toString` or `valueOf`.
         TypedExprKind::Unary { operand, .. } => is_primitive_literal(ta, *operand)?,
         TypedExprKind::Binary { lhs, rhs, .. } => {
             is_primitive_literal(ta, *lhs)? && is_primitive_literal(ta, *rhs)?

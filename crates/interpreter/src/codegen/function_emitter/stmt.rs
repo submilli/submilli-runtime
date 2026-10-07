@@ -5,7 +5,7 @@ use crate::codegen::bounds::{
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::init_guard;
 use crate::{
-    EnumVariantPayload, ExprId, Ident, StmtId, Type, TypedStmtKind, TypedSwitchCase,
+    EnumVariantPayload, ExprId, Ident, MangledName, StmtId, Type, TypedStmtKind, TypedSwitchCase,
     TypedSwitchValue,
 };
 use wasm_encoder::{BlockType, HeapType, Instruction, RefType, ValType};
@@ -213,29 +213,7 @@ pub fn emit_statement(
             value,
             ..
         } => {
-            let mark = init_guard::mark_at(ctx, mangled, id);
-            if mark == Some(init_guard::Mark::BeforeValue) {
-                init_guard::emit_mark_initialized(emitter, ctx, mangled);
-            }
-            emit_expr(emitter, ctx, *value)?;
-            let value_ty = ctx
-                .ta
-                .try_expr(*value)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .clone();
-            cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty)?;
-            let idx = ctx.symbols.global_idx(mangled).ok_or_else(|| {
-                crate::codegen::internal_failure("Inferer guarantees the binding exists")
-            })?;
-            // JavaScript checks the binding only once the value is computed.
-            if mark.is_none() {
-                init_guard::emit_check(emitter, ctx, mangled);
-            }
-            emitter.instruction(Instruction::GlobalSet(idx));
-            if mark == Some(init_guard::Mark::AfterStore) {
-                init_guard::emit_mark_initialized(emitter, ctx, mangled);
-            }
+            emit_assign_global(emitter, ctx, id, mangled, target_ty, *value)?;
         }
         TypedStmtKind::AssignField {
             receiver,
@@ -391,6 +369,38 @@ fn emit_operand_once(
     emitter.instruction(Instruction::LocalSet(slot));
     emitter.record_single_evaluation(expr, slot)?;
     Ok(slot)
+}
+
+fn emit_assign_global(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    stmt: StmtId,
+    mangled: &MangledName,
+    target_ty: &Type,
+    value: ExprId,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_expr(emitter, ctx, value)?;
+    let value_ty = ctx
+        .ta
+        .try_expr(value)
+        .map_err(crate::codegen::arena_failure)?
+        .ty
+        .clone();
+    cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty)?;
+    let idx = ctx
+        .symbols
+        .global_idx(mangled)
+        .ok_or_else(|| crate::codegen::internal_failure("Inferer guarantees the binding exists"))?;
+    // JavaScript checks the binding only once the value is computed.
+    let declares = init_guard::is_declaration(ctx, mangled, stmt);
+    if !declares {
+        init_guard::emit_check(emitter, ctx, mangled);
+    }
+    emitter.instruction(Instruction::GlobalSet(idx));
+    if declares {
+        init_guard::emit_mark_initialized(emitter, ctx, mangled);
+    }
+    Ok(())
 }
 
 fn emit_assign_field(
