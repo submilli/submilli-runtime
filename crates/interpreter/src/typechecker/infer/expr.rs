@@ -8646,7 +8646,7 @@ impl Inferer<'_> {
             parts.pop();
             asserts_chain = true;
         }
-        let (kind, ty) = self.infer_chain_steps(base, parts)?;
+        let (kind, ty) = self.infer_chain_steps(base, parts, asserts_chain)?;
         if !asserts_chain {
             return Ok((kind, ty));
         }
@@ -8671,10 +8671,12 @@ impl Inferer<'_> {
     /// `Type::InterfaceRef`; `Index` on `Type::Array`; `Call` on a
     /// closure-typed receiver; `Call` directly after a `Field` resolving to an
     /// interface method (lowered to `MethodCall`); `NonNull` anywhere.
+    /// `asserts_tail`: a `!` follows the chain's last step.
     fn infer_chain_steps(
         &mut self,
         base: ExprId,
         parts: Vec<ChainPart>,
+        asserts_tail: bool,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_base, base_ty) = self.infer_expr(base, None)?;
         // The namespace rejection subsumes the redundancy warning — a namespace
@@ -8709,7 +8711,10 @@ impl Inferer<'_> {
         // A step right under a `!` reads at its declared type, as a reference
         // under a `!` outside a chain does.
         let asserted: Vec<bool> = (0..parts.len())
-            .map(|index| matches!(parts.get(index + 1), Some(ChainPart::NonNull { .. })))
+            .map(|index| match parts.get(index + 1) {
+                Some(next) => matches!(next, ChainPart::NonNull { .. }),
+                None => asserts_tail,
+            })
             .collect();
         for (part, asserted) in parts.into_iter().zip(asserted) {
             if part.is_optional() && short_circuit_span.is_none() {

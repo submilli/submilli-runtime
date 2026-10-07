@@ -22,6 +22,13 @@ function chained(b: Box): string {
   }
   return "skipped";
 }
+function chainEnd(b: Box): string {
+  if (b.v === null) {
+    const s = b?.v!;
+    return s.slice(0);
+  }
+  return "skipped";
+}
 function tryIt(f: () => string): string {
   try { return f(); } catch (e) { return e instanceof TypeError ? "TypeError" : "other"; }
 }
@@ -30,4 +37,5 @@ function main(): void {
   assert(tryIt(global) === "TypeError");
   assert(tryIt(() => field({ v: "x" })) === "TypeError");
   assert(tryIt(() => chained({ v: null })) === "TypeError");
+  assert(tryIt(() => chainEnd({ v: null })) === "TypeError");
 }
