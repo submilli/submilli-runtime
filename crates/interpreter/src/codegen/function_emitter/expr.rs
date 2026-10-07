@@ -559,11 +559,24 @@ fn emit_expr_value(
     };
     // A `never` expression doesn't complete, so what an enclosing expression
     // would do with its value is unreachable: `"a" + fail()` never concatenates.
-    if matches!(expr.ty, Type::Never) && !matches!(expr.kind, TypedExprKind::LocalNarrowRef { .. })
-    {
+    // A read does complete: a `never[]` an alias filled holds elements, as
+    // TypeScript's types allow, so reading one yields what it holds.
+    if matches!(expr.ty, Type::Never) && !is_read(&expr.kind) {
         emitter.instruction(Instruction::Unreachable);
     }
     Ok(())
+}
+
+/// Whether `kind` reads a value already stored, rather than computing one.
+fn is_read(kind: &TypedExprKind) -> bool {
+    matches!(
+        kind,
+        TypedExprKind::LocalNarrowRef { .. }
+            | TypedExprKind::LocalRef { .. }
+            | TypedExprKind::GlobalRef { .. }
+            | TypedExprKind::FieldAccess { .. }
+            | TypedExprKind::IndexAccess { .. }
+    )
 }
 
 fn emit_global_ref(
@@ -2598,8 +2611,8 @@ fn emit_object_spread(
         .symbols
         .prelude_func_idx("ObjectConstructor##spread")
         .ok_or_else(|| crate::codegen::internal_failure("spread helper collected"))?;
-    emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
     let null_object = Instruction::RefNull(HeapType::Concrete(intrinsics.object));
+    emitter.instruction(null_object.clone());
     for (index, source) in sources.iter().enumerate() {
         let last = index + 1 == sources.len();
         // A source `runtime_values` widened may no longer hold what its
@@ -2627,11 +2640,7 @@ fn emit_object_spread(
         let source_local =
             stash_receiver_as_object_shape(emitter, narrowed_ty, intrinsics.object_shape)?;
         emitter.instruction(Instruction::LocalGet(source_local));
-        if last {
-            emit_spread_shape(emitter, ctx, shape);
-        } else {
-            emitter.instruction(null_object.clone());
-        }
+        emit_spread_shape_argument(emitter, ctx, last.then_some(shape), &null_object);
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
             emit_spread_mask(emitter, ctx, source_local, source.expr_id(), shape)?;
         } else {
@@ -2642,17 +2651,27 @@ fn emit_object_spread(
             emitter.emit_else();
             emitter.instruction(Instruction::LocalGet(accumulator));
             emitter.instruction(null_object.clone());
-            if last {
-                emit_spread_shape(emitter, ctx, shape);
-            } else {
-                emitter.instruction(null_object.clone());
-            }
+            emit_spread_shape_argument(emitter, ctx, last.then_some(shape), &null_object);
             emitter.instruction(null_object.clone());
             emitter.instruction(Instruction::Call(merge));
             emitter.emit_end();
         }
     }
     Ok(())
+}
+
+/// The merge's shape argument: the result shape on the last merge, which
+/// restores its optional markers, and null before it.
+fn emit_spread_shape_argument(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    final_shape: Option<&Type>,
+    null_object: &Instruction<'static>,
+) {
+    match final_shape {
+        Some(shape) => emit_spread_shape(emitter, ctx, shape),
+        None => emitter.instruction(null_object.clone()),
+    }
 }
 
 /// Whether a spread source of type `ty` may hold a value with no fields to

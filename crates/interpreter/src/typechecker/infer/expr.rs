@@ -599,18 +599,7 @@ impl Inferer<'_> {
                 return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
             }
             ExprKind::ObjectLiteral { members } => {
-                let lone_spread = matches!(
-                    members.as_slice(),
-                    [crate::ObjectLiteralMember::Spread { .. }]
-                );
-                let errors_before = self.error_count();
-                let (kind, ty) = self.infer_object_literal(expr_id, members, expected, span)?;
-                match expected {
-                    Some(expected) if lone_spread && self.error_count() == errors_before => {
-                        self.spread_as_its_alternatives(kind, ty, expected, span)
-                    }
-                    _ => Ok((kind, ty)),
-                }
+                self.infer_object_literal_expr(expr_id, members, expected, span)
             }
             ExprKind::ArrayLiteral { elements } => {
                 self.infer_array_literal(elements, expected, span)
@@ -4979,112 +4968,6 @@ impl Inferer<'_> {
     /// still checked against the selected variant's field, so it is rejected
     /// rather than mistyped. `None` (defer to the caller's single-shape scan)
     /// for ambiguity or no match.
-    /// `{ ...x }` checked against `expected`, where `x` is a union or a
-    /// conditional. Its alternatives merge into one object type, which may not
-    /// fit `expected` though each alternative does: `{ ...x }` with
-    /// `x: Dict | { a: string }` is a copy of whichever `x` holds. tsc types the
-    /// copy as the union of its alternatives; here the merged object is cast to
-    /// `expected` when every alternative fits it.
-    fn spread_as_its_alternatives(
-        &mut self,
-        kind: TypedExprKind,
-        ty: Type,
-        expected: &Type,
-        span: Span,
-    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let TypedExprKind::ObjectLiteral { members, .. } = &kind else {
-            return Ok((kind, ty));
-        };
-        let [crate::TypedObjectMember::Spread { source, .. }] = members.as_slice() else {
-            return Ok((kind, ty));
-        };
-        if assignable(&ty, expected, self.resolver()) {
-            return Ok((kind, ty));
-        }
-        let source_ty = self
-            .typed_ast
-            .try_expr(*source)
-            .map_err(crate::typechecker::arena_failure)?
-            .ty
-            .clone();
-        let mut alternatives = Vec::new();
-        self.collect_spread_alternatives(*source, &source_ty, &mut alternatives)?;
-        alternatives.retain(|alternative| !is_definitely_falsy(alternative));
-        let every_alternative_fits = alternatives.len() > 1
-            && alternatives
-                .iter()
-                .all(|alternative| assignable(alternative, expected, self.resolver()));
-        if !every_alternative_fits {
-            return Ok((kind, ty));
-        }
-        let copy = self.push_synthetic_expr(kind, ty, span)?;
-        Ok((
-            TypedExprKind::Cast {
-                value: copy,
-                target_ty: expected.clone(),
-                check: None,
-            },
-            expected.clone(),
-        ))
-    }
-
-    /// The hint an object literal takes against a union with a member that has
-    /// an index signature, which no field name can rule out: each field the
-    /// literal writes is hinted with every type a member gives that name. The
-    /// literal is then checked against the union itself. `None` when no member
-    /// has an index signature.
-    fn dictionary_union_hint(
-        &self,
-        members: &[Type],
-        literal: &[crate::ObjectLiteralMember],
-    ) -> Option<Type> {
-        if !members
-            .iter()
-            .any(|member| self.resolver().index_signature(member).is_some())
-        {
-            return None;
-        }
-        let shapes: Vec<(ObjectFields, Option<Type>)> = members
-            .iter()
-            .filter(|member| !matches!(member.peel(), Type::Null))
-            .map(|member| {
-                let index = self
-                    .resolver()
-                    .index_signature(member)
-                    .map(|index| *index.value);
-                (self.member_shape(member).unwrap_or_default(), index)
-            })
-            .collect();
-        let fields = literal
-            .iter()
-            .filter_map(|member| match member {
-                crate::ObjectLiteralMember::Field(field) => Some(field.name.name.as_str()),
-                _ => None,
-            })
-            .filter_map(|name| {
-                let types: Vec<Type> = shapes
-                    .iter()
-                    .filter_map(|(fields, index)| {
-                        fields
-                            .get(name)
-                            .map(|field| field.ty.clone())
-                            .or_else(|| index.clone())
-                    })
-                    .collect();
-                (!types.is_empty()).then(|| {
-                    (
-                        name.to_string(),
-                        crate::ObjectField::required(Type::union(types)),
-                    )
-                })
-            })
-            .collect();
-        Some(Type::Object {
-            index: None,
-            fields,
-        })
-    }
-
     fn select_union_variant<'a>(
         &self,
         members: &'a [Type],
@@ -5120,11 +5003,7 @@ impl Inferer<'_> {
         // A member with an index signature takes any names, so the names alone
         // can't choose between it and another member: `{ a: "on" }` may suit
         // `{ [k: string]: string }` though `{ a: number }` names `a`.
-        if has_spread
-            || members
-                .iter()
-                .any(|member| self.resolver().index_signature(member).is_some())
-        {
+        if has_spread || self.has_index_signature_member(members) {
             return Ok(None);
         }
 
@@ -5159,6 +5038,29 @@ impl Inferer<'_> {
             }
         }
         Ok(selected)
+    }
+
+    /// An object literal, with a lone spread of a union retyped to `expected`
+    /// when each of its alternatives fits (see `spread_as_its_alternatives`).
+    fn infer_object_literal_expr(
+        &mut self,
+        literal: ExprId,
+        members: Vec<crate::ObjectLiteralMember>,
+        expected: Option<&Type>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let lone_spread = matches!(
+            members.as_slice(),
+            [crate::ObjectLiteralMember::Spread { .. }]
+        );
+        let errors_before = self.error_count();
+        let (kind, ty) = self.infer_object_literal(literal, members, expected, span)?;
+        match expected {
+            Some(expected) if lone_spread && self.error_count() == errors_before => {
+                self.spread_as_its_alternatives(kind, ty, expected, span)
+            }
+            _ => Ok((kind, ty)),
+        }
     }
 
     fn infer_object_literal(
@@ -5694,6 +5596,126 @@ impl Inferer<'_> {
                 fields: resolved,
             },
         ))
+    }
+
+    /// The hint an object literal takes against a union with a member that has
+    /// an index signature, which no field name can rule out: each field the
+    /// literal writes is hinted with every type a member gives that name. The
+    /// literal is then checked against the union itself. `None` when no member
+    /// has an index signature.
+    fn dictionary_union_hint(
+        &self,
+        members: &[Type],
+        literal: &[crate::ObjectLiteralMember],
+    ) -> Option<Type> {
+        if !self.has_index_signature_member(members) {
+            return None;
+        }
+        let shapes: Vec<(ObjectFields, Option<Type>)> = members
+            .iter()
+            .filter(|member| !matches!(member.peel(), Type::Null))
+            .map(|member| {
+                let index = self
+                    .resolver()
+                    .index_signature(member)
+                    .map(|index| *index.value);
+                (self.member_shape(member).unwrap_or_default(), index)
+            })
+            .collect();
+        let fields = literal
+            .iter()
+            .filter_map(|member| match member {
+                crate::ObjectLiteralMember::Field(field) => Some(field.name.name.as_str()),
+                _ => None,
+            })
+            .filter_map(|name| {
+                let types: Vec<Type> = shapes
+                    .iter()
+                    .filter_map(|(fields, index)| {
+                        fields
+                            .get(name)
+                            .map(|field| field.ty.clone())
+                            .or_else(|| index.clone())
+                    })
+                    .collect();
+                (!types.is_empty()).then(|| {
+                    (
+                        name.to_string(),
+                        crate::ObjectField::required(Type::union(types)),
+                    )
+                })
+            })
+            .collect();
+        Some(Type::Object {
+            index: None,
+            fields,
+        })
+    }
+
+    /// `{ ...x }` checked against `expected`, where `x` is a union or a
+    /// conditional. Its alternatives merge into one object type, which may not
+    /// fit `expected` though each alternative does: `{ ...x }` with
+    /// `x: Dict | { a: string }` is a copy of whichever `x` holds. tsc types the
+    /// copy as the union of its alternatives; here the merged object is cast to
+    /// `expected` when every alternative fits it.
+    fn spread_as_its_alternatives(
+        &mut self,
+        kind: TypedExprKind,
+        ty: Type,
+        expected: &Type,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let TypedExprKind::ObjectLiteral { members, .. } = &kind else {
+            return Ok((kind, ty));
+        };
+        let [crate::TypedObjectMember::Spread { source, .. }] = members.as_slice() else {
+            return Ok((kind, ty));
+        };
+        if assignable(&ty, expected, self.resolver()) {
+            return Ok((kind, ty));
+        }
+        let source_ty = self
+            .typed_ast
+            .try_expr(*source)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty
+            .clone();
+        let mut alternatives = Vec::new();
+        self.collect_spread_alternatives(*source, &source_ty, &mut alternatives)?;
+        // A falsy alternative copies nothing, so it stands for `{}`.
+        let empty = Type::Object {
+            index: None,
+            fields: ObjectFields::new(),
+        };
+        let every_alternative_fits = alternatives.len() > 1
+            && alternatives.iter().all(|alternative| {
+                let copied = if is_definitely_falsy(alternative) {
+                    &empty
+                } else {
+                    alternative
+                };
+                assignable(copied, expected, self.resolver())
+            });
+        if !every_alternative_fits {
+            return Ok((kind, ty));
+        }
+        let copy = self.push_synthetic_expr(kind, ty, span)?;
+        Ok((
+            TypedExprKind::Cast {
+                value: copy,
+                target_ty: expected.clone(),
+                check: None,
+            },
+            expected.clone(),
+        ))
+    }
+
+    /// Whether a member of a union has an index signature, which backs any
+    /// field name.
+    fn has_index_signature_member(&self, members: &[Type]) -> bool {
+        members
+            .iter()
+            .any(|member| self.resolver().index_signature(member).is_some())
     }
 
     /// The fields a spread copies, and whether they must be found by name at
@@ -6895,85 +6917,6 @@ impl Inferer<'_> {
         self.infer_property_access(receiver, name, span)
     }
 
-    /// `u.length` where `u` is a union of strings with arrays or tuples, which
-    /// have no shared representation: `typeof u === "string"` picks the
-    /// string's length or the array's, with `u` evaluated once.
-    fn string_or_array_length(
-        &mut self,
-        typed_receiver: ExprId,
-        arrays: Type,
-        name: Ident,
-        span: Span,
-    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let mut stmts = Vec::new();
-        let held = self.hold_in_temp(typed_receiver, "length_receiver", &mut stmts)?;
-        let is_string = self.push_synthetic_expr(
-            TypedExprKind::TypeofTag {
-                value: held,
-                tag: crate::TypeofTagKind::String,
-            },
-            Type::Boolean,
-            span,
-        )?;
-        let string_length = self.narrowed_length(held, Type::String, &name, span)?;
-        let array_length = self.narrowed_length(held, arrays, &name, span)?;
-        let result = self.push_synthetic_expr(
-            TypedExprKind::Ternary {
-                cond: is_string,
-                then_: string_length,
-                else_: array_length,
-            },
-            Type::Number,
-            span,
-        )?;
-        Ok((TypedExprKind::Sequence { stmts, result }, Type::Number))
-    }
-
-    /// `(held as narrowed).length`, for a `held` known to hold `narrowed`.
-    fn narrowed_length(
-        &mut self,
-        held: ExprId,
-        narrowed: Type,
-        name: &Ident,
-        span: Span,
-    ) -> Result<ExprId, CompilerFailure> {
-        let Some((_, _, iface, _)) = self.lookup_interface_property(&narrowed, &name.name) else {
-            return Err(super::inference_failure(&format!(
-                "`{narrowed}` has no `length` property"
-            )));
-        };
-        let value = self.reread_temp(held)?;
-        let receiver = self.push_synthetic_expr(
-            TypedExprKind::Cast {
-                value,
-                target_ty: narrowed.clone(),
-                check: None,
-            },
-            narrowed,
-            span,
-        )?;
-        self.push_synthetic_expr(
-            TypedExprKind::InterfacePropertyAccess {
-                receiver,
-                iface,
-                name: name.clone(),
-            },
-            Type::Number,
-            span,
-        )
-    }
-
-    fn push_synthetic_expr(
-        &mut self,
-        kind: TypedExprKind,
-        ty: Type,
-        span: Span,
-    ) -> Result<ExprId, CompilerFailure> {
-        self.typed_ast
-            .try_push_expr(TypedExpr { kind, span, ty })
-            .map_err(crate::typechecker::arena_failure)
-    }
-
     fn infer_property_access(
         &mut self,
         receiver: ExprId,
@@ -7187,6 +7130,85 @@ impl Inferer<'_> {
             },
             field_ty,
         ))
+    }
+
+    /// `u.length` where `u` is a union of strings with arrays or tuples, which
+    /// have no shared representation: `typeof u === "string"` picks the
+    /// string's length or the array's, with `u` evaluated once.
+    fn string_or_array_length(
+        &mut self,
+        typed_receiver: ExprId,
+        arrays: Type,
+        name: Ident,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let mut stmts = Vec::new();
+        let held = self.hold_in_temp(typed_receiver, "length_receiver", &mut stmts)?;
+        let is_string = self.push_synthetic_expr(
+            TypedExprKind::TypeofTag {
+                value: held,
+                tag: crate::TypeofTagKind::String,
+            },
+            Type::Boolean,
+            span,
+        )?;
+        let string_length = self.narrowed_length(held, Type::String, &name, span)?;
+        let array_length = self.narrowed_length(held, arrays, &name, span)?;
+        let result = self.push_synthetic_expr(
+            TypedExprKind::Ternary {
+                cond: is_string,
+                then_: string_length,
+                else_: array_length,
+            },
+            Type::Number,
+            span,
+        )?;
+        Ok((TypedExprKind::Sequence { stmts, result }, Type::Number))
+    }
+
+    /// `(held as narrowed).length`, for a `held` known to hold `narrowed`.
+    fn narrowed_length(
+        &mut self,
+        held: ExprId,
+        narrowed: Type,
+        name: &Ident,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        let Some((_, _, iface, _)) = self.lookup_interface_property(&narrowed, &name.name) else {
+            return Err(super::inference_failure(&format!(
+                "`{narrowed}` has no `length` property"
+            )));
+        };
+        let value = self.reread_temp(held)?;
+        let receiver = self.push_synthetic_expr(
+            TypedExprKind::Cast {
+                value,
+                target_ty: narrowed.clone(),
+                check: None,
+            },
+            narrowed,
+            span,
+        )?;
+        self.push_synthetic_expr(
+            TypedExprKind::InterfacePropertyAccess {
+                receiver,
+                iface,
+                name: name.clone(),
+            },
+            Type::Number,
+            span,
+        )
+    }
+
+    fn push_synthetic_expr(
+        &mut self,
+        kind: TypedExprKind,
+        ty: Type,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        self.typed_ast
+            .try_push_expr(TypedExpr { kind, span, ty })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     fn infer_index_access(
@@ -11323,7 +11345,7 @@ fn fields_with_missing<'a>(
     for name in names {
         fields
             .entry(name.clone())
-            .or_insert_with(|| crate::ObjectField::optional(Type::Null));
+            .or_insert_with(|| crate::ObjectField::optional(Type::Never));
     }
     fields
 }
@@ -11336,11 +11358,12 @@ fn holds_empty_array_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, Com
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
             ExprKind::ArrayLiteral { elements } if elements.is_empty() => true,
             ExprKind::ArrayLiteral { elements } => {
-                elements.iter().try_fold(false, |found, element| {
-                    Ok::<_, CompilerFailure>(
-                        found || holds_empty_array_literal(ast, element.value())?,
-                    )
-                })?
+                for element in elements {
+                    if holds_empty_array_literal(ast, element.value())? {
+                        return Ok(true);
+                    }
+                }
+                false
             }
             ExprKind::Ternary { then_, else_, .. } => {
                 holds_empty_array_literal(ast, *then_)? || holds_empty_array_literal(ast, *else_)?

@@ -964,8 +964,7 @@ fn assignable_rec(
                     if a_field.optional && !e_field.optional {
                         return false;
                     }
-                    is_absent_field(a_field) && e_field.optional
-                        || assignable_rec(&a_field.ty, &e_field.ty, types, seen)
+                    assignable_rec(&a_field.ty, &e_field.ty, types, seen)
                 }
                 None => e_field.optional,
             })
@@ -1681,12 +1680,4 @@ mod tests {
             "method iface -> object"
         );
     }
-}
-
-/// An optional field that can only be absent or `null`, as array literal
-/// normalization adds for a field only other elements name (tsc's `b?:
-/// undefined`). Reading an optional field through any type already gives
-/// `null` for an absent one, so it fits any optional field, as in tsc.
-fn is_absent_field(field: &crate::ObjectField) -> bool {
-    field.optional && matches!(field.ty, Type::Null)
 }

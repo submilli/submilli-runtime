@@ -262,15 +262,7 @@ impl Inferer<'_> {
                     match self.object_rest(typed_source, &source_ty, &exclude, span)? {
                         Some(rest) => rest,
                         None => {
-                            if !matches!(source_ty.peel(), Type::Error) {
-                                self.error(
-                                    span,
-                                    format!(
-                                        "object rest can only destructure an object with a known \
-                                     shape; source has type `{source_ty}`",
-                                    ),
-                                );
-                            }
+                            self.report_unshaped_rest_source(&source_ty, span);
                             (typed_source, Type::Error)
                         }
                     };
@@ -297,6 +289,19 @@ impl Inferer<'_> {
                 })
                 .map_err(crate::typechecker::arena_failure)?,
         ))
+    }
+
+    fn report_unshaped_rest_source(&mut self, source_ty: &Type, span: Span) {
+        if matches!(source_ty.peel(), Type::Error) {
+            return;
+        }
+        self.error(
+            span,
+            format!(
+                "object rest can only destructure an object with a known shape; source has \
+                 type `{source_ty}`",
+            ),
+        );
     }
 
     fn infer_return(

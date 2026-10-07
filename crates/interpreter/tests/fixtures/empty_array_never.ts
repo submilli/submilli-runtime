@@ -1,5 +1,9 @@
 // An unannotated `[]` holds no element, so it is `never[]`, as in tsc: it can be
 // read, iterated, spread and nested, and fits any array type it meets later.
+function fill(list: number[]): void {
+  list.push(41);
+}
+
 function main(): void {
   let visits = 0;
   for (const v of []) {
@@ -23,4 +27,8 @@ function main(): void {
   const make = () => [];
   assert(box.items.length === 0 && make().length === 0, "[] in a field or returned");
   assert([].join("-") === "" && `${[]}` === "", "[] joins to an empty string");
+
+  const filled = { list: [] };
+  fill(filled.list);
+  assert(filled.list.length === 1, "a never[] another type fills holds what it was given");
 }
