@@ -10995,6 +10995,10 @@ fn has_to_string(ty: &Type) -> bool {
             // Class instances answer `toString` through vtable slot 0
             // (a user method fills it, else "[object Object]").
             | Type::ClassRef { .. }
+            // An interface value is an object, whose vtable answers `toString`
+            // whether the interface declares it as a method, a function-typed
+            // property, or not at all.
+            | Type::InterfaceRef { .. }
             | Type::TypeVar(_)
             | Type::GenericParam { .. }
             | Type::Unknown
