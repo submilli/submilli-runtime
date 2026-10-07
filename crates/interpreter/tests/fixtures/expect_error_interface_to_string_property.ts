@@ -30,4 +30,16 @@ interface Fixed {
   toString: () => "fixed";
 }
 
+type Side = "l" | "r";
+interface Sided {
+  toString: () => Side;
+}
+
+enum Color {
+  Red = "red",
+}
+interface Colored {
+  toJson: () => Color;
+}
+
 function main(): void {}

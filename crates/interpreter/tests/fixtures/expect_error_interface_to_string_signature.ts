@@ -11,4 +11,12 @@ function describe(n: Numbered): number {
   return n.toString();
 }
 
+// Any string subtype is a string, so a narrower return type is allowed.
+type Side = "l" | "r";
+class Sided {
+  toString(): Side {
+    return "l";
+  }
+}
+
 function main(): void {}

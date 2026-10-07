@@ -331,7 +331,7 @@ impl<'a> Inferer<'a> {
         if !matches!(name.name.as_str(), "toString" | "toJson") {
             return;
         }
-        if params.is_empty() && generics.is_empty() && matches!(ret.peel(), crate::Type::String) {
+        if params.is_empty() && generics.is_empty() && self.returns_string(ret) {
             return;
         }
         self.error_with_help(
@@ -357,18 +357,7 @@ impl<'a> Inferer<'a> {
         let Some(expected) = super::reserved::override_field_signature(&name.name) else {
             return;
         };
-        if let crate::Type::Function {
-            params,
-            ret,
-            has_rest: false,
-            ..
-        } = ty.peel()
-            && params.is_empty()
-            && matches!(
-                ret.peel(),
-                crate::Type::String | crate::Type::StringLiteral(_) | crate::Type::Never
-            )
-        {
+        if self.is_conversion_function(ty) {
             return;
         }
         self.error(
@@ -378,6 +367,29 @@ impl<'a> Inferer<'a> {
                 name.name
             ),
         );
+    }
+
+    /// Whether `ty` is a function the conversions can call: no parameters and
+    /// a return that is always a string.
+    fn is_conversion_function(&self, ty: &crate::Type) -> bool {
+        let crate::Type::Function {
+            params,
+            ret,
+            has_rest: false,
+            ..
+        } = ty.peel()
+        else {
+            return false;
+        };
+        params.is_empty() && self.returns_string(ret)
+    }
+
+    /// Whether a conversion returning `ret` always yields a string. Any string
+    /// subtype qualifies, as it does for an assignment; a type parameter
+    /// doesn't, since an instance may bind it to a non-string.
+    fn returns_string(&self, ret: &crate::Type) -> bool {
+        !mentions_generic_param(ret)
+            && super::assignable(ret, &crate::Type::String, self.resolver())
     }
 
     pub(super) fn bind_interface(
@@ -994,6 +1006,15 @@ fn without_type_vars(ty: &Type) -> Option<Type> {
             (!concrete.is_empty()).then(|| Type::union(concrete))
         }
         _ => Some(ty.clone()),
+    }
+}
+
+/// Whether `ty` is a type parameter or a union with one among its members.
+fn mentions_generic_param(ty: &crate::Type) -> bool {
+    match ty.peel() {
+        crate::Type::TypeVar(_) | crate::Type::GenericParam { .. } => true,
+        crate::Type::Union(members) => members.iter().any(mentions_generic_param),
+        _ => false,
     }
 }
 
