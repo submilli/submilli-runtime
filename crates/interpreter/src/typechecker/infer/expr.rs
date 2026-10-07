@@ -754,7 +754,7 @@ impl Inferer<'_> {
         // reject as expected.
         if let Some(want) = expected
             && !arrow_reported
-            && !self.arguments_with_replaceable_hints.contains(&expr_id)
+            && !self.values_with_guiding_hints.contains(&expr_id)
             && !assignable(&ty, want, self.resolver())
         {
             let has_structural_diff = self
@@ -5211,11 +5211,18 @@ impl Inferer<'_> {
                         ty: value_ty,
                         already_errored,
                         rejected_void,
-                    } = self.infer_value_operand(
+                    } = self.infer_argument_slot_value(
+                        literal,
+                        &field.name.name,
                         field.value,
-                        hint.as_ref(),
-                        ValuePosition::FieldValue,
-                        inferred_fields.remove(&field.value),
+                        |this| {
+                            this.infer_value_operand(
+                                field.value,
+                                hint.as_ref(),
+                                ValuePosition::FieldValue,
+                                inferred_fields.remove(&field.value),
+                            )
+                        },
                     )?;
                     self.object_this_hint = previous_hint;
                     let in_type_parameter_position = expected_field_ty
@@ -6393,7 +6400,9 @@ impl Inferer<'_> {
         let index = index.to_string();
         let hint = self.argument_slot_hint(literal, &index);
         let (typed_id, elem_ty) =
-            self.infer_expr(elem_id, Some(hint.as_ref().unwrap_or(expected_ty)))?;
+            self.infer_argument_slot_value(literal, &index, elem_id, |this| {
+                this.infer_expr(elem_id, Some(hint.as_ref().unwrap_or(expected_ty)))
+            })?;
         // Unbound generic-param slots take the inferred element type —
         // `new Map([["a", 1]])` must report `[string, number]`, not
         // `[K, V]`, so the call site can bind K and V.

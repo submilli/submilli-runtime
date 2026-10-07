@@ -1294,18 +1294,41 @@ impl Inferer<'_> {
             .as_ref()
             .filter(|inference| inference.literal == literal)?;
         let slot = inference.slots.get(name)?;
-        // A slot typed as a bare type parameter may still widen an earlier
-        // field's candidate (`{ v: new Dog(), w: new Animal() }`), so its
-        // value is not held to it.
-        let mut sub = if matches!(slot.ty.peel(), Type::TypeVar(_)) {
-            inference.sub.without_widenable_bindings()
-        } else {
-            inference.sub.clone()
-        };
+        let mut sub = inference.sub.clone();
         if let Some(Type::Function { params, .. }) = function_part(&slot.ty) {
             sub.bind_whole_union_fallbacks_in(params);
         }
         Some(sub.apply_or_record(&slot.ty, &self.type_limits))
+    }
+
+    /// Infer `value`, the value of slot `name` of `literal`, with `infer`.
+    /// A slot typed as a bare type parameter bound to a candidate may still
+    /// widen it (`{ v: new Dog(), w: new Animal() }`), so the candidate only
+    /// guides the value's inference, as tsc's contextual type does.
+    pub(super) fn infer_argument_slot_value<R>(
+        &mut self,
+        literal: ExprId,
+        name: &str,
+        value: ExprId,
+        infer: impl FnOnce(&mut Self) -> Result<R, CompilerFailure>,
+    ) -> Result<R, CompilerFailure> {
+        let guiding = self
+            .literal_argument_inference
+            .as_ref()
+            .filter(|inference| inference.literal == literal)
+            .and_then(|inference| {
+                let Type::TypeVar(var) = inference.slots.get(name)?.ty.peel() else {
+                    return None;
+                };
+                Some(inference.sub.is_widenable(var))
+            })
+            .unwrap_or(false);
+        if !guiding || !self.values_with_guiding_hints.insert(value) {
+            return infer(self);
+        }
+        let inferred = infer(self);
+        self.values_with_guiding_hints.remove(&value);
+        inferred
     }
 
     /// Whether a function literal in a field of `literal` typed `field_ty`
@@ -1425,7 +1448,10 @@ impl Inferer<'_> {
             self.next_function_keeps_returned_literals =
                 self.field_keeps_returned_literals(literal, expected_field_ty);
             let errors_before = self.error_count();
-            let (typed_value, value_ty) = self.infer_expr(field.value, hint.as_ref())?;
+            let (typed_value, value_ty) =
+                self.infer_argument_slot_value(literal, name, field.value, |this| {
+                    this.infer_expr(field.value, hint.as_ref())
+                })?;
             self.next_function_keeps_returned_literals = false;
             let errored = self.error_count() > errors_before;
             let unified_ty =
@@ -1696,7 +1722,7 @@ impl Inferer<'_> {
         let hint = self.literal_argument_hint(arg_id, hint, arguments.inferred_generics)?;
         let hinted_by_replaceable_binding = sub.mentions_replaceable_binding(param_ty);
         if hinted_by_replaceable_binding {
-            self.arguments_with_replaceable_hints.insert(arg_id);
+            self.values_with_guiding_hints.insert(arg_id);
         }
         let enclosing = self.start_literal_argument_inference(arg_id, param_ty, sub)?;
         let enclosing_fields = self
@@ -1716,7 +1742,7 @@ impl Inferer<'_> {
         );
         self.finish_literal_argument_inference(enclosing, sub);
         self.fields_keeping_returned_literals = enclosing_fields;
-        self.arguments_with_replaceable_hints.remove(&arg_id);
+        self.values_with_guiding_hints.remove(&arg_id);
         let (typed_id, arg_ty) = inferred?;
         if keeps_literal {
             self.record_kept_literal_argument(typed_id);

@@ -306,13 +306,9 @@ impl TypeParamSubstitution {
         loose
     }
 
-    /// These bindings without the candidates a later argument may still widen.
-    pub fn without_widenable_bindings(&self) -> TypeParamSubstitution {
-        let mut loose = self.clone();
-        loose
-            .bindings
-            .retain(|name, _| !self.widenable.contains(name));
-        loose
+    /// Whether `name` is bound to a candidate a later argument may widen.
+    pub fn is_widenable(&self, name: &str) -> bool {
+        self.widenable.contains(name)
     }
 
     fn is_candidate_binding(&self, name: &str) -> bool {
@@ -1247,7 +1243,8 @@ impl<'a> Unifier<'a> {
     /// a candidate a later argument may still widen, or to the expected
     /// result's hint an argument replaces: the members that fit
     /// none of the concrete siblings are one more candidate, as tsc infers
-    /// them. `orNullD(5, pick)` with `pick: 1 | 2` widens `T` to `number`
+    /// them. `orDefault(5, pick)` with `orDefault<T>(fallback: T, value: T | null)`
+    /// and `pick: 1 | 2` widens `T` to `number`
     /// from `1 | 2`, rather than pairing `2` with `null`. `None` when the
     /// parameter has another shape or every member fits a sibling.
     #[allow(clippy::result_large_err)]

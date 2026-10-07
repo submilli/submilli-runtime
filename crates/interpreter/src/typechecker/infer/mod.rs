@@ -165,7 +165,7 @@ pub fn infer_with_transitive_checked<'a>(
         current_type_predicate: None,
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
-        arguments_with_replaceable_hints: BTreeSet::new(),
+        values_with_guiding_hints: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
@@ -436,7 +436,7 @@ pub fn infer_package_checked<'a>(
         current_type_predicate: None,
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
-        arguments_with_replaceable_hints: BTreeSet::new(),
+        values_with_guiding_hints: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
@@ -861,11 +861,12 @@ pub(super) struct Inferer<'a> {
     /// Object literals inferred for their own type rather than checked against
     /// a declared one; see [`inference_sources`].
     pub(super) inference_source_literals: BTreeSet<crate::ExprId>,
-    /// Call arguments whose expected type comes partly from a binding an
-    /// argument may replace (the call's own expected result), so it guides
-    /// their inference without being a requirement:
-    /// an argument that doesn't fit it decides the type parameter instead.
-    pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
+    /// Call arguments and literal argument slots whose expected type comes
+    /// partly from a binding they may replace or widen (the call's own
+    /// expected result, or an earlier value's candidate), so it guides their
+    /// inference without being a requirement: a value that doesn't fit it
+    /// decides the type parameter instead.
+    pub(super) values_with_guiding_hints: BTreeSet<crate::ExprId>,
     /// The object or tuple literal argument whose slots a generic call is
     /// inferring one at a time; see [`generic::LiteralArgumentInference`].
     pub(super) literal_argument_inference: Option<generic::LiteralArgumentInference>,

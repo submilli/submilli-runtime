@@ -278,10 +278,12 @@ impl Inferer<'_> {
     }
 
     /// The type a generic call's result `ty` is reported at when it doesn't
-    /// fit `expected`: tsc widens the fresh literals an argument kept unless
+    /// fit `expected`: the fresh literals an argument kept are widened unless
     /// the expected type names a literal of their kind, so `const n: number
     /// = orNull(5)` reports `number | null`, where `const w: 1 | string =
-    /// first(1, 2)` reports `1 | 2`.
+    /// first(1, 2)` reports `1 | 2`, as tsc does. tsc keeps them in a few
+    /// more cases (`const c: "x" = id(1)` reports `1`); only the message
+    /// differs there.
     pub(super) fn reported_result_type(
         &self,
         kind: &TypedExprKind,

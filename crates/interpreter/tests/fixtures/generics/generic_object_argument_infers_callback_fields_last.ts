@@ -44,6 +44,15 @@ function track<V>(tag: string, v: V): V {
   return v;
 }
 
+function both<T>(o: { v: T; w: T }): T {
+  return o.v;
+}
+
+function later<T>(a: T, o: { cb: (t: T) => number; w: T }): T {
+  o.cb(a);
+  return o.w;
+}
+
 function main(): void {
   const picked = pick({ a: new Box(1), cb: (t) => t, z: either(true) });
   const boxes: Box<string> | Box<number> | null = picked;
@@ -55,4 +64,9 @@ function main(): void {
   assert(text === "abc" && animal.name === "a", "fields before the callback");
   const unexpected = common({ v: new Dog(), cb: (t) => t.name, w: new Animal() });
   assert(unexpected.name === "a", "a later field widens an earlier one");
+  const doubled = both({ v: (x: number) => x, w: (x) => x * 2 });
+  const lists = common({ v: [1], cb: (t) => `${t.length}`, w: [] });
+  const map = later(new Map<string, number>(), { cb: (t) => t.size, w: new Map() });
+  map.set("k", 1);
+  assert(doubled(2) === 2 && lists.length === 1 && map.size === 1, "an earlier binding types a later field");
 }

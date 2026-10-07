@@ -1,9 +1,14 @@
-// Each level of a deep chain also refers back to its first interface, so a
-// level measured while that first interface is still being measured skips
-// the reference; it is remembered for the rest of that measurement, which
-// keeps the comparison linear and still finds `T` contravariant at the end.
+// Each level of a deep chain also refers back to its first interface. A level
+// measured while that interface is still being measured is remembered for as
+// long as what it assumed about the interface holds, which keeps the
+// comparison linear and still finds `T` contravariant at the end.
+// A declaration that refers back to itself, directly or through another, in
+// a flipped position is measured again until its variances settle, so `T`
+// is invariant in `S` and `P`.
 // expect-error: expected `L5<number>`, got `L5<1>`
-// expect-error-count: 1
+// expect-error: expected `S<number>`, got `S<1>`
+// expect-error: expected `P<number>`, got `P<1>`
+// expect-error-count: 3
 interface L0<T> {
   a: L1<T>;
   b: L1<T>;
@@ -156,6 +161,32 @@ function wider(v: L5<number | string>): void {
 
 function narrower(v: L5<1>): void {
   take(v);
+}
+
+interface S<T> {
+  get: () => T;
+  cmp: (o: S<T>) => void;
+}
+
+interface P<T> {
+  get: () => T;
+  q: Q<T>;
+}
+
+interface Q<T> {
+  cmp: (o: P<T>) => void;
+}
+
+function takeS(v: S<number>): void {}
+
+function narrowerS(v: S<1>): void {
+  takeS(v);
+}
+
+function takeP(v: P<number>): void {}
+
+function narrowerP(v: P<1>): void {
+  takeP(v);
 }
 
 function main(): void {}
