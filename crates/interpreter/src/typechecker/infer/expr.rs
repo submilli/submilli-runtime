@@ -6126,9 +6126,28 @@ impl Inferer<'_> {
                     self.is_fully_annotated_function(id)?
                 }
                 ExprKind::ObjectLiteral { .. } => !self.needs_hint(id)?,
+                ExprKind::New {
+                    callee, type_args, ..
+                } => type_args.is_some() || self.names_non_generic_class(*callee)?,
                 _ => false,
             },
         )
+    }
+
+    /// Whether `callee` names a class without type parameters, whose `new`
+    /// takes nothing from a hint.
+    fn names_non_generic_class(&self, callee: ExprId) -> Result<bool, CompilerFailure> {
+        let ExprKind::Identifier(ident) = &self
+            .ast
+            .try_expr(callee)
+            .map_err(super::arena_failure)?
+            .kind
+        else {
+            return Ok(false);
+        };
+        Ok(self.lookup_named_type(&ident.name).is_some_and(|symbol| {
+            matches!(&symbol.kind, crate::TypeKind::Class { generics, .. } if generics.is_empty())
+        }))
     }
 
     /// Whether an expression needs a hint to be typed. Leaves that type themselves
@@ -10683,10 +10702,10 @@ fn object_literal_normalization(
         let crate::ArrayLiteralElement::Value(id) = element else {
             return Ok(None);
         };
-        let Some(fields) = fresh_object_fields(ast, *id)? else {
+        let Some(literals) = fresh_object_choices(ast, *id)? else {
             return Ok(None);
         };
-        for field in fields {
+        for field in literals.into_iter().flatten() {
             let names = if is_fresh_object(ast, field.value)? {
                 &mut fresh
             } else {
@@ -10716,6 +10735,29 @@ fn fresh_object_fields(
             _ => None,
         })
         .collect())
+}
+
+/// The fields of each fresh object literal `expr` may evaluate to: itself, or
+/// each branch of a conditional choosing between such literals. `None` when it
+/// may evaluate to anything else.
+fn fresh_object_choices(
+    ast: &crate::Ast,
+    expr: ExprId,
+) -> Result<Option<Vec<Vec<&crate::ObjectLiteralField>>>, CompilerFailure> {
+    let id = peel_parens(ast, expr)?;
+    if let ExprKind::Ternary { then_, else_, .. } =
+        &ast.try_expr(id).map_err(super::arena_failure)?.kind
+    {
+        let (Some(mut choices), Some(others)) = (
+            fresh_object_choices(ast, *then_)?,
+            fresh_object_choices(ast, *else_)?,
+        ) else {
+            return Ok(None);
+        };
+        choices.extend(others);
+        return Ok(Some(choices));
+    }
+    Ok(fresh_object_fields(ast, id)?.map(|fields| vec![fields]))
 }
 
 /// Whether the object literal `expr` names exactly the fields of `running`, a
