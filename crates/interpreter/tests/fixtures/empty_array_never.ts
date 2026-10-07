@@ -38,4 +38,7 @@ function main(): void {
     seen.push(item);
   }
   assert(seen.join(",") === "41", "iterating the elements it was given");
+  const shown = `${filled.list[0]}`;
+  assert(shown.length === 2 && shown === "41", "interpolating an element it was given");
+  assert(`${filled.list[0]}${filled.list[0]}` === "4141", "interpolations concatenate as strings");
 }

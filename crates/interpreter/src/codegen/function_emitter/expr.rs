@@ -561,16 +561,18 @@ fn emit_expr_value(
     // would do with its value is unreachable: `"a" + fail()` never concatenates.
     // A read does complete: a `never[]` an alias filled holds elements, as
     // TypeScript's types allow, so reading one yields what it holds.
-    if matches!(expr.ty, Type::Never) && !is_read(&expr.kind) {
+    if matches!(expr.ty, Type::Never) && !completes_when_never(&expr.kind) {
         emitter.instruction(Instruction::Unreachable);
     }
     Ok(())
 }
 
-/// Whether `kind` reads a value stored in an object or array, rather than
-/// computing one. A `never` binding stays unreachable: its initializer or the
-/// call that bound it diverged.
-fn is_read(kind: &TypedExprKind) -> bool {
+/// Whether a `never`-typed `kind` still yields a value or settles its own
+/// reachability. A field or element read yields what the object or array
+/// holds; a narrowed reference emits its own `unreachable` when it is `never`.
+/// A `never` binding stays unreachable: its initializer or the call that bound
+/// it diverged.
+fn completes_when_never(kind: &TypedExprKind) -> bool {
     matches!(
         kind,
         TypedExprKind::LocalNarrowRef { .. }

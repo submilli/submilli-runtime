@@ -4633,9 +4633,13 @@ impl Inferer<'_> {
         substitution_span: Span,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
         let peeled = ty.primitive_behavior();
-        // A `never` value is never read: the code holding it doesn't run.
-        if matches!(peeled, Type::String | Type::StringLiteral(_) | Type::Never) {
+        if matches!(peeled, Type::String | Type::StringLiteral(_)) {
             return Ok(expr_id);
+        }
+        // A `never` value has no `toString` to call, yet a read of a `never[]`
+        // an alias filled holds one, so it converts as `"" + value` does.
+        if matches!(peeled, Type::Never) {
+            return self.concatenated_onto_empty_string(expr_id, substitution_span);
         }
         let method_name = crate::Ident {
             name: "toString".to_string(),
@@ -4729,6 +4733,33 @@ impl Inferer<'_> {
                 } else {
                     Type::String
                 },
+            })
+            .map_err(crate::typechecker::arena_failure)
+    }
+
+    /// `"" + value`, the string `value` converts to.
+    fn concatenated_onto_empty_string(
+        &mut self,
+        value: ExprId,
+        span: Span,
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+        let empty = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::String(String::new()),
+                span,
+                ty: Type::String,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op: BinOp::Add,
+                    lhs: empty,
+                    rhs: value,
+                },
+                span,
+                ty: Type::String,
             })
             .map_err(crate::typechecker::arena_failure)
     }
@@ -5683,23 +5714,18 @@ impl Inferer<'_> {
         let mut alternatives = Vec::new();
         self.collect_spread_alternatives(*source, &source_ty, &mut alternatives)?;
         // A falsy alternative copies nothing, so it stands for `{}`.
+        let (falsy, copying): (Vec<&Type>, Vec<&Type>) = alternatives
+            .iter()
+            .partition(|alternative| is_definitely_falsy(alternative));
         let empty = Type::Object {
             index: None,
             fields: ObjectFields::new(),
         };
-        let objects = alternatives
-            .iter()
-            .filter(|alternative| !is_definitely_falsy(alternative))
-            .count();
-        let every_alternative_fits = objects > 1
-            && alternatives.iter().all(|alternative| {
-                let copied = if is_definitely_falsy(alternative) {
-                    &empty
-                } else {
-                    alternative
-                };
-                assignable(copied, expected, self.resolver())
-            });
+        let every_alternative_fits = copying.len() > 1
+            && copying
+                .iter()
+                .all(|alternative| assignable(alternative, expected, self.resolver()))
+            && (falsy.is_empty() || assignable(&empty, expected, self.resolver()));
         if !every_alternative_fits {
             return Ok((kind, ty));
         }
@@ -11242,9 +11268,9 @@ fn nested_field_types<'a>(
 
 /// tsc's normalized union of object literal types: each member gains, as an
 /// optional `never` field (tsc's `?: undefined`), every field only other
-/// members declare, so any of
-/// them reads from the union. Each of `nested_fields` that holds objects in
-/// every member that has it is normalized the same way, one level down.
+/// members declare, so any of them reads from the union. Each of
+/// `nested_fields` that holds objects in every member that has it is
+/// normalized the same way, one level down.
 /// `None` unless both sides are index-free objects.
 fn normalized_object_union(
     left: &Type,

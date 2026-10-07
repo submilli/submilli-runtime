@@ -33,6 +33,10 @@ function pick(flag: boolean, circle: Shape, square: Shape): Shape {
   return { ...(flag ? circle : square) };
 }
 
+function found(n: number): Shape | null {
+  return n > 0 ? { kind: "circle", r: n } : n < 0 ? { kind: "square", side: -n } : null;
+}
+
 function main(): void {
   const circle = copy({ kind: "circle", r: 2 });
   assert(area(circle) === 12, "a discriminated union copy narrows");
@@ -50,4 +54,10 @@ function main(): void {
   assert(JSON.stringify(keep({ z: 5 })) === '{"z":5}', "the dictionary alternative");
   assert(JSON.stringify(optional({ a: "t" })) === '{"a":"t"}', "a target each alternative fits");
   assert(area(pick(false, circle, square)) === 9, "a conditional source");
+
+  // A `null` alternative copies nothing, so the copy also fits a target `{}` fits.
+  const some: Shape | {} = { ...found(-2) };
+  const none: Shape | {} = { ...found(0) };
+  assert(JSON.stringify(some) === '{"kind":"square","side":2}', "a nullable union's object alternative");
+  assert(JSON.stringify(none) === "{}", "a nullable union's null alternative");
 }
