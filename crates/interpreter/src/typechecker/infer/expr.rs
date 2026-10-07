@@ -5377,6 +5377,9 @@ impl Inferer<'_> {
                         fields: fields.clone(),
                     };
                     for (name, field) in fields {
+                        // A spread field binds type parameters for the fields
+                        // after it, as one written out does.
+                        self.infer_from_object_argument_field(literal, &name, &field.ty);
                         let origin = crate::TypedObjectFieldSource::Spread {
                             source_index,
                             field_name: name.clone(),
@@ -6340,6 +6343,11 @@ impl Inferer<'_> {
             // `[K, V]`, so the call site can bind K and V.
             let slot = if is_type_parameter_position(expected_ty) {
                 self.widen_fresh_literals(typed_id, &elem_ty)?
+            } else if type_contains_type_var(expected_ty) {
+                // A slot naming a type parameter still being inferred takes
+                // the element's own type too: `{ v: "x" }` for `{ v: T }`
+                // must reach the call as `{ v: string }` to bind `T`.
+                elem_ty
             } else {
                 if self.error_count() == errors_before
                     && !assignable(&elem_ty, expected_ty, self.resolver())

@@ -1,12 +1,4 @@
-types: 88 of 258 tsc entries compared, 2 differ
-
-line 31: [() => 0, n => n.toFixed()]
-  tsc:  [() => number, (n: number) => string]
-  ours: [(arg0: number) => T, (arg0: T) => void]
-
-line 32: [_a => 0, n => n.toFixed()]
-  tsc:  [(_a: number) => number, (n: number) => string]
-  ours: [(arg0: number) => T, (arg0: T) => void]
+types: 86 of 258 tsc entries compared, 0 differ
 
 errors:
 line 31: ours: field `toFixed` does not exist on `T` (tsc accepts)

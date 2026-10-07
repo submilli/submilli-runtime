@@ -1507,6 +1507,7 @@ impl Inferer<'_> {
         arguments: &GenericArguments,
         sub: &mut TypeParamSubstitution,
     ) -> Result<(ExprId, Type), CompilerFailure> {
+        let hint = self.method_interface_literal_hint(arg_id, hint, param_ty, sub)?;
         let hint = self.literal_argument_hint(arg_id, hint, arguments.inferred_generics)?;
         let hinted_by_replaceable_binding = sub.mentions_replaceable_binding(param_ty);
         if hinted_by_replaceable_binding {
@@ -1571,25 +1572,100 @@ impl Inferer<'_> {
             .is_some_and(|concrete| super::assignable(arg_ty, &concrete, self.resolver()))
     }
 
+    /// The hint for an object literal argument for an interface with methods
+    /// whose type arguments are still being inferred: the interface with
+    /// what the literal's own members bind. The literal is typed as the
+    /// interface, which binds nothing, so its members are first inferred
+    /// against the interface's fields and methods as a plain shape, whose
+    /// diagnostics are dropped: `get({ v: 1, get() { return 1; } })` for
+    /// `Getter<T>` takes `Getter<number>` as its hint.
+    fn method_interface_literal_hint(
+        &mut self,
+        arg_id: ExprId,
+        hint: Type,
+        param_ty: &Type,
+        sub: &TypeParamSubstitution,
+    ) -> Result<Type, CompilerFailure> {
+        let Type::InterfaceRef {
+            mangled,
+            name,
+            args,
+            ..
+        } = hint.peel()
+        else {
+            return Ok(hint);
+        };
+        if !super::expr::type_contains_type_var(&hint)
+            || !matches!(
+                self.ast
+                    .try_expr(arg_id)
+                    .map_err(super::arena_failure)?
+                    .kind,
+                ExprKind::ObjectLiteral { .. }
+            )
+            || !self.resolver().interface_has_methods(mangled, name)
+        {
+            return Ok(hint);
+        }
+        let Some(fields) = self.structural_form(mangled, name, args) else {
+            return Ok(hint);
+        };
+        let shape = Type::Object {
+            fields,
+            index: None,
+        };
+        let diagnostics_before = self.diagnostics.len();
+        let scratch = self.infer_expr(arg_id, Some(&shape));
+        self.diagnostics.truncate(diagnostics_before);
+        let (_, scratch_ty) = scratch?;
+        // A member that conflicts with what an earlier one bound is then
+        // reported against that binding, as tsc reports it.
+        let mut bound = sub.clone();
+        let _ = bound.unify_argument(&shape, &scratch_ty, self.resolver());
+        Ok(bound.apply_or_record(param_ty, &self.type_limits))
+    }
+
     /// The hint for an object or array literal argument, with each data-only
     /// interface whose type arguments are still being inferred replaced by
     /// its fields, so the literal keeps its own field types to bind them
     /// from. Typed as `Box<T>` itself, it would bind nothing
-    /// (`unbox({ v: "s" })`).
+    /// (`unbox({ v: "s" })`). A function literal's return gets the same
+    /// treatment, for the literals it returns (`fn(() => ({ v: "f" }))`).
     fn literal_argument_hint(
         &self,
         arg_id: ExprId,
         hint: Type,
         inferred_generics: &[String],
     ) -> Result<Type, CompilerFailure> {
-        if !self.builds_literal(arg_id)? {
+        if self.builds_literal(arg_id)? {
+            return Ok(expand_hint_interfaces(
+                &hint,
+                inferred_generics,
+                self.resolver(),
+            ));
+        }
+        if self.function_literal_params(arg_id)?.is_none() {
             return Ok(hint);
         }
-        Ok(expand_hint_interfaces(
-            &hint,
-            inferred_generics,
-            self.resolver(),
-        ))
+        let Type::Function {
+            params,
+            ret,
+            predicate,
+            has_rest,
+        } = hint.peel()
+        else {
+            return Ok(hint);
+        };
+        Ok(Type::Function {
+            params: params.clone(),
+            ret: Box::new(expand_hint_interfaces(
+                ret,
+                inferred_generics,
+                self.resolver(),
+            )),
+            predicate: predicate.clone(),
+            has_rest: *has_rest,
+        })
     }
 
     /// Whether `expr` is an object or array literal, in parentheses or as both
@@ -2158,9 +2234,9 @@ fn expand_hint_interfaces(
 }
 
 /// `ty` with each data-only interface that names one of `inferred_generics`
-/// replaced by its fields, through object fields, array and tuple elements and
-/// union members: the positions a literal's own fields and elements take
-/// their hints from. An interface stays as it is when met again inside its
+/// replaced by its fields, through object fields and index values, array and
+/// tuple elements and union members: the positions a literal's own fields and
+/// elements take their hints from. An interface stays as it is when met again inside its
 /// own fields (so a recursive one expands once), when more unions than the
 /// walk allows enclose it, or once the walk has used its budget.
 fn expand_inferred_interfaces(
@@ -2210,7 +2286,9 @@ fn expand_inferred_interfaces(
                     )
                 })
                 .collect(),
-            index: index.clone(),
+            index: index
+                .as_ref()
+                .map(|index| index.map_value(|value| expand(value, expansion))),
         },
         Type::Array(element) => Type::Array(Box::new(expand(element, expansion))),
         Type::Tuple(elements) => Type::Tuple(
