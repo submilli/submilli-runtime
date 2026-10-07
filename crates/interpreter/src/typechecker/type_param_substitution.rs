@@ -590,6 +590,11 @@ impl<'a> Unifier<'a> {
                 // arguments' own from here on, whether or not it is replaced.
                 let replaceable = self.sub.replaceable.remove(name) && self.is_argument;
                 let from_callback_parameter = self.sub.narrowable.contains(name);
+                // The expected result's binding is only a hint: an argument it
+                // takes is the first candidate, which later ones widen.
+                if replaceable && self.infers_from_covariant_argument() {
+                    self.sub.widenable.insert(name.clone());
+                }
                 if self.contravariant {
                     self.sub.widenable.remove(name);
                 } else {

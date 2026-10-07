@@ -50,6 +50,8 @@ impl<'a> TypeRegistry<'a> {
         );
     }
 
+    /// The variances remembered for `mangled`: `None` when it hasn't been
+    /// measured, `Some(None)` when it was and can't be.
     pub(super) fn measured_variances(
         &self,
         mangled: &MangledName,
@@ -57,6 +59,7 @@ impl<'a> TypeRegistry<'a> {
         self.variances.borrow().get(mangled).cloned()
     }
 
+    /// Remember what a whole measurement of `mangled` found.
     pub(super) fn remember_variances(
         &self,
         mangled: &MangledName,

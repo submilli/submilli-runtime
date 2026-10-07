@@ -1182,10 +1182,10 @@ impl Inferer<'_> {
             }
             _ => None,
         };
-        if let Some(fields) = fields {
+        if let Some(slots) = fields {
             self.literal_argument_inference = Some(LiteralArgumentInference {
                 literal: arg,
-                fields,
+                slots,
                 sub: sub.clone(),
                 fallback_echoes: Vec::new(),
             });
@@ -1284,16 +1284,16 @@ impl Inferer<'_> {
 
     /// The hint for slot `name` (a field, or a tuple element's index) of
     /// `literal`, with what its other slots bound so far, if the literal's
-    /// slots are being inferred one at a time. A callback slot's parameters take the whole-union fallbacks of the type
-    /// parameters still unbound, as [`fix_callback_parameters`] gives them;
-    /// they apply to the hint only, so its returns or a later field can still
-    /// bind them.
+    /// slots are being inferred one at a time. A callback slot's parameters
+    /// take the whole-union fallbacks of the type parameters still unbound, as
+    /// [`fix_callback_parameters`] gives them; they apply to the hint only, so
+    /// its returns or a later slot can still bind them.
     pub(super) fn argument_slot_hint(&self, literal: ExprId, name: &str) -> Option<Type> {
         let inference = self
             .literal_argument_inference
             .as_ref()
             .filter(|inference| inference.literal == literal)?;
-        let field = inference.fields.get(name)?;
+        let field = inference.slots.get(name)?;
         let mut sub = inference.sub.clone();
         if let Some(Type::Function { params, .. }) = function_part(&field.ty) {
             sub.bind_whole_union_fallbacks_in(params);
@@ -1332,7 +1332,7 @@ impl Inferer<'_> {
         else {
             return;
         };
-        if let Some(field) = inference.fields.get(name) {
+        if let Some(field) = inference.slots.get(name) {
             let before = inference.sub.clone();
             let close_matches_before = inference.sub.close_match_count();
             let _ = inference
@@ -1411,10 +1411,7 @@ impl Inferer<'_> {
                 continue;
             }
             let name = &field.name.name;
-            // What the other fields bound is left out of the hint, as tsc's
-            // first pass types them against the parameter itself.
-            let hint = super::reserved::override_field_signature(name)
-                .or_else(|| expected_field_hint(name, expected_fields, expected_index));
+            let hint = self.object_field_hint(literal, name, expected_fields, expected_index);
             let expected_field_ty = expected_fields
                 .and_then(|fields| fields.get(name))
                 .map(|field| &field.ty);
@@ -1571,7 +1568,8 @@ impl Inferer<'_> {
                 } else {
                     self.locate_argument_close_matches(
                         sub,
-                        (arg_id, typed_id),
+                        arg_id,
+                        typed_id,
                         close_matches_before,
                         diagnostics_before,
                     )?;
@@ -1888,6 +1886,7 @@ impl Inferer<'_> {
                 if self.structural_member_unify(sub, param_ty, arg_ty) || already_reported {
                     return Ok(());
                 }
+                let expected = sub.apply_or_record(&expected, &self.type_limits);
                 let mut help = vec![signature_help(self)];
                 help.extend(
                     self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
@@ -1911,7 +1910,8 @@ impl Inferer<'_> {
     fn locate_argument_close_matches(
         &self,
         sub: &mut TypeParamSubstitution,
-        (arg, typed_arg): (ExprId, ExprId),
+        arg: ExprId,
+        typed_arg: ExprId,
         close_matches_before: usize,
         diagnostics_before: usize,
     ) -> Result<(), CompilerFailure> {
@@ -2626,10 +2626,10 @@ pub(crate) struct LiteralArgumentInference {
     literal: ExprId,
     /// The parameter's slots in terms of the type parameters, keyed by field
     /// name or by element index (`"0"`, `"1"`, …).
-    fields: std::collections::BTreeMap<String, crate::ObjectField>,
+    slots: std::collections::BTreeMap<String, crate::ObjectField>,
     sub: TypeParamSubstitution,
-    /// Type parameters a callback field bound to just their whole-union
-    /// fallback, left unbound so a later field may bind them; see
+    /// Type parameters a callback slot bound to just their whole-union
+    /// fallback, left unbound so a later slot may bind them; see
     /// [`TypeParamSubstitution::unbind_fallback_echoes`].
     fallback_echoes: Vec<String>,
 }
@@ -2686,9 +2686,16 @@ impl ShapeKind {
 /// arguments say (`console.log(xs.reduce((a, b) => a + b, 0))` would type `a`
 /// as `unknown`). It only fills the parameters the arguments leave unbound.
 fn pins_type_parameters(want: &Type) -> bool {
-    // An enclosing call's own unbound type parameter (`use(first(1, 2))`)
-    // says nothing yet, and binding to it would bind it from inside this call.
-    !matches!(want.peel(), Type::Error | Type::Unknown | Type::TypeVar(_))
+    // An enclosing call's own unbound type parameter (`use(first(1, 2))`,
+    // or `T | null` for `orNull(first(1, 2))`) says nothing yet, and binding
+    // to it would bind it from inside this call.
+    match want.peel() {
+        Type::Error | Type::Unknown | Type::TypeVar(_) => false,
+        Type::Union(members) => !members
+            .iter()
+            .any(|member| matches!(member.peel(), Type::TypeVar(_))),
+        _ => true,
+    }
 }
 
 /// Bind every type parameter inference left unsolved to `fallback`, so the call

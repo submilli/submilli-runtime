@@ -11,7 +11,7 @@
 //!   `Logger<number | string>`, but not a `Logger<string>`.
 //! - A parameter that appears nowhere relates any instantiation to any other.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::{MangledName, Type, TypeKind};
 
@@ -146,7 +146,7 @@ impl<'a> TypeResolver<'a> {
             };
         }
         let measured = self.walk_declaration(mangled, name, measuring);
-        if measured.is_complete() {
+        if !measured.is_partial {
             self.registry
                 .remember_variances(mangled, measured.variances.clone());
         }
@@ -173,38 +173,28 @@ impl<'a> TypeResolver<'a> {
             resolver: *self,
             found: vec![Occurrences::default(); generics.len()],
             measuring,
-            measured_without: BTreeSet::new(),
-            ran_out_of_work: false,
+            is_partial: false,
         };
         walk.measuring.push(mangled.clone());
         let walked = walk.members(sym, &markers);
         walk.measuring.pop();
-        // A reference back to the declaration itself is skipped wherever it is
-        // measured from, so it leaves the result complete.
-        walk.measured_without.remove(mangled);
         Measured {
             variances: walked.map(|()| walk.found.into_iter().map(Occurrences::variance).collect()),
-            measured_without: walk.measured_without,
-            ran_out_of_work: walk.ran_out_of_work,
+            is_partial: walk.is_partial,
         }
     }
 }
 
-/// A declaration's variances, and what they were measured without: the
-/// declarations further up the walk whose back-references it skipped, which
-/// a walk starting elsewhere would follow. Only a complete measurement is
-/// remembered.
+/// A declaration's variances, and whether they are partial: measured without
+/// following a reference back to a declaration further up the walk (directly
+/// or through a partial measurement it read), or cut short by the work limit.
+/// A partial measurement depends on where the walk started, so only a whole
+/// one is remembered; a reference back to the declaration itself is skipped
+/// wherever it is measured from, and leaves it whole.
 #[derive(Default)]
 struct Measured {
     variances: Option<Vec<Variance>>,
-    measured_without: BTreeSet<MangledName>,
-    ran_out_of_work: bool,
-}
-
-impl Measured {
-    fn is_complete(&self) -> bool {
-        self.measured_without.is_empty() && !self.ran_out_of_work
-    }
+    is_partial: bool,
 }
 
 struct VarianceWalk<'r, 'a> {
@@ -213,9 +203,8 @@ struct VarianceWalk<'r, 'a> {
     /// Declarations whose variance is being measured further up this walk. A
     /// reference back to one of them adds nothing: its other members decide.
     measuring: &'r mut Vec<MangledName>,
-    /// The declarations further up whose back-references this walk skipped.
-    measured_without: BTreeSet<MangledName>,
-    ran_out_of_work: bool,
+    /// Whether the measurement is partial; see [`Measured`].
+    is_partial: bool,
 }
 
 impl VarianceWalk<'_, '_> {
@@ -300,7 +289,7 @@ impl VarianceWalk<'_, '_> {
 
     fn walk(&mut self, ty: &Type, polarity: Polarity) {
         if !self.resolver.limits.spend_work(1) {
-            self.ran_out_of_work = true;
+            self.is_partial = true;
             return;
         }
         match ty {
@@ -367,14 +356,13 @@ impl VarianceWalk<'_, '_> {
             return;
         }
         if self.measuring.contains(mangled) {
-            self.measured_without.insert(mangled.clone());
+            self.is_partial |= self.measuring.last() != Some(mangled);
             return;
         }
         let measured = self
             .resolver
             .measure_variances(mangled, name, self.measuring);
-        self.measured_without.extend(measured.measured_without);
-        self.ran_out_of_work |= measured.ran_out_of_work;
+        self.is_partial |= measured.is_partial;
         let variances = measured
             .variances
             .unwrap_or_else(|| vec![Variance::Covariant; args.len()]);

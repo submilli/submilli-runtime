@@ -6390,11 +6390,7 @@ impl Inferer<'_> {
             .span;
         let errors_before = self.error_count();
         let index = index.to_string();
-        let hint = if self.is_context_sensitive_function(elem_id)? {
-            self.argument_slot_hint(literal, &index)
-        } else {
-            None
-        };
+        let hint = self.argument_slot_hint(literal, &index);
         let (typed_id, elem_ty) =
             self.infer_expr(elem_id, Some(hint.as_ref().unwrap_or(expected_ty)))?;
         // Unbound generic-param slots take the inferred element type —

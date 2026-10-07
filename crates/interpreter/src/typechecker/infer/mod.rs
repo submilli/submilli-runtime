@@ -866,8 +866,8 @@ pub(super) struct Inferer<'a> {
     /// their inference without being a requirement:
     /// an argument that doesn't fit it decides the type parameter instead.
     pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
-    /// The object literal argument whose fields a generic call is inferring
-    /// one at a time; see [`generic::LiteralArgumentInference`].
+    /// The object or tuple literal argument whose slots a generic call is
+    /// inferring one at a time; see [`generic::LiteralArgumentInference`].
     pub(super) literal_argument_inference: Option<generic::LiteralArgumentInference>,
     pub(super) generics_in_scope: Vec<Vec<String>>,
     /// Empty during the signature pass; populated with fresh `GenericParam` ids at body entry.
