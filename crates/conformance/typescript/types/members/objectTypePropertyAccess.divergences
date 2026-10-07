@@ -1,5 +1,1 @@
-types: 25 of 48 tsc entries compared, 0 differ
-
-errors:
-line 17: ours: no method `toString` on `I` (tsc accepts)
-line 18: ours: no method `toString` on `I` (tsc accepts)
+types: 29 of 48 tsc entries compared, 0 differ
