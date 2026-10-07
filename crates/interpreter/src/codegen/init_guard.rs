@@ -67,7 +67,10 @@ pub fn guarded_globals(ta: &TypedAst) -> Result<Vec<InitGuard>, CompilerFailure>
         };
         // The initializer runs before its own binding is initialized.
         code_may_have_run |= !is_inert(ta, *value)?;
-        if !declared.contains(mangled) || !seen.insert(mangled) || !code_may_have_run {
+        // `seen` records every first declaration, guarded or not, so a later
+        // write is never taken for one.
+        let is_first_declaration = declared.contains(mangled) && seen.insert(mangled);
+        if !is_first_declaration || !code_may_have_run {
             continue;
         }
         guards.push(InitGuard {
