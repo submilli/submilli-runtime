@@ -186,7 +186,12 @@ impl<'a> Inferer<'a> {
         }
         let flow_ty = self.assigned_flow_type(declared, written, value, value_ty)?;
         let narrowed = self.initializer_narrowed_ty(declared, flow_ty);
-        self.renarrow_global_after_write(name, mangled, declared, narrowed)
+        self.renarrow_global_after_write(
+            name,
+            mangled,
+            super::stmt::WriteSlot::plain(declared),
+            narrowed,
+        )
     }
 
     /// Top-level statements are not wrapped in narrowing regions, so only a

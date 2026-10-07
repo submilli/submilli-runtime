@@ -8090,13 +8090,8 @@ impl Inferer<'_> {
             let result_ty = postfix_result_ty(&operand_ty);
             // For non-error declared types that aren't assignable from
             // the result, mirror `infer_assign`'s rejection.
-            let fits = assignable(&result_ty, &entry.ty, self.resolver());
-            if !matches!(entry.ty, Type::Error) && !fits {
-                self.error(
-                    span,
-                    format!("expected `{}`, got `{}`", entry.ty, result_ty),
-                );
-            }
+            let fits = assignable(&result_ty, &entry.ty.widen_literal(), self.resolver());
+            self.check_compound_write(&result_ty, &entry.ty, span);
             // A rejected write leaves the declared type, as in TypeScript.
             if !fits {
                 self.invalidate_for_reassignment(path, target.span);
@@ -8313,13 +8308,7 @@ impl Inferer<'_> {
             );
         }
         let result_ty = postfix_result_ty(&target_ty);
-        if !matches!(target_ty, Type::Error) && !assignable(&result_ty, &target_ty, self.resolver())
-        {
-            self.error(
-                name.span,
-                format!("expected `{target_ty}`, got `{result_ty}`"),
-            );
-        }
+        self.check_compound_write(&result_ty, &target_ty, name.span);
         if let Some(mut path) = self.expr_to_reference_path(
             self.typed_ast
                 .try_expr(typed_receiver)
@@ -8327,7 +8316,14 @@ impl Inferer<'_> {
         )? {
             path.chain
                 .push(narrowing::PathElem::Field(name.name.clone()));
-            self.invalidate_for_write(path, name.span);
+            self.invalidate_for_write(path.clone(), name.span);
+            self.narrow_field_after_compound_write(
+                path,
+                typed_receiver,
+                &receiver_ty,
+                &name,
+                result_ty.clone(),
+            )?;
         }
         Ok((
             TypedExprKind::PostfixUnary {
@@ -8373,10 +8369,13 @@ impl Inferer<'_> {
                 );
         }
         let result_ty = postfix_result_ty(&operand_ty);
-        if !matches!(ty, Type::Error) && !assignable(&result_ty, &ty, self.resolver()) {
-            self.error(span, format!("expected `{ty}`, got `{result_ty}`"));
-        }
-        self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone())?;
+        self.check_compound_write(&result_ty, &ty, span);
+        let accepted = ty.widen_literal();
+        let slot = super::stmt::WriteSlot {
+            declared: &ty,
+            accepted: &accepted,
+        };
+        self.renarrow_global_after_write(&name, &mangled, slot, result_ty.clone())?;
         Ok((
             TypedExprKind::PostfixUnary {
                 op,
@@ -8478,9 +8477,7 @@ impl Inferer<'_> {
             );
         }
         let result_ty = postfix_result_ty(&read_ty);
-        if !matches!(elem_ty, Type::Error) && !assignable(&result_ty, &elem_ty, self.resolver()) {
-            self.error(span, format!("expected `{elem_ty}`, got `{result_ty}`"));
-        }
+        self.check_compound_write(&result_ty, &elem_ty, span);
         self.invalidate_index_write(typed_receiver, typed_index, span)?;
         Ok((
             TypedExprKind::PostfixUnary {
