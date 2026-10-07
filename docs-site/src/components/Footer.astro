@@ -14,8 +14,8 @@ const slug = entry.id === 'index' ? '' : entry.id;
 	<div class="footer-details">
 		{entry.id !== '404' && !entry.data.sidebar.hidden && (
 			<nav class="resource-links print:hidden" aria-label="Page resources">
-				<a href={markdownPath(slug)}>View Markdown</a>
-				<a href={DOCS_INDEX}>Documentation for agents</a>
+				<a href={markdownPath(slug)} data-analytics-cta="view_markdown">View Markdown</a>
+				<a href={DOCS_INDEX} data-analytics-cta="agent_docs">Documentation for agents</a>
 				<DiscordLink variant="text" />
 			</nav>
 		)}

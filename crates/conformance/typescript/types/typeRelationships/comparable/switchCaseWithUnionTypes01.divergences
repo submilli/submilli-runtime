@@ -1,7 +1,1 @@
 types: 21 of 22 tsc entries compared, 0 differ
-
-errors:
-line 11: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
-line 15: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
-line 16: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
-line 20: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)

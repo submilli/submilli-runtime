@@ -108,6 +108,7 @@ impl<'a> TypeResolver<'a> {
                     },
                     optional: false,
                     readonly: true,
+                    method: true,
                 },
             );
         }
@@ -118,6 +119,7 @@ impl<'a> TypeResolver<'a> {
                     ty: substitute_or_record(&sig.ty, &bindings, self.limits),
                     optional: sig.optional,
                     readonly: sig.readonly,
+                    method: false,
                 },
             );
         }
@@ -224,6 +226,7 @@ impl<'a> TypeResolver<'a> {
                         ty: self.method_type(sig, bindings),
                         optional: false,
                         readonly: true,
+                        method: true,
                     });
                 }
                 for (name, f) in fields {
@@ -234,6 +237,7 @@ impl<'a> TypeResolver<'a> {
                         ty: substitute_or_record(&f.ty, bindings, self.limits),
                         optional: f.optional,
                         readonly: f.readonly,
+                        method: false,
                     });
                 }
             },
@@ -519,6 +523,7 @@ impl<'a> TypeResolver<'a> {
                             ty: substitute_or_record(&sig.ty, &bindings, self.limits),
                             optional: sig.optional,
                             readonly: sig.readonly,
+                            method: false,
                         },
                     )
                 })
@@ -549,6 +554,19 @@ impl<'a> TypeResolver<'a> {
             },
         );
         names
+    }
+
+    /// Whether `name` resolves to an interface whose values are inert
+    /// `Dispatch::Static` receivers (`console`, `Number`): typed nulls with no
+    /// vtable behind them.
+    pub(super) fn is_static_interface(&self, mangled: &MangledName, name: &str) -> bool {
+        matches!(
+            self.lookup(mangled, name).map(|symbol| &symbol.kind),
+            Some(TypeKind::Interface {
+                dispatch: crate::Dispatch::Static,
+                ..
+            })
+        )
     }
 
     /// True when `name` resolves to an interface that declares methods — the
@@ -733,6 +751,10 @@ fn assignable_rec(
         (Type::NumberLiteral(a), Type::NumberLiteral(b)) => a == b,
         (Type::NumberLiteral(_) | Type::NumberEnum { .. }, Type::Number) => true,
         (Type::Number, Type::NumberLiteral(_)) => false,
+        // An enum's identity is its declaration: an aliased import
+        // (`import { E as G }`) names the same enum under another `name`.
+        (Type::NumberEnum { mangled: a, .. }, Type::NumberEnum { mangled: b, .. })
+        | (Type::StringEnum { mangled: a, .. }, Type::StringEnum { mangled: b, .. }) => a == b,
         (Type::BooleanLiteral(a), Type::BooleanLiteral(b)) => a == b,
         (Type::BooleanLiteral(_), Type::Boolean) => true,
         (Type::Boolean, Type::BooleanLiteral(_)) => false,
@@ -1547,6 +1569,7 @@ mod tests {
                             ty,
                             optional,
                             readonly: false,
+                            method: false,
                         },
                     )
                 })

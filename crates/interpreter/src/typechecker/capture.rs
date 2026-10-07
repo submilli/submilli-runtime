@@ -178,8 +178,16 @@ struct LocalBinding {
 #[derive(Clone)]
 enum BindingSource {
     Let(StmtId),
+    /// The binding of `catches[index]` in the `try` statement `try_stmt`.
+    Catch {
+        try_stmt: StmtId,
+        index: usize,
+    },
     Const,
-    Param { owner: ParamOwner, index: usize },
+    Param {
+        owner: ParamOwner,
+        index: usize,
+    },
 }
 
 #[derive(Clone)]
@@ -435,6 +443,12 @@ impl State<'_> {
                 ..
             } => {
                 self.walk_expr(discriminant)?;
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
+                    self.walk_expr(comparison)?;
+                }
                 for case in cases {
                     self.walk_stmt(case.body)?;
                 }
@@ -495,13 +509,16 @@ impl State<'_> {
                 // its `boxed` flag the same way ForOf handles its
                 // loop var.
                 self.walk_stmt(body)?;
-                for clause in catches {
+                for (index, clause) in catches.iter().enumerate() {
                     self.frames.push(Frame::default());
                     self.bind(LocalBinding {
                         name_ident: clause.binding.clone(),
                         ty: clause.ty.clone(),
-                        mutable: false,
-                        source: BindingSource::Const,
+                        mutable: true,
+                        source: BindingSource::Catch {
+                            try_stmt: id,
+                            index,
+                        },
                     })?;
                     self.walk_stmt(clause.body)?;
                     self.pop_frame()?;
@@ -847,6 +864,9 @@ impl State<'_> {
                 };
                 *boxed = true;
             }
+            BindingSource::Catch { try_stmt, index } => {
+                self.catch_clause_mut(*try_stmt, *index)?.boxed = true;
+            }
             BindingSource::Const => {} // const captures are copied; never boxed
             BindingSource::Param { owner, index } => match owner {
                 ParamOwner::Function(fidx) => {
@@ -889,6 +909,46 @@ impl State<'_> {
             },
         };
         Ok(())
+    }
+
+    fn catch_clause(
+        &self,
+        try_stmt: StmtId,
+        index: usize,
+    ) -> Result<&crate::TypedCatchClause, crate::compiler_error::CompilerFailure> {
+        let TypedStmtKind::Try { catches, .. } = &self
+            .ta
+            .try_stmt(try_stmt)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            return Err(crate::typechecker::invariant_failure(
+                "capture source is not a try statement",
+            ));
+        };
+        catches
+            .get(index)
+            .ok_or_else(|| crate::typechecker::invariant_failure("missing catch capture binding"))
+    }
+
+    fn catch_clause_mut(
+        &mut self,
+        try_stmt: StmtId,
+        index: usize,
+    ) -> Result<&mut crate::TypedCatchClause, crate::compiler_error::CompilerFailure> {
+        let TypedStmtKind::Try { catches, .. } = &mut self
+            .ta
+            .try_stmt_mut(try_stmt)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            return Err(crate::typechecker::invariant_failure(
+                "capture source is not a try statement",
+            ));
+        };
+        catches
+            .get_mut(index)
+            .ok_or_else(|| crate::typechecker::invariant_failure("missing catch capture binding"))
     }
 
     /// Deferred so same-frame refs before a capturing closure still see the final `boxed` flag.
@@ -964,6 +1024,7 @@ impl State<'_> {
                     ));
                 }
             },
+            BindingSource::Catch { try_stmt, index } => self.catch_clause(*try_stmt, *index)?.boxed,
             BindingSource::Const => false,
             BindingSource::Param { owner, index } => match owner {
                 ParamOwner::Function(fidx) => {
@@ -1205,6 +1266,12 @@ mod tests {
                 ..
             } => {
                 walk_expr(ta, *discriminant, out);
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
+                    walk_expr(ta, comparison, out);
+                }
                 for case in cases {
                     walk_stmt(ta, case.body, out);
                 }

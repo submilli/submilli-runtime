@@ -11,6 +11,3 @@ line 5: `abc${0}abc`
 line 6: `def${1}def`
   tsc:  "def1def"
   ours: string
-
-errors:
-line 5: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
