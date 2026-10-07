@@ -328,11 +328,10 @@ impl<'a> Inferer<'a> {
         generics: &[String],
         ret: &crate::Type,
     ) {
-        if !matches!(name.name.as_str(), "toString" | "toJson")
-            || (params.is_empty()
-                && generics.is_empty()
-                && matches!(ret.peel(), crate::Type::String))
-        {
+        if !matches!(name.name.as_str(), "toString" | "toJson") {
+            return;
+        }
+        if params.is_empty() && generics.is_empty() && matches!(ret.peel(), crate::Type::String) {
             return;
         }
         self.error_with_help(
@@ -347,6 +346,25 @@ impl<'a> Inferer<'a> {
                  `{}(): string` or pick another method name",
                 name.name, name.name
             )],
+        );
+    }
+
+    /// An interface property named `toString` or `toJson` is called by the
+    /// same conversions as the method, so it must have the method's type. It
+    /// may be optional: an object without it converts as a plain object.
+    fn check_conversion_property(&mut self, name: &Ident, ty: &crate::Type) {
+        let Some(expected) = super::reserved::override_field_signature(&name.name) else {
+            return;
+        };
+        if super::assignable(ty, &expected, self.resolver()) {
+            return;
+        }
+        self.error(
+            name.span,
+            format!(
+                "interface property `{}` must have type `{expected}` (got `{ty}`)",
+                name.name
+            ),
         );
     }
 
@@ -498,6 +516,7 @@ impl<'a> Inferer<'a> {
                         continue;
                     }
                     let resolved_ty = self.resolve_value_type(&ty, ValuePosition::FieldType)?;
+                    self.check_conversion_property(&p_name, &resolved_ty);
                     typed_members.push(crate::TypedInterfaceMember::Property {
                         name: p_name.clone(),
                         ty: resolved_ty.clone(),
