@@ -2177,6 +2177,7 @@ impl<'a> Inferer<'a> {
                             .map_err(type_limit_unlocated)?,
                         optional: field.optional,
                         readonly: field.readonly,
+                        method: false,
                     });
                 }
             }

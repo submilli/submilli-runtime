@@ -384,11 +384,14 @@ impl Inferer<'_> {
                 let signed_number = || -> Result<_, CompilerFailure> {
                     // `-1` and `+2` are literals to `tsc`. Adding `0.0` makes `-0`
                     // the same label as `0`, which `===` can't tell apart either.
-                    Ok(super::comparison_operand::constant_number(self.ast, *value_expr)?
-                        .map(|value| TypedSwitchValue::Number {
-                            value: value + 0.0,
-                            span: value_span,
-                        }))
+                    Ok(
+                        super::comparison_operand::constant_number(self.ast, *value_expr)?.map(
+                            |value| TypedSwitchValue::Number {
+                                value: value + 0.0,
+                                span: value_span,
+                            },
+                        ),
+                    )
                 };
                 let lit = match classify_switch_case_value(&val_kind, value_span) {
                     Some(lit) => Some(lit),
@@ -961,10 +964,7 @@ fn discriminant_temporary(switch_id: StmtId, span: Span) -> Ident {
 /// The literals `ty` is made of, or `None` if it holds any other value.
 fn literal_members(ty: &Type) -> Option<Vec<narrowing::LiteralValue>> {
     match ty.peel() {
-        Type::Union(members) => members
-            .iter()
-            .map(narrowing::unit_literal_value)
-            .collect(),
+        Type::Union(members) => members.iter().map(narrowing::unit_literal_value).collect(),
         other => narrowing::unit_literal_value(other).map(|literal| vec![literal]),
     }
 }

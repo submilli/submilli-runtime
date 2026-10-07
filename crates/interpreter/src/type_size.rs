@@ -360,6 +360,7 @@ pub fn map_children<E>(
                             ty: map(&field.ty)?,
                             optional: field.optional,
                             readonly: field.readonly,
+                            method: field.method,
                         },
                     ))
                 })

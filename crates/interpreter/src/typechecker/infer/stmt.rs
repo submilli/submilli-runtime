@@ -1310,6 +1310,7 @@ impl Inferer<'_> {
                         ty: *i.value,
                         optional: false,
                         readonly: i.readonly,
+                        method: false,
                     })
             });
             if let Some(field) = field_lookup {
@@ -2130,6 +2131,7 @@ impl Inferer<'_> {
                         ty: *index.value,
                         optional: true,
                         readonly: index.readonly,
+                        method: false,
                     })
             }) {
                 if field.readonly {

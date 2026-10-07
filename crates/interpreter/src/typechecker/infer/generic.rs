@@ -140,6 +140,7 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
                             ty: erase_generic_params(&v.ty),
                             optional: v.optional,
                             readonly: v.readonly,
+                            method: v.method,
                         },
                     )
                 })
@@ -2464,7 +2465,10 @@ mod tests {
                 ..
             } => {
                 collect_expr_types(ta, *discriminant, out);
-                for comparison in cases.iter().flat_map(crate::TypedSwitchCase::label_comparisons) {
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
                     collect_expr_types(ta, comparison, out);
                 }
                 for case in cases {

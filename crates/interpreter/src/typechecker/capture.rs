@@ -435,7 +435,10 @@ impl State<'_> {
                 ..
             } => {
                 self.walk_expr(discriminant)?;
-                for comparison in cases.iter().flat_map(crate::TypedSwitchCase::label_comparisons) {
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
                     self.walk_expr(comparison)?;
                 }
                 for case in cases {
@@ -1208,7 +1211,10 @@ mod tests {
                 ..
             } => {
                 walk_expr(ta, *discriminant, out);
-                for comparison in cases.iter().flat_map(crate::TypedSwitchCase::label_comparisons) {
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
                     walk_expr(ta, comparison, out);
                 }
                 for case in cases {

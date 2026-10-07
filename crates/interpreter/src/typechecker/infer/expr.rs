@@ -8228,6 +8228,7 @@ impl Inferer<'_> {
                         ty: *index.value,
                         optional: true,
                         readonly: index.readonly,
+                        method: false,
                     })
             }) {
                 if field.readonly {
@@ -10092,6 +10093,7 @@ impl Inferer<'_> {
                                 ty: self.reduce_interfaces_rec(&f.ty, seen, child, budget)?,
                                 optional: f.optional,
                                 readonly: f.readonly,
+                                method: f.method,
                             },
                         ))
                     })
@@ -11041,6 +11043,7 @@ fn merge_spread_field_type(
         ty: Type::union(vec![earlier.ty, field.ty]),
         optional: earlier.optional,
         readonly: false,
+        method: false,
     }
 }
 
@@ -11098,6 +11101,7 @@ fn merge_spread_alternatives(alternatives: &[SpreadAlternative]) -> ObjectFields
                     ty,
                     optional,
                     readonly: false,
+                    method: false,
                 },
             )
         })

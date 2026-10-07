@@ -191,7 +191,10 @@ impl<'a> Walker<'a, '_, '_> {
                 ..
             } => {
                 self.consume(*discriminant, Use::Inspect)?;
-                for comparison in cases.iter().flat_map(crate::TypedSwitchCase::label_comparisons) {
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
                     self.consume(comparison, Use::Inspect)?;
                 }
                 for case in cases {

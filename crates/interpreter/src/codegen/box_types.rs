@@ -164,7 +164,10 @@ impl Collector<'_> {
                 ..
             } => {
                 self.walk_expr(*discriminant)?;
-                for comparison in cases.iter().flat_map(crate::TypedSwitchCase::label_comparisons) {
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
                     self.walk_expr(comparison)?;
                 }
                 for case in cases {

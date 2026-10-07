@@ -1156,6 +1156,7 @@ mod tests {
             optional: false,
             readonly: false,
             rest: false,
+            method: false,
         }
     }
 

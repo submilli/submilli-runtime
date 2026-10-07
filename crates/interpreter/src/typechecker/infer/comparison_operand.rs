@@ -129,7 +129,11 @@ impl super::Inferer<'_> {
     }
 
     pub(super) fn error_nan_comparison(&mut self, op: crate::BinOp, span: crate::Span) {
-        let always = if op == crate::BinOp::NotEq { "true" } else { "false" };
+        let always = if op == crate::BinOp::NotEq {
+            "true"
+        } else {
+            "false"
+        };
         self.error_with_help(
             span,
             format!("this comparison is always `{always}`: `NaN` is not equal to any value, itself included"),
@@ -182,7 +186,10 @@ fn constant_substitution(ast: &crate::Ast, id: ExprId) -> Result<Option<String>,
     )
 }
 
-pub(super) fn constant_number(ast: &crate::Ast, id: ExprId) -> Result<Option<f64>, CompilerFailure> {
+pub(super) fn constant_number(
+    ast: &crate::Ast,
+    id: ExprId,
+) -> Result<Option<f64>, CompilerFailure> {
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
             ExprKind::Paren(inner) => constant_number(ast, *inner)?,

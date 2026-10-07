@@ -3385,6 +3385,7 @@ impl<'a> Parser<'a> {
                     optional: false,
                     readonly: false,
                     rest,
+                    method: false,
                 });
                 match self.peek().kind {
                     TokenKind::Comma => {
@@ -3672,7 +3673,8 @@ impl<'a> Parser<'a> {
         if optional {
             self.advance();
         }
-        let ty = if matches!(self.peek().kind, TokenKind::LeftParen) {
+        let method = matches!(self.peek().kind, TokenKind::LeftParen);
+        let ty = if method {
             if readonly {
                 self.reject_readonly_modifier(self.readonly_modifier_span(member_start));
             }
@@ -3691,6 +3693,7 @@ impl<'a> Parser<'a> {
             optional,
             readonly,
             rest: false,
+            method,
         })
     }
 
@@ -5697,8 +5700,14 @@ fn is_reserved_identifier_word(kind: &TokenKind) -> bool {
 /// Words strict mode reserves that Submilli otherwise lexes as identifiers: they
 /// can't name a binding or a type, but stay valid as property names and modifiers.
 /// (`implements`, `interface` and `let` are keywords already.)
-const STRICT_MODE_RESERVED_WORDS: [&str; 6] =
-    ["package", "private", "protected", "public", "static", "yield"];
+const STRICT_MODE_RESERVED_WORDS: [&str; 6] = [
+    "package",
+    "private",
+    "protected",
+    "public",
+    "static",
+    "yield",
+];
 
 fn reserved_keyword_rename_example(keyword: &str) -> &'static str {
     match keyword {
@@ -9676,9 +9685,8 @@ mod tests {
     fn parse_object_type_method_members() {
         // `m(): T` is the same member as `m: () => T`, so it parses to a function-typed
         // field — including through the `?` modifier.
-        let (ast, diags) = parse_str(
-            "let p: { m(): number; opt?(): string; r(a: number): boolean } = null;",
-        );
+        let (ast, diags) =
+            parse_str("let p: { m(): number; opt?(): string; r(a: number): boolean } = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
         let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {

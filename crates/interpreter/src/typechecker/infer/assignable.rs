@@ -108,6 +108,7 @@ impl<'a> TypeResolver<'a> {
                     },
                     optional: false,
                     readonly: true,
+                    method: true,
                 },
             );
         }
@@ -118,6 +119,7 @@ impl<'a> TypeResolver<'a> {
                     ty: substitute_or_record(&sig.ty, &bindings, self.limits),
                     optional: sig.optional,
                     readonly: sig.readonly,
+                    method: false,
                 },
             );
         }
@@ -224,6 +226,7 @@ impl<'a> TypeResolver<'a> {
                         ty: self.method_type(sig, bindings),
                         optional: false,
                         readonly: true,
+                        method: true,
                     });
                 }
                 for (name, f) in fields {
@@ -234,6 +237,7 @@ impl<'a> TypeResolver<'a> {
                         ty: substitute_or_record(&f.ty, bindings, self.limits),
                         optional: f.optional,
                         readonly: f.readonly,
+                        method: false,
                     });
                 }
             },
@@ -519,6 +523,7 @@ impl<'a> TypeResolver<'a> {
                             ty: substitute_or_record(&sig.ty, &bindings, self.limits),
                             optional: sig.optional,
                             readonly: sig.readonly,
+                            method: false,
                         },
                     )
                 })
@@ -1547,6 +1552,7 @@ mod tests {
                             ty,
                             optional,
                             readonly: false,
+                            method: false,
                         },
                     )
                 })

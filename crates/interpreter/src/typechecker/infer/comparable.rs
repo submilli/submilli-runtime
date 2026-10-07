@@ -233,9 +233,13 @@ impl Proof<'_> {
 
     /// Whether the declaration `target` instantiates reads its parameter at
     /// `position`: whether putting `replacement` there changes what it exposes.
+    /// A reference back to the declaration with that same argument reads nothing
+    /// new, as `tsc`'s variance measurement finds: `next: K<T> | null` alone
+    /// doesn't make `K` read `T`.
     fn parameter_read(&self, target: &Type, position: usize, replacement: &Type) -> bool {
         let swapped = with_argument(target, position, replacement);
-        instance_shape(&swapped, self.types) != instance_shape(target, self.types)
+        instance_shape(&swapped, self.types).with_type_replaced(&swapped, target)
+            != instance_shape(target, self.types)
     }
 
     /// Parameters relate by `variance` and the result covariantly, each by
@@ -310,7 +314,11 @@ impl Proof<'_> {
                 // Two optional members overlap on absence whatever their types.
                 Some(source_field) => {
                     (source_field.optional && target_field.optional)
-                        || self.member_types_comparable(&source_field.ty, &target_field.ty)
+                        || self.member_types_comparable(
+                            &source_field.ty,
+                            &target_field.ty,
+                            member_variance(target_field),
+                        )
                 }
                 None => target_field.optional,
             })
@@ -332,18 +340,17 @@ impl Proof<'_> {
                 .is_none_or(|source| self.comparable_to(&source.value, &target_index.value))
     }
 
-    /// A member's types compared. A function-typed member is taken for a method,
-    /// whose parameters `tsc` compares bivariantly; member forms don't record
-    /// whether a function-typed member was declared as a method or a property.
-    fn member_types_comparable(&mut self, source: &Type, target: &Type) -> bool {
+    /// A member's types compared, a function type's parameters by `variance`.
+    fn member_types_comparable(
+        &mut self,
+        source: &Type,
+        target: &Type,
+        variance: ParameterVariance,
+    ) -> bool {
         if matches!(source.peel(), Type::Function { .. })
             && matches!(target.peel(), Type::Function { .. })
         {
-            return self.comparable_functions(
-                source.peel(),
-                target.peel(),
-                ParameterVariance::Bivariant,
-            );
+            return self.comparable_functions(source.peel(), target.peel(), variance);
         }
         self.comparable_to(source, target)
     }
@@ -381,10 +388,22 @@ impl Proof<'_> {
             return assignable(source, target, self.types);
         };
         target_private.iter().all(|(member, target_ty)| {
-            source_private
-                .get(member)
-                .is_some_and(|source_ty| self.member_types_comparable(source_ty, target_ty))
+            source_private.get(member).is_some_and(|source_ty| {
+                // Private members don't record whether one is a method, so a
+                // function-typed one is taken for a method.
+                self.member_types_comparable(source_ty, target_ty, ParameterVariance::Bivariant)
+            })
         })
+    }
+}
+
+/// `tsc` compares a method's parameters bivariantly and a function-typed
+/// property's contravariantly, by how the target member was declared.
+fn member_variance(target: &ObjectField) -> ParameterVariance {
+    if target.method {
+        ParameterVariance::Bivariant
+    } else {
+        ParameterVariance::Contravariant
     }
 }
 
@@ -574,6 +593,46 @@ fn with_argument(ty: &Type, position: usize, replacement: &Type) -> Type {
 enum InstanceShape {
     Alias(Type),
     Members(Option<MemberForm>, Option<PrivateMembers>),
+}
+
+impl InstanceShape {
+    /// The shape with every occurrence of `from` in it replaced by `to`.
+    fn with_type_replaced(self, from: &Type, to: &Type) -> Self {
+        let replace = |ty: &Type| replace_type(ty, from, to);
+        match self {
+            Self::Alias(ty) => Self::Alias(replace(&ty)),
+            Self::Members(form, private) => Self::Members(
+                form.map(|(members, index)| {
+                    let members = members
+                        .into_iter()
+                        .map(|(name, field)| {
+                            let ty = replace(&field.ty);
+                            (name, ObjectField { ty, ..field })
+                        })
+                        .collect();
+                    (members, index.map(|index| index.map_value(replace)))
+                }),
+                private.map(|private| {
+                    private
+                        .into_iter()
+                        .map(|(member, ty)| (member, replace(&ty)))
+                        .collect()
+                }),
+            ),
+        }
+    }
+}
+
+fn replace_type(ty: &Type, from: &Type, to: &Type) -> Type {
+    if ty == from {
+        return to.clone();
+    }
+    let mapped: Result<Type, std::convert::Infallible> =
+        crate::type_size::map_children(ty, |child| Ok(replace_type(child, from, to)));
+    match mapped {
+        Ok(ty) => ty,
+        Err(never) => match never {},
+    }
 }
 
 fn instance_shape(ty: &Type, types: TypeResolver) -> InstanceShape {

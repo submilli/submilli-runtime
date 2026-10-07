@@ -766,7 +766,10 @@ impl<'a> Walker<'a, '_> {
                 ..
             } => {
                 let decider = identity(self.eval(*discriminant)?);
-                for comparison in cases.iter().flat_map(crate::TypedSwitchCase::label_comparisons) {
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
                     self.eval(comparison)?;
                 }
                 let since = self.mark();
