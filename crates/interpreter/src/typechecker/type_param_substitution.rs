@@ -260,7 +260,7 @@ impl TypeParamSubstitution {
         echoes
     }
 
-    /// Whether `name` has no binding yet, or is bound only to itself.
+    /// The type parameters bound to something other than themselves.
     fn bound_names(&self) -> impl Iterator<Item = String> + '_ {
         self.bindings
             .keys()
@@ -268,6 +268,7 @@ impl TypeParamSubstitution {
             .cloned()
     }
 
+    /// Whether `name` has no binding yet, or is bound only to itself.
     pub(crate) fn is_unbound(&self, name: &str) -> bool {
         match self.bindings.get(name) {
             None => true,
@@ -588,6 +589,7 @@ impl<'a> Unifier<'a> {
                 // Unified with an argument, a replaceable binding is the
                 // arguments' own from here on, whether or not it is replaced.
                 let replaceable = self.sub.replaceable.remove(name) && self.is_argument;
+                let from_callback_parameter = self.sub.narrowable.contains(name);
                 if self.contravariant {
                     self.sub.widenable.remove(name);
                 } else {
@@ -609,8 +611,13 @@ impl<'a> Unifier<'a> {
                         Ok(())
                     }
                     // An argument that neither fits a candidate binding nor
-                    // widens it is reported against it, as tsc reports it.
-                    Err(_) if self.subtype_widening && self.sub.widenable.contains(name) => {
+                    // widens it is reported against it, as tsc reports it,
+                    // and so is one that doesn't fit what a callback's
+                    // parameter bound.
+                    Err(_)
+                        if self.subtype_widening
+                            && (self.sub.widenable.contains(name) || from_callback_parameter) =>
+                    {
                         Err(UnifyError::Mismatch {
                             expected: resolved,
                             got: arg_resolved,
@@ -768,11 +775,10 @@ impl<'a> Unifier<'a> {
                 if aa.len() != ab.len() {
                     return Err(mismatch());
                 }
-                let variances = self
-                    .types
-                    .and_then(|types| types.type_param_variances(ma, name))
-                    .filter(|variances| variances.len() == aa.len())
-                    .unwrap_or_else(|| vec![Variance::Covariant; aa.len()]);
+                let variances = self.types.map_or_else(
+                    || vec![Variance::Covariant; aa.len()],
+                    |types| types.variances_or_covariant(ma, name, aa.len()),
+                );
                 for ((a, b), variance) in aa.iter().zip(ab.iter()).zip(variances) {
                     // An argument the declaration only takes in (a callback
                     // field's parameter) infers as a function parameter would.
@@ -980,10 +986,14 @@ impl<'a> Unifier<'a> {
         if bound.literal_base().is_some() && bound.literal_base() == arg.literal_base() {
             return Some(Type::union(vec![bound.clone(), arg.clone()]));
         }
+        // tsc sets a `null` candidate aside and adds it back to the common
+        // supertype of the rest; `None` stands for a candidate that is just
+        // `null`.
         let non_null = |ty: &Type| {
             (!matches!(ty.peel(), Type::Null)).then(|| super::infer::narrowing::strip_null(ty))
         };
-        if non_null(bound).as_ref() == Some(bound) && non_null(arg).as_ref() == Some(arg) {
+        let involves_null = |ty: &Type| non_null(ty).as_ref() != Some(ty);
+        if !involves_null(bound) && !involves_null(arg) {
             return None;
         }
         let supertype = match (non_null(bound), non_null(arg)) {

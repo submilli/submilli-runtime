@@ -160,7 +160,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         inferred_returns: None,
         inference_source_literals: std::collections::BTreeSet::new(),
         arguments_with_replaceable_hints: std::collections::BTreeSet::new(),
-        object_argument_inference: None,
+        literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,

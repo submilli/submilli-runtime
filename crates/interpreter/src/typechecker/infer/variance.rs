@@ -11,7 +11,7 @@
 //!   `Logger<number | string>`, but not a `Logger<string>`.
 //! - A parameter that appears nowhere relates any instantiation to any other.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{MangledName, Type, TypeKind};
 
@@ -114,18 +114,57 @@ impl<'a> TypeResolver<'a> {
     ) -> Option<Vec<Variance>> {
         let mut measuring = Vec::new();
         self.measure_variances(mangled, name, &mut measuring)
+            .variances
     }
 
+    /// [`Self::type_param_variances`] for an instantiation with `arity`
+    /// arguments, covariant for each when they can't be measured.
+    pub(crate) fn variances_or_covariant(
+        &self,
+        mangled: &MangledName,
+        name: &str,
+        arity: usize,
+    ) -> Vec<Variance> {
+        self.type_param_variances(mangled, name)
+            .filter(|variances| variances.len() == arity)
+            .unwrap_or_else(|| vec![Variance::Covariant; arity])
+    }
+
+    /// Measured once per declaration and remembered: a declaration referenced
+    /// from several members (`a: Next<T>; b: Next<T>`) would otherwise be
+    /// measured again at each reference, doubling the work at every level.
     fn measure_variances(
         &self,
         mangled: &MangledName,
         name: &str,
         measuring: &mut Vec<MangledName>,
-    ) -> Option<Vec<Variance>> {
-        let sym = self.lookup(mangled, name)?;
+    ) -> Measured {
+        if let Some(variances) = self.registry.measured_variances(mangled) {
+            return Measured {
+                variances,
+                ..Measured::default()
+            };
+        }
+        let measured = self.walk_declaration(mangled, name, measuring);
+        if measured.is_complete() {
+            self.registry
+                .remember_variances(mangled, measured.variances.clone());
+        }
+        measured
+    }
+
+    fn walk_declaration(
+        &self,
+        mangled: &MangledName,
+        name: &str,
+        measuring: &mut Vec<MangledName>,
+    ) -> Measured {
+        let Some(sym) = self.lookup(mangled, name) else {
+            return Measured::default();
+        };
         let (TypeKind::Class { generics, .. } | TypeKind::Interface { generics, .. }) = &sym.kind
         else {
-            return None;
+            return Measured::default();
         };
         let markers: Vec<Type> = (0..generics.len())
             .map(|i| Type::TypeVar(marker(i)))
@@ -134,12 +173,37 @@ impl<'a> TypeResolver<'a> {
             resolver: *self,
             found: vec![Occurrences::default(); generics.len()],
             measuring,
+            measured_without: BTreeSet::new(),
+            ran_out_of_work: false,
         };
         walk.measuring.push(mangled.clone());
         let walked = walk.members(sym, &markers);
         walk.measuring.pop();
-        walked?;
-        Some(walk.found.into_iter().map(Occurrences::variance).collect())
+        // A reference back to the declaration itself is skipped wherever it is
+        // measured from, so it leaves the result complete.
+        walk.measured_without.remove(mangled);
+        Measured {
+            variances: walked.map(|()| walk.found.into_iter().map(Occurrences::variance).collect()),
+            measured_without: walk.measured_without,
+            ran_out_of_work: walk.ran_out_of_work,
+        }
+    }
+}
+
+/// A declaration's variances, and what they were measured without: the
+/// declarations further up the walk whose back-references it skipped, which
+/// a walk starting elsewhere would follow. Only a complete measurement is
+/// remembered.
+#[derive(Default)]
+struct Measured {
+    variances: Option<Vec<Variance>>,
+    measured_without: BTreeSet<MangledName>,
+    ran_out_of_work: bool,
+}
+
+impl Measured {
+    fn is_complete(&self) -> bool {
+        self.measured_without.is_empty() && !self.ran_out_of_work
     }
 }
 
@@ -149,6 +213,9 @@ struct VarianceWalk<'r, 'a> {
     /// Declarations whose variance is being measured further up this walk. A
     /// reference back to one of them adds nothing: its other members decide.
     measuring: &'r mut Vec<MangledName>,
+    /// The declarations further up whose back-references this walk skipped.
+    measured_without: BTreeSet<MangledName>,
+    ran_out_of_work: bool,
 }
 
 impl VarianceWalk<'_, '_> {
@@ -233,6 +300,7 @@ impl VarianceWalk<'_, '_> {
 
     fn walk(&mut self, ty: &Type, polarity: Polarity) {
         if !self.resolver.limits.spend_work(1) {
+            self.ran_out_of_work = true;
             return;
         }
         match ty {
@@ -295,12 +363,20 @@ impl VarianceWalk<'_, '_> {
     }
 
     fn reference(&mut self, mangled: &MangledName, name: &str, args: &[Type], polarity: Polarity) {
-        if args.is_empty() || self.measuring.contains(mangled) {
+        if args.is_empty() {
             return;
         }
-        let variances = self
+        if self.measuring.contains(mangled) {
+            self.measured_without.insert(mangled.clone());
+            return;
+        }
+        let measured = self
             .resolver
-            .measure_variances(mangled, name, self.measuring)
+            .measure_variances(mangled, name, self.measuring);
+        self.measured_without.extend(measured.measured_without);
+        self.ran_out_of_work |= measured.ran_out_of_work;
+        let variances = measured
+            .variances
             .unwrap_or_else(|| vec![Variance::Covariant; args.len()]);
         for (arg, variance) in args.iter().zip(variances) {
             match variance {

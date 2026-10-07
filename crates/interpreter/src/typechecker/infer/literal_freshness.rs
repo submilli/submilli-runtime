@@ -1246,6 +1246,19 @@ fn union_of<'a>(positions: impl Iterator<Item = &'a Type>) -> Option<Type> {
 /// parameter to what it holds inside: always for `A[]`, never for `A`, and
 /// for `A | A[]` only an array the parameter's array member can take. A
 /// receiver, with no `param`, binds all it holds.
+fn binds_nested_literals(param: Option<&Type>, ty: &Type) -> bool {
+    let Some(param) = param else {
+        return true;
+    };
+    match ParamShape::of(param) {
+        ParamShape::Inside => true,
+        ParamShape::Whole => false,
+        ParamShape::WholeOrInside => {
+            binds_inside_array(param) && matches!(ty.peel(), Type::Array(_) | Type::Tuple(_))
+        }
+    }
+}
+
 /// The literals nested in `ty` that a value of that type, checked against
 /// `param`, binds to a type parameter `is_counted` accepts: those at the
 /// positions of a tuple, array or object that name one, so the `"on"` of a
@@ -1279,19 +1292,6 @@ fn deep_literals_bound_to(
             .flat_map(|(param, part)| deep_literals_bound_to(&param.ty, &part.ty, is_counted))
             .collect(),
         _ => deep_literals(ty),
-    }
-}
-
-fn binds_nested_literals(param: Option<&Type>, ty: &Type) -> bool {
-    let Some(param) = param else {
-        return true;
-    };
-    match ParamShape::of(param) {
-        ParamShape::Inside => true,
-        ParamShape::Whole => false,
-        ParamShape::WholeOrInside => {
-            binds_inside_array(param) && matches!(ty.peel(), Type::Array(_) | Type::Tuple(_))
-        }
     }
 }
 

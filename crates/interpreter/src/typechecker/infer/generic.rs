@@ -1154,18 +1154,19 @@ impl Inferer<'_> {
         Ok(())
     }
 
-    /// Start inferring an object literal argument's fields one at a time, when
-    /// one of them is a function literal with an unannotated parameter: as in
-    /// tsc, a type parameter an earlier field binds then types that function's
-    /// parameters. `test({ produce: (n: number) => n, consume: (x) => ... })`
-    /// types `x` from `produce`. Returns the inference this one interrupts.
-    fn start_object_argument_inference(
+    /// Start inferring an object or tuple literal argument's slots one at a
+    /// time, when one of them is a function literal with an unannotated
+    /// parameter: as in tsc, a type parameter another slot binds then types
+    /// that function's parameters. `test({ produce: (n: number) => n,
+    /// consume: (x) => ... })` types `x` from `produce`. Returns the inference
+    /// this one interrupts.
+    fn start_literal_argument_inference(
         &mut self,
         arg: ExprId,
         param_ty: &Type,
         sub: &TypeParamSubstitution,
-    ) -> Result<Option<ObjectArgumentInference>, CompilerFailure> {
-        let enclosing = self.object_argument_inference.take();
+    ) -> Result<Option<LiteralArgumentInference>, CompilerFailure> {
+        let enclosing = self.literal_argument_inference.take();
         let fields = match self
             .ast
             .try_expr(arg)
@@ -1182,7 +1183,7 @@ impl Inferer<'_> {
             _ => None,
         };
         if let Some(fields) = fields {
-            self.object_argument_inference = Some(ObjectArgumentInference {
+            self.literal_argument_inference = Some(LiteralArgumentInference {
                 literal: arg,
                 fields,
                 sub: sub.clone(),
@@ -1258,13 +1259,13 @@ impl Inferer<'_> {
     }
 
     /// Keep what the fields of the argument bound, and resume `enclosing`.
-    fn finish_object_argument_inference(
+    fn finish_literal_argument_inference(
         &mut self,
-        enclosing: Option<ObjectArgumentInference>,
+        enclosing: Option<LiteralArgumentInference>,
         sub: &mut TypeParamSubstitution,
     ) {
         if let Some(mut finished) =
-            std::mem::replace(&mut self.object_argument_inference, enclosing)
+            std::mem::replace(&mut self.literal_argument_inference, enclosing)
         {
             finished
                 .sub
@@ -1273,15 +1274,23 @@ impl Inferer<'_> {
         }
     }
 
-    /// The hint for field `name` of `literal`, with what its earlier fields
-    /// bound, if the literal's fields are being inferred one at a time. A
-    /// callback field's parameters take the whole-union fallbacks of the type
+    /// Whether `literal`, a generic call's argument, has its fields or
+    /// elements inferred one at a time.
+    pub(super) fn infers_one_at_a_time(&self, literal: ExprId) -> bool {
+        self.literal_argument_inference
+            .as_ref()
+            .is_some_and(|inference| inference.literal == literal)
+    }
+
+    /// The hint for slot `name` (a field, or a tuple element's index) of
+    /// `literal`, with what its other slots bound so far, if the literal's
+    /// slots are being inferred one at a time. A callback slot's parameters take the whole-union fallbacks of the type
     /// parameters still unbound, as [`fix_callback_parameters`] gives them;
     /// they apply to the hint only, so its returns or a later field can still
     /// bind them.
-    pub(super) fn object_argument_field_hint(&self, literal: ExprId, name: &str) -> Option<Type> {
+    pub(super) fn argument_slot_hint(&self, literal: ExprId, name: &str) -> Option<Type> {
         let inference = self
-            .object_argument_inference
+            .literal_argument_inference
             .as_ref()
             .filter(|inference| inference.literal == literal)?;
         let field = inference.fields.get(name)?;
@@ -1309,16 +1318,16 @@ impl Inferer<'_> {
             && matches!(field_ty.map(Type::peel), Some(Type::TypeVar(name)) if inferred.contains(name))
     }
 
-    /// Bind the type parameters field `name` of `literal` determines, for the
-    /// fields after it. A mismatch is reported when the whole argument is.
-    pub(super) fn infer_from_object_argument_field(
+    /// Bind the type parameters slot `name` of `literal` determines, for the
+    /// slots typed after it. A mismatch is reported when the whole argument is.
+    pub(super) fn infer_from_argument_slot(
         &mut self,
         literal: ExprId,
         name: &str,
         value_ty: &Type,
     ) {
         let Some(mut inference) = self
-            .object_argument_inference
+            .literal_argument_inference
             .take_if(|inference| inference.literal == literal)
         else {
             return;
@@ -1339,7 +1348,7 @@ impl Inferer<'_> {
                 inference.fallback_echoes.extend(echoes);
             }
         }
-        self.object_argument_inference = Some(inference);
+        self.literal_argument_inference = Some(inference);
     }
 
     /// The hint for field `name` of the object literal `literal`: an
@@ -1353,23 +1362,19 @@ impl Inferer<'_> {
         expected_index: Option<&crate::IndexSignature>,
     ) -> Option<Type> {
         super::reserved::override_field_signature(name)
-            .or_else(|| self.object_argument_field_hint(literal, name))
-            .or_else(|| {
-                expected_fields
-                    .and_then(|fields| fields.get(name))
-                    .map(|field| field.ty.clone())
-                    .or_else(|| expected_index.map(|index| (*index.value).clone()))
-            })
+            .or_else(|| self.argument_slot_hint(literal, name))
+            .or_else(|| expected_field_hint(name, expected_fields, expected_index))
     }
 
-    /// Infer the fields of a generic call's object literal argument that come
-    /// after a function literal with an unannotated parameter, ahead of it:
-    /// tsc infers such a context-sensitive field last, so a later field still
-    /// binds the type parameter its parameters read (`{ cb: (t) => t.length,
-    /// value: "abc" }` types `t` as `string`). The values land in `inferred`
-    /// for the field loop to reuse; returns the ones already unified. Only a
-    /// literal without spreads or methods is reordered, since a spread's
-    /// fields and a method's `this` depend on the members before them.
+    /// Infer the fields of a generic call's object literal argument other than
+    /// its function literals with an unannotated parameter, in source order,
+    /// ahead of those: tsc infers such a context-sensitive field last, so a
+    /// later field still binds the type parameter its parameters read
+    /// (`{ cb: (t) => t.length, value: "abc" }` types `t` as `string`). The
+    /// values land in `inferred` for the field loop to reuse; returns the ones
+    /// already unified. Only a literal without spreads or methods is
+    /// reordered, since a spread's fields and a method's `this` depend on the
+    /// members before them.
     pub(super) fn infer_fields_ahead_of_callbacks(
         &mut self,
         literal: ExprId,
@@ -1379,11 +1384,7 @@ impl Inferer<'_> {
         inferred: &mut super::expr::InferredObjectFields,
     ) -> Result<std::collections::BTreeSet<ExprId>, CompilerFailure> {
         let mut ahead = std::collections::BTreeSet::new();
-        if !self
-            .object_argument_inference
-            .as_ref()
-            .is_some_and(|inference| inference.literal == literal)
-        {
+        if !self.infers_one_at_a_time(literal) {
             return Ok(ahead);
         }
         let mut fields = Vec::new();
@@ -1402,20 +1403,18 @@ impl Inferer<'_> {
             }
             fields.push(field);
         }
-        let mut after_callback = false;
         for field in fields {
-            if self.is_context_sensitive_function(field.value)? {
-                after_callback = true;
-                continue;
-            }
-            if !after_callback
+            if self.is_context_sensitive_function(field.value)?
                 || inferred.contains_key(&field.value)
                 || super::reserved::is_reserved_object_field(&field.name.name)
             {
                 continue;
             }
             let name = &field.name.name;
-            let hint = self.object_field_hint(literal, name, expected_fields, expected_index);
+            // What the other fields bound is left out of the hint, as tsc's
+            // first pass types them against the parameter itself.
+            let hint = super::reserved::override_field_signature(name)
+                .or_else(|| expected_field_hint(name, expected_fields, expected_index));
             let expected_field_ty = expected_fields
                 .and_then(|fields| fields.get(name))
                 .map(|field| &field.ty);
@@ -1431,7 +1430,7 @@ impl Inferer<'_> {
                 } else {
                     value_ty.clone()
                 };
-            self.infer_from_object_argument_field(literal, name, &unified_ty);
+            self.infer_from_argument_slot(literal, name, &unified_ty);
             inferred.insert(field.value, (typed_value, value_ty, errored));
             ahead.insert(field.value);
         }
@@ -1456,7 +1455,10 @@ impl Inferer<'_> {
 
     /// A function literal with a parameter left for its context to type,
     /// which is what TypeScript infers after the other arguments.
-    fn is_context_sensitive_function(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+    pub(super) fn is_context_sensitive_function(
+        &self,
+        expr: ExprId,
+    ) -> Result<bool, CompilerFailure> {
         Ok(self
             .function_literal_params(expr)?
             .is_some_and(|params| params.iter().any(|p| p.ty.is_none())))
@@ -1567,23 +1569,12 @@ impl Inferer<'_> {
                 if unified.is_err() {
                     sub.forget_close_matches_after(close_matches_before);
                 } else {
-                    let arg_span = self.argument_span(typed_id)?;
-                    sub.locate_close_matches_after(close_matches_before, |path| {
-                        self.argument_field_span(arg_id, path).unwrap_or(arg_span)
-                    });
-                    // An error reported inside a close match's field usually
-                    // is that mismatch; one elsewhere in the argument (a
-                    // callback field's body) leaves it to report.
-                    let reported: Vec<Span> = self.diagnostics[diagnostics_before..]
-                        .iter()
-                        .filter(|diagnostic| diagnostic.severity == crate::Severity::Error)
-                        .map(|diagnostic| diagnostic.span)
-                        .collect();
-                    sub.retain_close_matches_after(close_matches_before, |close_match| {
-                        close_match.argument_span.is_some_and(|span| {
-                            !reported.iter().any(|error| span_contains(span, *error))
-                        })
-                    });
+                    self.locate_argument_close_matches(
+                        sub,
+                        (arg_id, typed_id),
+                        close_matches_before,
+                        diagnostics_before,
+                    )?;
                 }
                 match unified {
                     Err(error) => self.unify_argument_error(
@@ -1660,7 +1651,8 @@ impl Inferer<'_> {
         // as in tsc: one is checked against what a non-literal inferred.
         if self.error_count() == errors_before
             || !sub.mentions_candidate_binding(param_ty)
-            || self.builds_literal(arg_id)? && sub.mentions_non_literal_candidate_binding(param_ty)
+            || (self.builds_literal(arg_id)?
+                && sub.mentions_non_literal_candidate_binding(param_ty))
         {
             return Ok(first);
         }
@@ -1701,7 +1693,7 @@ impl Inferer<'_> {
         if hinted_by_replaceable_binding {
             self.arguments_with_replaceable_hints.insert(arg_id);
         }
-        let enclosing = self.start_object_argument_inference(arg_id, param_ty, sub)?;
+        let enclosing = self.start_literal_argument_inference(arg_id, param_ty, sub)?;
         let enclosing_fields = self
             .fields_keeping_returned_literals
             .replace((arg_id, arguments.inferred_generics.to_vec()));
@@ -1717,7 +1709,7 @@ impl Inferer<'_> {
                 this.infer_expr(arg_id, Some(&hint))
             },
         );
-        self.finish_object_argument_inference(enclosing, sub);
+        self.finish_literal_argument_inference(enclosing, sub);
         self.fields_keeping_returned_literals = enclosing_fields;
         self.arguments_with_replaceable_hints.remove(&arg_id);
         let (typed_id, arg_ty) = inferred?;
@@ -1907,6 +1899,39 @@ impl Inferer<'_> {
                 );
             }
         };
+        Ok(())
+    }
+
+    /// Locate the close matches the argument `arg` (typed as `typed_arg`)
+    /// recorded after the first `close_matches_before`, each at the field it
+    /// came from, and drop those an error reported since
+    /// `diagnostics_before` lies inside: an error inside a close match's field
+    /// usually is that mismatch, while one elsewhere in the argument (a
+    /// callback field's body) leaves it to report.
+    fn locate_argument_close_matches(
+        &self,
+        sub: &mut TypeParamSubstitution,
+        (arg, typed_arg): (ExprId, ExprId),
+        close_matches_before: usize,
+        diagnostics_before: usize,
+    ) -> Result<(), CompilerFailure> {
+        let arg_span = self.argument_span(typed_arg)?;
+        sub.locate_close_matches_after(close_matches_before, |path| {
+            self.argument_field_span(arg, path).unwrap_or(arg_span)
+        });
+        let reported: Vec<Span> = self
+            .diagnostics
+            .get(diagnostics_before..)
+            .unwrap_or_default()
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == crate::Severity::Error)
+            .map(|diagnostic| diagnostic.span)
+            .collect();
+        sub.retain_close_matches_after(close_matches_before, |close_match| {
+            close_match
+                .argument_span
+                .is_some_and(|span| !reported.iter().any(|error| span_contains(span, *error)))
+        });
         Ok(())
     }
 
@@ -2343,6 +2368,19 @@ fn is_literal_member_of(arg: &Type, param: &Type) -> bool {
         && matches!(param.peel(), Type::Union(members) if members.iter().any(|member| member.peel() == arg.peel()))
 }
 
+/// The type field `name` of an object literal is expected to have, from the
+/// expected type's own field or its index signature.
+fn expected_field_hint(
+    name: &str,
+    expected_fields: Option<&BTreeMap<String, crate::ObjectField>>,
+    expected_index: Option<&crate::IndexSignature>,
+) -> Option<Type> {
+    expected_fields
+        .and_then(|fields| fields.get(name))
+        .map(|field| field.ty.clone())
+        .or_else(|| expected_index.map(|index| (*index.value).clone()))
+}
+
 /// Whether `inner` lies within `outer`.
 fn span_contains(outer: Span, inner: Span) -> bool {
     outer.file == inner.file && outer.start <= inner.start && inner.end <= outer.end
@@ -2581,11 +2619,13 @@ fn takes_in_callback(param_ty: &Type, name: &str) -> bool {
         .any(|param| super::expr::mentions_type_var(param, &|var| var == name))
 }
 
-/// An object literal argument whose fields bind a generic call's type
-/// parameters one at a time, for the fields after them.
-pub(crate) struct ObjectArgumentInference {
+/// An object or tuple literal argument whose slots, its fields or elements,
+/// bind a generic call's type parameters one at a time, for the callback slots
+/// typed after them.
+pub(crate) struct LiteralArgumentInference {
     literal: ExprId,
-    /// The parameter's fields, in terms of the type parameters.
+    /// The parameter's slots in terms of the type parameters, keyed by field
+    /// name or by element index (`"0"`, `"1"`, …).
     fields: std::collections::BTreeMap<String, crate::ObjectField>,
     sub: TypeParamSubstitution,
     /// Type parameters a callback field bound to just their whole-union
@@ -2646,7 +2686,9 @@ impl ShapeKind {
 /// arguments say (`console.log(xs.reduce((a, b) => a + b, 0))` would type `a`
 /// as `unknown`). It only fills the parameters the arguments leave unbound.
 fn pins_type_parameters(want: &Type) -> bool {
-    !matches!(want.peel(), Type::Error | Type::Unknown)
+    // An enclosing call's own unbound type parameter (`use(first(1, 2))`)
+    // says nothing yet, and binding to it would bind it from inside this call.
+    !matches!(want.peel(), Type::Error | Type::Unknown | Type::TypeVar(_))
 }
 
 /// Bind every type parameter inference left unsolved to `fallback`, so the call

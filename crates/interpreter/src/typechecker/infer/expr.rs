@@ -5217,17 +5217,16 @@ impl Inferer<'_> {
                         inferred_fields.remove(&field.value),
                     )?;
                     self.object_this_hint = previous_hint;
-                    let in_type_parameter_position = expected_fields
+                    let in_type_parameter_position = expected_field_ty
                         .as_ref()
-                        .and_then(|m| m.get(&field.name.name))
-                        .is_some_and(|expected| is_type_parameter_position(&expected.ty));
+                        .is_some_and(is_type_parameter_position);
                     let value_ty = if in_type_parameter_position {
                         self.widen_fresh_literals(typed_value, &value_ty)?
                     } else {
                         value_ty
                     };
                     if !inferred_ahead.contains(&field.value) {
-                        self.infer_from_object_argument_field(literal, &field.name.name, &value_ty);
+                        self.infer_from_argument_slot(literal, &field.name.name, &value_ty);
                     }
                     if !has_spread {
                         object_members.push(crate::TypedObjectMember::Value(typed_value));
@@ -5385,7 +5384,7 @@ impl Inferer<'_> {
                     for (name, field) in fields {
                         // A spread field binds type parameters for the fields
                         // after it, as one written out does.
-                        self.infer_from_object_argument_field(literal, &name, &field.ty);
+                        self.infer_from_argument_slot(literal, &name, &field.ty);
                         let origin = crate::TypedObjectFieldSource::Spread {
                             source_index,
                             field_name: name.clone(),
@@ -6336,48 +6335,35 @@ impl Inferer<'_> {
             ));
         }
 
-        let mut typed_elements: Vec<ExprId> = Vec::with_capacity(elements.len());
-        let mut slot_types: Vec<Type> = Vec::with_capacity(elements.len());
-        for (index, (elem_id, expected_ty)) in
-            elements.iter().zip(expected_elems.iter()).enumerate()
-        {
-            let elem_span = self
-                .ast
-                .try_expr(*elem_id)
-                .map_err(super::arena_failure)?
-                .span;
-            let errors_before = self.error_count();
-            // A generic call's argument types each element with what the
-            // elements before it bound, as tsc's intra-expression inference.
-            let index = index.to_string();
-            let hint = self.object_argument_field_hint(literal, &index);
-            let (typed_id, elem_ty) =
-                self.infer_expr(*elem_id, Some(hint.as_ref().unwrap_or(expected_ty)))?;
-            // Unbound generic-param slots take the inferred element type —
-            // `new Map([["a", 1]])` must report `[string, number]`, not
-            // `[K, V]`, so the call site can bind K and V.
-            let slot = if is_type_parameter_position(expected_ty) {
-                self.widen_fresh_literals(typed_id, &elem_ty)?
-            } else if type_contains_type_var(expected_ty) {
-                // A slot naming a type parameter still being inferred takes
-                // the element's own type too: `{ v: "x" }` for `{ v: T }`
-                // must reach the call as `{ v: string }` to bind `T`.
-                elem_ty
-            } else {
-                if self.error_count() == errors_before
-                    && !assignable(&elem_ty, expected_ty, self.resolver())
-                {
-                    self.error(
-                        elem_span,
-                        format!("expected `{expected_ty}`, got `{elem_ty}`"),
-                    );
+        // A generic call's argument types its function literal elements with
+        // an unannotated parameter last, each with what the other elements
+        // bound, as tsc's intra-expression inference does. The elements still
+        // run in source order.
+        let mut order: Vec<usize> = (0..elements.len()).collect();
+        if self.infers_one_at_a_time(literal) {
+            let mut context_sensitive = Vec::new();
+            for (index, elem_id) in elements.iter().enumerate() {
+                if self.is_context_sensitive_function(*elem_id)? {
+                    context_sensitive.push(index);
                 }
-                expected_ty.clone()
-            };
-            self.infer_from_object_argument_field(literal, &index, &slot);
-            slot_types.push(slot);
-            typed_elements.push(typed_id);
+            }
+            order.retain(|index| !context_sensitive.contains(index));
+            order.extend(context_sensitive);
         }
+        let mut inferred: Vec<Option<(ExprId, Type)>> = vec![None; elements.len()];
+        for index in order {
+            let (Some(elem_id), Some(expected_ty)) =
+                (elements.get(index), expected_elems.get(index))
+            else {
+                continue;
+            };
+            let element = self.infer_tuple_element(literal, index, *elem_id, expected_ty)?;
+            if let Some(slot) = inferred.get_mut(index) {
+                *slot = Some(element);
+            }
+        }
+        let (typed_elements, slot_types): (Vec<ExprId>, Vec<Type>) =
+            inferred.into_iter().flatten().unzip();
 
         Ok((
             TypedExprKind::TupleLiteral {
@@ -6386,6 +6372,54 @@ impl Inferer<'_> {
             },
             Type::Tuple(slot_types),
         ))
+    }
+
+    /// Infer element `index` of the tuple literal `literal` against its slot
+    /// `expected_ty`, returning the typed element and the slot's type.
+    fn infer_tuple_element(
+        &mut self,
+        literal: ExprId,
+        index: usize,
+        elem_id: ExprId,
+        expected_ty: &Type,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let elem_span = self
+            .ast
+            .try_expr(elem_id)
+            .map_err(super::arena_failure)?
+            .span;
+        let errors_before = self.error_count();
+        let index = index.to_string();
+        let hint = if self.is_context_sensitive_function(elem_id)? {
+            self.argument_slot_hint(literal, &index)
+        } else {
+            None
+        };
+        let (typed_id, elem_ty) =
+            self.infer_expr(elem_id, Some(hint.as_ref().unwrap_or(expected_ty)))?;
+        // Unbound generic-param slots take the inferred element type —
+        // `new Map([["a", 1]])` must report `[string, number]`, not
+        // `[K, V]`, so the call site can bind K and V.
+        let slot = if is_type_parameter_position(expected_ty) {
+            self.widen_fresh_literals(typed_id, &elem_ty)?
+        } else if type_contains_type_var(expected_ty) {
+            // A slot naming a type parameter still being inferred takes
+            // the element's own type too: `{ v: "x" }` for `{ v: T }`
+            // must reach the call as `{ v: string }` to bind `T`.
+            elem_ty
+        } else {
+            if self.error_count() == errors_before
+                && !assignable(&elem_ty, expected_ty, self.resolver())
+            {
+                self.error(
+                    elem_span,
+                    format!("expected `{expected_ty}`, got `{elem_ty}`"),
+                );
+            }
+            expected_ty.clone()
+        };
+        self.infer_from_argument_slot(literal, &index, &slot);
+        Ok((typed_id, slot))
     }
 
     /// Whether a user binding named `name` — local, top-level, or another `case`

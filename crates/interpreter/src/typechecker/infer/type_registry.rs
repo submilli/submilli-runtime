@@ -11,6 +11,7 @@
 //! Contrast [`TypeNamespace`](super::type_namespace::TypeNamespace), which stays
 //! import-scoped and is the right table for resolving a *name written in source*.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use crate::mangle::MangledName;
@@ -19,6 +20,10 @@ use crate::package_declaration::TypeSymbol;
 #[derive(Default)]
 pub(in crate::typechecker) struct TypeRegistry<'a> {
     entries: BTreeMap<MangledName, TypeRegistryEntry<'a>>,
+    /// Each generic declaration's measured type parameter variances, as
+    /// [`TypeResolver::type_param_variances`](super::assignable::TypeResolver)
+    /// measures them; cleared whenever a declaration is added.
+    variances: RefCell<BTreeMap<MangledName, Option<Vec<super::variance::Variance>>>>,
 }
 
 enum TypeRegistryEntry<'a> {
@@ -32,15 +37,34 @@ impl<'a> TypeRegistry<'a> {
     }
 
     pub(super) fn insert_borrowed(&mut self, sym: &'a TypeSymbol) {
+        self.variances.get_mut().clear();
         self.entries
             .insert(sym.mangled_name.clone(), TypeRegistryEntry::Borrowed(sym));
     }
 
     pub(super) fn insert_owned(&mut self, sym: TypeSymbol) {
+        self.variances.get_mut().clear();
         self.entries.insert(
             sym.mangled_name.clone(),
             TypeRegistryEntry::Owned(Box::new(sym)),
         );
+    }
+
+    pub(super) fn measured_variances(
+        &self,
+        mangled: &MangledName,
+    ) -> Option<Option<Vec<super::variance::Variance>>> {
+        self.variances.borrow().get(mangled).cloned()
+    }
+
+    pub(super) fn remember_variances(
+        &self,
+        mangled: &MangledName,
+        variances: Option<Vec<super::variance::Variance>>,
+    ) {
+        self.variances
+            .borrow_mut()
+            .insert(mangled.clone(), variances);
     }
 
     pub(super) fn lookup(&self, mangled: &MangledName) -> Option<&TypeSymbol> {

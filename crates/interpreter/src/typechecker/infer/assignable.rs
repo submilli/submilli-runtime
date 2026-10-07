@@ -10,7 +10,6 @@ use super::generic::substitute_or_record;
 use super::narrowing;
 use super::type_namespace::TypeNamespace;
 use super::type_registry::TypeRegistry;
-use super::variance::Variance;
 
 /// The pair of tables structural resolution needs: the import-scoped namespace
 /// plus the import-independent FQN registry. Carried (by `Copy`) wherever
@@ -1002,10 +1001,7 @@ fn type_args_relate(
     if actual_args == expected_args {
         return true;
     }
-    let variances = types
-        .type_param_variances(mangled, name)
-        .filter(|variances| variances.len() == actual_args.len())
-        .unwrap_or_else(|| vec![Variance::Covariant; actual_args.len()]);
+    let variances = types.variances_or_covariant(mangled, name, actual_args.len());
     actual_args
         .iter()
         .zip(expected_args)
