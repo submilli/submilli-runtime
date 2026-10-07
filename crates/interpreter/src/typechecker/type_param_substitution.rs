@@ -850,6 +850,9 @@ impl<'a> Unifier<'a> {
                 if self.infer_through_structured_member(pa, arg_ty) {
                     return Ok(());
                 }
+                if self.defer_to_identical_member(pa, arg_ty) {
+                    return Ok(());
+                }
                 for m in self.fallback_type_vars_last(pa) {
                     let snap = self.snapshot();
                     if self.unify(m, arg_ty).is_ok() {
@@ -1320,8 +1323,29 @@ impl<'a> Unifier<'a> {
         false
     }
 
-    /// Unify `arg` with one of `others`, keeping its bindings, when
-    /// `type_var` has a whole-union fallback; returns whether one took it.
+    /// An argument identical to a member of its union parameter that names
+    /// no type parameter gives the unbound bare type parameters beside it
+    /// only a whole-union fallback, as tsc gives a naked type parameter the
+    /// lowest priority: `f(new Box(1), "s")` with `a: T | Box<number>` and
+    /// `c: T` binds `T` to `string`, and `h("x")` with `a: T | U | "x"`
+    /// binds both to `"x"`.
+    fn defer_to_identical_member(&mut self, params: &[Type], arg: &Type) -> bool {
+        if !self.infers_from_covariant_argument() {
+            return false;
+        }
+        let identical = params.iter().any(|member| {
+            !super::infer::expr::type_contains_type_var(member) && member.peel() == arg.peel()
+        });
+        if !identical || !params.iter().any(|member| self.is_unbound_type_var(member)) {
+            return false;
+        }
+        self.offer_to_type_vars_without_fallback(params, arg);
+        true
+    }
+
+    /// Unify `arg` with each of `others`, keeping the bindings of those that
+    /// take it, when `type_var` has a whole-union fallback; returns whether
+    /// one took it.
     /// tsc counts such an argument at most as another candidate of the
     /// fallback's priority, so it must not bind the type parameter ahead of
     /// the fallback.
@@ -1334,9 +1358,14 @@ impl<'a> Unifier<'a> {
         if !self.is_unbound_fallback_type_var(type_var) {
             return false;
         }
-        others
-            .iter()
-            .any(|other| self.unifies_or_rolls_back(other, arg))
+        // Every member infers from it, as in tsc: `Box<number>` for
+        // `T | Box<number> | Box<U>` binds `U` though the first member takes
+        // it as is.
+        let mut took = false;
+        for other in others {
+            took |= self.unifies_or_rolls_back(other, arg);
+        }
+        took
     }
 
     /// tsc infers from a readonly array argument through a mutable array

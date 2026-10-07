@@ -1568,6 +1568,7 @@ impl Inferer<'_> {
             && super::assignable(&arg_ty, &hint, self.resolver());
         if arguments.literal_types.widens(param_ty)
             && !fits_binding
+            && !is_literal_member_of(&arg_ty, param_ty)
             && !self.fits_without_fallback_type_params(sub, param_ty, &arg_ty)
         {
             let widened = self.widen_fresh_literals(typed_id, &arg_ty)?;
@@ -2134,6 +2135,14 @@ impl LiteralTypeArguments {
             .iter()
             .any(|name| self.widened.iter().any(|widened| widened == name))
     }
+}
+
+/// Whether `arg` is a literal type `param` names as a member of its union
+/// (`"x"` for `T | U | "x"`): tsc matches it there before widening it, so
+/// it stays a `"x"`.
+fn is_literal_member_of(arg: &Type, param: &Type) -> bool {
+    arg.literal_base().is_some()
+        && matches!(param.peel(), Type::Union(members) if members.iter().any(|member| member.peel() == arg.peel()))
 }
 
 /// The type parameters `ty` is, alone or as a member of a union.
