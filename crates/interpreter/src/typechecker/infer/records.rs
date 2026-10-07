@@ -1051,6 +1051,7 @@ fn interface_member_contracts(
                         ty: property.ty.clone(),
                         optional: property.optional,
                         readonly: property.readonly,
+                        method: false,
                     },
                     generic_count: 0,
                 },

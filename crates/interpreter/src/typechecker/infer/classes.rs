@@ -2072,7 +2072,7 @@ impl<'a> Inferer<'a> {
         Ok(())
     }
 
-    fn enum_runtime_members(&self, ty: &Type) -> Option<Type> {
+    pub(super) fn enum_runtime_members(&self, ty: &Type) -> Option<Type> {
         let (Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. }) = ty else {
             return None;
         };
@@ -2178,6 +2178,7 @@ impl<'a> Inferer<'a> {
                             .map_err(type_limit_unlocated)?,
                         optional: field.optional,
                         readonly: field.readonly,
+                        method: false,
                     });
                 }
             }

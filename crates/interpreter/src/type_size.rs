@@ -321,6 +321,15 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
     }
 }
 
+/// [`map_children`] for a `map` that can't fail.
+pub fn map_children_infallible(ty: &Type, mut map: impl FnMut(&Type) -> Type) -> Type {
+    let mapped: Result<Type, std::convert::Infallible> = map_children(ty, |child| Ok(map(child)));
+    match mapped {
+        Ok(ty) => ty,
+        Err(never) => match never {},
+    }
+}
+
 /// `ty` with each type directly inside it replaced by `map`'s result, in the
 /// order [`for_each_child`] visits them; a leaf is cloned. Unions are rebuilt
 /// through [`Type::union`], so substitutions that collapse members keep the
@@ -361,6 +370,7 @@ pub fn map_children<E>(
                             ty: map(&field.ty)?,
                             optional: field.optional,
                             readonly: field.readonly,
+                            method: field.method,
                         },
                     ))
                 })

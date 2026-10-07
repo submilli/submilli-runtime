@@ -1,1 +1,0 @@
-line 11, 15, 16, 20 extra: bug SUB-1196 (non-literal `case` label) a `case` label must be a literal

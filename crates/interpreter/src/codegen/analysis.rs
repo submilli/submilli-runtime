@@ -386,6 +386,12 @@ impl CodegenAnalysis {
                 ..
             } => {
                 self.walk_expr(ta, *discriminant)?;
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
+                    self.walk_expr(ta, comparison)?;
+                }
                 for case in cases {
                     self.walk_stmt(ta, case.body)?;
                 }

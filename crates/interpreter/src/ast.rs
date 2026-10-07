@@ -797,6 +797,8 @@ pub struct TypeAnnotationField {
     pub optional: bool,
     pub readonly: bool,
     pub rest: bool,
+    /// Declared with method syntax, `m(): T`, rather than as a property `m: () => T`.
+    pub method: bool,
 }
 
 /// Metadata for a synthesized `IndexAccess` from pattern lowering — lets the typechecker emit destructure-specific errors.

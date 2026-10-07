@@ -1,9 +1,0 @@
-// expect-error: must be a literal
-function main(): void {
-  let x: number = 1;
-  let target: number = 5;
-  switch (x) {
-    case target: break;
-    default: break;
-  }
-}

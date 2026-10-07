@@ -1,41 +1,8 @@
-types: 40 of 63 tsc entries compared, 8 differ
-
-line 12: x
-  tsc:  0
-  ours: 0 | 1 | 2
-
-line 15: x
-  tsc:  1
-  ours: 0 | 1 | 2
-
-line 18: x
-  tsc:  2
-  ours: 0 | 1 | 2
-
-line 21: x
-  tsc:  never
-  ours: 0 | 1 | 2
-
-line 28: x
-  tsc:  0
-  ours: 0 | 1 | 2
-
-line 31: x
-  tsc:  1 | 2
-  ours: 0 | 1 | 2
-
-line 34: x
-  tsc:  1 | 2
-  ours: 0 | 1 | 2
+types: 40 of 63 tsc entries compared, 1 differ
 
 line 65: x
   tsc:  never
   ours: 0 | 1 | string | true
 
 errors:
-line 11: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
-line 14: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
-line 17: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
-line 27: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
-line 30: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
 line 64: ours: duplicate `case` label (tsc accepts)
