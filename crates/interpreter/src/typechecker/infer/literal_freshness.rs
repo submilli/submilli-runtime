@@ -204,6 +204,17 @@ impl Inferer<'_> {
         Ok(widen_only(ty, &fresh))
     }
 
+    /// Whether `literal`, the type of `value`, is known to be fresh and not
+    /// also regular: written as a literal, or read from a `const` bound to one.
+    pub(super) fn is_known_fresh_literal(
+        &self,
+        value: ExprId,
+        literal: &Type,
+    ) -> Result<bool, CompilerFailure> {
+        Ok(self.known_fresh_literals(value)?.contains(literal)
+            && !self.regular_literals(value)?.contains(literal))
+    }
+
     /// Record that a generic call's result keeps the literal type of
     /// `argument`.
     pub(super) fn record_kept_literal_argument(&mut self, argument: ExprId) {
@@ -534,7 +545,14 @@ impl Inferer<'_> {
                 continue;
             }
             match &expr.kind {
-                TypedExprKind::Number(_) | TypedExprKind::String(_) | TypedExprKind::Boolean(_) => {
+                // A `!` and a template of constants are literals as TypeScript
+                // evaluates them; only a template's concatenation has a literal type.
+                TypedExprKind::Number(_)
+                | TypedExprKind::String(_)
+                | TypedExprKind::Boolean(_)
+                | TypedExprKind::BigInt(_)
+                | TypedExprKind::Unary { .. }
+                | TypedExprKind::Binary { op: BinOp::Add, .. } => {
                     fresh.extend(literal_members(&expr.ty));
                 }
                 TypedExprKind::LocalRef { ident, .. } => {

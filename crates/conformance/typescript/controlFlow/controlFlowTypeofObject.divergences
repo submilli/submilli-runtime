@@ -1,4 +1,4 @@
-types: 38 of 60 tsc entries compared, 9 differ
+types: 38 of 60 tsc entries compared, 7 differ
 
 line 11: x
   tsc:  {}
@@ -15,14 +15,6 @@ line 29: x
 line 38: x
   tsc:  {}
   ours: unknown
-
-line 44: !!true
-  tsc:  true
-  ours: boolean
-
-line 44: !true
-  tsc:  false
-  ours: boolean
 
 line 54: x
   tsc:  {} | undefined

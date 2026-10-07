@@ -24,6 +24,14 @@ function isRed(color: Color): boolean {
   return color == 1;
 }
 
+// The discriminant is the literal `"v2"`, so its one case covers it.
+function matchesFoldedLabel(): boolean {
+  switch (`v${2}`) {
+    case "v2":
+      return true;
+  }
+}
+
 function main(): void {
   const foo: "foo" | "bar" = "foo";
   assert("foo" === foo, "literal on the left");
@@ -36,9 +44,5 @@ function main(): void {
   assert((Color.Red) == 1 && !(Mode.Off != "off"), "parenthesised operand, loose operators");
   assert(colorName(Color.Red) === "red", "number label on an enum discriminant");
   assert(colorName(Color.Green) === "green", "enum member label");
-  switch (`v${2}`) {
-    case "v2":
-      return;
-  }
-  assert(false, "template discriminant matches its folded label");
+  assert(matchesFoldedLabel(), "template discriminant matches its folded label");
 }

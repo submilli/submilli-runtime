@@ -1554,7 +1554,9 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (operand_id, result_ty) = match op {
             UnOp::Not => {
-                let (id, operand_ty) = self.infer_expr(operand, None)?;
+                // The operand keeps a literal type, which can decide the result:
+                // `!true` is `false`.
+                let (id, operand_ty) = self.infer_expr_keeping_literals(operand, None, true)?;
                 if matches!(operand_ty.peel(), Type::Unknown) {
                     // `!x` on un-narrowed `unknown` rejected
                     // with a "narrow first" hint.
@@ -1580,8 +1582,9 @@ impl Inferer<'_> {
                         .map_err(super::arena_failure)?
                         .span;
                     self.error_non_condition_type(operand_span, &operand_ty);
+                    return Ok((TypedExprKind::Unary { op, operand: id }, Type::Boolean));
                 }
-                (id, Type::Boolean)
+                (id, narrowing::negation_type(&operand_ty))
             }
             UnOp::Neg | UnOp::Pos | UnOp::BitNot => {
                 // No forced hint — the operand picks its own widened type and
@@ -4553,14 +4556,18 @@ impl Inferer<'_> {
         // whole template's type degrades cleanly without poisoning the
         // surrounding inference.
         let mut had_error = false;
+        // The text of each substitution TypeScript can evaluate, in order. The
+        // template is the string literal they spell when every one has one.
+        let mut constant_texts: Vec<Option<String>> = Vec::with_capacity(exprs.len());
         let typed_interps: Vec<ExprId> = exprs
             .into_iter()
             .zip(substitution_spans)
             .map(|(expr_id, substitution_span)| {
-                let (typed_id, ty) = self.infer_expr(expr_id, None)?;
+                let (typed_id, ty) = self.infer_expr_keeping_literals(expr_id, None, true)?;
                 if matches!(ty, Type::Error) {
                     had_error = true;
                 }
+                constant_texts.push(self.substitution_constant_text(expr_id, typed_id, &ty)?);
                 let interp_span = self
                     .typed_ast
                     .try_expr(typed_id)
@@ -4590,7 +4597,36 @@ impl Inferer<'_> {
             }
         }
 
-        let result_ty = if had_error { Type::Error } else { Type::String };
+        let constant = (!had_error)
+            .then(|| constant_texts.into_iter().collect::<Option<Vec<String>>>())
+            .flatten()
+            .map(|texts| {
+                let mut text = String::new();
+                for (index, part) in parts.iter().enumerate() {
+                    text.push_str(part);
+                    text.push_str(texts.get(index).map_or("", String::as_str));
+                }
+                Type::StringLiteral(text)
+            });
+        let result_ty = match constant {
+            Some(literal) => literal,
+            None if had_error => Type::Error,
+            None => Type::String,
+        };
+
+        // A constant template stays a concatenation even of one operand, so its
+        // literal type reads as fresh, as a written literal's does.
+        if operands.len() == 1 && matches!(result_ty, Type::StringLiteral(_)) {
+            let empty = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::String(String::new()),
+                    span,
+                    ty: Type::String,
+                })
+                .map_err(crate::typechecker::arena_failure)?;
+            operands.insert(0, empty);
+        }
 
         // Single-operand case (e.g. `` `${x}` ``): the lone
         // interpolation *is* the result. Return its kind so the outer
@@ -4607,7 +4643,11 @@ impl Inferer<'_> {
             // unless a string literal type is expected of it.
             let keeps_literal = matches!(single.ty, Type::StringLiteral(_))
                 && expects_literal(expected, |ty| matches!(ty, Type::StringLiteral(_)));
-            let ty = if keeps_literal { single.ty } else { result_ty };
+            let ty = if keeps_literal && !matches!(result_ty, Type::StringLiteral(_)) {
+                single.ty
+            } else {
+                result_ty
+            };
             return Ok((single.kind, ty));
         }
 
@@ -4649,6 +4689,38 @@ impl Inferer<'_> {
             },
             result_ty,
         ))
+    }
+
+    /// The text TypeScript evaluates a template substitution to, when it does:
+    /// a string or number literal, an arithmetic of them, an enum member, or a
+    /// `const` bound to a literal. `None` for anything else, a boolean included.
+    fn substitution_constant_text(
+        &self,
+        source: ExprId,
+        typed: ExprId,
+        ty: &Type,
+    ) -> Result<Option<String>, CompilerFailure> {
+        if let Some(text) = super::comparison_operand::constant_substitution(self.ast, source)? {
+            return Ok(Some(text));
+        }
+        let kind = &self
+            .typed_ast
+            .try_expr(typed)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind;
+        match kind {
+            TypedExprKind::NumberEnumMember { value, .. } => {
+                return Ok(Some(crate::runtime::number::format_number_js(*value)));
+            }
+            TypedExprKind::StringEnumMember { value, .. } => return Ok(Some(value.clone())),
+            _ => {}
+        }
+        let text = match ty {
+            Type::StringLiteral(text) => text.clone(),
+            Type::NumberLiteral(value) => crate::runtime::number::format_number_js(value.0),
+            _ => return Ok(None),
+        };
+        Ok(self.is_known_fresh_literal(typed, ty)?.then_some(text))
     }
 
     /// Wrap an already-typed interpolation expression in a
@@ -11707,15 +11779,21 @@ mod tests {
 
     #[test]
     fn unary_not_correct() {
+        // As in TypeScript, `!` of a value whose truthiness its type decides
+        // is a literal type.
         let ta = run_clean("let x: boolean = !true;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::BooleanLiteral(false));
+        let ta = run_clean("let b: boolean = 1 > 2; let x: boolean = !b;");
+        assert_eq!(nth_decl_value_ty(&ta, 1), Type::Boolean);
     }
 
     #[test]
     fn unary_not_truthiness_operands() {
         let ta = run_clean("let x: boolean = !1;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::BooleanLiteral(false));
         let ta = run_clean("let xs: number[] = [1]; let x: boolean = !xs;");
+        assert_eq!(nth_decl_value_ty(&ta, 1), Type::BooleanLiteral(false));
+        let ta = run_clean("let n: number = 1; let x: boolean = !n;");
         assert_eq!(nth_decl_value_ty(&ta, 1), Type::Boolean);
     }
 

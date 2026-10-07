@@ -4,7 +4,9 @@ function main(): void {
   assert(1n <= 1n, "1 <= 1");
   assert(1n >= 1n, "1 >= 1");
   assert(1n === 1n, "1 === 1");
-  assert(1n !== 2n, "1 !== 2");
+  // `1n !== 2n` is rejected, as tsc rejects it: the literal types never overlap.
+  const one: bigint = 1n;
+  assert(one !== 2n, "1 !== 2");
 
   let big1: bigint = 12345678901234567890n;
   let big2: bigint = 12345678901234567891n;

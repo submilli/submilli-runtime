@@ -385,7 +385,17 @@ impl Inferer<'_> {
                     );
                     continue;
                 }
-                let Some(lit) = classify_switch_case_value(&val_kind, value_span) else {
+                // A template of constants is the string it spells, as `tsc` has it.
+                let constant_template =
+                    super::comparison_operand::constant_template(self.ast, *value_expr)?.map(
+                        |value| TypedSwitchValue::String {
+                            value,
+                            span: value_span,
+                        },
+                    );
+                let Some(lit) =
+                    classify_switch_case_value(&val_kind, value_span).or(constant_template)
+                else {
                     self.error(
                         value_span,
                         "`case` label must be a literal (string, number, boolean, `null`, or enum member)".to_string(),

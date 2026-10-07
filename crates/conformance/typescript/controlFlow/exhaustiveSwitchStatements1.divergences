@@ -1,12 +1,4 @@
-types: 83 of 223 tsc entries compared, 12 differ
-
-line 7: !!true
-  tsc:  true
-  ours: boolean
-
-line 7: !true
-  tsc:  false
-  ours: boolean
+types: 83 of 223 tsc entries compared, 10 differ
 
 line 43: E.A
   tsc:  E.A

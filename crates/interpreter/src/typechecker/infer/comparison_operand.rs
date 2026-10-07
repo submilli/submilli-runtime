@@ -3,7 +3,7 @@
 //! value, and a template of literals is the string it spells.
 
 use crate::compiler_error::CompilerFailure;
-use crate::{ExprId, ExprKind, MangledName, Type, TypedExprKind, UnOp};
+use crate::{BinOp, ExprId, ExprKind, MangledName, Type, TypedExprKind, UnOp};
 
 use super::assignable::TypeResolver;
 use super::comparable::comparable;
@@ -123,9 +123,12 @@ impl ComparisonOperand {
     }
 }
 
-/// The string a template literal spells when every substitution is a string or
-/// number literal, else `None`.
-fn constant_template(ast: &crate::Ast, id: ExprId) -> Result<Option<String>, CompilerFailure> {
+/// The string a template literal spells when TypeScript can evaluate every
+/// substitution (string and number literals and arithmetic on them), else `None`.
+pub(super) fn constant_template(
+    ast: &crate::Ast,
+    id: ExprId,
+) -> Result<Option<String>, CompilerFailure> {
     let (parts, exprs) = match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
         ExprKind::Paren(inner) => return constant_template(ast, *inner),
         ExprKind::TemplateLiteral { parts, exprs, .. } => (parts, exprs),
@@ -145,12 +148,29 @@ fn constant_template(ast: &crate::Ast, id: ExprId) -> Result<Option<String>, Com
     Ok(Some(text))
 }
 
-fn constant_substitution(ast: &crate::Ast, id: ExprId) -> Result<Option<String>, CompilerFailure> {
+pub(super) fn constant_substitution(
+    ast: &crate::Ast,
+    id: ExprId,
+) -> Result<Option<String>, CompilerFailure> {
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
             ExprKind::Paren(inner) => constant_substitution(ast, *inner)?,
             ExprKind::String(value) => Some(value.clone()),
             ExprKind::TemplateLiteral { .. } => constant_template(ast, id)?,
+            ExprKind::Binary {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            } if constant_number(ast, id)?.is_none() => {
+                // A concatenation: at least one side is a string.
+                match (
+                    constant_substitution(ast, *lhs)?,
+                    constant_substitution(ast, *rhs)?,
+                ) {
+                    (Some(left), Some(right)) => Some(left + &right),
+                    _ => None,
+                }
+            }
             _ => constant_number(ast, id)?.map(crate::runtime::number::format_number_js),
         },
     )
@@ -169,6 +189,22 @@ fn constant_number(ast: &crate::Ast, id: ExprId) -> Result<Option<f64>, Compiler
                 op: UnOp::Pos,
                 operand,
             } => constant_number(ast, *operand)?,
+            ExprKind::Binary { op, lhs, rhs } => {
+                let (Some(left), Some(right)) =
+                    (constant_number(ast, *lhs)?, constant_number(ast, *rhs)?)
+                else {
+                    return Ok(None);
+                };
+                // The operators whose IEEE 754 result Rust and JavaScript agree on.
+                match op {
+                    BinOp::Add => Some(left + right),
+                    BinOp::Sub => Some(left - right),
+                    BinOp::Mul => Some(left * right),
+                    BinOp::Div => Some(left / right),
+                    BinOp::Rem => Some(left % right),
+                    _ => None,
+                }
+            }
             _ => None,
         },
     )

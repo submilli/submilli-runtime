@@ -1,4 +1,4 @@
-types: 27 of 82 tsc entries compared, 27 differ
+types: 27 of 82 tsc entries compared, 17 differ
 
 line 38: d
   tsc:  typeof d
@@ -8,14 +8,6 @@ line 39: d
   tsc:  typeof d
   ours: () => void
 
-line 41: !!false
-  tsc:  false
-  ours: boolean
-
-line 41: !false
-  tsc:  true
-  ours: boolean
-
 line 42: d
   tsc:  typeof d
   ours: () => void
@@ -23,14 +15,6 @@ line 42: d
 line 44: d
   tsc:  typeof d
   ours: () => void
-
-line 45: !!false
-  tsc:  false
-  ours: boolean
-
-line 45: !false
-  tsc:  true
-  ours: boolean
 
 line 46: d
   tsc:  typeof d
@@ -43,14 +27,6 @@ line 49: d
 line 51: d
   tsc:  typeof d
   ours: () => void
-
-line 52: !!false
-  tsc:  false
-  ours: boolean
-
-line 52: !false
-  tsc:  true
-  ours: boolean
 
 line 53: d
   tsc:  typeof d
@@ -72,14 +48,6 @@ line 61: function() { }
   tsc:  { (): void; expando: number; both: string | number; }
   ours: () => void
 
-line 63: !!false
-  tsc:  false
-  ours: boolean
-
-line 63: !false
-  tsc:  true
-  ours: boolean
-
 line 64: g
   tsc:  { (): void; expando: number; both: string | number; }
   ours: () => void
@@ -87,14 +55,6 @@ line 64: g
 line 66: g
   tsc:  { (): void; expando: number; both: string | number; }
   ours: () => void
-
-line 68: !!false
-  tsc:  false
-  ours: boolean
-
-line 68: !false
-  tsc:  true
-  ours: boolean
 
 line 69: g
   tsc:  { (): void; expando: number; both: string | number; }

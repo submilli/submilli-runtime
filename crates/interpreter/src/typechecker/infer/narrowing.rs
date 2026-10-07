@@ -732,7 +732,14 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
                 AlwaysTruthy
             }
         }
-        Type::BigInt | Type::BigIntLiteral(_) => BigIntLike,
+        Type::BigInt => BigIntLike,
+        Type::BigIntLiteral(digits) => {
+            if digits == "0" {
+                AlwaysFalsy
+            } else {
+                AlwaysTruthy
+            }
+        }
         Type::NumberEnum { .. } => NumberLike,
         Type::StringEnum { .. } => StringLike,
         // `{}` admits every value but `null` and `undefined`, falsy primitives
@@ -763,6 +770,29 @@ pub fn has_known_truthiness(ty: &Type) -> bool {
             TruthinessClass::AlwaysTruthy | TruthinessClass::AlwaysFalsy
         )
     })
+}
+
+/// The type of `!value` for a `value` of type `ty`, as TypeScript has it:
+/// `false` when every value it holds is truthy, `true` when every one is
+/// falsy, and `boolean` otherwise.
+pub fn negation_type(ty: &Type) -> Type {
+    let classes: Vec<TruthinessClass> = union_members(ty)
+        .into_iter()
+        .map(truthiness_class)
+        .collect();
+    if classes
+        .iter()
+        .all(|class| *class == TruthinessClass::AlwaysTruthy)
+    {
+        return Type::BooleanLiteral(false);
+    }
+    if classes
+        .iter()
+        .all(|class| *class == TruthinessClass::AlwaysFalsy)
+    {
+        return Type::BooleanLiteral(true);
+    }
+    Type::Boolean
 }
 
 pub(super) fn union_members(ty: &Type) -> Vec<&Type> {

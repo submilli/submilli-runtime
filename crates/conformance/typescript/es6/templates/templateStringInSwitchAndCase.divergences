@@ -1,16 +1,1 @@
-types: 3 of 9 tsc entries compared, 3 differ
-
-line 2: `abc${0}abc`
-  tsc:  "abc0abc"
-  ours: string
-
-line 5: `abc${0}abc`
-  tsc:  "abc0abc"
-  ours: string
-
-line 6: `def${1}def`
-  tsc:  "def1def"
-  ours: string
-
-errors:
-line 5: ours: `case` label must be a literal (string, number, boolean, `null`, or enum member) (tsc accepts)
+types: 3 of 9 tsc entries compared, 0 differ

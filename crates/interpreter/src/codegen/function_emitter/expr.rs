@@ -3051,7 +3051,9 @@ fn emit_binary(
             })?;
             emit_bitwise_host(emitter, ctx, name, &[lhs, rhs], result_ty)?;
         }
-        BinOp::Add => match result_ty {
+        // A template of constants has a string literal type: concatenate it as
+        // a `string`.
+        BinOp::Add => match &result_ty.widen_literal() {
             Type::Number => {
                 emit_primitive_operand(emitter, ctx, lhs)?;
                 emit_primitive_operand(emitter, ctx, rhs)?;
