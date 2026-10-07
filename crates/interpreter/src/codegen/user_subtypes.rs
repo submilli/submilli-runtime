@@ -286,7 +286,9 @@ fn emit_subtype_to_string_body(
         return Ok(f);
     }
 
-    // The typechecker guarantees `toString` field is non-optional `() => string`, so the slot is non-null.
+    // The typechecker guarantees a `toString` field is `() => string`. It may be
+    // optional, and an absent one falls back to `[object Object]`, as in
+    // JavaScript, where the property lookup reaches `Object.prototype`.
     let to_string_sig = crate::codegen::closures::ClosureSig {
         arity: 0,
         is_void: false,
@@ -324,7 +326,12 @@ fn emit_subtype_to_string_body(
     )));
     f.instruction(&Instruction::LocalSet(self_t));
 
-    // The field slot is `(ref null $Object)`; ref.as_non_null before the closure cast.
+    f.instruction(&Instruction::Block(BlockType::Result(ref_to(
+        intrinsics.string,
+    ))));
+    f.instruction(&Instruction::Block(BlockType::Empty));
+    // The field slot is `(ref null $Object)`; null when an optional `toString`
+    // is absent.
     let to_string_slot = field_index(&subtype.ty, "toString")?
         .ok_or_else(|| internal_failure("an object shape lost its toString field slot"))?;
     f.instruction(&Instruction::LocalGet(self_t));
@@ -334,7 +341,7 @@ fn emit_subtype_to_string_body(
     });
     f.instruction(&Instruction::I32Const(to_string_slot.cast_signed()));
     f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
-    f.instruction(&Instruction::RefAsNonNull);
+    f.instruction(&Instruction::BrOnNull(0));
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         closure_struct_idx,
     )));
@@ -357,6 +364,15 @@ fn emit_subtype_to_string_body(
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         intrinsics.string,
     )));
+    f.instruction(&Instruction::Br(1));
+    f.instruction(&Instruction::End);
+    crate::codegen::intrinsics::push_string_literal(
+        &mut f,
+        intrinsics,
+        string_vtable_global_idx,
+        "[object Object]",
+    )?;
+    f.instruction(&Instruction::End);
     f.instruction(&Instruction::End);
     Ok(f)
 }
