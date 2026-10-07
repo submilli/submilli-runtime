@@ -447,7 +447,8 @@ impl Inferer<'_> {
         }
 
         let covered: BTreeSet<narrowing::LiteralValue> = seen.keys().cloned().collect();
-        let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered)?;
+        let (residual, site) =
+            self.compute_switch_residual(typed_disc, &disc_ty, &covered, saw_null.is_some())?;
 
         let typed_default = if let Some(d) = default {
             let body_span = self
@@ -480,6 +481,8 @@ impl Inferer<'_> {
                     self.emit_non_exhaustive(&unmatched, &site, switch_span);
                 }
                 any_arm_reachable_exit |= entry_reachable;
+            } else {
+                self.typed_ast.exhaustive_switches.insert(typed_disc);
             }
             None
         };
@@ -592,6 +595,7 @@ impl Inferer<'_> {
         typed_disc: ExprId,
         disc_ty: &Type,
         covered: &BTreeSet<narrowing::LiteralValue>,
+        covers_null: bool,
     ) -> Result<(Type, ResidualSite), crate::compiler_error::CompilerFailure> {
         let disc_expr = self
             .typed_ast
@@ -612,9 +616,9 @@ impl Inferer<'_> {
                     .iter()
                     .zip(field_tys)
                     .filter(|(_, field_ty)| {
-                        !field_ty
-                            .as_ref()
-                            .is_some_and(|ty| narrowing::is_covered_by_literals(ty, covered))
+                        !field_ty.as_ref().is_some_and(|ty| {
+                            narrowing::is_covered_by_literals(ty, covered, covers_null)
+                        })
                     })
                     .map(|(m, _)| m.clone())
                     .collect();

@@ -658,13 +658,13 @@ impl<'a> Inferer<'a> {
         let can_be_null = super::assignable(&Type::Null, &path_ty, self.resolver());
         let path_span = path_expr.span;
         let fallback_kind = path_expr.kind.clone();
+        let (mut eq_env, mut neq_env) =
+            self.null_discriminant_envs(&path, &fallback_kind, path_span)?;
 
         // Prefer un-narrowed source so NarrowRegion materialization avoids dangling chain shadows.
         let source_kind = self
             .synthesize_unnarrowed_source(&path, path_span)?
             .unwrap_or(fallback_kind);
-        let mut eq_env = narrowing::NarrowEnv::new();
-        let mut neq_env = narrowing::NarrowEnv::new();
         let source_eq = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -730,6 +730,42 @@ impl<'a> Inferer<'a> {
                 ));
             }
         })
+    }
+
+    /// The views `s.kind === null` puts on `s` when `kind` is a discriminant
+    /// some member types `null`: as for a literal, the members whose `kind` may
+    /// be `null` where it is, and the rest where it isn't. Empty otherwise.
+    fn null_discriminant_envs(
+        &mut self,
+        path: &narrowing::ReferencePath,
+        path_kind: &crate::TypedExprKind,
+        path_span: Span,
+    ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
+    {
+        let none = (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new());
+        if path.chain.is_empty() {
+            return Ok(none);
+        }
+        let Some(root) = self.discriminant_root(path, path_kind, path_span)? else {
+            return Ok(none);
+        };
+        let DiscriminantKey::Field(key) = &root.key else {
+            return Ok(none);
+        };
+        let Type::Union(members) = root.ty.peel() else {
+            return Ok(none);
+        };
+        let Some(split) = self.discriminant_split(members, key, &Type::Null) else {
+            return Ok(none);
+        };
+        self.root_discriminant_envs(
+            crate::BinOp::Eq,
+            root.path,
+            root.ty,
+            root.span,
+            root.kind,
+            split,
+        )
     }
 
     /// A non-null chain result proves every optional receiver was present.
@@ -1267,24 +1303,16 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    fn narrow_literal_discriminant(
+    /// The object a discriminant read `path` tests, with the key it reads:
+    /// `s.kind` tests `s` by its `kind` field, and `t[0]` tests `t` by position.
+    fn discriminant_root(
         &mut self,
-        op: crate::BinOp,
-        path: narrowing::ReferencePath,
-        path_ty: Type,
-        path_kind: crate::TypedExprKind,
+        path: &narrowing::ReferencePath,
+        path_kind: &crate::TypedExprKind,
         path_span: Span,
-        literal: narrowing::LiteralValue,
-    ) -> Result<
-        Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
-        crate::compiler_error::CompilerFailure,
-    > {
+    ) -> Result<Option<DiscriminantRoot>, crate::compiler_error::CompilerFailure> {
         use crate::TypedExprKind;
-        enum DiscKey {
-            Field(String),
-            Position(usize),
-        }
-        let (root_path, root_ty, root_span, root_kind, disc_key_from_path) = match &path_kind {
+        Ok(Some(match path_kind {
             TypedExprKind::FieldAccess { receiver, name } => {
                 let receiver_expr = self
                     .typed_ast
@@ -1299,13 +1327,13 @@ impl<'a> Inferer<'a> {
                 let root_kind = self
                     .synthesize_unnarrowed_source(&root_path, receiver_span)?
                     .unwrap_or(fallback_kind);
-                (
-                    root_path,
-                    receiver_ty,
-                    receiver_span,
-                    root_kind,
-                    DiscKey::Field(name.name.clone()),
-                )
+                DiscriminantRoot {
+                    path: root_path,
+                    ty: receiver_ty,
+                    span: receiver_span,
+                    kind: root_kind,
+                    key: DiscriminantKey::Field(name.name.clone()),
+                }
             }
             TypedExprKind::IndexAccess { receiver, index } => {
                 let receiver_expr = self
@@ -1330,24 +1358,24 @@ impl<'a> Inferer<'a> {
                 ) else {
                     return Ok(None);
                 };
-                (
-                    root_path,
-                    receiver_ty,
-                    receiver_span,
-                    root_kind,
-                    DiscKey::Position(position),
-                )
+                DiscriminantRoot {
+                    path: root_path,
+                    ty: receiver_ty,
+                    span: receiver_span,
+                    kind: root_kind,
+                    key: DiscriminantKey::Position(position),
+                }
             }
             TypedExprKind::LocalNarrowRef { .. } => {
                 let disc_key = match match path.chain.last().cloned() {
                     Some(value) => value,
                     None => return Ok(None),
                 } {
-                    narrowing::PathElem::Field(name) => DiscKey::Field(name),
+                    narrowing::PathElem::Field(name) => DiscriminantKey::Field(name),
                     narrowing::PathElem::Index(narrowing::LiteralValue::Number(n))
                         if n.0.is_finite() && n.0.fract() == 0.0 && n.0 >= 0.0 =>
                     {
-                        DiscKey::Position(n.0 as usize)
+                        DiscriminantKey::Position(n.0 as usize)
                     }
                     _ => return Ok(None),
                 };
@@ -1357,9 +1385,39 @@ impl<'a> Inferer<'a> {
                 else {
                     return Ok(None);
                 };
-                (root_path, root_ty, path_span, root_kind, disc_key)
+                DiscriminantRoot {
+                    path: root_path,
+                    ty: root_ty,
+                    span: path_span,
+                    kind: root_kind,
+                    key: disc_key,
+                }
             }
             _ => return Ok(None),
+        }))
+    }
+
+    fn narrow_literal_discriminant(
+        &mut self,
+        op: crate::BinOp,
+        path: narrowing::ReferencePath,
+        path_ty: Type,
+        path_kind: crate::TypedExprKind,
+        path_span: Span,
+        literal: narrowing::LiteralValue,
+    ) -> Result<
+        Option<(narrowing::NarrowEnv, narrowing::NarrowEnv)>,
+        crate::compiler_error::CompilerFailure,
+    > {
+        let Some(DiscriminantRoot {
+            path: root_path,
+            ty: root_ty,
+            span: root_span,
+            kind: root_kind,
+            key: disc_key_from_path,
+        }) = self.discriminant_root(&path, &path_kind, path_span)?
+        else {
+            return Ok(None);
         };
 
         // Peel aliases so `type Shape = A | B` pattern-matches as union.
@@ -1367,14 +1425,14 @@ impl<'a> Inferer<'a> {
             return Ok(None);
         };
         let (matching, remaining) = match &disc_key_from_path {
-            DiscKey::Field(key_field) => {
+            DiscriminantKey::Field(key_field) => {
                 let literal_ty = narrowing::literal_type(&literal);
                 let Some(split) = self.discriminant_split(members, key_field, &literal_ty) else {
                     return Ok(None);
                 };
                 split
             }
-            DiscKey::Position(pos) => {
+            DiscriminantKey::Position(pos) => {
                 let Some((disc_pos, table)) = narrowing::tuple_union_discriminant(members) else {
                     return Ok(None);
                 };
@@ -2621,4 +2679,20 @@ fn add_missing_views(env: &mut narrowing::NarrowEnv, extra: narrowing::NarrowEnv
             env.insert(path, view);
         }
     }
+}
+
+/// What a discriminant read tests the object it reads from by.
+enum DiscriminantKey {
+    Field(String),
+    Position(usize),
+}
+
+/// The object a discriminant read tests: its path, declared type, span, a
+/// source that reads it, and the key the read takes.
+struct DiscriminantRoot {
+    path: narrowing::ReferencePath,
+    ty: Type,
+    span: Span,
+    kind: crate::TypedExprKind,
+    key: DiscriminantKey,
 }

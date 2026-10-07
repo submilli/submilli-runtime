@@ -192,6 +192,9 @@ fn switch_is_exhaustive(
     discriminant: crate::ExprId,
     cases: &[TypedSwitchCase],
 ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    if ta.exhaustive_switches.contains(&discriminant) {
+        return Ok(true);
+    }
     let mut seen: std::collections::BTreeSet<narrowing::LiteralValue> =
         std::collections::BTreeSet::new();
     for case in cases {

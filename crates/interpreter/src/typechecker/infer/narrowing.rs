@@ -446,11 +446,18 @@ pub fn has_unit_member(ty: &Type) -> bool {
 }
 
 /// Whether every value `ty` holds is one of the `covered` literals.
-pub fn is_covered_by_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> bool {
+/// Whether `case` labels for the `covered` literals, and for `null` when
+/// `covers_null`, match every value of `ty`.
+pub fn is_covered_by_literals(
+    ty: &Type,
+    covered: &BTreeSet<LiteralValue>,
+    covers_null: bool,
+) -> bool {
     match ty.peel() {
         Type::Union(members) => members
             .iter()
-            .all(|member| is_covered_by_literals(member, covered)),
+            .all(|member| is_covered_by_literals(member, covered, covers_null)),
+        Type::Null => covers_null,
         // `boolean` is `true | false`.
         Type::Boolean => [true, false]
             .into_iter()
