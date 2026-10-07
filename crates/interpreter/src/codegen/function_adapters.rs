@@ -1,6 +1,6 @@
 //! Collects top-level functions used in value position and emits closure-shaped adapter bodies for them.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use wasm_encoder::{
     CodeSection, ConstExpr, EntityType, GlobalSection, GlobalType, HeapType, ImportSection,
@@ -19,12 +19,13 @@ pub struct AdapterMeta {
     pub signature: Type,
 }
 
-/// The functions and static methods whose closure cache this module exports:
-/// the non-generic exported functions it defines, and its classes' public
-/// static methods. A consumer that reads one as a value imports the cache
-/// instead of keeping its own, so the function is one closure across packages,
-/// as in JavaScript.
-pub fn exported_closure_caches(ta: &TypedAst) -> BTreeSet<MangledName> {
+/// The closure caches this module exports, from the name a consumer knows the
+/// function by to the function it defines: its non-generic exported functions,
+/// under each name they are exported as, and its classes' public static
+/// methods. A consumer that reads one as a value imports the cache instead of
+/// keeping its own, so the function is one closure across packages, as in
+/// JavaScript.
+pub fn exported_closure_caches(ta: &TypedAst) -> BTreeMap<MangledName, MangledName> {
     let defined: BTreeSet<&MangledName> = ta
         .functions
         .iter()
@@ -37,7 +38,7 @@ pub fn exported_closure_caches(ta: &TypedAst) -> BTreeSet<MangledName> {
         .filter(|entry| {
             entry.kind == crate::ExportKind::Function && defined.contains(&entry.target)
         })
-        .map(|entry| entry.target.clone());
+        .map(|entry| (entry.public_name.clone(), entry.target.clone()));
     let static_methods = ta.types.iter().flat_map(|decl| {
         let crate::TypedTypeDecl::Class(class) = decl else {
             return Vec::new();
@@ -46,7 +47,10 @@ pub fn exported_closure_caches(ta: &TypedAst) -> BTreeSet<MangledName> {
             .static_methods
             .iter()
             .filter(|(_, visibility)| **visibility == crate::Visibility::Public)
-            .map(|(name, _)| crate::mangle::static_member(&class.mangled_name, name))
+            .map(|(name, _)| {
+                let method = crate::mangle::static_member(&class.mangled_name, name);
+                (method.clone(), method)
+            })
             .collect()
     });
     functions.chain(static_methods).collect()
@@ -96,18 +100,19 @@ pub fn import_shared_closure_caches(
 /// top-level function yields the same value and `f === f` holds. The closure
 /// has no environment, so one instance serves every read. Each starts null and
 /// is filled on first read. A function read here gets a cache of its own
-/// unless it imported one; each of `exported` gets an exported shared cache.
+/// unless it imported one; each function `exported` names gets a shared cache.
 /// Returns how many globals were added.
 pub fn allocate_closure_globals(
     metas: &[AdapterMeta],
-    exported: &BTreeSet<MangledName>,
+    exported: &BTreeMap<MangledName, MangledName>,
     globals: &mut GlobalSection,
     symbols: &mut SymbolTable,
     next_global_idx: &mut u32,
 ) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    let shared: BTreeSet<&MangledName> = exported.values().collect();
     let mut count = 0usize;
     for meta in metas {
-        if exported.contains(&meta.mangled)
+        if shared.contains(&meta.mangled)
             || symbols.adapter_closure_global_idx(&meta.mangled).is_some()
         {
             continue;
@@ -135,7 +140,7 @@ pub fn allocate_closure_globals(
         crate::codegen::next_index(next_global_idx)?;
         count += 1;
     }
-    for mangled in exported {
+    for mangled in shared {
         globals.global(shared_cache_type(), &ConstExpr::ref_null(HeapType::ANY));
         symbols.record_shared_closure_global_idx(mangled.clone(), *next_global_idx);
         crate::codegen::next_index(next_global_idx)?;

@@ -1775,12 +1775,12 @@ fn codegen_inner(
     {
         exports.export(name.as_str(), WasmExportKind::Global, global_idx);
     }
-    for mangled in &exported_closure_caches {
+    for (public_name, function) in &exported_closure_caches {
         let global_idx = symbols
-            .adapter_closure_global_idx(mangled)
+            .adapter_closure_global_idx(function)
             .ok_or_else(|| crate::codegen::internal_failure("exported closure cache allocated"))?;
         exports.export(
-            crate::mangle::closure_cache(mangled).as_str(),
+            crate::mangle::closure_cache(public_name).as_str(),
             WasmExportKind::Global,
             global_idx,
         );
@@ -1999,7 +1999,7 @@ fn codegen_inner(
         type_info,
         runtime_functions: runtime_values::signatures(ta),
         runtime_globals: runtime_values::global_types(ta),
-        closure_caches: exported_closure_caches,
+        closure_caches: exported_closure_caches.into_keys().collect(),
     })
 }
 

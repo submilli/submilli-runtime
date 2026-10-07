@@ -19,3 +19,15 @@ export class Doubler {
 export function getTwice(): (a: number) => number {
   return Doubler.twice;
 }
+
+function hidden(a: number): number {
+  return a * 3;
+}
+
+export { hidden as triple };
+
+export function getTriple(): (a: number) => number {
+  return hidden;
+}
+
+export { dec, getDec } from "./extra";
