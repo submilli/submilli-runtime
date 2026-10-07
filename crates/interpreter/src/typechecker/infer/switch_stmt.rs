@@ -617,7 +617,11 @@ impl Inferer<'_> {
                     .zip(field_tys)
                     .filter(|(_, field_ty)| {
                         !field_ty.as_ref().is_some_and(|ty| {
-                            narrowing::is_covered_by_literals(ty, covered, covers_null)
+                            narrowing::is_covered_by_literals(
+                                &self.enums_as_literals(ty),
+                                covered,
+                                covers_null,
+                            )
                         })
                     })
                     .map(|(m, _)| m.clone())
@@ -674,13 +678,39 @@ impl Inferer<'_> {
                 return Ok((residual, ResidualSite::Anonymous));
             }
         }
-        let residual = narrowing::subtract_literals(disc_ty, covered);
+        // An enum leaves only when the cases name every member, since it has
+        // no type for the members left.
+        let enum_covered =
+            narrowing::subtract_literals(&self.enums_as_literals(disc_ty), covered) == Type::Never;
+        let residual = if enum_covered {
+            Type::Never
+        } else {
+            narrowing::subtract_literals(disc_ty, covered)
+        };
         Ok(
             if let Some(path) = self.expr_to_reference_path(disc_expr)? {
                 (residual, ResidualSite::Scrutinee { path })
             } else {
                 (residual, ResidualSite::Anonymous)
             },
+        )
+    }
+
+    /// `ty` with each enum in it spelled as the literals its members hold.
+    fn enums_as_literals(&self, ty: &Type) -> Type {
+        Type::union(
+            narrowing::union_members(ty)
+                .into_iter()
+                .map(|member| {
+                    super::comparable::enum_literal_values(member.peel(), self.resolver())
+                        .map_or_else(
+                            || member.clone(),
+                            |values| {
+                                Type::union(values.iter().map(narrowing::literal_type).collect())
+                            },
+                        )
+                })
+                .collect(),
         )
     }
 

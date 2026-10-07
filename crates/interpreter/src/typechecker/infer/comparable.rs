@@ -461,6 +461,36 @@ pub(super) fn enum_admits_literal(
     }
 }
 
+/// The values an enum type's members hold, as the literals a comparison or a
+/// `case` label with each member has.
+pub(super) fn enum_literal_values(
+    enum_ty: &Type,
+    types: TypeResolver,
+) -> Option<Vec<super::narrowing::LiteralValue>> {
+    use super::narrowing::LiteralValue;
+    match enum_ty {
+        Type::NumberEnum { mangled, name, .. } => match &types.lookup(mangled, name)?.kind {
+            TypeKind::NumberEnum { variants, .. } => Some(
+                variants
+                    .iter()
+                    .map(|(_, value)| LiteralValue::Number(crate::types::LiteralF64(*value)))
+                    .collect(),
+            ),
+            _ => None,
+        },
+        Type::StringEnum { mangled, name, .. } => match &types.lookup(mangled, name)?.kind {
+            TypeKind::StringEnum { variants, .. } => Some(
+                variants
+                    .iter()
+                    .map(|(_, value)| LiteralValue::String(value.clone()))
+                    .collect(),
+            ),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn is_enum(ty: &Type) -> bool {
     matches!(ty, Type::NumberEnum { .. } | Type::StringEnum { .. })
 }

@@ -1704,10 +1704,25 @@ impl<'a> Inferer<'a> {
             ty => std::slice::from_ref(ty),
         };
         let literal_ty = literal_to_type(&literal);
+        let mut excluded: std::collections::BTreeSet<narrowing::LiteralValue> = self
+            .lookup_narrowed_view(&path)
+            .map(|view| view.excluded_literals.clone())
+            .unwrap_or_default();
+        excluded.insert(literal.clone());
         let mut matched: Vec<Type> = Vec::new();
         let mut remaining: Vec<Type> = Vec::new();
         for m in members {
-            if m.peel() == &literal_ty {
+            if let Some(values) = super::comparable::enum_literal_values(m.peel(), self.resolver())
+                && values.contains(&literal)
+            {
+                // An enum has no type for one member: equal, the value keeps
+                // the enum's type, and unequal, it leaves once every member's
+                // value has been ruled out.
+                matched.push(m.clone());
+                if !values.iter().all(|value| excluded.contains(value)) {
+                    remaining.push(m.clone());
+                }
+            } else if m.peel() == &literal_ty {
                 matched.push(m.clone());
             } else if let (Type::Boolean, narrowing::LiteralValue::Boolean(value)) =
                 (m.peel(), &literal)
@@ -1771,8 +1786,7 @@ impl<'a> Inferer<'a> {
             .map_err(crate::typechecker::arena_failure)?;
         let mut true_env = narrowing::NarrowEnv::new();
         let mut false_env = narrowing::NarrowEnv::new();
-        let mut false_excluded = std::collections::BTreeSet::new();
-        false_excluded.insert(literal);
+        let false_excluded = excluded;
         let (true_excluded, false_excluded) = if op == BinOp::NotEq {
             (false_excluded, std::collections::BTreeSet::new())
         } else {
@@ -2548,6 +2562,9 @@ fn comparison_literal(
     let expr = ast
         .try_expr(id)
         .map_err(crate::typechecker::arena_failure)?;
+    if let Some(value) = enum_member_literal(&expr.kind) {
+        return Ok(Some(value));
+    }
     literal_value_of(&expr.kind).map_or_else(
         || {
             Ok::<_, crate::compiler_error::CompilerFailure>({
@@ -2561,6 +2578,20 @@ fn comparison_literal(
         },
         |value| Ok(Some(value)),
     )
+}
+
+/// The value an enum member reference holds, which is what comparing with
+/// it tests, as a `case` label with it does.
+fn enum_member_literal(kind: &crate::TypedExprKind) -> Option<narrowing::LiteralValue> {
+    match kind {
+        crate::TypedExprKind::NumberEnumMember { value, .. } => Some(
+            narrowing::LiteralValue::Number(crate::types::LiteralF64(*value)),
+        ),
+        crate::TypedExprKind::StringEnumMember { value, .. } => {
+            Some(narrowing::LiteralValue::String(value.clone()))
+        }
+        _ => None,
+    }
 }
 
 /// Whether the operand is a literal written in the source, not a reference
