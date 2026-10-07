@@ -754,8 +754,10 @@ impl Inferer<'_> {
         // reject as expected.
         if let Some(want) = expected
             && !arrow_reported
-            && !self.values_with_guiding_hints.contains(&expr_id)
+            && !self.arguments_with_replaceable_hints.contains(&expr_id)
             && !assignable(&ty, want, self.resolver())
+            && !(self.values_widening_candidates.contains(&expr_id)
+                && assignable(want, &ty, self.resolver()))
         {
             let has_structural_diff = self
                 .render_optional_help(super::type_diff::format_type_diff(want, &ty))

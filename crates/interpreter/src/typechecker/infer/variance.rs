@@ -133,8 +133,8 @@ impl<'a> TypeResolver<'a> {
     /// Measured once per declaration and remembered: a declaration referenced
     /// from several members (`a: Next<T>; b: Next<T>`) would otherwise be
     /// measured again at each reference, doubling the work at every level.
-    /// One that read what a declaration further up the walk is assumed to be
-    /// is remembered while that assumption holds.
+    /// One that read the estimate of a declaration further up the walk is
+    /// remembered while that estimate holds.
     fn measure_variances(
         &self,
         mangled: &MangledName,
@@ -147,33 +147,32 @@ impl<'a> TypeResolver<'a> {
                 ..Measured::default()
             };
         }
-        if let Some((variances, assumed)) = measuring.within_walk.get(mangled) {
-            return Measured {
-                variances: variances.clone(),
-                assumed: assumed.clone(),
-                cut_short: false,
-            };
+        if let Some(measured) = measuring.within_walk.get(mangled) {
+            return measured.clone();
         }
         let measured = self.walk_declaration(mangled, name, measuring);
         if measured.cut_short {
             return measured;
         }
-        if measured.assumed.is_empty() {
+        if measured.read.is_empty() {
             self.registry
                 .remember_variances(mangled, measured.variances.clone());
         } else {
-            measuring.within_walk.insert(
-                mangled.clone(),
-                (measured.variances.clone(), measured.assumed.clone()),
-            );
+            measuring
+                .within_walk
+                .insert(mangled.clone(), measured.clone());
         }
         measured
     }
 
-    /// A declaration that refers back to itself (`cmp: (o: S<T>) => void`)
-    /// is walked again with the variances the last walk found until they
-    /// settle; each walk only adds positions, so this ends within the few
-    /// steps from independent to invariant ([`MAX_REWALKS`] guards it).
+    /// A reference back to a declaration still being measured reads its
+    /// estimate, which starts independent. The outermost declaration of a
+    /// group that refers back to itself (`cmp: (o: S<T>) => void`, or `P`
+    /// through `Q` to `P`) walks the group again until no estimate in it
+    /// changes; the others take part in its walks rather than settling on
+    /// their own, which would repeat the walks below them at every level.
+    /// Each walk only adds positions, so the estimates settle within three
+    /// changes per type parameter.
     fn walk_declaration(
         &self,
         mangled: &MangledName,
@@ -187,98 +186,129 @@ impl<'a> TypeResolver<'a> {
         else {
             return Measured::default();
         };
-        let markers: Vec<Type> = (0..generics.len())
-            .map(|i| Type::TypeVar(marker(i)))
-            .collect();
         let depth = measuring.stack.len();
-        measuring.stack.push(OnStack {
-            mangled: mangled.clone(),
-            assumed: vec![Variance::Independent; generics.len()],
-        });
-        let mut rewalks = 0;
+        measuring.stack.push(mangled.clone());
+        let revised_outside = std::mem::take(&mut measuring.revised);
+        let mut revised_inside = false;
+        let mut walks = 0;
         let measured = loop {
             measuring.forget_from(depth);
-            let mut walk = VarianceWalk {
-                resolver: *self,
-                found: vec![Occurrences::default(); generics.len()],
-                measuring: &mut *measuring,
-                assumed: BTreeSet::new(),
-                cut_short: false,
-            };
-            let walked = walk.members(sym, &markers);
-            let VarianceWalk {
-                found,
-                assumed,
-                cut_short,
-                ..
-            } = walk;
-            let variances: Option<Vec<Variance>> =
-                walked.map(|()| found.into_iter().map(Occurrences::variance).collect());
-            let read_itself = assumed.contains(&depth);
-            let assumption = measuring.stack.last_mut().map(|entry| &mut entry.assumed);
-            if let (true, false, Some(found), Some(assumption)) =
-                (read_itself, cut_short, &variances, assumption)
-                && found != assumption
-            {
-                assumption.clone_from(found);
-                rewalks += 1;
-                if rewalks <= MAX_REWALKS {
-                    continue;
-                }
+            let measured = self.walk_once(sym, generics.len(), measuring);
+            let revised = std::mem::take(&mut measuring.revised)
+                | measuring.revise_estimate(mangled, &measured);
+            revised_inside |= revised;
+            walks += 1;
+            let heads_group = measured.read.first() == Some(&depth);
+            if !(revised && heads_group && !measured.cut_short) {
+                break measured;
             }
-            break Measured {
-                variances,
-                // Its own settled variances are no assumption.
-                assumed: assumed.into_iter().filter(|&index| index < depth).collect(),
-                cut_short: cut_short || rewalks > MAX_REWALKS,
-            };
+            if walks > measuring.max_walks() {
+                break Measured {
+                    variances: Some(vec![Variance::Invariant; generics.len()]),
+                    cut_short: true,
+                    ..measured
+                };
+            }
         };
+        measuring.revised = revised_outside | revised_inside;
         measuring.stack.pop();
         measuring.forget_from(depth);
-        measured
+        Measured {
+            // A reference back to the declaration itself read an estimate
+            // it settled, not one from further up the walk.
+            read: measured
+                .read
+                .into_iter()
+                .filter(|&index| index < depth)
+                .collect(),
+            ..measured
+        }
     }
-}
 
-/// More walks of one declaration than its variances can change in.
-const MAX_REWALKS: usize = 8;
-
-/// A declaration whose variance is being measured further up a walk, and
-/// what a reference back to it is taken to be meanwhile.
-struct OnStack {
-    mangled: MangledName,
-    assumed: Vec<Variance>,
+    fn walk_once(
+        &self,
+        sym: &crate::TypeSymbol,
+        arity: usize,
+        measuring: &mut Measuring,
+    ) -> Measured {
+        let markers: Vec<Type> = (0..arity).map(|i| Type::TypeVar(marker(i))).collect();
+        let mut walk = VarianceWalk {
+            resolver: *self,
+            found: vec![Occurrences::default(); arity],
+            measuring,
+            read: BTreeSet::new(),
+            cut_short: false,
+        };
+        let walked = walk.members(sym, &markers);
+        Measured {
+            variances: walked.map(|()| walk.found.into_iter().map(Occurrences::variance).collect()),
+            read: walk.read,
+            cut_short: walk.cut_short,
+        }
+    }
 }
 
 /// The declarations whose variance is being measured further up one walk.
 #[derive(Default)]
 struct Measuring {
-    stack: Vec<OnStack>,
-    /// Measurements that read what declarations on the stack are assumed to
-    /// be, at those stack positions, kept while the assumptions hold.
-    within_walk: BTreeMap<MangledName, (Option<Vec<Variance>>, BTreeSet<usize>)>,
+    stack: Vec<MangledName>,
+    /// What a reference back to a declaration on the stack takes its
+    /// variances to be; see [`TypeResolver::walk_declaration`].
+    estimates: BTreeMap<MangledName, Vec<Variance>>,
+    /// Whether an estimate changed during the current walk.
+    revised: bool,
+    /// Measurements that read the estimates of declarations on the stack, at
+    /// those stack positions, kept while the estimates hold.
+    within_walk: BTreeMap<MangledName, Measured>,
 }
 
 impl Measuring {
-    /// Forget the measurements that read the assumption at stack position
+    /// Forget the measurements that read the estimate at stack position
     /// `depth` or deeper, which is being revised or leaving the stack.
     fn forget_from(&mut self, depth: usize) {
         self.within_walk
-            .retain(|_, (_, assumed)| assumed.iter().all(|&index| index < depth));
+            .retain(|_, measured| measured.read.iter().all(|&index| index < depth));
+    }
+
+    fn estimate(&self, mangled: &MangledName, arity: usize) -> Vec<Variance> {
+        self.estimates
+            .get(mangled)
+            .cloned()
+            .unwrap_or_else(|| vec![Variance::Independent; arity])
+    }
+
+    /// Record what `measured` found as `mangled`'s estimate; whether it
+    /// changed.
+    fn revise_estimate(&mut self, mangled: &MangledName, measured: &Measured) -> bool {
+        let Some(found) = &measured.variances else {
+            return false;
+        };
+        if self.estimates.get(mangled) == Some(found) {
+            return false;
+        }
+        self.estimates.insert(mangled.clone(), found.clone());
+        true
+    }
+
+    /// More walks of a group than its estimates can change in: three
+    /// changes per type parameter, from independent to invariant.
+    fn max_walks(&self) -> usize {
+        3 * self.estimates.values().map(Vec::len).sum::<usize>() + 1
     }
 }
 
 /// A declaration's variances, and whether they are partial.
-/// - `assumed`: the stack positions of the declarations further up the walk
-///   whose assumed variances this measurement read, directly or through a
-///   nested measurement.
+/// - `read`: the stack positions of the declarations further up the walk
+///   whose estimates this measurement read, directly or through a nested
+///   measurement, in ascending order.
 /// - `cut_short`: the work limit ended the walk.
 ///
 /// A partial measurement depends on where the walk started, so it is not
 /// remembered for other walks.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Measured {
     variances: Option<Vec<Variance>>,
-    assumed: BTreeSet<usize>,
+    read: BTreeSet<usize>,
     cut_short: bool,
 }
 
@@ -287,7 +317,7 @@ struct VarianceWalk<'r, 'a> {
     found: Vec<Occurrences>,
     measuring: &'r mut Measuring,
     /// See [`Measured`].
-    assumed: BTreeSet<usize>,
+    read: BTreeSet<usize>,
     cut_short: bool,
 }
 
@@ -359,9 +389,17 @@ impl VarianceWalk<'_, '_> {
         }
     }
 
+    /// A method's parameters are compared both ways, except a callback,
+    /// which tsc compares strictly: `subscribe(listener: (value: T) => void)`
+    /// is covariant in `T`.
     fn method(&mut self, params: &[crate::Param], ret: &Type, bindings: &BTreeMap<String, Type>) {
         for param in params {
-            self.substituted(&param.ty, bindings, Polarity::Bivariant);
+            let polarity = if is_callback(&param.ty) {
+                Polarity::Contravariant
+            } else {
+                Polarity::Bivariant
+            };
+            self.substituted(&param.ty, bindings, polarity);
         }
         self.substituted(ret, bindings, Polarity::Covariant);
     }
@@ -439,22 +477,15 @@ impl VarianceWalk<'_, '_> {
         if args.is_empty() {
             return;
         }
-        let on_stack = self
-            .measuring
-            .stack
-            .iter()
-            .position(|entry| entry.mangled == *mangled);
+        let on_stack = self.measuring.stack.iter().position(|m| m == mangled);
         let variances = if let Some(index) = on_stack {
-            self.assumed.insert(index);
-            self.measuring
-                .stack
-                .get(index)
-                .map(|entry| entry.assumed.clone())
+            self.read.insert(index);
+            Some(self.measuring.estimate(mangled, args.len()))
         } else {
             let measured = self
                 .resolver
                 .measure_variances(mangled, name, self.measuring);
-            self.assumed.extend(measured.assumed);
+            self.read.extend(measured.read);
             self.cut_short |= measured.cut_short;
             measured.variances
         };
@@ -471,5 +502,23 @@ impl VarianceWalk<'_, '_> {
                 }
             }
         }
+    }
+}
+
+/// A function type, alone or beside `null`, as tsc takes a parameter to be
+/// a callback.
+fn is_callback(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Function { .. } => true,
+        Type::Union(members) => {
+            let mut rest = members
+                .iter()
+                .filter(|member| !matches!(member.peel(), Type::Null));
+            matches!(
+                (rest.next().map(Type::peel), rest.next()),
+                (Some(Type::Function { .. }), None)
+            )
+        }
+        _ => false,
     }
 }
