@@ -33,7 +33,7 @@ fn run(raise: &str, body: &str, cfg: RuntimeConfig) -> wasmtime::Result<()> {
 
 const PRELUDE: &str = r#"
 function recurse(depth: number): number { return recurse(depth + 1) + 1; }
-function spin(): number { let n = 0; while (true) { n = n + 1; } return n; }
+function spin(): number { let n = 0; while (true) { n = n + 1; } }
 class ViaGetter {
   // The `if` keeps the `return` reachable when RAISE is a `throw`.
   get value(): number { if (true) { RAISE; } return 0; }
