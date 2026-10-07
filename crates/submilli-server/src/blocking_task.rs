@@ -43,8 +43,19 @@ impl std::error::Error for BlockingTaskError {
 pub(crate) async fn run<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, BlockingTaskError> {
+    spawn(work)?
+        .await
+        .map_err(BlockingTaskError::Join)?
+        .ok_or(BlockingTaskError::WorkNotStarted)
+}
+
+/// Admit work synchronously, retaining Tokio's ownership if its join is dropped.
+/// On rejection, captured resources are dropped here, before returning the error.
+pub(crate) fn spawn<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<JoinHandle<Option<T>>, BlockingTaskError> {
     let runtime = Handle::try_current().map_err(|_| BlockingTaskError::RuntimeUnavailable)?;
-    let worker = admit(work, |receive| {
+    admit(work, |receive| {
         #[cfg(test)]
         if REJECT_ADMISSION
             .try_with(|reject| reject.replace(false))
@@ -54,11 +65,7 @@ pub(crate) async fn run<T: Send + 'static>(
             panic!("OS can't spawn worker thread: {error}");
         }
         runtime.spawn_blocking(receive)
-    })?;
-    worker
-        .await
-        .map_err(BlockingTaskError::Join)?
-        .ok_or(BlockingTaskError::WorkNotStarted)
+    })
 }
 
 fn admit<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(

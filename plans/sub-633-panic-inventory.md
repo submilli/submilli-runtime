@@ -333,7 +333,8 @@ network package files were skipped.
 
 **Sites:** `crates/submilli-server/src/idempotency_store.rs` (`blocking`),
 `session_manager.rs` (`attach_size_limit`), `volumes.rs` (`quota`),
-`handlers/packages.rs` (`install`); shared boundary in `blocking_task.rs`.
+`handlers/packages.rs` (`install`), and `record/throwaway.rs` (`copy_capped`
+and `Drop`); shared boundary in `blocking_task.rs`.
 Dependency: Tokio 1.52.3 `src/runtime/blocking/pool.rs:320–325`.
 
 These server preparation/storage paths previously called `tokio::task::spawn_blocking` directly.
@@ -363,6 +364,12 @@ errors keep their caller mappings. The panic hook still runs; Tokio upgrades
 must recheck this narrow contract. No interpreter worker or general cancellation
 redesign is included.
 
+Integration review found two more direct calls in replay workspace copying and
+cleanup, already present on `main` at `61183912`. Both now use the same gate.
+Synchronous admission lets detached cleanup keep Tokio ownership on success;
+rejection drops the captured temporary directory inline, including when no runtime
+is available. Quota usage offsets added on `main` remain applied after measurement.
+
 **Verification:** a current-thread Tokio runtime with an impossible blocking-worker
 stack size exercises the actual pinned OS-thread admission failure, verifies local
 resource release, and is followed by successful work on a healthy runtime.
@@ -372,12 +379,16 @@ follow-ups. Caller regressions cover durable reservation refusal/retry, workspac
 cleanup, uncached fail-closed volume quotas and install HTTP 500 without mutation.
 Helper tests cover returned operation errors, worker panics, unavailable runtime,
 shutdown rejection/draining and continued work/cleanup after waiter cancellation.
-The 88 distinct affected unit tests and focused server integration checks pass;
+Initial four-call-site verification passed 88 distinct affected unit tests and
+focused server integration checks;
 two session API checks needed host filesystem access for their default storage
 directory. Independent clean-code, correctness and edge-case review found no
-defects. OS thread exhaustion has not been induced. Full post-rebase PR
-verification is deferred; this entry does not claim publication or completion
-of SUB-633.
+defects before integration. Post-rebase review identified the two replay sibling
+sites above; 57 focused helper, volume and replay tests pass with their fix,
+including copy-admission/recovery and actual cleanup-admission failure. A renewed
+three-role review found no remaining defects. OS thread exhaustion has not been
+induced. Full post-rebase PR verification belongs to the publication handoff;
+this entry does not claim publication or completion of SUB-633.
 
 ### N10 — UUID generation panics if OS entropy fails
 
