@@ -11892,9 +11892,12 @@ mod tests {
     }
 
     #[test]
-    fn unary_neg_correct() {
+    fn unary_neg_of_a_literal_is_its_literal_type() {
         let ta = run_clean("let x: number = -1;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Number);
+        assert_eq!(
+            nth_decl_value_ty(&ta, 0),
+            Type::NumberLiteral(crate::types::LiteralF64(-1.0))
+        );
     }
 
     #[test]
