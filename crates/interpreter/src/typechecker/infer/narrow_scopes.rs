@@ -594,114 +594,6 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// A call that may run program code ends every narrowing on a module
-    /// variable some function assigns: the call may run that function, and the
-    /// read after it would see whatever it left. TypeScript keeps the narrowing,
-    /// which is unsound; this is the in-statement half of the rule
-    /// [`Self::keep_only_global_narrowings`] applies between top-level statements.
-    pub(super) fn end_written_global_narrowings_at_call(
-        &mut self,
-        call: &crate::TypedExprKind,
-        span: Span,
-    ) -> Result<(), CompilerFailure> {
-        if !self.call_assigns_written_globals(call)? {
-            return Ok(());
-        }
-        let written = self.function_written_global_names();
-        let roots: std::collections::BTreeSet<narrowing::ReferencePath> = self
-            .narrow_scopes
-            .iter()
-            .flat_map(|frame| frame.keys())
-            .filter(|path| {
-                matches!(&path.root, narrowing::BindingId::Global(mangled) if written.contains(mangled))
-            })
-            .map(|path| narrowing::ReferencePath {
-                root: path.root.clone(),
-                chain: Vec::new(),
-            })
-            .collect();
-        for root in roots {
-            self.invalidate(root, narrowing::InvalidationReason::Call { span });
-        }
-        Ok(())
-    }
-
-    /// Whether `kind` is a call that may assign a module variable: one that may
-    /// run program code, in a module where some function assigns one.
-    pub(super) fn call_assigns_written_globals(
-        &self,
-        kind: &crate::TypedExprKind,
-    ) -> Result<bool, CompilerFailure> {
-        if self.function_written_globals.is_empty() || !is_call(kind) {
-            return Ok(false);
-        }
-        self.call_may_run_program_code(kind)
-    }
-
-    /// Whether a call can run code the program wrote: anything but a call of a
-    /// built-in function or method that is handed no function to call back.
-    fn call_may_run_program_code(
-        &self,
-        call: &crate::TypedExprKind,
-    ) -> Result<bool, CompilerFailure> {
-        use crate::TypedExprKind as K;
-        let (builtin, args): (bool, Vec<ExprId>) = match call {
-            K::Call { mangled, args, .. } => (crate::mangle::is_builtin(mangled), args.clone()),
-            K::GenericCall { mangled, args, .. } => (
-                crate::mangle::is_builtin(mangled),
-                args.iter().map(|arg| arg.expr).collect(),
-            ),
-            K::MethodCall { iface, args, .. } => (crate::mangle::is_builtin(iface), args.clone()),
-            K::GenericMethodCall { iface, args, .. } => (
-                crate::mangle::is_builtin(iface),
-                args.iter().map(|arg| arg.expr).collect(),
-            ),
-            K::IntrinsicCall { args, .. } | K::McpCall { args, .. } => (true, args.clone()),
-            K::OptionalChain { parts, .. } => return self.chain_may_run_program_code(parts),
-            K::CallClosure { .. } | K::SuperCtorCall { .. } | K::SuperMethodCall { .. } => {
-                return Ok(true);
-            }
-            _ => return Ok(false),
-        };
-        if !builtin {
-            return Ok(true);
-        }
-        self.any_function_argument(&args)
-    }
-
-    fn chain_may_run_program_code(
-        &self,
-        parts: &[crate::TypedChainPart],
-    ) -> Result<bool, CompilerFailure> {
-        for part in parts {
-            let may_run = match part {
-                crate::TypedChainPart::Call { .. } => true,
-                crate::TypedChainPart::MethodCall { iface, args, .. } => {
-                    !crate::mangle::is_builtin(iface) || self.any_function_argument(args)?
-                }
-                _ => false,
-            };
-            if may_run {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    fn any_function_argument(&self, args: &[ExprId]) -> Result<bool, CompilerFailure> {
-        for &arg in args {
-            let ty = &self
-                .typed_ast
-                .try_expr(arg)
-                .map_err(crate::typechecker::arena_failure)?
-                .ty;
-            if has_function_part(ty) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
     /// The type a binding declared `declared` narrows to after a write of a
     /// `written` value. It is the value's own type, as for any write, unless the
     /// declaration has something `readonly` in it, or the value is a function.
@@ -1833,23 +1725,6 @@ impl<'a> Inferer<'a> {
 
 /// Whether a written value is, may be, or holds a function, whose own type may
 /// declare fewer parameters than the declared one it stands for.
-fn is_call(kind: &crate::TypedExprKind) -> bool {
-    use crate::TypedExprKind as K;
-    matches!(
-        kind,
-        K::Call { .. }
-            | K::CallClosure { .. }
-            | K::GenericCall { .. }
-            | K::MethodCall { .. }
-            | K::GenericMethodCall { .. }
-            | K::IntrinsicCall { .. }
-            | K::McpCall { .. }
-            | K::SuperCtorCall { .. }
-            | K::SuperMethodCall { .. }
-            | K::OptionalChain { .. }
-    )
-}
-
 fn has_function_part(ty: &Type) -> bool {
     match ty.peel() {
         Type::Function { .. } => true,

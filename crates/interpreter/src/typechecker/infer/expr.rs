@@ -593,9 +593,7 @@ impl Inferer<'_> {
                 callee,
                 type_args,
                 args,
-            } => self
-                .infer_call_running_invoked_body(callee, type_args, args, expected, span)
-                .and_then(|call| self.ending_written_global_narrowings(call, span)),
+            } => self.infer_call_running_invoked_body(callee, type_args, args, expected, span),
             ExprKind::Paren(inner) => {
                 self.next_function_keeps_returned_literals = keeps_returned_literals;
                 return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
@@ -670,9 +668,7 @@ impl Inferer<'_> {
                 callee,
                 type_args,
                 args,
-            } => self
-                .infer_new(callee, type_args, args, expected, span)
-                .and_then(|call| self.ending_written_global_narrowings(call, span)),
+            } => self.infer_new(callee, type_args, args, expected, span),
             ExprKind::TemplateLiteral {
                 parts,
                 exprs,
@@ -681,9 +677,9 @@ impl Inferer<'_> {
             ExprKind::Ternary { cond, then_, else_ } => {
                 self.infer_ternary(cond, then_, else_, expected, keeps_literal, span)
             }
-            ExprKind::OptionalChain { base, parts } => self
-                .infer_optional_chain(base, parts, expected, span)
-                .and_then(|chain| self.ending_written_global_narrowings(chain, span)),
+            ExprKind::OptionalChain { base, parts } => {
+                self.infer_optional_chain(base, parts, expected, span)
+            }
             ExprKind::PostfixUnary { op, operand } => self.infer_postfix_unary(op, operand, span),
             ExprKind::Assign {
                 target,
@@ -1788,15 +1784,6 @@ impl Inferer<'_> {
             ],
         );
         true
-    }
-
-    fn ending_written_global_narrowings(
-        &mut self,
-        call: (TypedExprKind, Type),
-        span: Span,
-    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        self.end_written_global_narrowings_at_call(&call.0, span)?;
-        Ok(call)
     }
 
     pub(super) fn infer_call(

@@ -195,7 +195,7 @@ impl<'a> Inferer<'a> {
     }
 
     /// The mangled names of the module variables some function assigns.
-    pub(super) fn function_written_global_names(&self) -> BTreeSet<crate::MangledName> {
+    fn function_written_global_names(&self) -> BTreeSet<crate::MangledName> {
         self.top_symbols
             .iter()
             .filter(|(name, _)| self.function_written_globals.contains(*name))
