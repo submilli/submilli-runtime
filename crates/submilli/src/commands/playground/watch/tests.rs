@@ -22,11 +22,26 @@ permissions:
 ";
 
 /// An in-memory store whose writes can be made to fail, for an apply that fails
-/// after its version was logged.
-#[derive(Default)]
+/// after its version was logged, or held, for an apply still in flight.
 struct Flaky {
     inner: InMemoryBlueprintStore,
     fail: AtomicBool,
+    /// The next write announces itself on `entered` and waits for a `release` permit.
+    hold_next: AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
+
+impl Default for Flaky {
+    fn default() -> Self {
+        Self {
+            inner: InMemoryBlueprintStore::default(),
+            fail: AtomicBool::new(false),
+            hold_next: AtomicBool::new(false),
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -35,6 +50,12 @@ impl BlueprintStore for Flaky {
         self.inner.add_yaml(stored).await
     }
     async fn upsert_yaml(&self, stored: StoredBlueprint) -> Result<bool, StoreError> {
+        if self.hold_next.swap(false, Ordering::SeqCst) {
+            self.entered.notify_one();
+            if let Ok(permit) = self.release.acquire().await {
+                permit.forget();
+            }
+        }
         if self.fail.load(Ordering::SeqCst) {
             return Err(StoreError::Io("disk full".into()));
         }
@@ -61,7 +82,7 @@ struct Fixture {
     dir: tempfile::TempDir,
     blueprints: Arc<Flaky>,
     store: Arc<Store>,
-    applier: Applier,
+    applier: Arc<Applier>,
 }
 
 impl Fixture {
@@ -75,7 +96,7 @@ impl Fixture {
             dir,
             blueprints,
             store,
-            applier,
+            applier: Arc::new(applier),
         }
     }
 
@@ -344,10 +365,8 @@ async fn a_start_on_a_refused_file_fails_with_its_line() {
 #[tokio::test]
 async fn a_save_by_rename_is_picked_up_by_the_watcher() {
     let fixture = Fixture::new(PINNED).await;
-    let applier = Arc::new(fixture.applier);
-    let _watch = watch(Arc::clone(&applier), Duration::from_millis(50)).unwrap();
-    // Some watcher backends start delivering only after a short delay.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let applier = Arc::clone(&fixture.applier);
+    let _watch = watching(&fixture, Duration::from_millis(50)).await;
     let edited = PINNED.replace("amount < 500", "amount < 100");
     let temp = fixture.dir.path().join(".demo.yaml.tmp");
     std::fs::write(&temp, &edited).unwrap();
@@ -364,4 +383,117 @@ async fn a_save_by_rename_is_picked_up_by_the_watcher() {
         fixture.store.changes().unwrap().current().unwrap().bytes,
         edited
     );
+}
+
+/// The watcher over `fixture`'s file, once it delivers events.
+async fn watching(fixture: &Fixture, debounce: Duration) -> Watch {
+    let watch = watch(Arc::clone(&fixture.applier), debounce).unwrap();
+    // Some watcher backends start delivering only after a short delay.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    watch
+}
+
+/// Waits up to 20 seconds for `done` to hold of the applier's status.
+async fn wait_until(applier: &Applier, what: &str, done: impl Fn(&BlueprintStatus) -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let status = applier.status().lock().unwrap().clone();
+        if done(&status) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}: {status:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_blueprint_deleted_then_recreated_is_refused_then_applied() {
+    let fixture = Fixture::new(PINNED).await;
+    let applier = Arc::clone(&fixture.applier);
+    let _watch = watching(&fixture, Duration::from_millis(50)).await;
+    let file = fixture.dir.path().join("demo.yaml");
+    std::fs::remove_file(&file).unwrap();
+    wait_until(&applier, "the deletion's refusal", |status| {
+        status
+            .refused
+            .as_ref()
+            .is_some_and(|refusal| refusal.code == "unreadable")
+    })
+    .await;
+    assert_eq!(fixture.versions(), [1]);
+    assert_eq!(applier.status().lock().unwrap().version, Some(1));
+
+    let edited = PINNED.replace("amount < 500", "amount < 100");
+    std::fs::write(&file, &edited).unwrap();
+    wait_until(&applier, "version 2", |status| {
+        status.version == Some(2) && status.refused.is_none()
+    })
+    .await;
+    assert_eq!(fixture.current().bytes, edited);
+}
+
+#[tokio::test]
+async fn two_saves_within_one_debounce_are_one_version_with_the_last_text() {
+    let fixture = Fixture::new(PINNED).await;
+    let applier = Arc::clone(&fixture.applier);
+    let _watch = watching(&fixture, Duration::from_millis(400)).await;
+    let file = fixture.dir.path().join("demo.yaml");
+    std::fs::write(&file, PINNED.replace("amount < 500", "amount < 100")).unwrap();
+    let last = PINNED.replace("amount < 500", "amount < 200");
+    std::fs::write(&file, &last).unwrap();
+    wait_until(&applier, "version 2", |status| status.version == Some(2)).await;
+    // Long enough for a second look, had the saves not been coalesced.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(fixture.versions(), [1, 2]);
+    assert_eq!(fixture.current().bytes, last);
+}
+
+#[tokio::test]
+async fn a_save_during_an_apply_is_applied_after_it() {
+    let fixture = Fixture::new(PINNED).await;
+    let applier = Arc::clone(&fixture.applier);
+    let _watch = watching(&fixture, Duration::from_millis(50)).await;
+    let file = fixture.dir.path().join("demo.yaml");
+    fixture.blueprints.hold_next.store(true, Ordering::SeqCst);
+    std::fs::write(&file, PINNED.replace("amount < 500", "amount < 100")).unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        fixture.blueprints.entered.notified(),
+    )
+    .await
+    .expect("the first save's apply started");
+
+    let last = PINNED.replace("amount < 500", "amount < 200");
+    std::fs::write(&file, &last).unwrap();
+    // Let the second save settle while the first apply is still held.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(fixture.versions(), [1, 2]);
+    fixture.blueprints.release.add_permits(1);
+
+    wait_until(&applier, "version 3", |status| status.version == Some(3)).await;
+    assert_eq!(fixture.current().bytes, last);
+    assert_eq!(
+        fixture.registered().await,
+        submilli_blueprint::parse(&last).unwrap()
+    );
+}
+
+// An explicit `default: deny` reads as a different blueprint from an absent default,
+// so it is a new version; the classifier finds nothing that changes what programs may
+// do, so the version is `unknown` and says so.
+#[tokio::test]
+async fn an_explicit_default_deny_is_a_version_with_no_change_to_access() {
+    let fixture = Fixture::new(PINNED).await;
+    let explicit = PINNED.replace("name: demo\n", "name: demo\ndefault: deny\n");
+    assert!(matches!(
+        fixture.save(&explicit).await,
+        Outcome::Applied { version: 2, .. }
+    ));
+    let current = fixture.current();
+    assert_eq!(current.classification["classification"], "unknown");
+    assert_eq!(current.classification["changes"], json!([]));
+    assert_eq!(current.summary, "No change to what programs may do.");
 }

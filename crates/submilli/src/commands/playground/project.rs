@@ -4,7 +4,8 @@
 //! that holds a `submilli/` folder with a `submilli.toml`, or a root
 //! `submilli.toml`. The blueprint is the one `--blueprint` names, otherwise the
 //! single file under `submilli/blueprints/`, or the project's root
-//! `blueprint.yaml`; a playground serves one blueprint.
+//! `blueprint.yaml`; a playground serves one blueprint. Either way the blueprint's
+//! path is resolved through symlinks, so the watcher watches the file saves land in.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -75,7 +76,7 @@ pub(crate) fn discover(from: &Path, blueprint: Option<&Path>) -> Result<Project,
     let (root, package_dir) = find_root(&from).ok_or(DiscoveryError::NoProject { from })?;
     let blueprint = match blueprint {
         Some(path) => canonical(path)?,
-        None => only_blueprint(&root, &package_dir)?,
+        None => canonical(&only_blueprint(&root, &package_dir)?)?,
     };
     Ok(Project {
         root,
@@ -201,6 +202,25 @@ mod tests {
         let project = discover(&root.join("submilli/blueprints"), None).unwrap();
         assert_eq!(project.root, root);
         assert_eq!(project.package_dir, root.join("submilli"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_blueprint_resolves_to_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        write(&root.join("submilli/submilli.toml"), "");
+        write(&root.join("shared/demo.yaml"), "name: demo\n");
+        std::fs::create_dir_all(root.join("submilli/blueprints")).unwrap();
+        std::os::unix::fs::symlink(
+            root.join("shared/demo.yaml"),
+            root.join("submilli/blueprints/demo.yaml"),
+        )
+        .unwrap();
+        let implicit = discover(&root, None).unwrap();
+        assert_eq!(implicit.blueprint, root.join("shared/demo.yaml"));
+        let explicit = discover(&root, Some(&root.join("submilli/blueprints/demo.yaml"))).unwrap();
+        assert_eq!(explicit.blueprint, implicit.blueprint);
     }
 
     #[test]

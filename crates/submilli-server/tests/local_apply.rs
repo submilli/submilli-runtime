@@ -6,6 +6,7 @@
 mod in_memory_config;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
@@ -15,6 +16,9 @@ use interpreter::{ModulePath, PackageSourceModule, compile_package};
 use serde_json::{Value, json};
 use submilli_build::{
     ArtifactMetadata, ArtifactSource, write_package_artifact_with_docs_and_sources,
+};
+use submilli_server::blueprint::{
+    BlueprintStore, InMemoryBlueprintStore, StoreError, StoredBlueprint,
 };
 use submilli_server::record::{FinishedRun, RunRecorder, RunRecorderFactory, RunStart};
 use submilli_server::{ApiToken, AppState, AuthConfig, Role, ServerConfig, app};
@@ -73,8 +77,47 @@ struct Server {
     dirs: tempfile::TempDir,
 }
 
+/// An in-memory blueprint store whose writes can be made to fail.
+#[derive(Default)]
+struct Flaky {
+    inner: InMemoryBlueprintStore,
+    fail: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl BlueprintStore for Flaky {
+    async fn add_yaml(&self, stored: StoredBlueprint) -> Result<(), StoreError> {
+        self.inner.add_yaml(stored).await
+    }
+    async fn upsert_yaml(&self, stored: StoredBlueprint) -> Result<bool, StoreError> {
+        if self.fail.load(Ordering::SeqCst) {
+            return Err(StoreError::Io("disk full".into()));
+        }
+        self.inner.upsert_yaml(stored).await
+    }
+    async fn list(&self) -> Result<Vec<String>, StoreError> {
+        self.inner.list().await
+    }
+    async fn list_blueprints(&self) -> Result<Vec<submilli_blueprint::Blueprint>, StoreError> {
+        self.inner.list_blueprints().await
+    }
+    async fn get(&self, name: &str) -> Result<Option<submilli_blueprint::Blueprint>, StoreError> {
+        self.inner.get(name).await
+    }
+    async fn get_yaml(&self, name: &str) -> Result<Option<String>, StoreError> {
+        self.inner.get_yaml(name).await
+    }
+    async fn remove(&self, name: &str) -> Result<bool, StoreError> {
+        self.inner.remove(name).await
+    }
+}
+
 impl Server {
     fn new() -> Self {
+        Self::with_blueprints(None)
+    }
+
+    fn with_blueprints(blueprints: Option<Arc<dyn BlueprintStore>>) -> Self {
         let dirs = tempfile::tempdir().expect("dirs");
         let runs = Arc::new(Runs::default());
         let config = ServerConfig {
@@ -88,6 +131,13 @@ impl Server {
             managed_volume_root: Some(dirs.path().join("volumes")),
             run_recorder: Some(Arc::new(Factory(Arc::clone(&runs)))),
             ..in_memory_config::config()
+        };
+        let config = match blueprints {
+            Some(blueprints) => ServerConfig {
+                blueprints: Some(blueprints),
+                ..config
+            },
+            None => config,
         };
         Self {
             state: AppState::new(config).expect("state"),
@@ -335,6 +385,69 @@ async fn a_volume_name_that_cannot_be_a_directory_is_refused() {
         .expect_err("refused");
     assert_eq!(error.code, "undeclared_volume", "{error:?}");
     assert!(!server.managed_root().join("-notes").exists());
+}
+
+fn with_volume(volume: &str) -> String {
+    format!(
+        "{V1}    - capability: fs.write\n      action: allow\nvfs:\n  mode: per_session\n  mounts:\n    /notes: {{mode: named, volume: {volume}}}\n"
+    )
+}
+
+#[tokio::test]
+async fn a_volume_is_declared_only_once_the_blueprint_is_stored() {
+    let store = Arc::new(Flaky::default());
+    let server = Server::with_blueprints(Some(store.clone()));
+    server.apply(V1, "v1").await;
+    store.fail.store(true, Ordering::SeqCst);
+    let error = server
+        .state
+        .apply_local_blueprint(&with_volume("notes"), "v2")
+        .await
+        .expect_err("the store refuses the write");
+    assert_eq!(error.code, "store_failed", "{error:?}");
+    let (_, listed) = server
+        .request("GET", "/v1/volumes", ADMIN_TOKEN, Value::Null)
+        .await;
+    assert!(!listed.to_string().contains("notes"), "{listed}");
+
+    store.fail.store(false, Ordering::SeqCst);
+    let applied = server.apply(&with_volume("notes"), "v3").await;
+    assert_eq!(applied.declared_volumes, ["notes"]);
+}
+
+#[tokio::test]
+async fn a_volume_name_differing_only_in_case_from_a_stored_one_is_refused() {
+    let server = Server::new();
+    server.apply(&with_volume("notes"), "v1").await;
+    for yaml in [with_volume("Notes"), with_volume("NOTES")] {
+        let error = server
+            .state
+            .check_local_blueprint(&yaml)
+            .await
+            .expect_err("refused by the check");
+        assert_eq!(error.code, "volume_name_conflict", "{error:?}");
+        assert!(error.message.contains("'notes'"), "{error:?}");
+        let error = server
+            .state
+            .apply_local_blueprint(&yaml, "v2")
+            .await
+            .expect_err("refused by the apply");
+        assert_eq!(error.code, "volume_name_conflict", "{error:?}");
+    }
+
+    // A directory an earlier run left under the managed root counts too.
+    let fresh = Server::new();
+    std::fs::create_dir_all(fresh.managed_root().join("Ledger")).unwrap();
+    let error = fresh
+        .state
+        .apply_local_blueprint(&with_volume("ledger"), "v1")
+        .await
+        .expect_err("refused");
+    assert_eq!(error.code, "volume_name_conflict", "{error:?}");
+    assert!(error.message.contains("'Ledger'"), "{error:?}");
+    // The same name in the same case is that directory's volume.
+    let applied = fresh.apply(&with_volume("Ledger"), "v2").await;
+    assert_eq!(applied.declared_volumes, ["Ledger"]);
 }
 
 const PING: &str =

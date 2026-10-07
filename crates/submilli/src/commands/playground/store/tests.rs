@@ -428,7 +428,7 @@ fn a_known_secret_appears_nowhere_in_the_store_in_any_form() {
         vec![decision(
             0,
             "http.post",
-            json!({ "body": echoed, SECRET: 1 }),
+            json!({ "body": echoed, "n": 1 }),
             true,
         )],
         vec![call(0, "http.post", Some(&echoed))],
@@ -1045,4 +1045,281 @@ fn recorded_runs_also_load_back_through_the_server_type() {
     let recorded: RecordedRun = serde_json::from_value(value["recording"].clone()).unwrap();
     assert_eq!(serde_json::to_value(&recorded).unwrap(), expected);
     let _ = &world.dir;
+}
+
+// ---- torn tails ------------------------------------------------------------------------
+
+/// Appends the start of a line that a crash cut short.
+fn tear(path: &Path) {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    std::io::Write::write_all(&mut file, b"{\"format\":1,\"id\":9").unwrap();
+}
+
+fn new_version(hash: &str) -> NewVersion {
+    NewVersion {
+        hash: hash.into(),
+        bytes: "name: demo\n".into(),
+        classification: Value::Null,
+        summary: String::new(),
+    }
+}
+
+#[test]
+fn a_torn_index_line_neither_breaks_the_next_append_nor_the_next_open() {
+    let world = World::new();
+    world
+        .start(run_start("exec-1", None))
+        .finish(finished(Vec::new(), Vec::new()));
+    tear(&world.root().join("index.jsonl"));
+    world
+        .start(run_start("exec-2", None))
+        .finish(finished(Vec::new(), Vec::new()));
+    let ids = |store: &Store| -> Vec<u64> {
+        store
+            .list_runs()
+            .unwrap()
+            .iter()
+            .map(|run| run.id)
+            .collect()
+    };
+    assert_eq!(ids(&world.store), [1, 2]);
+    let reopened = world.reopen();
+    assert_eq!(ids(&reopened), [1, 2]);
+    // Opening rewrote the index whole.
+    let index = std::fs::read_to_string(world.root().join("index.jsonl")).unwrap();
+    assert_eq!(index.lines().count(), 2, "{index}");
+}
+
+#[test]
+fn an_unreadable_index_is_rebuilt_from_the_runs() {
+    let world = World::new();
+    for n in 1..=2 {
+        world
+            .start(run_start(&format!("exec-{n}"), None))
+            .finish(finished(Vec::new(), Vec::new()));
+    }
+    std::fs::write(world.root().join("index.jsonl"), b"not json\n{]\n").unwrap();
+    let reopened = world.reopen();
+    let ids: Vec<u64> = reopened.list_runs().unwrap().iter().map(|r| r.id).collect();
+    assert_eq!(ids, [1, 2]);
+}
+
+#[test]
+fn a_torn_change_log_line_does_not_block_the_next_version() {
+    let world = World::new();
+    world.store.append_version(new_version("h1")).unwrap();
+    tear(&world.store.changes_path());
+    assert_eq!(world.store.append_version(new_version("h2")).unwrap(), 2);
+    let changes = world.store.changes().unwrap();
+    assert_eq!(changes.versions.len(), 2);
+    let reopened = world.reopen();
+    assert_eq!(reopened.changes().unwrap().versions.len(), 2);
+    assert_eq!(reopened.append_version(new_version("h3")).unwrap(), 3);
+}
+
+#[test]
+fn a_torn_event_line_does_not_stop_the_session_numbering() {
+    let world = World::new();
+    world.start(run_start("exec-1", Some("sess")));
+    world
+        .recorder
+        .event(event(1, "sess", "exec-1", run_started()));
+    tear(&world.store.events_path(Some("sess")));
+    world
+        .recorder
+        .event(event(2, "sess", "exec-1", call_started(0)));
+    let seqs = |store: &Store| -> Vec<u64> {
+        store
+            .read_events(Some("sess"))
+            .unwrap()
+            .events
+            .iter()
+            .map(|event| event.session_seq)
+            .collect()
+    };
+    assert_eq!(seqs(&world.store), [1, 2]);
+    // A restart reads the numbering back past the bad line.
+    let reopened = Arc::new(world.reopen());
+    let recorder = Recorder::new(Arc::clone(&reopened), KnownSecrets::default());
+    recorder.start(run_start("exec-2", Some("sess")));
+    recorder.event(event(3, "sess", "exec-2", run_started()));
+    assert_eq!(seqs(&reopened), [1, 2, 3]);
+}
+
+#[test]
+fn a_torn_retry_line_is_skipped() {
+    let world = World::new();
+    let retry = |key: &str| super::run::RetryRecord {
+        format: FORMAT,
+        at_micros: 1,
+        session_id: "s".into(),
+        idempotency_key: key.into(),
+        original: None,
+    };
+    world.store.record_retry(&retry("a")).unwrap();
+    tear(&world.root().join("retries.jsonl"));
+    world.store.record_retry(&retry("b")).unwrap();
+    assert_eq!(world.store.retries().unwrap().len(), 2);
+    assert_eq!(world.reopen().retries().unwrap().len(), 2);
+}
+
+// ---- redaction of records ---------------------------------------------------------------
+
+#[test]
+fn a_secret_equal_to_a_field_name_or_tag_word_leaves_runs_and_events_readable() {
+    for secret in ["started", "capability", "call-started"] {
+        let world = World::new();
+        world.secrets.add(secret);
+        let start = run_start("exec-1", Some("sess"));
+        let run = finished(
+            vec![decision(
+                0,
+                "http.get",
+                json!({ "q": format!("x {secret} y") }),
+                true,
+            )],
+            vec![call(0, "http.get", Some(&format!("body {secret}")))],
+        );
+        let recorder = world.start(start);
+        world
+            .recorder
+            .event(event(1, "sess", "exec-1", run_started()));
+        world
+            .recorder
+            .event(event(2, "sess", "exec-1", call_started(0)));
+        world
+            .recorder
+            .event(event(3, "sess", "exec-1", run_finished(0)));
+        recorder.finish(run);
+        let stored = world.store.load_run(1).unwrap().expect("the run is stored");
+        assert_eq!(
+            stored.recording.decisions[0].context["q"],
+            json!(format!("x {} y", super::redact::REDACTED)),
+            "{secret}"
+        );
+        let log = world.store.read_events(Some("sess")).unwrap();
+        assert_eq!(
+            kinds(&log.causal()),
+            ["started", "call 0", "end"],
+            "{secret}"
+        );
+    }
+}
+
+// ---- event log names ---------------------------------------------------------------------
+
+#[test]
+fn session_ids_differing_only_in_case_never_share_a_log() {
+    use super::events::session_file_name;
+    let pairs = [("abc-123", "ABC-123"), ("aBc", "AbC"), ("Mixed", "mixed")];
+    for (a, b) in pairs {
+        assert_ne!(
+            session_file_name(Some(a)).to_ascii_lowercase(),
+            session_file_name(Some(b)).to_ascii_lowercase(),
+            "{a} and {b}"
+        );
+    }
+}
+
+// ---- readers in other processes ----------------------------------------------------------
+
+#[test]
+fn a_read_only_open_changes_nothing_and_still_reads_around_a_crash() {
+    let world = World::new();
+    for n in 1..=2 {
+        world
+            .start(run_start(&format!("exec-{n}"), None))
+            .finish(finished(Vec::new(), Vec::new()));
+    }
+    // A crash: run 2's index line lost, temporary files left, a change line cut short.
+    let index = world.root().join("index.jsonl");
+    let first_line = std::fs::read_to_string(&index)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_owned();
+    std::fs::write(&index, format!("{first_line}\n")).unwrap();
+    let staged = [
+        world.root().join("runs").join(".staged-run"),
+        world.root().join(".staged-sequence"),
+    ];
+    for path in &staged {
+        std::fs::write(path, b"partial").unwrap();
+    }
+    world.store.append_version(new_version("h1")).unwrap();
+    tear(&world.store.changes_path());
+    let before = world.files();
+
+    let reader = Store::open_read_only(world.root()).unwrap();
+    let ids: Vec<u64> = reader.list_runs().unwrap().iter().map(|r| r.id).collect();
+    assert_eq!(
+        ids,
+        [1, 2],
+        "a run missing from the index is read from its file"
+    );
+    assert_eq!(reader.changes().unwrap().versions.len(), 1);
+    assert_eq!(reader.last_run_id(), 2);
+    assert!(matches!(
+        reader.next_run_id(),
+        Err(StoreError::ReadOnly { .. })
+    ));
+    assert!(matches!(
+        reader.append_version(new_version("h2")),
+        Err(StoreError::ReadOnly { .. })
+    ));
+    assert!(matches!(reader.clear(), Err(StoreError::ReadOnly { .. })));
+    assert_eq!(world.files(), before, "the read-only open changed a file");
+
+    // The writer's open repairs all of it.
+    let writer = world.reopen();
+    for path in &staged {
+        assert!(!path.exists(), "{}", path.display());
+    }
+    assert_eq!(std::fs::read_to_string(&index).unwrap().lines().count(), 2);
+    assert!(
+        std::fs::read(writer.changes_path())
+            .unwrap()
+            .ends_with(b"\n")
+    );
+    // A missing store is not created by a reader.
+    let missing = world.dir.path().join("nowhere");
+    assert!(Store::open_read_only(&missing).is_err());
+    assert!(!missing.exists());
+}
+
+// ---- audit window -----------------------------------------------------------------------
+
+#[test]
+fn the_audit_window_holds_the_runs_decided_under_the_current_version() {
+    let world = World::new();
+    let run_under = |execution_id: &str, version: Option<&str>| {
+        let mut start = run_start(execution_id, None);
+        start.blueprint_version = version.map(str::to_owned);
+        world.start(start).finish(finished(Vec::new(), Vec::new()));
+    };
+    let in_window = || -> Vec<u64> {
+        world
+            .store
+            .audit_window_runs()
+            .unwrap()
+            .iter()
+            .map(|run| run.id)
+            .collect()
+    };
+    run_under("exec-1", None);
+    assert_eq!(in_window(), [1], "before any version, every run");
+    assert_eq!(world.store.append_version(new_version("h1")).unwrap(), 1);
+    run_under("exec-2", Some("1"));
+    // Version 2 is logged; a run starts before it is applied, under version 1.
+    assert_eq!(world.store.append_version(new_version("h2")).unwrap(), 2);
+    run_under("exec-3", Some("1"));
+    run_under("exec-4", Some("2"));
+    assert_eq!(in_window(), [4]);
+    // A failed apply voids version 2: the window is version 1's again.
+    world
+        .store
+        .append_apply_failed(2, "refused".into())
+        .unwrap();
+    assert_eq!(in_window(), [2, 3]);
 }

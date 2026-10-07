@@ -9,7 +9,7 @@ use std::fs::File;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::Json;
@@ -21,12 +21,12 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use submilli_server::audit::AuditConfig;
 use submilli_server::{AppState, AuthConfig, RunTelemetry, ServerConfig};
 use tokio::sync::Notify;
 
-use super::control_auth::{self, Caller, ControlAuth, LoginRefusal};
+use super::control_auth::{self, Caller, ControlAuth, LoginRefusal, Now};
 use super::packages::{self, ClosureEntry, Freshness, ProjectPackages};
 use super::project::Project;
 use super::state::{APP_TOKEN, Lock, StateDir};
@@ -52,7 +52,7 @@ pub(crate) struct HostOptions {
 }
 
 /// What the control listener reports about this instance. Built once at start.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Description {
     pub(crate) project: PathBuf,
     pub(crate) blueprint: BlueprintInfo,
@@ -63,25 +63,62 @@ pub(crate) struct Description {
     pub(crate) state_dir: PathBuf,
     pub(crate) log_file: PathBuf,
     pub(crate) egress_grants: Vec<String>,
-    pub(crate) provider: Option<&'static str>,
+    pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
     /// The blueprint's package closure at start: each package's origin and whether a
     /// program may import it. `status` reads it again for the blueprint in force.
     pub(crate) packages: Vec<ClosureEntry>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct BlueprintInfo {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
 }
 
+/// What `GET /api/status` answers: the description, with the closure of the
+/// blueprint in force now, and what changes while the instance runs.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Status {
+    #[serde(flatten)]
+    pub(crate) description: Description,
+    pub(crate) running: bool,
+    pub(crate) browser_sessions: usize,
+    pub(crate) blueprint_status: BlueprintStatus,
+    /// Why the closure of the blueprint in force could not be read; `packages` is
+    /// then the closure at start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) packages_error: Option<String>,
+    /// Whether the server listener answers, which `status` adds after asking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) health: Option<String>,
+}
+
+/// Hidden: how long a serving process waits after taking the instance lock, so a
+/// test can act on an instance that is starting. Unset outside tests.
+const START_DELAY_ENV: &str = "SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS";
+
 /// Serve until a stop, a signal, or `POST /v1/shutdown`, then drain and remove
-/// the lock and the ready file.
+/// the lock and the ready file. Refused while another process serves the project.
 pub(crate) fn serve(options: HostOptions) -> Result<()> {
     restrict_new_files();
     let state_dir = StateDir::for_project(&options.project.root);
     state_dir.create()?;
+    // Held until this process exits, however it exits: no second instance can serve
+    // this state directory, even one whose start never saw this one's lock.
+    let Some(_instance) = state_dir.instance_lock()? else {
+        anyhow::bail!(
+            "another Submilli playground is already serving {}; stop it with `submilli \
+             playground stop`",
+            options.project.root.display()
+        );
+    };
+    if let Some(delay) = std::env::var(START_DELAY_ENV)
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+    {
+        std::thread::sleep(Duration::from_millis(delay));
+    }
     let tokens = state_dir.tokens()?;
     let blueprint_yaml = std::fs::read_to_string(&options.project.blueprint)
         .with_context(|| format!("reading {}", options.project.blueprint.display()))?;
@@ -118,7 +155,7 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
         state_dir,
         config,
         tokens,
-        Served {
+        Serving {
             name: blueprint.name.clone(),
             store,
             packages,
@@ -133,7 +170,7 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
 
 /// The blueprint the playground serves, by the name it had at start, and the store
 /// its versions are logged in.
-struct Served {
+struct Serving {
     name: String,
     store: Arc<Store>,
     packages: Arc<ProjectPackages>,
@@ -148,26 +185,30 @@ async fn run(
     state_dir: StateDir,
     mut config: ServerConfig,
     tokens: Vec<submilli_server::ApiToken>,
-    blueprint: Served,
+    serving: Serving,
 ) -> Result<()> {
+    // Before anything announces this instance: a signal from then on drains it
+    // rather than killing it with its lock on disk.
+    let signals = submilli_server::EmbeddedSignals::install()?;
     let blueprints = submilli_server::prepare_blueprint_store(&config).await?;
     config.blueprints = Some(Arc::clone(&blueprints));
     let state = AppState::new(config)?;
     state.boot().await?;
-    let _store_watch = packages::watch_store(state.clone(), blueprint.packages.store_root())?;
-    // The file as it is now, then every save, through the trusted local path.
+    let _store_watch = packages::watch_store(state.clone(), serving.packages.store_root())?;
+    // Every save, then the file as it is now, through the trusted local path. The
+    // watch comes first so a save during the first apply is seen, not missed.
     let applier = Arc::new(
         Applier::new(
             state.clone(),
-            blueprint.store,
+            serving.store,
             options.project.blueprint.clone(),
-            blueprint.name.clone(),
+            serving.name.clone(),
         )
-        .with_packages(blueprint.freshness),
+        .with_packages(serving.freshness),
     );
+    let _watch = watch::watch(Arc::clone(&applier), watch::DEBOUNCE)?;
     applier.start().await?;
     let blueprint_status = applier.status();
-    let _watch = watch::watch(applier, watch::DEBOUNCE)?;
 
     let server = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .await
@@ -181,10 +222,10 @@ async fn run(
     let description = describe(
         &options,
         &state_dir,
-        &blueprint.name,
+        &serving.name,
         control_port,
         server_port,
-        blueprint.closure,
+        serving.closure,
     );
     let auth = Arc::new(ControlAuth::new(tokens));
     let shared = ControlState(Arc::new(ControlInner {
@@ -195,8 +236,8 @@ async fn run(
         description: description.clone(),
         blueprint_status,
         blueprints,
-        blueprint_name: blueprint.name.clone(),
-        packages: Arc::clone(&blueprint.packages),
+        blueprint_name: serving.name.clone(),
+        packages: Arc::clone(&serving.packages),
     }));
     let control_stop = Arc::new(Notify::new());
     let control_task = tokio::spawn({
@@ -221,11 +262,10 @@ async fn run(
         state_dir.write_ready(&lock)?;
         drop(options.start_lock);
         if let Some(output) = options.print {
-            let code = auth.mint_login_code(Instant::now())?;
-            let record = ReadyRecord::new(description_value(&description)?, &code, false);
-            record.print(output);
+            let code = auth.mint_login_code(Now::current())?;
+            ReadyRecord::new(&description, None, &code, false).print(output);
         }
-        submilli_server::serve_embedded(server, state, SHUTDOWN_GRACE).await
+        submilli_server::serve_embedded(server, state, SHUTDOWN_GRACE, signals).await
     }
     .await;
 
@@ -283,6 +323,7 @@ fn describe(
     packages: Vec<ClosureEntry>,
 ) -> Description {
     let (provider, model) = detect_provider();
+    let provider = provider.map(str::to_owned);
     Description {
         project: options.project.root.clone(),
         blueprint: BlueprintInfo {
@@ -342,10 +383,6 @@ fn detect_provider() -> (Option<&'static str>, Option<String>) {
         .ok()
         .filter(|model| !model.trim().is_empty());
     (provider, model)
-}
-
-pub(crate) fn description_value(description: &Description) -> Result<Value> {
-    serde_json::to_value(description).context("encoding the playground's description")
 }
 
 /// Files the server creates under the state directory must be owner-only too.
@@ -468,7 +505,7 @@ async fn require_admin(
     request: Request,
     next: Next,
 ) -> Response {
-    match state.0.auth.caller(request.headers(), Instant::now()) {
+    match state.0.auth.caller(request.headers(), Now::current()) {
         Some(Caller::Admin) => next.run(request).await,
         Some(_) => forbidden(),
         None => unauthorized(),
@@ -480,7 +517,7 @@ async fn require_viewer(
     request: Request,
     next: Next,
 ) -> Response {
-    match state.0.auth.caller(request.headers(), Instant::now()) {
+    match state.0.auth.caller(request.headers(), Now::current()) {
         Some(Caller::Admin | Caller::Browser) => next.run(request).await,
         Some(Caller::Token(_)) => forbidden(),
         None => unauthorized(),
@@ -494,7 +531,7 @@ async fn not_found(State(state): State<ControlState>, request: Request) -> Respo
         && state
             .0
             .auth
-            .caller(request.headers(), Instant::now())
+            .caller(request.headers(), Now::current())
             .is_none()
     {
         return unauthorized();
@@ -527,7 +564,7 @@ struct LoginRequest {
 }
 
 async fn login(State(state): State<ControlState>, Json(request): Json<LoginRequest>) -> Response {
-    match state.0.auth.exchange(&request.code, Instant::now()) {
+    match state.0.auth.exchange(&request.code, Now::current()) {
         Ok(token) => Json(json!({
             "session_token": token,
             "expires_in_secs": control_auth::SESSION_TTL.as_secs(),
@@ -548,7 +585,7 @@ async fn login(State(state): State<ControlState>, Json(request): Json<LoginReque
 }
 
 async fn mint_login_code(State(state): State<ControlState>) -> Response {
-    match state.0.auth.mint_login_code(Instant::now()) {
+    match state.0.auth.mint_login_code(Now::current()) {
         Ok(code) => Json(json!({
             "code": code,
             "expires_in_secs": control_auth::LOGIN_CODE_TTL.as_secs(),
@@ -563,38 +600,31 @@ async fn mint_login_code(State(state): State<ControlState>) -> Response {
 }
 
 async fn status(State(state): State<ControlState>) -> Response {
-    let Ok(mut description) = description_value(&state.0.description) else {
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal",
-            "cannot encode the playground's description",
-        );
-    };
-    if let Some(object) = description.as_object_mut() {
-        object.insert("running".into(), json!(true));
-        object.insert(
-            "browser_sessions".into(),
-            json!(state.0.auth.browser_sessions(Instant::now())),
-        );
-        let blueprint_status = state
-            .0
-            .blueprint_status
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        object.insert("blueprint_status".into(), json!(blueprint_status));
-        // The closure of the blueprint in force now, which a save may have changed.
-        match current_closure(&state).await {
-            Ok(Some(closure)) => {
-                object.insert("packages".into(), json!(closure));
-            }
-            Ok(None) => {}
-            Err(message) => {
-                object.insert("packages_error".into(), json!(message));
-            }
+    let mut description = state.0.description.clone();
+    // The closure of the blueprint in force now, which a save may have changed.
+    let packages_error = match current_closure(&state).await {
+        Ok(Some(closure)) => {
+            description.packages = closure;
+            None
         }
-    }
-    Json(description).into_response()
+        Ok(None) => None,
+        Err(message) => Some(message),
+    };
+    let blueprint_status = state
+        .0
+        .blueprint_status
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    Json(Status {
+        description,
+        running: true,
+        browser_sessions: state.0.auth.browser_sessions(Now::current()),
+        blueprint_status,
+        packages_error,
+        health: None,
+    })
+    .into_response()
 }
 
 async fn current_closure(state: &ControlState) -> Result<Option<Vec<ClosureEntry>>, String> {

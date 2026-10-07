@@ -3,12 +3,14 @@
 //! The blueprint watcher logs each change as a version before applying it, appends a
 //! bytes-updated entry for an edit that changes only comments or whitespace, and voids
 //! a version whose apply failed. `clear` appends a clear marker. Readers take the
-//! latest bytes per version and skip voided versions; the audit window starts after
-//! the latest version or clear that still stands.
+//! latest bytes per version and skip voided versions. The audit window is the runs
+//! decided under the latest version that still stands, or, when a clear came after it,
+//! the runs after that clear.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::run::RunSummary;
 use super::{FORMAT, Result, Store, append_line, json_line, now_micros, read_lines};
 
 /// One line of the change log.
@@ -79,10 +81,12 @@ pub(crate) struct Changes {
     pub(crate) voided: Vec<u64>,
     /// Every line, in order, for a reader that wants the history itself.
     pub(crate) lines: Vec<ChangeLine>,
+    /// Lines that did not parse (a write cut short), left out of `lines`.
+    pub(crate) skipped: usize,
 }
 
 impl Changes {
-    fn from_lines(lines: Vec<ChangeLine>) -> Self {
+    fn from_lines(lines: Vec<ChangeLine>, skipped: usize) -> Self {
         let voided: Vec<u64> = lines
             .iter()
             .filter_map(|line| match &line.entry {
@@ -121,6 +125,7 @@ impl Changes {
             versions,
             voided,
             lines,
+            skipped,
         }
     }
 
@@ -153,9 +158,12 @@ impl Changes {
             .unwrap_or(0)
     }
 
-    /// The audit window: runs with an id above the returned one, and what started it.
-    /// The latest standing version or clear starts it, so a comment-only edit (a
-    /// bytes-updated entry) and a failed apply leave it where it was.
+    /// What started the audit window, and an id every run in it is above. The latest
+    /// standing version or clear starts it, so a comment-only edit (a bytes-updated
+    /// entry) and a failed apply leave it where it was. For a clear the id is its
+    /// high-water mark, and the window is every run above it. For a version it is the
+    /// last id handed out when the version was logged, a bound only: which runs are in
+    /// the window is [`Changes::in_audit_window`]'s answer.
     pub(crate) fn audit_window(&self) -> (u64, WindowStart) {
         let mut window = (0, WindowStart::Beginning);
         for line in &self.lines {
@@ -171,6 +179,27 @@ impl Changes {
         }
         window
     }
+
+    /// Whether `run` is in the audit window. When a version starts the window, that is a
+    /// run decided under it, as the run itself records: a run that started after the
+    /// version was logged but before it was applied ran under the earlier one and is not
+    /// in it. Otherwise it is every run after the clear that started the window, or every
+    /// run when nothing has.
+    pub(crate) fn in_audit_window(&self, run: &RunSummary) -> bool {
+        match self.audit_window() {
+            (_, WindowStart::Beginning) => true,
+            (high_water, WindowStart::Clear) => run.id > high_water,
+            (_, WindowStart::Version(version)) => {
+                run.blueprint_version.as_deref() == Some(version_tag(version).as_str())
+            }
+        }
+    }
+}
+
+/// The tag a run records for the version it was decided under
+/// (`RunStart::blueprint_version`).
+pub(crate) fn version_tag(version: u64) -> String {
+    version.to_string()
 }
 
 /// What the watcher logs for a new version; the store numbers it.
@@ -182,13 +211,25 @@ pub(crate) struct NewVersion {
 }
 
 impl Store {
-    /// The change log as readers see it. Refuses a line in a newer format.
+    /// The change log as readers see it. A line that does not parse (a write cut short)
+    /// is skipped and counted, so it never blocks the watcher; a line in a newer format
+    /// is refused.
     pub(crate) fn changes(&self) -> Result<Changes> {
-        read_lines(&self.changes_path()).map(Changes::from_lines)
+        read_lines(&self.changes_path())
+            .map(|lines| Changes::from_lines(lines.records, lines.skipped))
+    }
+
+    /// The stored runs in the audit window ([`Changes::in_audit_window`]), by id.
+    pub(crate) fn audit_window_runs(&self) -> Result<Vec<RunSummary>> {
+        let changes = self.changes()?;
+        let mut runs = self.list_runs()?;
+        runs.retain(|run| changes.in_audit_window(run));
+        Ok(runs)
     }
 
     /// Logs a new version and returns its number.
     pub(crate) fn append_version(&self, new: NewVersion) -> Result<u64> {
+        self.writer()?;
         // The run-id lock first, as `clear` takes them, so the two never deadlock.
         let inner = self.lock();
         let _changes = self
@@ -218,6 +259,7 @@ impl Store {
     }
 
     pub(super) fn append_change(&self, entry: ChangeEntry) -> Result<()> {
+        self.writer()?;
         let _changes = self
             .changes
             .lock()

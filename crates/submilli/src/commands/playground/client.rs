@@ -1,25 +1,60 @@
-//! How a command reaches a running playground: read the lock, check the pid,
-//! and complete the nonce challenge before any credential is sent. Only a
+//! How a command reaches a running playground: read the lock, check the instance
+//! lock, and complete the nonce challenge before any credential is sent. Only a
 //! listener that proves it knows the lock's start nonce ever sees the admin token.
 
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::control_auth::{CHALLENGE_BYTES, challenge_response};
+use super::host::Status;
 use super::state::{Lock, StateDir, random_hex};
 
 /// Long enough for a loaded playground to answer, short enough that a listener
-/// that never answers reads as not running rather than hanging the command.
+/// that never answers is reported rather than hanging the command.
 const CHALLENGE_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) enum Probe {
     NotRunning,
-    /// A lock whose pid is gone or whose listener does not answer the challenge.
-    Stale,
+    /// A lock no serving process holds: what it names is gone.
+    Stale(Lock),
+    /// A process serves this project but cannot be reached now: it is still
+    /// starting, or it did not answer the challenge in time. Never replaced.
+    Busy(Busy),
     Running(Running),
+}
+
+pub(crate) enum Busy {
+    /// The instance lock is held but no lock names an instance yet.
+    Starting,
+    /// The lock's listener did not answer the challenge, or answered it wrong.
+    NotAnswering { pid: u32 },
+}
+
+impl Busy {
+    pub(crate) fn pid(&self) -> Option<u32> {
+        match self {
+            Self::Starting => None,
+            Self::NotAnswering { pid } => Some(*pid),
+        }
+    }
+
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::Starting => "a Submilli playground is starting for this project; try again \
+                               in a moment"
+                .to_owned(),
+            Self::NotAnswering { pid } => format!(
+                "a Submilli playground (pid {pid}) serves this project but did not answer its \
+                 control listener within {}s; it may be busy. Try again, or end the process \
+                 if it is stuck",
+                CHALLENGE_TIMEOUT.as_secs()
+            ),
+        }
+    }
 }
 
 pub(crate) struct Running {
@@ -28,17 +63,27 @@ pub(crate) struct Running {
     admin: String,
 }
 
-/// What the lock in `state` names, checked.
+/// What the lock in `state` names, checked. Only a process holding the instance
+/// lock serves the project, so a lock without one is stale however its pid and
+/// port look, and one with it is never stale, however slowly it answers.
 pub(crate) fn probe(state: &StateDir) -> Result<Probe> {
-    let Some(lock) = state.read_lock()? else {
-        return Ok(Probe::NotRunning);
+    // The lock before the instance lock: an instance takes the instance lock before
+    // it writes its lock, so a lock read here and no holder after means it is gone.
+    let lock = state.read_lock()?;
+    let held = state.instance_held()?;
+    let Some(lock) = lock else {
+        return Ok(if held {
+            Probe::Busy(Busy::Starting)
+        } else {
+            Probe::NotRunning
+        });
     };
-    if !pid_alive(lock.pid) {
-        return Ok(Probe::Stale);
+    if !held {
+        return Ok(Probe::Stale(lock));
     }
     let agent = agent(CHALLENGE_TIMEOUT);
     if !answers_challenge(&agent, &lock) {
-        return Ok(Probe::Stale);
+        return Ok(Probe::Busy(Busy::NotAnswering { pid: lock.pid }));
     }
     // Read only now: a listener that failed the challenge never gets near it.
     let admin = state.admin_token()?;
@@ -77,20 +122,21 @@ fn answers_challenge(agent: &ureq::Agent, lock: &Lock) -> bool {
 }
 
 impl Running {
-    pub(crate) fn status(&self) -> Result<Value> {
+    pub(crate) fn status(&self) -> Result<Status> {
         self.call("GET", "/api/status")
     }
 
     pub(crate) fn mint_login_code(&self) -> Result<String> {
-        let body = self.call("POST", "/api/login-codes")?;
-        body["code"]
-            .as_str()
-            .map(str::to_owned)
-            .context("the playground returned no login code")
+        #[derive(serde::Deserialize)]
+        struct Minted {
+            code: String,
+        }
+        let minted: Minted = self.call("POST", "/api/login-codes")?;
+        Ok(minted.code)
     }
 
     pub(crate) fn stop(&self) -> Result<()> {
-        self.call("POST", "/api/stop").map(|_| ())
+        self.call::<Value>("POST", "/api/stop").map(|_| ())
     }
 
     /// Whether the server listener answers its health probe, which needs no token.
@@ -102,7 +148,9 @@ impl Running {
             .is_ok_and(|response| response.status().is_success())
     }
 
-    fn call(&self, method: &str, path: &str) -> Result<Value> {
+    /// A control call's answer. A success whose body is not what the route returns
+    /// is an error, never an empty answer.
+    fn call<T: DeserializeOwned>(&self, method: &str, path: &str) -> Result<T> {
         let url = format!("{}{path}", base(&self.lock));
         let request = ureq::http::Request::builder()
             .method(method)
@@ -119,15 +167,18 @@ impl Running {
             .body_mut()
             .with_config()
             .limit(1 << 20)
-            .read_json::<Value>()
-            .unwrap_or(Value::Null);
+            .read_json::<Value>();
         if !status.is_success() {
-            let message = body["message"]
-                .as_str()
-                .map_or_else(|| format!("HTTP {}", status.as_u16()), str::to_owned);
+            let message = body
+                .ok()
+                .and_then(|body| body["message"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
             bail!("the playground refused {method} {path}: {message}");
         }
-        Ok(body)
+        let body = body
+            .with_context(|| format!("the playground's answer to {method} {path} is not JSON"))?;
+        serde_json::from_value(body)
+            .with_context(|| format!("the playground's answer to {method} {path} is malformed"))
     }
 }
 
@@ -142,19 +193,4 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .timeout_global(Some(timeout))
         .build()
         .into()
-}
-
-/// Whether a process with this pid exists. A pid this user may not signal still
-/// exists, so it counts as alive; the nonce challenge tells whether it is ours.
-pub(crate) fn pid_alive(pid: u32) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return false;
-    };
-    if pid <= 0 {
-        return false;
-    }
-    // SAFETY: kill with signal 0 only checks for the process; it takes scalar
-    // arguments and sends nothing.
-    let result = unsafe { libc::kill(pid, 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }

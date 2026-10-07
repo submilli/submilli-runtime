@@ -306,14 +306,16 @@ pub async fn apply(
     }
     let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(&req.yaml));
     let created = {
-        // Registered without a tag: its runs record the blueprint's hash.
+        // Registered without a tag: its runs record the blueprint's hash. The tag
+        // goes only once the write succeeds, so a failed write leaves both as they were.
         let mut tags = state.blueprint_tags_for_write().await;
-        tags.remove(&name);
-        state
+        let created = state
             .blueprints()
             .upsert_yaml(stored)
             .await
-            .map_err(store_error)?
+            .map_err(store_error)?;
+        tags.remove(&name);
+        created
     };
     state.evict_mcp_catalog(&name);
     // Another apply may have committed since the audit read above.
@@ -416,12 +418,16 @@ pub async fn remove(
         "old_hash": previous.as_ref().map(crate::audit::blueprint_hash)}));
     let removed = {
         let mut tags = state.blueprint_tags_for_write().await;
-        tags.remove(&name);
-        state
+        let removed = state
             .blueprints()
             .remove(&name)
             .await
-            .map_err(store_error)?
+            .map_err(store_error)?;
+        // Only once the store no longer holds it, so a failed remove keeps its tag.
+        if removed {
+            tags.remove(&name);
+        }
+        removed
     };
     if !removed {
         return Err(not_found(name));

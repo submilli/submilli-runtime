@@ -337,6 +337,122 @@ mod unix {
         pid
     }
 
+    /// The instance lock, held as a serving playground holds it, until dropped.
+    fn hold_instance_lock(project: &Project) -> std::fs::File {
+        std::fs::create_dir_all(project.state()).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(project.state().join("instance.lock"))
+            .unwrap();
+        file.lock().unwrap();
+        file
+    }
+
+    fn instance_held(project: &Project) -> bool {
+        let Ok(file) = std::fs::OpenOptions::new()
+            .write(true)
+            .open(project.state().join("instance.lock"))
+        else {
+            return false;
+        };
+        matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+    }
+
+    /// A listener that accepts every connection and never answers.
+    fn silent_listener() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut open = Vec::new();
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                open.push(stream);
+            }
+        });
+        port
+    }
+
+    /// The answer the real control listener gives a challenge under `nonce`.
+    fn challenge_answer(nonce: &str, challenge: &str) -> String {
+        use hmac::{Hmac, Mac};
+        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(nonce.as_bytes()).unwrap();
+        mac.update(b"submilli-playground-challenge/1\0");
+        mac.update(challenge.to_ascii_lowercase().as_bytes());
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    /// A control listener that answers the challenge under the test lock's nonce,
+    /// then answers each other route from `routes` (path to body).
+    fn convincing_impostor(routes: &'static [(&'static str, &'static str)]) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                let body = loop {
+                    let Ok(read) = stream.read(&mut buffer) else {
+                        break None;
+                    };
+                    if read == 0 {
+                        break None;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    let text = String::from_utf8_lossy(&request).into_owned();
+                    let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                        continue;
+                    };
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break Some((head.to_owned(), body.to_owned()));
+                    }
+                };
+                let Some((head, body)) = body else { continue };
+                let path = head
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned();
+                let reply = if path == "/api/challenge" {
+                    let challenge: Value = serde_json::from_str(&body).unwrap_or_default();
+                    let challenge = challenge["challenge"].as_str().unwrap_or_default();
+                    json!({ "response": challenge_answer(&"00".repeat(32), challenge) }).to_string()
+                } else {
+                    routes
+                        .iter()
+                        .find(|(route, _)| *route == path)
+                        .map_or("{}", |(_, body)| body)
+                        .to_owned()
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        port
+    }
+
+    fn read_lock_file(project: &Project) -> String {
+        std::fs::read_to_string(project.lock()).unwrap()
+    }
+
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
     fn fresh_start_creates_private_state_and_prints_a_ready_record() {
@@ -570,7 +686,10 @@ mod unix {
 
         let (port, seen) = impostor(r#"{"response":"00"}"#);
         write_lock(&project, std::process::id(), port);
-        for command in ["status", "open"] {
+        // A process holds the instance lock, so the lock is not simply stale and the
+        // challenge is what decides.
+        let _held = hold_instance_lock(&project);
+        for command in ["status", "open", "stop"] {
             let output = project.run(&[command, "--json"]);
             assert_eq!(
                 output.status.code(),
@@ -713,6 +832,37 @@ mod unix {
             Some(json!({ "code": login_code(&record) })),
         );
         assert_eq!(status, 403);
+        // A sandboxed frame or a file page sends `Origin: null`.
+        let (status, _, _) = request("GET", &url, Some(&admin), &[("origin", "null")], None);
+        assert_eq!(status, 403);
+        let (status, _, _) = request(
+            "POST",
+            &control(&record, "/api/login"),
+            None,
+            &[("origin", "null")],
+            Some(json!({ "code": login_code(&record) })),
+        );
+        assert_eq!(status, 403);
+        // The other loopback spellings of this listener pass.
+        for host in [format!("localhost:{port}"), format!("[::1]:{port}")] {
+            let (status, _, _) = request("GET", &url, Some(&admin), &[("host", &host)], None);
+            assert_eq!(status, 200, "{host}");
+        }
+        let (status, _, _) = request("GET", &url, Some(&admin), &[("host", "127.0.0.1")], None);
+        assert_eq!(status, 403);
+
+        // A garbage or huge credential is refused, and the listener stays up.
+        let huge = format!("Bearer {}", "a".repeat(32 * 1024));
+        for value in ["garbage", "Bearer", "Basic YWRtaW46YWRtaW4=", huge.as_str()] {
+            let (status, _, _) = request("GET", &url, None, &[("authorization", value)], None);
+            assert!(
+                status == 401 || status == 431,
+                "{}: {status}",
+                &value[..value.len().min(30)]
+            );
+        }
+        let (status, _, _) = request("GET", &url, Some(&admin), &[], None);
+        assert_eq!(status, 200);
     }
 
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
@@ -900,6 +1050,25 @@ mod unix {
         assert_eq!(records[0]["pid"], records[1]["pid"]);
         assert_eq!(records[0]["url"], records[1]["url"]);
         assert_ne!(records[0]["login_url"], records[1]["login_url"]);
+        // Both starts agreed on the tokens: every one on disk is the one the server
+        // accepts.
+        let record = &records[0];
+        let (status, _, body) = request(
+            "GET",
+            &control(record, "/api/status"),
+            Some(&project.token("admin")),
+            &[],
+            None,
+        );
+        assert_eq!(status, 200, "admin: {body}");
+        for name in ["stand-in", "app", "chat", "browser-chat"] {
+            let body = execute(
+                record,
+                &project.token(name),
+                "function main(): number { return 1; }",
+            );
+            assert_eq!(body["result"], "1", "{name}: {body}");
+        }
     }
 
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
@@ -927,5 +1096,176 @@ mod unix {
         let record = parse(&output);
         assert_eq!(record["blueprint"]["name"], "demo");
         assert!(root.join(".submilli/playground/lock").exists());
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn a_live_instance_that_does_not_answer_is_busy_and_never_replaced() {
+        let project = Project::new();
+        project.start(&[]);
+        assert!(project.stop().status.success());
+
+        let port = silent_listener();
+        write_lock(&project, std::process::id(), port);
+        let held = hold_instance_lock(&project);
+        let before = read_lock_file(&project);
+
+        let output = project.run(&["stop", "--json"]);
+        assert_eq!(output.status.code(), Some(6), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("did not answer"),
+            "{}",
+            stderr(&output)
+        );
+        assert_eq!(parse(&output)["busy"], true);
+        assert_eq!(read_lock_file(&project), before, "stop removed a live lock");
+
+        let output = project.run(&["start", "--json"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("did not answer"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(stdout(&output).trim().is_empty(), "{}", stdout(&output));
+        assert_eq!(
+            read_lock_file(&project),
+            before,
+            "start replaced a live lock"
+        );
+        assert!(
+            !project.ready_file().exists(),
+            "start launched a second instance"
+        );
+
+        // Once nothing holds the instance lock, the same lock is stale.
+        drop(held);
+        let record = project.start(&[]);
+        assert_ne!(record["attached"], true);
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn a_start_killed_while_its_child_starts_leaves_one_playground() {
+        let project = Project::new();
+        let mut first = project
+            .command(&["start", "--json"])
+            .env("SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS", "3000")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        wait_until(
+            "the child to take the instance lock",
+            Duration::from_secs(30),
+            || instance_held(&project),
+        );
+        first.kill().unwrap();
+        first.wait().unwrap();
+
+        // The orphaned child is still starting: a start leaves it alone.
+        let output = project.run(&["start", "--json"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(stderr(&output).contains("starting"), "{}", stderr(&output));
+
+        // Once it is ready, a start attaches to it rather than starting another.
+        wait_until(
+            "the orphaned child to be ready",
+            Duration::from_secs(60),
+            || project.lock().exists() && project.run(&["status", "--json"]).status.success(),
+        );
+        let record = project.start(&[]);
+        assert_eq!(record["attached"], true, "{record}");
+        let lock: Value = serde_json::from_str(&read_lock_file(&project)).unwrap();
+        assert_eq!(lock["pid"], record["pid"]);
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn interrupting_a_start_stops_the_child_it_launched() {
+        let project = Project::new();
+        let mut start = project
+            .command(&["start", "--json"])
+            .env("SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS", "5000")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        wait_until(
+            "the child to take the instance lock",
+            Duration::from_secs(30),
+            || instance_held(&project),
+        );
+        Command::new("kill")
+            .args(["-INT", &start.id().to_string()])
+            .status()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let exit = loop {
+            if let Some(exit) = start.try_wait().unwrap() {
+                break exit;
+            }
+            assert!(Instant::now() < deadline, "start did not end on SIGINT");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let mut err = String::new();
+        start
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut err)
+            .unwrap();
+        assert_eq!(exit.code(), Some(130), "{err}");
+        assert!(err.contains("interrupted"), "{err}");
+        wait_until("the child to end", Duration::from_secs(10), || {
+            !instance_held(&project)
+        });
+        assert!(!project.lock().exists());
+        assert!(!project.ready_file().exists());
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn open_refuses_a_success_whose_body_is_not_a_status() {
+        let project = Project::new();
+        project.start(&[]);
+        assert!(project.stop().status.success());
+
+        let port = convincing_impostor(&[
+            ("/api/login-codes", r#"{"code":"abc"}"#),
+            ("/api/status", "this is not JSON"),
+        ]);
+        write_lock(&project, std::process::id(), port);
+        let _held = hold_instance_lock(&project);
+        for command in ["open", "status"] {
+            let output = project.run(&[command, "--json"]);
+            assert!(!output.status.success(), "{command}: {}", stdout(&output));
+            assert!(!stdout(&output).contains("#login="), "{}", stdout(&output));
+            assert!(stderr(&output).contains("not JSON"), "{}", stderr(&output));
+        }
+        std::fs::remove_file(project.lock()).unwrap();
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn attaching_with_other_settings_says_the_running_playground_keeps_its_own() {
+        let project = Project::new();
+        project.start(&[]);
+        let output = project.run(&["start", "--json"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            !stderr(&output).contains("keeps its own"),
+            "{}",
+            stderr(&output)
+        );
+
+        let output = project.run(&["start", "--json", "--allow-localhost"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let err = stderr(&output);
+        assert!(err.contains("keeps its own settings"), "{err}");
+        assert!(err.contains("submilli playground stop"), "{err}");
+        let record = parse(&output);
+        assert_eq!(record["attached"], true);
+        assert_eq!(record["egress_grants"], json!([]));
     }
 }

@@ -59,6 +59,6 @@ async fn a_refused_local_apply_evicts_nothing() {
             .is_err()
     );
     assert!(state.inner.mcp_catalogs.lock().unwrap().contains_key(&mine));
-    let (_, tag) = state.blueprint_for_run("demo").await.unwrap().unwrap();
-    assert_eq!(tag.as_deref(), Some("v1"));
+    let found = state.blueprint_for_run("demo").await.unwrap().unwrap();
+    assert_eq!(found.version_tag.as_deref(), Some("v1"));
 }

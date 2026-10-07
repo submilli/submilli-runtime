@@ -1,6 +1,8 @@
 //! `submilli playground init`: a `submilli/` folder with a starter billing package,
 //! a deny-by-default blueprint that pins charges to the signed-in customer, and an
-//! example program. Nothing is written outside `submilli/`.
+//! example program. Nothing is left outside `submilli/`: the files are written into
+//! a hidden staging folder beside it and renamed into place, so a failed `init`
+//! leaves no partial `submilli/` that would make the next one refuse.
 //!
 //! The starter package is the quickstart's billing package, except that its charges
 //! come from a fixture file on the project's `billing` volume (`submilli/volumes/`)
@@ -50,6 +52,10 @@ pub(crate) fn root_for(from: &Path) -> PathBuf {
 /// Write the starter under `<root>/submilli/`. Refuses when `submilli/` already
 /// exists, so nothing of the developer's is overwritten.
 pub(crate) fn init(root: &Path) -> Result<Scaffolded> {
+    init_with(root, FILES)
+}
+
+fn init_with(root: &Path, starter: &[(&str, &str)]) -> Result<Scaffolded> {
     let folder = root.join(FOLDER);
     if folder.exists() {
         bail!(
@@ -57,9 +63,13 @@ pub(crate) fn init(root: &Path) -> Result<Scaffolded> {
             folder.display()
         );
     }
-    let mut files = Vec::with_capacity(FILES.len());
-    for (relative, text) in FILES {
-        let path = folder.join(relative);
+    // Removed when dropped, so a write that fails takes the staged files with it.
+    let staging = tempfile::Builder::new()
+        .prefix(".submilli-init-")
+        .tempdir_in(root)
+        .with_context(|| format!("creating a staging folder in {}", root.display()))?;
+    for (relative, text) in starter {
+        let path = staging.path().join(relative);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
@@ -71,11 +81,24 @@ pub(crate) fn init(root: &Path) -> Result<Scaffolded> {
             .with_context(|| format!("creating {}", path.display()))?;
         file.write_all(text.as_bytes())
             .with_context(|| format!("writing {}", path.display()))?;
-        files.push(path);
     }
+    if folder.exists() {
+        bail!(
+            "{} appeared while the starter was written; `playground init` only creates a \
+             new `submilli/` folder",
+            folder.display()
+        );
+    }
+    std::fs::rename(staging.path(), &folder)
+        .with_context(|| format!("moving the starter into {}", folder.display()))?;
+    // The staging folder is now `submilli/`; there is nothing left to remove.
+    let _ = staging.keep();
     Ok(Scaffolded {
         root: root.to_path_buf(),
-        files,
+        files: starter
+            .iter()
+            .map(|(relative, _)| folder.join(relative))
+            .collect(),
     })
 }
 
@@ -252,6 +275,24 @@ mod tests {
         assert_eq!(top, ["app.py", "submilli"]);
         let error = init(dir.path()).err().unwrap();
         assert!(error.to_string().contains("already exists"), "{error}");
+    }
+
+    #[test]
+    fn a_failed_init_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app.py"), "print('hi')\n").unwrap();
+        // The second file cannot be created: the first already holds its path.
+        let error = init_with(dir.path(), &[("a.txt", "one"), ("a.txt", "two")])
+            .err()
+            .expect("the duplicate write fails");
+        assert!(error.to_string().contains("a.txt"), "{error:#}");
+        let top: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(top, ["app.py"]);
+        // So the next init is not refused.
+        init(dir.path()).unwrap();
     }
 
     #[test]

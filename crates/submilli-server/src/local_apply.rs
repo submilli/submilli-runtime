@@ -112,10 +112,14 @@ impl AppState {
     ) -> Result<LocalApplied, LocalApplyError> {
         let blueprint = self.check_local_blueprint(yaml).await?;
         let name = blueprint.name.clone();
-        let declared_volumes = self.declare_local_volumes(&blueprint)?;
+        let references = volume_references(&blueprint);
         let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(yaml));
-        let created = {
+        let (created, declared_volumes) = {
+            // Held across the store write and the declarations: no run reads the
+            // blueprint before its volumes are declared, and no other local apply
+            // declares a volume between this one's check and its declaration.
             let mut tags = self.blueprint_tags_for_write().await;
+            self.check_new_volumes(&references)?;
             let created = self
                 .blueprints()
                 .upsert_yaml(stored)
@@ -125,8 +129,11 @@ impl AppState {
                     message: format!("the blueprint could not be stored: {error}"),
                     diagnostics: Vec::new(),
                 })?;
+            // Only after the store accepted the blueprint, so a refused write
+            // declares nothing.
+            let declared = self.declare_local_volumes(&references)?;
             tags.insert(name.clone(), version_tag.to_owned());
-            created
+            (created, declared)
         };
         self.evict_mcp_catalog(&name);
         self.evict_prepared_packages(&name);
@@ -140,6 +147,8 @@ impl AppState {
     /// Volume references as registration checks them, except that an undeclared
     /// volume passes when its name can be a managed volume's directory.
     fn check_local_volumes(&self, blueprint: &Blueprint) -> Result<(), LocalApplyError> {
+        let references = volume_references(blueprint);
+        self.check_new_volumes(&references)?;
         let mut table = self.session_manager().volumes();
         for reference in blueprint.vfs.named_references() {
             if !table.contains_key(reference.volume) && is_managed_name(reference.volume) {
@@ -162,26 +171,66 @@ impl AppState {
         })
     }
 
-    fn declare_local_volumes(&self, blueprint: &Blueprint) -> Result<Vec<String>, LocalApplyError> {
+    /// A volume the server does not declare whose name could be a managed volume's
+    /// but differs only in letter case from one it stores is refused; other names
+    /// are left to the volume-reference check.
+    fn check_new_volumes(&self, references: &[(String, YamlPath)]) -> Result<(), LocalApplyError> {
+        let registry = self.session_manager().volume_registry();
+        for (volume, path) in references {
+            if !is_managed_name(volume) {
+                continue;
+            }
+            if let Err(error) = registry.check_managed(volume) {
+                return Err(volume_refusal("volume_name_conflict", &error, path));
+            }
+        }
+        Ok(())
+    }
+
+    /// Declares each named volume the server lacks. Runs after
+    /// [`Self::check_new_volumes`] under the same tag lock, so a refusal here
+    /// means only a name registration's check let through.
+    fn declare_local_volumes(
+        &self,
+        references: &[(String, YamlPath)],
+    ) -> Result<Vec<String>, LocalApplyError> {
         let registry = self.session_manager().volume_registry();
         let mut declared = Vec::new();
-        for reference in blueprint.vfs.named_references() {
+        for (volume, path) in references {
             let added = registry
-                .declare_managed(reference.volume, SizeLimit::Unlimited)
-                .map_err(|error| LocalApplyError {
-                    code: "undeclared_volume",
-                    message: error.to_string(),
-                    diagnostics: vec![LocalDiagnostic {
-                        path: Some(reference.yaml_path("volume")),
-                        line: None,
-                        col: None,
-                        message: error.to_string(),
-                    }],
-                })?;
+                .declare_managed(volume, SizeLimit::Unlimited)
+                .map_err(|error| volume_refusal("undeclared_volume", &error, path))?;
             if added {
-                declared.push(reference.volume.to_owned());
+                declared.push(volume.clone());
             }
         }
         Ok(declared)
+    }
+}
+
+/// Each volume the blueprint names, with where it names it.
+fn volume_references(blueprint: &Blueprint) -> Vec<(String, YamlPath)> {
+    blueprint
+        .vfs
+        .named_references()
+        .into_iter()
+        .map(|reference| (reference.volume.to_owned(), reference.yaml_path("volume")))
+        .collect()
+}
+
+fn volume_refusal(
+    code: &'static str,
+    error: &crate::volumes::DeclareError,
+    path: &YamlPath,
+) -> LocalApplyError {
+    LocalApplyError {
+        code,
+        message: error.to_string(),
+        diagnostics: vec![LocalDiagnostic {
+            path: Some(path.clone()),
+            line: None,
+            col: None,
+            message: error.to_string(),
+        }],
     }
 }

@@ -174,17 +174,31 @@ async fn serve_opened(
     }
 }
 
+/// SIGTERM and SIGINT, registered for [`serve_embedded`]. An embedder installs them
+/// before it announces itself (writes a lock, prints an address), as [`serve`] does
+/// before it binds, so a signal sent once it is visible is held for the drain rather
+/// than killing the process mid-start.
+pub struct EmbeddedSignals(ShutdownSignals);
+
+impl EmbeddedSignals {
+    /// Register the handlers. Needs a Tokio runtime with signal support.
+    pub fn install() -> Result<Self> {
+        ShutdownSignals::install().map(Self)
+    }
+}
+
 /// Serve a state an embedder built and booted, on a listener it bound, until
 /// shutdown is requested — by `POST /v1/shutdown`, by notifying
-/// [`AppState::shutdown_signal`], or by SIGTERM or SIGINT — then drain as
+/// [`AppState::shutdown_signal`], or by one of `signals` — then drain as
 /// [`serve`] does. For an embedder that runs the server beside listeners of its
 /// own, such as the playground; the embedder owns any database it opened.
 pub async fn serve_embedded(
     listener: tokio::net::TcpListener,
     state: AppState,
     shutdown_grace: Duration,
+    signals: EmbeddedSignals,
 ) -> Result<()> {
-    let signals = ShutdownSignals::install()?;
+    let EmbeddedSignals(signals) = signals;
     state.set_bind_addr(listener.local_addr()?);
     let shutdown = state.shutdown_signal();
     let requests = state.graceful_shutdown();

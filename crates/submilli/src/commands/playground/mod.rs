@@ -17,7 +17,6 @@ use std::process::ExitCode;
 
 use clap::{Args as ClapArgs, Subcommand};
 use ipnet::IpNet;
-use serde_json::Value;
 
 #[cfg(unix)]
 mod client;
@@ -264,43 +263,51 @@ fn parse_ip_or_cidr(value: &str) -> Result<IpNet, String> {
 
 /// What `start` prints: the running instance's description plus a login link.
 /// Never a token: the record names the app token's file, not its value.
-pub(crate) struct ReadyRecord(Value);
+#[cfg(unix)]
+#[derive(serde::Serialize)]
+pub(crate) struct ReadyRecord<'a> {
+    #[serde(flatten)]
+    description: &'a host::Description,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    packages_error: Option<&'a str>,
+    login_url: String,
+    attached: bool,
+}
 
-impl ReadyRecord {
-    pub(crate) fn new(mut description: Value, login_code: &str, attached: bool) -> Self {
-        if let Some(object) = description.as_object_mut() {
-            object.remove("running");
-            object.remove("browser_sessions");
-            object.remove("blueprint_status");
-            let url = object
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            object.insert(
-                "login_url".into(),
-                Value::String(format!("{url}#login={login_code}")),
-            );
-            object.insert("attached".into(), Value::Bool(attached));
+#[cfg(unix)]
+impl<'a> ReadyRecord<'a> {
+    pub(crate) fn new(
+        description: &'a host::Description,
+        packages_error: Option<&'a str>,
+        login_code: &str,
+        attached: bool,
+    ) -> Self {
+        Self {
+            description,
+            packages_error,
+            login_url: login_url(&description.url, login_code),
+            attached,
         }
-        Self(description)
     }
 
     pub(crate) fn print(&self, output: Output) {
         match output {
-            Output::Json => println!("{}", self.0),
+            Output::Json => match serde_json::to_string(self) {
+                Ok(json) => println!("{json}"),
+                Err(error) => eprintln!("encoding the ready record failed: {error}"),
+            },
             Output::Text => {
-                let record = &self.0;
-                let heading = if record["attached"] == true {
+                let heading = if self.attached {
                     "Submilli playground is already running"
                 } else {
                     "Submilli playground is running"
                 };
-                println!("{heading} (pid {}).", record["pid"]);
-                print_description(record);
+                println!("{heading} (pid {}).", self.description.pid);
+                print_description(self.description, self.packages_error);
                 println!(
-                    "  open:       {}  (single use, expires in 5 minutes)",
-                    text(&record["login_url"])
+                    "  open:       {}  (single use, expires in {})",
+                    self.login_url,
+                    login_code_ttl_text()
                 );
                 println!(
                     "Point an app at the server with the token in the app token file. Stop it with \
@@ -311,26 +318,41 @@ impl ReadyRecord {
     }
 }
 
-fn print_description(record: &Value) {
-    println!("  project:    {}", text(&record["project"]));
+/// The page's address with a login code in its fragment, which the browser never
+/// sends to a server.
+#[cfg(unix)]
+fn login_url(url: &str, code: &str) -> String {
+    format!("{url}#login={code}")
+}
+
+/// How long a login code lasts, for people: "5 minutes".
+#[cfg(unix)]
+fn login_code_ttl_text() -> String {
+    let secs = control_auth::LOGIN_CODE_TTL.as_secs();
+    match (secs / 60, secs % 60) {
+        (1, 0) => "1 minute".to_owned(),
+        (minutes, 0) => format!("{minutes} minutes"),
+        _ => format!("{secs} seconds"),
+    }
+}
+
+#[cfg(unix)]
+fn print_description(description: &host::Description, packages_error: Option<&str>) {
+    println!("  project:    {}", description.project.display());
     println!(
         "  blueprint:  {} ({})",
-        text(&record["blueprint"]["name"]),
-        text(&record["blueprint"]["path"])
+        description.blueprint.name,
+        description.blueprint.path.display()
     );
-    println!("  page:       {}", text(&record["url"]));
-    println!("  server:     {}", text(&record["server_url"]));
-    println!("  app token:  {}", text(&record["app_token_file"]));
-    let grants: Vec<&str> = record["egress_grants"]
-        .as_array()
-        .map(|grants| grants.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    if grants.is_empty() {
+    println!("  page:       {}", description.url);
+    println!("  server:     {}", description.server_url);
+    println!("  app token:  {}", description.app_token_file.display());
+    if description.egress_grants.is_empty() {
         println!("  egress:     loopback and private ranges denied (see --allow-localhost)");
     } else {
-        println!("  egress:     {}", grants.join(", "));
+        println!("  egress:     {}", description.egress_grants.join(", "));
     }
-    match record["provider"].as_str() {
+    match &description.provider {
         Some(provider) => {
             println!("  provider:   {provider} (keys exported after start need a restart)");
         }
@@ -339,45 +361,43 @@ fn print_description(record: &Value) {
              and restart"
         ),
     }
-    println!("  log:        {}", text(&record["log_file"]));
-    print_packages(record);
+    println!("  log:        {}", description.log_file.display());
+    print_packages(&description.packages, packages_error);
 }
 
 /// The package closure, one package per line: its origin and whether a program may
 /// import it.
-fn print_packages(record: &Value) {
-    let packages = record["packages"].as_array().cloned().unwrap_or_default();
+#[cfg(unix)]
+fn print_packages(packages: &[packages::ClosureEntry], error: Option<&str>) {
     if packages.is_empty() {
         println!("  packages:   none");
     }
     for (index, package) in packages.iter().enumerate() {
         let label = if index == 0 { "packages:" } else { "" };
-        let mut notes = vec![text(&package["origin"])];
-        notes.push(if package["importable"] == true {
+        let mut notes = vec![
+            match package.origin {
+                packages::Origin::Blueprint => "blueprint",
+                packages::Origin::Dependency => "dependency",
+            }
+            .to_owned(),
+        ];
+        notes.push(if package.importable {
             "importable".to_owned()
         } else {
             "not importable".to_owned()
         });
-        if package["project"] == true {
+        if package.project {
             notes.push("project".to_owned());
         }
         println!(
             "  {label:<11} {} {} ({})",
-            text(&package["name"]),
-            text(&package["version"]),
+            package.name,
+            package.version,
             notes.join(", ")
         );
     }
-    if let Some(error) = record["packages_error"].as_str() {
+    if let Some(error) = error {
         println!("  packages:   {error}");
-    }
-}
-
-fn text(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        Value::Null => "-".to_owned(),
-        other => other.to_string(),
     }
 }
 
@@ -389,7 +409,7 @@ mod unix {
     use anyhow::{Context, Result, bail};
     use serde_json::json;
 
-    use super::client::{self, Probe};
+    use super::client::{self, Busy, Probe};
     use super::host::{self, HostOptions};
     use super::packages::ProjectPackages;
     use super::project::{self, DiscoveryError, Project};
@@ -397,7 +417,7 @@ mod unix {
     use super::state::{Lock, StateDir, random_hex};
     use super::{
         EXIT_NO_PROJECT, EXIT_NOT_RUNNING, EXIT_PACKAGE_RESOLUTION, Egress, Output, ReadyRecord,
-        StartArgs, print_description,
+        StartArgs, login_code_ttl_text, login_url, print_description,
     };
 
     /// How long a background start waits for its child to be ready.
@@ -406,6 +426,10 @@ mod unix {
     const STOP_TIMEOUT: Duration = Duration::from_secs(20);
     const POLL: Duration = Duration::from_millis(25);
     const NONCE_ENV: &str = "SUBMILLI_PLAYGROUND_START_NONCE";
+    /// `start` found a playground starting or not answering, and left it alone.
+    const EXIT_BUSY: u8 = 1;
+    /// `start` was interrupted while it waited, and stopped what it launched.
+    const EXIT_INTERRUPTED: u8 = 130;
 
     pub(super) fn start(args: StartArgs) -> Result<ExitCode> {
         let output = super::Output::from_json(args.json);
@@ -439,12 +463,18 @@ mod unix {
             return Ok(ExitCode::SUCCESS);
         }
 
-        // Ensure the tokens exist before anything can be told where they are.
-        state.tokens()?;
         let start_lock = state.start_lock()?;
+        // Ensure the tokens exist before anything can be told where they are; under
+        // the start lock, so concurrent first starts agree on them.
+        state.tokens()?;
         match client::probe(&state)? {
-            Probe::Running(running) => return attach(&running, output),
-            Probe::Stale => state.remove_stale(),
+            Probe::Running(running) => return attach(&running, &project, &egress, output),
+            Probe::Stale(stale) => state.remove_if_ours(&stale.nonce),
+            Probe::Busy(busy) => {
+                // Its lock stays: the instance holding it may answer in a moment.
+                eprintln!("{}", busy.message());
+                return Ok(ExitCode::from(EXIT_BUSY));
+            }
             Probe::NotRunning => {}
         }
         // A package the blueprint needs that cannot be built or found fails here, with
@@ -470,7 +500,11 @@ mod unix {
         let result = spawn_and_wait(&project, &state, &egress, &nonce, timeout);
         drop(start_lock);
         match result {
-            Ok(()) => {}
+            Ok(Waited::Ready) => {}
+            Ok(Waited::Interrupted) => {
+                eprintln!("interrupted; the playground this start launched was stopped");
+                return Ok(ExitCode::from(EXIT_INTERRUPTED));
+            }
             Err(error) => {
                 eprintln!("{error:#}");
                 return Ok(ExitCode::from(1));
@@ -478,7 +512,7 @@ mod unix {
         }
         match client::probe(&state)? {
             Probe::Running(running) => print_ready(&running, output, false),
-            Probe::NotRunning | Probe::Stale => {
+            Probe::NotRunning | Probe::Stale(_) | Probe::Busy(_) => {
                 eprintln!("the playground started but does not answer its control listener");
                 Ok(ExitCode::from(1))
             }
@@ -576,15 +610,63 @@ mod unix {
         }
     }
 
-    fn attach(running: &client::Running, output: Output) -> Result<ExitCode> {
-        print_ready(running, output, true)
+    /// Report the running playground. A start asking for another blueprint or other
+    /// grants is told the running one keeps its own, and how to change them.
+    fn attach(
+        running: &client::Running,
+        project: &Project,
+        egress: &Egress,
+        output: Output,
+    ) -> Result<ExitCode> {
+        let status = running.status()?;
+        let description = &status.description;
+        let same_blueprint = same_path(&description.blueprint.path, &project.blueprint);
+        let mut asked = egress.grants();
+        let mut has = description.egress_grants.clone();
+        asked.sort();
+        has.sort();
+        if !same_blueprint || asked != has {
+            eprintln!(
+                "note: the running playground keeps its own settings (blueprint {}, egress {}); \
+                 to start it with these, run `submilli playground stop` and start it again",
+                description.blueprint.path.display(),
+                if has.is_empty() {
+                    "with no grants".to_owned()
+                } else {
+                    has.join(", ")
+                }
+            );
+        }
+        let code = running.mint_login_code()?;
+        ReadyRecord::new(description, status.packages_error.as_deref(), &code, true).print(output);
+        Ok(ExitCode::SUCCESS)
+    }
+
+    fn same_path(one: &std::path::Path, other: &std::path::Path) -> bool {
+        match (one.canonicalize(), other.canonicalize()) {
+            (Ok(one), Ok(other)) => one == other,
+            _ => one == other,
+        }
     }
 
     fn print_ready(running: &client::Running, output: Output, attached: bool) -> Result<ExitCode> {
         let code = running.mint_login_code()?;
         let status = running.status()?;
-        ReadyRecord::new(status, &code, attached).print(output);
+        ReadyRecord::new(
+            &status.description,
+            status.packages_error.as_deref(),
+            &code,
+            attached,
+        )
+        .print(output);
         Ok(ExitCode::SUCCESS)
+    }
+
+    /// How a wait for the child ended, when it did not fail.
+    enum Waited {
+        Ready,
+        /// This process was told to stop while it waited; the child was stopped too.
+        Interrupted,
     }
 
     /// Re-execute this binary as a detached child that serves the playground, and
@@ -596,8 +678,12 @@ mod unix {
         egress: &Egress,
         nonce: &str,
         timeout: Duration,
-    ) -> Result<()> {
+    ) -> Result<Waited> {
         use std::os::unix::process::CommandExt;
+
+        // Before the child exists: a Ctrl-C from here on stops it rather than
+        // leaving it behind with no one to report it.
+        let interrupts = interrupt::Guard::install()?;
 
         let _ = std::fs::remove_file(state.ready_path());
         let log = state.fresh_log()?;
@@ -615,9 +701,17 @@ mod unix {
             // Its own process group, so a Ctrl-C meant for the caller's terminal
             // does not reach the playground.
             .process_group(0);
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .with_context(|| format!("a ready timeout of {}s is too long", timeout.as_secs()))?;
         let mut child = command.spawn().context("starting the playground")?;
-        let deadline = Instant::now() + timeout;
         loop {
+            if interrupts.interrupted() {
+                let _ = child.kill();
+                let _ = child.wait();
+                state.remove_if_ours(nonce);
+                return Ok(Waited::Interrupted);
+            }
             if let Some(exit) = child.try_wait().context("waiting for the playground")? {
                 state.remove_if_ours(nonce);
                 let log = std::fs::read_to_string(state.log_path()).unwrap_or_default();
@@ -631,7 +725,7 @@ mod unix {
                 .as_ref()
                 .is_some_and(|ready| accepts(ready, nonce, child.id()))
             {
-                return Ok(());
+                return Ok(Waited::Ready);
             }
             if Instant::now() >= deadline {
                 let _ = child.kill();
@@ -656,8 +750,10 @@ mod unix {
         let Some(state) = state_for_cwd()? else {
             return not_running(output);
         };
-        let Probe::Running(running) = client::probe(&state)? else {
-            return not_running(output);
+        let running = match client::probe(&state)? {
+            Probe::Running(running) => running,
+            Probe::Busy(busy) => return busy_exit(output, &busy),
+            Probe::NotRunning | Probe::Stale(_) => return not_running(output),
         };
         let mut status = running.status()?;
         let health = if running.server_healthy() {
@@ -665,29 +761,29 @@ mod unix {
         } else {
             "server unreachable"
         };
-        if let Some(object) = status.as_object_mut() {
-            object.insert("health".into(), json!(health));
-        }
+        status.health = Some(health.to_owned());
         match output {
-            Output::Json => println!("{status}"),
+            Output::Json => println!(
+                "{}",
+                serde_json::to_string(&status).context("encoding the status")?
+            ),
             Output::Text => {
-                println!("Submilli playground is running (pid {}).", status["pid"]);
-                print_description(&status);
-                println!("  health:     {health}");
                 println!(
-                    "  browsers:   {} signed in",
-                    status["browser_sessions"].as_u64().unwrap_or(0)
+                    "Submilli playground is running (pid {}).",
+                    status.description.pid
                 );
-                let blueprint = &status["blueprint_status"];
-                if let Some(version) = blueprint["version"].as_u64() {
+                print_description(&status.description, status.packages_error.as_deref());
+                println!("  health:     {health}");
+                println!("  browsers:   {} signed in", status.browser_sessions);
+                let blueprint = &status.blueprint_status;
+                if let Some(version) = blueprint.version {
                     println!("  version:    {version} in force");
                 }
-                if blueprint["refused"].is_object() {
-                    let refused = &blueprint["refused"];
-                    let line = refused["line"]
-                        .as_u64()
+                if let Some(refused) = &blueprint.refused {
+                    let line = refused
+                        .line
                         .map_or_else(String::new, |line| format!("line {line}: "));
-                    println!("  refused:    {line}{}", super::text(&refused["message"]));
+                    println!("  refused:    {line}{}", refused.message);
                 }
             }
         }
@@ -698,21 +794,27 @@ mod unix {
         let Some(state) = state_for_cwd()? else {
             return not_running(output);
         };
-        let Probe::Running(running) = client::probe(&state)? else {
-            return not_running(output);
+        let running = match client::probe(&state)? {
+            Probe::Running(running) => running,
+            Probe::Busy(busy) => return busy_exit(output, &busy),
+            Probe::NotRunning | Probe::Stale(_) => return not_running(output),
         };
         let code = running.mint_login_code()?;
         let status = running.status()?;
-        let url = status["url"].as_str().unwrap_or_default();
-        let login_url = format!("{url}#login={code}");
+        let url = &status.description.url;
+        let login_url = login_url(url, &code);
         match output {
             Output::Json => println!(
                 "{}",
-                json!({ "url": url, "login_url": login_url, "expires_in_secs": 300 })
+                json!({
+                    "url": url,
+                    "login_url": login_url,
+                    "expires_in_secs": super::control_auth::LOGIN_CODE_TTL.as_secs(),
+                })
             ),
             Output::Text => {
                 println!("{login_url}");
-                println!("Single use; expires in 5 minutes.");
+                println!("Single use; expires in {}.", login_code_ttl_text());
             }
         }
         Ok(ExitCode::SUCCESS)
@@ -724,19 +826,24 @@ mod unix {
         };
         let running = match client::probe(&state)? {
             Probe::NotRunning => return stopped(output, None, "not running"),
-            Probe::Stale => {
-                state.remove_stale();
+            Probe::Stale(stale) => {
+                state.remove_if_ours(&stale.nonce);
                 return stopped(output, None, "not running (removed a stale lock)");
             }
+            Probe::Busy(busy) => return busy_exit(output, &busy),
             Probe::Running(running) => running,
         };
         running.stop()?;
         let lock = running.lock.clone();
-        let deadline = Instant::now() + STOP_TIMEOUT;
-        // The instance removes its lock as the last thing it does; a dead pid
-        // means it ended without getting there.
-        while state.read_lock()?.is_some_and(|current| current == lock)
-            && client::pid_alive(lock.pid)
+        let deadline = Instant::now()
+            .checked_add(STOP_TIMEOUT)
+            .context("the clock cannot represent the stop deadline")?;
+        // The instance lock goes when the process ends, however it ends; a lock
+        // with another nonce is a new instance, which is not this stop's to wait for.
+        while state.instance_held()?
+            && !state
+                .read_lock()?
+                .is_some_and(|current| current.nonce != lock.nonce)
         {
             if Instant::now() >= deadline {
                 bail!(
@@ -749,6 +856,20 @@ mod unix {
         }
         state.remove_if_ours(&lock.nonce);
         stopped(output, Some(lock.pid), "stopped")
+    }
+
+    /// A process serves the project but cannot be reached: said, and exit 6, with
+    /// its lock left in place.
+    fn busy_exit(output: Output, busy: &Busy) -> Result<ExitCode> {
+        match output {
+            Output::Json => println!(
+                "{}",
+                json!({ "running": true, "busy": true, "pid": busy.pid() })
+            ),
+            Output::Text => {}
+        }
+        eprintln!("{}", busy.message());
+        Ok(ExitCode::from(EXIT_NOT_RUNNING))
     }
 
     fn stopped(output: Output, pid: Option<u32>, message: &str) -> Result<ExitCode> {
@@ -782,5 +903,71 @@ mod unix {
     fn state_for_cwd() -> Result<Option<StateDir>> {
         let cwd = std::env::current_dir().context("reading the current directory")?;
         Ok(project::find_project_root(&cwd).map(|root| StateDir::for_project(&root)))
+    }
+
+    /// SIGINT, SIGTERM, and SIGHUP noted rather than acted on, while a start waits
+    /// for the child it launched, so it can stop that child before it exits.
+    mod interrupt {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use anyhow::Result;
+
+        const SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+
+        static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+        extern "C" fn note(_: libc::c_int) {
+            INTERRUPTED.store(true, Ordering::SeqCst);
+        }
+
+        /// The handlers, installed until it drops, which puts back what was there.
+        pub(super) struct Guard {
+            previous: Vec<(libc::c_int, libc::sigaction)>,
+        }
+
+        impl Guard {
+            pub(super) fn install() -> Result<Self> {
+                INTERRUPTED.store(false, Ordering::SeqCst);
+                let mut guard = Self {
+                    previous: Vec::with_capacity(SIGNALS.len()),
+                };
+                for signal in SIGNALS {
+                    // SAFETY: a zeroed sigaction is a valid "no handler, empty mask"
+                    // value to fill in; `note` only stores to an atomic, which is
+                    // async-signal-safe; both pointers are to live locals.
+                    let previous = unsafe {
+                        let mut action: libc::sigaction = std::mem::zeroed();
+                        action.sa_sigaction = note as extern "C" fn(libc::c_int) as usize;
+                        libc::sigemptyset(&mut action.sa_mask);
+                        let mut previous: libc::sigaction = std::mem::zeroed();
+                        if libc::sigaction(signal, &action, &mut previous) != 0 {
+                            return Err(anyhow::anyhow!(
+                                "installing a signal handler: {}",
+                                std::io::Error::last_os_error()
+                            ));
+                        }
+                        previous
+                    };
+                    guard.previous.push((signal, previous));
+                }
+                Ok(guard)
+            }
+
+            pub(super) fn interrupted(&self) -> bool {
+                INTERRUPTED.load(Ordering::SeqCst)
+            }
+        }
+
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                for (signal, previous) in &self.previous {
+                    // SAFETY: `previous` is the action sigaction returned for this
+                    // signal, restored as it was.
+                    unsafe {
+                        libc::sigaction(*signal, previous, std::ptr::null_mut());
+                    }
+                }
+            }
+        }
     }
 }

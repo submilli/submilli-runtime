@@ -13,17 +13,13 @@
 //! backfilled.
 
 use std::collections::HashMap;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use submilli_server::record::SessionEvent;
 
-use super::{
-    FORMAT, Result, Store, append_line, complete_lines, io_error, parse_record, read_lines,
-};
+use super::{Result, Store, StoreError, append_line, read_lines};
 
 /// One line of a session's event log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +80,8 @@ pub(crate) struct Position {
 pub(crate) struct EventLog {
     /// In the order they were appended (`session_seq`).
     pub(crate) events: Vec<StoredEvent>,
+    /// Lines that did not parse (a write cut short), left out of `events`.
+    pub(crate) skipped: usize,
 }
 
 impl EventLog {
@@ -113,18 +111,20 @@ impl EventLog {
     }
 }
 
-/// The file a session's events go to. Session ids the server makes are UUIDs and are
-/// used as they are; anything else (an MCP client's own id) is hashed so it cannot name
-/// a path. Events outside any session share one log.
+/// The file a session's events go to. Session ids the server makes are lowercase UUIDs
+/// and are used as they are; anything else (an MCP client's own id, or any id with an
+/// uppercase letter) is hashed, so it cannot name a path, and two ids that differ only
+/// in case never share a file on a case-insensitive filesystem. A hashed name starts with
+/// `_`, which a plain id cannot. Events outside any session share one log.
 pub(crate) fn session_file_name(session: Option<&str>) -> String {
     match session {
         None => "_sessionless.jsonl".to_owned(),
         Some(id)
             if !id.is_empty()
                 && id.len() <= 128
-                && id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-') =>
+                && id.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                }) =>
         {
             format!("{id}.jsonl")
         }
@@ -143,28 +143,37 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 /// Appends events, numbering each session's from 1.
 pub(crate) struct Appender {
     dir: PathBuf,
+    /// Opened by the store's writer; a read-only store's appender refuses to append.
+    writable: bool,
     /// The last sequence number per session log file, read from the file the first time
     /// the session is appended to in this process.
     last: Mutex<HashMap<String, u64>>,
 }
 
 impl Appender {
-    pub(super) fn new(dir: PathBuf) -> Self {
+    pub(super) fn new(dir: PathBuf, writable: bool) -> Self {
         Self {
             dir,
+            writable,
             last: Mutex::new(HashMap::new()),
         }
     }
 
     /// Appends `event` to its session's log, numbered next in that session, and returns
     /// the number. `write` turns the numbered event into the line written, so the caller
-    /// can redact it.
+    /// can redact it, or into `None` to leave it out; the number is then not used and
+    /// `None` returned.
     pub(crate) fn append(
         &self,
         session: Option<&str>,
         mut event: StoredEvent,
-        write: impl FnOnce(&StoredEvent) -> Vec<u8>,
-    ) -> Result<u64> {
+        write: impl FnOnce(&StoredEvent) -> Option<Vec<u8>>,
+    ) -> Result<Option<u64>> {
+        if !self.writable {
+            return Err(StoreError::ReadOnly {
+                path: self.dir.clone(),
+            });
+        }
         let name = session_file_name(session);
         let path = self.dir.join(&name);
         let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
@@ -173,9 +182,12 @@ impl Appender {
             None => last_seq(&path)?,
         };
         event.session_seq = previous.saturating_add(1);
-        append_line(&path, &write(&event))?;
+        let Some(line) = write(&event) else {
+            return Ok(None);
+        };
+        append_line(&path, &line)?;
         last.insert(name, event.session_seq);
-        Ok(event.session_seq)
+        Ok(Some(event.session_seq))
     }
 
     /// Forgets the numbering, after the logs were removed.
@@ -187,35 +199,29 @@ impl Appender {
     }
 }
 
-/// The last complete line's sequence number in a log, or 0 for no log.
+/// The highest sequence number among a log's complete lines that parse, or 0 for no
+/// log. A line a crash cut short is skipped, so numbering carries on past it.
 fn last_seq(path: &Path) -> Result<u64> {
     #[derive(Deserialize)]
     struct Seq {
-        format: u32,
         session_seq: u64,
     }
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(io_error(path)(error)),
-    };
-    let Some(line) = complete_lines(&bytes)
-        .filter(|line| !line.is_empty())
-        .last()
-    else {
-        return Ok(0);
-    };
-    let seq: Seq = parse_record(path, line)?;
-    debug_assert!(seq.format <= FORMAT, "parse_record refuses newer formats");
-    Ok(seq.session_seq)
+    Ok(read_lines::<Seq>(path)?
+        .records
+        .iter()
+        .map(|seq| seq.session_seq)
+        .max()
+        .unwrap_or(0))
 }
 
 impl Store {
-    /// A session's whole event log. Refuses a line in a newer format.
+    /// A session's whole event log, without lines that do not parse (counted in
+    /// `skipped`). Refuses a line in a newer format.
     pub(crate) fn read_events(&self, session: Option<&str>) -> Result<EventLog> {
-        let path = self.events_path(session);
+        let lines = read_lines(&self.events_path(session))?;
         Ok(EventLog {
-            events: read_lines(&path)?,
+            events: lines.records,
+            skipped: lines.skipped,
         })
     }
 

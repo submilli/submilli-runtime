@@ -530,15 +530,16 @@ impl AppState {
 
     /// The blueprint a run is decided under and its version tag, read together:
     /// a concurrent registration lands wholly before or wholly after this lookup.
-    /// The tag is `None` for a blueprint registered without one.
     pub(crate) async fn blueprint_for_run(
         &self,
         name: &str,
-    ) -> std::result::Result<Option<(Blueprint, Option<String>)>, crate::blueprint::StoreError>
-    {
+    ) -> std::result::Result<Option<BlueprintForRun>, crate::blueprint::StoreError> {
         let tags = self.inner.blueprint_tags.read().await;
         let found = self.blueprints().get(name).await?;
-        Ok(found.map(|blueprint| (blueprint, tags.get(name).cloned())))
+        Ok(found.map(|blueprint| BlueprintForRun {
+            blueprint,
+            version_tag: tags.get(name).cloned(),
+        }))
     }
 
     /// Held across a write to the blueprint store, so no run reads the blueprint
@@ -1302,6 +1303,14 @@ fn join_key_parts(parts: &BTreeSet<String>) -> String {
 fn cache_key_belongs_to_blueprint(key: &str, blueprint_name: &str) -> bool {
     key.starts_with(&format!("mcp:{blueprint_name}:"))
         || key.starts_with(&format!("pkg:{blueprint_name}:"))
+}
+
+/// A blueprint as a run reads it: the blueprint and its version tag, from one lookup.
+#[derive(Clone, Debug)]
+pub(crate) struct BlueprintForRun {
+    pub(crate) blueprint: Blueprint,
+    /// `None` for a blueprint registered without one; the run then records its hash.
+    pub(crate) version_tag: Option<String>,
 }
 
 #[cfg(test)]

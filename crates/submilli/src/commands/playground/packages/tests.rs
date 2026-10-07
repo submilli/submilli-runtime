@@ -106,7 +106,12 @@ fn a_package_that_no_longer_builds_is_reported_and_its_installed_copy_is_kept() 
     assert!(diagnostic.contains("lib.ts"), "{diagnostic}");
     let message = failure.to_string();
     assert!(message.contains("`@acme/billing`"), "{message}");
-    assert!(message.contains("no longer builds"), "{message}");
+    assert!(message.contains("does not build"), "{message}");
+    // Only a run refused before it started says so.
+    assert!(!message.contains("the run"), "{message}");
+    let for_run = failure.for_run();
+    assert!(for_run.contains("no longer builds"), "{for_run}");
+    assert!(for_run.contains("the run did not start"), "{for_run}");
     assert_eq!(
         fixture.installed_source(),
         before,
@@ -195,4 +200,113 @@ fn a_missing_package_names_itself_and_the_install_command() {
     assert!(message.contains("`@acme/absent`"), "{message}");
     assert!(message.contains("submilli install"), "{message}");
     assert!(!message.contains("denied"), "{message}");
+}
+
+/// Builds `@acme/money` in a project of its own and installs it into `store`, as
+/// `submilli build publish-local` there would.
+fn publish_money(store: &Path) {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("packages/money");
+    std::fs::create_dir_all(package.join("src")).unwrap();
+    std::fs::create_dir_all(package.join("docs")).unwrap();
+    std::fs::write(
+        package.join("src/lib.ts"),
+        "/** Cents as dollars. */\nexport function dollars(cents: number): number { return cents / 100; }\n",
+    )
+    .unwrap();
+    std::fs::write(package.join("docs/readme.md"), "# @acme/money\n").unwrap();
+    let text = "[[package]]\nname = \"@acme/money\"\nversion = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n";
+    std::fs::write(dir.path().join("submilli.toml"), text).unwrap();
+    let manifest = parse_manifest(text, dir.path()).expect("the money manifest parses");
+    let store = PackageStore::new(store);
+    let built = build_packages(&manifest, dir.path(), &store, None).expect("money builds");
+    install_packages(&store, &built).expect("money installs");
+}
+
+/// Makes billing's source import `@acme/money` from the store.
+fn import_money(fixture: &Fixture) {
+    let mut text = std::fs::read_to_string(fixture.lib()).unwrap();
+    text.insert_str(0, "import { dollars } from \"@acme/money\";\n");
+    text.push_str(
+        "\n/** Cents as dollars, through the money package. */\nexport function inDollars(cents: number): number { return dollars(cents); }\n",
+    );
+    std::fs::write(fixture.lib(), text).unwrap();
+}
+
+const MONEY_DEPENDENCY: &str =
+    "dependencies = [\"@acme/money\"]\n\n[dependencies]\n\"@acme/money\" = \"0.1.0\"\n";
+
+fn declare_money(fixture: &Fixture) {
+    let manifest = fixture.package_dir.join("submilli.toml");
+    let mut text = std::fs::read_to_string(&manifest).unwrap();
+    text.push_str(MONEY_DEPENDENCY);
+    std::fs::write(&manifest, text).unwrap();
+}
+
+#[test]
+fn a_build_fixed_in_the_manifest_alone_is_retried() {
+    let fixture = Fixture::starter();
+    publish_money(&fixture.store);
+    import_money(&fixture);
+    let packages = fixture.packages();
+    let failure = packages.sync(&billing()).unwrap_err();
+    assert!(
+        matches!(failure, ResolutionFailure::Build { .. }),
+        "{failure}"
+    );
+    // The same inputs report the remembered failure.
+    assert!(packages.sync(&billing()).is_err());
+
+    // Only `submilli.toml` changes: the source already imports the package.
+    declare_money(&fixture);
+    assert_eq!(
+        packages.sync(&billing()).unwrap().reinstalled,
+        ["@acme/billing"]
+    );
+}
+
+#[test]
+fn installing_a_missing_dependency_retries_the_failed_build() {
+    let fixture = Fixture::starter();
+    import_money(&fixture);
+    declare_money(&fixture);
+    let packages = fixture.packages();
+    let failure = packages.sync(&billing()).unwrap_err();
+    let ResolutionFailure::Build { diagnostic, .. } = &failure else {
+        panic!("a build failure: {failure}");
+    };
+    assert!(diagnostic.contains("@acme/money"), "{diagnostic}");
+    assert!(packages.sync(&billing()).is_err());
+
+    publish_money(&fixture.store);
+    assert_eq!(
+        packages.sync(&billing()).unwrap().reinstalled,
+        ["@acme/billing"]
+    );
+}
+
+#[test]
+fn an_edited_manifest_entry_rebuilds_its_package() {
+    let fixture = Fixture::starter();
+    let packages = fixture.packages();
+    packages.sync(&billing()).unwrap();
+
+    // The keywords the installed copy carries no longer match the entry.
+    let manifest = fixture.package_dir.join("submilli.toml");
+    edit(&manifest, "\"charges\"]", "\"charges\", \"ledger\"]");
+    assert_eq!(
+        packages.sync(&billing()).unwrap().reinstalled,
+        ["@acme/billing"]
+    );
+    assert_eq!(packages.sync(&billing()).unwrap(), Synced::default());
+
+    // The entrypoint moves from `lib.ts` to `lib.subm` with the same text: the entry
+    // changed, though the embedded sources did not.
+    let legacy = fixture.package_dir.join("packages/billing/src/lib.subm");
+    std::fs::rename(fixture.lib(), &legacy).unwrap();
+    assert_eq!(
+        packages.sync(&billing()).unwrap().reinstalled,
+        ["@acme/billing"]
+    );
+    assert_eq!(packages.sync(&billing()).unwrap(), Synced::default());
 }

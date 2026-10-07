@@ -43,6 +43,7 @@ ipnet = { workspace = true }
 hmac = "0.12"
 async-trait = { workspace = true }
 percent-encoding = { workspace = true }
+aho-corasick = "1"
 # The playground's blueprint watcher: one coalesced "something changed" per burst of
 # filesystem events, which is all it needs, since it re-reads the file each time.
 notify-debouncer-mini = "0.7"

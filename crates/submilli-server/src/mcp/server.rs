@@ -24,7 +24,7 @@ use submilli_blueprint::{Blueprint, HarnessSecretBindings, VfsConfig, required_h
 use submilli_shared::PolicyCheck;
 use submilli_shared::library_visibility::LibraryVisibility;
 
-use crate::app::AppState;
+use crate::app::{AppState, BlueprintForRun};
 use crate::error::ExecuteError;
 use crate::handlers::execute::{ExecuteInputs, VfsSource, blueprint_miss_message, execute_core};
 use crate::packages;
@@ -211,7 +211,7 @@ impl SubmilliMcp {
 
     /// [`Self::require_blueprint`] with the version tag read in the same lookup, for
     /// a run to record.
-    async fn require_blueprint_for_run(&self) -> Result<(Blueprint, Option<String>), ErrorData> {
+    async fn require_blueprint_for_run(&self) -> Result<BlueprintForRun, ErrorData> {
         match self
             .state
             .blueprint_for_run(&self.blueprint_name)
@@ -331,16 +331,19 @@ impl SubmilliMcp {
         parts: axum::http::request::Parts,
         audit: Arc<crate::audit::ExecutionAudit>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (blueprint, version_tag) =
-            self.require_blueprint_for_run()
-                .await
-                .inspect_err(|error| {
-                    audit.error(if error.code == ErrorCode::INTERNAL_ERROR {
-                        crate::error::ErrorKind::RuntimeError
-                    } else {
-                        crate::error::ErrorKind::BlueprintNotFound
-                    });
-                })?;
+        let BlueprintForRun {
+            blueprint,
+            version_tag,
+        } = self
+            .require_blueprint_for_run()
+            .await
+            .inspect_err(|error| {
+                audit.error(if error.code == ErrorCode::INTERNAL_ERROR {
+                    crate::error::ErrorKind::RuntimeError
+                } else {
+                    crate::error::ErrorKind::BlueprintNotFound
+                });
+            })?;
         let blueprint = Arc::new(blueprint);
 
         // Stateful transport: every connection has a session id (rmcp rejects a

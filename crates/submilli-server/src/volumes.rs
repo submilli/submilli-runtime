@@ -97,6 +97,10 @@ impl std::error::Error for ReferenceError {}
 pub enum DeclareError {
     /// The name cannot be one directory name under the managed root.
     BadName { volume: String },
+    /// The name differs only in letter case from a declared volume or a directory
+    /// under the managed root: on a case-insensitive filesystem both would be
+    /// stored in one directory.
+    CaseConflict { volume: String, existing: String },
 }
 
 impl std::fmt::Display for DeclareError {
@@ -107,11 +111,33 @@ impl std::fmt::Display for DeclareError {
                 "volume '{volume}' cannot be stored as a managed volume: a name is up to 64 \
                  letters, digits, `.`, `_`, or `-`, starting with a letter or digit"
             ),
+            DeclareError::CaseConflict { volume, existing } => write!(
+                f,
+                "volume '{volume}' differs only in letter case from '{existing}', which this \
+                 server already stores; on a case-insensitive filesystem they would share one \
+                 directory, so use '{existing}' or a name that differs in more than case"
+            ),
         }
     }
 }
 
 impl std::error::Error for DeclareError {}
+
+/// The checks on a volume `table` does not declare yet, against the table alone.
+fn check_new_managed(table: &VolumeTable, volume: &str) -> Result<(), DeclareError> {
+    if !is_managed_name(volume) {
+        return Err(DeclareError::BadName {
+            volume: volume.to_owned(),
+        });
+    }
+    match table.keys().find(|name| name.eq_ignore_ascii_case(volume)) {
+        Some(existing) => Err(DeclareError::CaseConflict {
+            volume: volume.to_owned(),
+            existing: existing.clone(),
+        }),
+        None => Ok(()),
+    }
+}
 
 impl VolumeRegistry {
     pub fn new(table: VolumeTable, managed_root: PathBuf) -> Self {
@@ -128,25 +154,54 @@ impl VolumeRegistry {
         }
     }
 
+    /// Whether `volume` could be declared as a `managed-local` volume: its name is
+    /// one directory name, and differs in more than letter case from every declared
+    /// volume and every directory under the managed root. A volume already declared
+    /// passes. The operator-trusted local apply path checks this before it stores a
+    /// blueprint, so the declaration that follows the store cannot be refused.
+    pub(crate) fn check_managed(&self, volume: &str) -> Result<(), DeclareError> {
+        let table = self.table.read().expect("volume table poisoned");
+        if table.contains_key(volume) {
+            return Ok(());
+        }
+        check_new_managed(&table, volume)?;
+        // A directory a volume of another case left behind, from an earlier run.
+        // No managed root yet holds no directory to collide with; any other failure
+        // to list it surfaces when the volume is first used.
+        let Ok(entries) = std::fs::read_dir(&self.managed_root) else {
+            return Ok(());
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if let Some(name) = name.to_str()
+                && name != volume
+                && name.eq_ignore_ascii_case(volume)
+            {
+                return Err(DeclareError::CaseConflict {
+                    volume: volume.to_owned(),
+                    existing: name.to_owned(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Declares `volume` as a `managed-local` volume, read-write, stored at
     /// `<managed root>/<volume>`, unless a volume of that name is already declared.
     /// Returns whether it was added. Only the operator-trusted local apply path
-    /// calls this: a deployed server's table stays what its operator declared.
+    /// calls this, after [`Self::check_managed`]: a deployed server's table stays
+    /// what its operator declared.
     pub(crate) fn declare_managed(
         &self,
         volume: &str,
         size_limit: SizeLimit,
     ) -> Result<bool, DeclareError> {
-        if !is_managed_name(volume) {
-            return Err(DeclareError::BadName {
-                volume: volume.to_owned(),
-            });
-        }
         // Lock order: the table, then the quotas, as `quota` never holds both.
         let mut table = self.table.write().expect("volume table poisoned");
         if table.contains_key(volume) {
             return Ok(false);
         }
+        check_new_managed(&table, volume)?;
         if matches!(size_limit, SizeLimit::Bytes(_)) {
             self.quotas
                 .write()

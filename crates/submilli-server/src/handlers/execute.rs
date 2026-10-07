@@ -12,7 +12,7 @@ use submilli_blueprint::{
 };
 use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
-use crate::app::AppState;
+use crate::app::{AppState, BlueprintForRun};
 use crate::error::{ErrorKind, ExecuteError};
 use crate::record::{RunEntry, TestWorld};
 use interpreter::runtime::{Vfs, VfsInfo};
@@ -140,7 +140,13 @@ pub(crate) async fn one_shot_with(
 
     // Blueprint and variables are supplied inline and validated here, before the
     // shared core runs them.
-    let found = match state.blueprint_for_run(&req.blueprint).await {
+    // A test run was prepared under a blueprint it already looked up; it runs under
+    // that one.
+    let found = match test.as_ref().map(TestWorld::blueprint) {
+        Some(found) => Ok(Some(found.clone())),
+        None => state.blueprint_for_run(&req.blueprint).await,
+    };
+    let found = match found {
         Ok(found) => found,
         Err(error) => {
             return failed(
@@ -149,7 +155,11 @@ pub(crate) async fn one_shot_with(
             );
         }
     };
-    let Some((blueprint, version_tag)) = found else {
+    let Some(BlueprintForRun {
+        blueprint,
+        version_tag,
+    }) = found
+    else {
         return match blueprint_miss_message(state, &req.blueprint).await {
             Ok(message) => failed(ErrorKind::BlueprintNotFound, message),
             Err(error) => failed(

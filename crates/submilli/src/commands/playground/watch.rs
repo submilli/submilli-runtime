@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use notify_debouncer_mini::notify::RecursiveMode;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use submilli_blueprint::Blueprint;
@@ -34,7 +34,7 @@ use submilli_server::{AppState, LocalApplyError};
 
 use super::packages::{Freshness, ResolutionFailure};
 use super::store::Store;
-use super::store::changes::NewVersion;
+use super::store::changes::{NewVersion, Version};
 
 /// How long the directory must be quiet before a save is read. Long enough to
 /// coalesce an editor's write-then-rename or a format-on-save rewrite into one
@@ -43,14 +43,14 @@ pub(crate) const DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// What the control listener reports about the blueprint: the version in force and
 /// the last save that was refused, until a later save applies.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct BlueprintStatus {
     pub(crate) version: Option<u64>,
     pub(crate) refused: Option<Refusal>,
 }
 
 /// A save the playground did not apply. Nothing was logged for it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Refusal {
     /// Registration's error code (`parse_error`, `invalid_filter`, ...), or
     /// `name_changed` or `unreadable`.
@@ -63,6 +63,15 @@ pub(crate) struct Refusal {
 }
 
 impl Refusal {
+    fn new(code: &str, message: String) -> Self {
+        Self {
+            code: code.to_owned(),
+            message,
+            line: None,
+            column: None,
+        }
+    }
+
     fn of(error: LocalApplyError) -> Self {
         let first = error.diagnostics.first();
         Self {
@@ -92,6 +101,14 @@ pub(crate) enum Outcome {
     ApplyFailed { version: u64, reason: String },
 }
 
+/// When the file is read: at start, a file that holds the version in force is
+/// registered again under its tag; on a later save it is already registered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Moment {
+    Start,
+    Save,
+}
+
 /// Applies the playground's blueprint file through the server's trusted local path.
 pub(crate) struct Applier {
     state: AppState,
@@ -106,6 +123,9 @@ pub(crate) struct Applier {
     // the store's locks are: the status is only a report, and each update sets whole
     // fields.
     status: Arc<Mutex<BlueprintStatus>>,
+    /// One apply at a time: the watcher can fire while `start` is still applying, and
+    /// two applies reading the same change log would log the same version twice.
+    turn: tokio::sync::Mutex<()>,
 }
 
 impl Applier {
@@ -117,6 +137,7 @@ impl Applier {
             name,
             packages: None,
             status: Arc::default(),
+            turn: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -139,7 +160,7 @@ impl Applier {
     /// the version in force, or under that version's tag when it does not. A refused
     /// file fails the start.
     pub(crate) async fn start(&self) -> Result<()> {
-        match self.apply_file_at(true).await {
+        match self.apply_file_at(Moment::Start).await {
             Outcome::Refused(refusal) => Err(anyhow::anyhow!(
                 "{}: {}",
                 self.path.display(),
@@ -155,25 +176,26 @@ impl Applier {
 
     /// Reads the file and acts on what changed; see the module docs.
     pub(crate) async fn apply_file(&self) -> Outcome {
-        self.apply_file_at(false).await
+        self.apply_file_at(Moment::Save).await
     }
 
-    async fn apply_file_at(&self, starting: bool) -> Outcome {
-        let outcome = self.look(starting).await;
+    async fn apply_file_at(&self, moment: Moment) -> Outcome {
+        let _turn = self.turn.lock().await;
+        let outcome = self.check_and_apply(moment).await;
         self.report(&outcome);
         outcome
     }
 
-    async fn look(&self, starting: bool) -> Outcome {
+    /// Reads the file, refuses what registration would refuse or what renames the
+    /// blueprint, and otherwise logs and applies it as the version it is.
+    async fn check_and_apply(&self, moment: Moment) -> Outcome {
         let yaml = match std::fs::read_to_string(&self.path) {
             Ok(yaml) => yaml,
             Err(error) => {
-                return self.refuse(Refusal {
-                    code: "unreadable".into(),
-                    message: format!("reading {}: {error}", self.path.display()),
-                    line: None,
-                    column: None,
-                });
+                return self.refuse(Refusal::new(
+                    "unreadable",
+                    format!("reading {}: {error}", self.path.display()),
+                ));
             }
         };
         if let Err(failure) = self.prepare_packages(&yaml).await {
@@ -184,73 +206,88 @@ impl Applier {
             Err(error) => return self.refuse(Refusal::of(error)),
         };
         if blueprint.name != self.name {
-            return self.refuse(Refusal {
-                code: "name_changed".into(),
-                message: format!(
+            return self.refuse(Refusal::new(
+                "name_changed",
+                format!(
                     "the blueprint's `name:` changed from `{}` to `{}`; the playground serves \
                      `{}` until it restarts, so put the name back or restart it",
                     self.name, blueprint.name, self.name
                 ),
-                line: None,
-                column: None,
-            });
+            ));
         }
         let hash = normalized_hash(&blueprint);
         let changes = match self.store.changes() {
             Ok(changes) => changes,
             Err(error) => {
-                return self.refuse(Refusal {
-                    code: "change_log_unreadable".into(),
-                    message: format!("reading the change log: {error}"),
-                    line: None,
-                    column: None,
-                });
+                return self.refuse(Refusal::new(
+                    "change_log_unreadable",
+                    format!("reading the change log: {error}"),
+                ));
             }
         };
         if let Some(current) = changes.current().filter(|current| current.hash == hash) {
-            let version = current.version;
-            let same_bytes = current.bytes == yaml;
-            if !same_bytes
-                && let Err(error) = self.store.append_bytes_updated(version, yaml.clone())
-            {
-                warn(&format!("logging the comment-only edit failed: {error}"));
-            }
-            if starting {
-                // Runs record the version's tag, which lives with the registration,
-                // not on disk: register again under it.
-                if let Err(error) = self.state.apply_local_blueprint(&yaml, &tag(version)).await {
-                    return Outcome::ApplyFailed {
-                        version,
-                        reason: error.message,
-                    };
-                }
-                self.set_status(|status| status.version = Some(version));
-            }
-            // The file is back to good text, so an earlier refusal no longer stands.
-            self.set_status(|status| status.refused = None);
-            return if same_bytes {
-                Outcome::Unchanged
-            } else {
-                Outcome::BytesUpdated { version }
-            };
+            return self.same_version(current, yaml, moment).await;
         }
-
         let previous = changes
             .current()
-            .and_then(|current| submilli_blueprint::parse(&current.bytes).ok());
-        let diff = previous.map(|previous| Box::new(diff::diff(&previous, &blueprint)));
-        let (classification, summary) = match &diff {
-            Some(diff) => (
-                serde_json::to_value(diff.as_ref()).unwrap_or(Value::Null),
-                diff.summary(),
-            ),
-            None if changes.current().is_some() => (
+            .map(|current| submilli_blueprint::parse(&current.bytes).ok());
+        self.log_and_apply(previous, &blueprint, hash, yaml).await
+    }
+
+    /// The file holds the current version, maybe with other comments or layout:
+    /// records the new bytes and, at start, registers it again under its tag.
+    async fn same_version(&self, current: &Version, yaml: String, moment: Moment) -> Outcome {
+        let version = current.version;
+        let same_bytes = current.bytes == yaml;
+        if !same_bytes && let Err(error) = self.store.append_bytes_updated(version, yaml.clone()) {
+            warn(&format!("logging the comment-only edit failed: {error}"));
+        }
+        if moment == Moment::Start {
+            // Runs record the version's tag, which lives with the registration, not
+            // on disk: register again under it.
+            if let Err(error) = self.state.apply_local_blueprint(&yaml, &tag(version)).await {
+                return Outcome::ApplyFailed {
+                    version,
+                    reason: error.message,
+                };
+            }
+            self.set_status(|status| status.version = Some(version));
+        }
+        // The file is back to good text, so an earlier refusal no longer stands.
+        self.set_status(|status| status.refused = None);
+        if same_bytes {
+            Outcome::Unchanged
+        } else {
+            Outcome::BytesUpdated { version }
+        }
+    }
+
+    /// Classifies `blueprint` against the version in force (`previous`: `None` when
+    /// there is none, `Some(None)` when it no longer parses), logs it as a new
+    /// version, and applies it; a failed apply voids the version.
+    async fn log_and_apply(
+        &self,
+        previous: Option<Option<Blueprint>>,
+        blueprint: &Blueprint,
+        hash: String,
+        yaml: String,
+    ) -> Outcome {
+        let (diff, classification, summary) = match previous {
+            Some(Some(previous)) => {
+                let diff = Box::new(diff::diff(&previous, blueprint));
+                let classification = serde_json::to_value(diff.as_ref()).unwrap_or(Value::Null);
+                let summary = diff.summary();
+                (Some(diff), classification, summary)
+            }
+            Some(None) => (
+                None,
                 json!({ "classification": "unknown", "changes": [] }),
                 "The version this replaces could not be read back, so the change is not \
                  classified."
                     .to_owned(),
             ),
             None => (
+                None,
                 json!({ "classification": "initial", "changes": [] }),
                 "The first version the playground served.".to_owned(),
             ),
@@ -263,12 +300,10 @@ impl Applier {
         }) {
             Ok(version) => version,
             Err(error) => {
-                return self.refuse(Refusal {
-                    code: "change_log_unwritable".into(),
-                    message: format!("logging the version failed, so it was not applied: {error}"),
-                    line: None,
-                    column: None,
-                });
+                return self.refuse(Refusal::new(
+                    "change_log_unwritable",
+                    format!("logging the version failed, so it was not applied: {error}"),
+                ));
             }
         };
         match self.state.apply_local_blueprint(&yaml, &tag(version)).await {
@@ -374,7 +409,7 @@ impl Applier {
 
 /// The opaque tag a version's runs record.
 pub(crate) fn tag(version: u64) -> String {
-    version.to_string()
+    super::store::changes::version_tag(version)
 }
 
 /// The hash that decides whether an edit is a new version: of the blueprint as
@@ -403,12 +438,7 @@ fn package_refusal(failure: &ResolutionFailure) -> Refusal {
         ),
         other => ("package_resolution", other.to_string()),
     };
-    Refusal {
-        code: code.to_owned(),
-        message,
-        line: None,
-        column: None,
-    }
+    Refusal::new(code, message)
 }
 
 fn describe_refusal(refusal: &Refusal) -> String {

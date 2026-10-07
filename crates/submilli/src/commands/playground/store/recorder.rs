@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use interpreter::runtime::{CallRecord, DecisionLogConfig, DecisionRecord};
-use serde_json::Value;
 use submilli_server::record::{
     EVENT_SCHEMA, EventKind, FinishedRun, RetryLink, RunRecorder, RunRecorderFactory, RunStart,
     SessionEvent,
@@ -17,7 +16,7 @@ use submilli_server::record::{
 
 use super::events::{EventBody, Gap, Position, StoredEvent};
 use super::run::{RetryRecord, RunLink, StoredRun};
-use super::{FORMAT, KnownSecrets, Store, json_line, now_micros};
+use super::{FORMAT, KnownSecrets, Store, json_line, now_micros, warn};
 
 /// The recording caps for every run the playground serves, raised from the server's
 /// defaults (10,000 decisions and calls, 1 KiB context strings, 1 MiB body copies, a
@@ -409,9 +408,15 @@ impl Shared {
             .store
             .events
             .append(session.as_deref(), event, |event| {
-                let mut value = serde_json::to_value(event).unwrap_or(Value::Null);
-                self.secrets.redact_value(&mut value);
-                json_line(&value)
+                // Read back like a run, so a line that would not parse is never written;
+                // the event is then left out of the log, with a warning.
+                match self.secrets.redact_record(event) {
+                    Ok(redacted) => Some(json_line(&redacted.value)),
+                    Err(error) => {
+                        warn(&format!("event {} not recorded: {error}", event.event_id));
+                        None
+                    }
+                }
             });
         if let Err(error) = appended {
             warn(&format!("event not recorded: {error}"));
@@ -532,33 +537,16 @@ impl RunRecorder for RunRecording {
 }
 
 impl RunRecording {
-    /// The run with every known secret cut out. `None`, with a warning, in the unlikely
-    /// case that the redacted form no longer reads back: the run is not stored rather
-    /// than stored unredacted.
+    /// The run with every known secret cut out. `None`, with a warning, when the
+    /// redacted form does not read back: the run is not stored rather than stored
+    /// unredacted.
     fn redacted(&self, run: &StoredRun) -> Option<StoredRun> {
-        let mut value = match serde_json::to_value(run) {
-            Ok(value) => value,
+        match self.shared.secrets.redact_record(run) {
+            Ok(redacted) => Some(redacted.record),
             Err(error) => {
                 warn(&format!("run {} not stored: {error}", self.id));
-                return None;
-            }
-        };
-        self.shared.secrets.redact_value(&mut value);
-        match serde_json::from_value(value) {
-            Ok(run) => Some(run),
-            Err(error) => {
-                warn(&format!(
-                    "run {} not stored: redacting its secrets left it unreadable: {error}",
-                    self.id
-                ));
                 None
             }
         }
     }
-}
-
-/// The detached playground's stderr is its log.
-fn warn(message: &str) {
-    use std::io::Write;
-    let _ = writeln!(std::io::stderr().lock(), "warning: {message}");
 }

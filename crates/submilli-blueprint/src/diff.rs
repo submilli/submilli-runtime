@@ -16,7 +16,7 @@
 //! weakened". The same edits to a `deny` rule are classified by their effect, with
 //! no pin flag.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::Serialize;
@@ -150,17 +150,7 @@ pub fn diff(old: &Blueprint, new: &Blueprint) -> BlueprintDiff {
     diff_packages(old, new, &mut changes);
     let new_required_variables = diff_variables(old, new, &mut changes);
     diff_mcp(old, new, &mut changes);
-    if old.allow_insecure_http != new.allow_insecure_http {
-        let (classification, now) = if new.allow_insecure_http {
-            (Classification::Widening, "may now use cleartext `http://`")
-        } else {
-            (
-                Classification::Narrowing,
-                "may no longer use cleartext `http://`",
-            )
-        };
-        changes.push(plain(classification, format!("programs {now}")));
-    }
+    diff_insecure_http(old, new, &mut changes);
     diff_unclassified(old, new, &mut changes);
     BlueprintDiff {
         classification: Classification::combine(changes.iter().map(|c| c.classification))
@@ -297,6 +287,20 @@ fn diff_mcp(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
     }
 }
 
+fn diff_insecure_http(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
+    match (old.allow_insecure_http, new.allow_insecure_http) {
+        (false, true) => out.push(plain(
+            Classification::Widening,
+            "programs may now use cleartext `http://`".to_owned(),
+        )),
+        (true, false) => out.push(plain(
+            Classification::Narrowing,
+            "programs may no longer use cleartext `http://`".to_owned(),
+        )),
+        _ => {}
+    }
+}
+
 /// Sections whose changes are not classified: each one that changed is listed
 /// as unknown.
 fn diff_unclassified(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
@@ -323,7 +327,7 @@ fn diff_unclassified(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
 
 fn diff_permissions(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
     let empty = Vec::new();
-    let callers: std::collections::BTreeSet<&String> = old
+    let callers: BTreeSet<&String> = old
         .permissions
         .keys()
         .chain(new.permissions.keys())
@@ -348,28 +352,97 @@ fn diff_permissions(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
     // A rule removed from one caller block and added, unchanged, to another moved
     // between them: it narrows the first caller and widens the second.
     let mut taken = vec![false; added.len()];
+    let mut left: Vec<(String, usize, PermissionRule)> = Vec::new();
     for (from, from_index, rule) in removed {
         let moved = added
             .iter()
             .enumerate()
             .find(|(i, (to, _, candidate))| !taken[*i] && *to != from && *candidate == rule)
             .map(|(i, _)| i);
-        match moved {
-            Some(i) => {
-                taken[i] = true;
-                let (to, to_index, _) = &added[i];
-                out.push(moved_between_callers(
-                    &from, from_index, to, *to_index, &rule,
-                ));
-            }
-            None => out.push(rule_removed(&from, from_index, &rule)),
+        if let Some(i) = moved {
+            taken[i] = true;
+            let (to, to_index, _) = &added[i];
+            out.push(moved_between_callers(
+                &from, from_index, to, *to_index, &rule,
+            ));
+        } else {
+            out.push(rule_removed(&from, from_index, &rule));
+            left.push((from, from_index, rule));
         }
     }
+    // An allow rule removed and an allow rule added in its place (an edit that
+    // also moved past another rule for its capability) still carry the pin
+    // analysis, so a pin lost that way is flagged.
+    let mut replaced = vec![false; left.len()];
     for (i, (caller, index, rule)) in added.iter().enumerate() {
-        if !taken[i] {
-            out.push(rule_added(caller, *index, rule));
+        if taken[i] {
+            continue;
         }
+        let mut change = rule_added(caller, *index, rule);
+        if rule.action == Action::Allow
+            && let Some((k, pin)) = replaced_pin(caller, rule, &left, &replaced)
+        {
+            replaced[k] = true;
+            change
+                .summary
+                .push_str(&pin_sentence(&pin, &rule.capability));
+            change.pin = Some(pin);
+        }
+        out.push(change);
     }
+}
+
+/// The removed allow rule in `caller` that `rule` most plausibly replaces (its
+/// namesake, else one for the same capability) and the pin it lost doing so.
+fn replaced_pin(
+    caller: &str,
+    rule: &PermissionRule,
+    removed: &[(String, usize, PermissionRule)],
+    used: &[bool],
+) -> Option<(usize, PinChange)> {
+    let candidates = |same_name: bool| {
+        removed
+            .iter()
+            .enumerate()
+            .filter(move |(k, (from, _, old))| {
+                !used[*k]
+                    && from == caller
+                    && old.action == Action::Allow
+                    && old.capability == rule.capability
+                    && (!same_name || (old.name.is_some() && old.name == rule.name))
+            })
+    };
+    let (k, (_, _, old)) = candidates(true)
+        .next()
+        .or_else(|| candidates(false).next())?;
+    pin_change(
+        old.filter.as_ref(),
+        rule.filter.as_ref(),
+        FilterChange::Unknown,
+    )
+    .map(|pin| (k, pin))
+}
+
+/// A sentence, after a change's summary, on the pin a replacement lost.
+fn pin_sentence(pin: &PinChange, capability: &str) -> String {
+    match pin {
+        PinChange::Removed { field, variable } => format!(
+            " It replaces one that pinned `{field}` to `${{vars.{variable}}}`, so `{capability}` \
+             now matches whatever `{field}` the session is bound to or not."
+        ),
+        PinChange::PossiblyWeakened { variables } => format!(
+            " It replaces one pinned to {}, which may be weakened.",
+            variable_list(variables)
+        ),
+    }
+}
+
+fn variable_list(variables: &[String]) -> String {
+    variables
+        .iter()
+        .map(|v| format!("`${{vars.{v}}}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn rule_label(index: usize, rule: &PermissionRule) -> String {
@@ -480,6 +553,12 @@ struct BlockDiff {
     added: Vec<(usize, PermissionRule)>,
 }
 
+/// The most entries the table that matches one caller block's changed rules may
+/// hold: (rules changed before + 1) x (rules changed after + 1). A block whose
+/// changed middle is larger is reported as changed, unclassified, rather than
+/// matched rule by rule.
+const MAX_MATCH_TABLE: usize = 1 << 16;
+
 /// What became of each old rule.
 #[derive(Clone, Copy)]
 enum Fate {
@@ -487,9 +566,20 @@ enum Fate {
     Kept(usize),
     /// Unchanged, but moved relative to the kept rules.
     Moved(usize),
-    /// Edited in place.
+    /// Edited in place: its order relative to every other surviving rule for its
+    /// capability is unchanged.
     Edited(usize),
     Removed,
+}
+
+impl Fate {
+    /// The rule's position in the new block, when it survived.
+    fn new_index(self) -> Option<usize> {
+        match self {
+            Fate::Kept(j) | Fate::Moved(j) | Fate::Edited(j) => Some(j),
+            Fate::Removed => None,
+        }
+    }
 }
 
 fn diff_block(
@@ -498,26 +588,31 @@ fn diff_block(
     after: &[PermissionRule],
     out: &mut Vec<Change>,
 ) -> BlockDiff {
+    let Some(kept) = longest_common_subsequence(before, after) else {
+        out.push(Change {
+            classification: Classification::Unknown,
+            caller: Some(caller.to_owned()),
+            rule: None,
+            pin: None,
+            summary: format!(
+                "{}: `{caller}`'s rules changed in too many places to compare one by one \
+                 ({} rules before, {} after).",
+                Classification::Unknown.word(),
+                before.len(),
+                after.len()
+            ),
+        });
+        return BlockDiff {
+            removed: Vec::new(),
+            added: Vec::new(),
+        };
+    };
     let mut fate: Vec<Fate> = vec![Fate::Removed; before.len()];
     let mut claimed = vec![false; after.len()];
-    for (i, j) in longest_common_subsequence(before, after) {
+    for (i, j) in kept {
         fate[i] = Fate::Kept(j);
         claimed[j] = true;
     }
-    // Kept rules before each position: an edit is paired only within one gap
-    // between kept rules, so an edited rule that also moved is not mistaken for
-    // an in-place edit.
-    let gap_before = |kept: &dyn Fn(usize) -> bool, position: usize| -> usize {
-        (0..position).filter(|&p| kept(p)).count()
-    };
-    let old_kept = |p: usize| matches!(fate.get(p), Some(Fate::Kept(_)));
-    let old_gaps: Vec<usize> = (0..before.len())
-        .map(|i| gap_before(&old_kept, i))
-        .collect();
-    let new_kept_flags = claimed.clone();
-    let new_kept = |p: usize| new_kept_flags.get(p).copied().unwrap_or(false);
-    let new_gaps: Vec<usize> = (0..after.len()).map(|j| gap_before(&new_kept, j)).collect();
-
     for i in 0..before.len() {
         if !matches!(fate[i], Fate::Removed) {
             continue;
@@ -528,7 +623,10 @@ fn diff_block(
         }
     }
     // Edits pair a rule with its namesake first, then with an unclaimed rule for
-    // the same capability (a rename, or an unnamed rule edited).
+    // the same capability (a rename, or an unnamed rule edited). An edit is judged
+    // with the rules around it fixed, so it is paired only when it keeps its order
+    // relative to every rule already paired for its capability; otherwise (two
+    // edited rules that swapped, say) it is a rule removed and another added.
     let namesake = |i: usize, j: usize| match (&before[i].name, &after[j].name) {
         (Some(a), Some(b)) => a == b,
         (None, None) => before[i].capability == after[j].capability,
@@ -540,8 +638,8 @@ fn diff_block(
             if !matches!(fate[i], Fate::Removed) {
                 continue;
             }
-            if let Some(j) =
-                (0..after.len()).find(|&j| !claimed[j] && pairs(i, j) && old_gaps[i] == new_gaps[j])
+            if let Some(j) = (0..after.len())
+                .find(|&j| !claimed[j] && pairs(i, j) && keeps_order(before, after, &fate, i, j))
             {
                 fate[i] = Fate::Edited(j);
                 claimed[j] = true;
@@ -549,15 +647,9 @@ fn diff_block(
         }
     }
 
-    let new_index = |i: usize| match fate[i] {
-        Fate::Kept(j) | Fate::Moved(j) | Fate::Edited(j) => Some(j),
-        Fate::Removed => None,
-    };
     for i in 0..before.len() {
         match fate[i] {
-            Fate::Moved(j) => out.push(classify_move(
-                caller, before, after, i, j, &new_index, &fate,
-            )),
+            Fate::Moved(j) => out.push(classify_move(caller, before, after, i, j, &fate)),
             Fate::Edited(j) => out.push(classify_edit(caller, i, &before[i], &after[j])),
             Fate::Kept(_) | Fate::Removed => {}
         }
@@ -574,24 +666,66 @@ fn diff_block(
     }
 }
 
-/// Index pairs `(old, new)` of a longest common subsequence of equal rules.
-fn longest_common_subsequence(a: &[PermissionRule], b: &[PermissionRule]) -> Vec<(usize, usize)> {
-    // lengths[i][j]: the LCS of a[i..] and b[j..].
-    let mut lengths = vec![vec![0_usize; b.len().saturating_add(1)]; a.len().saturating_add(1)];
-    for i in (0..a.len()).rev() {
-        for j in (0..b.len()).rev() {
-            lengths[i][j] = if a[i] == b[j] {
+/// Whether reading old rule `i` as new rule `j` keeps it in the same order relative
+/// to every rule already paired that governs either rule's capability. Rules for
+/// other capabilities never decide the same call, so passing them does not count.
+fn keeps_order(
+    before: &[PermissionRule],
+    after: &[PermissionRule],
+    fate: &[Fate],
+    i: usize,
+    j: usize,
+) -> bool {
+    fate.iter().enumerate().all(|(k, fate)| {
+        let Some(k_new) = fate.new_index() else {
+            return true;
+        };
+        // `k_new` came from pairing with a rule of `after`, so it indexes it.
+        let related = before[k].capability == before[i].capability
+            || after[k_new].capability == after[j].capability;
+        !related || (k < i) == (k_new < j)
+    })
+}
+
+/// Index pairs `(old, new)` of a longest common subsequence of equal rules, or
+/// `None` when the rules that differ are too many to match within
+/// [`MAX_MATCH_TABLE`]. A common prefix and suffix are matched directly, so a
+/// long block with a few edits stays well inside the bound.
+fn longest_common_subsequence(
+    a: &[PermissionRule],
+    b: &[PermissionRule],
+) -> Option<Vec<(usize, usize)>> {
+    let prefix = a.iter().zip(b).take_while(|(x, y)| x == y).count();
+    let (a_rest, b_rest) = (&a[prefix..], &b[prefix..]);
+    let suffix = a_rest
+        .iter()
+        .rev()
+        .zip(b_rest.iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
+    // `suffix` is at most the shorter rest, so neither slice end underflows.
+    let a_mid = &a_rest[..a_rest.len() - suffix];
+    let b_mid = &b_rest[..b_rest.len() - suffix];
+    let width = b_mid.len().checked_add(1)?;
+    if a_mid.len().checked_add(1)?.checked_mul(width)? > MAX_MATCH_TABLE {
+        return None;
+    }
+    // lengths[i][j]: the LCS of a_mid[i..] and b_mid[j..].
+    let mut lengths = vec![vec![0_usize; width]; a_mid.len() + 1];
+    for i in (0..a_mid.len()).rev() {
+        for j in (0..b_mid.len()).rev() {
+            lengths[i][j] = if a_mid[i] == b_mid[j] {
                 lengths[i + 1][j + 1].saturating_add(1)
             } else {
                 lengths[i + 1][j].max(lengths[i][j + 1])
             };
         }
     }
+    let mut pairs: Vec<(usize, usize)> = (0..prefix).map(|i| (i, i)).collect();
     let (mut i, mut j) = (0, 0);
-    let mut pairs = Vec::new();
-    while i < a.len() && j < b.len() {
-        if a[i] == b[j] {
-            pairs.push((i, j));
+    while i < a_mid.len() && j < b_mid.len() {
+        if a_mid[i] == b_mid[j] {
+            pairs.push((prefix + i, prefix + j));
             i += 1;
             j += 1;
         } else if lengths[i + 1][j] >= lengths[i][j + 1] {
@@ -600,7 +734,9 @@ fn longest_common_subsequence(a: &[PermissionRule], b: &[PermissionRule]) -> Vec
             j += 1;
         }
     }
-    pairs
+    let (a_tail, b_tail) = (a.len() - suffix, b.len() - suffix);
+    pairs.extend((0..suffix).map(|k| (a_tail + k, b_tail + k)));
+    Some(pairs)
 }
 
 /// A rule that moved within its caller block changes which rule decides a call
@@ -613,7 +749,6 @@ fn classify_move(
     after: &[PermissionRule],
     from: usize,
     to: usize,
-    new_index: &dyn Fn(usize) -> Option<usize>,
     fate: &[Fate],
 ) -> Change {
     let rule = &before[from];
@@ -626,7 +761,7 @@ fn classify_move(
         if matches!(fate[other], Fate::Moved(_)) && other < from {
             continue;
         }
-        let Some(other_to) = new_index(other) else {
+        let Some(other_to) = fate[other].new_index() else {
             continue;
         };
         let Some(other_after) = after.get(other_to) else {
@@ -795,11 +930,7 @@ fn classify_edit(
         ),
         Some(PinChange::PossiblyWeakened { variables }) => format!(
             "{label} under `{caller}` changed its filter; its pin to {} may be weakened",
-            variables
-                .iter()
-                .map(|v| format!("`${{vars.{v}}}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            variable_list(variables)
         ),
         None => format!(
             "{label} under `{caller}` {} its filter",
@@ -835,7 +966,7 @@ fn pin_change(
     let old_pins = pins_of(Some(before));
     let new_pins = pins_of(after);
     let referenced: Vec<&str> = after.map_or_else(Vec::new, |f| f.var_refs());
-    let mut weakened: BTreeMap<String, ()> = BTreeMap::new();
+    let mut weakened: BTreeSet<String> = BTreeSet::new();
     for (field, variable) in &old_pins {
         if new_pins.contains(&(field.clone(), variable.clone())) {
             continue;
@@ -846,18 +977,18 @@ fn pin_change(
                 variable: variable.clone(),
             });
         }
-        weakened.insert(variable.clone(), ());
+        weakened.insert(variable.clone());
     }
     // Every pin still a top-level conjunct holds whatever else changed: the filter
     // matches only calls that satisfy it. A variable-bearing filter with no pin to
     // keep may be loosened past its variables by any edit short of a tightening.
     if old_pins.is_empty() && relation != FilterChange::Tighter {
         for variable in before.var_refs().into_iter().chain(referenced) {
-            weakened.insert(variable.to_owned(), ());
+            weakened.insert(variable.to_owned());
         }
     }
     (!weakened.is_empty()).then(|| PinChange::PossiblyWeakened {
-        variables: weakened.into_keys().collect(),
+        variables: weakened.into_iter().collect(),
     })
 }
 
@@ -1192,6 +1323,337 @@ mod tests {
         let diff = diff(&with_main(&before), &with_main(&after));
         assert_eq!(diff.classification, Classification::Mixed, "{diff:#?}");
         assert!(diff.changes.iter().all(|change| change.pin.is_none()));
+    }
+
+    fn rules(rules: &str) -> Blueprint {
+        bp(&format!("name: demo\npermissions:\n  main:\n{rules}"))
+    }
+
+    #[test]
+    fn two_edited_rules_that_swap_are_not_judged_in_place() {
+        // Read rule by rule, each edit narrows (the deny rule loosens, the allow rule
+        // tightens), but the swap lets through a call the deny rule decided.
+        let before = rules(
+            "    - name: block-big\n      capability: http.get\n      filter: amount > 100 and \
+             region == \"eu\"\n      action: deny\n    - name: allow-charges\n      capability: \
+             http.get\n      filter: amount > 0\n      action: allow\n",
+        );
+        let after = rules(
+            "    - name: allow-charges\n      capability: http.get\n      filter: amount > 0 and \
+             currency == \"usd\"\n      action: allow\n    - name: block-big\n      capability: \
+             http.get\n      filter: amount > 100\n      action: deny\n",
+        );
+        let context = serde_json::json!({ "amount": 500, "region": "eu", "currency": "usd" });
+        let vars = crate::VarBindings::default();
+        assert_eq!(
+            before.resolve_permission("main", "http.get", &context, &vars),
+            Action::Deny
+        );
+        assert_eq!(
+            after.resolve_permission("main", "http.get", &context, &vars),
+            Action::Allow
+        );
+        let diff = diff(&before, &after);
+        assert_eq!(diff.classification, Classification::Mixed, "{diff:#?}");
+    }
+
+    #[test]
+    fn a_pin_removed_by_an_edit_that_moves_past_another_capabilitys_rule_is_flagged() {
+        let other = "    - capability: http.post\n      action: deny\n";
+        let before = format!("{PINNED}{other}");
+        let after = format!(
+            "{other}{}",
+            PINNED.replace("customerId == ${vars.customerId} and ", "")
+        );
+        let diff = diff(&with_main(&before), &with_main(&after));
+        assert_eq!(diff.classification, Classification::Widening, "{diff:#?}");
+        assert_eq!(diff.pin_removals().count(), 1, "{diff:#?}");
+    }
+
+    #[test]
+    fn a_pin_removed_by_an_edit_that_moves_past_a_rule_for_its_capability_is_flagged() {
+        let before = format!("{DENY}{PINNED}");
+        let after = format!(
+            "{}{DENY}",
+            PINNED.replace("customerId == ${vars.customerId} and ", "")
+        );
+        let diff = diff(&with_main(&before), &with_main(&after));
+        assert_eq!(diff.classification, Classification::Mixed, "{diff:#?}");
+        let removals: Vec<&Change> = diff.pin_removals().collect();
+        assert_eq!(removals.len(), 1, "{diff:#?}");
+        assert_eq!(
+            removals[0].pin,
+            Some(PinChange::Removed {
+                field: "customerId".into(),
+                variable: "customerId".into()
+            })
+        );
+        assert!(
+            diff.summary().starts_with(&removals[0].summary),
+            "{}",
+            diff.summary()
+        );
+        assert!(
+            removals[0].summary.contains("pinned `customerId`"),
+            "{}",
+            removals[0].summary
+        );
+    }
+
+    #[test]
+    fn an_explicit_default_deny_is_the_same_policy_as_an_absent_default() {
+        // The two texts parse to different blueprints, so the watcher logs a new
+        // version; the classifier finds no change to what programs may do.
+        let absent = bp("name: demo\n");
+        let explicit = bp("name: demo\ndefault: deny\n");
+        assert_ne!(absent, explicit);
+        for (before, after) in [(&absent, &explicit), (&explicit, &absent)] {
+            let diff = diff(before, after);
+            assert!(diff.changes.is_empty(), "{diff:#?}");
+            assert_eq!(diff.classification, Classification::Unknown);
+            assert_eq!(diff.summary(), "No change to what programs may do.");
+        }
+    }
+
+    fn numbered_rules(count: usize, edited: Option<usize>) -> Blueprint {
+        let mut text = String::new();
+        for n in 0..count {
+            let bound = if Some(n) == edited { n + 1 } else { n };
+            text.push_str(&format!(
+                "    - name: r{n}\n      capability: http.get\n      filter: amount > {bound}\n      \
+                 action: deny\n"
+            ));
+        }
+        rules(&text)
+    }
+
+    #[test]
+    fn a_long_block_with_one_edit_is_matched_through_its_common_ends() {
+        let diff = diff(&numbered_rules(600, None), &numbered_rules(600, Some(300)));
+        let change = only(&diff);
+        assert_eq!(change.rule.as_deref(), Some("`r300`"));
+    }
+
+    #[test]
+    fn a_block_too_changed_to_match_is_unknown_without_a_large_table() {
+        let before = numbered_rules(600, None);
+        let mut reversed = before.clone();
+        if let Some(rules) = reversed.permissions.get_mut("main") {
+            rules.reverse();
+        }
+        let diff = diff(&before, &reversed);
+        let change = only(&diff);
+        assert_eq!(change.classification, Classification::Unknown);
+        assert!(change.summary.contains("too many places"), "{change:#?}");
+    }
+
+    /// A small deterministic generator, so the property test needs no dependency.
+    struct Rng(u64);
+
+    impl Rng {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n as u64) as usize
+        }
+    }
+
+    const ATOMS: &[&str] = &[
+        "amount > 100",
+        "amount > 0",
+        "amount < 50",
+        "region == \"eu\"",
+        "currency == \"usd\"",
+        "customerId == ${vars.customerId}",
+    ];
+
+    #[derive(Clone)]
+    struct GenRule {
+        name: Option<usize>,
+        capability: &'static str,
+        filter: Vec<(usize, bool)>,
+        action: &'static str,
+    }
+
+    impl GenRule {
+        fn random(rng: &mut Rng, next_name: &mut usize) -> Self {
+            let name = (rng.below(3) > 0).then(|| {
+                *next_name += 1;
+                *next_name
+            });
+            let mut rule = GenRule {
+                name,
+                capability: ["http.get", "http.get", "http.post"][rng.below(3)],
+                filter: Vec::new(),
+                action: "allow",
+            };
+            rule.randomize(rng);
+            rule
+        }
+
+        fn randomize(&mut self, rng: &mut Rng) {
+            self.action = ["allow", "deny", "ask-human"][rng.below(3)];
+            // Each atom joined to the previous by `and` (false) or `or` (true).
+            self.filter = (0..rng.below(3))
+                .map(|_| (rng.below(ATOMS.len()), rng.below(2) == 0))
+                .collect();
+        }
+
+        fn edit_filter(&mut self, rng: &mut Rng) {
+            match rng.below(3) {
+                0 if !self.filter.is_empty() => {
+                    let at = rng.below(self.filter.len());
+                    self.filter.remove(at);
+                }
+                _ => self
+                    .filter
+                    .push((rng.below(ATOMS.len()), rng.below(2) == 0)),
+            }
+        }
+
+        fn yaml(&self) -> String {
+            let mut text = String::new();
+            if let Some(name) = self.name {
+                text.push_str(&format!("    - name: r{name}\n      "));
+            } else {
+                text.push_str("    - ");
+            }
+            text.push_str(&format!("capability: {}\n", self.capability));
+            if !self.filter.is_empty() {
+                let mut filter = String::new();
+                for (k, (atom, or)) in self.filter.iter().enumerate() {
+                    if k > 0 {
+                        filter.push_str(if *or { " or " } else { " and " });
+                    }
+                    filter.push_str(ATOMS[*atom]);
+                }
+                text.push_str(&format!("      filter: {filter}\n"));
+            }
+            text.push_str(&format!("      action: {}\n", self.action));
+            text
+        }
+    }
+
+    fn generated(rules: &[GenRule], default: &str) -> Blueprint {
+        let body: String = rules.iter().map(GenRule::yaml).collect();
+        let permissions = if rules.is_empty() {
+            String::new()
+        } else {
+            format!("permissions:\n  main:\n{body}")
+        };
+        bp(&format!(
+            "name: demo\n{default}variables:\n  customerId:\n    required: true\n{permissions}"
+        ))
+    }
+
+    fn mutate(rules: &mut Vec<GenRule>, rng: &mut Rng, next_name: &mut usize) {
+        let len = rules.len();
+        match rng.below(7) {
+            0 if len >= 2 => {
+                let (a, b) = (rng.below(len), rng.below(len));
+                rules.swap(a, b);
+            }
+            1 if len >= 1 => {
+                let at = rng.below(len);
+                rules.remove(at);
+            }
+            2 if len >= 1 => {
+                let at = rng.below(len);
+                rules[at].edit_filter(rng);
+            }
+            3 if len >= 1 => {
+                let at = rng.below(len);
+                rules[at].action = ["allow", "deny", "ask-human"][rng.below(3)];
+            }
+            5 if len >= 2 => {
+                // Two rules swap and both change, as when one edit reorders a block.
+                let (a, b) = (rng.below(len), rng.below(len));
+                rules.swap(a, b);
+                rules[a].edit_filter(rng);
+                rules[b].edit_filter(rng);
+            }
+            4 if len >= 1 => {
+                let rule = rules.remove(rng.below(len));
+                let at = rng.below(rules.len() + 1);
+                rules.insert(at, rule);
+            }
+            _ => {
+                let at = rng.below(len + 1);
+                rules.insert(at, GenRule::random(rng, next_name));
+            }
+        }
+    }
+
+    // Guards the classifier as a whole: whenever it calls a change narrowing (or
+    // finds none), no call is allowed or asked about that was decided less
+    // permissively before; whenever it calls one widening, none is decided less
+    // permissively after.
+    #[test]
+    fn a_classified_direction_holds_for_every_call() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let mut contexts = Vec::new();
+        for amount in [0, 20, 70, 150] {
+            for region in ["eu", "us"] {
+                for currency in ["usd", "eur"] {
+                    for customer in ["c1", "c2"] {
+                        contexts.push(serde_json::json!({
+                            "amount": amount, "region": region,
+                            "currency": currency, "customerId": customer,
+                        }));
+                    }
+                }
+            }
+        }
+        let vars: crate::VarBindings = [("customerId".to_owned(), "c1".to_owned())]
+            .into_iter()
+            .collect();
+        let defaults = [
+            "",
+            "default: deny\n",
+            "default: allow\n",
+            "default: ask-human\n",
+        ];
+        for _ in 0..6000 {
+            let mut next_name = 0;
+            let mut old: Vec<GenRule> = (0..rng.below(5))
+                .map(|_| GenRule::random(&mut rng, &mut next_name))
+                .collect();
+            let old_default = defaults[rng.below(defaults.len())];
+            let mut new = old.clone();
+            for _ in 0..=rng.below(3) {
+                mutate(&mut new, &mut rng, &mut next_name);
+            }
+            let new_default = if rng.below(4) == 0 {
+                defaults[rng.below(defaults.len())]
+            } else {
+                old_default
+            };
+            if rng.below(2) == 0 {
+                std::mem::swap(&mut old, &mut new);
+            }
+            let (before, after) = (generated(&old, old_default), generated(&new, new_default));
+            let diff = diff(&before, &after);
+            let narrowing =
+                diff.changes.is_empty() || diff.classification == Classification::Narrowing;
+            let widening =
+                diff.changes.is_empty() || diff.classification == Classification::Widening;
+            for capability in ["http.get", "http.post"] {
+                for context in &contexts {
+                    let was = before.resolve_permission("main", capability, context, &vars);
+                    let now = after.resolve_permission("main", capability, context, &vars);
+                    let wider = rank(now) > rank(was);
+                    let narrower = rank(now) < rank(was);
+                    assert!(
+                        !(narrowing && wider) && !(widening && narrower),
+                        "{capability} {context}: {was:?} -> {now:?} under {}\nbefore:\n{}\nafter:\n{}\n{diff:#?}",
+                        diff.classification,
+                        crate::to_yaml(&before),
+                        crate::to_yaml(&after),
+                    );
+                }
+            }
+        }
     }
 
     #[test]

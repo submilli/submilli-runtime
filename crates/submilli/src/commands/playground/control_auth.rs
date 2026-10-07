@@ -7,10 +7,14 @@
 //!   as digests, and a stop drops them.
 //! - The nonce challenge proves the listener belongs to the instance the lock
 //!   names before any command sends a credential to it.
+//!
+//! Expiry is checked against both clocks ([`Now`]): the monotonic one stops while
+//! the machine sleeps, so a code minted before a night's sleep would otherwise
+//! still work in the morning.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use axum::http::HeaderMap;
 use axum::http::header::{HOST, ORIGIN};
@@ -58,12 +62,59 @@ pub(crate) struct ControlAuth {
     secrets: Mutex<Secrets>,
 }
 
+/// The current time on both clocks.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Now {
+    monotonic: Instant,
+    wall: SystemTime,
+}
+
+impl Now {
+    pub(crate) fn current() -> Self {
+        Self {
+            monotonic: Instant::now(),
+            wall: SystemTime::now(),
+        }
+    }
+
+    /// `ttl` from now on both clocks; `None` when either cannot represent it.
+    fn plus(self, ttl: Duration) -> Option<Deadline> {
+        Some(Deadline {
+            monotonic: self.monotonic.checked_add(ttl)?,
+            wall: self.wall.checked_add(ttl)?,
+        })
+    }
+
+    #[cfg(test)]
+    fn later(self, monotonic: Duration, wall: Duration) -> Self {
+        Self {
+            monotonic: self.monotonic + monotonic,
+            wall: self.wall + wall,
+        }
+    }
+}
+
+/// When a code or session expires: as soon as either clock says so.
+#[derive(Clone, Copy, Debug)]
+struct Deadline {
+    monotonic: Instant,
+    wall: SystemTime,
+}
+
+impl Deadline {
+    fn live_at(self, now: Now) -> bool {
+        now.monotonic < self.monotonic && now.wall < self.wall
+    }
+}
+
 #[derive(Default)]
 struct Secrets {
     /// Digest of an unused login code, and when it expires, oldest first.
-    codes: VecDeque<([u8; 32], Instant)>,
+    codes: VecDeque<([u8; 32], Deadline)>,
     /// Digest of a browser session token, and when it expires.
-    sessions: HashMap<[u8; 32], Instant>,
+    sessions: HashMap<[u8; 32], Deadline>,
+    /// When recent exchanges failed, for the rate limit. Monotonic only: a sleep
+    /// that stretches the window only makes the limit stricter.
     failures: VecDeque<Instant>,
 }
 
@@ -76,13 +127,13 @@ impl ControlAuth {
     }
 
     /// A new single-use login code.
-    pub(crate) fn mint_login_code(&self, now: Instant) -> anyhow::Result<String> {
+    pub(crate) fn mint_login_code(&self, now: Now) -> anyhow::Result<String> {
         let code = random_hex(SECRET_BYTES)?;
         let expires = now
-            .checked_add(LOGIN_CODE_TTL)
+            .plus(LOGIN_CODE_TTL)
             .ok_or_else(|| anyhow::anyhow!("the clock cannot represent a login code's expiry"))?;
         let mut secrets = self.lock();
-        secrets.codes.retain(|(_, expiry)| *expiry > now);
+        secrets.codes.retain(|(_, expiry)| expiry.live_at(now));
         while secrets.codes.len() >= MAX_CODES {
             secrets.codes.pop_front();
         }
@@ -92,13 +143,11 @@ impl ControlAuth {
 
     /// Trade a login code for a browser session token. The code is spent whether
     /// or not the caller reads the answer.
-    pub(crate) fn exchange(&self, code: &str, now: Instant) -> Result<String, LoginRefusal> {
+    pub(crate) fn exchange(&self, code: &str, now: Now) -> Result<String, LoginRefusal> {
         let mut secrets = self.lock();
-        while secrets
-            .failures
-            .front()
-            .is_some_and(|failed| now.saturating_duration_since(*failed) >= FAILURE_WINDOW)
-        {
+        while secrets.failures.front().is_some_and(|failed| {
+            now.monotonic.saturating_duration_since(*failed) >= FAILURE_WINDOW
+        }) {
             secrets.failures.pop_front();
         }
         if secrets.failures.len() >= MAX_FAILURES {
@@ -108,21 +157,21 @@ impl ControlAuth {
         let found = secrets
             .codes
             .iter()
-            .position(|(code, expiry)| *code == presented && *expiry > now);
+            .position(|(code, expiry)| *code == presented && expiry.live_at(now));
         let Some(index) = found else {
-            secrets.failures.push_back(now);
+            secrets.failures.push_back(now.monotonic);
             return Err(LoginRefusal::Invalid);
         };
         secrets.codes.remove(index);
         let token = random_hex(SECRET_BYTES).map_err(|_| LoginRefusal::Invalid)?;
-        let expires = now.checked_add(SESSION_TTL).ok_or(LoginRefusal::Invalid)?;
-        secrets.sessions.retain(|_, expiry| *expiry > now);
+        let expires = now.plus(SESSION_TTL).ok_or(LoginRefusal::Invalid)?;
+        secrets.sessions.retain(|_, expiry| expiry.live_at(now));
         secrets.sessions.insert(digest(&token), expires);
         Ok(token)
     }
 
     /// Who presents `headers`' bearer token, if anyone recognized.
-    pub(crate) fn caller(&self, headers: &HeaderMap, now: Instant) -> Option<Caller> {
+    pub(crate) fn caller(&self, headers: &HeaderMap, now: Now) -> Option<Caller> {
         if let Some(token) = submilli_server::auth::authenticate(&self.tokens, headers) {
             return Some(if token.name() == ADMIN_TOKEN {
                 Caller::Admin
@@ -135,15 +184,15 @@ impl ControlAuth {
         secrets
             .sessions
             .get(&digest(presented))
-            .is_some_and(|expiry| *expiry > now)
+            .is_some_and(|expiry| expiry.live_at(now))
             .then_some(Caller::Browser)
     }
 
-    pub(crate) fn browser_sessions(&self, now: Instant) -> usize {
+    pub(crate) fn browser_sessions(&self, now: Now) -> usize {
         self.lock()
             .sessions
             .values()
-            .filter(|expiry| **expiry > now)
+            .filter(|expiry| expiry.live_at(now))
             .count()
     }
 
@@ -246,7 +295,7 @@ mod tests {
     #[test]
     fn a_login_code_works_once_and_not_after_it_expires() {
         let auth = auth();
-        let now = Instant::now();
+        let now = Now::current();
         let code = auth.mint_login_code(now).unwrap();
         assert!(code.len() * 4 >= 128);
         let session = auth.exchange(&code, now).unwrap();
@@ -254,24 +303,53 @@ mod tests {
         assert_eq!(auth.caller(&bearer(&session), now), Some(Caller::Browser));
 
         let late = auth.mint_login_code(now).unwrap();
-        let expired = now + LOGIN_CODE_TTL + Duration::from_secs(1);
+        let past = LOGIN_CODE_TTL + Duration::from_secs(1);
+        let expired = now.later(past, past);
         assert_eq!(auth.exchange(&late, expired), Err(LoginRefusal::Invalid));
         let just_in_time = auth.mint_login_code(now).unwrap();
+        let almost = LOGIN_CODE_TTL - Duration::from_secs(1);
         assert!(
-            auth.exchange(&just_in_time, now + LOGIN_CODE_TTL - Duration::from_secs(1))
+            auth.exchange(&just_in_time, now.later(almost, almost))
                 .is_ok()
         );
+    }
+
+    /// The monotonic clock stops while the machine sleeps; the wall clock does not,
+    /// and either one passing the expiry ends a code or a session.
+    #[test]
+    fn a_code_and_a_session_expire_across_a_sleep() {
+        let auth = auth();
+        let now = Now::current();
+        let code = auth.mint_login_code(now).unwrap();
+        let slept = now.later(
+            Duration::from_secs(1),
+            LOGIN_CODE_TTL + Duration::from_secs(1),
+        );
+        assert_eq!(auth.exchange(&code, slept), Err(LoginRefusal::Invalid));
+
+        let session = auth
+            .exchange(&auth.mint_login_code(now).unwrap(), now)
+            .unwrap();
+        let slept = now.later(Duration::from_secs(1), SESSION_TTL + Duration::from_secs(1));
+        assert_eq!(auth.caller(&bearer(&session), slept), None);
+        assert_eq!(auth.browser_sessions(slept), 0);
+        // A wall clock set back does not revive anything either.
+        let rewound = Now {
+            monotonic: now.monotonic + SESSION_TTL + Duration::from_secs(1),
+            wall: now.wall,
+        };
+        assert_eq!(auth.caller(&bearer(&session), rewound), None);
     }
 
     #[test]
     fn sessions_expire_and_a_stop_drops_them() {
         let auth = auth();
-        let now = Instant::now();
+        let now = Now::current();
         let session = auth
             .exchange(&auth.mint_login_code(now).unwrap(), now)
             .unwrap();
-        let later = now + SESSION_TTL + Duration::from_secs(1);
-        assert_eq!(auth.caller(&bearer(&session), later), None);
+        let past = SESSION_TTL + Duration::from_secs(1);
+        assert_eq!(auth.caller(&bearer(&session), now.later(past, past)), None);
         let session = auth
             .exchange(&auth.mint_login_code(now).unwrap(), now)
             .unwrap();
@@ -282,19 +360,22 @@ mod tests {
     #[test]
     fn failed_exchanges_are_rate_limited() {
         let auth = auth();
-        let now = Instant::now();
+        let now = Now::current();
         let code = auth.mint_login_code(now).unwrap();
         for _ in 0..MAX_FAILURES {
             assert_eq!(auth.exchange("wrong", now), Err(LoginRefusal::Invalid));
         }
         assert_eq!(auth.exchange(&code, now), Err(LoginRefusal::RateLimited));
-        assert!(auth.exchange(&code, now + FAILURE_WINDOW).is_ok());
+        assert!(
+            auth.exchange(&code, now.later(FAILURE_WINDOW, FAILURE_WINDOW))
+                .is_ok()
+        );
     }
 
     #[test]
     fn tokens_are_told_apart() {
         let auth = auth();
-        let now = Instant::now();
+        let now = Now::current();
         assert_eq!(auth.caller(&bearer(ADMIN), now), Some(Caller::Admin));
         assert_eq!(
             auth.caller(&bearer(APP), now),
@@ -348,5 +429,50 @@ mod tests {
             4000
         ));
         assert!(!same_origin(&HeaderMap::new(), 4000));
+        // Every loopback spelling of this listener, with its port; none without one.
+        assert!(same_origin(&headers("localhost:4000", None), 4000));
+        assert!(same_origin(&headers("LOCALHOST:4000", None), 4000));
+        assert!(same_origin(
+            &headers("[::1]:4000", Some("http://[::1]:4000")),
+            4000
+        ));
+        for host in [
+            "127.0.0.1",
+            "localhost",
+            "[::1]",
+            "127.0.0.1:",
+            "127.0.0.1:04000",
+        ] {
+            assert!(!same_origin(&headers(host, None), 4000), "{host}");
+        }
+    }
+
+    #[test]
+    fn a_garbage_or_huge_authorization_header_is_no_caller() {
+        let auth = auth();
+        let now = Now::current();
+        let header = |value: &[u8]| {
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, HeaderValue::from_bytes(value).unwrap());
+            headers
+        };
+        let huge = format!("Bearer {}", "a".repeat(1 << 20));
+        let with_admin_prefix = format!("Bearer {ADMIN}{}", "0".repeat(4096));
+        for value in [
+            b"garbage".as_slice(),
+            b"Bearer",
+            b"Bearer ",
+            b"Basic YWRtaW46YWRtaW4=",
+            b"Bearer \xff\xfe\xfd",
+            huge.as_bytes(),
+            with_admin_prefix.as_bytes(),
+        ] {
+            assert_eq!(
+                auth.caller(&header(value), now),
+                None,
+                "{}",
+                String::from_utf8_lossy(&value[..value.len().min(40)])
+            );
+        }
     }
 }

@@ -35,7 +35,7 @@ pub use interpreter::runtime::{
     DEFAULT_MAX_EXECUTION_TOKENS, DEFAULT_MAX_STORE_BYTES, LlmLimits, NetworkPolicy, RuntimeConfig,
 };
 pub use local_apply::{LocalApplied, LocalApplyError, LocalDiagnostic};
-pub use serve::{prepare_blueprint_store, runtime, serve, serve_embedded};
+pub use serve::{EmbeddedSignals, prepare_blueprint_store, runtime, serve, serve_embedded};
 pub use submilli_shared::mcp_token::{McpTokenError, OAuthTokenManager};
 pub use submilli_shared::secret_store::{FileSecretStore, KeySource};
 pub use submilli_shared::secret_store::{SecretStore, SecretStoreError};
