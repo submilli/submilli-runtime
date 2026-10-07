@@ -786,6 +786,9 @@ impl<'a> Parser<'a> {
                 && is_property_name(&self.peek_at(1).kind)
                 && matches!(self.peek_at(2).kind, TokenKind::LeftParen)
             {
+                if let Some(span) = modifiers.readonly {
+                    self.reject_readonly_modifier(span);
+                }
                 if let Some(span) = modifiers.static_span {
                     self.error_at_with_help(
                         span,
@@ -829,6 +832,9 @@ impl<'a> Parser<'a> {
 
         // Method.
         if matches!(self.peek().kind, TokenKind::LessThan | TokenKind::LeftParen) {
+            if let Some(span) = modifiers.readonly {
+                self.reject_readonly_modifier(span);
+            }
             let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
                 self.parse_generic_param_list()?
             } else {
@@ -1206,6 +1212,9 @@ impl<'a> Parser<'a> {
                     doc: member_doc,
                 });
                 continue;
+            }
+            if readonly {
+                self.reject_readonly_modifier(self.readonly_modifier_span(member_start));
             }
             let m_generics = if matches!(self.peek().kind, TokenKind::LessThan) {
                 self.parse_generic_param_list()?
@@ -3566,7 +3575,7 @@ impl<'a> Parser<'a> {
                 }
                 index = Some(Box::new(signature));
             } else {
-                let field = self.parse_object_type_field(readonly)?;
+                let field = self.parse_object_type_field(readonly, member_start)?;
                 if let Some(existing) = fields.iter().find(|f| f.name.name == field.name.name) {
                     self.diagnostics.push(Diagnostic {
                         severity: Severity::Error,
@@ -3629,7 +3638,11 @@ impl<'a> Parser<'a> {
     }
 
     /// `name: T`, `name?: T` or the method signature `name(params): T`.
-    fn parse_object_type_field(&mut self, readonly: bool) -> Option<TypeAnnotationField> {
+    fn parse_object_type_field(
+        &mut self,
+        readonly: bool,
+        member_start: u32,
+    ) -> Option<TypeAnnotationField> {
         let name = self.expect_property_ident("expected field name in object type")?;
         // `name?: T` — omittable at construction; reads widen to `T | null`.
         let optional = matches!(self.peek().kind, TokenKind::Question);
@@ -3637,6 +3650,9 @@ impl<'a> Parser<'a> {
             self.advance();
         }
         let ty = if matches!(self.peek().kind, TokenKind::LeftParen) {
+            if readonly {
+                self.reject_readonly_modifier(self.readonly_modifier_span(member_start));
+            }
             self.parse_object_type_method_signature(name.span.start)?
         } else {
             if !matches!(self.peek().kind, TokenKind::Colon) {
@@ -3734,6 +3750,22 @@ impl<'a> Parser<'a> {
         }
         let tok = self.advance();
         Some(self.property_ident_from_token(&tok))
+    }
+
+    /// The span of a `readonly` modifier that [`Parser::eat_readonly_property_modifier`]
+    /// consumed at `member_start`.
+    fn readonly_modifier_span(&self, member_start: u32) -> Span {
+        self.span(member_start, member_start + "readonly".len() as u32)
+    }
+
+    /// Reports `readonly` on a method, accessor or method signature, as TypeScript
+    /// does (TS1024). Parsing continues: the modifier changes nothing else.
+    fn reject_readonly_modifier(&mut self, span: Span) {
+        self.error_at_with_help(
+            span,
+            "`readonly` can only modify a property or index signature",
+            vec!["remove `readonly`".to_string()],
+        );
     }
 
     fn eat_readonly_property_modifier(&mut self) -> bool {
@@ -9561,11 +9593,35 @@ mod tests {
     }
 
     #[test]
+    fn readonly_is_rejected_on_methods_accessors_and_method_signatures() {
+        let source = "class K {\n\
+             readonly m(): number { return 1; }\n\
+             public readonly n<T>(): number { return 1; }\n\
+             readonly get g(): number { return 1; }\n\
+             readonly p: number = 1;\n\
+             }\n\
+             type T = { readonly r(a: number): boolean; readonly f: () => void };\n\
+             interface I { readonly s(): void; readonly q: number; }\n";
+        let (_, diags) = parse_str(source);
+        let lines: Vec<usize> = diags
+            .iter()
+            .map(|d| {
+                assert_eq!(
+                    d.message,
+                    "`readonly` can only modify a property or index signature"
+                );
+                source[..d.span.start as usize].matches('\n').count() + 1
+            })
+            .collect();
+        assert_eq!(lines, vec![2, 3, 4, 7, 8]);
+    }
+
+    #[test]
     fn parse_object_type_method_members() {
         // `m(): T` is the same member as `m: () => T`, so it parses to a function-typed
-        // field — including through the `?` and `readonly` modifiers.
+        // field — including through the `?` modifier.
         let (ast, diags) = parse_str(
-            "let p: { m(): number; opt?(): string; readonly r(a: number): boolean } = null;",
+            "let p: { m(): number; opt?(): string; r(a: number): boolean } = null;",
         );
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
@@ -9582,7 +9638,6 @@ mod tests {
             );
         }
         assert!(fields[1].optional, "`opt?()` is an optional member");
-        assert!(fields[2].readonly, "`readonly r()` keeps its modifier");
         let crate::TypeAnnotationKind::Function { ref params, .. } = fields[2].ty.kind else {
             unreachable!("checked above");
         };
