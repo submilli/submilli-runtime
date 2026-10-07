@@ -31,6 +31,22 @@ function afterTruthiness(s: S | null): string {
   return never(s);
 }
 
+// A loop pass that writes the ruled-out member back undoes the exclusion at
+// the loop's entry.
+function reassignedInLoop(e: S | null): string {
+  let seen = "";
+  if (e !== S.X) {
+    for (let i = 0; i < 2; i++) {
+      if (e !== null) {
+        if (e === S.Y) seen += "Y";
+        else seen += "other";
+      }
+      e = S.X;
+    }
+  }
+  return seen;
+}
+
 function main(): void {
   assert(afterNull(S.Y) === "Y");
   assert(afterNull(null) === "null");
@@ -38,4 +54,5 @@ function main(): void {
   assert(afterTypeof(3) === "number");
   assert(afterTruthiness(S.Y) === "Y");
   assert(afterTruthiness(null) === "null");
+  assert(reassignedInLoop(S.Y) === "Yother");
 }

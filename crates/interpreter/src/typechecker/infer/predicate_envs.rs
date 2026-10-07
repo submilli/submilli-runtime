@@ -2481,10 +2481,6 @@ impl<'a> Inferer<'a> {
             .filter(|view| !narrowing::is_ruled_out(&view.narrowed_ty))
     }
 
-    /// A read of `path` under the narrowing that holds there. A guard that
-    /// rules out every value (its view [`narrowing::RULED_OUT`]) reads as `never`, as in
-    /// TypeScript, where [`Self::rules_out_to_never`] allows: no value
-    /// reaches the read, and codegen emits a trap for it.
     /// The literals `path` is already known not to hold, which a further
     /// narrowing of it keeps: `s !== S.X` still holds inside `s !== null`.
     fn known_exclusions(
@@ -2496,6 +2492,10 @@ impl<'a> Inferer<'a> {
             .unwrap_or_default()
     }
 
+    /// A read of `path` under the narrowing that holds there. A guard that
+    /// rules out every value (its view [`narrowing::RULED_OUT`]) reads as `never`, as in
+    /// TypeScript, where [`Self::rules_out_to_never`] allows: no value
+    /// reaches the read, and codegen emits a trap for it.
     pub(super) fn narrowed_read(
         &self,
         path: narrowing::ReferencePath,
