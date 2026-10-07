@@ -138,6 +138,7 @@ impl<'a> ShapeCollector<'a> {
             | Type::Readonly(inner) => self.collect(inner),
             Type::Number
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::NumberLiteral(_)
             | Type::String
             | Type::StringLiteral(_)

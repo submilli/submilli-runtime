@@ -732,7 +732,7 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
                 AlwaysTruthy
             }
         }
-        Type::BigInt => BigIntLike,
+        Type::BigInt | Type::BigIntLiteral(_) => BigIntLike,
         Type::NumberEnum { .. } => NumberLike,
         Type::StringEnum { .. } => StringLike,
         // `{}` admits every value but `null` and `undefined`, falsy primitives
@@ -915,6 +915,7 @@ fn is_typeof_object(ty: &Type) -> bool {
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::Function { .. } => false,
 
         // Not classifiable, for four different reasons: no value at all

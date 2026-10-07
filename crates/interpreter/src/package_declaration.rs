@@ -607,6 +607,7 @@ impl PackageShapeCollector {
             }
             Type::Number
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::NumberLiteral(_)
             | Type::String
             | Type::StringLiteral(_)

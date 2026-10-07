@@ -888,7 +888,7 @@ impl SymbolTable {
                     heap_type: HeapType::Concrete(idx),
                 })
             }
-            Type::BigInt => {
+            Type::BigInt | Type::BigIntLiteral(_) => {
                 let idx = self.bigint_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::BigInt requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,

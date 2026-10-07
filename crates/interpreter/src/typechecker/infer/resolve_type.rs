@@ -758,6 +758,7 @@ impl<'a> Inferer<'a> {
             }
             TypeAnnotationKind::StringLiteral(s) => Type::StringLiteral(s.clone()),
             TypeAnnotationKind::NumberLiteral(v) => Type::NumberLiteral(*v),
+            TypeAnnotationKind::BigIntLiteral(digits) => crate::types::bigint_literal_type(digits),
             TypeAnnotationKind::BooleanLiteral(b) => Type::BooleanLiteral(*b),
             TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand)?,
             TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path)?,

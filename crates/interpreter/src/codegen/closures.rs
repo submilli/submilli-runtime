@@ -397,6 +397,7 @@ pub(crate) fn walk_type(
         Type::Number
         | Type::NumberLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::String

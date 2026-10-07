@@ -167,6 +167,8 @@ fn is_primitive(ty: &Type) -> bool {
             | Type::StringLiteral(_)
             | Type::NumberLiteral(_)
             | Type::BooleanLiteral(_)
+            | Type::BigInt
+            | Type::BigIntLiteral(_)
     )
 }
 
@@ -352,7 +354,7 @@ fn chain_step_phrasing(part: &ChainPart) -> Result<ChainStepPhrasing, CompilerFa
 }
 
 fn postfix_result_ty(operand_ty: &Type) -> Type {
-    if matches!(operand_ty.peel(), Type::BigInt) {
+    if operand_ty.is_bigint() {
         Type::BigInt
     } else {
         Type::Number
@@ -557,9 +559,13 @@ impl Inferer<'_> {
                 });
                 Ok((TypedExprKind::Number(v), ty))
             }
-            // bigint literal — always widens to `Type::BigInt`
-            // (no `Type::BigIntLiteral` narrowing variant in v1).
-            ExprKind::BigInt(digits) => Ok((TypedExprKind::BigInt(digits), Type::BigInt)),
+            ExprKind::BigInt(digits) => {
+                let literal = crate::types::bigint_literal_type(&digits);
+                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::BigIntLiteral(_))
+                });
+                Ok((TypedExprKind::BigInt(digits), ty))
+            }
             ExprKind::String(s) => {
                 let literal = Type::StringLiteral(s.clone());
                 let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
@@ -588,7 +594,9 @@ impl Inferer<'_> {
             ExprKind::Binary { op, lhs, rhs } => {
                 self.infer_binary(op, lhs, rhs, expected, keeps_literal, span)
             }
-            ExprKind::Unary { op, operand } => self.infer_unary(op, operand),
+            ExprKind::Unary { op, operand } => {
+                self.infer_unary_keeping_literals(op, operand, expected, keeps_literal)
+            }
             ExprKind::Call {
                 callee,
                 type_args,
@@ -1228,7 +1236,7 @@ impl Inferer<'_> {
                 let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
                 let rhs_hint = match lt.peel() {
                     Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
-                    Type::BigInt => Some(Type::BigInt),
+                    Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
                     _ => None,
                 };
                 let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
@@ -1283,7 +1291,7 @@ impl Inferer<'_> {
                 let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
                 let rhs_hint = match lt.peel() {
                     Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
-                    Type::BigInt => Some(Type::BigInt),
+                    Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
                     _ => None,
                 };
                 let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
@@ -1506,6 +1514,37 @@ impl Inferer<'_> {
             },
             Type::Boolean,
         ))
+    }
+
+    /// [`infer_unary`](Self::infer_unary), giving a negated literal its literal
+    /// type where the literal itself would keep one: `const n = -1n` is `-1n`, as
+    /// TypeScript has it. Only a literal written right after the `-` counts.
+    fn infer_unary_keeping_literals(
+        &mut self,
+        op: UnOp,
+        operand: ExprId,
+        expected: Option<&Type>,
+        keeps_literal: bool,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (kind, ty) = self.infer_unary(op, operand)?;
+        if !matches!(op, UnOp::Neg) {
+            return Ok((kind, ty));
+        }
+        let literal = match &self
+            .ast
+            .try_expr(operand)
+            .map_err(super::arena_failure)?
+            .kind
+        {
+            ExprKind::BigInt(digits) => {
+                Type::BigIntLiteral(crate::types::negate_bigint_digits(digits))
+            }
+            _ => return Ok((kind, ty)),
+        };
+        let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+            matches!(t, Type::BigIntLiteral(_))
+        });
+        Ok((kind, ty))
     }
 
     fn infer_unary(
@@ -10369,6 +10408,10 @@ fn unsupported_cast_target_reason(
         | Type::Uint8Array
         | Type::Function { .. }
         | Type::Unknown => None,
+        Type::BigIntLiteral(_) => Some(
+            "bigint literal types aren't supported as `as` targets — cast to `bigint` \
+             and compare the value",
+        ),
         Type::Object { fields, index } => fields
             .values()
             .map(|f| &f.ty)
@@ -10903,20 +10946,25 @@ pub(super) fn literal_comparison_type(
         TypedExprKind::String(value) => Type::StringLiteral(value.clone()),
         TypedExprKind::Number(value) => Type::NumberLiteral(crate::types::LiteralF64(*value)),
         TypedExprKind::Boolean(value) => Type::BooleanLiteral(*value),
+        TypedExprKind::BigInt(digits) => crate::types::bigint_literal_type(digits),
         TypedExprKind::Unary {
-            op: UnOp::Neg | UnOp::Pos,
+            op: op @ (UnOp::Neg | UnOp::Pos),
             operand,
         } => {
-            let TypedExprKind::Number(value) = ast
+            let negative = matches!(op, UnOp::Neg);
+            match &ast
                 .try_expr(*operand)
                 .map_err(crate::typechecker::arena_failure)?
                 .kind
-            else {
-                return Ok(expr.ty.clone());
-            };
-            let negative = matches!(expr.kind, TypedExprKind::Unary { op: UnOp::Neg, .. });
-            let signed = if negative { -value } else { value };
-            number_literal_type(signed)
+            {
+                TypedExprKind::Number(value) => {
+                    number_literal_type(if negative { -value } else { *value })
+                }
+                TypedExprKind::BigInt(digits) if negative => {
+                    Type::BigIntLiteral(crate::types::negate_bigint_digits(digits))
+                }
+                _ => expr.ty.clone(),
+            }
         }
         _ => expr.ty.clone(),
     })
@@ -10979,7 +11027,7 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
         return bitnot_result(ty);
     }
     match ty.primitive_behavior() {
-        Type::BigInt => Some(Type::BigInt),
+        Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
         Type::Number | Type::NumberLiteral(_) | Type::Error => Some(Type::Number),
         // `+s` is JS's explicit string→number coercion and the one TS keeps; it
         // lowers to the same parse `Number(s)` does (`NaN` when the text isn't a
@@ -10993,7 +11041,7 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
 fn bitnot_result(ty: &Type) -> Option<Type> {
     match ty.peel() {
         Type::Unknown | Type::Null | Type::Void => None,
-        Type::BigInt => Some(Type::BigInt),
+        Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
         Type::Never => Some(Type::Number),
         Type::Union(members) => {
             let results: Option<Vec<_>> = members.iter().map(bitnot_result).collect();
@@ -11012,6 +11060,7 @@ fn has_to_string(ty: &Type) -> bool {
             | Type::Number
             | Type::NumberLiteral(_)
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Array(_)

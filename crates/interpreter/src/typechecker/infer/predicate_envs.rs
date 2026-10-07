@@ -2741,6 +2741,7 @@ fn may_share_an_object(left: &Type, right: &Type) -> bool {
                 | Type::Boolean
                 | Type::BooleanLiteral(_)
                 | Type::BigInt
+                | Type::BigIntLiteral(_)
         )
     };
     let is_class = |ty: &Type| matches!(ty.peel(), Type::ClassRef { .. });

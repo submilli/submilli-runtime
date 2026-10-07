@@ -3121,6 +3121,39 @@ impl<'a> Parser<'a> {
                     span,
                 }
             }
+            TokenKind::BigIntLiteral(_) => {
+                let tok = self.advance();
+                let TokenKind::BigIntLiteral(digits) = tok.kind else {
+                    // advance returns the token just matched, before moving the cursor.
+                    unreachable!("advance preserves the matched BigIntLiteral variant");
+                };
+                TypeAnnotation {
+                    kind: TypeAnnotationKind::BigIntLiteral(digits),
+                    span: tok.span,
+                }
+            }
+            TokenKind::Minus
+                if matches!(
+                    self.peek_at(1).kind,
+                    TokenKind::NumberLiteral(_) | TokenKind::BigIntLiteral(_)
+                ) =>
+            {
+                let minus = self.advance().span;
+                let tok = self.advance();
+                let span = self.span(minus.start, tok.span.end);
+                let kind =
+                    match tok.kind {
+                        TokenKind::NumberLiteral(v) => TypeAnnotationKind::NumberLiteral(
+                            crate::types::LiteralF64(if v == 0.0 { 0.0 } else { -v }),
+                        ),
+                        TokenKind::BigIntLiteral(digits) => TypeAnnotationKind::BigIntLiteral(
+                            crate::types::negate_bigint_digits(&digits),
+                        ),
+                        // The guard admits only the two numeric literal tokens.
+                        _ => unreachable!("guarded to a numeric literal after `-`"),
+                    };
+                TypeAnnotation { kind, span }
+            }
             TokenKind::BooleanLiteral(value) => {
                 let span = self.advance().span;
                 TypeAnnotation {

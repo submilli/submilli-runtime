@@ -776,7 +776,7 @@ impl CodegenAnalysis {
                     self.dependency_usage
                         .note_value(crate::runtime::prelude::math::math_key("pow"));
                 }
-                if matches!(expr.ty.peel(), Type::BigInt) {
+                if expr.ty.is_bigint() {
                     match op {
                         BinOp::Add => self.dependency_usage.collect_bigint_host_value("add"),
                         BinOp::Sub => self.dependency_usage.collect_bigint_host_value("sub"),
@@ -802,16 +802,16 @@ impl CodegenAnalysis {
                         | BinOp::NullishCoalesce => {}
                     }
                 }
-                if matches!(
-                    ta.try_expr(*lhs)
-                        .map_err(crate::codegen::arena_failure)?
-                        .ty
-                        .peel(),
-                    Type::BigInt
-                ) && matches!(
-                    op,
-                    BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
-                ) {
+                if ta
+                    .try_expr(*lhs)
+                    .map_err(crate::codegen::arena_failure)?
+                    .ty
+                    .is_bigint()
+                    && matches!(
+                        op,
+                        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
+                    )
+                {
                     self.dependency_usage.collect_bigint_host_value("cmp");
                 }
                 if matches!(op, BinOp::In)
@@ -841,7 +841,7 @@ impl CodegenAnalysis {
                     .map_err(crate::codegen::arena_failure)?
                     .ty
                     .peel();
-                if matches!(op, crate::UnOp::Neg) && matches!(operand_ty, Type::BigInt) {
+                if matches!(op, crate::UnOp::Neg) && operand_ty.is_bigint() {
                     self.dependency_usage.collect_bigint_host_value("neg");
                 }
                 if matches!(op, crate::UnOp::Pos) && operand_ty.is_string_shaped() {

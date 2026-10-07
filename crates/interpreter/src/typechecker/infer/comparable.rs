@@ -396,6 +396,7 @@ fn is_primitive_like(ty: &Type) -> bool {
         Type::Number
             | Type::NumberLiteral(_)
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::String
             | Type::StringLiteral(_)
             | Type::Boolean

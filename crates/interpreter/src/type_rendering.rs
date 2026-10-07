@@ -125,6 +125,10 @@ fn write_node<'a>(
     match ty {
         Type::Number => out.push("number"),
         Type::BigInt => out.push("bigint"),
+        Type::BigIntLiteral(digits) => {
+            out.push(digits)?;
+            out.push("n")
+        }
         Type::NumberLiteral(value) => out.push(&crate::runtime::number::format_number_js(value.0)),
         Type::String => out.push("string"),
         Type::StringLiteral(value) => write_string(out, value),
@@ -482,6 +486,7 @@ fn child_count(ty: &Type) -> usize {
         Type::Number
         | Type::NumberLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
         | Type::Uint8Array

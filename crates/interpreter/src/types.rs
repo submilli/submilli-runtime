@@ -180,6 +180,10 @@ pub enum Type {
     /// No distinct runtime representation — codegen widens to `f64` at every emission site.
     NumberLiteral(LiteralF64),
     BigInt,
+    /// A bigint literal type: `123n`, `-1n`. Holds the value in decimal, with a
+    /// leading `-` when negative, so each value has one spelling. Like the other
+    /// literal types it lowers exactly as its base, `bigint`.
+    BigIntLiteral(String),
     String,
     StringLiteral(String),
     Uint8Array,
@@ -565,6 +569,7 @@ impl Type {
             Type::NumberEnum { .. } => &Type::Number,
             Type::StringEnum { .. } => &Type::String,
             Type::BooleanLiteral(_) => &Type::Boolean,
+            Type::BigIntLiteral(_) => &Type::BigInt,
             Type::Union(members)
                 if !members.is_empty()
                     && members.iter().all(|member| {
@@ -577,12 +582,26 @@ impl Type {
                 &Type::Number
             }
             Type::Union(members)
+                if !members.is_empty()
+                    && members
+                        .iter()
+                        .all(|member| matches!(member.primitive_behavior(), Type::BigInt)) =>
+            {
+                &Type::BigInt
+            }
+            Type::Union(members)
                 if !members.is_empty() && members.iter().all(Type::is_string_shaped) =>
             {
                 &Type::String
             }
             ty => ty,
         }
+    }
+
+    /// Whether every value of this type is a bigint: `bigint`, a bigint literal
+    /// type, or a union or alias of those.
+    pub fn is_bigint(&self) -> bool {
+        matches!(self.primitive_behavior(), Type::BigInt)
     }
 
     /// This type with literal types replaced by the primitive they are a literal of.
@@ -601,6 +620,7 @@ impl Type {
             Type::NumberLiteral(_) => Type::Number,
             Type::StringLiteral(_) => Type::String,
             Type::BooleanLiteral(_) => Type::Boolean,
+            Type::BigIntLiteral(_) => Type::BigInt,
             // A union widens memberwise, which also collapses it when the members
             // share a base: `1 | 2` is `number`, not `number | number`, because
             // `Type::union` deduplicates.
@@ -817,6 +837,36 @@ pub(crate) fn escape_string_literal(s: &str) -> String {
         }
     }
     out
+}
+
+/// The [`Type::BigIntLiteral`] of a bigint literal's decimal digits, as the
+/// lexer writes them.
+pub fn bigint_literal_type(digits: &str) -> Type {
+    Type::BigIntLiteral(canonical_bigint_digits(digits))
+}
+
+/// `digits` negated, in [`Type::BigIntLiteral`]'s spelling: `-0n` is `0n`.
+pub fn negate_bigint_digits(digits: &str) -> String {
+    let canonical = canonical_bigint_digits(digits);
+    if canonical == "0" {
+        return canonical;
+    }
+    match canonical.strip_prefix('-') {
+        Some(magnitude) => magnitude.to_string(),
+        None => format!("-{canonical}"),
+    }
+}
+
+/// `digits` without leading zeros, keeping a sign, and `0` for zero.
+fn canonical_bigint_digits(digits: &str) -> String {
+    let (sign, magnitude) = match digits.strip_prefix('-') {
+        Some(magnitude) => ("-", magnitude),
+        None => ("", digits),
+    };
+    match magnitude.trim_start_matches('0') {
+        "" => "0".to_string(),
+        trimmed => format!("{sign}{trimmed}"),
+    }
 }
 
 /// `boolean` is `true | false`: a union holding both literals, or `boolean`

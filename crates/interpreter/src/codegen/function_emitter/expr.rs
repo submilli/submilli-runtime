@@ -2114,7 +2114,7 @@ fn emit_postfix_delta_checked(
         emitter.instruction(Instruction::Call(function));
         return Ok(());
     }
-    if matches!(ty.peel(), Type::BigInt) {
+    if ty.is_bigint() {
         emit_bigint_pm_one(emitter, ctx, op);
         return Ok(());
     }
@@ -3078,7 +3078,7 @@ fn emit_binary(
         },
         BinOp::Sub | BinOp::Mul | BinOp::Div => {
             // bigint operands route to inline host calls.
-            if matches!(result_ty, Type::BigInt) {
+            if result_ty.is_bigint() {
                 let name = match op {
                     BinOp::Sub => "sub",
                     BinOp::Mul => "mul",
@@ -3116,7 +3116,7 @@ fn emit_binary(
             // `submilli:bigint.pow` host call (which validates the
             // exponent is non-negative and fits in u32, else traps).
             // Number routes to the prelude-host `Math#pow` function.
-            if matches!(result_ty, Type::BigInt) {
+            if result_ty.is_bigint() {
                 emit_bigint_binop_inline(emitter, ctx, lhs, rhs, "pow")?;
                 return Ok(());
             }
@@ -3135,7 +3135,7 @@ fn emit_binary(
         }
         BinOp::Rem => {
             // `bigint % bigint` → inline host call.
-            if matches!(result_ty, Type::BigInt) {
+            if result_ty.is_bigint() {
                 emit_bigint_binop_inline(emitter, ctx, lhs, rhs, "mod")?;
                 return Ok(());
             }
@@ -3168,7 +3168,7 @@ fn emit_binary(
                 .ty
                 .primitive_behavior()
                 .clone();
-            if matches!(operand_ty, Type::BigInt) {
+            if operand_ty.is_bigint() {
                 emit_bigint_cmp_inline(emitter, ctx, lhs, rhs, op)?;
                 return Ok(());
             }
@@ -3312,7 +3312,7 @@ fn emit_equality(
     // bigint equality short-circuits to a direct
     // `submilli:bigint.cmp == 0` call — a faster path than the
     // generic `ValType::Ref(_)` arm's vtable `equals` dispatch.
-    if matches!(lhs_ty.peel(), Type::BigInt) {
+    if lhs_ty.is_bigint() {
         emit_bigint_cmp_eq_inline(emitter, ctx, lhs, rhs, op)?;
         return Ok(());
     }
@@ -4761,14 +4761,13 @@ fn emit_unary(
         UnOp::BitNot => emit_bitwise_host(emitter, ctx, "bitnot", &[operand], result_ty)?,
         UnOp::Neg => {
             // bigint negation routes to inline host call.
-            if matches!(
-                ctx.ta
-                    .try_expr(operand)
-                    .map_err(crate::codegen::arena_failure)?
-                    .ty
-                    .peel(),
-                Type::BigInt
-            ) {
+            if ctx
+                .ta
+                .try_expr(operand)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .is_bigint()
+            {
                 emit_primitive_operand(emitter, ctx, operand)?;
                 emit_bigint_extract_to_stack(emitter, ctx);
                 let host_idx = ctx

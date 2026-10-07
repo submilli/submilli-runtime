@@ -1551,7 +1551,8 @@ impl<'a> Inferer<'a> {
             | Type::BooleanLiteral(_)
             | Type::String
             | Type::StringLiteral(_)
-            | Type::BigInt => true,
+            | Type::BigInt
+            | Type::BigIntLiteral(_) => true,
             _ => false,
         }
     }

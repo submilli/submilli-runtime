@@ -1293,7 +1293,10 @@ impl TypeParamSubstitution {
 fn is_primitive_literal(ty: &Type) -> bool {
     matches!(
         ty,
-        Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
+        Type::NumberLiteral(_)
+            | Type::StringLiteral(_)
+            | Type::BooleanLiteral(_)
+            | Type::BigIntLiteral(_)
     )
 }
 

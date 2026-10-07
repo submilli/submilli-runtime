@@ -1134,7 +1134,10 @@ fn call_operands(
 fn is_single_literal(ty: &Type) -> bool {
     matches!(
         ty.peel(),
-        Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
+        Type::NumberLiteral(_)
+            | Type::StringLiteral(_)
+            | Type::BooleanLiteral(_)
+            | Type::BigIntLiteral(_)
     )
 }
 
@@ -1151,6 +1154,7 @@ fn is_primitive_union(ty: &Type) -> bool {
                 | Type::StringLiteral(_)
                 | Type::NumberLiteral(_)
                 | Type::BooleanLiteral(_)
+                | Type::BigIntLiteral(_)
         )
     })
 }
@@ -1294,9 +1298,10 @@ fn flattened_union_members(ty: &Type) -> Vec<&Type> {
 /// The literal types `ty` is made of: itself, or its union members.
 fn literal_members(ty: &Type) -> BTreeSet<Type> {
     match ty.peel() {
-        literal @ (Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)) => {
-            BTreeSet::from([literal.clone()])
-        }
+        literal @ (Type::NumberLiteral(_)
+        | Type::StringLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::BigIntLiteral(_)) => BTreeSet::from([literal.clone()]),
         Type::Union(members) => members.iter().flat_map(literal_members).collect(),
         _ => BTreeSet::new(),
     }
@@ -1346,7 +1351,10 @@ fn deep_literals(ty: &Type) -> BTreeSet<Type> {
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         match ty {
-            Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_) => {
+            Type::NumberLiteral(_)
+            | Type::StringLiteral(_)
+            | Type::BooleanLiteral(_)
+            | Type::BigIntLiteral(_) => {
                 literals.insert(ty.clone());
             }
             Type::Union(members) | Type::Tuple(members) => pending.extend(members),
@@ -1382,7 +1390,10 @@ fn deep_literals(ty: &Type) -> BTreeSet<Type> {
 /// declared.
 fn widen_only(ty: &Type, fresh: &BTreeSet<Type>) -> Type {
     match ty {
-        Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
+        Type::NumberLiteral(_)
+        | Type::StringLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::BigIntLiteral(_)
             if fresh.contains(ty) =>
         {
             ty.widen_literal()
@@ -1410,7 +1421,10 @@ fn widen_only(ty: &Type, fresh: &BTreeSet<Type>) -> Type {
 /// [`Type::widen_literal`], keeping the literal members in `regular`.
 fn widen_unless_regular(ty: &Type, regular: &BTreeSet<Type>) -> Type {
     match ty {
-        Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
+        Type::NumberLiteral(_)
+        | Type::StringLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::BigIntLiteral(_)
             if regular.contains(ty) =>
         {
             ty.clone()
@@ -1440,7 +1454,10 @@ fn without_absorbed_literals(members: Vec<Type>) -> Type {
             .filter(|member| {
                 !matches!(
                     member,
-                    Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
+                    Type::NumberLiteral(_)
+                        | Type::StringLiteral(_)
+                        | Type::BooleanLiteral(_)
+                        | Type::BigIntLiteral(_)
                 ) || !bases.contains(&member.widen_literal())
             })
             .collect(),

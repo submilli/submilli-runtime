@@ -986,6 +986,7 @@ fn emit_field_compare(
         Type::String
         | Type::StringLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::Object { .. }
         | Type::Array(_)
         | Type::Tuple(_)
@@ -1261,6 +1262,7 @@ fn emit_field_hash(
         | Type::String
         | Type::StringLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::Object { .. }
         | Type::Array(_)
         | Type::Tuple(_)
@@ -1442,6 +1444,7 @@ fn is_ref_dispatch_field(ty: &Type) -> bool {
         Type::String
             | Type::StringLiteral(_)
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::Object { .. }
             | Type::Array(_)
             | Type::Tuple(_)

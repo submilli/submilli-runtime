@@ -887,7 +887,7 @@ impl<'a> Inferer<'a> {
         // A compound assignment's right-hand side is whatever the caller wrote,
         // and guessing it would hand back code computing the wrong thing.
         let operand = match op {
-            RwOp::Postfix(_) if matches!(non_null.peel(), Type::BigInt) => "1n",
+            RwOp::Postfix(_) if non_null.is_bigint() => "1n",
             RwOp::Postfix(_) => "1",
             RwOp::Compound(_) => "…",
         };
