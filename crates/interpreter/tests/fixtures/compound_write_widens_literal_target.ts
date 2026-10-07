@@ -72,6 +72,12 @@ function main(): void {
   }
   assert(seen === "f9t1t2");
 
+  let guarded: number = 0;
+  if (guarded === 0) {
+    guarded += 1;
+  }
+  assert(guarded === 1);
+
   appendModuleText();
   const text: string = moduleText;
   assert(text === "y");

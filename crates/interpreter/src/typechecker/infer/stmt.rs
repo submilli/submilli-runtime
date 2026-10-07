@@ -1096,7 +1096,7 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             (id, ty.clone())
         };
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty.widen_literal()))?;
         let result_ty =
             self.check_compound_arith(op, (synth_lhs, &lhs_ty), (typed_value, &value_ty), op_span)?;
         let synth_binary = self
@@ -1985,7 +1985,7 @@ impl Inferer<'_> {
                     .map_err(crate::typechecker::arena_failure)?;
                 (id, target_ty.clone())
             };
-            let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty))?;
+            let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty.widen_literal()))?;
             let result_ty = self.check_compound_arith(
                 op,
                 (synth_lhs, &lhs_ty),
@@ -2279,7 +2279,7 @@ impl Inferer<'_> {
         stmt_span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&rw.read))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&rw.read.widen_literal()))?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2373,7 +2373,7 @@ impl Inferer<'_> {
             elem_ty.clone()
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty.widen_literal()))?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2730,8 +2730,11 @@ fn next_pass_falsifies(
     view: &narrowing::NarrowedView,
     post: Option<&narrowing::NarrowedView>,
 ) -> bool {
+    // A literal the entry view rules out that the next pass doesn't rule
+    // out disproves it too, though its type may hold the same members.
     post.is_none_or(|post| {
         Type::union(vec![view.narrowed_ty.clone(), post.narrowed_ty.clone()]) != view.narrowed_ty
+            || !post.excluded_literals.is_superset(&view.excluded_literals)
     })
 }
 
