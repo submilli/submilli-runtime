@@ -12,6 +12,7 @@ const stars = variant === 'label' ? await getGitHubStars() : null;
 
 <a
 	href={GITHUB_URL}
+	data-analytics-cta="github"
 	rel="me"
 	class:list={['github-link', `github-link--${variant}`]}
 	aria-label="Submilli on GitHub"

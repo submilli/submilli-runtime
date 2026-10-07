@@ -1,0 +1,24 @@
+---
+const enabled = Boolean(import.meta.env.PUBLIC_POSTHOG_KEY && import.meta.env.PUBLIC_POSTHOG_HOST);
+---
+
+{enabled && <>
+	<aside id="analytics-choice" hidden aria-label="Analytics preferences">
+		<span>Usage analytics helps us improve these docs. Choose your preference.</span>
+		<button type="button" data-consent="granted">Allow analytics</button>
+		<button type="button" data-consent="denied">No thanks</button>
+	</aside>
+	<button id="analytics-settings" type="button" hidden>Analytics preferences</button>
+ </>}
+
+<script>
+	import '../lib/analytics-client';
+</script>
+
+<style>
+	#analytics-choice { position: fixed; bottom: 16px; left: 16px; right: 16px; z-index: 1000; padding: 16px; background: #202020; color: white; border: 1px solid #737373; border-radius: 12px; font: 14px/1.5 system-ui; box-shadow: 0 8px 32px #0006; }
+	#analytics-choice:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+	#analytics-choice span { flex: 1 1 260px; }
+	#analytics-choice button, #analytics-settings { cursor: pointer; border: 1px solid #929292; border-radius: 6px; padding: 8px 12px; background: #202020; color: white; font: inherit; }
+	#analytics-settings { position: fixed; bottom: 8px; right: 8px; z-index: 999; font-size: 11px; }
+</style>
