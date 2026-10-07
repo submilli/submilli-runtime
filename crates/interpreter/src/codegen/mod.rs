@@ -20,6 +20,7 @@ pub mod field_names;
 pub mod function_adapters;
 pub mod function_emitter;
 pub mod imported_classes;
+pub mod init_guard;
 pub mod intrinsics;
 #[cfg(test)]
 mod invariant_tests;
@@ -1569,6 +1570,21 @@ fn codegen_inner(
             &default_const_expr(val_type)?,
         );
         symbols.record_typed_global(g.mangled_name.clone(), next_global_idx, g.ty.clone());
+        crate::codegen::next_index(&mut next_global_idx)?;
+        globals_count = globals_count
+            .checked_add(1)
+            .ok_or_else(|| crate::codegen::internal_failure("Wasm index count overflow"))?;
+    }
+    for guard in init_guard::guarded_globals(ta)? {
+        globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i32_const(0),
+        );
+        symbols.record_init_guard(guard, next_global_idx);
         crate::codegen::next_index(&mut next_global_idx)?;
         globals_count = globals_count
             .checked_add(1)

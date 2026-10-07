@@ -343,6 +343,7 @@ mod tests {
                 "PermissionDeniedError",
                 "QuotaExceededError",
                 "RangeError",
+                "ReferenceError",
                 "RegExp",
                 "RegExpConstructor",
                 "RegExpMatch",
@@ -415,6 +416,7 @@ mod tests {
                     | "TypeError"
                     | "SyntaxError"
                     | "URIError"
+                    | "ReferenceError"
                     | "PermissionDeniedError"
             ) {
                 assert!(matches!(&defs.types[*name].kind, TypeKind::Class { .. }));

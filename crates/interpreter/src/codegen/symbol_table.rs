@@ -50,6 +50,7 @@ pub struct SymbolTable {
     funcs: BTreeMap<MangledName, u32>,
     globals: BTreeMap<MangledName, u32>,
     global_types: BTreeMap<MangledName, Type>,
+    init_guards: BTreeMap<MangledName, crate::codegen::init_guard::InitFlag>,
     intrinsic_type_indices: Option<IntrinsicTypeIndices>,
     pub(crate) this_environment_type: Option<u32>,
     pub(crate) call_metadata_type: Option<u32>,
@@ -215,6 +216,13 @@ impl SymbolTable {
 
     pub fn global_type(&self, mangled: &MangledName) -> Option<&Type> {
         self.global_types.get(mangled)
+    }
+
+    pub fn init_guard(
+        &self,
+        global: &MangledName,
+    ) -> Option<&crate::codegen::init_guard::InitFlag> {
+        self.init_guards.get(global)
     }
 
     pub fn prelude_func_idx(&self, symbol: &str) -> Option<u32> {
@@ -794,6 +802,21 @@ impl SymbolTable {
 
     /// Language globals retain their declared type for checked narrowed reads.
     /// Runtime metadata globals only need an index.
+    pub fn record_init_guard(
+        &mut self,
+        guard: crate::codegen::init_guard::InitGuard,
+        flag_idx: u32,
+    ) {
+        self.init_guards.insert(
+            guard.global,
+            crate::codegen::init_guard::InitFlag {
+                flag_idx,
+                declaration: guard.declaration,
+                message: guard.message,
+            },
+        );
+    }
+
     pub fn record_typed_global(&mut self, mangled: MangledName, idx: u32, ty: Type) {
         self.global_types.insert(mangled.clone(), ty);
         self.record_global(mangled, idx);

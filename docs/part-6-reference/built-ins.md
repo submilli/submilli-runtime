@@ -23,7 +23,7 @@ modules are on [Standard library](/docs/reference/standard-library).
 `submilli builtins` prints the catalog:
 
 ```text
-Types: Array, BigInt, Boolean, Error, Map, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, Record, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TypeError, URIError, Uint8Array
+Types: Array, BigInt, Boolean, Error, Map, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, Record, ReferenceError, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TypeError, URIError, Uint8Array
 Namespaces: JSON, Math, Temporal
 ```
 
@@ -46,6 +46,7 @@ Namespaces: JSON, Math, Temporal
 | `RangeError` | Error class | Out-of-range values: an array index, bigint division by zero, invalid Temporal values, and argument-size caps |
 | `SyntaxError` | Error class | Text that fails to parse: `JSON.parse`, `BigInt()`, `Uint8Array.fromHex`, `new RegExp()` |
 | `URIError` | Error class | A malformed `%` escape in `decodeURI`, or a lone surrogate in `encodeURI` |
+| `ReferenceError` | Error class | Reading or writing a module variable or static field before its declaration has run |
 | `PermissionDeniedError` | Error class | A denied capability, with fields `caller`, `capability`, `reason` ([Permissions](/docs/reference/permissions)) |
 | `QuotaExceededError` | Error class | A budget refusal: filesystem space, model tokens, or session state ([Errors and limits](/docs/reference/errors-and-limits)) |
 | `JSON` | Namespace | `JSON.parse`, returning `unknown`, and `JSON.stringify` |

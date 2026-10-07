@@ -3,6 +3,7 @@ use crate::codegen::bounds::{
     emit_checked_index, emit_checked_index_with_length, stash_array_length, stash_index_operand,
 };
 use crate::codegen::function_emitter::FunctionEmitter;
+use crate::codegen::init_guard;
 use crate::{
     EnumVariantPayload, ExprId, Ident, StmtId, Type, TypedStmtKind, TypedSwitchCase,
     TypedSwitchValue,
@@ -223,7 +224,15 @@ pub fn emit_statement(
             let idx = ctx.symbols.global_idx(mangled).ok_or_else(|| {
                 crate::codegen::internal_failure("Inferer guarantees the binding exists")
             })?;
+            // JavaScript checks the binding only once the value is computed.
+            let declares = init_guard::is_declaration(ctx, mangled, id);
+            if !declares {
+                init_guard::emit_check(emitter, ctx, mangled);
+            }
             emitter.instruction(Instruction::GlobalSet(idx));
+            if declares {
+                init_guard::emit_mark_initialized(emitter, ctx, mangled);
+            }
         }
         TypedStmtKind::AssignField {
             receiver,
