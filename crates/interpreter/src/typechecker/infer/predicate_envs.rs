@@ -1731,6 +1731,12 @@ impl<'a> Inferer<'a> {
             } else {
                 if matches!(m.peel(), Type::Unknown) || m.peel() == &literal_ty.widen_literal() {
                     matched.push(literal_ty.clone());
+                } else if !narrowing::has_erased_member(m)
+                    && super::comparable::comparable(m, &literal_ty, self.resolver())
+                {
+                    // As in TypeScript, a member that can be compared with
+                    // the literal (a weak object type a string matches) stays.
+                    matched.push(m.clone());
                 }
                 remaining.push(m.clone());
             }
@@ -1740,10 +1746,18 @@ impl<'a> Inferer<'a> {
             // the comparison anyway. Skip narrowing.
             return Ok(None);
         }
-        let matched_ty = Type::union(matched);
+        // A side that keeps every member keeps the type as written, alias
+        // included.
+        let matched_ty = if matched == members {
+            path_ty.clone()
+        } else {
+            Type::union(matched)
+        };
         // Unequal, a path that can only be the literal holds no value.
         let remaining_ty = if remaining.is_empty() {
             narrowing::RULED_OUT
+        } else if remaining == members {
+            path_ty.clone()
         } else {
             Type::union(remaining)
         };
