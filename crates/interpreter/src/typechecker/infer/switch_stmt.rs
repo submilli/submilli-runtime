@@ -482,10 +482,6 @@ impl Inferer<'_> {
         })
     }
 
-    /// A `case` label that isn't a literal, compared with `===` at run time as
-    /// `tsc` allows. `label_ty` is its type as compared, which keeps literal types.
-    /// The comparison spans the whole clause, `case_span`: it is no expression
-    /// in the source, so it must not take the label's own span.
     /// Type one `case` label and check it against the discriminant: a literal
     /// label, or an expression label compared at run time. `None` after an error.
     fn infer_case_label(
@@ -518,15 +514,8 @@ impl Inferer<'_> {
         if let Some(literal) = self.literal_case_label(value_expr, typed_val, value_span)? {
             return Ok(Some(literal));
         }
-        self.expression_case_label(
-            discriminant.switch_id,
-            discriminant.typed,
-            discriminant.ty,
-            typed_val,
-            &case_operand.ty,
-            case_span,
-        )
-        .map(Some)
+        self.expression_case_label(discriminant, typed_val, &case_operand.ty, case_span)
+            .map(Some)
     }
 
     /// A label spelled as a literal: `"a"`, `1`, `null`, `E.A`, or a signed number,
@@ -557,11 +546,13 @@ impl Inferer<'_> {
         )
     }
 
+    /// A `case` label that isn't a literal, compared with `===` at run time as
+    /// `tsc` allows. `label_ty` is its type as compared, which keeps literal types.
+    /// The comparison spans the whole clause, `case_span`: it is no expression
+    /// in the source, so it must not take the label's own span.
     fn expression_case_label(
         &mut self,
-        switch_id: StmtId,
-        typed_disc: ExprId,
-        disc_ty: &Type,
+        discriminant: &CaseDiscriminant<'_>,
         label: ExprId,
         label_ty: &Type,
         case_span: Span,
@@ -573,18 +564,18 @@ impl Inferer<'_> {
             .span;
         let disc_span = self
             .typed_ast
-            .try_expr(typed_disc)
+            .try_expr(discriminant.typed)
             .map_err(crate::typechecker::arena_failure)?
             .span;
-        let discriminant = self
+        let discriminant_ref = self
             .typed_ast
             .try_push_expr(TypedExpr {
                 kind: TypedExprKind::LocalRef {
-                    ident: discriminant_temporary(switch_id, disc_span),
+                    ident: discriminant_temporary(discriminant.switch_id, disc_span),
                     boxed: false,
                 },
                 span: disc_span,
-                ty: disc_ty.clone(),
+                ty: discriminant.ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
         let comparison = self
@@ -592,7 +583,7 @@ impl Inferer<'_> {
             .try_push_expr(TypedExpr {
                 kind: TypedExprKind::Binary {
                     op: BinOp::Eq,
-                    lhs: discriminant,
+                    lhs: discriminant_ref,
                     rhs: label,
                 },
                 span: case_span,
@@ -1007,7 +998,6 @@ fn literal_switch_value(literal: narrowing::LiteralValue, span: Span) -> TypedSw
     }
 }
 
-/// Null uses `saw_null` separately because there's no `LiteralValue::Null` variant.
 /// The discriminant every `case` label of one `switch` is checked against.
 struct CaseDiscriminant<'d> {
     switch_id: StmtId,
@@ -1027,6 +1017,7 @@ fn case_value_span(value: &TypedSwitchValue) -> Span {
     }
 }
 
+/// Null uses `saw_null` separately because there's no `LiteralValue::Null` variant.
 fn duplicate_key(
     value: &TypedSwitchValue,
     seen: &mut BTreeMap<narrowing::LiteralValue, Span>,

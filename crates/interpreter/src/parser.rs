@@ -1098,8 +1098,13 @@ impl<'a> Parser<'a> {
     /// A contextual modifier keyword counts as a modifier only when another member token
     /// (the real name, or a further modifier) follows — otherwise the word is the member
     /// name itself (e.g. a field named `private`). Mirrors `eat_readonly_property_modifier`.
+    /// As in TypeScript, only `static` may be followed by a line break; in a class body
+    /// ASI already ends the member there, but a constructor parameter list has no ASI.
     fn peek_word_is_class_modifier(&self, word: &str) -> bool {
         if !self.peek_identifier_text_is(word) {
+            return false;
+        }
+        if word != "static" && self.line_break_after_peek() {
             return false;
         }
         let next = &self.peek_at(1).kind;
@@ -1536,7 +1541,7 @@ impl<'a> Parser<'a> {
         nested: bool,
         doc: Option<crate::DocComment>,
     ) -> Option<StmtId> {
-        let (specs, open_span) = self.parse_specifier_list("export")?;
+        let (specs, open_span) = self.parse_specifier_list(SpecifierList::Export)?;
         if specs.is_empty() {
             self.error_at_with_help(
                 open_span,
@@ -1709,7 +1714,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_named_imports(&mut self) -> Option<ImportKind> {
-        let (specs, open_span) = self.parse_specifier_list("import")?;
+        let (specs, open_span) = self.parse_specifier_list(SpecifierList::Import)?;
         if specs.is_empty() {
             self.error_at_with_help(
                 open_span,
@@ -1725,7 +1730,11 @@ impl<'a> Parser<'a> {
     /// `what` names the construct in diagnostics. Returns the specifiers (possibly
     /// empty — callers reject empty with construct-specific help) and the span of
     /// the opening brace.
-    fn parse_specifier_list(&mut self, what: &str) -> Option<(Vec<ImportSpecifier>, Span)> {
+    fn parse_specifier_list(
+        &mut self,
+        list: SpecifierList,
+    ) -> Option<(Vec<ImportSpecifier>, Span)> {
+        let what = list.noun();
         let open = self.advance();
         let mut specs: Vec<ImportSpecifier> = Vec::new();
         while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
@@ -1741,9 +1750,7 @@ impl<'a> Parser<'a> {
                 self.expect_identifier_name(&format!("expected {what} specifier name"))?;
             let imported_name = self.ident_from_token(&imported_tok);
 
-            // An import binds a local name, which strict mode restricts; an
-            // export's names are module export names, which it doesn't.
-            let binds_local = what == "import";
+            let binds_local = list == SpecifierList::Import;
             let local_name = if self.peek_identifier_text_is("as") {
                 self.advance();
                 let local_tok = self.expect_identifier_name("expected local name after `as`")?;
@@ -3620,6 +3627,14 @@ impl<'a> Parser<'a> {
     /// or `(`. A member list that reaches one was left unclosed, so it stops there
     /// and leaves the declaration to be parsed.
     fn peek_starts_declaration(&self) -> bool {
+        if matches!(self.peek().kind, TokenKind::Export)
+            && matches!(
+                self.peek_at(1).kind,
+                TokenKind::Default | TokenKind::LeftBrace | TokenKind::Star
+            )
+        {
+            return true;
+        }
         let mut offset = 0;
         while self.peek_at_is_declaration_modifier(offset) {
             offset += 1;
@@ -5724,6 +5739,24 @@ fn is_reserved_identifier_word(kind: &TokenKind) -> bool {
             | TokenKind::Super
             | TokenKind::This
     )
+}
+
+/// Which statement a `{ … }` specifier list belongs to. An import binds local
+/// names, which strict mode restricts; an export's are module export names,
+/// which it doesn't.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpecifierList {
+    Import,
+    Export,
+}
+
+impl SpecifierList {
+    fn noun(self) -> &'static str {
+        match self {
+            SpecifierList::Import => "import",
+            SpecifierList::Export => "export",
+        }
+    }
 }
 
 /// Words strict mode reserves that Submilli otherwise lexes as identifiers: they
