@@ -350,13 +350,25 @@ impl<'a> Inferer<'a> {
     }
 
     /// An interface property named `toString` or `toJson` is called by the
-    /// same conversions as the method, so it must have the method's type. It
-    /// may be optional: an object without it converts as a plain object.
+    /// same conversions as the method, so it must have exactly the method's
+    /// type. It may be optional: an object without it converts as a plain
+    /// object.
     fn check_conversion_property(&mut self, name: &Ident, ty: &crate::Type) {
         let Some(expected) = super::reserved::override_field_signature(&name.name) else {
             return;
         };
-        if super::assignable(ty, &expected, self.resolver()) {
+        if let crate::Type::Function {
+            params,
+            ret,
+            has_rest: false,
+            ..
+        } = ty.peel()
+            && params.is_empty()
+            && matches!(
+                ret.peel(),
+                crate::Type::String | crate::Type::StringLiteral(_) | crate::Type::Never
+            )
+        {
             return;
         }
         self.error(

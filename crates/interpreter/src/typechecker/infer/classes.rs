@@ -334,7 +334,7 @@ impl<'a> Inferer<'a> {
                     self.pop_signature_generics();
                     self.check_conversion_method(
                         "class",
-                        &m_name,
+                        m_name,
                         &resolved_params,
                         &m_generic_names,
                         &resolved_ret,
