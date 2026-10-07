@@ -539,10 +539,10 @@ impl<'a> Inferer<'a> {
                         });
                         continue;
                     }
-                    // As on object types: `String(x)` and `${x}` call an override
-                    // field through the vtable, which an absent one would leave null.
-                    if optional && super::reserved::override_field_signature(&p_name.name).is_some()
-                    {
+                    // `JSON.stringify` calls `toJson` through the vtable, which an
+                    // absent one would leave null. An absent `toString` falls back
+                    // to `[object Object]`, as JavaScript does.
+                    if optional && p_name.name == "toJson" {
                         self.error(p_name.span, format!("`{}` cannot be optional", p_name.name));
                     }
                     let resolved_ty = self.resolve_value_type(&ty, ValuePosition::FieldType)?;
