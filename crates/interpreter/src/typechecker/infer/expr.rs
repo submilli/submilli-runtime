@@ -1439,10 +1439,11 @@ impl Inferer<'_> {
                     _ => return Err(super::inference_failure("matched And | Or above")),
                 };
                 // `a || b` is `a` when `a` is never falsy, so only `a` meets what
-                // is expected of it; `b` still takes it as context unless it
-                // types itself, as a variable does.
+                // is expected of it. `b` still takes it as context unless it is a
+                // read, which the context can't change: `[]`, a tuple, a callback
+                // or an object literal for an interface all type by it.
                 let lhs_decides = op == BinOp::Or && super::narrowing::is_never_falsy(&lhs_ty);
-                let rhs_expected = if lhs_decides && self.types_itself(rhs)? {
+                let rhs_expected = if lhs_decides && self.is_read(rhs)? {
                     None
                 } else {
                     expected
@@ -6232,6 +6233,15 @@ impl Inferer<'_> {
         normalized_object_union(running, &elem_ty.widen_literal(), nested_fields)
     }
 
+    /// Whether an expression reads a variable, a field or `this`.
+    fn is_read(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        let id = peel_parens(self.ast, expr)?;
+        Ok(matches!(
+            self.ast.try_expr(id).map_err(super::arena_failure)?.kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::This
+        ))
+    }
+
     /// Whether an array element is typed on its own rather than against the
     /// elements before it: an identifier or field read, a fully annotated
     /// function, or an object literal none of whose fields needs a hint.
@@ -8779,9 +8789,6 @@ impl Inferer<'_> {
         ))
     }
 
-    /// `a ?? b`. Result type is `union(strip_null(lhs), rhs)`.
-    /// Emits a `Severity::Warning` when `lhs` is statically
-    /// non-nullable (the `??` clause is unreachable).
     /// The type of `a || b` or `a ?? b` when `a` decides the result: `a`'s own,
     /// as in TypeScript, if `b` fits `a`'s base type. `b` is compiled though it
     /// never runs, so it must fit `a`'s representation.
@@ -8789,6 +8796,9 @@ impl Inferer<'_> {
         assignable(rhs_ty, &lhs_ty.widen_literal(), self.resolver()).then(|| lhs_ty.clone())
     }
 
+    /// `a ?? b`. Result type is `union(strip_null(lhs), rhs)`.
+    /// Emits a `Severity::Warning` when `lhs` is statically
+    /// non-nullable (the `??` clause is unreachable).
     fn infer_nullish_coalesce(
         &mut self,
         lhs: ExprId,

@@ -5,6 +5,10 @@ function addString(xs: (string | number)[]): void {
   xs.push("y");
 }
 
+interface Named {
+  name(): string;
+}
+
 function pick(flag: boolean): boolean {
   return flag;
 }
@@ -17,6 +21,9 @@ function main(): void {
   const double = (x: number): number => x * 2;
   const keptFn: (x: number) => number = double || ((x) => x);
   assert(keptPair[1] === "a" && keptNums.length === 1 && keptFn(3) === 6, "`||` gives its right side context");
+  const named: Named = { name: (): string => "n" };
+  const keptNamed: Named = named || { name: (): string => "z" };
+  assert(keptNamed.name() === "n", "an object literal on the right takes an interface as context");
 
   let mixed: (string | number)[] = [1, 2];
   mixed = [3];
