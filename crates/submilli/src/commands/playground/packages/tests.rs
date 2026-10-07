@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::*;
 use crate::commands::playground::scaffold;
@@ -309,4 +310,53 @@ fn an_edited_manifest_entry_rebuilds_its_package() {
         ["@acme/billing"]
     );
     assert_eq!(packages.sync(&billing()).unwrap(), Synced::default());
+}
+
+#[tokio::test]
+async fn a_check_whose_caller_stops_waiting_still_finishes_before_the_next_starts() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    let fixture = Fixture::starter();
+    let freshness = Freshness::new(Arc::new(fixture.packages()));
+    let building = Arc::new(AtomicBool::new(false));
+    let (started, started_rx) = tokio::sync::oneshot::channel();
+    let first = freshness.run_check({
+        let building = Arc::clone(&building);
+        move |_| {
+            building.store(true, Ordering::SeqCst);
+            let _ = started.send(());
+            // A slow build.
+            std::thread::sleep(Duration::from_millis(500));
+            building.store(false, Ordering::SeqCst);
+            Ok(Synced::default())
+        }
+    });
+    // Wait until the first build runs, then stop waiting for it, as a run whose
+    // client went away would.
+    tokio::select! {
+        _ = first => panic!("the first check finished before it was cancelled"),
+        started = started_rx => started.expect("the first build started"),
+    }
+
+    let overlapped = tokio::time::timeout(
+        Duration::from_secs(20),
+        freshness.run_check({
+            let building = Arc::clone(&building);
+            move |_| {
+                Ok(Synced {
+                    reinstalled: Vec::new(),
+                    evict: building.load(Ordering::SeqCst),
+                })
+            }
+        }),
+    )
+    .await
+    .expect("the second check ran")
+    .unwrap()
+    .evict;
+    assert!(
+        !overlapped,
+        "the second check ran while the first build did"
+    );
 }

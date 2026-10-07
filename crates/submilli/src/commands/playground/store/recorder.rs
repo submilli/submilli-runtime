@@ -14,9 +14,10 @@ use submilli_server::record::{
     SessionEvent,
 };
 
+use super::super::log::warn;
 use super::events::{EventBody, Gap, Position, StoredEvent};
 use super::run::{RetryRecord, RunLink, StoredRun};
-use super::{FORMAT, KnownSecrets, Store, json_line, now_micros, warn};
+use super::{FORMAT, KnownSecrets, Store, json_line, now_micros};
 
 /// The recording caps for every run the playground serves, raised from the server's
 /// defaults (10,000 decisions and calls, 1 KiB context strings, 1 MiB body copies, a

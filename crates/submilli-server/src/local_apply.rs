@@ -115,23 +115,27 @@ impl AppState {
         let references = volume_references(&blueprint);
         let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(yaml));
         let (created, declared_volumes) = {
-            // Held across the store write and the declarations: no run reads the
-            // blueprint before its volumes are declared, and no other local apply
-            // declares a volume between this one's check and its declaration.
+            // Held across the declarations and the store write: no run reads the
+            // blueprint before its volumes are declared, and no registration or
+            // other local apply sees a declaration this one may withdraw.
             let mut tags = self.blueprint_tags_for_write().await;
             self.check_new_volumes(&references)?;
-            let created = self
-                .blueprints()
-                .upsert_yaml(stored)
-                .await
-                .map_err(|error| LocalApplyError {
-                    code: "store_failed",
-                    message: format!("the blueprint could not be stored: {error}"),
-                    diagnostics: Vec::new(),
-                })?;
-            // Only after the store accepted the blueprint, so a refused write
-            // declares nothing.
+            // Before the store write, so a refused declaration leaves the version in
+            // force, under its own tag.
             let declared = self.declare_local_volumes(&references)?;
+            let created = match self.blueprints().upsert_yaml(stored).await {
+                Ok(created) => created,
+                Err(error) => {
+                    // No stored blueprint names them, so a refused write declares
+                    // nothing.
+                    self.withdraw_local_volumes(&declared);
+                    return Err(LocalApplyError {
+                        code: "store_failed",
+                        message: format!("the blueprint could not be stored: {error}"),
+                        diagnostics: Vec::new(),
+                    });
+                }
+            };
             tags.insert(name.clone(), version_tag.to_owned());
             (created, declared)
         };
@@ -189,7 +193,8 @@ impl AppState {
 
     /// Declares each named volume the server lacks. Runs after
     /// [`Self::check_new_volumes`] under the same tag lock, so a refusal here
-    /// means only a name registration's check let through.
+    /// means only a name registration's check let through; the volumes declared
+    /// before it are withdrawn.
     fn declare_local_volumes(
         &self,
         references: &[(String, YamlPath)],
@@ -197,14 +202,26 @@ impl AppState {
         let registry = self.session_manager().volume_registry();
         let mut declared = Vec::new();
         for (volume, path) in references {
-            let added = registry
-                .declare_managed(volume, SizeLimit::Unlimited)
-                .map_err(|error| volume_refusal("undeclared_volume", &error, path))?;
-            if added {
-                declared.push(volume.clone());
+            match registry.declare_managed(volume, SizeLimit::Unlimited) {
+                Ok(true) => declared.push(volume.clone()),
+                Ok(false) => {}
+                Err(error) => {
+                    self.withdraw_local_volumes(&declared);
+                    return Err(volume_refusal("undeclared_volume", &error, path));
+                }
             }
         }
         Ok(declared)
+    }
+
+    /// Withdraws volumes [`Self::declare_local_volumes`] just declared for a
+    /// blueprint that was not stored. Called under the tag lock that covered the
+    /// declaration, so no stored blueprint references them.
+    fn withdraw_local_volumes(&self, declared: &[String]) {
+        let registry = self.session_manager().volume_registry();
+        for volume in declared {
+            registry.withdraw_managed(volume);
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 //! KTD19's redaction: every known secret value is cut out of what the store writes,
-//! verbatim and in its base64, URL-encoded, and JSON-escaped forms.
+//! verbatim and in its base64, URL-encoded, and JSON-escaped forms. Where the
+//! occurrences of two secrets overlap, the whole span they cover is cut.
 //!
 //! The runtime already keeps `secrets.get` results out of call records and masks
 //! credential-bearing headers before it copies a payload. What it cannot do is find a
@@ -16,12 +17,13 @@
 //! [`KnownSecrets::redact_record`].
 
 use std::collections::BTreeSet;
+use std::ops::Range;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use aho_corasick::{AhoCorasick, Input, MatchKind};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -34,6 +36,28 @@ pub(crate) const REDACTED: &str = "[redacted]";
 /// tags out of every record; a credential is never this short.
 pub(crate) const MIN_SECRET_BYTES: usize = 6;
 
+/// Shortest part of a secret's base64 at another alignment treated as a form of it: as
+/// long as the base64 of the shortest secret.
+const MIN_SHIFTED_BASE64_CHARS: usize = 8;
+
+/// RFC 3986's unreserved characters, which most URL encoders leave as they are.
+const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
+
+/// What JavaScript's `encodeURIComponent` leaves as it is.
+const URI_COMPONENT: &AsciiSet = &UNRESERVED
+    .remove(b'!')
+    .remove(b'\'')
+    .remove(b'(')
+    .remove(b')')
+    .remove(b'*');
+
+/// What Python's `urllib.parse.quote` leaves as it is by default.
+const URL_PATH: &AsciiSet = &UNRESERVED.remove(b'/');
+
 /// The secret values the playground knows, shared by everything that writes the store.
 /// Held only in memory: the set itself is never written anywhere.
 #[derive(Clone, Default)]
@@ -44,9 +68,9 @@ pub(crate) struct KnownSecrets {
 #[derive(Default)]
 struct Patterns {
     values: BTreeSet<String>,
-    /// Every form of every value, longest first.
+    /// Every form of every value, longest first, any percent escape's hex in uppercase.
     forms: Vec<Vec<u8>>,
-    /// One automaton over every form, matching the longest form at each place. `None`
+    /// One automaton over every form, reporting every match, overlapping ones too. `None`
     /// only when building it failed (a pattern set beyond its size limits); the forms are
     /// then searched one by one.
     matcher: Option<AhoCorasick>,
@@ -59,8 +83,10 @@ pub(crate) struct Redacted<T> {
     pub(crate) value: Value,
 }
 
-/// The most groups of changed values tried one by one when a redacted record does not
-/// read back, bounding the work a record whose format collides with a secret costs.
+/// The most shapes of changed values tried one by one when a redacted record does not
+/// read back, bounding the work a record whose format collides with a secret costs. A
+/// value's shape is where it sits in its record: the path of field names to it, with `*`
+/// for any array index.
 const MAX_PROBED_SHAPES: usize = 64;
 
 /// The marker the runtime's recorder ends a cut context string with:
@@ -83,7 +109,7 @@ impl KnownSecrets {
         let mut forms: Vec<Vec<u8>> = forms.into_iter().collect();
         forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
         patterns.matcher = AhoCorasick::builder()
-            .match_kind(MatchKind::LeftmostLongest)
+            .match_kind(MatchKind::Standard)
             .build(&forms)
             .ok();
         patterns.forms = forms;
@@ -98,7 +124,7 @@ impl KnownSecrets {
     /// `text` with every known secret cut out.
     pub(crate) fn redact_text(&self, text: &str) -> String {
         let patterns = self.inner.read().unwrap_or_else(PoisonError::into_inner);
-        patterns.redact_str(text, false)
+        patterns.redact_str(text, Ending::Whole)
     }
 
     /// `record` serialized with every known secret cut out of its values, and read back.
@@ -112,11 +138,13 @@ impl KnownSecrets {
     /// appear in its base64 text at a fixed alignment.
     ///
     /// When the redacted form does not read back as `T`, a changed value was one the
-    /// format fixes: an enum tag, or a number in a typed field. Changes are grouped by
-    /// where they sit in the record (the path of field names, any array index), each group
-    /// is tried alone, and the groups that break reading are left unredacted: their values
-    /// are the format's own words and counters, public in every record. An error when even
-    /// that does not read back, or the record does not serialize; the caller then writes
+    /// format fixes: an enum tag, or a number in a typed field. The changed values'
+    /// shapes (see [`MAX_PROBED_SHAPES`]) are each tried alone, and the shapes whose
+    /// redaction breaks reading are left unredacted: their values are the format's own
+    /// words and counters, public in every record. No record type puts user data at a
+    /// shape it also gives a tag or a typed number, so this never keeps user data. An
+    /// error when even that does not read back, when more than [`MAX_PROBED_SHAPES`]
+    /// shapes changed, or when the record does not serialize; the caller then writes
     /// nothing rather than something unredacted.
     pub(crate) fn redact_record<T: Serialize + DeserializeOwned>(
         &self,
@@ -131,22 +159,28 @@ impl KnownSecrets {
         }
         if changed.len() > MAX_PROBED_SHAPES {
             return Err(format!(
-                "redacting its secrets changed {} kinds of field and left it unreadable",
-                changed.len()
+                "redacting its secrets changed values of {} shapes, more than the {} probed, \
+                 and left it unreadable",
+                changed.len(),
+                MAX_PROBED_SHAPES
             ));
         }
-        let mut fixed = BTreeSet::new();
+        let mut format_owned = BTreeSet::new();
         for shape in &changed {
-            let mut others = changed.clone();
-            others.remove(shape);
+            // Redact this shape alone: skip every other changed one.
+            let every_other_shape: BTreeSet<String> = changed
+                .iter()
+                .filter(|other| *other != shape)
+                .cloned()
+                .collect();
             let mut probe = serialize()?;
-            patterns.redact_tree(&mut probe, &others);
+            patterns.redact_tree(&mut probe, &every_other_shape);
             if T::deserialize(&probe).is_err() {
-                fixed.insert(shape.clone());
+                format_owned.insert(shape.clone());
             }
         }
         let mut value = serialize()?;
-        patterns.redact_tree(&mut value, &fixed);
+        patterns.redact_tree(&mut value, &format_owned);
         match T::deserialize(&value) {
             Ok(record) => Ok(Redacted { record, value }),
             Err(error) => Err(format!("redacting its secrets left it unreadable: {error}")),
@@ -156,58 +190,60 @@ impl KnownSecrets {
 
 impl Patterns {
     fn contains(&self, haystack: &[u8]) -> bool {
+        !self.spans(haystack).is_empty()
+    }
+
+    /// Where `haystack` holds a form, the spans of overlapping or adjacent matches merged,
+    /// in order. A percent escape matches in either hex case.
+    fn spans(&self, haystack: &[u8]) -> Vec<Range<usize>> {
         if self.forms.is_empty() {
-            return false;
+            return Vec::new();
         }
-        if let Some(matcher) = &self.matcher
-            && let Ok(mut matches) = matcher.try_find_iter(Input::new(haystack))
-        {
-            return matches.next().is_some();
+        let mut found = Vec::new();
+        self.find_matches(haystack, &mut found);
+        // The forms' escapes are in uppercase; the same text with the haystack's in
+        // uppercase too has the same length, so its matches are spans of the haystack.
+        if let Some(uppercased) = uppercase_percent_hex(haystack) {
+            self.find_matches(&uppercased, &mut found);
         }
-        self.forms.iter().any(|form| find(haystack, form).is_some())
+        merge_spans(found)
     }
 
-    /// `bytes` with every form cut out, the longest form first where two overlap.
-    fn redact_bytes(&self, bytes: &[u8]) -> Vec<u8> {
+    /// Every match of every form in `haystack`, overlapping ones included.
+    fn find_matches(&self, haystack: &[u8], found: &mut Vec<Range<usize>>) {
         if let Some(matcher) = &self.matcher
-            && let Ok(matches) = matcher.try_find_iter(Input::new(bytes))
+            && let Ok(matches) = matcher.try_find_overlapping_iter(Input::new(haystack))
         {
-            let mut out = Vec::with_capacity(bytes.len());
-            let mut kept = 0;
-            for found in matches {
-                out.extend_from_slice(bytes.get(kept..found.start()).unwrap_or_default());
-                out.extend_from_slice(REDACTED.as_bytes());
-                kept = found.end();
-            }
-            out.extend_from_slice(bytes.get(kept..).unwrap_or_default());
-            return out;
+            found.extend(matches.map(|found| found.range()));
+            return;
         }
-        let mut current = bytes.to_vec();
         for form in &self.forms {
-            if find(&current, form).is_none() {
-                continue;
-            }
-            let mut out = Vec::with_capacity(current.len());
-            let mut rest = current.as_slice();
-            while let Some(at) = find(rest, form) {
-                out.extend_from_slice(rest.get(..at).unwrap_or_default());
-                out.extend_from_slice(REDACTED.as_bytes());
-                rest = rest
-                    .get(at.saturating_add(form.len())..)
-                    .unwrap_or_default();
-            }
-            out.extend_from_slice(rest);
-            current = out;
+            found.extend(find_all(haystack, form));
         }
-        current
     }
 
-    /// `bytes` redacted, and when `cut`, also without a trailing start of any form that
-    /// the cut left (at least [`MIN_SECRET_BYTES`] of it).
-    fn redact_cut_bytes(&self, bytes: &[u8], cut: bool) -> Vec<u8> {
+    /// `bytes` with every span a form covers cut out.
+    fn redact_bytes(&self, bytes: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut kept = 0;
+        for span in self.spans(bytes) {
+            out.extend_from_slice(bytes.get(kept..span.start).unwrap_or_default());
+            out.extend_from_slice(REDACTED.as_bytes());
+            kept = span.end;
+        }
+        out.extend_from_slice(bytes.get(kept..).unwrap_or_default());
+        out
+    }
+
+    /// `bytes` redacted, and when they end at a cut, also without a trailing start of any
+    /// form that the cut left (at least [`MIN_SECRET_BYTES`] of it).
+    fn redact_cut_bytes(&self, bytes: &[u8], ending: Ending) -> Vec<u8> {
         let mut out = self.redact_bytes(bytes);
-        if cut {
-            let tail = self.cut_form_len(&out);
+        if ending == Ending::Cut {
+            let tail = match uppercase_percent_hex(&out) {
+                Some(uppercased) => self.cut_form_len(&out).max(self.cut_form_len(&uppercased)),
+                None => self.cut_form_len(&out),
+            };
             if tail > 0 {
                 out.truncate(out.len().saturating_sub(tail));
                 out.extend_from_slice(REDACTED.as_bytes());
@@ -233,16 +269,16 @@ impl Patterns {
     }
 
     /// `text` redacted. A string ending in the runtime's truncation marker is treated as
-    /// cut where the marker starts; otherwise `cut` says whether its end is a cut.
-    fn redact_str(&self, text: &str, cut: bool) -> String {
-        let (kept, marker, cut) = match split_cut_marker(text) {
-            Some((kept, marker)) => (kept, marker, true),
-            None => (text, "", cut),
+    /// cut where the marker starts; otherwise `ending` says whether its end is a cut.
+    fn redact_str(&self, text: &str, ending: Ending) -> String {
+        let (kept, marker, ending) = match split_cut_marker(text) {
+            Some((kept, marker)) => (kept, marker, Ending::Cut),
+            None => (text, "", ending),
         };
-        if !cut && !self.contains(kept.as_bytes()) {
+        if ending == Ending::Whole && !self.contains(kept.as_bytes()) {
             return text.to_owned();
         }
-        let cleaned = self.redact_cut_bytes(kept.as_bytes(), cut);
+        let cleaned = self.redact_cut_bytes(kept.as_bytes(), ending);
         // Every form is cut whole and the marker is ASCII, but a non-UTF-8 form (none is
         // today) could split a character; the lossy conversion keeps the result a string.
         let mut cleaned = String::from_utf8(cleaned)
@@ -261,10 +297,17 @@ impl Patterns {
             changed: BTreeSet::new(),
         };
         if !self.forms.is_empty() {
-            walk.value(value, false);
+            walk.value(value, Ending::Whole);
         }
         walk.changed
     }
+}
+
+/// Whether a string, or a body copy holding one, ends where the runtime cut it at a cap.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    Whole,
+    Cut,
 }
 
 /// One pass of [`Patterns::redact_tree`]: where it is, and what it changed.
@@ -290,11 +333,10 @@ impl Walk<'_> {
         }
     }
 
-    /// `cut`: `value` is a string the runtime cut at its end, or a body copy holding one.
-    fn value(&mut self, value: &mut Value, cut: bool) {
+    fn value(&mut self, value: &mut Value, ending: Ending) {
         match value {
             Value::String(text) => {
-                let redacted = self.patterns.redact_str(text, cut);
+                let redacted = self.patterns.redact_str(text, ending);
                 if redacted != *text {
                     self.replace(value, Value::String(redacted));
                 }
@@ -307,21 +349,25 @@ impl Walk<'_> {
             Value::Array(items) => {
                 self.path.push("*".to_owned());
                 for item in items {
-                    self.value(item, cut);
+                    self.value(item, ending);
                 }
                 self.path.pop();
             }
             Value::Object(fields) => {
                 let copy = body_copy_encoding(fields);
                 // A payload record whose copy was cut: its body ends at the cap.
-                let payload_cut = fields.get("truncated") == Some(&Value::Bool(true));
+                let body_ending = if fields.get("truncated") == Some(&Value::Bool(true)) {
+                    Ending::Cut
+                } else {
+                    Ending::Whole
+                };
                 for (key, item) in fields.iter_mut() {
                     self.path.push(key.clone());
                     match (copy, key.as_str()) {
-                        (Some(Encoding::Base64), "data") => self.base64_copy(item, cut),
-                        (Some(Encoding::Text), "data") => self.value(item, cut),
-                        (None, "body") => self.value(item, payload_cut),
-                        _ => self.value(item, false),
+                        (Some(Encoding::Base64), "data") => self.base64_copy(item, ending),
+                        (Some(Encoding::Text), "data") => self.value(item, ending),
+                        (None, "body") => self.value(item, body_ending),
+                        _ => self.value(item, Ending::Whole),
                     }
                     self.path.pop();
                 }
@@ -332,16 +378,18 @@ impl Walk<'_> {
 
     /// A base64 body copy's data, redacted through its decoded bytes; as text when it
     /// does not decode.
-    fn base64_copy(&mut self, data: &mut Value, cut: bool) {
+    fn base64_copy(&mut self, data: &mut Value, ending: Ending) {
         let Value::String(text) = data else {
-            return self.value(data, cut);
+            return self.value(data, ending);
         };
         let Ok(decoded) = STANDARD.decode(text.as_bytes()) else {
-            return self.value(data, cut);
+            return self.value(data, ending);
         };
-        let cleaned = self.patterns.redact_cut_bytes(&decoded, cut);
+        let cleaned = self.patterns.redact_cut_bytes(&decoded, ending);
         // The text may also carry a secret's own base64 form at the copy's alignment.
-        let encoded = self.patterns.redact_str(&STANDARD.encode(&cleaned), false);
+        let encoded = self
+            .patterns
+            .redact_str(&STANDARD.encode(&cleaned), Ending::Whole);
         if encoded != *text {
             self.replace(data, Value::String(encoded));
         }
@@ -421,8 +469,10 @@ impl SecretStore for WatchedSecretStore {
 }
 
 /// The forms a secret can take in a record: as is; base64 (standard and URL-safe, with
-/// and without padding); URL-encoded (strict percent-encoding and form encoding, with
-/// upper- and lowercase hex); and JSON-escaped inside a text body (the standard escapes,
+/// and without padding, and inside longer base64 text at any alignment); URL-encoded
+/// (percent-encoding of every character but letters and digits, or leaving what common
+/// encoders leave, with a space as `%20` or `+`; any escape's hex matches in either case,
+/// see [`Patterns::spans`]); and JSON-escaped inside a text body (the standard escapes,
 /// with `/` as `\/`, and with characters as `\uXXXX` the ways common encoders write them).
 fn encoded_forms(value: &str) -> BTreeSet<Vec<u8>> {
     let bytes = value.as_bytes();
@@ -431,12 +481,17 @@ fn encoded_forms(value: &str) -> BTreeSet<Vec<u8>> {
     for engine in [&STANDARD, &STANDARD_NO_PAD, &URL_SAFE, &URL_SAFE_NO_PAD] {
         forms.insert(engine.encode(bytes).into_bytes());
     }
-    let percent = utf8_percent_encode(value, NON_ALPHANUMERIC).to_string();
-    let form: String = url::form_urlencoded::byte_serialize(bytes).collect();
-    for encoded in [percent, form] {
-        forms.insert(lowercase_percent_hex(&encoded).into_bytes());
-        forms.insert(encoded.into_bytes());
+    forms.extend(base64_inside_longer_text(bytes));
+    for set in [NON_ALPHANUMERIC, UNRESERVED, URI_COMPONENT, URL_PATH] {
+        let percent = utf8_percent_encode(value, set).to_string();
+        forms.insert(percent.replace("%20", "+").into_bytes());
+        forms.insert(percent.into_bytes());
     }
+    forms.insert(
+        url::form_urlencoded::byte_serialize(bytes)
+            .collect::<String>()
+            .into_bytes(),
+    );
     // The escapes serde_json and most encoders write.
     let json = serde_json::to_string(value).unwrap_or_default();
     let json = json
@@ -461,22 +516,71 @@ fn encoded_forms(value: &str) -> BTreeSet<Vec<u8>> {
     forms
 }
 
-/// `encoded` with each `%XX` escape's hex digits in lowercase.
-fn lowercase_percent_hex(encoded: &str) -> String {
-    let mut out = String::with_capacity(encoded.len());
-    let mut hex_left = 0;
-    for c in encoded.chars() {
-        if hex_left > 0 {
-            out.push(c.to_ascii_lowercase());
-            hex_left -= 1;
-        } else {
-            if c == '%' {
-                hex_left = 2;
+/// The part of the base64 of `bytes`, standard and URL-safe, that stays the same
+/// wherever they sit inside longer encoded data (`btoa("user:" + secret)`): encoded after
+/// zero, one, or two other bytes, without the leading characters those bytes share and
+/// the trailing one the next byte would. Parts shorter than [`MIN_SHIFTED_BASE64_CHARS`]
+/// are left out.
+fn base64_inside_longer_text(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let mut forms = Vec::new();
+    for engine in [&STANDARD_NO_PAD, &URL_SAFE_NO_PAD] {
+        // After `shift` other bytes, the first `shared` characters mix in theirs.
+        for (shift, shared) in [(0, 0), (1, 2), (2, 3)] {
+            let mut shifted = vec![0_u8; shift];
+            shifted.extend_from_slice(bytes);
+            let encoded = engine.encode(&shifted);
+            // A last group short of three bytes ends in a character the next byte shares.
+            let trailing = usize::from(shifted.len() % 3 != 0);
+            let end = encoded.len().saturating_sub(trailing);
+            if let Some(part) = encoded.get(shared..end)
+                && part.len() >= MIN_SHIFTED_BASE64_CHARS
+            {
+                forms.push(part.as_bytes().to_vec());
             }
-            out.push(c);
         }
     }
+    forms
+}
+
+/// `bytes` with each `%XX` escape's hex digits in uppercase, when any was lowercase; the
+/// same length, so a span of one is a span of the other.
+fn uppercase_percent_hex(bytes: &[u8]) -> Option<Vec<u8>> {
+    let is_escape = |at: usize| {
+        bytes.get(at) == Some(&b'%')
+            && bytes.get(at + 1).is_some_and(u8::is_ascii_hexdigit)
+            && bytes.get(at + 2).is_some_and(u8::is_ascii_hexdigit)
+    };
+    let mut out: Option<Vec<u8>> = None;
+    let mut at = 0;
+    while at < bytes.len() {
+        if !is_escape(at) {
+            at += 1;
+            continue;
+        }
+        for digit in [at + 1, at + 2] {
+            if bytes.get(digit).is_some_and(u8::is_ascii_lowercase) {
+                let out = out.get_or_insert_with(|| bytes.to_vec());
+                if let Some(byte) = out.get_mut(digit) {
+                    byte.make_ascii_uppercase();
+                }
+            }
+        }
+        at += 3;
+    }
     out
+}
+
+/// Merges overlapping or adjacent spans, in order.
+fn merge_spans(mut spans: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    spans.sort_by_key(|span| (span.start, span.end));
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(spans.len());
+    for span in spans {
+        match merged.last_mut() {
+            Some(last) if span.start <= last.end => last.end = last.end.max(span.end),
+            _ => merged.push(span),
+        }
+    }
+    merged
 }
 
 /// `json` (already JSON-escaped text) with each character `escape` picks written as
@@ -509,13 +613,18 @@ fn unicode_escaped(json: &str, escape: impl Fn(char) -> bool, upper: bool) -> St
     out
 }
 
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
+/// Every place `needle` occurs in `haystack`, overlapping ones included.
+fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<Range<usize>> {
+    if needle.is_empty() {
+        return Vec::new();
     }
+    // Each window starts at `at` and is `needle.len()` long, inside `haystack`.
     haystack
         .windows(needle.len())
-        .position(|window| window == needle)
+        .enumerate()
+        .filter(|(_, window)| *window == needle)
+        .map(|(at, _)| at..at + needle.len())
+        .collect()
 }
 
 #[cfg(test)]
@@ -578,8 +687,11 @@ mod tests {
                 }),
             );
             let data = STANDARD.decode(value["data"].as_str().unwrap()).unwrap();
-            assert!(find(&data, SECRET.as_bytes()).is_none());
-            assert!(find(&data, REDACTED.as_bytes()).is_some(), "pad {pad}");
+            assert!(find_all(&data, SECRET.as_bytes()).is_empty());
+            assert!(
+                !find_all(&data, REDACTED.as_bytes()).is_empty(),
+                "pad {pad}"
+            );
         }
     }
 
@@ -700,6 +812,91 @@ mod tests {
             }
         );
         assert_eq!(redacted.value["kind"], "call-started");
+    }
+
+    #[test]
+    fn overlapping_secrets_are_cut_as_one_span() {
+        let known = KnownSecrets::default();
+        known.add("AAAAAAAAXXXXXX");
+        known.add("XXXXXXBBBBBBBBBBBB");
+        assert_eq!(
+            known.redact_text("pre AAAAAAAAXXXXXXBBBBBBBBBBBB post"),
+            format!("pre {REDACTED} post")
+        );
+        // The same the other way round, the second secret starting first.
+        assert_eq!(
+            known.redact_text("XXXXXXBBBBBBBBBBBB AAAAAAAAXXXXXXBBBBBBBBBBBB"),
+            format!("{REDACTED} {REDACTED}")
+        );
+    }
+
+    #[test]
+    fn a_secret_that_starts_another_is_cut_with_the_longer_one() {
+        let known = KnownSecrets::default();
+        known.add("abcdefgh");
+        known.add("abcdefgh12345");
+        known.add("12345zyxwvu");
+        assert_eq!(
+            known.redact_text("x abcdefgh12345zyxwvu y abcdefgh z"),
+            format!("x {REDACTED} y {REDACTED} z")
+        );
+    }
+
+    #[test]
+    fn a_secret_base64_encoded_after_other_bytes_is_cut_at_every_alignment() {
+        let known = known();
+        // `btoa("user:" + secret)`, and the same after one, two, and three bytes, and
+        // followed by more text.
+        for prefix in ["user:", "u", "us", "usr", ""] {
+            for suffix in ["", "\n", ":more"] {
+                for engine in [&STANDARD, &URL_SAFE] {
+                    let encoded = engine.encode(format!("{prefix}{SECRET}{suffix}"));
+                    let text = format!("Basic {encoded}");
+                    let redacted = known.redact_text(&text);
+                    let rest = redacted.strip_prefix("Basic ").unwrap();
+                    let (before, after) = rest
+                        .split_once(REDACTED)
+                        .unwrap_or_else(|| panic!("{prefix:?} {suffix:?}: {redacted}"));
+                    // What is left mixes in the bytes around the secret: at most the
+                    // prefix's own characters and one shared one, then the suffix's.
+                    let prefix_chars = engine.encode(prefix).trim_end_matches('=').len();
+                    assert!(before.len() <= prefix_chars, "{prefix:?}: {redacted}");
+                    let suffix_chars = engine.encode(suffix).len() + 4;
+                    assert!(after.len() <= suffix_chars, "{suffix:?}: {redacted}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn percent_escapes_match_in_any_hex_case_and_under_encode_uri_component() {
+        let known = known();
+        for form in [
+            "sk_live_9f8e7d%2b%2F%3d%3F%26",
+            "sk_live_9f8e7d%2B%2f%3D%3f%26",
+            "sk_live_9f8e7d%2b%2f%3d%3f%26",
+        ] {
+            assert_eq!(
+                known.redact_text(&format!("q={form}&x=1")),
+                format!("q={REDACTED}&x=1"),
+                "{form}"
+            );
+        }
+        // `encodeURIComponent` leaves `~ ! ' ( ) *` as they are.
+        let known = KnownSecrets::default();
+        known.add("tok~en!'(x)*/=1 ok");
+        for form in [
+            "tok~en!'(x)*%2F%3D1%20ok",
+            "tok~en!'(x)*%2f%3d1%20ok",
+            "tok%7Een%21%27%28x%29%2A%2F%3D1%20ok",
+            "tok~en%21%27%28x%29%2A%2F%3D1+ok",
+        ] {
+            assert_eq!(
+                known.redact_text(&format!("q={form}&x=1")),
+                format!("q={REDACTED}&x=1"),
+                "{form}"
+            );
+        }
     }
 
     #[test]

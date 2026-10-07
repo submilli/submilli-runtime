@@ -38,12 +38,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+
+use super::fsx::{self, STAGED_PREFIX};
+use super::log::warn;
 
 pub(crate) mod changes;
 pub(crate) mod events;
@@ -185,9 +188,9 @@ impl Store {
     /// append-only file, an index that disagrees with the run files), which would race a
     /// writer still running. Every other process uses [`Store::open_read_only`].
     pub(crate) fn open(root: &Path) -> Result<Self> {
-        private_dir(root)?;
-        private_dir(&root.join("runs"))?;
-        private_dir(&root.join("events"))?;
+        private_dir_all(root)?;
+        private_dir_all(&root.join("runs"))?;
+        private_dir_all(&root.join("events"))?;
         let marker = root.join("store.json");
         match fs::read(&marker) {
             Ok(bytes) => {
@@ -518,8 +521,6 @@ impl Store {
     }
 }
 
-const STAGED_PREFIX: &str = ".staged-";
-
 fn json_bytes<T: Serialize>(value: &T) -> Vec<u8> {
     // Every type the store writes serializes: plain fields, string-keyed maps, and JSON
     // values, none of which can fail.
@@ -532,31 +533,16 @@ fn json_line<T: Serialize>(value: &T) -> Vec<u8> {
     line
 }
 
-/// Creates `path` as a 0700 directory, or tightens an existing one to 0700.
-fn private_dir(path: &Path) -> Result<()> {
-    match fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(path)
-    {
-        Ok(()) => {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(io_error(path))
-        }
-        Err(error) => Err(io_error(path)(error)),
-    }
+/// Creates `path` (and its parents) as a 0700 directory, or tightens an existing one to
+/// 0700.
+fn private_dir_all(path: &Path) -> Result<()> {
+    fsx::create_private_dir_all(path).map_err(io_error(path))
 }
 
 /// `bytes` in a 0600 temporary file beside `path`, synced, ready to be renamed over it.
 fn stage(path: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut staged = tempfile::Builder::new()
-        .prefix(STAGED_PREFIX)
-        .permissions(fs::Permissions::from_mode(0o600))
-        .tempfile_in(dir)
-        .map_err(io_error(path))?;
-    staged.write_all(bytes).map_err(io_error(path))?;
-    staged.as_file().sync_all().map_err(io_error(path))?;
-    Ok(staged)
+    fsx::stage(dir, bytes).map_err(io_error(path))
 }
 
 /// Replaces `path` with `bytes` in one rename, so a reader never sees a partial file.
@@ -570,11 +556,18 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
         })
 }
 
-/// Appends one whole line in a single write to a 0600 file opened for appending. When
-/// the file does not end in a newline (an earlier write was cut short), the line starts
-/// with one, so the cut line stays a line of its own that readers skip, and this one
-/// still reads.
+/// Appends one whole line in a single write to a 0600 file opened for appending; see
+/// [`open_for_append`].
 fn append_line(path: &Path, line: &[u8]) -> Result<()> {
+    let (mut file, _) = open_for_append(path)?;
+    file.write_all(line).map_err(io_error(path))
+}
+
+/// `path` opened for appending, as a 0600 file, and whether it was repaired. When the file
+/// does not end in a newline (an earlier write was cut short), one is written first, so
+/// the cut line stays a line of its own and the next one still reads. A cut line that is
+/// whole but for its newline then reads as a complete line too.
+fn open_for_append(path: &Path) -> Result<(fs::File, bool)> {
     let mut file = OpenOptions::new()
         .create(true)
         .read(true)
@@ -593,13 +586,9 @@ fn append_line(path: &Path, line: &[u8]) -> Result<()> {
         None => false,
     };
     if unfinished {
-        let mut whole = Vec::with_capacity(line.len().saturating_add(1));
-        whole.push(b'\n');
-        whole.extend_from_slice(line);
-        file.write_all(&whole).map_err(io_error(path))
-    } else {
-        file.write_all(line).map_err(io_error(path))
+        file.write_all(b"\n").map_err(io_error(path))?;
     }
+    Ok((file, unfinished))
 }
 
 /// Truncates `path` after its last newline, when it has bytes after it. Only the writer
@@ -674,9 +663,4 @@ fn now_micros() -> u64 {
         .map_or(0, |elapsed| {
             u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX)
         })
-}
-
-/// The detached playground's stderr is its log.
-fn warn(message: &str) {
-    let _ = writeln!(io::stderr().lock(), "warning: {message}");
 }

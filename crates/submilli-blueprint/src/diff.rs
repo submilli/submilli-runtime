@@ -325,6 +325,13 @@ fn diff_unclassified(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
     }
 }
 
+/// A rule a caller block lost or gained outright, with its position in the block.
+struct LooseRule {
+    caller: String,
+    index: usize,
+    rule: PermissionRule,
+}
+
 fn diff_permissions(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
     let empty = Vec::new();
     let callers: BTreeSet<&String> = old
@@ -332,8 +339,8 @@ fn diff_permissions(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
         .keys()
         .chain(new.permissions.keys())
         .collect();
-    let mut removed: Vec<(String, usize, PermissionRule)> = Vec::new();
-    let mut added: Vec<(String, usize, PermissionRule)> = Vec::new();
+    let mut removed = Vec::new();
+    let mut added = Vec::new();
     for caller in callers {
         let before = old.permissions.get(caller).unwrap_or(&empty);
         let after = new.permissions.get(caller).unwrap_or(&empty);
@@ -341,82 +348,71 @@ fn diff_permissions(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
             continue;
         }
         let block = diff_block(caller, before, after, out);
-        removed.extend(
-            block
-                .removed
-                .into_iter()
-                .map(|(i, r)| (caller.clone(), i, r)),
-        );
-        added.extend(block.added.into_iter().map(|(i, r)| (caller.clone(), i, r)));
+        removed.extend(block.removed);
+        added.extend(block.added);
     }
-    // A rule removed from one caller block and added, unchanged, to another moved
-    // between them: it narrows the first caller and widens the second.
-    let mut taken = vec![false; added.len()];
-    let mut left: Vec<(String, usize, PermissionRule)> = Vec::new();
-    for (from, from_index, rule) in removed {
-        let moved = added
-            .iter()
-            .enumerate()
-            .find(|(i, (to, _, candidate))| !taken[*i] && *to != from && *candidate == rule)
-            .map(|(i, _)| i);
-        if let Some(i) = moved {
-            taken[i] = true;
-            let (to, to_index, _) = &added[i];
-            out.push(moved_between_callers(
-                &from, from_index, to, *to_index, &rule,
-            ));
-        } else {
-            out.push(rule_removed(&from, from_index, &rule));
-            left.push((from, from_index, rule));
-        }
-    }
+    let (mut removed, added) = pair_cross_caller_moves(removed, added, out);
     // An allow rule removed and an allow rule added in its place (an edit that
     // also moved past another rule for its capability) still carry the pin
     // analysis, so a pin lost that way is flagged.
-    let mut replaced = vec![false; left.len()];
-    for (i, (caller, index, rule)) in added.iter().enumerate() {
-        if taken[i] {
-            continue;
-        }
-        let mut change = rule_added(caller, *index, rule);
-        if rule.action == Action::Allow
-            && let Some((k, pin)) = replaced_pin(caller, rule, &left, &replaced)
+    for added in added {
+        let mut change = rule_added(&added.caller, added.index, &added.rule);
+        if added.rule.action == Action::Allow
+            && let Some((k, pin)) = replaced_pin(&added, &removed)
         {
-            replaced[k] = true;
+            removed.remove(k);
             change
                 .summary
-                .push_str(&pin_sentence(&pin, &rule.capability));
+                .push_str(&pin_sentence(&pin, &added.rule.capability));
             change.pin = Some(pin);
         }
         out.push(change);
     }
 }
 
-/// The removed allow rule in `caller` that `rule` most plausibly replaces (its
-/// namesake, else one for the same capability) and the pin it lost doing so.
-fn replaced_pin(
-    caller: &str,
-    rule: &PermissionRule,
-    removed: &[(String, usize, PermissionRule)],
-    used: &[bool],
-) -> Option<(usize, PinChange)> {
-    let candidates = |same_name: bool| {
-        removed
+/// A rule removed from one caller block and added, unchanged, to another moved
+/// between them: it narrows the first caller and widens the second. Reports each
+/// move and each rule removed outright; returns the removed rules no move took and
+/// the added rules left to report.
+fn pair_cross_caller_moves(
+    removed: Vec<LooseRule>,
+    mut added: Vec<LooseRule>,
+    out: &mut Vec<Change>,
+) -> (Vec<LooseRule>, Vec<LooseRule>) {
+    let mut left = Vec::new();
+    for from in removed {
+        let moved = added
             .iter()
-            .enumerate()
-            .filter(move |(k, (from, _, old))| {
-                !used[*k]
-                    && from == caller
-                    && old.action == Action::Allow
-                    && old.capability == rule.capability
-                    && (!same_name || (old.name.is_some() && old.name == rule.name))
-            })
+            .position(|to| to.caller != from.caller && to.rule == from.rule);
+        if let Some(position) = moved {
+            let to = added.remove(position);
+            out.push(moved_between_callers(&from, &to));
+        } else {
+            out.push(rule_removed(&from.caller, from.index, &from.rule));
+            left.push(from);
+        }
+    }
+    (left, added)
+}
+
+/// The removed allow rule in `added`'s caller block that it most plausibly replaces
+/// (its namesake, else one for the same capability), by position in `removed`, and
+/// the pin it lost doing so.
+fn replaced_pin(added: &LooseRule, removed: &[LooseRule]) -> Option<(usize, PinChange)> {
+    let rule = &added.rule;
+    let candidates = |same_name: bool| {
+        removed.iter().enumerate().filter(move |(_, old)| {
+            old.caller == added.caller
+                && old.rule.action == Action::Allow
+                && old.rule.capability == rule.capability
+                && (!same_name || (old.rule.name.is_some() && old.rule.name == rule.name))
+        })
     };
-    let (k, (_, _, old)) = candidates(true)
+    let (k, old) = candidates(true)
         .next()
         .or_else(|| candidates(false).next())?;
     pin_change(
-        old.filter.as_ref(),
+        old.rule.filter.as_ref(),
         rule.filter.as_ref(),
         FilterChange::Unknown,
     )
@@ -511,29 +507,25 @@ fn rule_removed(caller: &str, index: usize, rule: &PermissionRule) -> Change {
     )
 }
 
-fn moved_between_callers(
-    from: &str,
-    from_index: usize,
-    to: &str,
-    to_index: usize,
-    rule: &PermissionRule,
-) -> Change {
+fn moved_between_callers(from: &LooseRule, to: &LooseRule) -> Change {
+    let rule = &from.rule;
     let classification = match rule.action {
         Action::AskHuman => Classification::Unknown,
         _ => Classification::Mixed,
     };
+    let (from_caller, to_caller) = (&from.caller, &to.caller);
     Change {
         summary: format!(
-            "{}: {} {} for `{}` moved from `{from}` to `{to}`, so `{from}` lost it and `{to}` \
-             gained it.",
+            "{}: {} {} for `{}` moved from `{from_caller}` to `{to_caller}`, so \
+             `{from_caller}` lost it and `{to_caller}` gained it.",
             classification.word(),
             action_article(rule.action),
-            rule_label(from_index, rule),
+            rule_label(from.index, rule),
             rule.capability
         ),
         classification,
-        caller: Some(to.to_owned()),
-        rule: Some(rule_label(to_index, rule)),
+        caller: Some(to_caller.clone()),
+        rule: Some(rule_label(to.index, rule)),
         pin: None,
     }
 }
@@ -548,9 +540,10 @@ fn action_article(action: Action) -> &'static str {
 
 /// Rules a caller block lost or gained outright, for matching moves between
 /// caller blocks.
+#[derive(Default)]
 struct BlockDiff {
-    removed: Vec<(usize, PermissionRule)>,
-    added: Vec<(usize, PermissionRule)>,
+    removed: Vec<LooseRule>,
+    added: Vec<LooseRule>,
 }
 
 /// The most entries the table that matches one caller block's changed rules may
@@ -589,23 +582,8 @@ fn diff_block(
     out: &mut Vec<Change>,
 ) -> BlockDiff {
     let Some(kept) = longest_common_subsequence(before, after) else {
-        out.push(Change {
-            classification: Classification::Unknown,
-            caller: Some(caller.to_owned()),
-            rule: None,
-            pin: None,
-            summary: format!(
-                "{}: `{caller}`'s rules changed in too many places to compare one by one \
-                 ({} rules before, {} after).",
-                Classification::Unknown.word(),
-                before.len(),
-                after.len()
-            ),
-        });
-        return BlockDiff {
-            removed: Vec::new(),
-            added: Vec::new(),
-        };
+        out.push(too_changed(caller, before, after));
+        return BlockDiff::default();
     };
     let mut fate: Vec<Fate> = vec![Fate::Removed; before.len()];
     let mut claimed = vec![false; after.len()];
@@ -622,11 +600,43 @@ fn diff_block(
             claimed[j] = true;
         }
     }
-    // Edits pair a rule with its namesake first, then with an unclaimed rule for
-    // the same capability (a rename, or an unnamed rule edited). An edit is judged
-    // with the rules around it fixed, so it is paired only when it keeps its order
-    // relative to every rule already paired for its capability; otherwise (two
-    // edited rules that swapped, say) it is a rule removed and another added.
+    pair_edits(before, after, &mut fate, &mut claimed);
+
+    for i in 0..before.len() {
+        match fate[i] {
+            Fate::Moved(j) => out.push(classify_move(caller, before, after, i, j, &fate)),
+            Fate::Edited(j) => out.push(classify_edit(caller, i, &before[i], &after[j])),
+            Fate::Kept(_) | Fate::Removed => {}
+        }
+    }
+    let loose = |index: usize, rule: &PermissionRule| LooseRule {
+        caller: caller.to_owned(),
+        index,
+        rule: rule.clone(),
+    };
+    BlockDiff {
+        removed: (0..before.len())
+            .filter(|&i| matches!(fate[i], Fate::Removed))
+            .map(|i| loose(i, &before[i]))
+            .collect(),
+        added: (0..after.len())
+            .filter(|&j| !claimed[j])
+            .map(|j| loose(j, &after[j]))
+            .collect(),
+    }
+}
+
+/// Edits pair a rule with its namesake first, then with an unclaimed rule for the
+/// same capability (a rename, or an unnamed rule edited). An edit is judged with the
+/// rules around it fixed, so it is paired only when it keeps its order relative to
+/// every rule already paired for its capability; otherwise (two edited rules that
+/// swapped, say) it is a rule removed and another added.
+fn pair_edits(
+    before: &[PermissionRule],
+    after: &[PermissionRule],
+    fate: &mut [Fate],
+    claimed: &mut [bool],
+) {
     let namesake = |i: usize, j: usize| match (&before[i].name, &after[j].name) {
         (Some(a), Some(b)) => a == b,
         (None, None) => before[i].capability == after[j].capability,
@@ -639,30 +649,80 @@ fn diff_block(
                 continue;
             }
             if let Some(j) = (0..after.len())
-                .find(|&j| !claimed[j] && pairs(i, j) && keeps_order(before, after, &fate, i, j))
+                .find(|&j| !claimed[j] && pairs(i, j) && keeps_order(before, after, fate, i, j))
             {
                 fate[i] = Fate::Edited(j);
                 claimed[j] = true;
             }
         }
     }
+}
 
-    for i in 0..before.len() {
-        match fate[i] {
-            Fate::Moved(j) => out.push(classify_move(caller, before, after, i, j, &fate)),
-            Fate::Edited(j) => out.push(classify_edit(caller, i, &before[i], &after[j])),
-            Fate::Kept(_) | Fate::Removed => {}
+/// A block whose changed middle is too large to match rule by rule: unknown, and
+/// flagged for the pins of the allow rules it lost or changed. An allow rule tied to
+/// a variable with no identical rule in the new block may have lost its pin; when no
+/// allow rule for its capability references that variable any more, it has.
+fn too_changed(caller: &str, before: &[PermissionRule], after: &[PermissionRule]) -> Change {
+    let mut pin = None;
+    let mut weakened: BTreeSet<String> = BTreeSet::new();
+    for rule in before {
+        let Some(filter) = rule.filter.as_ref() else {
+            continue;
+        };
+        if rule.action != Action::Allow || after.contains(rule) {
+            continue;
         }
+        let referenced = |variable: &str| {
+            after.iter().any(|new| {
+                new.action == Action::Allow
+                    && new.capability == rule.capability
+                    && new
+                        .filter
+                        .as_ref()
+                        .is_some_and(|filter| filter.var_refs().contains(&variable))
+            })
+        };
+        if pin.is_none() {
+            pin = filter
+                .conjuncts()
+                .into_iter()
+                .filter_map(FilterExpr::as_pin)
+                .find(|(_, variable)| !referenced(variable))
+                .map(|(field, variable)| PinChange::Removed {
+                    field,
+                    variable: variable.to_owned(),
+                });
+        }
+        weakened.extend(filter.var_refs().into_iter().map(str::to_owned));
     }
-    BlockDiff {
-        removed: (0..before.len())
-            .filter(|&i| matches!(fate[i], Fate::Removed))
-            .map(|i| (i, before[i].clone()))
-            .collect(),
-        added: (0..after.len())
-            .filter(|&j| !claimed[j])
-            .map(|j| (j, after[j].clone()))
-            .collect(),
+    let pin = pin.or_else(|| {
+        (!weakened.is_empty()).then(|| PinChange::PossiblyWeakened {
+            variables: weakened.into_iter().collect(),
+        })
+    });
+    let flag = match &pin {
+        Some(PinChange::Removed { field, variable }) => format!(
+            " An allow rule that pinned `{field}` to `${{vars.{variable}}}` is gone, and no allow \
+             rule for its capability references that variable now."
+        ),
+        Some(PinChange::PossiblyWeakened { variables }) => format!(
+            " Allow rules tied to {} changed, so a pin may be weakened.",
+            variable_list(variables)
+        ),
+        None => String::new(),
+    };
+    Change {
+        classification: Classification::Unknown,
+        caller: Some(caller.to_owned()),
+        rule: None,
+        pin,
+        summary: format!(
+            "{}: `{caller}`'s rules changed in too many places to compare one by one \
+             ({} rules before, {} after).{flag}",
+            Classification::Unknown.word(),
+            before.len(),
+            after.len()
+        ),
     }
 }
 
@@ -1445,6 +1505,96 @@ mod tests {
         let change = only(&diff);
         assert_eq!(change.classification, Classification::Unknown);
         assert!(change.summary.contains("too many places"), "{change:#?}");
+    }
+
+    #[test]
+    fn a_pin_removed_in_a_block_too_changed_to_match_is_still_flagged() {
+        let mut text = String::from(PINNED);
+        for n in 0..299 {
+            text.push_str(&format!(
+                "    - name: r{n}\n      capability: http.post\n      filter: amount > {n}\n      \
+                 action: deny\n"
+            ));
+        }
+        let before = with_main(&text);
+        let mut after = with_main(&text.replace("customerId == ${vars.customerId} and ", ""));
+        if let Some(rules) = after.permissions.get_mut("main") {
+            rules.reverse();
+        }
+        let diff = diff(&before, &after);
+        let change = only(&diff);
+        assert_eq!(change.classification, Classification::Unknown);
+        assert!(change.summary.contains("too many places"), "{change:#?}");
+        assert_eq!(
+            change.pin,
+            Some(PinChange::Removed {
+                field: "customerId".into(),
+                variable: "customerId".into()
+            })
+        );
+        assert_eq!(diff.pin_removals().count(), 1);
+
+        // The pin kept, under another filter: the rule may be weakened.
+        let mut kept = with_main(&text.replace("and amount < 500", "and amount < 100"));
+        if let Some(rules) = kept.permissions.get_mut("main") {
+            rules.reverse();
+        }
+        let diff = super::diff(&before, &kept);
+        assert_eq!(
+            only(&diff).pin,
+            Some(PinChange::PossiblyWeakened {
+                variables: vec!["customerId".into()]
+            })
+        );
+
+        // Only reordered: every allow rule has its identical counterpart.
+        let mut reordered = before.clone();
+        if let Some(rules) = reordered.permissions.get_mut("main") {
+            rules.reverse();
+        }
+        assert_eq!(only(&super::diff(&before, &reordered)).pin, None);
+    }
+
+    #[test]
+    fn an_empty_caller_block_is_the_same_as_an_absent_one() {
+        let absent = bp("name: demo\n");
+        let empty = bp("name: demo\npermissions:\n  main: []\n");
+        assert!(diff(&absent, &empty).changes.is_empty());
+        assert!(diff(&empty, &absent).changes.is_empty());
+        let one = rules(ALLOW);
+        assert_eq!(diff(&empty, &one).classification, Classification::Widening);
+        assert_eq!(diff(&one, &empty).classification, Classification::Narrowing);
+    }
+
+    #[test]
+    fn identical_duplicate_rules_are_matched_one_for_one() {
+        let once = rules(ALLOW);
+        let twice = rules(&format!("{ALLOW}{ALLOW}"));
+        // The duplicate decides nothing the first does not, but losing or gaining an
+        // allow rule is still read in its direction, never the other way.
+        let removed = diff(&twice, &once);
+        assert_eq!(only(&removed).classification, Classification::Narrowing);
+        let added = diff(&once, &twice);
+        assert_eq!(only(&added).classification, Classification::Widening);
+
+        // One copy moved to another caller block is one move; the other stays.
+        let moved = bp(&format!(
+            "name: demo\npermissions:\n  main:\n{ALLOW}  '@acme/billing':\n{ALLOW}"
+        ));
+        let diff = diff(&twice, &moved);
+        assert_eq!(diff.classification, Classification::Mixed, "{diff:#?}");
+        assert!(
+            only(&diff).summary.contains("moved from `main`"),
+            "{diff:#?}"
+        );
+
+        // A deny rule moved between two identical allow rules.
+        let before = rules(&format!("{DENY}{ALLOW}{ALLOW}"));
+        let after = rules(&format!("{ALLOW}{DENY}{ALLOW}"));
+        assert_eq!(
+            super::diff(&before, &after).classification,
+            Classification::Widening
+        );
     }
 
     /// A small deterministic generator, so the property test needs no dependency.

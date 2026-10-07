@@ -13,13 +13,14 @@
 //! backfilled.
 
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use submilli_server::record::SessionEvent;
 
-use super::{Result, Store, StoreError, append_line, read_lines};
+use super::{Result, Store, StoreError, io_error, open_for_append, read_lines};
 
 /// One line of a session's event log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,15 +178,18 @@ impl Appender {
         let name = session_file_name(session);
         let path = self.dir.join(&name);
         let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        let (mut file, repaired) = open_for_append(&path)?;
+        // A repaired file may now end in a line this process numbered but saw fail (a
+        // write cut between the line and its newline), so the number is read again.
         let previous = match last.get(&name) {
-            Some(seq) => *seq,
-            None => last_seq(&path)?,
+            Some(seq) if !repaired => *seq,
+            _ => last_seq(&path)?,
         };
         event.session_seq = previous.saturating_add(1);
         let Some(line) = write(&event) else {
             return Ok(None);
         };
-        append_line(&path, &line)?;
+        file.write_all(&line).map_err(io_error(&path))?;
         last.insert(name, event.session_seq);
         Ok(Some(event.session_seq))
     }

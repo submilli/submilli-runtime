@@ -409,6 +409,12 @@ async fn a_volume_is_declared_only_once_the_blueprint_is_stored() {
         .request("GET", "/v1/volumes", ADMIN_TOKEN, Value::Null)
         .await;
     assert!(!listed.to_string().contains("notes"), "{listed}");
+    // The version in force stays, under its own tag.
+    assert_eq!(
+        store.get("demo").await.unwrap(),
+        Some(submilli_blueprint::parse(V1).unwrap()),
+        "the refused write left the blueprint in force"
+    );
 
     store.fail.store(false, Ordering::SeqCst);
     let applied = server.apply(&with_volume("notes"), "v3").await;

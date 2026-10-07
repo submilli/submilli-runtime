@@ -9,6 +9,7 @@ use std::fs::File;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -27,9 +28,10 @@ use submilli_server::{AppState, AuthConfig, RunTelemetry, ServerConfig};
 use tokio::sync::Notify;
 
 use super::control_auth::{self, Caller, ControlAuth, LoginRefusal, Now};
+use super::log::warn;
 use super::packages::{self, ClosureEntry, Freshness, ProjectPackages};
 use super::project::Project;
-use super::state::{APP_TOKEN, Lock, StateDir};
+use super::state::{APP_TOKEN, InstanceLock, InstanceRecord, StateDir};
 use super::store::redact::WatchedSecretStore;
 use super::store::{KnownSecrets, Recorder, Store};
 use super::watch::{self, Applier, BlueprintStatus};
@@ -52,7 +54,10 @@ pub(crate) struct HostOptions {
 }
 
 /// What the control listener reports about this instance. Built once at start.
-#[derive(Clone, Serialize, Deserialize)]
+/// Every field defaults when absent, so a CLI reads an instance of another
+/// version rather than failing on a field one of them lacks.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct Description {
     pub(crate) project: PathBuf,
     pub(crate) blueprint: BlueprintInfo,
@@ -70,33 +75,42 @@ pub(crate) struct Description {
     pub(crate) packages: Vec<ClosureEntry>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct BlueprintInfo {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
 }
 
 /// What `GET /api/status` answers: the description, with the closure of the
-/// blueprint in force now, and what changes while the instance runs.
-#[derive(Clone, Serialize, Deserialize)]
+/// blueprint in force now, and what changes while the instance runs. Defaults
+/// like [`Description`].
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct Status {
     #[serde(flatten)]
     pub(crate) description: Description,
+    /// Serving, and not draining.
     pub(crate) running: bool,
+    /// Draining after a stop or a signal; it exits once its runs end.
+    pub(crate) stopping: bool,
     pub(crate) browser_sessions: usize,
     pub(crate) blueprint_status: BlueprintStatus,
     /// Why the closure of the blueprint in force could not be read; `packages` is
     /// then the closure at start.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) packages_error: Option<String>,
     /// Whether the server listener answers, which `status` adds after asking.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) health: Option<String>,
 }
 
-/// Hidden: how long a serving process waits after taking the instance lock, so a
-/// test can act on an instance that is starting. Unset outside tests.
+/// Test-only, hidden: how long a serving process waits after taking the instance
+/// lock, in milliseconds, so a test can act on an instance that is starting. Unset
+/// outside tests; capped at [`START_DELAY_CAP`] so a stray value cannot wedge a
+/// start.
 const START_DELAY_ENV: &str = "SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS";
+const START_DELAY_CAP: Duration = Duration::from_secs(60);
 
 /// Serve until a stop, a signal, or `POST /v1/shutdown`, then drain and remove
 /// the lock and the ready file. Refused while another process serves the project.
@@ -106,7 +120,7 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
     state_dir.create()?;
     // Held until this process exits, however it exits: no second instance can serve
     // this state directory, even one whose start never saw this one's lock.
-    let Some(_instance) = state_dir.instance_lock()? else {
+    let Some(instance) = state_dir.instance_lock()? else {
         anyhow::bail!(
             "another Submilli playground is already serving {}; stop it with `submilli \
              playground stop`",
@@ -117,7 +131,7 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
         .ok()
         .and_then(|ms| ms.parse().ok())
     {
-        std::thread::sleep(Duration::from_millis(delay));
+        std::thread::sleep(Duration::from_millis(delay).min(START_DELAY_CAP));
     }
     let tokens = state_dir.tokens()?;
     let blueprint_yaml = std::fs::read_to_string(&options.project.blueprint)
@@ -153,6 +167,7 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
     let result = runtime.block_on(run(
         options,
         state_dir,
+        Arc::new(Stopping::new(instance)),
         config,
         tokens,
         Serving {
@@ -180,9 +195,39 @@ struct Serving {
     closure: Vec<ClosureEntry>,
 }
 
+/// Whether this instance has begun to drain: answered by `status`, and written
+/// into `instance.lock` so a command that finds no lock file still sees it.
+struct Stopping {
+    /// Held for the process's life; dropped only when it exits.
+    instance: InstanceLock,
+    begun: AtomicBool,
+}
+
+impl Stopping {
+    fn new(instance: InstanceLock) -> Self {
+        Self {
+            instance,
+            begun: AtomicBool::new(false),
+        }
+    }
+
+    fn begin(&self) {
+        if !self.begun.swap(true, Ordering::SeqCst)
+            && let Err(error) = self.instance.record(true)
+        {
+            warn(&format!("{error:#}"));
+        }
+    }
+
+    fn begun(&self) -> bool {
+        self.begun.load(Ordering::SeqCst)
+    }
+}
+
 async fn run(
     options: HostOptions,
     state_dir: StateDir,
+    stopping: Arc<Stopping>,
     mut config: ServerConfig,
     tokens: Vec<submilli_server::ApiToken>,
     serving: Serving,
@@ -190,6 +235,8 @@ async fn run(
     // Before anything announces this instance: a signal from then on drains it
     // rather than killing it with its lock on disk.
     let signals = submilli_server::EmbeddedSignals::install()?;
+    // The server drains on the same signals; this notes that it has begun.
+    let _signal_watch = tokio::spawn(note_signals(Arc::clone(&stopping))?);
     let blueprints = submilli_server::prepare_blueprint_store(&config).await?;
     config.blueprints = Some(Arc::clone(&blueprints));
     let state = AppState::new(config)?;
@@ -238,6 +285,7 @@ async fn run(
         blueprints,
         blueprint_name: serving.name.clone(),
         packages: Arc::clone(&serving.packages),
+        stopping: Arc::clone(&stopping),
     }));
     let control_stop = Arc::new(Notify::new());
     let control_task = tokio::spawn({
@@ -250,7 +298,7 @@ async fn run(
         }
     });
 
-    let lock = Lock {
+    let lock = InstanceRecord {
         pid: std::process::id(),
         control_port,
         server_port,
@@ -269,6 +317,8 @@ async fn run(
     }
     .await;
 
+    // Also after a drain no signal or stop route began (`POST /v1/shutdown`).
+    stopping.begin();
     auth.drop_sessions();
     control_stop.notify_one();
     if tokio::time::timeout(CONTROL_CLOSE_BUDGET, control_task)
@@ -279,6 +329,20 @@ async fn run(
     }
     state_dir.remove_if_ours(&options.nonce);
     served
+}
+
+/// A future that marks `stopping` begun on SIGTERM or SIGINT, registered now.
+fn note_signals(stopping: Arc<Stopping>) -> Result<impl Future<Output = ()>> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut terminate = signal(SignalKind::terminate()).context("watching for SIGTERM")?;
+    let mut interrupt = signal(SignalKind::interrupt()).context("watching for SIGINT")?;
+    Ok(async move {
+        tokio::select! {
+            _ = terminate.recv() => {}
+            _ = interrupt.recv() => {}
+        }
+        stopping.begin();
+    })
 }
 
 fn server_config(
@@ -393,12 +457,6 @@ fn restrict_new_files() {
     }
 }
 
-/// The detached child's stderr is its log; nothing else reports this.
-fn warn(message: &str) {
-    use std::io::Write;
-    let _ = writeln!(std::io::stderr().lock(), "warning: {message}");
-}
-
 #[derive(Clone)]
 struct ControlState(Arc<ControlInner>);
 
@@ -414,6 +472,7 @@ struct ControlInner {
     blueprints: Arc<dyn submilli_server::blueprint::BlueprintStore>,
     blueprint_name: String,
     packages: Arc<ProjectPackages>,
+    stopping: Arc<Stopping>,
 }
 
 /// The control listener's routes, by who may call them. Later steps add their
@@ -616,9 +675,11 @@ async fn status(State(state): State<ControlState>) -> Response {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
+    let stopping = state.0.stopping.begun();
     Json(Status {
         description,
-        running: true,
+        running: !stopping,
+        stopping,
         browser_sessions: state.0.auth.browser_sessions(Now::current()),
         blueprint_status,
         packages_error,
@@ -642,6 +703,7 @@ async fn current_closure(state: &ControlState) -> Result<Option<Vec<ClosureEntry
 }
 
 async fn stop(State(state): State<ControlState>) -> Response {
+    state.0.stopping.begin();
     state.0.server_shutdown.notify_one();
     (StatusCode::ACCEPTED, Json(json!({ "stopping": true }))).into_response()
 }

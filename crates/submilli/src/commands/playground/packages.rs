@@ -33,6 +33,8 @@ use submilli_build::{
 };
 use submilli_server::{AppState, PreExecute, PreExecuteHook, PreExecuteRefusal};
 
+use super::log::note;
+
 /// How long the package store must be quiet before the playground evicts: an install
 /// writes several files per package.
 const STORE_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -244,34 +246,13 @@ impl ProjectPackages {
         if reached.is_empty() {
             return Ok(Synced::default());
         }
+        let inputs = self.read_inputs(&manifest, &reached)?;
         let store = self.store();
         let mut seen = self
             .seen
             .lock()
             .expect("the package check's state is poisoned by an earlier panic");
-        let mut evict = false;
-        let mut stale = Vec::new();
-        let mut inputs = Fingerprint::new(&manifest_text);
-        for package in reached_packages(&manifest, &reached) {
-            let name = package.name.as_str();
-            let (sources, documentation) = self.sources_of(package)?;
-            inputs.add_package(name, &sources, &documentation);
-            let located = store.locate(name).map_err(ResolutionFailure::Store)?;
-            let stamp = located
-                .as_ref()
-                .and_then(|located| installed_at(&located.dir));
-            evict |= seen.note_stamp(name, stamp);
-            let confirmed = seen.entries.get(name);
-            let matches = confirmed.is_none_or(|entry| entry == package)
-                && located.is_some_and(|located| {
-                    installed_copy_matches(&located.dir, package, &sources, &documentation)
-                });
-            if matches {
-                seen.entries.insert(name.to_owned(), package.clone());
-            } else {
-                stale.push(package.name.clone());
-            }
-        }
+        let (stale, evict) = seen.scan_installed(&store, &inputs)?;
         if stale.is_empty() {
             seen.failed = None;
             return Ok(Synced {
@@ -279,8 +260,7 @@ impl ProjectPackages {
                 evict,
             });
         }
-        inputs.add_dependency_stamps(&store, &manifest, &reached);
-        let fingerprint = inputs.finish();
+        let fingerprint = fingerprint(&manifest_text, &store, &inputs);
         if let Some(failed) = &seen.failed
             && failed.fingerprint == fingerprint
         {
@@ -314,38 +294,41 @@ impl ProjectPackages {
             }
         };
         seen.failed = None;
-        for name in &reinstalled {
-            let stamp = store
-                .locate(name)
-                .ok()
-                .flatten()
-                .and_then(|located| installed_at(&located.dir));
-            seen.stamps.insert(name.clone(), stamp);
-            if let Some(package) = manifest
-                .packages
-                .iter()
-                .find(|package| package.name.as_str() == name)
-            {
-                seen.entries.insert(name.clone(), package.clone());
-            }
-        }
+        seen.record_reinstalled(&store, &manifest, &reinstalled);
         Ok(Synced {
             reinstalled,
             evict: true,
         })
     }
 
+    /// What a build of `reached` reads from the project: each package's entry,
+    /// sources, and documentation, in manifest order.
+    fn read_inputs<'a>(
+        &self,
+        manifest: &'a ProjectManifest,
+        reached: &BTreeSet<String>,
+    ) -> Result<Vec<PackageInputs<'a>>, ResolutionFailure> {
+        manifest
+            .packages
+            .iter()
+            .filter(|package| reached.contains(package.name.as_str()))
+            .map(|package| {
+                let (sources, documentation) = self.sources_of(package)?;
+                Ok(PackageInputs {
+                    package,
+                    sources,
+                    documentation,
+                })
+            })
+            .collect()
+    }
+
     /// The fingerprint [`Self::sync`] computes for `reached`, read afresh; `None` when
     /// something it reads cannot be read.
     fn fingerprint_now(&self, store: &PackageStore, reached: &BTreeSet<String>) -> Option<u64> {
         let (manifest, text) = self.read_manifest().ok()?;
-        let mut inputs = Fingerprint::new(&text);
-        for package in reached_packages(&manifest, reached) {
-            let (sources, documentation) = self.sources_of(package).ok()?;
-            inputs.add_package(package.name.as_str(), &sources, &documentation);
-        }
-        inputs.add_dependency_stamps(store, &manifest, reached);
-        Some(inputs.finish())
+        let inputs = self.read_inputs(&manifest, reached).ok()?;
+        Some(fingerprint(&text, store, &inputs))
     }
 
     /// Build each stale package with the siblings it needs, and install the stale ones.
@@ -445,7 +428,75 @@ impl ProjectPackages {
     }
 }
 
+/// What a build reads of one project package.
+struct PackageInputs<'a> {
+    package: &'a PackageManifest,
+    sources: Vec<ArtifactSource>,
+    documentation: String,
+}
+
 impl Seen {
+    /// Compares each package's installed copy with its inputs: the packages whose copy
+    /// is stale, and whether a copy was written from outside the playground since the
+    /// last check. Confirms the entry of each copy that matches.
+    fn scan_installed(
+        &mut self,
+        store: &PackageStore,
+        inputs: &[PackageInputs<'_>],
+    ) -> Result<(Vec<PackageName>, bool), ResolutionFailure> {
+        let mut stale = Vec::new();
+        let mut evict = false;
+        for input in inputs {
+            let package = input.package;
+            let name = package.name.as_str();
+            let located = store.locate(name).map_err(ResolutionFailure::Store)?;
+            let stamp = located
+                .as_ref()
+                .and_then(|located| installed_at(&located.dir));
+            evict |= self.note_stamp(name, stamp);
+            let matches = self.entries.get(name).is_none_or(|entry| entry == package)
+                && located.is_some_and(|located| {
+                    installed_copy_matches(
+                        &located.dir,
+                        package,
+                        &input.sources,
+                        &input.documentation,
+                    )
+                });
+            if matches {
+                self.entries.insert(name.to_owned(), package.clone());
+            } else {
+                stale.push(package.name.clone());
+            }
+        }
+        Ok((stale, evict))
+    }
+
+    /// Records the copies this check installed, so the next check neither reports them
+    /// as installed from outside nor finds their entries edited.
+    fn record_reinstalled(
+        &mut self,
+        store: &PackageStore,
+        manifest: &ProjectManifest,
+        reinstalled: &[String],
+    ) {
+        for name in reinstalled {
+            let stamp = store
+                .locate(name)
+                .ok()
+                .flatten()
+                .and_then(|located| installed_at(&located.dir));
+            self.stamps.insert(name.clone(), stamp);
+            if let Some(package) = manifest
+                .packages
+                .iter()
+                .find(|package| package.name.as_str() == name)
+            {
+                self.entries.insert(name.clone(), package.clone());
+            }
+        }
+    }
+
     /// Records when `name`'s installed copy was written; whether that changed since
     /// the last check, which means an install from outside the playground.
     fn note_stamp(&mut self, name: &str, stamp: Option<SystemTime>) -> bool {
@@ -453,17 +504,6 @@ impl Seen {
             .insert(name.to_owned(), stamp)
             .is_some_and(|previous| previous != stamp)
     }
-}
-
-/// The manifest's packages that `reached` names, in manifest order.
-fn reached_packages<'a>(
-    manifest: &'a ProjectManifest,
-    reached: &'a BTreeSet<String>,
-) -> impl Iterator<Item = &'a PackageManifest> {
-    manifest
-        .packages
-        .iter()
-        .filter(|package| reached.contains(package.name.as_str()))
 }
 
 /// Whether the copy installed in `dir` was built from `package`'s entry and from
@@ -542,65 +582,45 @@ fn installed_at(dir: &Path) -> Option<SystemTime> {
         .ok()
 }
 
-/// A digest of what a build reads: the manifest text, each reached package's sources
-/// and documentation, and when each package they depend on from the store was
-/// installed.
-struct Fingerprint(sha2::Sha256);
-
-impl Fingerprint {
-    fn new(manifest_text: &str) -> Self {
-        let mut fingerprint = Self(sha2::Sha256::default());
-        fingerprint.part(manifest_text);
-        fingerprint
-    }
-
-    fn part(&mut self, part: &str) {
-        use sha2::Digest;
-        self.0.update((part.len() as u64).to_le_bytes());
-        self.0.update(part.as_bytes());
-    }
-
-    fn add_package(&mut self, name: &str, sources: &[ArtifactSource], docs: &str) {
-        self.part(name);
-        self.part(docs);
-        for source in sources {
-            self.part(source.path.as_str());
-            self.part(&source.text);
+/// A digest of what a build reads: the manifest text, each package's sources and
+/// documentation, and when each package they depend on from the store was installed,
+/// since installing a missing or changed dependency changes what the build reads.
+fn fingerprint(manifest_text: &str, store: &PackageStore, inputs: &[PackageInputs<'_>]) -> u64 {
+    use sha2::Digest;
+    let mut digest = sha2::Sha256::default();
+    let mut part = |part: &str| {
+        digest.update((part.len() as u64).to_le_bytes());
+        digest.update(part.as_bytes());
+    };
+    part(manifest_text);
+    for input in inputs {
+        part(input.package.name.as_str());
+        part(&input.documentation);
+        for source in &input.sources {
+            part(source.path.as_str());
+            part(&source.text);
         }
     }
-
-    /// The store packages `reached` depends on directly, by when each was installed:
-    /// installing a missing or changed dependency changes what the build reads.
-    fn add_dependency_stamps(
-        &mut self,
-        store: &PackageStore,
-        manifest: &ProjectManifest,
-        reached: &BTreeSet<String>,
-    ) {
-        let dependencies: BTreeSet<&str> = reached_packages(manifest, reached)
-            .flat_map(|package| &package.dependencies)
-            .filter(|dependency| dependency.kind != DependencyKind::Sibling)
-            .map(|dependency| dependency.name.as_str())
-            .collect();
-        for name in dependencies {
-            self.part(name);
-            let stamp = store
-                .locate(name)
-                .ok()
-                .flatten()
-                .and_then(|located| installed_at(&located.dir))
-                .and_then(|stamp| stamp.duration_since(SystemTime::UNIX_EPOCH).ok());
-            self.part(&format!("{stamp:?}"));
-        }
+    let dependencies: BTreeSet<&str> = inputs
+        .iter()
+        .flat_map(|input| &input.package.dependencies)
+        .filter(|dependency| dependency.kind != DependencyKind::Sibling)
+        .map(|dependency| dependency.name.as_str())
+        .collect();
+    for name in dependencies {
+        part(name);
+        let stamp = store
+            .locate(name)
+            .ok()
+            .flatten()
+            .and_then(|located| installed_at(&located.dir))
+            .and_then(|stamp| stamp.duration_since(SystemTime::UNIX_EPOCH).ok());
+        part(&format!("{stamp:?}"));
     }
-
-    fn finish(self) -> u64 {
-        use sha2::Digest;
-        let digest = self.0.finalize();
-        let mut first = [0_u8; 8];
-        first.copy_from_slice(&digest[..8]);
-        u64::from_le_bytes(first)
-    }
+    let digest = digest.finalize();
+    let mut first = [0_u8; 8];
+    first.copy_from_slice(&digest[..8]);
+    u64::from_le_bytes(first)
 }
 
 /// The server's pre-execute hook: a run's project packages are brought up to date
@@ -609,14 +629,16 @@ impl Fingerprint {
 /// serialized, so two runs after one edit rebuild once.
 pub(crate) struct Freshness {
     packages: Arc<ProjectPackages>,
-    turn: tokio::sync::Mutex<()>,
+    /// Held by the blocking task itself, so a check whose caller stops waiting still
+    /// finishes before the next one starts.
+    turn: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Freshness {
     pub(crate) fn new(packages: Arc<ProjectPackages>) -> Self {
         Self {
             packages,
-            turn: tokio::sync::Mutex::new(()),
+            turn: Arc::default(),
         }
     }
 
@@ -658,11 +680,7 @@ impl Freshness {
         state: &AppState,
         check: impl FnOnce(&ProjectPackages) -> Result<Synced, ResolutionFailure> + Send + 'static,
     ) -> Result<(), ResolutionFailure> {
-        let _turn = self.turn.lock().await;
-        let packages = Arc::clone(&self.packages);
-        let synced = tokio::task::spawn_blocking(move || check(&packages))
-            .await
-            .map_err(|error| ResolutionFailure::Stopped(error.to_string()))??;
+        let synced = self.run_check(check).await?;
         for name in &synced.reinstalled {
             note(&format!(
                 "reinstalled {name}: its source changed since it was installed"
@@ -672,6 +690,23 @@ impl Freshness {
             state.evict_all_prepared_packages();
         }
         Ok(())
+    }
+
+    /// Run `check` on a blocking thread once every earlier check has finished. The
+    /// turn moves into the blocking task, so dropping this future does not let the next
+    /// check overlap a build that is still running.
+    pub(super) async fn run_check(
+        &self,
+        check: impl FnOnce(&ProjectPackages) -> Result<Synced, ResolutionFailure> + Send + 'static,
+    ) -> Result<Synced, ResolutionFailure> {
+        let turn = Arc::clone(&self.turn).lock_owned().await;
+        let packages = Arc::clone(&self.packages);
+        tokio::task::spawn_blocking(move || {
+            let _turn = turn;
+            check(&packages)
+        })
+        .await
+        .map_err(|error| ResolutionFailure::Stopped(error.to_string()))?
     }
 }
 
@@ -713,12 +748,6 @@ pub(crate) fn watch_store(state: AppState, root: &Path) -> Result<StoreWatch> {
     Ok(StoreWatch {
         _debouncer: debouncer,
     })
-}
-
-/// The detached child's stderr is its log.
-fn note(message: &str) {
-    use std::io::Write;
-    let _ = writeln!(std::io::stderr().lock(), "playground: {message}");
 }
 
 #[cfg(test)]

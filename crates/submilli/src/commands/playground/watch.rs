@@ -32,6 +32,7 @@ use submilli_blueprint::Blueprint;
 use submilli_blueprint::diff::{self, BlueprintDiff};
 use submilli_server::{AppState, LocalApplyError};
 
+use super::log::{note, warn};
 use super::packages::{Freshness, ResolutionFailure};
 use super::store::Store;
 use super::store::changes::{NewVersion, Version};
@@ -107,6 +108,32 @@ pub(crate) enum Outcome {
 enum Moment {
     Start,
     Save,
+}
+
+/// The version a save replaces, as the change log holds it.
+enum Previous {
+    /// The log holds no version: this save is the first.
+    None,
+    /// The version in force no longer parses, so the change cannot be classified.
+    Unreadable,
+    Parsed(Box<Blueprint>),
+}
+
+impl Previous {
+    fn of(current: Option<&Version>) -> Self {
+        match current.map(|current| submilli_blueprint::parse(&current.bytes)) {
+            None => Self::None,
+            Some(Ok(blueprint)) => Self::Parsed(Box::new(blueprint)),
+            Some(Err(_)) => Self::Unreadable,
+        }
+    }
+
+    fn blueprint(&self) -> Option<&Blueprint> {
+        match self {
+            Self::Parsed(blueprint) => Some(blueprint),
+            Self::None | Self::Unreadable => None,
+        }
+    }
 }
 
 /// Applies the playground's blueprint file through the server's trusted local path.
@@ -198,7 +225,20 @@ impl Applier {
                 ));
             }
         };
-        if let Err(failure) = self.prepare_packages(&yaml).await {
+        let changes = match self.store.changes() {
+            Ok(changes) => changes,
+            Err(error) => {
+                return self.refuse(Refusal::new(
+                    "change_log_unreadable",
+                    format!("reading the change log: {error}"),
+                ));
+            }
+        };
+        // No other apply can log a version while this one holds the turn, so the
+        // version read here stays the one in force until this save is logged.
+        let current = changes.current();
+        let previous = Previous::of(current);
+        if let Err(failure) = self.prepare_packages(&yaml, previous.blueprint()).await {
             return self.refuse(package_refusal(&failure));
         }
         let blueprint = match self.state.check_local_blueprint(&yaml).await {
@@ -216,21 +256,9 @@ impl Applier {
             ));
         }
         let hash = normalized_hash(&blueprint);
-        let changes = match self.store.changes() {
-            Ok(changes) => changes,
-            Err(error) => {
-                return self.refuse(Refusal::new(
-                    "change_log_unreadable",
-                    format!("reading the change log: {error}"),
-                ));
-            }
-        };
-        if let Some(current) = changes.current().filter(|current| current.hash == hash) {
+        if let Some(current) = current.filter(|current| current.hash == hash) {
             return self.same_version(current, yaml, moment).await;
         }
-        let previous = changes
-            .current()
-            .map(|current| submilli_blueprint::parse(&current.bytes).ok());
         self.log_and_apply(previous, &blueprint, hash, yaml).await
     }
 
@@ -262,31 +290,30 @@ impl Applier {
         }
     }
 
-    /// Classifies `blueprint` against the version in force (`previous`: `None` when
-    /// there is none, `Some(None)` when it no longer parses), logs it as a new
-    /// version, and applies it; a failed apply voids the version.
+    /// Classifies `blueprint` against the version in force, logs it as a new version,
+    /// and applies it; a failed apply voids the version.
     async fn log_and_apply(
         &self,
-        previous: Option<Option<Blueprint>>,
+        previous: Previous,
         blueprint: &Blueprint,
         hash: String,
         yaml: String,
     ) -> Outcome {
         let (diff, classification, summary) = match previous {
-            Some(Some(previous)) => {
+            Previous::Parsed(previous) => {
                 let diff = Box::new(diff::diff(&previous, blueprint));
                 let classification = serde_json::to_value(diff.as_ref()).unwrap_or(Value::Null);
                 let summary = diff.summary();
                 (Some(diff), classification, summary)
             }
-            Some(None) => (
+            Previous::Unreadable => (
                 None,
                 json!({ "classification": "unknown", "changes": [] }),
                 "The version this replaces could not be read back, so the change is not \
                  classified."
                     .to_owned(),
             ),
-            None => (
+            Previous::None => (
                 None,
                 json!({ "classification": "initial", "changes": [] }),
                 "The first version the playground served.".to_owned(),
@@ -331,22 +358,21 @@ impl Applier {
         }
     }
 
-    /// Build and install the project packages `yaml` newly names. Text that does not
-    /// parse is left for validation to report.
-    async fn prepare_packages(&self, yaml: &str) -> Result<(), ResolutionFailure> {
+    /// Build and install the project packages `yaml` names that `in_force` does not.
+    /// Text that does not parse is left for validation to report.
+    async fn prepare_packages(
+        &self,
+        yaml: &str,
+        in_force: Option<&Blueprint>,
+    ) -> Result<(), ResolutionFailure> {
         let Some(packages) = &self.packages else {
             return Ok(());
         };
         let Ok(blueprint) = submilli_blueprint::parse(yaml) else {
             return Ok(());
         };
-        let in_force = self.store.changes().ok().and_then(|changes| {
-            changes
-                .current()
-                .and_then(|current| submilli_blueprint::parse(&current.bytes).ok())
-        });
         packages
-            .prepare_edit(&self.state, blueprint, in_force)
+            .prepare_edit(&self.state, blueprint, in_force.cloned())
             .await
     }
 
@@ -416,7 +442,7 @@ pub(crate) fn tag(version: u64) -> String {
 /// parsed and written back, so comments and layout do not count.
 pub(crate) fn normalized_hash(blueprint: &Blueprint) -> String {
     let digest = Sha256::digest(submilli_blueprint::to_yaml(blueprint).as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    super::state::hex(&digest)
 }
 
 /// A save refused because a project package it names could not be built or installed.
@@ -441,7 +467,7 @@ fn package_refusal(failure: &ResolutionFailure) -> Refusal {
     Refusal::new(code, message)
 }
 
-fn describe_refusal(refusal: &Refusal) -> String {
+pub(crate) fn describe_refusal(refusal: &Refusal) -> String {
     match (refusal.line, refusal.column) {
         (Some(line), Some(column)) => format!("line {line}, column {column}: {}", refusal.message),
         (Some(line), None) => format!("line {line}: {}", refusal.message),
@@ -454,16 +480,6 @@ fn indent(text: &str) -> String {
         .map(|line| format!("  {line}"))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn note(message: &str) {
-    use std::io::Write;
-    let _ = writeln!(std::io::stderr().lock(), "{message}");
-}
-
-fn warn(message: &str) {
-    use std::io::Write;
-    let _ = writeln!(std::io::stderr().lock(), "warning: {message}");
 }
 
 /// Watches the blueprint's directory and applies each settled save until dropped.

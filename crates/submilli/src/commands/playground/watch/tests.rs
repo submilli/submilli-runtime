@@ -497,3 +497,91 @@ async fn an_explicit_default_deny_is_a_version_with_no_change_to_access() {
     assert_eq!(current.classification["changes"], json!([]));
     assert_eq!(current.summary, "No change to what programs may do.");
 }
+
+const WITH_PACKAGE: &str = "\
+name: demo
+packages:
+- '@acme/billing'
+permissions:
+  main:
+    - capability: acme.com/charges.list
+      filter: customerId == \"cus_a\"
+      action: allow
+  '@acme/billing':
+    - capability: fs.read
+      filter: path == \"/billing/charges.json\"
+      action: allow
+";
+
+#[tokio::test]
+async fn a_save_during_a_slow_package_check_is_applied_after_it() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::commands::playground::scaffold::init(dir.path()).unwrap();
+    std::fs::write(dir.path().join("demo.yaml"), WITH_PACKAGE).unwrap();
+    let store = Arc::new(Store::open(&dir.path().join("store")).unwrap());
+    let (blueprints, applier) = Fixture::serve(dir.path(), &store);
+    let packages = Arc::new(super::super::packages::ProjectPackages::new(
+        &dir.path().join("submilli"),
+        dir.path().join("packages"),
+    ));
+    let freshness = Arc::new(Freshness::new(packages));
+    let applier = Arc::new(applier.with_packages(Arc::clone(&freshness)));
+    applier.start().await.expect("the first version applies");
+    let fixture = Fixture {
+        dir,
+        blueprints,
+        store,
+        applier: Arc::clone(&applier),
+    };
+    let _watch = watching(&fixture, Duration::from_millis(50)).await;
+
+    // A package check that does not finish until released, as a slow build would.
+    let (started, started_rx) = tokio::sync::oneshot::channel();
+    let (release, release_rx) = std::sync::mpsc::channel::<()>();
+    let slow = tokio::spawn({
+        let freshness = Arc::clone(&freshness);
+        async move {
+            freshness
+                .run_check(move |_| {
+                    let _ = started.send(());
+                    let _ = release_rx.recv();
+                    Ok(Default::default())
+                })
+                .await
+        }
+    });
+    started_rx.await.expect("the slow check started");
+
+    let file = fixture.dir.path().join("demo.yaml");
+    std::fs::write(&file, WITH_PACKAGE.replace("cus_a", "cus_b")).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let last = WITH_PACKAGE.replace("cus_a", "cus_c");
+    std::fs::write(&file, &last).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        fixture.versions(),
+        [1],
+        "nothing applies while the check runs"
+    );
+    release.send(()).unwrap();
+    slow.await.unwrap().unwrap();
+
+    wait_until(&applier, "the last save", |status| {
+        status.refused.is_none() && status.version.is_some_and(|version| version > 1)
+    })
+    .await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while fixture.current().bytes != last {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the last save was not applied: {:?}",
+            fixture.versions()
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(fixture.versions().len() <= 3, "{:?}", fixture.versions());
+    assert_eq!(
+        fixture.registered().await,
+        submilli_blueprint::parse(&last).unwrap()
+    );
+}

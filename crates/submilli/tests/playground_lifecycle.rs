@@ -154,7 +154,23 @@ mod unix {
             if self.lock().exists() {
                 let _ = self.stop();
             }
+            // Whatever still holds the instance lock (a child that never got ready,
+            // a helper holder) is ended too.
+            if let Some(pid) = instance_holder(self) {
+                terminate(pid);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while instance_holder(self).is_some() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
         }
+    }
+
+    fn terminate(pid: u32) {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .stderr(Stdio::null())
+            .status();
     }
 
     fn stdout(output: &Output) -> String {
@@ -337,27 +353,168 @@ mod unix {
         pid
     }
 
-    /// The instance lock, held as a serving playground holds it, until dropped.
-    fn hold_instance_lock(project: &Project) -> std::fs::File {
-        std::fs::create_dir_all(project.state()).unwrap();
-        let file = std::fs::OpenOptions::new()
+    /// A whole-file `fcntl` write lock request, as the playground makes.
+    fn whole_file_write_lock() -> libc::flock {
+        // SAFETY: all-zero bytes are a valid `flock`; start 0, length 0 is the file.
+        let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+        lock.l_type = libc::F_WRLCK as libc::c_short;
+        lock.l_whence = libc::SEEK_SET as libc::c_short;
+        lock
+    }
+
+    fn open_instance_lock(path: &Path) -> std::fs::File {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
+            .read(true)
             .write(true)
-            .open(project.state().join("instance.lock"))
-            .unwrap();
-        file.lock().unwrap();
+            .mode(0o600)
+            .open(path)
+            .unwrap()
+    }
+
+    /// The instance lock, held by this test process as a serving playground holds
+    /// it, until dropped. This process must not open the file again meanwhile: a
+    /// record lock goes when any of the process's descriptors of the file closes.
+    fn hold_instance_lock(project: &Project) -> std::fs::File {
+        use std::os::fd::AsRawFd;
+        std::fs::create_dir_all(project.state()).unwrap();
+        let file = open_instance_lock(&project.state().join("instance.lock"));
+        let mut lock = whole_file_write_lock();
+        // SAFETY: a live descriptor and a live `flock`.
+        let taken = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &raw mut lock) };
+        assert_eq!(taken, 0, "{}", std::io::Error::last_os_error());
         file
     }
 
+    /// The pid of another process holding the project's instance lock, asked of the
+    /// kernel without taking the lock.
+    fn instance_holder(project: &Project) -> Option<u32> {
+        use std::os::fd::AsRawFd;
+        let file = std::fs::File::open(project.state().join("instance.lock")).ok()?;
+        let mut lock = whole_file_write_lock();
+        // SAFETY: a live descriptor and a live `flock`.
+        let asked = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETLK, &raw mut lock) };
+        assert_eq!(asked, 0, "{}", std::io::Error::last_os_error());
+        (lock.l_type != libc::F_UNLCK as libc::c_short).then(|| u32::try_from(lock.l_pid).unwrap())
+    }
+
     fn instance_held(project: &Project) -> bool {
-        let Ok(file) = std::fs::OpenOptions::new()
-            .write(true)
-            .open(project.state().join("instance.lock"))
-        else {
-            return false;
+        instance_holder(project).is_some()
+    }
+
+    const HOLDER_ENV: &str = "SUBMILLI_TEST_INSTANCE_LOCK_HOLDER";
+    const HOLDER_IGNORES_TERM_ENV: &str = "SUBMILLI_TEST_INSTANCE_LOCK_HOLDER_IGNORES_TERM";
+
+    /// Run as its own process by [`spawn_holder`]: take the instance lock at
+    /// `$SUBMILLI_TEST_INSTANCE_LOCK_HOLDER` as a starting playground does, then wait
+    /// to be killed. Does nothing when run any other way.
+    #[test]
+    #[ignore = "a helper process the lifecycle tests start"]
+    fn instance_lock_holder_process() {
+        use std::os::fd::AsRawFd;
+        let Some(path) = std::env::var_os(HOLDER_ENV).map(PathBuf::from) else {
+            return;
         };
-        matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+        let file = open_instance_lock(&path);
+        let mut lock = whole_file_write_lock();
+        // SAFETY: a live descriptor and a live `flock`.
+        let taken = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLKW, &raw mut lock) };
+        assert_eq!(taken, 0, "{}", std::io::Error::last_os_error());
+        let record = json!({ "pid": std::process::id(), "stopping": false }).to_string();
+        std::os::unix::fs::FileExt::write_all_at(&file, record.as_bytes(), 0).unwrap();
+        if std::env::var_os(HOLDER_IGNORES_TERM_ENV).is_some() {
+            // SAFETY: setting a disposition touches no memory of this process.
+            unsafe {
+                libc::signal(libc::SIGTERM, libc::SIG_IGN);
+            }
+        }
+        std::fs::write(path.with_extension("held"), "").unwrap();
+        std::thread::sleep(Duration::from_secs(120));
+        drop(file);
+    }
+
+    /// A separate process holding the project's instance lock, killed on drop.
+    struct Holder(std::process::Child);
+
+    impl Holder {
+        fn pid(&self) -> u32 {
+            self.0.id()
+        }
+    }
+
+    impl Drop for Holder {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn spawn_holder(project: &Project, ignore_term: bool) -> Holder {
+        std::fs::create_dir_all(project.state()).unwrap();
+        let path = project.state().join("instance.lock");
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "unix::instance_lock_holder_process",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .env(HOLDER_ENV, &path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if ignore_term {
+            command.env(HOLDER_IGNORES_TERM_ENV, "1");
+        }
+        let holder = Holder(command.spawn().unwrap());
+        wait_until(
+            "the helper to hold the lock",
+            Duration::from_secs(30),
+            || path.with_extension("held").exists(),
+        );
+        assert_eq!(instance_holder(project), Some(holder.pid()));
+        holder
+    }
+
+    /// `output()`, failing the test rather than hanging when the command does not
+    /// end within `timeout`.
+    fn run_within(project: &Project, args: &[&str], timeout: Duration) -> Output {
+        let mut child = project
+            .command(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + timeout;
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{args:?} did not end within {timeout:?}");
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        child.wait_with_output().unwrap()
+    }
+
+    /// Every path under `dir`, relative to it.
+    fn tree(dir: &Path) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(next) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&next) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                paths.push(path.strip_prefix(dir).unwrap().to_path_buf());
+                stack.push(path);
+            }
+        }
+        paths.sort();
+        paths
     }
 
     /// A listener that accepts every connection and never answers.
@@ -1150,7 +1307,7 @@ mod unix {
         let project = Project::new();
         let mut first = project
             .command(&["start", "--json"])
-            .env("SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS", "3000")
+            .env("SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS", "15000")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -1163,10 +1320,13 @@ mod unix {
         first.kill().unwrap();
         first.wait().unwrap();
 
-        // The orphaned child is still starting: a start leaves it alone.
+        // The orphaned child is still starting: a start leaves it alone, and names it.
+        let child = instance_holder(&project).expect("the orphaned child");
         let output = project.run(&["start", "--json"]);
         assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-        assert!(stderr(&output).contains("starting"), "{}", stderr(&output));
+        let err = stderr(&output);
+        assert!(err.contains("starting"), "{err}");
+        assert!(err.contains(&format!("pid {child}")), "{err}");
 
         // Once it is ready, a start attaches to it rather than starting another.
         wait_until(
@@ -1180,48 +1340,283 @@ mod unix {
         assert_eq!(lock["pid"], record["pid"]);
     }
 
+    /// A `start` whose child is still starting (it waits 30s after taking the
+    /// instance lock), with stderr piped, once the child holds the lock.
+    fn start_waiting(project: &Project, ignore_hup: bool) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        let mut command = project.command(&["start", "--json"]);
+        command
+            .env("SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS", "30000")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        if ignore_hup {
+            // SAFETY: only an async-signal-safe call between fork and exec.
+            unsafe {
+                command.pre_exec(|| {
+                    libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                    Ok(())
+                });
+            }
+        }
+        let start = command.spawn().unwrap();
+        wait_until(
+            "the child to take the instance lock",
+            Duration::from_secs(30),
+            || instance_held(project),
+        );
+        start
+    }
+
+    fn wait_exit(
+        child: &mut std::process::Child,
+        what: &str,
+    ) -> (std::process::ExitStatus, String) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let exit = loop {
+            if let Some(exit) = child.try_wait().unwrap() {
+                break exit;
+            }
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let mut err = String::new();
+        if let Some(mut pipe) = child.stderr.take() {
+            pipe.read_to_string(&mut err).unwrap();
+        }
+        (exit, err)
+    }
+
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
     fn interrupting_a_start_stops_the_child_it_launched() {
         let project = Project::new();
-        let mut start = project
-            .command(&["start", "--json"])
-            .env("SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS", "5000")
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
+        for (signal, code) in [("INT", 130), ("TERM", 143), ("HUP", 129)] {
+            let mut start = start_waiting(&project, false);
+            Command::new("kill")
+                .args([&format!("-{signal}"), &start.id().to_string()])
+                .status()
+                .unwrap();
+            let (exit, err) = wait_exit(&mut start, &format!("start did not end on SIG{signal}"));
+            assert_eq!(exit.code(), Some(code), "SIG{signal}: {err}");
+            assert!(err.contains("interrupted"), "{err}");
+            wait_until("the child to end", Duration::from_secs(10), || {
+                !instance_held(&project)
+            });
+            assert!(!project.lock().exists());
+            assert!(!project.ready_file().exists());
+        }
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn a_start_under_nohup_ignores_sighup() {
+        let project = Project::new();
+        let mut start = start_waiting(&project, true);
+        Command::new("kill")
+            .args(["-HUP", &start.id().to_string()])
+            .status()
             .unwrap();
-        wait_until(
-            "the child to take the instance lock",
-            Duration::from_secs(30),
-            || instance_held(&project),
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(
+            start.try_wait().unwrap().is_none(),
+            "SIGHUP ended a nohup start"
         );
+        assert!(instance_held(&project));
         Command::new("kill")
             .args(["-INT", &start.id().to_string()])
             .status()
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let exit = loop {
-            if let Some(exit) = start.try_wait().unwrap() {
-                break exit;
-            }
-            assert!(Instant::now() < deadline, "start did not end on SIGINT");
-            std::thread::sleep(Duration::from_millis(50));
-        };
-        let mut err = String::new();
-        start
-            .stderr
-            .take()
-            .unwrap()
-            .read_to_string(&mut err)
-            .unwrap();
+        let (exit, err) = wait_exit(&mut start, "start did not end on SIGINT");
         assert_eq!(exit.code(), Some(130), "{err}");
-        assert!(err.contains("interrupted"), "{err}");
-        wait_until("the child to end", Duration::from_secs(10), || {
-            !instance_held(&project)
-        });
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn stop_ends_a_playground_that_is_still_starting() {
+        let project = Project::new();
+        let mut start = start_waiting(&project, false);
+        let child = instance_holder(&project).expect("the starting child");
+        let output = project.run(&["status", "--json"]);
+        assert_eq!(output.status.code(), Some(6), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains(&format!("pid {child}")),
+            "{}",
+            stderr(&output)
+        );
+
+        let output = project.stop();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let stopped = parse(&output);
+        assert_eq!(stopped["stopped"], true, "{stopped}");
+        assert_eq!(stopped["pid"], json!(child));
+        assert!(!instance_held(&project));
+        assert!(!pid_alive(child) || instance_holder(&project) != Some(child));
+        // The start that launched it reports that it ended before it was ready.
+        let (exit, _) = wait_exit(&mut start, "start did not end once its child stopped");
+        assert_eq!(exit.code(), Some(1));
         assert!(!project.lock().exists());
-        assert!(!project.ready_file().exists());
+    }
+
+    #[test]
+    fn status_open_and_stop_in_a_project_that_never_started_create_nothing() {
+        let project = Project::new();
+        let before = tree(&project.root);
+        for (command, code) in [("status", 6), ("open", 6), ("stop", 0)] {
+            let output = project.run(&[command, "--json"]);
+            assert_eq!(
+                output.status.code(),
+                Some(code),
+                "{command}: {}",
+                stderr(&output)
+            );
+            assert_eq!(parse(&output)["running"], false, "{command}");
+            let text = project.run(&[command]);
+            assert_eq!(
+                text.status.code(),
+                Some(code),
+                "{command}: {}",
+                stderr(&text)
+            );
+            assert!(
+                stdout(&text).contains("not running"),
+                "{command}: {}",
+                stdout(&text)
+            );
+        }
+        assert_eq!(tree(&project.root), before);
+
+        // A state directory without an instance lock is no different.
+        std::fs::create_dir_all(project.state()).unwrap();
+        let before = tree(&project.root);
+        for (command, code) in [("status", 6), ("open", 6), ("stop", 0)] {
+            let output = project.run(&[command, "--json"]);
+            assert_eq!(
+                output.status.code(),
+                Some(code),
+                "{command}: {}",
+                stderr(&output)
+            );
+        }
+        assert_eq!(tree(&project.root), before);
+    }
+
+    #[test]
+    fn a_corrupt_lock_with_a_held_instance_lock_is_starting_until_stopped() {
+        let project = Project::new();
+        let holder = spawn_holder(&project, false);
+        std::fs::write(project.lock(), "{ not json").unwrap();
+        let pid = format!("pid {}", holder.pid());
+
+        let output = project.run(&["status", "--json"]);
+        assert_eq!(output.status.code(), Some(6), "{}", stderr(&output));
+        assert!(stderr(&output).contains("starting"), "{}", stderr(&output));
+        assert!(stderr(&output).contains(&pid), "{}", stderr(&output));
+        let output = project.run(&["start", "--json"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(stderr(&output).contains(&pid), "{}", stderr(&output));
+        assert_eq!(read_lock_file(&project), "{ not json");
+
+        let output = project.stop();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(parse(&output)["pid"], json!(holder.pid()));
+        assert!(!instance_held(&project));
+    }
+
+    #[test]
+    fn a_stop_that_times_out_exits_1_naming_the_pid() {
+        let project = Project::new();
+        let holder = spawn_holder(&project, true);
+        let output = run_within(&project, &["stop", "--json"], Duration::from_secs(60));
+        assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+        let err = stderr(&output);
+        assert!(err.contains(&format!("pid {}", holder.pid())), "{err}");
+        assert!(err.contains("did not stop"), "{err}");
+        assert!(instance_held(&project));
+    }
+
+    #[test]
+    fn a_non_regular_instance_lock_is_a_clear_error() {
+        let project = Project::new();
+        std::fs::create_dir_all(project.state()).unwrap();
+        let path = project.state().join("instance.lock");
+        let fifo = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a valid C string.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        for args in [
+            &["status", "--json"][..],
+            &["stop", "--json"],
+            &["start", "--json"],
+        ] {
+            let output = run_within(&project, args, Duration::from_secs(30));
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{args:?}: {}",
+                stdout(&output)
+            );
+            let err = stderr(&output);
+            assert!(
+                err.contains("instance.lock is not a regular file"),
+                "{args:?}: {err}"
+            );
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let output = run_within(&project, &["status"], Duration::from_secs(30));
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains("instance.lock is not a regular file"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn status_and_start_say_stopping_while_the_playground_drains() {
+        let port = silent_listener();
+        let project = Project::new();
+        let record = project.start(&["--allow-localhost"]);
+        let pid = u32::try_from(record["pid"].as_u64().unwrap()).unwrap();
+        // A run that never ends holds the drain open for its grace period.
+        let program = format!(
+            "import {{ get, Response }} from \"submilli:http\";\nfunction main(): string {{ const r: Response = get(\"http://127.0.0.1:{port}/\"); return r.body; }}"
+        );
+        let url = server(&record, "/v1/execute");
+        let app = project.token("app");
+        std::thread::spawn(move || {
+            let _ = request(
+                "POST",
+                &url,
+                Some(&app),
+                &[],
+                Some(json!({ "code": program, "blueprint": "demo" })),
+            );
+        });
+        std::thread::sleep(Duration::from_millis(500));
+        let (status, _, body) = request(
+            "POST",
+            &control(&record, "/api/stop"),
+            Some(&project.token("admin")),
+            &[],
+            None,
+        );
+        assert_eq!(status, 202, "{body}");
+
+        let output = project.run(&["status", "--json"]);
+        assert_eq!(output.status.code(), Some(6), "{}", stderr(&output));
+        let status = parse(&output);
+        assert_eq!(status["stopping"], true, "{status}");
+        assert_eq!(status["running"], false, "{status}");
+        let output = project.run(&["start", "--json"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        let err = stderr(&output);
+        assert!(err.contains("stopping"), "{err}");
+        assert!(err.contains(&format!("pid {pid}")), "{err}");
+        // `stop` waits for the drain to end.
+        let output = project.stop();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(!instance_held(&project));
     }
 
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]

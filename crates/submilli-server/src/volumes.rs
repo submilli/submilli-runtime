@@ -26,8 +26,9 @@ use crate::session_manager::SessionError;
 
 pub struct VolumeRegistry {
     /// Fixed at startup, except that the operator-trusted local apply path may add
-    /// a `managed-local` volume ([`Self::declare_managed`]); nothing removes or
-    /// changes a declaration. Poison means a panic interrupted such an addition;
+    /// a `managed-local` volume ([`Self::declare_managed`]), and withdraw one it
+    /// just added when the blueprint naming it was not stored
+    /// ([`Self::withdraw_managed`]); nothing changes a declaration. Poison means a panic interrupted such an addition;
     /// AGENTS.md permits the poisoned-lock panic rather than reading a table that
     /// may be half-updated.
     table: RwLock<VolumeTable>,
@@ -210,6 +211,25 @@ impl VolumeRegistry {
         }
         table.insert(volume.to_owned(), VolumeSpec::managed(size_limit));
         Ok(true)
+    }
+
+    /// Removes a `managed-local` declaration [`Self::declare_managed`] added. Only the
+    /// local apply path calls this, for a volume it declared under the blueprint tag
+    /// lock it still holds, when the blueprint that names the volume was not
+    /// stored: no stored blueprint references it, so no run resolves it.
+    pub(crate) fn withdraw_managed(&self, volume: &str) {
+        // Lock order: the table, then the quotas, as in `declare_managed`.
+        let mut table = self.table.write().expect("volume table poisoned");
+        if table
+            .get(volume)
+            .is_some_and(|spec| matches!(spec.kind, VolumeKind::ManagedLocal))
+        {
+            table.remove(volume);
+            self.quotas
+                .write()
+                .expect("volume quotas poisoned")
+                .remove(volume);
+        }
     }
 
     fn spec(&self, volume: &str) -> Option<VolumeSpec> {
@@ -526,6 +546,30 @@ mod tests {
                 "the host path stays in the log: {err}"
             );
         }
+    }
+
+    #[test]
+    fn a_withdrawn_declaration_is_gone_and_can_be_made_again() {
+        let root = tempfile::tempdir().unwrap();
+        let registry = registry(root.path(), VolumeTable::new());
+        assert_eq!(
+            registry.declare_managed("notes", SizeLimit::Bytes(10)),
+            Ok(true)
+        );
+        registry.withdraw_managed("notes");
+        assert!(!registry.table().contains_key("notes"));
+        assert!(
+            !registry
+                .quotas
+                .read()
+                .expect("volume quotas poisoned")
+                .contains_key("notes")
+        );
+        assert!(registry.check_reference("notes", None).is_err());
+        assert_eq!(
+            registry.declare_managed("notes", SizeLimit::Unlimited),
+            Ok(true)
+        );
     }
 
     #[tokio::test]

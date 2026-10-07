@@ -23,9 +23,13 @@ mod client;
 #[cfg(unix)]
 mod control_auth;
 #[cfg(unix)]
+mod fsx;
+#[cfg(unix)]
 mod host;
 #[cfg(unix)]
 mod labels;
+#[cfg(unix)]
+mod log;
 #[cfg(unix)]
 mod packages;
 #[cfg(unix)]
@@ -39,12 +43,20 @@ mod store;
 #[cfg(unix)]
 mod watch;
 
-/// Not running, or a lock whose listener failed the nonce challenge.
-const EXIT_NOT_RUNNING: u8 = 6;
+// Exit codes. 0 is success, including a `stop` that found nothing running; 1 is
+// any other failure, including a `stop` that timed out.
+/// `start` found a playground starting, stopping, or not answering, and left it alone.
+const EXIT_BUSY: u8 = 1;
 /// No project to serve, or no single blueprint in it.
 const EXIT_NO_PROJECT: u8 = 2;
 /// A package the blueprint needs could not be built or found.
 const EXIT_PACKAGE_RESOLUTION: u8 = 5;
+/// `status`, `open`, or `stop` found no playground it can reach: none running, or
+/// one starting, stopping, or failing the nonce challenge.
+const EXIT_UNREACHABLE: u8 = 6;
+// A start interrupted while it waits stops what it launched and exits as the shell
+// reports the signal: 129 for SIGHUP, 130 for SIGINT, 143 for SIGTERM. A signal
+// the caller ignores (`nohup`) stays ignored.
 
 #[derive(ClapArgs)]
 #[command(args_conflicts_with_subcommands = true)]
@@ -410,14 +422,15 @@ mod unix {
     use serde_json::json;
 
     use super::client::{self, Busy, Probe};
-    use super::host::{self, HostOptions};
+    use super::host::{self, HostOptions, Status};
     use super::packages::ProjectPackages;
     use super::project::{self, DiscoveryError, Project};
     use super::scaffold;
-    use super::state::{Lock, StateDir, random_hex};
+    use super::state::{InstanceRecord, StateDir, random_hex};
+    use super::watch::describe_refusal;
     use super::{
-        EXIT_NO_PROJECT, EXIT_NOT_RUNNING, EXIT_PACKAGE_RESOLUTION, Egress, Output, ReadyRecord,
-        StartArgs, login_code_ttl_text, login_url, print_description,
+        EXIT_BUSY, EXIT_NO_PROJECT, EXIT_PACKAGE_RESOLUTION, EXIT_UNREACHABLE, Egress, Output,
+        ReadyRecord, StartArgs, login_code_ttl_text, login_url, print_description,
     };
 
     /// How long a background start waits for its child to be ready.
@@ -426,10 +439,6 @@ mod unix {
     const STOP_TIMEOUT: Duration = Duration::from_secs(20);
     const POLL: Duration = Duration::from_millis(25);
     const NONCE_ENV: &str = "SUBMILLI_PLAYGROUND_START_NONCE";
-    /// `start` found a playground starting or not answering, and left it alone.
-    const EXIT_BUSY: u8 = 1;
-    /// `start` was interrupted while it waited, and stopped what it launched.
-    const EXIT_INTERRUPTED: u8 = 130;
 
     pub(super) fn start(args: StartArgs) -> Result<ExitCode> {
         let output = super::Output::from_json(args.json);
@@ -501,9 +510,9 @@ mod unix {
         drop(start_lock);
         match result {
             Ok(Waited::Ready) => {}
-            Ok(Waited::Interrupted) => {
+            Ok(Waited::Interrupted(signal)) => {
                 eprintln!("interrupted; the playground this start launched was stopped");
-                return Ok(ExitCode::from(EXIT_INTERRUPTED));
+                return Ok(ExitCode::from(interrupt::exit_code(signal)));
             }
             Err(error) => {
                 eprintln!("{error:#}");
@@ -511,7 +520,10 @@ mod unix {
             }
         }
         match client::probe(&state)? {
-            Probe::Running(running) => print_ready(&running, output, false),
+            Probe::Running(running) => {
+                let status = running.status()?;
+                print_ready(&running, &status, output, false)
+            }
             Probe::NotRunning | Probe::Stale(_) | Probe::Busy(_) => {
                 eprintln!("the playground started but does not answer its control listener");
                 Ok(ExitCode::from(1))
@@ -619,6 +631,13 @@ mod unix {
         output: Output,
     ) -> Result<ExitCode> {
         let status = running.status()?;
+        if status.stopping {
+            let busy = Busy::Stopping {
+                pid: Some(status.description.pid),
+            };
+            eprintln!("{}", busy.message());
+            return Ok(ExitCode::from(EXIT_BUSY));
+        }
         let description = &status.description;
         let same_blueprint = same_path(&description.blueprint.path, &project.blueprint);
         let mut asked = egress.grants();
@@ -637,9 +656,7 @@ mod unix {
                 }
             );
         }
-        let code = running.mint_login_code()?;
-        ReadyRecord::new(description, status.packages_error.as_deref(), &code, true).print(output);
-        Ok(ExitCode::SUCCESS)
+        print_ready(running, &status, output, true)
     }
 
     fn same_path(one: &std::path::Path, other: &std::path::Path) -> bool {
@@ -649,9 +666,15 @@ mod unix {
         }
     }
 
-    fn print_ready(running: &client::Running, output: Output, attached: bool) -> Result<ExitCode> {
+    /// The ready record for `status` with a fresh login code: `attached` when this
+    /// start found the playground already running.
+    fn print_ready(
+        running: &client::Running,
+        status: &Status,
+        output: Output,
+        attached: bool,
+    ) -> Result<ExitCode> {
         let code = running.mint_login_code()?;
-        let status = running.status()?;
         ReadyRecord::new(
             &status.description,
             status.packages_error.as_deref(),
@@ -665,8 +688,9 @@ mod unix {
     /// How a wait for the child ended, when it did not fail.
     enum Waited {
         Ready,
-        /// This process was told to stop while it waited; the child was stopped too.
-        Interrupted,
+        /// This process was told to stop, by this signal, while it waited; the
+        /// child was stopped too.
+        Interrupted(libc::c_int),
     }
 
     /// Re-execute this binary as a detached child that serves the playground, and
@@ -705,12 +729,15 @@ mod unix {
             .checked_add(timeout)
             .with_context(|| format!("a ready timeout of {}s is too long", timeout.as_secs()))?;
         let mut child = command.spawn().context("starting the playground")?;
+        let abandon = |child: &mut std::process::Child| {
+            let _ = child.kill();
+            let _ = child.wait();
+            state.remove_if_ours(nonce);
+        };
         loop {
-            if interrupts.interrupted() {
-                let _ = child.kill();
-                let _ = child.wait();
-                state.remove_if_ours(nonce);
-                return Ok(Waited::Interrupted);
+            if let Some(signal) = interrupts.interrupted() {
+                abandon(&mut child);
+                return Ok(Waited::Interrupted(signal));
             }
             if let Some(exit) = child.try_wait().context("waiting for the playground")? {
                 state.remove_if_ours(nonce);
@@ -725,12 +752,10 @@ mod unix {
                 .as_ref()
                 .is_some_and(|ready| accepts(ready, nonce, child.id()))
             {
-                return Ok(Waited::Ready);
+                break;
             }
             if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                state.remove_if_ours(nonce);
+                abandon(&mut child);
                 bail!(
                     "the playground was not ready within {:.1}s and was stopped; its log is {}",
                     timeout.as_secs_f64(),
@@ -739,10 +764,16 @@ mod unix {
             }
             std::thread::sleep(POLL);
         }
+        // A signal that arrived after the last check is still this start's to honor.
+        if let Some(signal) = interrupts.interrupted() {
+            abandon(&mut child);
+            return Ok(Waited::Interrupted(signal));
+        }
+        Ok(Waited::Ready)
     }
 
     /// Only the ready file this start's child wrote counts.
-    fn accepts(ready: &Lock, nonce: &str, child: u32) -> bool {
+    fn accepts(ready: &InstanceRecord, nonce: &str, child: u32) -> bool {
         ready.nonce == nonce && ready.pid == child
     }
 
@@ -756,6 +787,14 @@ mod unix {
             Probe::NotRunning | Probe::Stale(_) => return not_running(output),
         };
         let mut status = running.status()?;
+        if status.stopping {
+            return busy_exit(
+                output,
+                &Busy::Stopping {
+                    pid: Some(status.description.pid),
+                },
+            );
+        }
         let health = if running.server_healthy() {
             "ok"
         } else {
@@ -780,10 +819,7 @@ mod unix {
                     println!("  version:    {version} in force");
                 }
                 if let Some(refused) = &blueprint.refused {
-                    let line = refused
-                        .line
-                        .map_or_else(String::new, |line| format!("line {line}: "));
-                    println!("  refused:    {line}{}", refused.message);
+                    println!("  refused:    {}", describe_refusal(refused));
                 }
             }
         }
@@ -799,9 +835,17 @@ mod unix {
             Probe::Busy(busy) => return busy_exit(output, &busy),
             Probe::NotRunning | Probe::Stale(_) => return not_running(output),
         };
+        let page = running.page()?;
+        if page.stopping {
+            return busy_exit(
+                output,
+                &Busy::Stopping {
+                    pid: Some(running.lock.pid),
+                },
+            );
+        }
         let code = running.mint_login_code()?;
-        let status = running.status()?;
-        let url = &status.description.url;
+        let url = &page.url;
         let login_url = login_url(url, &code);
         match output {
             Output::Json => println!(
@@ -830,32 +874,73 @@ mod unix {
                 state.remove_if_ours(&stale.nonce);
                 return stopped(output, None, "not running (removed a stale lock)");
             }
+            Probe::Busy(Busy::Starting { pid: Some(pid) }) => {
+                return stop_starting(&state, output, pid);
+            }
+            Probe::Busy(Busy::Stopping { pid: Some(pid) }) => {
+                wait_for_exit(&state, pid, None)?;
+                return stopped(output, Some(pid), "stopped");
+            }
             Probe::Busy(busy) => return busy_exit(output, &busy),
             Probe::Running(running) => running,
         };
         running.stop()?;
         let lock = running.lock.clone();
+        wait_for_exit(&state, lock.pid, Some(&lock.nonce))?;
+        state.remove_if_ours(&lock.nonce);
+        stopped(output, Some(lock.pid), "stopped")
+    }
+
+    /// An instance still starting has no control listener yet: it is sent SIGTERM,
+    /// which ends it before it serves (or drains it if it just began to).
+    fn stop_starting(state: &StateDir, output: Output, pid: u32) -> Result<ExitCode> {
+        // Asked again just before the signal: it goes to the process the kernel
+        // says holds the instance lock, never to a pid since reused.
+        if state.instance_holder()?.and_then(|holder| holder.pid) != Some(pid) {
+            return stopped(output, None, "not running");
+        }
+        let target = libc::pid_t::try_from(pid)
+            .with_context(|| format!("pid {pid} is not a process id here"))?;
+        // SAFETY: kill takes plain integers and touches no memory.
+        if unsafe { libc::kill(target, libc::SIGTERM) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error).with_context(|| format!("signaling the playground (pid {pid})"));
+            }
+        }
+        wait_for_exit(state, pid, None)?;
+        stopped(output, Some(pid), "stopped")
+    }
+
+    /// Wait until `pid` no longer holds the instance lock. The lock goes when the
+    /// process ends, however it ends; a lock file with a nonce other than `nonce`
+    /// is a new instance, which is not this stop's to wait for.
+    fn wait_for_exit(state: &StateDir, pid: u32, nonce: Option<&str>) -> Result<()> {
         let deadline = Instant::now()
             .checked_add(STOP_TIMEOUT)
             .context("the clock cannot represent the stop deadline")?;
-        // The instance lock goes when the process ends, however it ends; a lock
-        // with another nonce is a new instance, which is not this stop's to wait for.
-        while state.instance_held()?
-            && !state
-                .read_lock()?
-                .is_some_and(|current| current.nonce != lock.nonce)
-        {
+        loop {
+            let gone = state
+                .instance_holder()?
+                .is_none_or(|holder| holder.pid.is_some_and(|held| held != pid));
+            let replaced = nonce.is_some_and(|nonce| {
+                state
+                    .read_lock()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|current| current.nonce != nonce)
+            });
+            if gone || replaced {
+                return Ok(());
+            }
             if Instant::now() >= deadline {
                 bail!(
-                    "the playground (pid {}) did not stop within {}s",
-                    lock.pid,
+                    "the playground (pid {pid}) did not stop within {}s",
                     STOP_TIMEOUT.as_secs()
                 );
             }
             std::thread::sleep(POLL);
         }
-        state.remove_if_ours(&lock.nonce);
-        stopped(output, Some(lock.pid), "stopped")
     }
 
     /// A process serves the project but cannot be reached: said, and exit 6, with
@@ -864,12 +949,17 @@ mod unix {
         match output {
             Output::Json => println!(
                 "{}",
-                json!({ "running": true, "busy": true, "pid": busy.pid() })
+                json!({
+                    "running": !busy.stopping(),
+                    "busy": true,
+                    "stopping": busy.stopping(),
+                    "pid": busy.pid(),
+                })
             ),
             Output::Text => {}
         }
         eprintln!("{}", busy.message());
-        Ok(ExitCode::from(EXIT_NOT_RUNNING))
+        Ok(ExitCode::from(EXIT_UNREACHABLE))
     }
 
     fn stopped(output: Output, pid: Option<u32>, message: &str) -> Result<ExitCode> {
@@ -895,7 +985,7 @@ mod unix {
                 );
             }
         }
-        Ok(ExitCode::from(EXIT_NOT_RUNNING))
+        Ok(ExitCode::from(EXIT_UNREACHABLE))
     }
 
     /// The state directory of the project around the current directory, if any.
@@ -908,16 +998,26 @@ mod unix {
     /// SIGINT, SIGTERM, and SIGHUP noted rather than acted on, while a start waits
     /// for the child it launched, so it can stop that child before it exits.
     mod interrupt {
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::atomic::{AtomicI32, Ordering};
 
         use anyhow::Result;
 
         const SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
 
-        static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+        /// The last signal noted, or 0.
+        static INTERRUPTED: AtomicI32 = AtomicI32::new(0);
 
-        extern "C" fn note(_: libc::c_int) {
-            INTERRUPTED.store(true, Ordering::SeqCst);
+        extern "C" fn note(signal: libc::c_int) {
+            INTERRUPTED.store(signal, Ordering::SeqCst);
+        }
+
+        /// How the shell reports a process ended by `signal`: 128 plus its number.
+        pub(super) fn exit_code(signal: libc::c_int) -> u8 {
+            match signal {
+                libc::SIGHUP => 129,
+                libc::SIGTERM => 143,
+                _ => 130,
+            }
         }
 
         /// The handlers, installed until it drops, which puts back what was there.
@@ -927,20 +1027,31 @@ mod unix {
 
         impl Guard {
             pub(super) fn install() -> Result<Self> {
-                INTERRUPTED.store(false, Ordering::SeqCst);
+                INTERRUPTED.store(0, Ordering::SeqCst);
                 let mut guard = Self {
                     previous: Vec::with_capacity(SIGNALS.len()),
                 };
                 for signal in SIGNALS {
                     // SAFETY: a zeroed sigaction is a valid "no handler, empty mask"
                     // value to fill in; `note` only stores to an atomic, which is
-                    // async-signal-safe; both pointers are to live locals.
+                    // async-signal-safe; every pointer is to a live local or null,
+                    // which sigaction accepts for the action it does not set.
                     let previous = unsafe {
+                        let mut previous: libc::sigaction = std::mem::zeroed();
+                        if libc::sigaction(signal, std::ptr::null(), &mut previous) != 0 {
+                            return Err(anyhow::anyhow!(
+                                "reading a signal's handler: {}",
+                                std::io::Error::last_os_error()
+                            ));
+                        }
+                        // Ignored by whoever started this (`nohup`): left ignored.
+                        if previous.sa_sigaction == libc::SIG_IGN {
+                            continue;
+                        }
                         let mut action: libc::sigaction = std::mem::zeroed();
                         action.sa_sigaction = note as extern "C" fn(libc::c_int) as usize;
                         libc::sigemptyset(&mut action.sa_mask);
-                        let mut previous: libc::sigaction = std::mem::zeroed();
-                        if libc::sigaction(signal, &action, &mut previous) != 0 {
+                        if libc::sigaction(signal, &action, std::ptr::null_mut()) != 0 {
                             return Err(anyhow::anyhow!(
                                 "installing a signal handler: {}",
                                 std::io::Error::last_os_error()
@@ -953,8 +1064,9 @@ mod unix {
                 Ok(guard)
             }
 
-            pub(super) fn interrupted(&self) -> bool {
-                INTERRUPTED.load(Ordering::SeqCst)
+            /// The signal this process was told to stop by, if any.
+            pub(super) fn interrupted(&self) -> Option<libc::c_int> {
+                Some(INTERRUPTED.load(Ordering::SeqCst)).filter(|signal| *signal != 0)
             }
         }
 

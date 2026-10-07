@@ -1323,3 +1323,272 @@ fn the_audit_window_holds_the_runs_decided_under_the_current_version() {
         .unwrap();
     assert_eq!(in_window(), [2, 3]);
 }
+
+// ---- redaction pinned to the record formats ----------------------------------------------
+
+/// Words the store's record formats own: enum tags and the like, each at least
+/// [`super::redact::MIN_SECRET_BYTES`] long.
+const FORMAT_WORDS: [&str; 12] = [
+    "run-started",
+    "call-started",
+    "decision",
+    "call-finished",
+    "run-finished",
+    "returned",
+    "tool-call",
+    "gated-op",
+    "runtime-invariant",
+    "variable-not-bound",
+    "base64",
+    "permission_denied",
+];
+
+/// User data holding the secret and, in angle brackets, every format word.
+fn tainted(field: &str) -> String {
+    let words: Vec<String> = FORMAT_WORDS
+        .iter()
+        .map(|word| format!("<{word}>"))
+        .collect();
+    format!("{field} {SECRET} {}", words.join(" "))
+}
+
+#[test]
+fn no_user_data_shares_a_place_with_a_value_the_format_owns() {
+    // Every format word is also a secret, so redacting it breaks each record's tags and
+    // the fallback leaves those tags alone. User data must never sit where a tag does:
+    // every occurrence in user data, bracketed, has to be gone everywhere.
+    let world = World::new();
+    world.secrets.add(SECRET);
+    for word in FORMAT_WORDS {
+        world.secrets.add(word);
+    }
+    let t = tainted;
+    let session = t("session");
+    let execution = t("exec");
+    let start = RunStart {
+        execution_id: execution.clone(),
+        label: t("label"),
+        entry: RunEntry::McpFileTool { tool: t("tool") },
+        test_of: Some(t("tested")),
+        client: Some(t("client")),
+        tool_call_id: Some(t("tool-call-id")),
+        session_id: Some(session.clone()),
+        idempotency_key: Some(t("idem")),
+        blueprint_name: t("blueprint"),
+        blueprint: Arc::new(Blueprint::default()),
+        blueprint_hash: Some(t("hash")),
+        blueprint_version: Some(t("version")),
+        variables: Arc::new(VarBindings::from([("customerId".to_owned(), t("var"))])),
+        harness_secrets: Arc::default(),
+        code: Some(Arc::from(t("code").as_str())),
+    };
+    let context = json!({
+        "kind": t("context kind"),
+        "list": [t("item"), { "kind": t("nested") }],
+    });
+    let mut first = decision(0, &t("capability"), context.clone(), false);
+    first.caller = t("caller");
+    first.source = t("source");
+    first.reason = Some(t("reason"));
+    first.cause = DecisionCause::RuntimeInvariant {
+        reason: t("invariant"),
+    };
+    first.near_misses = vec![interpreter::runtime::NearMissRecord {
+        rule: RuleCitation {
+            caller: t("rule caller"),
+            index: 0,
+            name: Some(t("rule name")),
+        },
+        filter: t("filter"),
+        failures: vec![interpreter::runtime::FailureRecord {
+            comparison: t("comparison"),
+            actual: Some(context.clone()),
+            expected: Some(t("expected")),
+            reason: interpreter::runtime::FailureReasonRecord::VariableNotBound(t("variable")),
+            negated: false,
+        }],
+    }];
+    let mut second = decision(1, "http.get", json!(t("plain")), true);
+    second.cause = DecisionCause::Rule(RuleCitation {
+        caller: t("cited caller"),
+        index: 1,
+        name: Some(t("cited name")),
+    });
+    let mut first_call = call(0, &t("capability"), Some(&t("response")));
+    first_call.caller = t("caller");
+    let request = first_call.request.as_mut().unwrap();
+    request.meta = context.clone();
+    request.body = Some(BodyCopy::Base64(
+        base64::engine::general_purpose::STANDARD.encode(t("binary")),
+    ));
+    request.masked_headers = vec![t("header")];
+    let mut run = finished(vec![first.clone(), second], vec![first_call.clone()]);
+    run.error = Some(ExecuteError {
+        kind: ErrorKind::PermissionDenied,
+        message: t("message"),
+        diagnostics: Vec::new(),
+        denial: Some(submilli_server::error::DenialDetails {
+            caller: t("denied caller"),
+            capability: t("denied capability"),
+            source: "policy",
+        }),
+    });
+    run.result = Some(t("result"));
+    run.console = t("console");
+
+    let event = |seq: u64, kind: EventKind| SessionEvent {
+        schema: EVENT_SCHEMA,
+        event_id: t(&format!("event {seq}")),
+        seq,
+        at_micros: super::now_micros() + seq,
+        session_id: Some(session.clone()),
+        run_id: Some(execution.clone()),
+        tool_call_id: Some(t("tool-call-id")),
+        kind,
+    };
+    let recorder = world.start(start);
+    let kinds = [
+        EventKind::RunStarted {
+            label: t("label"),
+            entry: t("entry"),
+            client: Some(t("client")),
+            blueprint: t("blueprint"),
+            blueprint_hash: Some(t("hash")),
+            code_hash: Some(t("code hash")),
+        },
+        EventKind::CallStarted {
+            call_index: 0,
+            caller: t("caller"),
+            capability: t("capability"),
+            started_micros: 0,
+            line: None,
+        },
+        EventKind::Decision {
+            record: Box::new(first),
+        },
+        call_finished(&first_call),
+        EventKind::Returned { bytes: 4 },
+        EventKind::ToolCall {
+            tool: t("tool"),
+            ok: true,
+            result_bytes: 1,
+            wall_ms: 1,
+        },
+    ];
+    let appended = kinds.len();
+    for (seq, kind) in (1..).zip(kinds) {
+        world.recorder.event(event(seq, kind));
+    }
+    recorder.finish(run);
+    world.recorder.event(event(99, run_finished(0)));
+
+    let stored = world.store.load_run(1).unwrap().expect("the run is stored");
+    assert_eq!(stored.recording.decisions.len(), 2);
+    let log = world.store.read_events(Some(&session)).unwrap();
+    // Every event is written (and the run's record may add some it backfills).
+    assert!(log.events.len() > appended, "{}", log.events.len());
+    assert_eq!(log.skipped, 0);
+    let files = world.files();
+    for (path, bytes) in &files {
+        let mut text = String::from_utf8_lossy(bytes).into_owned();
+        // A base64 body copy, decoded.
+        for copy in text.clone().split("\"data\":\"").skip(1) {
+            let data = copy.split('"').next().unwrap();
+            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(data) {
+                text.push_str(&String::from_utf8_lossy(&decoded));
+            }
+        }
+        assert!(
+            !text.contains(SECRET),
+            "{} holds the secret",
+            path.display()
+        );
+        for word in FORMAT_WORDS {
+            assert!(
+                !text.contains(&format!("<{word}>")),
+                "{} keeps {word} in user data",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_record_whose_redaction_needs_more_probes_than_the_cap_is_not_written() {
+    let world = World::new();
+    // Tags of a decision event and of a decision in a run, so redacting either record
+    // breaks it and its changes have to be probed one shape at a time.
+    world.secrets.add("decision");
+    world.secrets.add("gated-op");
+    let context: serde_json::Map<String, Value> = (0..70)
+        .map(|n| (format!("k{n}"), json!(format!("a decision {n} gated-op"))))
+        .collect();
+    let record = decision(0, "http.get", Value::Object(context), true);
+    let recorder = world.start(run_start("exec-1", Some("sess")));
+    world.recorder.event(event(
+        1,
+        "sess",
+        "exec-1",
+        EventKind::Decision {
+            record: Box::new(record.clone()),
+        },
+    ));
+    recorder.finish(finished(vec![record], Vec::new()));
+    assert!(world.store.load_run(1).unwrap().is_none(), "run not stored");
+    assert!(
+        world
+            .store
+            .read_events(Some("sess"))
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    // The number the dropped event would have had is not used up.
+    world
+        .recorder
+        .event(event(2, "sess", "exec-1", run_finished(0)));
+    let log = world.store.read_events(Some("sess")).unwrap();
+    let seqs: Vec<u64> = log.events.iter().map(|event| event.session_seq).collect();
+    assert_eq!(seqs, [1]);
+}
+
+#[test]
+fn a_write_cut_before_its_newline_does_not_reuse_its_number() {
+    let world = World::new();
+    world.start(run_start("exec-1", Some("sess")));
+    world
+        .recorder
+        .event(event(1, "sess", "exec-1", run_started()));
+    // A write that reached the file whole but for its newline, numbered 2.
+    let path = world.store.events_path(Some("sess"));
+    let written = std::fs::read_to_string(&path).unwrap();
+    let cut = written
+        .trim_end()
+        .replace("\"session_seq\":1", "\"session_seq\":2")
+        .replace("srv-1", "srv-cut");
+    assert_ne!(cut, written.trim_end());
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    std::io::Write::write_all(&mut file, cut.as_bytes()).unwrap();
+    drop(file);
+    world
+        .recorder
+        .event(event(2, "sess", "exec-1", call_started(0)));
+    let seqs = |store: &Store| -> Vec<u64> {
+        store
+            .read_events(Some("sess"))
+            .unwrap()
+            .events
+            .iter()
+            .map(|event| event.session_seq)
+            .collect()
+    };
+    assert_eq!(seqs(&world.store), [1, 2, 3]);
+    let reopened = Arc::new(world.reopen());
+    let recorder = Recorder::new(Arc::clone(&reopened), KnownSecrets::default());
+    recorder.start(run_start("exec-2", Some("sess")));
+    recorder.event(event(3, "sess", "exec-2", run_started()));
+    assert_eq!(seqs(&reopened), [1, 2, 3, 4]);
+}

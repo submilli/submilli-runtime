@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::control_auth::{CHALLENGE_BYTES, challenge_response};
 use super::host::Status;
-use super::state::{Lock, StateDir, random_hex};
+use super::state::{InstanceRecord, StateDir, random_hex};
 
 /// Long enough for a loaded playground to answer, short enough that a listener
 /// that never answers is reported rather than hanging the command.
@@ -20,7 +20,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) enum Probe {
     NotRunning,
     /// A lock no serving process holds: what it names is gone.
-    Stale(Lock),
+    Stale(InstanceRecord),
     /// A process serves this project but cannot be reached now: it is still
     /// starting, or it did not answer the challenge in time. Never replaced.
     Busy(Busy),
@@ -29,7 +29,9 @@ pub(crate) enum Probe {
 
 pub(crate) enum Busy {
     /// The instance lock is held but no lock names an instance yet.
-    Starting,
+    Starting { pid: Option<u32> },
+    /// The instance is draining and will exit; a start waits for it to end.
+    Stopping { pid: Option<u32> },
     /// The lock's listener did not answer the challenge, or answered it wrong.
     NotAnswering { pid: u32 },
 }
@@ -37,18 +39,30 @@ pub(crate) enum Busy {
 impl Busy {
     pub(crate) fn pid(&self) -> Option<u32> {
         match self {
-            Self::Starting => None,
+            Self::Starting { pid } | Self::Stopping { pid } => *pid,
             Self::NotAnswering { pid } => Some(*pid),
         }
     }
 
+    pub(crate) fn stopping(&self) -> bool {
+        matches!(self, Self::Stopping { .. })
+    }
+
     pub(crate) fn message(&self) -> String {
+        let pid = self
+            .pid()
+            .map_or_else(String::new, |pid| format!(" (pid {pid})"));
         match self {
-            Self::Starting => "a Submilli playground is starting for this project; try again \
-                               in a moment"
-                .to_owned(),
-            Self::NotAnswering { pid } => format!(
-                "a Submilli playground (pid {pid}) serves this project but did not answer its \
+            Self::Starting { .. } => format!(
+                "a Submilli playground{pid} is starting for this project; try again in a \
+                 moment, or end it with `submilli playground stop`"
+            ),
+            Self::Stopping { .. } => format!(
+                "a Submilli playground{pid} is stopping for this project; try again in a \
+                 moment"
+            ),
+            Self::NotAnswering { .. } => format!(
+                "a Submilli playground{pid} serves this project but did not answer its \
                  control listener within {}s; it may be busy. Try again, or end the process \
                  if it is stuck",
                 CHALLENGE_TIMEOUT.as_secs()
@@ -57,8 +71,15 @@ impl Busy {
     }
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct Page {
+    pub(crate) url: String,
+    #[serde(default)]
+    pub(crate) stopping: bool,
+}
+
 pub(crate) struct Running {
-    pub(crate) lock: Lock,
+    pub(crate) lock: InstanceRecord,
     agent: ureq::Agent,
     admin: String,
 }
@@ -70,17 +91,15 @@ pub(crate) fn probe(state: &StateDir) -> Result<Probe> {
     // The lock before the instance lock: an instance takes the instance lock before
     // it writes its lock, so a lock read here and no holder after means it is gone.
     let lock = state.read_lock()?;
-    let held = state.instance_held()?;
-    let Some(lock) = lock else {
-        return Ok(if held {
-            Probe::Busy(Busy::Starting)
-        } else {
-            Probe::NotRunning
-        });
+    let Some(holder) = state.instance_holder()? else {
+        return Ok(lock.map_or(Probe::NotRunning, Probe::Stale));
     };
-    if !held {
-        return Ok(Probe::Stale(lock));
+    if holder.stopping {
+        return Ok(Probe::Busy(Busy::Stopping { pid: holder.pid }));
     }
+    let Some(lock) = lock else {
+        return Ok(Probe::Busy(Busy::Starting { pid: holder.pid }));
+    };
     let agent = agent(CHALLENGE_TIMEOUT);
     if !answers_challenge(&agent, &lock) {
         return Ok(Probe::Busy(Busy::NotAnswering { pid: lock.pid }));
@@ -94,7 +113,7 @@ pub(crate) fn probe(state: &StateDir) -> Result<Probe> {
     }))
 }
 
-fn answers_challenge(agent: &ureq::Agent, lock: &Lock) -> bool {
+fn answers_challenge(agent: &ureq::Agent, lock: &InstanceRecord) -> bool {
     let Ok(challenge) = random_hex(CHALLENGE_BYTES) else {
         return false;
     };
@@ -123,6 +142,12 @@ fn answers_challenge(agent: &ureq::Agent, lock: &Lock) -> bool {
 
 impl Running {
     pub(crate) fn status(&self) -> Result<Status> {
+        self.call("GET", "/api/status")
+    }
+
+    /// Only the page's address, and whether the instance is stopping: what `open`
+    /// needs, from an instance of any version.
+    pub(crate) fn page(&self) -> Result<Page> {
         self.call("GET", "/api/status")
     }
 
@@ -182,7 +207,7 @@ impl Running {
     }
 }
 
-fn base(lock: &Lock) -> String {
+fn base(lock: &InstanceRecord) -> String {
     format!("http://127.0.0.1:{}", lock.control_port)
 }
 

@@ -11,8 +11,8 @@
 //! playground reads or opens must be a regular file owned by this user, tightened
 //! to 0600 if it was looser.
 
-use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{self, Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -34,9 +34,9 @@ pub(crate) const APP_TOKEN: &str = "app";
 
 /// What the running playground leaves on disk for other commands: its pid, both
 /// ports, and the start nonce the control listener proves it knows. The lock
-/// and the ready file share this shape; neither carries a credential.
+/// file and the ready file share this shape; neither carries a credential.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Lock {
+pub(crate) struct InstanceRecord {
     pub(crate) pid: u32,
     pub(crate) control_port: u16,
     pub(crate) server_port: u16,
@@ -45,6 +45,55 @@ pub(crate) struct Lock {
 
 pub(crate) struct StateDir {
     root: PathBuf,
+}
+
+/// The process holding the instance lock, as another command sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Holder {
+    /// `None` only when neither the kernel nor the file names it.
+    pub(crate) pid: Option<u32>,
+    /// It has begun to drain and will exit.
+    pub(crate) stopping: bool,
+}
+
+/// What the holder writes into `instance.lock`.
+#[derive(Serialize, Deserialize)]
+struct HolderRecord {
+    pid: u32,
+    stopping: bool,
+}
+
+/// The instance lock, held until dropped (or the process ends).
+pub(crate) struct InstanceLock {
+    file: File,
+    path: PathBuf,
+}
+
+impl InstanceLock {
+    /// Write this process's pid, and whether it is stopping, into the file, through
+    /// the descriptor that holds the lock (opening another would release it).
+    pub(crate) fn record(&self, stopping: bool) -> Result<()> {
+        use std::os::unix::fs::FileExt;
+        let bytes = serde_json::to_vec(&HolderRecord {
+            pid: std::process::id(),
+            stopping,
+        })?;
+        self.file
+            .set_len(0)
+            .and_then(|()| self.file.write_all_at(&bytes, 0))
+            .with_context(|| format!("writing {}", self.path.display()))
+    }
+}
+
+/// A request for a write lock on the whole file.
+fn whole_file_write_lock() -> libc::flock {
+    // SAFETY: `flock` is a plain C struct for which all-zero bytes are valid: start
+    // 0 and length 0 cover the whole file.
+    let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+    // The F_* and SEEK_* constants are small and fit a c_short on every platform.
+    lock.l_type = libc::F_WRLCK as libc::c_short;
+    lock.l_whence = libc::SEEK_SET as libc::c_short;
+    lock
 }
 
 impl StateDir {
@@ -119,6 +168,15 @@ impl StateDir {
             }
         }
         own_real_dir(parent)?;
+        // Writable by others, `.submilli` would let them swap the state directory.
+        let mode = fs::symlink_metadata(parent)
+            .with_context(|| format!("checking {}", parent.display()))?
+            .permissions()
+            .mode();
+        if mode & 0o022 != 0 {
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+                .with_context(|| format!("restricting {}", parent.display()))?;
+        }
         for dir in [
             self.root.clone(),
             self.root.join("tokens"),
@@ -127,7 +185,7 @@ impl StateDir {
             self.ephemeral_vfs_dir(),
             self.volumes_dir(),
         ] {
-            private_dir(&dir)?;
+            owned_private_dir(&dir)?;
         }
         let gitignore = self.root.join(".gitignore");
         if !gitignore.exists() {
@@ -179,20 +237,20 @@ impl StateDir {
         Ok(token.trim().to_owned())
     }
 
-    pub(crate) fn read_lock(&self) -> Result<Option<Lock>> {
+    pub(crate) fn read_lock(&self) -> Result<Option<InstanceRecord>> {
         read_record(&self.lock_path())
     }
 
-    pub(crate) fn read_ready(&self) -> Result<Option<Lock>> {
+    pub(crate) fn read_ready(&self) -> Result<Option<InstanceRecord>> {
         read_record(&self.ready_path())
     }
 
-    pub(crate) fn write_lock(&self, lock: &Lock) -> Result<()> {
-        write_private(&self.lock_path(), &serde_json::to_vec(lock)?)
+    pub(crate) fn write_lock(&self, record: &InstanceRecord) -> Result<()> {
+        write_private(&self.lock_path(), &serde_json::to_vec(record)?)
     }
 
-    pub(crate) fn write_ready(&self, lock: &Lock) -> Result<()> {
-        write_private(&self.ready_path(), &serde_json::to_vec(lock)?)
+    pub(crate) fn write_ready(&self, record: &InstanceRecord) -> Result<()> {
+        write_private(&self.ready_path(), &serde_json::to_vec(record)?)
     }
 
     /// Remove the lock and the ready file if they belong to the instance started
@@ -202,7 +260,7 @@ impl StateDir {
             if read_record(&path)
                 .ok()
                 .flatten()
-                .is_some_and(|lock| lock.nonce == nonce)
+                .is_some_and(|record| record.nonce == nonce)
             {
                 let _ = fs::remove_file(&path);
             }
@@ -223,31 +281,78 @@ impl StateDir {
     /// The instance lock, taken for the serving process's whole life: `None` when
     /// another process holds it, so two instances never serve one state directory.
     /// The kernel releases it when the process ends, however it ends.
-    pub(crate) fn instance_lock(&self) -> Result<Option<File>> {
+    ///
+    /// It is a POSIX record lock (`fcntl`), not `flock`, so other commands can ask
+    /// who holds it (`F_GETLK`) without taking it: a probe never makes a starting
+    /// instance refuse, and the kernel names the holder's pid. A record lock belongs
+    /// to the process and goes when *any* descriptor of the file closes in it, so
+    /// the serving process opens `instance.lock` only here, once, and never calls
+    /// [`Self::instance_holder`].
+    pub(crate) fn instance_lock(&self) -> Result<Option<InstanceLock>> {
+        use std::os::fd::AsRawFd;
         let path = self.instance_lock_path();
         let file = open_private(&path, false)?;
-        match file.try_lock() {
-            Ok(()) => Ok(Some(file)),
-            Err(TryLockError::WouldBlock) => Ok(None),
-            Err(TryLockError::Error(error)) => {
-                Err(error).with_context(|| format!("locking {}", path.display()))
-            }
+        let mut lock = whole_file_write_lock();
+        // SAFETY: the descriptor is open for the duration of the call and `lock` is
+        // a live, initialized `flock` the kernel only reads for F_SETLK.
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &raw mut lock) } == -1 {
+            let error = io::Error::last_os_error();
+            return match error.raw_os_error() {
+                Some(libc::EAGAIN | libc::EACCES) => Ok(None),
+                _ => Err(error).with_context(|| format!("locking {}", path.display())),
+            };
         }
+        let instance = InstanceLock { file, path };
+        instance.record(false)?;
+        Ok(Some(instance))
     }
 
-    /// Whether a process serves this state directory now, starting or running:
-    /// it holds the instance lock.
-    pub(crate) fn instance_held(&self) -> Result<bool> {
+    /// Who serves this state directory now, starting, running, or stopping: the
+    /// process holding the instance lock, found without taking it. `None` when no
+    /// process holds it or there is no `instance.lock`; nothing is created.
+    pub(crate) fn instance_holder(&self) -> Result<Option<Holder>> {
+        use std::os::fd::AsRawFd;
         let path = self.instance_lock_path();
-        let file = open_private(&path, false)?;
-        match file.try_lock_shared() {
-            // Released when `file` drops at the end of this call.
-            Ok(()) => Ok(false),
-            Err(TryLockError::WouldBlock) => Ok(true),
-            Err(TryLockError::Error(error)) => {
-                Err(error).with_context(|| format!("checking {}", path.display()))
+        let mut file = match OpenOptions::new()
+            .read(true)
+            // A FIFO in its place must not hang the command before it is refused.
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
+                bail!("{} is a symlink", path.display())
             }
+            Err(error) => {
+                return Err(error).with_context(|| format!("opening {}", path.display()));
+            }
+        };
+        own_private_file(&file, &path)?;
+        let mut lock = whole_file_write_lock();
+        // SAFETY: the descriptor is open for the duration of the call and `lock` is
+        // a live, initialized `flock` the kernel overwrites with the conflicting lock.
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETLK, &raw mut lock) } == -1 {
+            return Err(io::Error::last_os_error())
+                .with_context(|| format!("checking {}", path.display()));
         }
+        if lock.l_type == libc::F_UNLCK as libc::c_short {
+            return Ok(None);
+        }
+        let mut text = String::new();
+        let record = file
+            .read_to_string(&mut text)
+            .ok()
+            .and_then(|_| serde_json::from_str::<HolderRecord>(&text).ok());
+        // The kernel's answer first; the pid the holder wrote where the kernel does
+        // not know it (a network filesystem reports 0).
+        let pid = u32::try_from(lock.l_pid)
+            .ok()
+            .filter(|pid| *pid != 0)
+            .or(record.as_ref().map(|record| record.pid));
+        // A record another pid wrote is a previous holder's, left by a crash.
+        let stopping = record.is_some_and(|record| record.stopping && Some(record.pid) == pid);
+        Ok(Some(Holder { pid, stopping }))
     }
 
     fn instance_lock_path(&self) -> PathBuf {
@@ -260,7 +365,7 @@ impl StateDir {
     }
 }
 
-fn read_record(path: &Path) -> Result<Option<Lock>> {
+fn read_record(path: &Path) -> Result<Option<InstanceRecord>> {
     let Some(text) = read_private(path).with_context(|| format!("reading {}", path.display()))?
     else {
         return Ok(None);
@@ -301,7 +406,9 @@ fn own_real_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn private_dir(path: &Path) -> Result<()> {
+/// Creates `path` (not its parents) as a 0700 directory, or checks that an existing
+/// one is a real directory this user owns and tightens it to 0700.
+fn owned_private_dir(path: &Path) -> Result<()> {
     match fs::DirBuilder::new().mode(0o700).create(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -343,7 +450,8 @@ fn open_private(path: &Path, truncate: bool) -> Result<File> {
         .truncate(truncate)
         .write(true)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
+        // A FIFO in its place is refused below rather than waited on.
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
         .with_context(|| format!("opening {}", path.display()))?;
     own_private_file(&file, path)?;
@@ -355,7 +463,8 @@ fn open_private(path: &Path, truncate: bool) -> Result<File> {
 fn read_private(path: &Path) -> Result<Option<String>> {
     let mut file = match OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        // A FIFO in its place is refused below rather than waited on.
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
     {
         Ok(file) => file,
@@ -395,14 +504,7 @@ fn staged(path: &Path, bytes: &[u8]) -> Result<tempfile::NamedTempFile> {
     let dir = path
         .parent()
         .with_context(|| format!("{} has no parent directory", path.display()))?;
-    let mut staged = tempfile::Builder::new()
-        .prefix(".staged-")
-        .permissions(fs::Permissions::from_mode(0o600))
-        .tempfile_in(dir)
-        .with_context(|| format!("writing {}", path.display()))?;
-    staged.write_all(bytes)?;
-    staged.as_file().sync_all()?;
-    Ok(staged)
+    super::fsx::stage(dir, bytes).with_context(|| format!("writing {}", path.display()))
 }
 
 /// `bytes` random bytes from the operating system, as lowercase hex.
@@ -498,16 +600,44 @@ mod tests {
     }
 
     #[test]
-    fn the_instance_lock_is_held_by_one_holder_at_a_time() {
+    fn a_missing_instance_lock_has_no_holder_and_is_not_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = StateDir::for_project(dir.path());
+        assert_eq!(state.instance_holder().unwrap(), None);
+        assert!(!dir.path().join(".submilli").exists());
+        state.create().unwrap();
+        assert_eq!(state.instance_holder().unwrap(), None);
+        assert!(!state.instance_lock_path().exists());
+    }
+
+    #[test]
+    fn the_instance_lock_records_its_holder() {
         let dir = tempfile::tempdir().unwrap();
         let state = StateDir::for_project(dir.path());
         state.create().unwrap();
-        assert!(!state.instance_held().unwrap());
+        // Only the record is checked here: reading the file in the holding process
+        // releases its record lock, and the kernel never reports a process's own
+        // lock to it. The lifecycle tests probe it from other processes.
         let held = state.instance_lock().unwrap().expect("first holder");
-        assert!(state.instance_held().unwrap());
-        assert!(state.instance_lock().unwrap().is_none());
-        drop(held);
-        assert!(!state.instance_held().unwrap());
-        assert!(state.instance_lock().unwrap().is_some());
+        let read = || -> HolderRecord {
+            serde_json::from_slice(&fs::read(state.instance_lock_path()).unwrap()).unwrap()
+        };
+        assert_eq!(read().pid, std::process::id());
+        assert!(!read().stopping);
+        held.record(true).unwrap();
+        assert!(read().stopping);
+    }
+
+    #[test]
+    fn a_dot_submilli_writable_by_others_is_tightened() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".submilli")).unwrap();
+        fs::set_permissions(
+            dir.path().join(".submilli"),
+            fs::Permissions::from_mode(0o777),
+        )
+        .unwrap();
+        StateDir::for_project(dir.path()).create().unwrap();
+        assert_eq!(mode(&dir.path().join(".submilli")), 0o700);
     }
 }

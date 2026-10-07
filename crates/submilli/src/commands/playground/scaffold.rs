@@ -296,6 +296,26 @@ mod tests {
     }
 
     #[test]
+    fn a_staging_folder_left_by_an_interrupted_init_does_not_block_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        // An init killed before its rename leaves its staging folder behind.
+        let leftover = dir.path().join(".submilli-init-abc123");
+        std::fs::create_dir_all(leftover.join("packages")).unwrap();
+        std::fs::write(leftover.join("submilli.toml"), "partial").unwrap();
+        let scaffolded = init(dir.path()).unwrap();
+        assert_eq!(scaffolded.files.len(), FILES.len());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(FOLDER).join("submilli.toml")).unwrap(),
+            MANIFEST
+        );
+        // The leftover is the developer's to remove; init neither uses nor deletes it.
+        assert_eq!(
+            std::fs::read_to_string(leftover.join("submilli.toml")).unwrap(),
+            "partial"
+        );
+    }
+
+    #[test]
     fn the_starter_blueprint_parses_and_pins_the_customer() {
         let blueprint = submilli_blueprint::parse(BLUEPRINT).unwrap();
         assert_eq!(blueprint.name, BLUEPRINT_NAME);
