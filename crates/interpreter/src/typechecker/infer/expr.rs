@@ -1353,6 +1353,9 @@ impl Inferer<'_> {
                         ),
                     );
                 }
+                if self.is_global_nan(typed_lhs)? || self.is_global_nan(typed_rhs)? {
+                    self.error_nan_comparison(op, span);
+                }
                 // `void` has no runtime value to compare, and the comparison
                 // otherwise typechecks clean and panics in codegen.
                 let rhs_void = rt.carries_void().then(|| rt.clone());

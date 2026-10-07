@@ -112,6 +112,32 @@ impl super::Inferer<'_> {
     }
 }
 
+impl super::Inferer<'_> {
+    /// Whether `typed` reads the global `NaN`, not a local of that name. `tsc`
+    /// reports comparing it with `===` or `!==` (TS2845), since `NaN` equals
+    /// nothing, itself included. Like `tsc`, `Number.NaN` is not checked.
+    pub(super) fn is_global_nan(&self, typed: ExprId) -> Result<bool, CompilerFailure> {
+        let typed = self
+            .typed_ast
+            .try_expr(typed)
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(matches!(
+            &typed.kind,
+            TypedExprKind::GlobalRef { mangled, name }
+                if name.name == "NaN" && crate::mangle::is_builtin(mangled)
+        ))
+    }
+
+    pub(super) fn error_nan_comparison(&mut self, op: crate::BinOp, span: crate::Span) {
+        let always = if op == crate::BinOp::NotEq { "true" } else { "false" };
+        self.error_with_help(
+            span,
+            format!("this comparison is always `{always}`: `NaN` is not equal to any value, itself included"),
+            vec!["use `Number.isNaN(x)` to test for `NaN`".to_string()],
+        );
+    }
+}
+
 impl ComparisonOperand {
     /// An operand that is not an enum member, compared as its type.
     fn of_type(ty: Type) -> Self {
