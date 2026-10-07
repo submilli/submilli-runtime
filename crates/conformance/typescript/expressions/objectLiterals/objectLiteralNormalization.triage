@@ -1,4 +1,4 @@
-line 6, 7, 8, 9, 10, 11, 12, 15, 16, 17, 18, 19, 20, 21, 22, 39, 40, 41, 42, 43, 44 type: by-design spec §Excluded-Features there is no `undefined`, so a field a normalized union adds is optional `null` where tsc writes `?: undefined`, and the array literal already holds the normalized union where tsc normalizes only on widening
+line 6, 7, 8, 9, 10, 11, 12, 15, 16, 17, 18, 19, 20, 21, 22, 39, 40, 41, 42, 43, 44 type: by-design spec §Excluded-Features there is no `undefined`, so a field a normalized union adds is optional `never` where tsc writes `?: undefined`, and the array literal already holds the normalized union where tsc normalizes only on widening
 line 13 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
 line 26, 27 type: by-design spec §2.5 a spread of a union merges its members into one object type with optional fields
 line 32, 33 type: bug SUB-1196 (literals from constant expressions) `!` on an operand of known truthiness isn't a literal type

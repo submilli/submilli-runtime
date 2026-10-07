@@ -107,31 +107,3 @@ line 58: config.y
 line 59: config.z
   tsc:  number
   ours: number | null
-
-errors:
-line 34: ours: cannot spread `false` into an object literal (tsc accepts)
-line 35: ours: cannot spread `false` into an object literal (tsc accepts)
-line 36: ours: cannot spread `false` into an object literal (tsc accepts)
-line 37: ours: cannot spread `false` into an object literal (tsc accepts)
-line 38: ours: cannot spread `false` into an object literal (tsc accepts)
-line 39: ours: cannot spread `false` into an object literal (tsc accepts)
-line 40: ours: cannot spread `false` into an object literal (tsc accepts)
-line 41: ours: cannot spread `false` into an object literal (tsc accepts)
-line 42: ours: cannot spread `false` into an object literal (tsc accepts)
-line 43: ours: cannot spread `false` into an object literal (tsc accepts)
-line 44: ours: cannot spread `false` into an object literal (tsc accepts)
-line 45: ours: cannot spread `false` into an object literal (tsc accepts)
-line 46: ours: cannot spread `false` into an object literal (tsc accepts)
-line 47: ours: cannot spread `false` into an object literal (tsc accepts)
-line 48: ours: cannot spread `false` into an object literal (tsc accepts)
-line 49: ours: cannot spread `false` into an object literal (tsc accepts)
-line 50: ours: cannot spread `false` into an object literal (tsc accepts)
-line 51: ours: cannot spread `false` into an object literal (tsc accepts)
-line 52: ours: cannot spread `false` into an object literal (tsc accepts)
-line 53: ours: cannot spread `false` into an object literal (tsc accepts)
-line 54: ours: cannot spread `false` into an object literal (tsc accepts)
-line 55: ours: cannot spread `false` into an object literal (tsc accepts)
-line 56: ours: cannot spread `false` into an object literal (tsc accepts)
-line 57: ours: cannot spread `false` into an object literal (tsc accepts)
-line 58: ours: cannot spread `false` into an object literal (tsc accepts)
-line 59: ours: cannot spread `false` into an object literal (tsc accepts)

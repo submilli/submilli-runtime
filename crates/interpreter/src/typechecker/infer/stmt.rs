@@ -275,27 +275,13 @@ impl Inferer<'_> {
                 doc,
             } => {
                 let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-                let (typed_value, source_ty) = self.infer_expr(source, hint.as_ref())?;
-                let narrowed = match source_ty.clone() {
-                    Type::Object { mut fields, .. } => {
-                        for excl in &exclude {
-                            fields.remove(&excl.name);
-                        }
-                        Type::Object {
-                            index: None,
-                            fields,
-                        }
-                    }
-                    other => {
-                        self.error(
-                            span,
-                            format!(
-                                "object rest can only destructure an object with a known shape; \
-                                 source has type `{other}`",
-                            ),
-                        );
-                        other
-                    }
+                let (typed_source, source_ty) = self.infer_expr(source, hint.as_ref())?;
+                let rest = self.object_rest(typed_source, &source_ty, &exclude, span)?;
+                let (typed_value, narrowed) = if let Some(rest) = rest {
+                    rest
+                } else {
+                    self.report_unshaped_rest_source(&source_ty, span);
+                    (typed_source, Type::Error)
                 };
                 self.scopes
                     .insert(name.name.clone(), narrowed.clone(), true, name.span);
@@ -320,6 +306,19 @@ impl Inferer<'_> {
                 })
                 .map_err(crate::typechecker::arena_failure)?,
         ))
+    }
+
+    fn report_unshaped_rest_source(&mut self, source_ty: &Type, span: Span) {
+        if matches!(source_ty.peel(), Type::Error) {
+            return;
+        }
+        self.error(
+            span,
+            format!(
+                "object rest can only destructure an object with a known shape; source has \
+                 type `{source_ty}`",
+            ),
+        );
     }
 
     fn infer_return(
@@ -419,6 +418,7 @@ impl Inferer<'_> {
         // narrowing: `let done = false` reads as `false` until reassigned.
         let (typed_value, value_ty) =
             self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
+        let value_ty = self.reject_evolving_empty_array(&name, hint.is_some(), value, value_ty)?;
         // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
         // let b = a;` binds `number`, not `1`. A literal type the value got from
         // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
@@ -474,6 +474,7 @@ impl Inferer<'_> {
         let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
         let (typed_value, value_ty) =
             self.infer_expr_keeping_literals(value, hint.as_ref(), hint.is_none())?;
+        let value_ty = self.reject_evolving_empty_array(&name, hint.is_some(), value, value_ty)?;
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());
         let bound = self.pattern_binding_storage_type(value, bound)?;
@@ -508,6 +509,41 @@ impl Inferer<'_> {
             value: typed_value,
             doc,
         })
+    }
+
+    /// An unannotated `[]` bound to a variable the code later reassigns or adds
+    /// elements to is, in tsc, an array typed by those writes. Submilli types
+    /// a value where it is declared, so it asks for the element type there.
+    /// Any other unannotated `[]` holds nothing, as its `never[]` says.
+    fn reject_evolving_empty_array(
+        &mut self,
+        name: &Ident,
+        annotated: bool,
+        value: ExprId,
+        value_ty: Type,
+    ) -> Result<Type, CompilerFailure> {
+        if annotated || !self.grown_bindings.contains(&name.span) {
+            return Ok(value_ty);
+        }
+        let value = self.ast.try_expr(value).map_err(super::arena_failure)?;
+        let crate::ExprKind::ArrayLiteral { elements } = &value.kind else {
+            return Ok(value_ty);
+        };
+        if !elements.is_empty() {
+            return Ok(value_ty);
+        }
+        self.error_with_help(
+            value.span,
+            format!(
+                "cannot infer the element type of `{}` from an empty array",
+                name.name
+            ),
+            vec![format!(
+                "`{}` is reassigned or gains elements later; annotate its element type, as in `{}: T[] = []`",
+                name.name, name.name
+            )],
+        );
+        Ok(Type::Array(Box::new(Type::Error)))
     }
 
     fn infer_if_statement(
@@ -3306,9 +3342,19 @@ impl Inferer<'_> {
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
             // A union of arrays and tuples is one `$Array` at runtime too. It
             // follows the string arm, which takes unions of string literals.
-            Type::Union(_) => iter_ty
-                .array_like_union_element()
-                .map(|element| (element, crate::ForOfKind::Array)),
+            Type::Union(_) => {
+                if let Some(element) = iter_ty.array_like_union_element() {
+                    return Some((element, crate::ForOfKind::Array));
+                }
+                // A union of strings with arrays has no shared representation;
+                // the desugar picks the string's or the array's iterator.
+                let arrays = iter_ty.string_or_array_union_arrays()?;
+                let (element, _) = self.classify_for_of_source(&arrays)?;
+                Some((
+                    Type::union(vec![Type::String, element]),
+                    crate::ForOfKind::Iterable,
+                ))
+            }
             // Exact-name match keeps Iterator<U> on its own desugar path
             // (it declares `next()`, not `iterator()`, so it fails the structural check below).
             Type::InterfaceRef { name, args, .. } if name == "Iterator" && args.len() == 1 => {

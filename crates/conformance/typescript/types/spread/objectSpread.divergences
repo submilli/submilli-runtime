@@ -1,4 +1,4 @@
-types: 169 of 308 tsc entries compared, 48 differ
+types: 169 of 308 tsc entries compared, 44 differ
 
 line 14: { ...{ a: 3, ...{ b: false, c: 'overriden' } }, c: 'whatever' }
   tsc:  { c: string; b: false; a: number; }
@@ -24,14 +24,6 @@ line 20: { b: false, c: 'overriden' }
   tsc:  { b: false; c: string; }
   ours: { b: boolean; c: string }
 
-line 48: o2
-  tsc:  { x?: number | undefined; }
-  ours: {}
-
-line 48: { ...b && { x: 21 }}
-  tsc:  { x?: number | undefined; }
-  ours: {}
-
 line 55: nt && { x: nt }
   tsc:  0 | { x: number; }
   ours: number | { x: number }
@@ -47,14 +39,6 @@ line 57: { ...nt && { x: nt }}
 line 57: nt && { x: nt }
   tsc:  0 | { x: number; }
   ours: number | { x: number }
-
-line 66: o2
-  tsc:  { x?: string | undefined; }
-  ours: {}
-
-line 66: { ...st && { x: st }}
-  tsc:  { x?: string | undefined; }
-  ours: {}
 
 line 127: x01
   tsc:  T
@@ -194,12 +178,8 @@ line 143: { ...t, ...v, ...w }
 
 errors:
 line 31: ours: cannot spread `() => void` into an object literal (tsc accepts)
-line 46: ours: cannot spread `false` into an object literal (tsc accepts)
-line 48: ours: cannot spread `false` into an object literal (tsc accepts)
 line 55: ours: cannot spread `number` into an object literal (tsc accepts)
 line 57: ours: cannot spread `number` into an object literal (tsc accepts)
-line 64: ours: cannot spread `""` into an object literal (tsc accepts)
-line 66: ours: cannot spread `""` into an object literal (tsc accepts)
 line 127: ours: cannot spread `T` into an object literal (tsc accepts)
 line 128: ours: cannot spread `T` into an object literal (tsc accepts)
 line 129: ours: cannot spread `T` into an object literal (tsc accepts)

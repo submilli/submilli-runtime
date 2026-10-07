@@ -246,7 +246,7 @@ impl Inferer<'_> {
     }
 
     /// Declares a `const` temporary holding `expr`, and returns a read of it.
-    fn hold_in_temp(
+    pub(super) fn hold_in_temp(
         &mut self,
         expr: ExprId,
         role: &str,
@@ -285,7 +285,7 @@ impl Inferer<'_> {
             .map_err(crate::typechecker::arena_failure)
     }
 
-    fn reread_temp(
+    pub(super) fn reread_temp(
         &mut self,
         held: ExprId,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {

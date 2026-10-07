@@ -37,7 +37,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 te
 | `boolean` | §1.1 | done | 482 | 107 | 375 | 0 | 1711 | 1 of 1 | — | — |  |
 | `null` | §1.1 | done | 386 | 73 | 313 | 0 | 1370 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 500 | 41 | 459 | 0 | 584 | 1 of 1 | — | — |  |
-| `never` | §1.1 | done | 72 | 8 | 64 | 0 | 67 | 1 of 1 | — | — |  |
+| `never` | §1.1 | done | 72 | 8 | 64 | 0 | 97 | 1 of 1 | — | — |  |
 | `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 30 | 1 of 1 | 16 | 68 |  |
 | Radix literals (`0x`/`0b`/`0o`) | §1.1 | done | 22 | 3 | 19 | 0 | 15 | 4 of 4 | — | — |  |
 | Numeric separators (`1_000`) | §1.1 | done | 6 | 2 | 4 | 0 | 9 | 1 of 1 | — | — |  |
@@ -64,7 +64,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 te
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Function declarations | §1.4 | done | 1368 | 158 | 1210 | 0 | 663 | 1 of 1 | — | — |  |
+| Function declarations | §1.4 | done | 1368 | 158 | 1210 | 0 | 664 | 1 of 1 | — | — |  |
 | Nested function declarations | §1.4 | done | 62 | 4 | 58 | 0 | 1 | 1 of 1 | — | — |  |
 | Arrow functions | §1.4 | done | 563 | 61 | 502 | 0 | 132 | 1 of 1 | — | — |  |
 | Closures (function expressions and arrows in a function) | §1.4 | done | 205 | 21 | 184 | 0 | 46 | 1 of 1 | — | — |  |
@@ -80,7 +80,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 te
 | `while` | §1.5 | done | 53 | 9 | 44 | 0 | 37 | 1 of 1 | — | — |  |
 | `do…while` | §1.5 | done | 19 | 3 | 16 | 0 | 22 | 1 of 1 | — | — |  |
 | `for` (C-style) | §1.5 | done | 57 | 4 | 53 | 0 | 17 | 1 of 1 | — | — |  |
-| `for…of` | §1.5 | done | 210 | 44 | 166 | 0 | 87 | 1 of 1 | — | — |  |
+| `for…of` | §1.5 | done | 210 | 44 | 166 | 0 | 88 | 1 of 1 | — | — |  |
 | `switch` | §1.5 | done | 58 | 16 | 42 | 0 | 84 | 1 of 1 | — | — |  |
 | `break` / `continue` | §1.5 | done | 96 | 18 | 78 | 0 | 21 | 2 of 2 | — | — |  |
 
@@ -150,7 +150,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 te
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Generic functions | §2.1 | done | 591 | 55 | 536 | 0 | 129 | 1 of 1 | — | — |  |
+| Generic functions | §2.1 | done | 591 | 55 | 536 | 0 | 130 | 1 of 1 | — | — |  |
 | Generic types | §2.1 | done | 294 | 21 | 273 | 0 | 85 | 1 of 1 | — | — |  |
 | Explicit type arguments | §2.1 | done | 133 | 24 | 109 | 0 | 36 | 1 of 1 | — | — |  |
 

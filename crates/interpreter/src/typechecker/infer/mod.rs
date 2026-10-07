@@ -3,6 +3,7 @@
 mod aliased_conditions;
 mod assign_expr;
 pub(crate) mod assignable;
+mod best_common_type;
 mod binding_analysis;
 mod classes;
 mod closure_arity;
@@ -136,6 +137,7 @@ pub fn infer_with_transitive_checked<'a>(
         arithmetic_targets: bindings.arithmetic_targets,
         arithmetic_written_globals: bindings.arithmetic_written_globals,
         last_assignments: bindings.last_assignments,
+        grown_bindings: bindings.grown_bindings,
         nested_function_creation_points: bindings.nested_function_creation_points,
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
@@ -410,6 +412,7 @@ pub fn infer_package_checked<'a>(
         arithmetic_targets: Default::default(),
         arithmetic_written_globals: Default::default(),
         last_assignments: Default::default(),
+        grown_bindings: Default::default(),
         nested_function_creation_points: Default::default(),
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
@@ -759,6 +762,8 @@ pub(super) struct Inferer<'a> {
     pub(super) arithmetic_targets: std::collections::HashSet<(String, Span)>,
     pub(super) arithmetic_written_globals: std::collections::HashSet<String>,
     pub(super) last_assignments: std::collections::HashMap<Span, u32>,
+    /// See `binding_analysis::Analysis::grown_bindings`.
+    pub(super) grown_bindings: std::collections::HashSet<Span>,
     /// From the binding analysis: nested functions that capture a local of
     /// their block, by name span, with the last declared of those locals. See
     /// [`nested_functions`].
@@ -1022,6 +1027,7 @@ impl<'a> Inferer<'a> {
         self.arithmetic_targets = bindings.arithmetic_targets;
         self.arithmetic_written_globals = bindings.arithmetic_written_globals;
         self.last_assignments = bindings.last_assignments;
+        self.grown_bindings = bindings.grown_bindings;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
         self.nested_functions.clear();
         self.diagnostics.extend(bindings.diagnostics);

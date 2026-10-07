@@ -27,16 +27,21 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         Err(error) => return Err(error),
     };
 
-    let resp = match agent.post(&format!("{base}/v1/shutdown")).send_empty() {
-        Ok(response) => response,
+    match agent.post(&format!("{base}/v1/shutdown")).send_empty() {
+        Ok(response) => {
+            if ok_or_report(response).is_none() {
+                return Ok(ExitCode::from(1));
+            }
+        }
         Err(ureq::Error::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
             println!("already stopped (no server at {base})");
             return Ok(ExitCode::SUCCESS);
         }
+        // The server may close the connection as it starts draining, before
+        // its reply is read. Whether it is stopping is settled by the polling
+        // below, which only succeeds once a fresh connection is refused.
+        Err(ureq::Error::Io(error)) if closed_mid_exchange(&error) => {}
         Err(error) => return Err(error.into()),
-    };
-    if ok_or_report(resp).is_none() {
-        return Ok(ExitCode::from(1));
     }
 
     if wait_until_stopped(|| agent.get(&format!("{base}/healthz")).call().map(|_| ()))? {
@@ -59,12 +64,21 @@ fn wait_until_stopped(mut probe: impl FnMut() -> Result<(), ureq::Error>) -> any
             {
                 return Ok(true);
             }
-            Err(ureq::Error::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+            Err(ureq::Error::Io(error)) if closed_mid_exchange(&error) => {}
             Err(error) => return Err(error.into()),
         }
         std::thread::sleep(POLL_INTERVAL);
     }
     Ok(false)
+}
+
+/// Whether the server closed an open connection mid-request, as a draining
+/// listener can: reset, or closed before the response (`UnexpectedEof`).
+fn closed_mid_exchange(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::UnexpectedEof
+    )
 }
 
 #[cfg(test)]
@@ -84,6 +98,18 @@ mod tests {
             .expect("shutdown polling");
         assert!(stopped);
         assert!(responses.next().is_none(), "reset must not report success");
+    }
+
+    #[test]
+    fn a_connection_closed_before_the_response_keeps_polling() {
+        let mut responses = [
+            Err(ureq::Error::Io(ErrorKind::UnexpectedEof.into())),
+            Err(ureq::Error::Io(ErrorKind::ConnectionRefused.into())),
+        ]
+        .into_iter();
+        let stopped = wait_until_stopped(|| responses.next().expect("unexpected extra poll"))
+            .expect("shutdown polling");
+        assert!(stopped);
     }
 
     #[test]
