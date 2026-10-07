@@ -1491,8 +1491,6 @@ impl Inferer<'_> {
         )
     }
 
-    /// Handle an argument that didn't unify with its parameter: a structural
-    /// match may still bind it; otherwise report it, unless `already_reported`.
     /// `Array.from({ length }, mapFn)` calls `mapFn` with `undefined` for each
     /// element, which has no type here: the element arrives as `null`. A
     /// callback whose element type doesn't admit `null` would read that
@@ -1552,6 +1550,8 @@ impl Inferer<'_> {
         Ok(())
     }
 
+    /// Handle an argument that didn't unify with its parameter: a structural
+    /// match may still bind it; otherwise report it, unless `already_reported`.
     fn unify_argument_error(
         &mut self,
         error: UnifyError,

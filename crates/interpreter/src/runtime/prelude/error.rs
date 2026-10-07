@@ -15,13 +15,12 @@
 //! and `name` at slot 1. Construction is host-only — guests call the imported
 //! constructor; a user subclass's `super(...)` calls the self-first ctor-init.
 //!
-//! `RangeError`, `TypeError`, `SyntaxError`, `URIError`, and `ReferenceError` are the
-//! host-implemented
-//! `Error` subclasses:
-//! same layout, one shared `(rec $Subclass_vtable $Subclass)` pair subtyping
-//! the `$Error` pair (canonical identity includes the supertype, so consumers'
-//! imported-class reconstruction produces the same engine types — and all
-//! subclasses canonicalize to the same pair), and per-class vtable singletons
+//! `RangeError`, `TypeError`, `SyntaxError`, `URIError`, and `ReferenceError`
+//! are the host-implemented `Error` subclasses: same layout, one shared
+//! `(rec $Subclass_vtable $Subclass)` pair subtyping the `$Error` pair
+//! (canonical identity includes the supertype, so consumers' imported-class
+//! reconstruction produces the same engine types — and all subclasses
+//! canonicalize to the same pair), and per-class vtable singletons
 //! whose parent link is the `Error` vtable — the nominal-identity chain
 //! `instanceof` and typed catch walk.
 
@@ -633,10 +632,10 @@ fn error_equals(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
 
 /// Which of an Error instance's inherited `message`/`name` slots are not own
 /// enumerable properties, so `Object.keys` and JSON leave them out, as
-/// JavaScript does: `message` is not an own enumerable property, and
-/// `name` is one only when the instance assigned it. An assigned `name` can't
-/// be told from the one the constructor stored, so a `name` equal to a built-in
-/// error class's is taken as the constructor's. Likewise a subclass that
+/// JavaScript does: `message` never is, and `name` is one only when the
+/// instance assigned it. An assigned `name` can't be told from the one the
+/// constructor stored, so a `name` equal to a built-in error class's is taken
+/// as the constructor's. Likewise a subclass that
 /// redeclares `message` as a class field still has it left out. `None` for a
 /// non-Error value.
 pub(crate) fn non_enumerable_slots(

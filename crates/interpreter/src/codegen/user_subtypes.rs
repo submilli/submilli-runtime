@@ -326,6 +326,8 @@ fn emit_subtype_to_string_body(
     )));
     f.instruction(&Instruction::LocalSet(self_t));
 
+    // The outer block yields the result string; the inner one is left for the
+    // `[object Object]` fallback below it when the field slot is null.
     f.instruction(&Instruction::Block(BlockType::Result(ref_to(
         intrinsics.string,
     ))));

@@ -4,8 +4,8 @@
 //! lone surrogate either raw or as a `\uD800` escape. Both must survive into the
 //! parsed string, as they do in JavaScript, so this reader never decodes to
 //! Rust's UTF-8 `String`. Its grammar, recursion limit and error texts follow
-//! `serde_json`, which the runtime used before and which the MCP and other host
-//! paths still use for text that is always well-formed UTF-8.
+//! `serde_json`, which the MCP and other host paths use for text that is always
+//! well-formed UTF-8, so both readers accept and reject the same documents.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
