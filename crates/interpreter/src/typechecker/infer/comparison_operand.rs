@@ -182,7 +182,7 @@ fn constant_substitution(ast: &crate::Ast, id: ExprId) -> Result<Option<String>,
     )
 }
 
-fn constant_number(ast: &crate::Ast, id: ExprId) -> Result<Option<f64>, CompilerFailure> {
+pub(super) fn constant_number(ast: &crate::Ast, id: ExprId) -> Result<Option<f64>, CompilerFailure> {
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
             ExprKind::Paren(inner) => constant_number(ast, *inner)?,

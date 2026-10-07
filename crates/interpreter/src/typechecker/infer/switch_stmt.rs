@@ -383,7 +383,20 @@ impl Inferer<'_> {
                     );
                     continue;
                 }
-                let Some(lit) = classify_switch_case_value(&val_kind, value_span) else {
+                let signed_number = || -> Result<_, CompilerFailure> {
+                    // `-1` and `+2` are literals to `tsc`. Adding `0.0` makes `-0`
+                    // the same label as `0`, which `===` can't tell apart either.
+                    Ok(super::comparison_operand::constant_number(self.ast, *value_expr)?
+                        .map(|value| TypedSwitchValue::Number {
+                            value: value + 0.0,
+                            span: value_span,
+                        }))
+                };
+                let lit = match classify_switch_case_value(&val_kind, value_span) {
+                    Some(lit) => Some(lit),
+                    None => signed_number()?,
+                };
+                let Some(lit) = lit else {
                     self.error(
                         value_span,
                         "`case` label must be a literal (string, number, boolean, `null`, or enum member)".to_string(),
