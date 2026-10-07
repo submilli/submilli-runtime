@@ -583,7 +583,12 @@ fn build_object_vtable(
                     *abi_result(results, 0)? = value;
                     return Ok(());
                 }
-                let st = write_submilli_string_struct(&mut *caller, "[object Object]")?;
+                let tag = match collection_backing_kind(&mut *caller, abi_arg(params, 0)?)? {
+                    Some(CollectionBacking::Map) => "[object Map]",
+                    Some(CollectionBacking::Set) => "[object Set]",
+                    None => "[object Object]",
+                };
+                let st = write_submilli_string_struct(&mut *caller, tag)?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
