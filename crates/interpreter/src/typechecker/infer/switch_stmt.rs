@@ -919,14 +919,18 @@ impl Inferer<'_> {
         };
         let mut left = Vec::new();
         for member in narrowing::union_members(ty) {
-            match super::comparable::enum_member_types(member.peel(), self.resolver()) {
-                Some(members) if member.peel().enum_member_value().is_none() => {
-                    if !self.names_every_member(member, covered) {
-                        left.extend(members.into_iter().filter(|m| !is_named(m)));
-                    }
+            let whole_enum = !member.peel().is_enum_member();
+            if whole_enum
+                && let Some(members) =
+                    super::comparable::enum_member_types(member.peel(), self.resolver())
+            {
+                if !self.names_every_member(member, covered) {
+                    left.extend(members.into_iter().filter(|m| !is_named(m)));
                 }
-                _ if is_named(member) => {}
-                _ => left.push(member.clone()),
+                continue;
+            }
+            if !is_named(member) {
+                left.push(member.clone());
             }
         }
         Type::union(left)

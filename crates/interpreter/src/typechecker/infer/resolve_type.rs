@@ -1,6 +1,4 @@
 use crate::compiler_error::CompilerFailure;
-
-use crate::types::{EnumValue, LiteralF64};
 use crate::{Package, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeSymbol};
 
 use super::Inferer;
@@ -911,23 +909,12 @@ impl Inferer<'_> {
         let sym = self.lookup_named_type(enum_text)?;
         let mangled = sym.mangled_name.clone();
         let package = self.type_package(enum_text);
-        let (enum_ty, variants): (Type, Vec<(String, EnumValue)>) = match &sym.kind {
-            TypeKind::NumberEnum { variants, .. } => (
-                Type::number_enum(package, enum_text, mangled),
-                variants
-                    .iter()
-                    .map(|(name, value)| (name.clone(), EnumValue::Number(LiteralF64(*value))))
-                    .collect(),
-            ),
-            TypeKind::StringEnum { variants, .. } => (
-                Type::string_enum(package, enum_text, mangled),
-                variants
-                    .iter()
-                    .map(|(name, value)| (name.clone(), EnumValue::String(value.clone())))
-                    .collect(),
-            ),
+        let enum_ty = match &sym.kind {
+            TypeKind::NumberEnum { .. } => Type::number_enum(package, enum_text, mangled),
+            TypeKind::StringEnum { .. } => Type::string_enum(package, enum_text, mangled),
             _ => return None,
         };
+        let variants = super::comparable::enum_variant_values(&sym.kind)?;
         if !args.is_empty() {
             self.error(span, format!("enum member `{text}` is not a generic type"));
             return Some(Type::Error);

@@ -195,7 +195,7 @@ impl Inferer<'_> {
         value: ExprId,
         ty: &Type,
     ) -> Result<Type, CompilerFailure> {
-        if !is_single_literal(ty) {
+        if !ty.peel().is_literal_type() {
             return Ok(ty.clone());
         }
         let mut fresh = self.known_fresh_literals(value)?;
@@ -1148,11 +1148,6 @@ fn call_operands(
     receiver
         .into_iter()
         .chain(args.iter().map(|argument| argument.expr))
-}
-
-/// Whether `ty` is one literal type, what tsc calls a unit type.
-fn is_single_literal(ty: &Type) -> bool {
-    ty.peel().is_literal_type()
 }
 
 /// Whether `ty` is made only of `string`, `number`, `boolean`, `null` and

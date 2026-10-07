@@ -428,16 +428,16 @@ impl<'a> Inferer<'a> {
     /// `??`, or a ternary branch — under `env`. A write in it may have happened,
     /// so it still invalidates outer narrowings, but the narrowing the write
     /// installs does not outlive the operand: `c && (x = null)` leaves `x` at its
-    /// declared type, not `null`, and not the view it had before.
+    /// declared type, not `null`, and not the view it had before. The operand
+    /// keeps its literal type, as the expression it is part of does.
     pub(super) fn infer_conditional_operand(
         &mut self,
         operand: ExprId,
         env: &narrowing::NarrowEnv,
         expected: Option<&Type>,
-        keep_literals: bool,
     ) -> Result<(ExprId, Type), CompilerFailure> {
         self.push_narrow_frame(env.clone());
-        let inferred = self.infer_expr_keeping_literals(operand, expected, keep_literals)?;
+        let inferred = self.infer_expr_keeping_literals(operand, expected, true)?;
         let (_, assigned) = self.pop_narrow_frame_capture()?;
         let span = self
             .ast

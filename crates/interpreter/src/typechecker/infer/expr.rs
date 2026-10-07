@@ -178,22 +178,15 @@ fn is_primitive(ty: &Type) -> bool {
 /// of them: `"a" | "b"` is a tag, `string | null` isn't.
 fn is_tag_type(ty: &Type) -> bool {
     fn is_unit(ty: &Type) -> bool {
+        let ty = ty.peel();
         matches!(
-            ty.peel(),
+            ty,
             Type::StringLiteral(_)
                 | Type::NumberLiteral(_)
                 | Type::BooleanLiteral(_)
                 | Type::Boolean
                 | Type::Null
-                | Type::NumberEnum {
-                    member: Some(_),
-                    ..
-                }
-                | Type::StringEnum {
-                    member: Some(_),
-                    ..
-                }
-        )
+        ) || ty.is_enum_member()
     }
     match ty.peel() {
         Type::Union(members) => members.iter().all(is_unit),
@@ -214,15 +207,7 @@ fn tag_fits(ty: &Type, value: &TagValue) -> bool {
         (Type::StringLiteral(s), TagValue::Literal(LiteralValue::String(v))) => s == v,
         (Type::NumberLiteral(n), TagValue::Literal(LiteralValue::Number(v))) => n == v,
         (Type::BooleanLiteral(b), TagValue::Literal(LiteralValue::Boolean(v))) => b == v,
-        (
-            member @ (Type::NumberEnum {
-                member: Some(_), ..
-            }
-            | Type::StringEnum {
-                member: Some(_), ..
-            }),
-            _,
-        ) => {
+        (member, _) if member.is_enum_member() => {
             matches!(value, TagValue::Literal(v) if LiteralValue::of_enum_member(member).as_ref() == Some(v))
         }
         (other, _) => !is_primitive(other),
@@ -1458,7 +1443,7 @@ impl Inferer<'_> {
                 let lhs_decides = op == BinOp::Or && super::narrowing::is_never_falsy(&lhs_ty);
                 let rhs_expected = if lhs_decides { None } else { expected };
                 let (typed_rhs, rhs_ty) =
-                    self.infer_conditional_operand(rhs, &rhs_env, rhs_expected, true)?;
+                    self.infer_conditional_operand(rhs, &rhs_env, rhs_expected)?;
                 if matches!(rhs_ty.peel(), Type::Void | Type::Never)
                     && !self.is_condition_value(typed_rhs, &rhs_ty)?
                 {
@@ -1475,12 +1460,11 @@ impl Inferer<'_> {
                 };
                 let result_ty = if condition_error {
                     Type::Error
-                } else if lhs_decides
-                    && assignable(&rhs_ty, &lhs_kept.widen_literal(), self.resolver())
+                } else if let Some(decided) = lhs_decides
+                    .then(|| self.deciding_left_type(&lhs_kept, &rhs_ty))
+                    .flatten()
                 {
-                    // The right side is compiled though it never runs, so it
-                    // must fit the left side's representation.
-                    lhs_kept
+                    decided
                 } else if let Some(joined) =
                     empty_literal_join(self.ast, (lhs, &lhs_kept), (rhs, &rhs_ty))?
                 {
@@ -4640,21 +4624,10 @@ impl Inferer<'_> {
             }
         }
 
-        let constant = (!had_error)
-            .then(|| constant_texts.into_iter().collect::<Option<Vec<String>>>())
-            .flatten()
-            .map(|texts| {
-                let mut text = String::new();
-                for (index, part) in parts.iter().enumerate() {
-                    text.push_str(part);
-                    text.push_str(texts.get(index).map_or("", String::as_str));
-                }
-                Type::StringLiteral(text)
-            });
-        let result_ty = match constant {
-            Some(literal) => literal,
-            None if had_error => Type::Error,
-            None => Type::String,
+        let result_ty = if had_error {
+            Type::Error
+        } else {
+            spelled_template(&parts, constant_texts).map_or(Type::String, Type::StringLiteral)
         };
 
         // A constant template stays a concatenation even of one operand, so its
@@ -5606,15 +5579,19 @@ impl Inferer<'_> {
             }
         }
 
-        // The literal's own type, before the expected shape's optional fields and
-        // an interface's field types are spliced into its layout below.
-        let own_fields: Option<std::collections::BTreeMap<String, crate::ObjectField>> =
-            expected_fields.as_ref().map(|_| {
-                merged
-                    .iter()
-                    .map(|(name, (field, _))| (name.clone(), field.clone()))
-                    .collect()
-            });
+        // Taken before the expected shape's optional fields and an interface's
+        // field types are spliced into the literal's layout below.
+        let own_ty = (self.error_count() == errors_before)
+            .then(|| {
+                self.own_object_literal_type(
+                    &merged,
+                    expected,
+                    expected_fields.as_ref(),
+                    interface_target.is_some(),
+                    has_spread,
+                )
+            })
+            .flatten();
 
         // when an expected shape declares optional fields,
         // splice them into the literal's resulting type. The runtime
@@ -5706,37 +5683,14 @@ impl Inferer<'_> {
             resolved.insert(name, field);
         }
 
-        // A literal checked against a structural shape keeps its own type, as in
-        // tsc: `{ value: 10 }` against `{ value: number; error?: string }` is
-        // `{ value: number }`. Codegen builds it from the field origins instead.
-        // Against an interface with methods it stays the interface, whose methods
-        // a value reaches through the interface's own dispatch; against an unbound
-        // type parameter it stays the shape a call site infers that parameter
-        // from. A spread's fields take their optionality from the expected shape.
-        let dispatches_methods = interface_target.is_some()
-            && expected_fields.as_ref().is_some_and(|want| {
-                want.values()
-                    .any(|field| field.method || matches!(field.ty.peel(), Type::Function { .. }))
-            });
-        if let Some(fields) = own_fields
-            && !dispatches_methods
-            && !has_spread
-            && !expected.is_some_and(type_contains_type_var)
-            && self.error_count() == errors_before
-        {
-            let own = Type::Object {
-                index: None,
-                fields,
-            };
-            if expected.is_some_and(|want| assignable(&own, want, self.resolver())) {
-                return Ok((
-                    TypedExprKind::ObjectLiteral {
-                        members: object_members,
-                        fields: field_origins,
-                    },
-                    own,
-                ));
-            }
+        if let Some(own) = own_ty {
+            return Ok((
+                TypedExprKind::ObjectLiteral {
+                    members: object_members,
+                    fields: field_origins,
+                },
+                own,
+            ));
         }
 
         // when the expected type was an `InterfaceRef`, the
@@ -5771,6 +5725,44 @@ impl Inferer<'_> {
                 fields: resolved,
             },
         ))
+    }
+
+    /// The type an object literal checked against `expected` keeps as its own,
+    /// as in tsc: `{ value: 10 }` against `{ value: number; error?: string }` is
+    /// `{ value: number }`. Codegen builds it from its field origins instead.
+    /// `None` keeps the expected type: against an interface with methods, whose
+    /// methods a value reaches through the interface's own dispatch; with a
+    /// spread, whose fields take their optionality from the expected shape; and
+    /// against an unbound type parameter, which a call site infers from the
+    /// expected shape.
+    fn own_object_literal_type(
+        &self,
+        merged: &std::collections::BTreeMap<
+            String,
+            (crate::ObjectField, crate::TypedObjectFieldSource),
+        >,
+        expected: Option<&Type>,
+        expected_fields: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
+        against_interface: bool,
+        has_spread: bool,
+    ) -> Option<Type> {
+        let expected = expected?;
+        let expected_fields = expected_fields?;
+        let dispatches_methods = against_interface
+            && expected_fields
+                .values()
+                .any(|field| field.method || matches!(field.ty.peel(), Type::Function { .. }));
+        if dispatches_methods || has_spread || type_contains_type_var(expected) {
+            return None;
+        }
+        let own = Type::Object {
+            index: None,
+            fields: merged
+                .iter()
+                .map(|(name, (field, _))| (name.clone(), field.clone()))
+                .collect(),
+        };
+        assignable(&own, expected, self.resolver()).then_some(own)
     }
 
     /// The fields a spread copies, and whether they must be found by name at
@@ -8760,13 +8752,11 @@ impl Inferer<'_> {
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
-        let (typed_then, then_ty) =
-            self.infer_conditional_operand(then_, &true_env, expected, true)?;
+        let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected)?;
         let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span)?;
 
-        let (typed_else, else_ty) =
-            self.infer_conditional_operand(else_, &false_env, expected, true)?;
+        let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected)?;
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
@@ -8787,6 +8777,13 @@ impl Inferer<'_> {
     /// `a ?? b`. Result type is `union(strip_null(lhs), rhs)`.
     /// Emits a `Severity::Warning` when `lhs` is statically
     /// non-nullable (the `??` clause is unreachable).
+    /// The type of `a || b` or `a ?? b` when `a` decides the result: `a`'s own,
+    /// as in TypeScript, if `b` fits `a`'s base type. `b` is compiled though it
+    /// never runs, so it must fit `a`'s representation.
+    fn deciding_left_type(&self, lhs_ty: &Type, rhs_ty: &Type) -> Option<Type> {
+        assignable(rhs_ty, &lhs_ty.widen_literal(), self.resolver()).then(|| lhs_ty.clone())
+    }
+
     fn infer_nullish_coalesce(
         &mut self,
         lhs: ExprId,
@@ -8796,7 +8793,7 @@ impl Inferer<'_> {
         let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
         // The right side runs only where the left is `null`.
         let rhs_env = self.null_operand_env(typed_lhs)?;
-        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, None, true)?;
+        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, None)?;
         let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
         let typed_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
 
@@ -8841,10 +8838,11 @@ impl Inferer<'_> {
         // which reaches codegen and panics in `value_type`.
         let result_ty = if matches!(lhs_ty.peel(), Type::Null) {
             rhs_ty
-        } else if lhs_decides && assignable(&rhs_ty, &lhs_ty.widen_literal(), self.resolver()) {
-            // As for `||`: the right side never runs, but it is compiled, so it
-            // must fit the left side's representation.
-            lhs_ty
+        } else if let Some(decided) = lhs_decides
+            .then(|| self.deciding_left_type(&lhs_ty, &rhs_ty))
+            .flatten()
+        {
+            decided
         } else {
             let present = super::narrowing::strip_null(&lhs_ty);
             match empty_literal_join(self.ast, (lhs, &present), (rhs, &rhs_ty))? {
@@ -11162,6 +11160,19 @@ fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> Result<bool, 
 pub(super) fn number_literal_type(value: f64) -> Type {
     let canonical = if value == 0.0 { 0.0 } else { value };
     Type::NumberLiteral(crate::types::LiteralF64(canonical))
+}
+
+/// The string a template spells, when every substitution has a constant text.
+fn spelled_template(parts: &[String], substitutions: Vec<Option<String>>) -> Option<String> {
+    let mut substitutions = substitutions.into_iter();
+    let mut text = String::new();
+    for part in parts {
+        text.push_str(part);
+        if let Some(substitution) = substitutions.next() {
+            text.push_str(&substitution?);
+        }
+    }
+    Some(text)
 }
 
 pub(super) fn literal_comparison_type(

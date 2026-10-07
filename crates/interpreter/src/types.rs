@@ -31,6 +31,16 @@ pub enum EnumValue {
     String(String),
 }
 
+impl EnumValue {
+    /// The plain literal type of this value: `1` or `"a"`.
+    pub fn literal_type(&self) -> Type {
+        match self {
+            EnumValue::Number(value) => Type::NumberLiteral(*value),
+            EnumValue::String(value) => Type::StringLiteral(value.clone()),
+        }
+    }
+}
+
 /// `f64` wrapper for total ordering and bit-pattern equality — bare `f64` lacks `Eq`/`Ord`,
 /// which would break the derived impls on [`Type`]. Construction must canonicalize `-0.0 → 0.0`;
 /// NaN can't appear from source literals so bit-pattern equality is safe.
@@ -481,15 +491,29 @@ impl Type {
                 | Type::StringLiteral(_)
                 | Type::BooleanLiteral(_)
                 | Type::BigIntLiteral(_)
-                | Type::NumberEnum {
-                    member: Some(_),
-                    ..
-                }
-                | Type::StringEnum {
-                    member: Some(_),
-                    ..
-                }
-        )
+        ) || self.is_enum_member()
+    }
+
+    /// Whether this is an enum member literal type `E.A`.
+    pub fn is_enum_member(&self) -> bool {
+        self.enum_member_name().is_some()
+    }
+
+    /// The enum, member name and member count of an enum member literal type `E.A`.
+    pub fn enum_member_name(&self) -> Option<(&MangledName, &str, usize)> {
+        match self {
+            Type::NumberEnum {
+                mangled,
+                member: Some(member),
+                ..
+            } => Some((mangled, &member.name, member.member_count)),
+            Type::StringEnum {
+                mangled,
+                member: Some(member),
+                ..
+            } => Some((mangled, &member.name, member.member_count)),
+            _ => None,
+        }
     }
 
     /// The value an enum member literal type `E.A` holds.
@@ -763,12 +787,7 @@ impl Type {
             Type::StringLiteral(_) => Type::String,
             Type::BooleanLiteral(_) => Type::Boolean,
             Type::BigIntLiteral(_) => Type::BigInt,
-            Type::NumberEnum {
-                member: Some(_), ..
-            }
-            | Type::StringEnum {
-                member: Some(_), ..
-            } => self.without_enum_member(),
+            _ if self.is_enum_member() => self.without_enum_member(),
             // A union widens memberwise, which also collapses it when the members
             // share a base: `1 | 2` is `number`, not `number | number`, because
             // `Type::union` deduplicates.
@@ -1041,6 +1060,25 @@ fn fold_boolean_literals(members: &mut Vec<Type>) {
 /// or member beside its primitive (`E | number`) is absorbed by the primitive.
 /// Leaves `members` sorted and deduplicated.
 fn fold_enum_members(members: &mut Vec<Type>) {
+    absorb_enums_into_primitives(members);
+    let complete = complete_enums(members);
+    if complete.is_empty() {
+        return;
+    }
+    for member in members.iter_mut() {
+        if let Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. } =
+            member.without_aliases()
+            && complete.contains(mangled)
+        {
+            *member = member.without_aliases().without_enum_member();
+        }
+    }
+    members.sort_by(|a, b| a.without_aliases().cmp(b.without_aliases()));
+    members.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
+}
+
+/// Drops every enum type and member beside the primitive it holds.
+fn absorb_enums_into_primitives(members: &mut Vec<Type>) {
     let has = |base: &Type| members.iter().any(|m| m.without_aliases() == base);
     let (has_number, has_string) = (has(&Type::Number), has(&Type::String));
     members.retain(|m| match m.without_aliases() {
@@ -1048,63 +1086,39 @@ fn fold_enum_members(members: &mut Vec<Type>) {
         Type::StringEnum { .. } => !has_string,
         _ => true,
     });
-    let mut named: BTreeMap<&MangledName, (usize, BTreeSet<&str>)> = BTreeMap::new();
-    let mut plain: BTreeSet<&MangledName> = BTreeSet::new();
-    for member in members.iter() {
-        match member.without_aliases() {
-            Type::NumberEnum {
-                mangled,
-                member: Some(m),
-                ..
-            } => {
-                let names = named
-                    .entry(mangled)
-                    .or_insert((m.member_count, BTreeSet::new()));
-                names.1.insert(m.name.as_str());
-            }
-            Type::StringEnum {
-                mangled,
-                member: Some(m),
-                ..
-            } => {
-                let names = named
-                    .entry(mangled)
-                    .or_insert((m.member_count, BTreeSet::new()));
-                names.1.insert(m.name.as_str());
-            }
-            Type::NumberEnum {
-                mangled,
-                member: None,
-                ..
-            }
-            | Type::StringEnum {
-                mangled,
-                member: None,
-                ..
-            } => {
-                plain.insert(mangled);
-            }
-            _ => {}
+}
+
+/// The enums `members` holds whole: as the enum itself, or by naming every
+/// one of its members.
+fn complete_enums(members: &[Type]) -> BTreeSet<MangledName> {
+    struct NamedMembers<'a> {
+        member_count: usize,
+        names: BTreeSet<&'a str>,
+    }
+    let mut named: BTreeMap<&MangledName, NamedMembers> = BTreeMap::new();
+    let mut whole: BTreeSet<&MangledName> = BTreeSet::new();
+    for member in members {
+        let ty = member.without_aliases();
+        if let Some((mangled, name, member_count)) = ty.enum_member_name() {
+            named
+                .entry(mangled)
+                .or_insert_with(|| NamedMembers {
+                    member_count,
+                    names: BTreeSet::new(),
+                })
+                .names
+                .insert(name);
+        } else if let Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. } = ty {
+            whole.insert(mangled);
         }
     }
-    let folded: BTreeSet<MangledName> = named
+    named
         .into_iter()
-        .filter(|(mangled, (count, names))| plain.contains(mangled) || names.len() >= *count)
+        .filter(|(mangled, named)| {
+            whole.contains(mangled) || named.names.len() >= named.member_count
+        })
         .map(|(mangled, _)| mangled.clone())
-        .collect();
-    if folded.is_empty() {
-        return;
-    }
-    for member in members.iter_mut() {
-        if let Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. } =
-            member.without_aliases()
-            && folded.contains(mangled)
-        {
-            *member = member.without_aliases().without_enum_member();
-        }
-    }
-    members.sort_by(|a, b| a.without_aliases().cmp(b.without_aliases()));
-    members.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
+        .collect()
 }
 
 impl Type {

@@ -487,38 +487,38 @@ pub(super) fn enum_admits_literal(
 
 /// An enum type's members, as their member literal types `E.A`.
 pub(super) fn enum_member_types(enum_ty: &Type, types: TypeResolver) -> Option<Vec<Type>> {
+    let (Type::NumberEnum { mangled, name, .. } | Type::StringEnum { mangled, name, .. }) = enum_ty
+    else {
+        return None;
+    };
+    let variants = enum_variant_values(&types.lookup(mangled, name)?.kind)?;
+    let member_count = variants.len();
+    Some(
+        variants
+            .into_iter()
+            .map(|(member, value)| enum_ty.with_enum_member(&member, value, member_count))
+            .collect(),
+    )
+}
+
+/// Each member of an enum declaration with the value it holds.
+pub(super) fn enum_variant_values(
+    kind: &TypeKind,
+) -> Option<Vec<(String, crate::types::EnumValue)>> {
     use crate::types::{EnumValue, LiteralF64};
-    match enum_ty {
-        Type::NumberEnum { mangled, name, .. } => match &types.lookup(mangled, name)?.kind {
-            TypeKind::NumberEnum { variants, .. } => Some(
-                variants
-                    .iter()
-                    .map(|(member, value)| {
-                        enum_ty.with_enum_member(
-                            member,
-                            EnumValue::Number(LiteralF64(*value)),
-                            variants.len(),
-                        )
-                    })
-                    .collect(),
-            ),
-            _ => None,
-        },
-        Type::StringEnum { mangled, name, .. } => match &types.lookup(mangled, name)?.kind {
-            TypeKind::StringEnum { variants, .. } => Some(
-                variants
-                    .iter()
-                    .map(|(member, value)| {
-                        enum_ty.with_enum_member(
-                            member,
-                            EnumValue::String(value.clone()),
-                            variants.len(),
-                        )
-                    })
-                    .collect(),
-            ),
-            _ => None,
-        },
+    match kind {
+        TypeKind::NumberEnum { variants, .. } => Some(
+            variants
+                .iter()
+                .map(|(name, value)| (name.clone(), EnumValue::Number(LiteralF64(*value))))
+                .collect(),
+        ),
+        TypeKind::StringEnum { variants, .. } => Some(
+            variants
+                .iter()
+                .map(|(name, value)| (name.clone(), EnumValue::String(value.clone())))
+                .collect(),
+        ),
         _ => None,
     }
 }

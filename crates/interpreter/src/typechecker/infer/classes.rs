@@ -2077,14 +2077,8 @@ impl<'a> Inferer<'a> {
             return None;
         };
         // A member type `E.A` holds its own value alone.
-        match ty.enum_member_value() {
-            Some(crate::types::EnumValue::Number(value)) => {
-                return Some(Type::NumberLiteral(value));
-            }
-            Some(crate::types::EnumValue::String(value)) => {
-                return Some(Type::StringLiteral(value));
-            }
-            None => {}
+        if let Some(value) = ty.enum_member_value() {
+            return Some(value.literal_type());
         }
         let symbol = self
             .type_registry

@@ -140,31 +140,16 @@ fn write_node<'a>(
         Type::Unknown => out.push("unknown"),
         Type::Error => out.push("<error>"),
         Type::Never => out.push("never"),
-        Type::TypeVar(name)
-        | Type::GenericParam { name, .. }
-        | Type::NumberEnum {
-            name, member: None, ..
-        }
-        | Type::StringEnum {
-            name, member: None, ..
-        } => out.push(name),
-        Type::NumberEnum {
-            name,
-            member: Some(member),
-            ..
-        } => {
+        Type::TypeVar(name) | Type::GenericParam { name, .. } => out.push(name),
+        Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => {
             out.push(name)?;
-            out.push(".")?;
-            out.push(&member.name)
-        }
-        Type::StringEnum {
-            name,
-            member: Some(member),
-            ..
-        } => {
-            out.push(name)?;
-            out.push(".")?;
-            out.push(&member.name)
+            match ty.enum_member_name() {
+                Some((_, member, _)) => {
+                    out.push(".")?;
+                    out.push(member)
+                }
+                None => Ok(()),
+            }
         }
         Type::Function {
             params,
