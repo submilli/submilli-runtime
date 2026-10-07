@@ -332,3 +332,41 @@ fn nightly_only_requested() -> bool {
         )
     })
 }
+
+#[test]
+fn rejected_string_output_does_not_allocate_its_buffer() {
+    use interpreter::runtime::limits::{MemoryCapExceeded, TenantLimits};
+    use interpreter::runtime::prelude::string::{Str, concat, pad_end, pad_start, repeat};
+
+    if !nightly_only_requested() {
+        eprintln!("host memory: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
+        return;
+    }
+    // A prior panic may have interrupted measurements protected by this lock.
+    let _guard = TEST_LOCK
+        .lock()
+        .expect("host memory measurement lock poisoned");
+
+    let input = Str::from_units(vec![0xD800; 512 * 1024]);
+    let pad = Str::from_units(vec![0xDC00]);
+    let limits = TenantLimits::new(16 * 1024);
+    for operation in 0..4 {
+        let baseline = ALLOCATED.load(Ordering::Relaxed);
+        reset_peak_to_current();
+        let result = match operation {
+            0 => repeat(&input, 2.0, &limits),
+            1 => pad_start(&input, 1048576.0, &pad, &limits),
+            2 => pad_end(&input, 1048576.0, &pad, &limits),
+            _ => concat(&input, &input, &limits),
+        };
+        let delta = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
+        let err = result.err().expect("output exceeds the tenant cap");
+        assert!(err.is::<MemoryCapExceeded>(), "{err:#}");
+        assert!(
+            delta < HOST_MEMORY_THRESHOLD,
+            "operation {operation} allocated {delta} bytes despite admission refusal"
+        );
+        assert_eq!(limits.host_attached_bytes(), 0);
+        assert_eq!(limits.peak_bytes(), 0);
+    }
+}
