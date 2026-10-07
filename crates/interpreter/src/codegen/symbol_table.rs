@@ -109,6 +109,9 @@ pub struct SymbolTable {
     error_tag_idx: Option<u32>,
     adapter_func_idx: BTreeMap<MangledName, u32>,
     adapter_closure_global_idx: BTreeMap<MangledName, u32>,
+    /// The closure caches typed `anyref` because the function's package exports
+    /// them, so its consumers share one closure; see `function_adapters`.
+    shared_closure_globals: BTreeSet<MangledName>,
     /// Runtime validator helpers keyed by recursive alias or interface back-edges.
     runtime_validator_idx: BTreeMap<Type, u32>,
     generic_runtime_validators: BTreeMap<MangledName, (Vec<String>, u32)>,
@@ -500,6 +503,10 @@ impl SymbolTable {
         self.adapter_closure_global_idx.get(mangled).copied()
     }
 
+    pub fn is_shared_closure_global(&self, mangled: &MangledName) -> bool {
+        self.shared_closure_globals.contains(mangled)
+    }
+
     /// Whether a `value`-typed ref already satisfies a `slot` by WasmGC
     /// subtyping, so a coercion needs no instruction.
     ///
@@ -677,6 +684,11 @@ impl SymbolTable {
     }
 
     pub fn record_adapter_closure_global_idx(&mut self, mangled: MangledName, idx: u32) {
+        self.adapter_closure_global_idx.insert(mangled, idx);
+    }
+
+    pub fn record_shared_closure_global_idx(&mut self, mangled: MangledName, idx: u32) {
+        self.shared_closure_globals.insert(mangled.clone());
         self.adapter_closure_global_idx.insert(mangled, idx);
     }
 

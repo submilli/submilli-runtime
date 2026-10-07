@@ -680,6 +680,7 @@ pub struct GeneratedModule {
     pub type_info: crate::TypeInfoTable,
     pub runtime_functions: BTreeMap<crate::MangledName, crate::RuntimeFunction>,
     pub runtime_globals: BTreeMap<crate::MangledName, Type>,
+    pub closure_caches: BTreeSet<crate::MangledName>,
 }
 
 pub fn codegen_with_type_info(
@@ -958,6 +959,14 @@ fn codegen_inner(
             &mut symbols,
         )?;
     }
+    function_adapters::import_shared_closure_caches(
+        &adapter_metas,
+        dependencies,
+        &mut import_section,
+        &mut symbols,
+        &mut next_global_idx,
+    )?;
+    let exported_closure_caches = function_adapters::exported_closure_caches(ta);
 
     // VTable globals are not in PackageDeclaration — there is no language-level Type for $VTable.
     let vtable_ref = ValType::Ref(RefType {
@@ -1697,6 +1706,7 @@ fn codegen_inner(
     };
     let adapter_closure_globals_count = function_adapters::allocate_closure_globals(
         &adapter_metas,
+        &exported_closure_caches,
         &mut globals,
         &mut symbols,
         &mut next_global_idx,
@@ -1774,6 +1784,16 @@ fn codegen_inner(
         class_plan.exported_vtable_globals(&symbols, |m| exported_class_mangles.contains(m))?
     {
         exports.export(name.as_str(), WasmExportKind::Global, global_idx);
+    }
+    for mangled in &exported_closure_caches {
+        let global_idx = symbols
+            .adapter_closure_global_idx(mangled)
+            .ok_or_else(|| crate::codegen::internal_failure("exported closure cache allocated"))?;
+        exports.export(
+            crate::mangle::closure_cache(mangled).as_str(),
+            WasmExportKind::Global,
+            global_idx,
+        );
     }
     module.section(&exports);
 
@@ -1989,6 +2009,7 @@ fn codegen_inner(
         type_info,
         runtime_functions: runtime_values::signatures(ta),
         runtime_globals: runtime_values::global_types(ta),
+        closure_caches: exported_closure_caches,
     })
 }
 
@@ -2332,6 +2353,7 @@ pub(crate) mod tests {
                 .expect("code generation");
         package.runtime_functions = generated.runtime_functions;
         package.runtime_globals = generated.runtime_globals;
+        package.closure_caches = generated.closure_caches;
         (generated.wasm, package, generated.type_info)
     }
 

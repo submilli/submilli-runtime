@@ -663,7 +663,13 @@ fn emit_function_ref(
     emitter.instruction(Instruction::GlobalSet(closure_global_idx));
     emitter.emit_end();
     emitter.instruction(Instruction::GlobalGet(closure_global_idx));
-    emitter.instruction(Instruction::RefAsNonNull);
+    if ctx.symbols.is_shared_closure_global(mangled) {
+        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+            closure_struct_idx,
+        )));
+    } else {
+        emitter.instruction(Instruction::RefAsNonNull);
+    }
 
     Ok(())
 }

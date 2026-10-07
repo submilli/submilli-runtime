@@ -1,13 +1,16 @@
 //! Collects top-level functions used in value position and emits closure-shaped adapter bodies for them.
 
+use std::collections::BTreeSet;
+
 use wasm_encoder::{
-    CodeSection, ConstExpr, GlobalSection, GlobalType, HeapType, Instruction, RefType, ValType,
+    CodeSection, ConstExpr, EntityType, GlobalSection, GlobalType, HeapType, ImportSection,
+    Instruction, RefType, ValType,
 };
 
 use crate::codegen::CodegenCtx;
 use crate::codegen::function_emitter::{FunctionEmitter, cast};
 use crate::codegen::symbol_table::SymbolTable;
-use crate::{Ident, Span, Type};
+use crate::{Ident, MangledName, Span, Type, TypedAst};
 
 #[derive(Clone, Debug)]
 pub struct AdapterMeta {
@@ -16,17 +19,99 @@ pub struct AdapterMeta {
     pub signature: Type,
 }
 
-/// Allocates one global per adapter that caches the function's closure, so every
-/// read of a top-level function yields the same value and `f === f` holds. The
-/// closure has no environment, so one instance serves every read. Each starts
-/// null and is filled on first read. Returns how many globals were added.
+/// The functions and static methods whose closure cache this module exports:
+/// the non-generic exported functions it defines, and its classes' public
+/// static methods. A consumer that reads one as a value imports the cache
+/// instead of keeping its own, so the function is one closure across packages,
+/// as in JavaScript.
+pub fn exported_closure_caches(ta: &TypedAst) -> BTreeSet<MangledName> {
+    let defined: BTreeSet<&MangledName> = ta
+        .functions
+        .iter()
+        .filter(|function| function.generics.is_empty())
+        .map(|function| &function.mangled_name)
+        .collect();
+    let functions = ta
+        .exports
+        .iter()
+        .filter(|entry| {
+            entry.kind == crate::ExportKind::Function && defined.contains(&entry.target)
+        })
+        .map(|entry| entry.target.clone());
+    let static_methods = ta.types.iter().flat_map(|decl| {
+        let crate::TypedTypeDecl::Class(class) = decl else {
+            return Vec::new();
+        };
+        class
+            .static_methods
+            .iter()
+            .filter(|(_, visibility)| **visibility == crate::Visibility::Public)
+            .map(|(name, _)| crate::mangle::static_member(&class.mangled_name, name))
+            .collect()
+    });
+    functions.chain(static_methods).collect()
+}
+
+/// A closure cache another module may fill: typed `anyref`, because each
+/// module reads it as the closure struct of its own view of the signature.
+fn shared_cache_type() -> GlobalType {
+    GlobalType {
+        val_type: ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::ANY,
+        }),
+        mutable: true,
+        shared: false,
+    }
+}
+
+/// Imports the closure cache of each dependency function this module reads as
+/// a value, where the function's package exports one.
+pub fn import_shared_closure_caches(
+    metas: &[AdapterMeta],
+    dependencies: &[&crate::PackageDeclaration],
+    imports: &mut ImportSection,
+    symbols: &mut SymbolTable,
+    next_global_idx: &mut u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    for meta in metas {
+        let Some(package) = dependencies
+            .iter()
+            .find(|package| package.closure_caches.contains(&meta.mangled))
+        else {
+            continue;
+        };
+        imports.import(
+            &package.package_name,
+            crate::mangle::closure_cache(&meta.mangled).as_str(),
+            EntityType::Global(shared_cache_type()),
+        );
+        symbols.record_shared_closure_global_idx(meta.mangled.clone(), *next_global_idx);
+        crate::codegen::next_index(next_global_idx)?;
+    }
+    Ok(())
+}
+
+/// Allocates the globals that cache a function's closure, so every read of a
+/// top-level function yields the same value and `f === f` holds. The closure
+/// has no environment, so one instance serves every read. Each starts null and
+/// is filled on first read. A function read here gets a cache of its own
+/// unless it imported one; each of `exported` gets an exported shared cache.
+/// Returns how many globals were added.
 pub fn allocate_closure_globals(
     metas: &[AdapterMeta],
+    exported: &BTreeSet<MangledName>,
     globals: &mut GlobalSection,
     symbols: &mut SymbolTable,
     next_global_idx: &mut u32,
 ) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    let mut count = 0usize;
     for meta in metas {
+        if exported.contains(&meta.mangled)
+            || symbols.adapter_closure_global_idx(&meta.mangled).is_some()
+        {
+            continue;
+        }
         let closure_struct_idx = symbols
             .closure_struct_type_idx(super::closures::classify(&meta.signature)?)
             .ok_or_else(|| {
@@ -48,8 +133,15 @@ pub fn allocate_closure_globals(
         );
         symbols.record_adapter_closure_global_idx(meta.mangled.clone(), *next_global_idx);
         crate::codegen::next_index(next_global_idx)?;
+        count += 1;
     }
-    crate::codegen::wasm_u32(metas.len())
+    for mangled in exported {
+        globals.global(shared_cache_type(), &ConstExpr::ref_null(HeapType::ANY));
+        symbols.record_shared_closure_global_idx(mangled.clone(), *next_global_idx);
+        crate::codegen::next_index(next_global_idx)?;
+        count += 1;
+    }
+    crate::codegen::wasm_u32(count)
 }
 
 pub fn emit_bodies(
