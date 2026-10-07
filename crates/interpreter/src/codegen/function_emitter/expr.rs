@@ -567,13 +567,13 @@ fn emit_expr_value(
     Ok(())
 }
 
-/// Whether `kind` reads a value already stored, rather than computing one.
+/// Whether `kind` reads a value stored in an object or array, rather than
+/// computing one. A `never` binding stays unreachable: its initializer or the
+/// call that bound it diverged.
 fn is_read(kind: &TypedExprKind) -> bool {
     matches!(
         kind,
         TypedExprKind::LocalNarrowRef { .. }
-            | TypedExprKind::LocalRef { .. }
-            | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FieldAccess { .. }
             | TypedExprKind::IndexAccess { .. }
     )
@@ -2614,7 +2614,7 @@ fn emit_object_spread(
     let null_object = Instruction::RefNull(HeapType::Concrete(intrinsics.object));
     emitter.instruction(null_object.clone());
     for (index, source) in sources.iter().enumerate() {
-        let last = index + 1 == sources.len();
+        let final_shape = (index + 1 == sources.len()).then_some(shape);
         // A source `runtime_values` widened may no longer hold what its
         // narrowed type said; `emit_receiver` checks it against that type,
         // which the stash and the mask then read in place of `unknown`.
@@ -2640,7 +2640,7 @@ fn emit_object_spread(
         let source_local =
             stash_receiver_as_object_shape(emitter, narrowed_ty, intrinsics.object_shape)?;
         emitter.instruction(Instruction::LocalGet(source_local));
-        emit_spread_shape_argument(emitter, ctx, last.then_some(shape), &null_object);
+        emit_spread_shape_argument(emitter, ctx, final_shape, &null_object);
         if matches!(source, TypedObjectMember::Spread { by_name: true, .. }) {
             emit_spread_mask(emitter, ctx, source_local, source.expr_id(), shape)?;
         } else {
@@ -2651,7 +2651,7 @@ fn emit_object_spread(
             emitter.emit_else();
             emitter.instruction(Instruction::LocalGet(accumulator));
             emitter.instruction(null_object.clone());
-            emit_spread_shape_argument(emitter, ctx, last.then_some(shape), &null_object);
+            emit_spread_shape_argument(emitter, ctx, final_shape, &null_object);
             emitter.instruction(null_object.clone());
             emitter.instruction(Instruction::Call(merge));
             emitter.emit_end();

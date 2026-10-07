@@ -31,4 +31,11 @@ function main(): void {
   const filled = { list: [] };
   fill(filled.list);
   assert(filled.list.length === 1, "a never[] another type fills holds what it was given");
+  const first = filled.list[0];
+  assert(first === 41, "reading an element it was given");
+  const seen: number[] = [];
+  for (const item of filled.list) {
+    seen.push(item);
+  }
+  assert(seen.join(",") === "41", "iterating the elements it was given");
 }

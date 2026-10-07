@@ -5687,7 +5687,11 @@ impl Inferer<'_> {
             index: None,
             fields: ObjectFields::new(),
         };
-        let every_alternative_fits = alternatives.len() > 1
+        let objects = alternatives
+            .iter()
+            .filter(|alternative| !is_definitely_falsy(alternative))
+            .count();
+        let every_alternative_fits = objects > 1
             && alternatives.iter().all(|alternative| {
                 let copied = if is_definitely_falsy(alternative) {
                     &empty
@@ -6376,7 +6380,7 @@ impl Inferer<'_> {
         // Object literals with differing fields, or the same fields neither of
         // which fits the other, join as tsc's normalized union:
         // `[{ a: 0 }, { a: 1, b: "x" }]` holds
-        // `{ a: number; b?: null } | { a: number; b: string }`.
+        // `{ a: number; b?: never } | { a: number; b: string }`.
         let nested_fields = join.normalization?;
         normalized_object_union(running, &elem_ty.widen_literal(), nested_fields)
     }
@@ -11237,7 +11241,8 @@ fn nested_field_types<'a>(
 }
 
 /// tsc's normalized union of object literal types: each member gains, as an
-/// optional `null` field, every field only other members declare, so any of
+/// optional `never` field (tsc's `?: undefined`), every field only other
+/// members declare, so any of
 /// them reads from the union. Each of `nested_fields` that holds objects in
 /// every member that has it is normalized the same way, one level down.
 /// `None` unless both sides are index-free objects.
@@ -11315,11 +11320,11 @@ fn nested_object_field_names(
 /// says nothing about the field's type, so it doesn't stop the field from
 /// holding objects.
 fn is_added_missing_field(field: &crate::ObjectField) -> bool {
-    field.optional && field.ty == Type::Null
+    field.optional && field.ty == Type::Never
 }
 
 /// Each object member of `ty` with the fields of `names` it lacks added as
-/// optional `null`.
+/// optional `never`, which reads as `null`.
 fn type_with_missing_fields(ty: &Type, names: &BTreeSet<String>) -> Type {
     let Some(members) = object_members(ty) else {
         return ty.clone();

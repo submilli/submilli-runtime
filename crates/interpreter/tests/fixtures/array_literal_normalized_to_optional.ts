@@ -1,5 +1,5 @@
 // A normalized array of object literals fits a type whose field is optional:
-// the field the normalization adds (`b?: null`, tsc's `b?: undefined`) is
+// the field the normalization adds (`b?: never`, tsc's `b?: undefined`) is
 // absent, which any optional field allows. Writes through the wider type land
 // on the same objects.
 type Row = { a: number; b?: number };
