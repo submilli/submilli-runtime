@@ -539,6 +539,12 @@ impl<'a> Inferer<'a> {
                         });
                         continue;
                     }
+                    // As on object types: `String(x)` and `${x}` call an override
+                    // field through the vtable, which an absent one would leave null.
+                    if optional && super::reserved::override_field_signature(&p_name.name).is_some()
+                    {
+                        self.error(p_name.span, format!("`{}` cannot be optional", p_name.name));
+                    }
                     let resolved_ty = self.resolve_value_type(&ty, ValuePosition::FieldType)?;
                     self.check_conversion_property(&p_name, &resolved_ty);
                     typed_members.push(crate::TypedInterfaceMember::Property {

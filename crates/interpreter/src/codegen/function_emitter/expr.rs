@@ -1079,6 +1079,7 @@ fn emit_object_literal(
                             ty: f.ty.clone(),
                             optional: f.optional,
                             readonly: false,
+                            method: false,
                         },
                     )
                 })

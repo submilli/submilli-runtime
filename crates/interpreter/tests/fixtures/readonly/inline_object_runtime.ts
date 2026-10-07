@@ -1,4 +1,4 @@
-type Read = { readonly x: number; readonly m(): number };
+type Read = { readonly x: number; readonly m: () => number };
 type Write = { x: number; m(): number };
 function main(): void {
   const w: Write = { x: 2, m: (): number => 3 };

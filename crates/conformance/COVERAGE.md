@@ -26,7 +26,7 @@ line, a name it declares, or the type `tsc` printed. It is approximate, and
 `COVERAGE_SAMPLE=<feature>` prints what it counted. It shows a feature that
 pruning nearly removed.
 
-Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 test262 cases.
+Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 657 test262 cases.
 
 ## Types
 
@@ -46,7 +46,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 te
 | Optional properties (`a?: T`) | §1.2 | done | 129 | 35 | 94 | 0 | 40 | 1 of 1 | — | — |  |
 | Object literal shorthand (`{ x }`) | §1.2 | done | 79 | 6 | 73 | 0 | 2 | 1 of 1 | — | — |  |
 | Arrays (`T[]`) | §1.2 | done | 781 | 125 | 656 | 0 | 474 | 1 of 1 | 72 | 294 |  |
-| Tuples (`[T, U]`) | §1.2 | done | 153 | 30 | 123 | 0 | 174 | 1 of 1 | — | — |  |
+| Tuples (`[T, U]`) | §1.2 | done | 153 | 30 | 123 | 0 | 173 | 1 of 1 | — | — |  |
 | `readonly` arrays and tuples | §1.2 | done | 24 | 5 | 19 | 0 | 43 | 1 of 1 | — | — |  |
 | Union types (`A | B`) | §1.2 | done | 458 | 159 | 299 | 0 | 1589 | 1 of 1 | — | — |  |
 | Type aliases (`type X = …`) | §1.2 | done | 267 | 48 | 219 | 0 | 328 | 1 of 1 | — | — |  |
@@ -194,7 +194,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 te
 | `TextEncoder` / `TextDecoder` | §1.2 | n/a | — | — | — | — | — | — | — | — | WHATWG Encoding, not ECMAScript: test262 has no tests for it |
 | `Boolean` | §1.6 | done | — | — | — | — | — | — | 5 | 15 |  |
 | `Number` and numeric globals | §1.6 | done | — | — | — | — | — | — | 48 | 297 |  |
-| URI functions | §1.6 | done | — | — | — | — | — | — | 129 | 219 |  |
+| URI functions | §1.6 | done | — | — | — | — | — | — | 121 | 221 |  |
 | `Object` statics | §1.6 | done | — | — | — | — | — | — | 24 | 105 |  |
 | `JSON` | §1.6 | done | — | — | — | — | — | — | 26 | 59 |  |
 | `Math` | §1.10 | done | — | — | — | — | — | — | 60 | 234 |  |

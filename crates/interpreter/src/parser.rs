@@ -74,6 +74,7 @@ pub fn parse_checked(
         function_expression_body_depth: 0,
         recursion_depth: 0,
         recursion_limit_span: None,
+        last_as_type_end: None,
         eof,
         fatal: None,
     };
@@ -153,6 +154,10 @@ pub(crate) struct Parser<'a> {
     function_expression_body_depth: u32,
     recursion_depth: usize,
     recursion_limit_span: Option<Span>,
+    /// End offset of the type in the most recent `x as T`. A statement ending there
+    /// may end at a line break, since the type stops at one (see
+    /// [`Parser::at_statement_end`]).
+    last_as_type_end: Option<u32>,
     eof: Token,
     fatal: Option<CompilerFailure>,
 }
@@ -241,7 +246,7 @@ impl<'a> Parser<'a> {
     fn parse_expression_statement(&mut self) -> Option<StmtId> {
         let expr_id = self.parse_expression()?;
         let expr_span = parse_arena_result(self.ast.try_expr(expr_id), &mut self.fatal)?.span;
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+        if !self.at_statement_end() {
             let what = if matches!(
                 parse_arena_result(self.ast.try_expr(expr_id), &mut self.fatal)?.kind,
                 ExprKind::Assign { .. }
@@ -253,8 +258,8 @@ impl<'a> Parser<'a> {
             self.error_at_peek(format!("expected `;` after {what}"));
             return None;
         }
-        let semi = self.advance();
-        let span = self.span(expr_span.start, semi.span.end);
+        let end = self.finish_statement();
+        let span = self.span(expr_span.start, end);
         let kind = self.statement_kind_for(expr_id)?;
         parse_arena_result(self.ast.try_push_stmt(Stmt { kind, span }), &mut self.fatal)
     }
@@ -362,13 +367,13 @@ impl<'a> Parser<'a> {
 
         let value = self.parse_expression()?;
 
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+        if !self.at_statement_end() {
             self.error_at_peek("expected `;` after declaration");
             return None;
         }
-        let semi = self.advance();
+        let end = self.finish_statement();
 
-        let span = self.span(kw.span.start, semi.span.end);
+        let span = self.span(kw.span.start, end);
         let kind = match (binding, name) {
             (Some(binding), _) => {
                 if is_const {
@@ -480,6 +485,7 @@ impl<'a> Parser<'a> {
                     self.error_at_peek("expected `:` after keyword field name in object pattern");
                     return None;
                 }
+                self.reject_strict_mode_reserved_word(&source_tok);
                 let end = source.span.end;
                 (source.clone(), end)
             };
@@ -781,6 +787,9 @@ impl<'a> Parser<'a> {
                 && is_property_name(&self.peek_at(1).kind)
                 && matches!(self.peek_at(2).kind, TokenKind::LeftParen)
             {
+                if let Some(span) = modifiers.readonly {
+                    self.reject_readonly_modifier(span);
+                }
                 if let Some(span) = modifiers.static_span {
                     self.error_at_with_help(
                         span,
@@ -824,6 +833,9 @@ impl<'a> Parser<'a> {
 
         // Method.
         if matches!(self.peek().kind, TokenKind::LessThan | TokenKind::LeftParen) {
+            if let Some(span) = modifiers.readonly {
+                self.reject_readonly_modifier(span);
+            }
             let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
                 self.parse_generic_param_list()?
             } else {
@@ -1086,8 +1098,13 @@ impl<'a> Parser<'a> {
     /// A contextual modifier keyword counts as a modifier only when another member token
     /// (the real name, or a further modifier) follows — otherwise the word is the member
     /// name itself (e.g. a field named `private`). Mirrors `eat_readonly_property_modifier`.
+    /// As in TypeScript, only `static` may be followed by a line break; in a class body
+    /// ASI already ends the member there, but a constructor parameter list has no ASI.
     fn peek_word_is_class_modifier(&self, word: &str) -> bool {
         if !self.peek_identifier_text_is(word) {
+            return false;
+        }
+        if word != "static" && self.line_break_after_peek() {
             return false;
         }
         let next = &self.peek_at(1).kind;
@@ -1130,7 +1147,9 @@ impl<'a> Parser<'a> {
         self.advance();
 
         let mut members: Vec<crate::InterfaceMember> = Vec::new();
-        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
+        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof)
+            && !self.peek_starts_declaration()
+        {
             // Call signatures `(params): ret;` are stored under the sentinel name `@call`.
             // The `@` prefix is not a valid identifier start, so collisions with user methods
             // are impossible.
@@ -1201,6 +1220,9 @@ impl<'a> Parser<'a> {
                     doc: member_doc,
                 });
                 continue;
+            }
+            if readonly {
+                self.reject_readonly_modifier(self.readonly_modifier_span(member_start));
             }
             let m_generics = if matches!(self.peek().kind, TokenKind::LessThan) {
                 self.parse_generic_param_list()?
@@ -1346,7 +1368,7 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let member_doc = self.take_leading_doc();
-            let member_name_tok = self.expect_identifier("expected enum member name")?;
+            let member_name_tok = self.expect_identifier_name("expected enum member name")?;
             let member_name = self.ident_from_token(&member_name_tok);
 
             let value = if matches!(self.peek().kind, TokenKind::Equals) {
@@ -1519,7 +1541,7 @@ impl<'a> Parser<'a> {
         nested: bool,
         doc: Option<crate::DocComment>,
     ) -> Option<StmtId> {
-        let (specs, open_span) = self.parse_specifier_list("export")?;
+        let (specs, open_span) = self.parse_specifier_list(SpecifierList::Export)?;
         if specs.is_empty() {
             self.error_at_with_help(
                 open_span,
@@ -1692,7 +1714,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_named_imports(&mut self) -> Option<ImportKind> {
-        let (specs, open_span) = self.parse_specifier_list("import")?;
+        let (specs, open_span) = self.parse_specifier_list(SpecifierList::Import)?;
         if specs.is_empty() {
             self.error_at_with_help(
                 open_span,
@@ -1705,10 +1727,15 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a `{ a, b as c }` specifier list shared by `import` and re-`export`.
-    /// `what` names the construct in diagnostics. Returns the specifiers (possibly
+    /// `list` says whether the specifiers bind local names (an import) and names the
+    /// construct in diagnostics. Returns the specifiers (possibly
     /// empty — callers reject empty with construct-specific help) and the span of
     /// the opening brace.
-    fn parse_specifier_list(&mut self, what: &str) -> Option<(Vec<ImportSpecifier>, Span)> {
+    fn parse_specifier_list(
+        &mut self,
+        list: SpecifierList,
+    ) -> Option<(Vec<ImportSpecifier>, Span)> {
+        let what = list.noun();
         let open = self.advance();
         let mut specs: Vec<ImportSpecifier> = Vec::new();
         while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
@@ -1721,14 +1748,21 @@ impl<'a> Parser<'a> {
                 self.advance();
             }
             let imported_tok =
-                self.expect_identifier(&format!("expected {what} specifier name"))?;
+                self.expect_identifier_name(&format!("expected {what} specifier name"))?;
             let imported_name = self.ident_from_token(&imported_tok);
 
+            let binds_local = list == SpecifierList::Import;
             let local_name = if self.peek_identifier_text_is("as") {
                 self.advance();
-                let local_tok = self.expect_identifier("expected local name after `as`")?;
+                let local_tok = self.expect_identifier_name("expected local name after `as`")?;
+                if binds_local {
+                    self.reject_strict_mode_reserved_word(&local_tok);
+                }
                 self.ident_from_token(&local_tok)
             } else {
+                if binds_local {
+                    self.reject_strict_mode_reserved_word(&imported_tok);
+                }
                 imported_name.clone()
             };
 
@@ -2743,16 +2777,16 @@ impl<'a> Parser<'a> {
             Some(self.parse_expression()?)
         };
 
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+        if !self.at_statement_end() {
             self.error_at_peek("expected `;` after return");
             return None;
         }
-        let semi = self.advance();
+        let end = self.finish_statement();
 
         parse_arena_result(
             self.ast.try_push_stmt(Stmt {
                 kind: StmtKind::Return(value),
-                span: self.span(kw.span.start, semi.span.end),
+                span: self.span(kw.span.start, end),
             }),
             &mut self.fatal,
         )
@@ -2771,16 +2805,16 @@ impl<'a> Parser<'a> {
 
         let value = self.parse_expression()?;
 
-        if !matches!(self.peek().kind, TokenKind::Semicolon) {
+        if !self.at_statement_end() {
             self.error_at_peek("expected `;` after `throw`");
             return None;
         }
-        let semi = self.advance();
+        let end = self.finish_statement();
 
         parse_arena_result(
             self.ast.try_push_stmt(Stmt {
                 kind: StmtKind::Throw { value },
-                span: self.span(kw.span.start, semi.span.end),
+                span: self.span(kw.span.start, end),
             }),
             &mut self.fatal,
         )
@@ -3026,7 +3060,7 @@ impl<'a> Parser<'a> {
                 let mut end = first.span.end;
                 while matches!(self.peek().kind, TokenKind::Dot) {
                     self.advance();
-                    let seg = self.expect_identifier("expected a property name after `.`")?;
+                    let seg = self.expect_identifier_name("expected a property name after `.`")?;
                     end = seg.span.end;
                     path.push(self.type_name(seg.span)?);
                 }
@@ -3055,7 +3089,10 @@ impl<'a> Parser<'a> {
                         path.push(self.type_name(seg.span)?);
                     }
                 }
-                let (args, end) = if matches!(self.peek().kind, TokenKind::LessThan) {
+                // Type arguments, like the `[]` suffix, must start on the type's line.
+                let (args, end) = if matches!(self.peek().kind, TokenKind::LessThan)
+                    && !self.line_break_before_peek()
+                {
                     self.parse_type_argument_list()?
                 } else {
                     (Vec::new(), path_end)
@@ -3366,6 +3403,7 @@ impl<'a> Parser<'a> {
                     optional: false,
                     readonly: false,
                     rest,
+                    method: false,
                 });
                 match self.peek().kind {
                     TokenKind::Comma => {
@@ -3542,7 +3580,9 @@ impl<'a> Parser<'a> {
         let open = self.advance();
         let mut fields: Vec<TypeAnnotationField> = Vec::new();
         let mut index = None;
-        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
+        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof)
+            && !self.peek_starts_declaration()
+        {
             let member_start = self.peek().span.start;
             let readonly = self.eat_readonly_property_modifier();
             if self.peek_is_parameterless_index_signature() {
@@ -3560,7 +3600,7 @@ impl<'a> Parser<'a> {
                 }
                 index = Some(Box::new(signature));
             } else {
-                let field = self.parse_object_type_field(readonly)?;
+                let field = self.parse_object_type_field(readonly, member_start)?;
                 if let Some(existing) = fields.iter().find(|f| f.name.name == field.name.name) {
                     self.diagnostics.push(Diagnostic {
                         severity: Severity::Error,
@@ -3583,6 +3623,44 @@ impl<'a> Parser<'a> {
             kind: TypeAnnotationKind::Object { index, fields },
             span: self.span(open.span.start, close.span.end),
         })
+    }
+
+    /// Whether the next tokens start a declaration (`function f`, `class C`, `type T`,
+    /// …, optionally after `export`, `declare`, `async` or `abstract`) or an export
+    /// statement (`export {`, `export *`, `export default`), which no type member can:
+    /// a keyword is a member name only before `:`, `?` or `(`. A member list that reaches one was left unclosed, so it stops there
+    /// and leaves the declaration to be parsed.
+    fn peek_starts_declaration(&self) -> bool {
+        if matches!(self.peek().kind, TokenKind::Export)
+            && matches!(
+                self.peek_at(1).kind,
+                TokenKind::Default | TokenKind::LeftBrace | TokenKind::Star
+            )
+        {
+            return true;
+        }
+        let mut offset = 0;
+        while self.peek_at_is_declaration_modifier(offset) {
+            offset += 1;
+        }
+        let declaration_keyword = matches!(
+            self.peek_at(offset).kind,
+            TokenKind::Function
+                | TokenKind::Class
+                | TokenKind::Let
+                | TokenKind::Const
+                | TokenKind::Enum
+                | TokenKind::Interface
+        ) || self.peek_at_is_word(offset, "type");
+        declaration_keyword && matches!(self.peek_at(offset + 1).kind, TokenKind::Identifier)
+    }
+
+    /// `export`, `declare`, `async` or `abstract` before a declaration keyword.
+    fn peek_at_is_declaration_modifier(&self, offset: usize) -> bool {
+        matches!(self.peek_at(offset).kind, TokenKind::Export)
+            || ["declare", "async", "abstract"]
+                .iter()
+                .any(|word| self.peek_at_is_word(offset, word))
     }
 
     /// `new (params): T` or `new <T>(params): T` inside a type literal: a construct
@@ -3623,14 +3701,22 @@ impl<'a> Parser<'a> {
     }
 
     /// `name: T`, `name?: T` or the method signature `name(params): T`.
-    fn parse_object_type_field(&mut self, readonly: bool) -> Option<TypeAnnotationField> {
+    fn parse_object_type_field(
+        &mut self,
+        readonly: bool,
+        member_start: u32,
+    ) -> Option<TypeAnnotationField> {
         let name = self.expect_property_ident("expected field name in object type")?;
         // `name?: T` — omittable at construction; reads widen to `T | null`.
         let optional = matches!(self.peek().kind, TokenKind::Question);
         if optional {
             self.advance();
         }
-        let ty = if matches!(self.peek().kind, TokenKind::LeftParen) {
+        let method = matches!(self.peek().kind, TokenKind::LeftParen);
+        let ty = if method {
+            if readonly {
+                self.reject_readonly_modifier(self.readonly_modifier_span(member_start));
+            }
             self.parse_object_type_method_signature(name.span.start)?
         } else {
             if !matches!(self.peek().kind, TokenKind::Colon) {
@@ -3646,6 +3732,7 @@ impl<'a> Parser<'a> {
             optional,
             readonly,
             rest: false,
+            method,
         })
     }
 
@@ -3672,7 +3759,17 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// An identifier that names a binding or a type, which rejects the words strict
+    /// mode reserves (see [`STRICT_MODE_RESERVED_WORDS`]).
     fn expect_identifier(&mut self, message: &str) -> Option<Token> {
+        let tok = self.expect_identifier_name(message)?;
+        self.reject_strict_mode_reserved_word(&tok);
+        Some(tok)
+    }
+
+    /// An identifier in a position where strict mode's reserved words are allowed: an
+    /// enum member, a property, or the name an import specifier refers to.
+    fn expect_identifier_name(&mut self, message: &str) -> Option<Token> {
         if matches!(self.peek().kind, TokenKind::Identifier) {
             return Some(self.advance());
         }
@@ -3691,6 +3788,23 @@ impl<'a> Parser<'a> {
         }
         self.error_at_peek(message.to_string());
         None
+    }
+
+    /// Reports a binding named by a word strict mode reserves. Parsing continues
+    /// with the name: nothing else about it is wrong.
+    fn reject_strict_mode_reserved_word(&mut self, tok: &Token) {
+        let word = &self.source[tok.span.start as usize..tok.span.end as usize];
+        if !STRICT_MODE_RESERVED_WORDS.contains(&word) {
+            return;
+        }
+        self.error_at_with_help(
+            tok.span,
+            format!("`{word}` is a reserved word in strict mode and can't be used as a name"),
+            vec![format!(
+                "rename it, for example: `{}`",
+                reserved_keyword_rename_example(word)
+            )],
+        );
     }
 
     fn ident_from_token(&self, tok: &Token) -> Ident {
@@ -3730,8 +3844,25 @@ impl<'a> Parser<'a> {
         Some(self.property_ident_from_token(&tok))
     }
 
+    /// The span of a `readonly` modifier that [`Parser::eat_readonly_property_modifier`]
+    /// consumed at `member_start`.
+    fn readonly_modifier_span(&self, member_start: u32) -> Span {
+        self.span(member_start, member_start + "readonly".len() as u32)
+    }
+
+    /// Reports `readonly` on a method, accessor or method signature, as TypeScript
+    /// does (TS1024). Parsing continues: the modifier changes nothing else.
+    fn reject_readonly_modifier(&mut self, span: Span) {
+        self.error_at_with_help(
+            span,
+            "`readonly` can only modify a property or index signature",
+            vec!["remove `readonly`".to_string()],
+        );
+    }
+
     fn eat_readonly_property_modifier(&mut self) -> bool {
         if self.peek_identifier_text_is("readonly")
+            && !self.line_break_after_peek()
             && (self.peek_starts_property_after_readonly()
                 || matches!(self.peek_at(1).kind, TokenKind::LeftBracket))
         {
@@ -4492,6 +4623,7 @@ impl<'a> Parser<'a> {
             let kind = if is_instanceof {
                 ExprKind::InstanceOf { value: expr, ty }
             } else {
+                self.last_as_type_end = Some(end);
                 ExprKind::As { expr, ty }
             };
             expr = parse_arena_result(
@@ -5413,14 +5545,41 @@ impl<'a> Parser<'a> {
         self.fatal.is_some() || matches!(self.peek().kind, TokenKind::Eof)
     }
 
-    /// Whether a line break separates the next token from the one before it. The
-    /// ASI pass drops newline tokens, so the source between the two is read instead.
+    /// Whether a line break separates the next token from the one before it.
     fn line_break_before_peek(&self) -> bool {
-        let start = self.prev_token_end() as usize;
-        let end = self.peek().span.start as usize;
+        self.source_has_line_break(self.prev_token_end(), self.peek().span.start)
+    }
+
+    /// Whether a line break separates the next token from the one after it.
+    fn line_break_after_peek(&self) -> bool {
+        self.source_has_line_break(self.peek().span.end, self.peek_at(1).span.start)
+    }
+
+    /// The ASI pass drops newline tokens, so line breaks between tokens are read
+    /// from the source.
+    fn source_has_line_break(&self, start: u32, end: u32) -> bool {
         self.source
-            .get(start..end)
+            .get(start as usize..end as usize)
             .is_some_and(|gap| gap.contains(['\n', '\r']))
+    }
+
+    /// Whether the statement being parsed ends here: at a `;`, or at a line break
+    /// right after an `as T`. ASI keeps a `[` or `(` on the next line attached, but
+    /// the type already stopped at the break (see `parse_type_array_inner`), and no
+    /// expression continues past a type, so TypeScript ends the statement there.
+    fn at_statement_end(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::Semicolon)
+            || (self.last_as_type_end == Some(self.prev_token_end())
+                && self.line_break_before_peek())
+    }
+
+    /// Consumes the `;` that [`Parser::at_statement_end`] found, if there is one, and
+    /// returns the statement's end offset.
+    fn finish_statement(&mut self) -> u32 {
+        if matches!(self.peek().kind, TokenKind::Semicolon) {
+            return self.advance().span.end;
+        }
+        self.prev_token_end()
     }
 
     /// End offset of the most recently consumed token (the body of the file's first
@@ -5585,6 +5744,36 @@ fn is_reserved_identifier_word(kind: &TokenKind) -> bool {
             | TokenKind::This
     )
 }
+
+/// Which statement a `{ … }` specifier list belongs to. An import binds local
+/// names, which strict mode restricts; an export's are module export names,
+/// which it doesn't.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpecifierList {
+    Import,
+    Export,
+}
+
+impl SpecifierList {
+    fn noun(self) -> &'static str {
+        match self {
+            SpecifierList::Import => "import",
+            SpecifierList::Export => "export",
+        }
+    }
+}
+
+/// Words strict mode reserves that Submilli otherwise lexes as identifiers: they
+/// can't name a binding or a type, but stay valid as property names and modifiers.
+/// (`implements`, `interface` and `let` are keywords already.)
+const STRICT_MODE_RESERVED_WORDS: [&str; 6] = [
+    "package",
+    "private",
+    "protected",
+    "public",
+    "static",
+    "yield",
+];
 
 fn reserved_keyword_rename_example(keyword: &str) -> &'static str {
     match keyword {
@@ -5865,6 +6054,7 @@ mod tests {
             function_expression_body_depth: 0,
             recursion_depth: 0,
             recursion_limit_span: None,
+            last_as_type_end: None,
             eof: Token::new(
                 TokenKind::Eof,
                 crate::Span::new(F, source.len() as u32, source.len() as u32).unwrap(),
@@ -9534,12 +9724,35 @@ mod tests {
     }
 
     #[test]
+    fn readonly_is_rejected_on_methods_accessors_and_method_signatures() {
+        let source = "class K {\n\
+             readonly m(): number { return 1; }\n\
+             public readonly n<T>(): number { return 1; }\n\
+             readonly get g(): number { return 1; }\n\
+             readonly p: number = 1;\n\
+             }\n\
+             type T = { readonly r(a: number): boolean; readonly f: () => void };\n\
+             interface I { readonly s(): void; readonly q: number; }\n";
+        let (_, diags) = parse_str(source);
+        let lines: Vec<usize> = diags
+            .iter()
+            .map(|d| {
+                assert_eq!(
+                    d.message,
+                    "`readonly` can only modify a property or index signature"
+                );
+                source[..d.span.start as usize].matches('\n').count() + 1
+            })
+            .collect();
+        assert_eq!(lines, vec![2, 3, 4, 7, 8]);
+    }
+
+    #[test]
     fn parse_object_type_method_members() {
         // `m(): T` is the same member as `m: () => T`, so it parses to a function-typed
-        // field — including through the `?` and `readonly` modifiers.
-        let (ast, diags) = parse_str(
-            "let p: { m(): number; opt?(): string; readonly r(a: number): boolean } = null;",
-        );
+        // field — including through the `?` modifier.
+        let (ast, diags) =
+            parse_str("let p: { m(): number; opt?(): string; r(a: number): boolean } = null;");
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
         let ty = type_of_let(single_stmt(&ast));
         let crate::TypeAnnotationKind::Object { ref fields, .. } = ty.kind else {
@@ -9555,7 +9768,6 @@ mod tests {
             );
         }
         assert!(fields[1].optional, "`opt?()` is an optional member");
-        assert!(fields[2].readonly, "`readonly r()` keeps its modifier");
         let crate::TypeAnnotationKind::Function { ref params, .. } = fields[2].ty.kind else {
             unreachable!("checked above");
         };
