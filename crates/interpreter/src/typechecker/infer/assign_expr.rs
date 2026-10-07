@@ -70,14 +70,7 @@ impl Inferer<'_> {
             return Ok(expr.ty.clone());
         };
         let value_ty = expr.ty.clone();
-        let Some(
-            TypedStmtKind::AssignLocal {
-                target_ty, value, ..
-            }
-            | TypedStmtKind::AssignGlobal {
-                target_ty, value, ..
-            },
-        ) = stmts
+        let Some(assignment) = stmts
             .last()
             .map(|&s| {
                 Ok::<_, crate::compiler_error::CompilerFailure>(
@@ -92,7 +85,22 @@ impl Inferer<'_> {
         else {
             return Ok(value_ty);
         };
-        let flow_ty = self.assigned_flow_type(target_ty, *value, value_ty)?;
+        let (target_ty, value, written) = match assignment {
+            TypedStmtKind::AssignLocal {
+                ident,
+                target_ty,
+                value,
+                ..
+            } => (target_ty, value, self.is_local_type_written(&ident.name)),
+            TypedStmtKind::AssignGlobal {
+                mangled,
+                target_ty,
+                value,
+                ..
+            } => (target_ty, value, self.is_global_type_written(mangled)),
+            _ => return Ok(value_ty),
+        };
+        let flow_ty = self.assigned_flow_type(target_ty, written, *value, value_ty)?;
         Ok(self.assignment_narrowed_ty(target_ty, flow_ty))
     }
 

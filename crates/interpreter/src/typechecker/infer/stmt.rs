@@ -405,7 +405,7 @@ impl Inferer<'_> {
         );
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
-            None => self.assigned_flow_type(&bound, typed_value, value_ty)?,
+            None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
         };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Let {
@@ -458,7 +458,7 @@ impl Inferer<'_> {
         }
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
-            None => self.assigned_flow_type(&bound, typed_value, value_ty)?,
+            None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
         };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Const {
@@ -1411,7 +1411,7 @@ impl Inferer<'_> {
         if matches!(written, Type::Error) || !assignable(&written, &declared, self.resolver()) {
             return Ok(());
         }
-        let written = self.assigned_flow_type(&declared, value, written)?;
+        let written = self.assigned_flow_type(&declared, true, value, written)?;
         let narrowed_ty = self.assignment_narrowed_ty(&declared, written);
         if narrowed_ty == declared {
             return Ok(());
@@ -1803,7 +1803,8 @@ impl Inferer<'_> {
                     format!("expected `{}`, got `{}`", entry.ty, value_ty),
                 );
             }
-            let flow_ty = self.assigned_flow_type(&entry.ty, typed_value, value_ty)?;
+            let written = self.is_local_type_written(&target.name);
+            let flow_ty = self.assigned_flow_type(&entry.ty, written, typed_value, value_ty)?;
             let narrowed_shadow_ty =
                 self.renarrow_local_after_write(&target, entry.decl_scope, &entry.ty, flow_ty)?;
             return Ok(TypedStmtKind::AssignLocal {
@@ -1828,7 +1829,8 @@ impl Inferer<'_> {
                     if !reported && !assignable(&value_ty, &ty, self.resolver()) {
                         self.error(value_span, format!("expected `{ty}`, got `{value_ty}`"));
                     }
-                    let flow_ty = self.assigned_flow_type(&ty, typed_value, value_ty)?;
+                    let written = self.is_global_type_written(&mangled);
+                    let flow_ty = self.assigned_flow_type(&ty, written, typed_value, value_ty)?;
                     self.renarrow_global_after_write(&target, &mangled, &ty, flow_ty)?;
                     TypedStmtKind::AssignGlobal {
                         ident: target,
