@@ -413,9 +413,9 @@ mod tests {
         assert!(diags.is_empty(), "{diags:?}");
         let resolved = crate::typechecker::rules::check_script(&ta, &[&dependency]).unwrap();
         assert!(resolved.is_empty(), "{resolved:?}");
-        // Without the declaration the enum's variants are unknown.
+        // Inference saw the enum's members, so the check needs no declaration.
         let unresolved = crate::check(&ta).unwrap();
-        assert_eq!(unresolved.len(), 1, "{unresolved:?}");
+        assert!(unresolved.is_empty(), "{unresolved:?}");
     }
 
     #[test]
