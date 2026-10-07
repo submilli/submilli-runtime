@@ -8821,7 +8821,9 @@ impl Inferer<'_> {
 
         // A poisoned operand has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
-        if !type_admits_null(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error) {
+        let lhs_decides =
+            !type_admits_null(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error);
+        if lhs_decides {
             self.diagnostics.push(crate::Diagnostic {
                 severity: Severity::Warning,
                 span,
@@ -8839,6 +8841,10 @@ impl Inferer<'_> {
         // which reaches codegen and panics in `value_type`.
         let result_ty = if matches!(lhs_ty.peel(), Type::Null) {
             rhs_ty
+        } else if lhs_decides && assignable(&rhs_ty, &lhs_ty.widen_literal(), self.resolver()) {
+            // As for `||`: the right side never runs, but it is compiled, so it
+            // must fit the left side's representation.
+            lhs_ty
         } else {
             let present = super::narrowing::strip_null(&lhs_ty);
             match empty_literal_join(self.ast, (lhs, &present), (rhs, &rhs_ty))? {
