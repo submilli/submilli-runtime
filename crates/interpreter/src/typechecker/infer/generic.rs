@@ -1227,9 +1227,9 @@ impl Inferer<'_> {
     /// it types in each object shape of `param_ty`, leaving out plain values
     /// (`w: 2`), and keep it when the largest count is at most one: tsc's
     /// common supertype of two function values (`{ v: () => 1, w: () => 2 }`)
-    /// widens what they return to `() => number`. An empty list when `arg` spreads
-    /// another object; every one of `inferred` when `arg` is not an object
-    /// literal or `param_ty` has no object shape.
+    /// widens what they return to `() => number`. An empty list when `arg`
+    /// spreads another object; every one of `inferred` when `arg` is not an
+    /// object literal or `param_ty` has no object shape.
     fn type_params_of_one_field(
         &self,
         arg: ExprId,
@@ -1286,17 +1286,18 @@ impl Inferer<'_> {
 
     /// Whether `expr` can never be a function, whatever its operands: a
     /// literal, an operator that yields a primitive, or a choice between such
-    /// values. Values of other forms (a name, a call, a cast) may be one.
+    /// values, seen through parentheses and a non-null assertion. Values of
+    /// other forms (a name, a call, a cast) may be one.
     fn is_plain_value(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         let kind = &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind;
         Ok(match kind {
+            // The forms that yield an operand (parentheses, `x!`, `&&`, `||`,
+            // `??`) come before the operator arms that yield a primitive.
             ExprKind::Paren(inner)
             | ExprKind::PostfixUnary {
                 op: crate::PostfixOp::NonNullAssert,
                 operand: inner,
             } => self.is_plain_value(*inner)?,
-            // These yield an operand rather than a primitive, so they come
-            // before the other operators below.
             ExprKind::Binary {
                 op: crate::BinOp::And | crate::BinOp::Or | crate::BinOp::NullishCoalesce,
                 lhs,
