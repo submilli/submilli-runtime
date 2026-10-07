@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use interpreter::runtime::{
     CallOutcome, CallRecord, DecisionRecord, ModelUsage, RecordObserver, SourceLine,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{RunEntry, RunRecorderFactory, RunStart};
@@ -37,7 +37,7 @@ use crate::error::ErrorKind;
 pub const EVENT_SCHEMA: u32 = 1;
 
 /// One thing that happened in a session.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEvent {
     pub schema: u32,
     pub event_id: String,
@@ -59,7 +59,7 @@ pub struct SessionEvent {
     pub kind: EventKind,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum EventKind {
     RunStarted {
@@ -503,6 +503,7 @@ fn entry_name(entry: &RunEntry) -> String {
         RunEntry::Mcp => "mcp".into(),
         RunEntry::McpFileTool { tool } => format!("mcp:{tool}"),
         RunEntry::Program => "program".into(),
+        RunEntry::Test => "test".into(),
     }
 }
 

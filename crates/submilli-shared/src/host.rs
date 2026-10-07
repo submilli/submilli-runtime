@@ -927,6 +927,7 @@ permissions:
             decompress: false,
             transport_policy: None,
             redirect_guard: None,
+            recorded_as: None,
         }
     }
 

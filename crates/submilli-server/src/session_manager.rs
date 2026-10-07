@@ -447,6 +447,25 @@ impl SessionManager {
         self.llm.build()
     }
 
+    /// A per-execution token budget with its own aggregate: it holds a run to the
+    /// per-execution ceiling without charging the server-wide one, for a run whose usage
+    /// is not new spend (a test run answered from a recording).
+    pub(crate) fn private_llm_budget(&self) -> Arc<ExecutionTokenBudget> {
+        Arc::new(ExecutionTokenBudget::new(
+            self.llm.limits,
+            SharedTokenBudget::new(u64::MAX),
+        ))
+    }
+
+    /// An embedding budget with its own aggregate, for a run that spends nothing new
+    /// ([`Self::private_llm_budget`]).
+    pub(crate) fn private_embedding_budget(&self) -> Arc<EmbeddingTokenBudget> {
+        Arc::new(EmbeddingTokenBudget::new(
+            self.embedding.limits,
+            SharedTokenBudget::new(u64::MAX),
+        ))
+    }
+
     /// The fan-out bound one `batch` dispatches at (KTD4).
     pub fn llm_max_concurrency(&self) -> usize {
         self.llm.max_concurrency
@@ -648,7 +667,7 @@ impl SessionManager {
     }
 
     /// The declared volume table, for registration checks and listings.
-    pub(crate) fn volumes(&self) -> &VolumeTable {
+    pub(crate) fn volumes(&self) -> VolumeTable {
         self.volumes.table()
     }
 
@@ -823,6 +842,35 @@ impl SessionManager {
     ) -> Result<(Vfs, VfsInfo), SessionError> {
         let (vfs, info) = self.session_vfs_with_variables(session_id, blueprint, variables)?;
         Ok((attach_limits(vfs, blueprint, &self.volumes).await?, info))
+    }
+
+    /// The directory a `per_session` session's files live in, when it has one.
+    pub(crate) fn session_vfs_root(&self, session_id: &str) -> Option<PathBuf> {
+        self.lock().sessions.get(session_id)?.vfs_root.clone()
+    }
+
+    /// [`vfs_for_execute_with_variables`](Self::vfs_for_execute_with_variables) over roots
+    /// the caller supplies instead of a session's own: `session_root` for a `per_session`
+    /// workspace, and `volumes` to resolve named volumes through. A test run's throwaway
+    /// copies are opened this way.
+    pub async fn vfs_over_roots(
+        &self,
+        blueprint: &Blueprint,
+        variables: &VarBindings,
+        session_root: Option<&Path>,
+        volumes: &VolumeRegistry,
+    ) -> Result<(Vfs, VfsInfo), SessionError> {
+        let vfs = build_vfs(
+            blueprint,
+            variables,
+            session_root,
+            self.ephemeral_root.as_deref(),
+            volumes,
+        )?;
+        Ok((
+            attach_limits(vfs, blueprint, volumes).await?,
+            vfs_info(blueprint),
+        ))
     }
 
     /// Mark execute activity, keeping the session alive and resetting idle.
@@ -2527,6 +2575,38 @@ mod tests {
             mgr.llm_budget().used(),
             1_000,
             "dropping one execution must release its reservation and no one else's"
+        );
+    }
+
+    #[test]
+    fn a_private_budget_holds_a_run_without_charging_the_server_aggregate() {
+        let (mgr, _root) = manager();
+        let private = mgr.private_llm_budget();
+        private.reserve("m", 500).expect("reserves");
+        assert_eq!(private.used(), 500);
+        assert_eq!(mgr.llm_budget().used(), 0, "the aggregate is untouched");
+        let shared = mgr.llm_budget_for_execute();
+        shared.reserve("m", 500).expect("reserves");
+        assert_eq!(mgr.llm_budget().used(), 500, "a shared one is charged");
+    }
+
+    #[test]
+    fn a_private_embedding_budget_does_not_charge_the_server_aggregate() {
+        let (mgr, _root) = manager();
+        let private = mgr.private_embedding_budget();
+        private.reserve("m", 500).expect("reserves");
+        assert_eq!(private.used(), 500);
+        assert_eq!(
+            mgr.embedding_budget().used(),
+            0,
+            "the aggregate is untouched"
+        );
+        let shared = mgr.embedding_budget_for_execute();
+        shared.reserve("m", 500).expect("reserves");
+        assert_eq!(
+            mgr.embedding_budget().used(),
+            500,
+            "a shared one is charged"
         );
     }
 

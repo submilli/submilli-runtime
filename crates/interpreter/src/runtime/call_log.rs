@@ -20,7 +20,7 @@
 use std::borrow::Cow;
 
 use base64::Engine as _;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -28,7 +28,7 @@ use super::StoreData;
 use super::decision::{CallTicket, SourceLine};
 
 /// How a call ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CallOutcome {
     /// The host function returned a value.
@@ -55,7 +55,7 @@ impl PayloadRecord {
 }
 
 /// A copy of a payload body, kept as text when it is UTF-8.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "encoding", content = "data")]
 pub enum BodyCopy {
     Text(String),
@@ -63,7 +63,7 @@ pub enum BodyCopy {
 }
 
 /// One side of a call: what it sent, or what came back.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PayloadRecord {
     /// The structured part: a method and URL, a tool, a model, a status. Capped like a
     /// decision's context, with credential-bearing headers masked.
@@ -82,7 +82,7 @@ pub struct PayloadRecord {
 }
 
 /// Token counts a model provider reported for one call. Absent when not reported.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
@@ -91,7 +91,7 @@ pub struct ModelUsage {
 }
 
 /// One host call. Times are microseconds measured from the recorder's start.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallRecord {
     /// Run-wide, in call order; the same index the call's decisions carry.
     pub call_index: u64,
@@ -336,17 +336,9 @@ pub(crate) fn capture(
     room: u64,
     max_body: usize,
 ) -> PayloadRecord {
-    let mut hasher = Sha256::new();
     let meta_text = serde_json::to_vec(&payload.meta).unwrap_or_default();
-    // The length prefix marks where the meta ends and the body begins, so two payloads
-    // that split the same bytes differently do not share a digest.
-    hasher.update((meta_text.len() as u64).to_le_bytes());
-    hasher.update(&meta_text);
     let body = payload.body.as_deref();
-    if let Some(body) = body {
-        hasher.update(body);
-    }
-    let digest = format!("{:x}", hasher.finalize());
+    let digest = digest_of(&meta_text, body);
     let (meta, mut truncated) = super::decision::cap_context(&payload.meta, max_meta);
     if payload.masked_headers.len() > MAX_MASKED_HEADERS {
         truncated = true;
@@ -381,6 +373,29 @@ pub(crate) fn capture(
         bytes: full,
         truncated,
         masked_headers,
+    }
+}
+
+/// SHA-256, hex, of a payload: the meta's JSON text, then the body. The length prefix
+/// marks where the meta ends and the body begins, so two payloads that split the same
+/// bytes differently do not share a digest.
+fn digest_of(meta_text: &[u8], body: Option<&[u8]>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update((meta_text.len() as u64).to_le_bytes());
+    hasher.update(meta_text);
+    if let Some(body) = body {
+        hasher.update(body);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+impl Payload<'_> {
+    /// The digest a record of this payload carries ([`PayloadRecord::digest`]), whatever
+    /// the recorder's caps keep of it. Lets a transport compute what the call log
+    /// recorded for a request.
+    pub fn digest(&self) -> String {
+        let meta_text = serde_json::to_vec(&self.meta).unwrap_or_default();
+        digest_of(&meta_text, self.body.as_deref())
     }
 }
 
