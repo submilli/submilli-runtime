@@ -213,6 +213,10 @@ pub fn emit_statement(
             value,
             ..
         } => {
+            let mark = init_guard::mark_at(ctx, mangled, id);
+            if mark == Some(init_guard::Mark::BeforeValue) {
+                init_guard::emit_mark_initialized(emitter, ctx, mangled);
+            }
             emit_expr(emitter, ctx, *value)?;
             let value_ty = ctx
                 .ta
@@ -225,12 +229,11 @@ pub fn emit_statement(
                 crate::codegen::internal_failure("Inferer guarantees the binding exists")
             })?;
             // JavaScript checks the binding only once the value is computed.
-            let declares = init_guard::is_declaration(ctx, mangled, id);
-            if !declares {
+            if mark.is_none() {
                 init_guard::emit_check(emitter, ctx, mangled);
             }
             emitter.instruction(Instruction::GlobalSet(idx));
-            if declares {
+            if mark == Some(init_guard::Mark::AfterStore) {
                 init_guard::emit_mark_initialized(emitter, ctx, mangled);
             }
         }

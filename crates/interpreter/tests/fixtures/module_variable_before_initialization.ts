@@ -34,6 +34,15 @@ class Later {
   static value: number = 7;
 }
 
+// A class is initialized before its static initializers run, so they can read
+// its later statics, which still hold their defaults.
+class SelfInit {
+  static first: number = 1;
+  static sum: number = SelfInit.add();
+  static add(): number { return SelfInit.first + SelfInit.later; }
+  static later: number = 5;
+}
+
 function main(): void {
   const number = "ReferenceError: Cannot access 'laterNumber' before initialization";
   assert(early[0] === number, "a number read");
@@ -45,6 +54,7 @@ function main(): void {
   assert(laterNumber === 5, "the failed write left the initializer's value");
   assert(readNumber() === 5 && readString() === "s" && readObject().a === 1, "reads after initialization");
   assert(readStatic() === 7, "a static read after initialization");
+  assert(SelfInit.sum === 1, "a static initializer reads a later static's default");
   writeNumber();
   bumpNumber();
   assert(laterNumber === 4, "writes after initialization");

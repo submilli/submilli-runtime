@@ -1584,21 +1584,11 @@ fn codegen_inner(
             .checked_add(1)
             .ok_or_else(|| crate::codegen::internal_failure("Wasm index count overflow"))?;
     }
-    for guard in init_guard::guarded_globals(ta)? {
-        globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(0),
-        );
-        symbols.record_init_guard(guard, next_global_idx);
-        crate::codegen::next_index(&mut next_global_idx)?;
-        globals_count = globals_count
-            .checked_add(1)
-            .ok_or_else(|| crate::codegen::internal_failure("Wasm index count overflow"))?;
-    }
+    let init_flags_count =
+        init_guard::allocate_flags(ta, &mut globals, &mut symbols, &mut next_global_idx)?;
+    globals_count = globals_count
+        .checked_add(init_flags_count)
+        .ok_or_else(|| crate::codegen::internal_failure("Wasm index count overflow"))?;
     let vtable_globals_count = wasm_u32(user_subtypes_alloc.len())?;
     user_subtypes::emit_vtable_globals(
         &mut globals,

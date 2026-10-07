@@ -812,23 +812,17 @@ impl SymbolTable {
         self.globals.insert(mangled, idx);
     }
 
-    /// Language globals retain their declared type for checked narrowed reads.
-    /// Runtime metadata globals only need an index.
+    /// A guarded module global's initialization flag; see `init_guard`.
     pub fn record_init_guard(
         &mut self,
-        guard: crate::codegen::init_guard::InitGuard,
-        flag_idx: u32,
+        global: MangledName,
+        flag: crate::codegen::init_guard::InitFlag,
     ) {
-        self.init_guards.insert(
-            guard.global,
-            crate::codegen::init_guard::InitFlag {
-                flag_idx,
-                declaration: guard.declaration,
-                message: guard.message,
-            },
-        );
+        self.init_guards.insert(global, flag);
     }
 
+    /// Language globals retain their declared type for checked narrowed reads.
+    /// Runtime metadata globals only need an index.
     pub fn record_typed_global(&mut self, mangled: MangledName, idx: u32, ty: Type) {
         self.global_types.insert(mangled.clone(), ty);
         self.record_global(mangled, idx);

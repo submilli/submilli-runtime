@@ -111,7 +111,11 @@ impl CodegenAnalysis {
                 .note_type(crate::mangle::prelude("ReferenceError"));
         }
         for guard in init_guards {
-            analysis.string_pool.intern_text(&guard.message);
+            analysis
+                .string_pool
+                .intern_text(&super::init_guard::before_initialization_message(
+                    &guard.binding,
+                ));
         }
 
         for f in &ta.functions {
