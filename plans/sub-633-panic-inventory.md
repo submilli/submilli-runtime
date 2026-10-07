@@ -30,9 +30,9 @@ by [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 ## Active work
 
-Entries marked **fixed on main** were merged in PR #151, PR #152 or PR #163. Entries marked **fixed
+Entries marked **fixed on main** were merged in PR #151, PR #152, PR #163 or PR #169. Entries marked **fixed
 on branch** have completed focused verification and review; other N entries
-remain open. Five N entries remain open, eleven are fixed on main, and N08 is
+remain open. Four N entries remain open, twelve are fixed on main, and N17 is
 fixed on this branch. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
@@ -52,7 +52,7 @@ fixed on this branch. Evidence means:
 | N05 | **Fixed on main:** bound namespace metadata before recursive consumers | Debug/release 2 MiB stack regressions pass |
 | N06 | **Fixed on main:** validate sibling dependencies at public build entry | Typed-error regression passes |
 | N07 | **Fixed on main:** make resolver error formatting safe for arbitrary UTF-8 | Public formatting regression passes |
-| N08 | **Fixed on branch:** make watchdog thread creation fallible | Injected setup failure, recovery and timer lifecycle regressions |
+| N08 | **Fixed on main:** make watchdog thread creation fallible | Injected setup failure, recovery and timer lifecycle regressions |
 | N09 | Handle blocking-pool thread admission failures | Inspection; dependency OS failure |
 | N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
 | N11 | **Fixed on main:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
@@ -61,7 +61,7 @@ fixed on this branch. Evidence means:
 | N14 | **Fixed on main:** bound aggregate MCP discovery pages/tools/schemas | Paginated localhost and aggregate-limit regressions pass |
 | N15 | **Fixed on main:** bound artifact reads and retained package data before loading | File and wide-closure regressions pass |
 | N16 | Admit native string-builder output before allocation | Inspection; host allocation before store limit |
-| N17 | Validate the public reaper's timer configuration | Inspection; zero interval panics |
+| N17 | **Fixed on branch:** validate reaper configuration and check timer deadlines | Invalid setup/recovery, timer contract and sweep regressions |
 
 | ID | Investigation | Exit condition |
 | --- | --- | --- |
@@ -313,8 +313,8 @@ is not an invariant. This concerns CLI/direct timeout setup; the server's separa
 execution. Preserve timer ownership/disarming. Inject a spawn failure and verify
 a later successful run; do not silently disable a requested timeout.
 
-**Disposition (N08 follow-up):** fixed on `codex/fallible-watchdog`, against
-integration base `6358bd85`. `watchdog::arm` returns `std::io::Result<Watchdog>`
+**Disposition (N08 follow-up):** merged as `38f29096` in PR #169; developed on
+`codex/fallible-watchdog` against integration base `6358bd85`. `watchdog::arm` returns `std::io::Result<Watchdog>`
 from `Builder::spawn`; `RuntimeConfig::arm_timeout` returns
 `wasmtime::Result<Option<Watchdog>>` with watchdog startup context and its I/O
 cause. Direct, CLI, package-test and harness callers propagate failure. Production
@@ -325,7 +325,9 @@ unchanged. This is an injected OS-failure check, not induced thread exhaustion.
 Focused evidence: five watchdog tests cover failure cause, healthy follow-up,
 failure before guest top-level execution, disabled timeout, interruption and
 disarming. Caller regressions, formatting, Clippy and review results are recorded
-in the working handoff; full verification is deferred to the post-rebase PR gate.
+in the working handoff. Final workspace tests and 134 package/documentation
+checks passed before PR #169; HTTP/nightly-only coverage was excluded and 35
+network package files were skipped.
 
 ### N09 — Tokio blocking-pool admission can panic before a join exists
 
@@ -543,24 +545,42 @@ Keep UTF-16 units and real user range errors. Verify small tenant budgets reject
 large outputs before native growth, boundaries still work, and accounting refunds
 on error. Include concat and the named shared wrappers in the same fix.
 
-### N17 — Public reaper accepts a zero timer interval
+### N17 — Public reaper timer configuration
 
-**Site:** `crates/submilli-server/src/session_manager.rs:963–978`
-(`SessionManager::spawn_reaper`).
+**Original site:** `crates/submilli-server/src/session_manager.rs`
+(`SessionManager::spawn_reaper`); still unresolved on integration base `38f29096`.
+Zero intervals panic inside Tokio's interval task after the started flag is set.
+Tokio 1.52.3 also adds the interval unchecked on its missed-tick path and
+rounds timer-registration deadlines up with unchecked addition. Both boundaries
+require checked headroom for caller-supplied durations.
 
-The public method accepts any `Duration`, sets `reaper_started`, then creates
-`tokio::time::interval(interval)` inside its spawned task. Tokio rejects zero by
-panicking. The normal `AppState` callers pass fixed nonzero `REAP_INTERVAL`, so
-those calls have a genuine local guarantee; arbitrary direct callers do not.
-A failed task also leaves the started flag set. An entered runtime alone does not
-prove its timer driver is enabled.
+**Disposition:** fixed on `codex/validated-reaper`. The public API now returns
+`Result<(), ReaperStartError>` for zero intervals and unrepresentable deadlines.
+Timer construction precedes publishing startup state. Checked `sleep_until`
+deadlines reserve one millisecond for Tokio registration rounding and preserve the immediate first sweep and burst catch-up. Later deadline
+overflow logs a failure and clears startup state after completing the sweep.
+No-runtime calls remain no-ops; invalid configuration is rejected in a runtime
+even when a reaper already runs. General task cancellation/restart is unchanged.
 
-**Evidence:** source/dependency contract inspection; no direct API execution.
+**Accepted invariants:** entered runtimes must have their time driver enabled;
+this is documented on `spawn_reaper`, `AppState::boot` and `app`. The timer is
+constructed in that runtime before spawning, without intervening callbacks, and
+remains attached to it. Repository server/CLI runtime builders enable timers.
+Violation of this explicit embedding contract may panic; it is not a removed
+panic. AppState's private startup helper uses `expect` on the returned interval
+error because its immutable 30-second constant is nonzero and representable;
+configuration and callbacks cannot substitute a different duration.
 
-**Direction/done:** establish the interval/runtime preconditions at the public
-boundary before publishing started state, preferably structurally or through a
-fallible start API. Test zero and supported nonzero configuration; decide and
-document the timer-enabled runtime contract. No general reaper/lifecycle redesign.
+**Verification:** seven reaper regressions cover invalid intervals and healthy
+follow-up, no-runtime behavior, timer-disabled contract violation before state
+publication, checked/catch-up deadlines, platform-specific timer-rounding
+headroom, an injected later-overflow schedule and
+state recovery, and immediate/subsequent expiry sweeps. AppState boot/router
+regressions pass (nine tests selected by `reaper`, two by `direct_router`,
+with one overlap). Formatting and workspace Clippy pass. Two independent
+three-role review rounds completed: the first found missing Tokio rounding
+headroom, now fixed; the second found no issues. Full verification is deferred
+to the PR gate.
 
 ## Questions requiring a scoped follow-up
 
