@@ -15,6 +15,9 @@ function main(): void {
   assert(o.k === 1 && list.length === 3, "object and array elements");
   // The rest is an array of the remaining elements' types, so it can grow and
   // be indexed by any number.
+  const [id, ...names] = [7, "ann", "bob"];
+  const nameList: string[] = names;
+  assert(id === 7 && nameList.join(",") === "ann,bob", "a rest of one element type");
   const [head, ...tail] = [1, "a", true];
   const index = tail.length - 1;
   assert(head === 1 && tail[0] === "a" && tail[index] === true, "a rest element takes the remaining elements");
