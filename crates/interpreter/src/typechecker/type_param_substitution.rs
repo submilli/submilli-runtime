@@ -7,6 +7,7 @@ use crate::typechecker::infer::assignable::{
     TypeResolver, assignable, expand_alias_ref, expand_interface_data_shape, rest_function_accepts,
 };
 use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
+use crate::typechecker::infer::variance::Variance;
 use crate::{Span, Type};
 
 /// BTreeMap for deterministic ordering (stable snapshots and error messages).
@@ -564,6 +565,7 @@ impl<'a> Unifier<'a> {
             (
                 Type::InterfaceRef {
                     mangled: ma,
+                    name,
                     args: aa,
                     ..
                 },
@@ -576,6 +578,7 @@ impl<'a> Unifier<'a> {
             | (
                 Type::ClassRef {
                     mangled: ma,
+                    name,
                     args: aa,
                     ..
                 },
@@ -599,8 +602,19 @@ impl<'a> Unifier<'a> {
                 if aa.len() != ab.len() {
                     return Err(mismatch());
                 }
-                for (a, b) in aa.iter().zip(ab.iter()) {
-                    self.unify(a, b)?;
+                let variances = self
+                    .types
+                    .and_then(|types| types.type_param_variances(ma, name))
+                    .filter(|variances| variances.len() == aa.len())
+                    .unwrap_or_else(|| vec![Variance::Covariant; aa.len()]);
+                for ((a, b), variance) in aa.iter().zip(ab.iter()).zip(variances) {
+                    // An argument the declaration only takes in (a callback
+                    // field's parameter) infers as a function parameter would.
+                    if variance == Variance::Contravariant {
+                        self.in_function_parameter(|u| u.unify(a, b))?;
+                    } else {
+                        self.unify(a, b)?;
+                    }
                 }
                 Ok(())
             }

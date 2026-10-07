@@ -10,6 +10,7 @@ use super::generic::substitute_or_record;
 use super::narrowing;
 use super::type_namespace::TypeNamespace;
 use super::type_registry::TypeRegistry;
+use super::variance::Variance;
 
 /// The pair of tables structural resolution needs: the import-scoped namespace
 /// plus the import-independent FQN registry. Carried (by `Copy`) wherever
@@ -124,7 +125,7 @@ impl<'a> TypeResolver<'a> {
         Some(out)
     }
 
-    fn sym_by_mangled(&self, mangled: &MangledName) -> Option<&'a crate::TypeSymbol> {
+    pub(super) fn sym_by_mangled(&self, mangled: &MangledName) -> Option<&'a crate::TypeSymbol> {
         self.registry
             .lookup(mangled)
             .or_else(|| self.types.lookup_by_mangled(mangled))
@@ -758,22 +759,14 @@ fn assignable_rec(
                 ..
             },
         ) => {
-            if ma == me
-                && aa.len() == ae.len()
-                && aa
-                    .iter()
-                    .zip(ae.iter())
-                    .all(|(a, e)| assignable_rec(a, e, types, seen))
-            {
+            if ma == me && type_args_relate(ma, na, aa, ae, types, seen) {
                 return true;
             }
-            let _ = na;
             satisfies_structurally(actual, expected, types, seen)
         }
         // Classes are nominal: assignable only up the `extends` chain. Generic
-        // classes additionally compare args pairwise (covariant, the
-        // InterfaceRef convention — TS-style unsound covariance for mutable
-        // members, matching the interface behavior).
+        // classes additionally compare args pairwise, at each type parameter's
+        // variance (mutable fields count as covariant, as in TypeScript).
         (
             Type::ClassRef {
                 mangled: ma,
@@ -782,6 +775,7 @@ fn assignable_rec(
             },
             Type::ClassRef {
                 mangled: me,
+                name: ne,
                 args: ae,
                 ..
             },
@@ -795,13 +789,7 @@ fn assignable_rec(
                 types.class_args_at_ancestor(ma, aa, me)
             };
             match actual_at_expected {
-                Some(at) => {
-                    at.len() == ae.len()
-                        && at
-                            .iter()
-                            .zip(ae.iter())
-                            .all(|(a, e)| assignable_rec(a, e, types, seen))
-                }
+                Some(at) => type_args_relate(me, ne, &at, ae, types, seen),
                 None => false,
             }
         }
@@ -996,6 +984,35 @@ fn assignable_rec(
         }
         _ => actual == expected,
     }
+}
+
+/// Whether one instantiation's type arguments relate to another's, for the
+/// generic class or interface `mangled`, at each parameter's variance.
+fn type_args_relate(
+    mangled: &MangledName,
+    name: &str,
+    actual_args: &[Type],
+    expected_args: &[Type],
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    if actual_args.len() != expected_args.len() {
+        return false;
+    }
+    if actual_args == expected_args {
+        return true;
+    }
+    let variances = types
+        .type_param_variances(mangled, name)
+        .filter(|variances| variances.len() == actual_args.len())
+        .unwrap_or_else(|| vec![Variance::Covariant; actual_args.len()]);
+    actual_args
+        .iter()
+        .zip(expected_args)
+        .zip(variances)
+        .all(|((actual, expected), variance)| {
+            variance.relates(actual, expected, |a, e| assignable_rec(a, e, types, seen))
+        })
 }
 
 /// Whether `actual` is a `readonly` array or tuple and `expected` a mutable one.
