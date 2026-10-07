@@ -267,7 +267,8 @@ impl LowerCtx {
         let pattern_span = binding.span();
         let dst = self.fresh("dst", pattern_span)?;
         let is_const = matches!(binding_kind, BindingKind::Const);
-        let mut decompose = self.emit_decompose(ast, binding, dst.clone(), is_const, None, None)?;
+        let mut decompose =
+            self.emit_decompose(ast, binding, dst.clone(), is_const, /*doc=*/ None)?;
         let mut source_bindings = Vec::new();
         for &id in &decompose {
             match &ast
@@ -404,12 +405,7 @@ impl LowerCtx {
             }
         };
 
-        let tuple_len = if ty.is_none() {
-            tuple_source_len(ast, &binding, value)?
-        } else {
-            None
-        };
-        if tuple_len.is_some() {
+        if ty.is_none() && is_tuple_source(ast, &binding, value)? {
             ast.tuple_pattern_sources.insert(value);
         }
         let pattern_span = binding.span();
@@ -429,7 +425,7 @@ impl LowerCtx {
             .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
 
         let mut out = vec![dst_stmt];
-        out.extend(self.emit_decompose(ast, binding, dst, is_const, doc, tuple_len)?);
+        out.extend(self.emit_decompose(ast, binding, dst, is_const, doc)?);
         Ok(out)
     }
 
@@ -445,15 +441,15 @@ impl LowerCtx {
             };
             let fresh = self.fresh(PATTERN_PARAM, pattern.span())?;
             param.name = fresh.clone();
-            decompose
-                .extend(self.emit_decompose(ast, pattern, fresh, /*is_const=*/ true, None, None)?);
+            decompose.extend(self.emit_decompose(
+                ast, pattern, fresh, /*is_const=*/ true, /*doc=*/ None,
+            )?);
         }
 
         Ok(())
     }
 
-    /// `doc` attaches to the first emitted stmt only. `tuple_len` is the length
-    /// of the array literal `source` holds, when it is typed as a tuple.
+    /// `doc` attaches to the first emitted stmt only.
     fn emit_decompose(
         &mut self,
         ast: &mut Ast,
@@ -461,7 +457,6 @@ impl LowerCtx {
         source: Ident,
         is_const: bool,
         mut doc: Option<crate::DocComment>,
-        tuple_len: Option<usize>,
     ) -> Result<Vec<StmtId>, CompilerFailure> {
         let mut out = Vec::new();
         match binding {
@@ -563,10 +558,7 @@ impl LowerCtx {
                     out.push(decl);
                 }
                 if let Some(rest_ident) = rest {
-                    let rest_value = match tuple_len {
-                        Some(len) => tuple_rest(ast, &source, elems_len..len, rest_ident.span)?,
-                        None => array_rest(ast, &source, elems_len, rest_ident.span)?,
-                    };
+                    let rest_value = array_rest(ast, &source, elems_len, rest_ident.span)?;
                     let decl = ast
                         .try_push_stmt(Stmt {
                             kind: make_decl(is_const, rest_ident.clone(), rest_value, doc.take()),
@@ -610,31 +602,26 @@ impl LowerCtx {
     }
 }
 
-/// The length of `value` when it is an array literal without spreads that
-/// `binding`, an array pattern, takes apart slot by slot. A pattern of only a
-/// rest element takes the literal whole, and TypeScript keeps it an array.
-fn tuple_source_len(
-    ast: &Ast,
-    binding: &Binding,
-    value: ExprId,
-) -> Result<Option<usize>, CompilerFailure> {
+/// Whether `value` is an array literal without spreads that `binding`, an
+/// array pattern, takes apart slot by slot, so TypeScript types it as a tuple.
+/// A pattern of only a rest element takes the literal whole, as an array.
+fn is_tuple_source(ast: &Ast, binding: &Binding, value: ExprId) -> Result<bool, CompilerFailure> {
     let Binding::Array { elems, .. } = binding else {
-        return Ok(None);
+        return Ok(false);
     };
     if elems.is_empty() {
-        return Ok(None);
+        return Ok(false);
     }
     let ExprKind::ArrayLiteral { elements } = &ast
         .try_expr(value)
         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
         .kind
     else {
-        return Ok(None);
+        return Ok(false);
     };
-    let has_spread = elements
+    Ok(!elements
         .iter()
-        .any(|element| matches!(element, crate::ArrayLiteralElement::Spread { .. }));
-    Ok((!has_spread).then_some(elements.len()))
+        .any(|element| matches!(element, crate::ArrayLiteralElement::Spread { .. })))
 }
 
 /// `source.slice(from, source.length)`: the elements an array pattern's rest
@@ -680,26 +667,6 @@ fn array_rest(
         span,
     )?;
     Ok(slice_call)
-}
-
-/// `[source[from], …, source[to - 1]]`: the rest of a tuple-typed array
-/// literal, itself typed as a tuple, as TypeScript types it.
-fn tuple_rest(
-    ast: &mut Ast,
-    source: &Ident,
-    indices: std::ops::Range<usize>,
-    span: Span,
-) -> Result<ExprId, CompilerFailure> {
-    let mut elements = Vec::with_capacity(indices.len());
-    for i in indices {
-        let receiver = push_expr(ast, ExprKind::Identifier(source.clone()), span)?;
-        let index = push_expr(ast, ExprKind::Number(i as f64), span)?;
-        let access = push_expr(ast, ExprKind::IndexAccess { receiver, index }, span)?;
-        elements.push(crate::ArrayLiteralElement::Value(access));
-    }
-    let rest = push_expr(ast, ExprKind::ArrayLiteral { elements }, span)?;
-    ast.tuple_pattern_sources.insert(rest);
-    Ok(rest)
 }
 
 fn push_expr(ast: &mut Ast, kind: ExprKind, span: Span) -> Result<ExprId, CompilerFailure> {

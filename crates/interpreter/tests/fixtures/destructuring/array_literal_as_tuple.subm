@@ -13,9 +13,13 @@ function main(): void {
   const [o, list] = [{ k: 1 }, [1, 2]];
   list.push(3);
   assert(o.k === 1 && list.length === 3, "object and array elements");
+  // The rest is an array of the remaining elements' types, so it can grow and
+  // be indexed by any number.
   const [head, ...tail] = [1, "a", true];
-  const tailText: string = tail[0];
-  assert(head === 1 && tailText === "a" && tail[1] && tail.length === 2, "a rest element takes the remaining elements");
+  const index = tail.length - 1;
+  assert(head === 1 && tail[0] === "a" && tail[index] === true, "a rest element takes the remaining elements");
+  tail.push("b");
+  assert(tail.length === 3, "a rest element is an array");
   const [...whole] = [1, 2, 3];
   whole.push(4);
   assert(whole.length === 4, "a pattern of only a rest element keeps the literal an array");
