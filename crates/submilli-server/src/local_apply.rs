@@ -116,8 +116,9 @@ impl AppState {
         let stored = StoredBlueprint::new(blueprint, permissions_last_preserving_comments(yaml));
         let (created, declared_volumes) = {
             // Held across the declarations and the store write: no run reads the
-            // blueprint before its volumes are declared, and no registration or
-            // other local apply sees a declaration this one may withdraw.
+            // blueprint before its volumes are declared, and no other local apply,
+            // nor a registration (which checks volume references again under this
+            // lock), relies on a declaration this one may withdraw.
             let mut tags = self.blueprint_tags_for_write().await;
             self.check_new_volumes(&references)?;
             // Before the store write, so a refused declaration leaves the version in

@@ -519,16 +519,23 @@ mod unix {
 
     /// A listener that accepts every connection and never answers.
     fn silent_listener() -> u16 {
+        silent_listener_reporting().0
+    }
+
+    /// [`silent_listener`], with a message for each connection it accepts.
+    fn silent_listener_reporting() -> (u16, std::sync::mpsc::Receiver<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
+        let (accepted, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut open = Vec::new();
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { return };
                 open.push(stream);
+                let _ = accepted.send(());
             }
         });
-        port
+        (port, receiver)
     }
 
     /// The answer the real control listener gives a challenge under `nonce`.
@@ -1451,10 +1458,147 @@ mod unix {
         assert_eq!(stopped["pid"], json!(child));
         assert!(!instance_held(&project));
         assert!(!pid_alive(child) || instance_holder(&project) != Some(child));
-        // The start that launched it reports that it ended before it was ready.
-        let (exit, _) = wait_exit(&mut start, "start did not end once its child stopped");
-        assert_eq!(exit.code(), Some(1));
+        // The start that launched it reports that it was stopped while starting.
+        let (exit, err) = wait_exit(&mut start, "start did not end once its child stopped");
+        assert_eq!(exit.code(), Some(1), "{err}");
+        assert!(err.contains("stopped while it was starting"), "{err}");
         assert!(!project.lock().exists());
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn a_stop_once_signals_are_handled_but_before_ready_never_announces() {
+        let project = Project::new();
+        let mut start = project
+            .command(&["start", "--json"])
+            .env("SUBMILLI_PLAYGROUND_TEST_ANNOUNCE_DELAY_MS", "30000")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let log = project.state().join("playground.log");
+        wait_until(
+            "the child to wait with its signal handlers in",
+            Duration::from_secs(60),
+            || {
+                std::fs::read_to_string(&log)
+                    .is_ok_and(|log| log.contains("waiting before announcing"))
+            },
+        );
+        let child = instance_holder(&project).expect("the starting child");
+
+        let output = project.stop();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(parse(&output)["pid"], json!(child));
+        let (exit, err) = wait_exit(&mut start, "start did not end once its child stopped");
+        assert_eq!(exit.code(), Some(1), "{err}");
+        assert!(err.contains("stopped while it was starting"), "{err}");
+        assert!(!err.contains("does not answer"), "{err}");
+        let mut out = String::new();
+        start
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_string(&mut out)
+            .unwrap();
+        assert!(!out.contains("#login="), "{out}");
+        assert!(!instance_held(&project));
+        assert!(!project.lock().exists());
+        assert!(!project.ready_file().exists());
+        let log = std::fs::read_to_string(&log).unwrap();
+        assert!(log.contains("stopped while it was starting"), "{log}");
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn a_foreground_playground_started_with_sigint_ignored_keeps_ignoring_it() {
+        use std::os::unix::process::CommandExt;
+        let project = Project::new();
+        let mut command = project.command(&["start", "--foreground", "--json"]);
+        command.stdout(Stdio::null()).stderr(Stdio::null());
+        // SAFETY: only an async-signal-safe call between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                libc::signal(libc::SIGINT, libc::SIG_IGN);
+                Ok(())
+            });
+        }
+        let mut serving = command.spawn().unwrap();
+        wait_until("the playground to serve", Duration::from_secs(60), || {
+            project.lock().exists() && project.run(&["status", "--json"]).status.success()
+        });
+        Command::new("kill")
+            .args(["-INT", &serving.id().to_string()])
+            .status()
+            .unwrap();
+        // Nothing to wait on for a signal that must do nothing: a while is enough.
+        std::thread::sleep(Duration::from_millis(750));
+        assert!(serving.try_wait().unwrap().is_none(), "SIGINT ended it");
+        let output = project.run(&["status", "--json"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(parse(&output)["stopping"], false);
+        assert!(project.stop().status.success());
+        let (exit, _) = wait_exit(&mut serving, "the foreground playground did not stop");
+        assert!(exit.success());
+    }
+
+    #[test]
+    fn a_start_whose_wait_fails_ends_the_child_it_launched() {
+        let project = Project::new();
+        std::fs::create_dir_all(project.state()).unwrap();
+        // A ready file that is not a file fails the wait on its first read.
+        std::fs::create_dir(project.ready_file()).unwrap();
+        let output = project
+            .command(&["start", "--json"])
+            .env("SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS", "30000")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+        assert!(
+            stderr(&output).contains("not a regular file"),
+            "{}",
+            stderr(&output)
+        );
+        // The child would hold the instance lock for 30s; it is gone well before.
+        std::thread::sleep(Duration::from_secs(1));
+        assert!(!instance_held(&project), "the child was left behind");
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn the_serving_process_keeps_its_instance_lock_through_status_runs_and_saves() {
+        let project = Project::new();
+        let record = project.start(&[]);
+        let pid = u32::try_from(record["pid"].as_u64().unwrap()).unwrap();
+        assert_eq!(instance_holder(&project), Some(pid));
+
+        let output = project.run(&["status", "--json"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(instance_holder(&project), Some(pid));
+
+        execute(
+            &record,
+            &project.token("app"),
+            "function main(): number { return 1; }",
+        );
+        let run = project.state().join("store/runs/1.json");
+        wait_until("the run to be stored", Duration::from_secs(20), || {
+            run.exists()
+        });
+        assert_eq!(instance_holder(&project), Some(pid));
+
+        let blueprint = project.root.join("submilli/blueprints/demo.yaml");
+        std::fs::write(
+            &blueprint,
+            format!("{BLUEPRINT}    - capability: http.post\n      action: allow\n"),
+        )
+        .unwrap();
+        wait_until("the save to apply", Duration::from_secs(30), || {
+            let output = project.run(&["status", "--json"]);
+            output.status.success() && parse(&output)["blueprint_status"]["version"] == 2
+        });
+        assert_eq!(instance_holder(&project), Some(pid));
+        assert!(project.stop().status.success());
     }
 
     #[test]
@@ -1574,7 +1718,7 @@ mod unix {
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
     fn status_and_start_say_stopping_while_the_playground_drains() {
-        let port = silent_listener();
+        let (port, accepted) = silent_listener_reporting();
         let project = Project::new();
         let record = project.start(&["--allow-localhost"]);
         let pid = u32::try_from(record["pid"].as_u64().unwrap()).unwrap();
@@ -1593,7 +1737,10 @@ mod unix {
                 Some(json!({ "code": program, "blueprint": "demo" })),
             );
         });
-        std::thread::sleep(Duration::from_millis(500));
+        // The run is in flight once it has reached the listener.
+        accepted
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the run to reach the silent listener");
         let (status, _, body) = request(
             "POST",
             &control(&record, "/api/stop"),
@@ -1637,6 +1784,23 @@ mod unix {
             assert!(!output.status.success(), "{command}: {}", stdout(&output));
             assert!(!stdout(&output).contains("#login="), "{}", stdout(&output));
             assert!(stderr(&output).contains("not JSON"), "{}", stderr(&output));
+        }
+
+        // JSON that is no status (every field defaults) is refused too.
+        let port = convincing_impostor(&[
+            ("/api/login-codes", r#"{"code":"abc"}"#),
+            ("/api/status", "{}"),
+        ]);
+        write_lock(&project, std::process::id(), port);
+        for command in ["open", "status"] {
+            let output = project.run(&[command, "--json"]);
+            assert!(!output.status.success(), "{command}: {}", stdout(&output));
+            assert!(!stdout(&output).contains("#login="), "{}", stdout(&output));
+            assert!(
+                stderr(&output).contains("not a playground status"),
+                "{command}: {}",
+                stderr(&output)
+            );
         }
         std::fs::remove_file(project.lock()).unwrap();
     }

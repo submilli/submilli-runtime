@@ -2,7 +2,8 @@
 //! a deny-by-default blueprint that pins charges to the signed-in customer, and an
 //! example program. Nothing is left outside `submilli/`: the files are written into
 //! a hidden staging folder beside it and renamed into place, so a failed `init`
-//! leaves no partial `submilli/` that would make the next one refuse.
+//! leaves no partial `submilli/` that would make the next one refuse, and a staging
+//! folder an interrupted `init` left behind is removed by the next one that succeeds.
 //!
 //! The starter package is the quickstart's billing package, except that its charges
 //! come from a fixture file on the project's `billing` volume (`submilli/volumes/`)
@@ -14,6 +15,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+
+use super::log::warn;
 
 /// The folder `init` creates, beside the project's own files.
 pub(crate) const FOLDER: &str = "submilli";
@@ -55,21 +58,67 @@ pub(crate) fn init(root: &Path) -> Result<Scaffolded> {
     init_with(root, FILES)
 }
 
+/// The prefix of the hidden folder `init` stages the starter in.
+const STAGING_PREFIX: &str = ".submilli-init-";
+
 fn init_with(root: &Path, starter: &[(&str, &str)]) -> Result<Scaffolded> {
     let folder = root.join(FOLDER);
     if folder.exists() {
-        bail!(
-            "{} already exists; `playground init` only creates a new `submilli/` folder",
-            folder.display()
-        );
+        return Err(already_exists(&folder));
     }
     // Removed when dropped, so a write that fails takes the staged files with it.
-    let staging = tempfile::Builder::new()
-        .prefix(".submilli-init-")
+    // Created with the mode a plain directory gets (0777 less the umask), not the
+    // owner-only mode of a temporary directory: it becomes the developer's
+    // `submilli/`.
+    let mut staging = tempfile::Builder::new();
+    staging.prefix(STAGING_PREFIX);
+    #[cfg(unix)]
+    let permissions = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::Permissions::from_mode(0o777)
+    };
+    #[cfg(unix)]
+    staging.permissions(permissions);
+    let staging = staging
         .tempdir_in(root)
         .with_context(|| format!("creating a staging folder in {}", root.display()))?;
+    let moved = write_starter(staging.path(), starter).and_then(|()| {
+        if folder.exists() {
+            bail!("another init created it");
+        }
+        std::fs::rename(staging.path(), &folder)
+            .with_context(|| format!("moving the starter into {}", folder.display()))
+    });
+    if let Err(error) = moved {
+        // A concurrent init that finished first, maybe removing this one's staging
+        // folder as a leftover, is the reason, whatever step failed.
+        if folder.exists() {
+            return Err(already_exists(&folder));
+        }
+        return Err(error);
+    }
+    // The staging folder is now `submilli/`; there is nothing left to remove.
+    let _ = staging.keep();
+    remove_leftover_staging(root);
+    Ok(Scaffolded {
+        root: root.to_path_buf(),
+        files: starter
+            .iter()
+            .map(|(relative, _)| folder.join(relative))
+            .collect(),
+    })
+}
+
+fn already_exists(folder: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{} already exists; `playground init` only creates a new `submilli/` folder",
+        folder.display()
+    )
+}
+
+fn write_starter(staging: &Path, starter: &[(&str, &str)]) -> Result<()> {
     for (relative, text) in starter {
-        let path = staging.path().join(relative);
+        let path = staging.join(relative);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
@@ -82,24 +131,40 @@ fn init_with(root: &Path, starter: &[(&str, &str)]) -> Result<Scaffolded> {
         file.write_all(text.as_bytes())
             .with_context(|| format!("writing {}", path.display()))?;
     }
-    if folder.exists() {
-        bail!(
-            "{} appeared while the starter was written; `playground init` only creates a \
-             new `submilli/` folder",
-            folder.display()
-        );
+    Ok(())
+}
+
+/// Removes the staging folders an interrupted `init` left in `root`. Runs once
+/// `submilli/` exists, so an init still staging beside it would fail anyway, and
+/// reports that `submilli/` already exists.
+fn remove_leftover_staging(root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let staged = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(STAGING_PREFIX));
+        // Not through a link: only a folder an init made here is removed.
+        if !staged || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let path = entry.path();
+        // Not found or not empty: the init it belongs to is still running, and on
+        // finding `submilli/` removes its own.
+        if let Err(error) = std::fs::remove_dir_all(&path)
+            && !matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+            )
+        {
+            warn(&format!(
+                "removing {}, left by an interrupted init: {error}",
+                path.display()
+            ));
+        }
     }
-    std::fs::rename(staging.path(), &folder)
-        .with_context(|| format!("moving the starter into {}", folder.display()))?;
-    // The staging folder is now `submilli/`; there is nothing left to remove.
-    let _ = staging.keep();
-    Ok(Scaffolded {
-        root: root.to_path_buf(),
-        files: starter
-            .iter()
-            .map(|(relative, _)| folder.join(relative))
-            .collect(),
-    })
 }
 
 const MANIFEST: &str = r#"[[package]]
@@ -296,22 +361,67 @@ mod tests {
     }
 
     #[test]
-    fn a_staging_folder_left_by_an_interrupted_init_does_not_block_the_next() {
+    fn a_staging_folder_left_by_an_interrupted_init_is_removed_by_the_next() {
         let dir = tempfile::tempdir().unwrap();
         // An init killed before its rename leaves its staging folder behind.
         let leftover = dir.path().join(".submilli-init-abc123");
         std::fs::create_dir_all(leftover.join("packages")).unwrap();
         std::fs::write(leftover.join("submilli.toml"), "partial").unwrap();
+        // Something else whose name only starts the same way, through a link, stays.
+        let other = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(other.path(), dir.path().join(".submilli-init-link")).unwrap();
         let scaffolded = init(dir.path()).unwrap();
         assert_eq!(scaffolded.files.len(), FILES.len());
         assert_eq!(
             std::fs::read_to_string(dir.path().join(FOLDER).join("submilli.toml")).unwrap(),
             MANIFEST
         );
-        // The leftover is the developer's to remove; init neither uses nor deletes it.
+        assert!(!leftover.exists());
+        #[cfg(unix)]
+        assert!(other.path().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_folder_gets_the_mode_a_plain_directory_gets() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        init(dir.path()).unwrap();
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir.path().join(FOLDER)), mode(&plain));
+        assert_ne!(mode(&plain), 0o700, "the umask leaves group or other bits");
+    }
+
+    #[test]
+    fn inits_racing_in_one_folder_leave_one_starter_and_say_the_rest_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Barrier::new(8);
+        let results: Vec<Result<Scaffolded>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        init(dir.path())
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        for error in results.iter().filter_map(|r| r.as_ref().err()) {
+            assert!(error.to_string().contains("already exists"), "{error:#}");
+        }
+        let top: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(top, [FOLDER], "no staging folder is left");
         assert_eq!(
-            std::fs::read_to_string(leftover.join("submilli.toml")).unwrap(),
-            "partial"
+            std::fs::read_to_string(dir.path().join(FOLDER).join("submilli.toml")).unwrap(),
+            MANIFEST
         );
     }
 

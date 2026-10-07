@@ -433,6 +433,20 @@ fn pin_sentence(pin: &PinChange, capability: &str) -> String {
     }
 }
 
+/// What an unmatchable block's summary adds for the pin it may have lost.
+fn block_pin_sentence(pin: &PinChange) -> String {
+    match pin {
+        PinChange::Removed { field, variable } => format!(
+            " An allow rule that pinned `{field}` to `${{vars.{variable}}}` is gone, and no allow \
+             rule for its capability references that variable now."
+        ),
+        PinChange::PossiblyWeakened { variables } => format!(
+            " Allow rules tied to {} changed, so a pin may be weakened.",
+            variable_list(variables)
+        ),
+    }
+}
+
 fn variable_list(variables: &[String]) -> String {
     variables
         .iter()
@@ -582,7 +596,7 @@ fn diff_block(
     out: &mut Vec<Change>,
 ) -> BlockDiff {
     let Some(kept) = longest_common_subsequence(before, after) else {
-        out.push(too_changed(caller, before, after));
+        out.push(unmatchable_block(caller, before, after));
         return BlockDiff::default();
     };
     let mut fate: Vec<Fate> = vec![Fate::Removed; before.len()];
@@ -659,11 +673,30 @@ fn pair_edits(
 }
 
 /// A block whose changed middle is too large to match rule by rule: unknown, and
-/// flagged for the pins of the allow rules it lost or changed. An allow rule tied to
-/// a variable with no identical rule in the new block may have lost its pin; when no
-/// allow rule for its capability references that variable any more, it has.
-fn too_changed(caller: &str, before: &[PermissionRule], after: &[PermissionRule]) -> Change {
-    let mut pin = None;
+/// flagged for the pins of the allow rules it lost or changed.
+fn unmatchable_block(caller: &str, before: &[PermissionRule], after: &[PermissionRule]) -> Change {
+    let pin = unmatched_block_pin(before, after);
+    let flag = pin.as_ref().map_or_else(String::new, block_pin_sentence);
+    Change {
+        classification: Classification::Unknown,
+        caller: Some(caller.to_owned()),
+        rule: None,
+        pin,
+        summary: format!(
+            "{}: `{caller}`'s rules changed in too many places to compare one by one \
+             ({} rules before, {} after).{flag}",
+            Classification::Unknown.word(),
+            before.len(),
+            after.len()
+        ),
+    }
+}
+
+/// The pin an unmatchable block may have lost. An allow rule tied to a variable with
+/// no identical rule in the new block may have lost its pin; when no allow rule for
+/// its capability references that variable any more, it has.
+fn unmatched_block_pin(before: &[PermissionRule], after: &[PermissionRule]) -> Option<PinChange> {
+    let mut removed = None;
     let mut weakened: BTreeSet<String> = BTreeSet::new();
     for rule in before {
         let Some(filter) = rule.filter.as_ref() else {
@@ -682,8 +715,8 @@ fn too_changed(caller: &str, before: &[PermissionRule], after: &[PermissionRule]
                         .is_some_and(|filter| filter.var_refs().contains(&variable))
             })
         };
-        if pin.is_none() {
-            pin = filter
+        if removed.is_none() {
+            removed = filter
                 .conjuncts()
                 .into_iter()
                 .filter_map(FilterExpr::as_pin)
@@ -695,35 +728,11 @@ fn too_changed(caller: &str, before: &[PermissionRule], after: &[PermissionRule]
         }
         weakened.extend(filter.var_refs().into_iter().map(str::to_owned));
     }
-    let pin = pin.or_else(|| {
+    removed.or_else(|| {
         (!weakened.is_empty()).then(|| PinChange::PossiblyWeakened {
             variables: weakened.into_iter().collect(),
         })
-    });
-    let flag = match &pin {
-        Some(PinChange::Removed { field, variable }) => format!(
-            " An allow rule that pinned `{field}` to `${{vars.{variable}}}` is gone, and no allow \
-             rule for its capability references that variable now."
-        ),
-        Some(PinChange::PossiblyWeakened { variables }) => format!(
-            " Allow rules tied to {} changed, so a pin may be weakened.",
-            variable_list(variables)
-        ),
-        None => String::new(),
-    };
-    Change {
-        classification: Classification::Unknown,
-        caller: Some(caller.to_owned()),
-        rule: None,
-        pin,
-        summary: format!(
-            "{}: `{caller}`'s rules changed in too many places to compare one by one \
-             ({} rules before, {} after).{flag}",
-            Classification::Unknown.word(),
-            before.len(),
-            after.len()
-        ),
-    }
+    })
 }
 
 /// Whether reading old rule `i` as new rule `j` keeps it in the same order relative
@@ -1553,6 +1562,69 @@ mod tests {
             rules.reverse();
         }
         assert_eq!(only(&super::diff(&before, &reordered)).pin, None);
+    }
+
+    /// The `main` rules of a blueprint binding `customerId` and `region`.
+    fn main_rules(rules: &str) -> Vec<PermissionRule> {
+        bp(&format!(
+            "name: demo\nvariables:\n  customerId:\n    required: true\n  region:\n    \
+             required: true\npermissions:\n  main:\n{rules}"
+        ))
+        .permissions
+        .get("main")
+        .cloned()
+        .unwrap_or_default()
+    }
+
+    const EU: &str = "    - name: eu-refunds\n      capability: http.post\n      \
+                      filter: region == ${vars.region} and amount < 9\n      action: allow\n";
+
+    #[test]
+    fn an_unmatchable_block_reports_the_second_pin_when_only_it_is_lost() {
+        let before = main_rules(&format!("{PINNED}{EU}"));
+        // The first rule changes but keeps its pin; the second loses its pin.
+        let after = main_rules(&format!(
+            "{}{}",
+            PINNED.replace("amount < 500", "amount < 100"),
+            EU.replace("region == ${vars.region} and ", "")
+        ));
+        assert_eq!(
+            unmatched_block_pin(&before, &after),
+            Some(PinChange::Removed {
+                field: "region".into(),
+                variable: "region".into()
+            })
+        );
+        let pin = unmatched_block_pin(&before, &after).unwrap();
+        assert!(
+            block_pin_sentence(&pin).contains("pinned `region` to `${vars.region}`"),
+            "{}",
+            block_pin_sentence(&pin)
+        );
+    }
+
+    #[test]
+    fn a_pin_variable_another_allow_rule_still_references_is_possibly_weakened() {
+        let before = main_rules(PINNED);
+        // The pinned rule is gone, but another allow rule for its capability still
+        // ties calls to the variable.
+        let after = main_rules(
+            "    - name: charges-for-signed-in-customer-or-free\n      capability: http.get\n      \
+             filter: customerId == ${vars.customerId} or amount == 0\n      action: allow\n",
+        );
+        let pin = unmatched_block_pin(&before, &after);
+        assert_eq!(
+            pin,
+            Some(PinChange::PossiblyWeakened {
+                variables: vec!["customerId".into()]
+            })
+        );
+        assert!(
+            block_pin_sentence(&pin.unwrap()).contains("may be weakened"),
+            "the sentence says so"
+        );
+        // Nothing an allow rule was tied to changed: no pin to report.
+        assert_eq!(unmatched_block_pin(&before, &before), None);
     }
 
     #[test]

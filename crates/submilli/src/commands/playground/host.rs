@@ -113,13 +113,13 @@ const START_DELAY_ENV: &str = "SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS";
 const START_DELAY_CAP: Duration = Duration::from_secs(60);
 
 /// Serve until a stop, a signal, or `POST /v1/shutdown`, then drain and remove
-/// the lock and the ready file. Refused while another process serves the project.
+/// the instance record and the ready file. Refused while another process serves the project.
 pub(crate) fn serve(options: HostOptions) -> Result<()> {
     restrict_new_files();
     let state_dir = StateDir::for_project(&options.project.root);
     state_dir.create()?;
     // Held until this process exits, however it exits: no second instance can serve
-    // this state directory, even one whose start never saw this one's lock.
+    // this state directory, even one whose start never saw this one's record.
     let Some(instance) = state_dir.instance_lock()? else {
         anyhow::bail!(
             "another Submilli playground is already serving {}; stop it with `submilli \
@@ -160,14 +160,14 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
         Some(secret_store),
         Some(Arc::new(Recorder::new(Arc::clone(&store), secrets))),
     );
-    config.volumes = project_volumes(&options.project.package_dir);
+    config.volumes = super::project::volumes(&options.project);
     let freshness = Arc::new(Freshness::new(Arc::clone(&packages)));
     config.pre_execute = Some(Arc::clone(&freshness) as _);
     let runtime = submilli_server::runtime(&config).context("starting the async runtime")?;
     let result = runtime.block_on(run(
         options,
         state_dir,
-        Arc::new(Stopping::new(instance)),
+        Arc::new(HeldInstance::new(instance)),
         config,
         tokens,
         Serving {
@@ -195,48 +195,50 @@ struct Serving {
     closure: Vec<ClosureEntry>,
 }
 
-/// Whether this instance has begun to drain: answered by `status`, and written
-/// into `instance.lock` so a command that finds no lock file still sees it.
-struct Stopping {
-    /// Held for the process's life; dropped only when it exits.
+/// The instance lock this process holds for its whole life, and whether the
+/// instance has begun to drain: answered by `status`, and written into
+/// `instance.lock` so a command that finds no instance record still sees it. It is
+/// kept until the process exits, so the lock goes only when the process does.
+struct HeldInstance {
+    /// Dropped only when the process exits.
     instance: InstanceLock,
-    begun: AtomicBool,
+    stopping: AtomicBool,
 }
 
-impl Stopping {
+impl HeldInstance {
     fn new(instance: InstanceLock) -> Self {
         Self {
             instance,
-            begun: AtomicBool::new(false),
+            stopping: AtomicBool::new(false),
         }
     }
 
-    fn begin(&self) {
-        if !self.begun.swap(true, Ordering::SeqCst)
+    fn begin_stopping(&self) {
+        if !self.stopping.swap(true, Ordering::SeqCst)
             && let Err(error) = self.instance.record(true)
         {
             warn(&format!("{error:#}"));
         }
     }
 
-    fn begun(&self) -> bool {
-        self.begun.load(Ordering::SeqCst)
+    fn is_stopping(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
     }
 }
 
 async fn run(
     options: HostOptions,
     state_dir: StateDir,
-    stopping: Arc<Stopping>,
+    held: Arc<HeldInstance>,
     mut config: ServerConfig,
     tokens: Vec<submilli_server::ApiToken>,
     serving: Serving,
 ) -> Result<()> {
     // Before anything announces this instance: a signal from then on drains it
-    // rather than killing it with its lock on disk.
+    // rather than killing it with its record on disk.
     let signals = submilli_server::EmbeddedSignals::install()?;
     // The server drains on the same signals; this notes that it has begun.
-    let _signal_watch = tokio::spawn(note_signals(Arc::clone(&stopping))?);
+    let _signal_watch = tokio::spawn(note_signals(Arc::clone(&held))?);
     let blueprints = submilli_server::prepare_blueprint_store(&config).await?;
     config.blueprints = Some(Arc::clone(&blueprints));
     let state = AppState::new(config)?;
@@ -285,7 +287,7 @@ async fn run(
         blueprints,
         blueprint_name: serving.name.clone(),
         packages: Arc::clone(&serving.packages),
-        stopping: Arc::clone(&stopping),
+        held: Arc::clone(&held),
     }));
     let control_stop = Arc::new(Notify::new());
     let control_task = tokio::spawn({
@@ -298,16 +300,23 @@ async fn run(
         }
     });
 
-    let lock = InstanceRecord {
+    let record = InstanceRecord {
         pid: std::process::id(),
         control_port,
         server_port,
         nonce: options.nonce.clone(),
     };
     let served = async {
-        // The lock first, so the ready file never names an instance without one.
-        state_dir.write_lock(&lock)?;
-        state_dir.write_ready(&lock)?;
+        test_announce_delay(&held).await;
+        // Told to stop while it started: it never announces itself, so no command
+        // finds a record of, or a link to, an instance that is already going.
+        if held.is_stopping() {
+            super::log::note("the playground was stopped while it was starting");
+            return Ok(());
+        }
+        // The record first, so the ready file never names an instance without one.
+        state_dir.write_record(&record)?;
+        state_dir.write_ready(&record)?;
         drop(options.start_lock);
         if let Some(output) = options.print {
             let code = auth.mint_login_code(Now::current())?;
@@ -318,7 +327,7 @@ async fn run(
     .await;
 
     // Also after a drain no signal or stop route began (`POST /v1/shutdown`).
-    stopping.begin();
+    held.begin_stopping();
     auth.drop_sessions();
     control_stop.notify_one();
     if tokio::time::timeout(CONTROL_CLOSE_BUDGET, control_task)
@@ -331,18 +340,61 @@ async fn run(
     served
 }
 
-/// A future that marks `stopping` begun on SIGTERM or SIGINT, registered now.
-fn note_signals(stopping: Arc<Stopping>) -> Result<impl Future<Output = ()>> {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut terminate = signal(SignalKind::terminate()).context("watching for SIGTERM")?;
-    let mut interrupt = signal(SignalKind::interrupt()).context("watching for SIGINT")?;
+/// A future that marks `held` stopping on SIGTERM or SIGINT, registered now. A
+/// signal this process ignores is left ignored, as [`submilli_server::EmbeddedSignals`]
+/// leaves it.
+fn note_signals(held: Arc<HeldInstance>) -> Result<impl Future<Output = ()>> {
+    use tokio::signal::unix::{Signal, SignalKind, signal};
+    let watch = |number: libc::c_int, kind: SignalKind, name: &str| -> Result<Option<Signal>> {
+        if submilli_server::EmbeddedSignals::is_ignored(number)
+            .with_context(|| format!("reading the {name} handler"))?
+        {
+            return Ok(None);
+        }
+        signal(kind)
+            .map(Some)
+            .with_context(|| format!("watching for {name}"))
+    };
+    let mut terminate = watch(libc::SIGTERM, SignalKind::terminate(), "SIGTERM")?;
+    let mut interrupt = watch(libc::SIGINT, SignalKind::interrupt(), "SIGINT")?;
     Ok(async move {
         tokio::select! {
-            _ = terminate.recv() => {}
-            _ = interrupt.recv() => {}
+            () = next(&mut terminate) => {}
+            () = next(&mut interrupt) => {}
         }
-        stopping.begin();
+        held.begin_stopping();
     })
+}
+
+/// The next delivery of a watched signal; never, for one left ignored.
+async fn next(signal: &mut Option<tokio::signal::unix::Signal>) {
+    match signal {
+        Some(signal) => {
+            signal.recv().await;
+        }
+        None => std::future::pending().await,
+    }
+}
+
+/// Test-only, hidden: how long a serving process waits once its signal handlers
+/// are in, just before it would announce itself, in milliseconds, so a test can
+/// signal an instance that is starting and handles signals. Unset outside tests;
+/// capped like [`START_DELAY_ENV`]. A stop ends the wait early.
+const ANNOUNCE_DELAY_ENV: &str = "SUBMILLI_PLAYGROUND_TEST_ANNOUNCE_DELAY_MS";
+
+async fn test_announce_delay(held: &HeldInstance) {
+    let Some(delay) = std::env::var(ANNOUNCE_DELAY_ENV)
+        .ok()
+        .and_then(|ms| ms.parse().ok())
+    else {
+        return;
+    };
+    super::log::note("waiting before announcing (test)");
+    let delay = Duration::from_millis(delay).min(START_DELAY_CAP);
+    let started = tokio::time::Instant::now();
+    while started.elapsed() < delay && !held.is_stopping() {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 fn server_config(
@@ -407,30 +459,6 @@ fn describe(
     }
 }
 
-/// The project's volumes: each directory under `submilli/volumes/` is a read-only
-/// volume of that name, so a fixture there is read through a recorded file read. A
-/// blueprint naming any other volume gets a managed one under the state directory.
-fn project_volumes(package_dir: &std::path::Path) -> submilli_server::config::VolumeTable {
-    let mut volumes = submilli_server::config::VolumeTable::new();
-    let Ok(entries) = std::fs::read_dir(package_dir.join("volumes")) else {
-        return volumes;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
-        if path.is_dir() && submilli_server::config::is_managed_name(&name) {
-            volumes.insert(
-                name,
-                submilli_server::config::VolumeSpec::local_path(path)
-                    .with_access(submilli_server::config::Access::ReadOnly),
-            );
-        }
-    }
-    volumes
-}
-
 /// The bring-your-own-key provider the environment names when the playground
 /// starts. Only which variable is set is read here, never its value.
 fn detect_provider() -> (Option<&'static str>, Option<String>) {
@@ -472,7 +500,7 @@ struct ControlInner {
     blueprints: Arc<dyn submilli_server::blueprint::BlueprintStore>,
     blueprint_name: String,
     packages: Arc<ProjectPackages>,
-    stopping: Arc<Stopping>,
+    held: Arc<HeldInstance>,
 }
 
 /// The control listener's routes, by who may call them. Later steps add their
@@ -675,7 +703,7 @@ async fn status(State(state): State<ControlState>) -> Response {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
-    let stopping = state.0.stopping.begun();
+    let stopping = state.0.held.is_stopping();
     Json(Status {
         description,
         running: !stopping,
@@ -703,7 +731,7 @@ async fn current_closure(state: &ControlState) -> Result<Option<Vec<ClosureEntry
 }
 
 async fn stop(State(state): State<ControlState>) -> Response {
-    state.0.stopping.begin();
+    state.0.held.begin_stopping();
     state.0.server_shutdown.notify_one();
     (StatusCode::ACCEPTED, Json(json!({ "stopping": true }))).into_response()
 }

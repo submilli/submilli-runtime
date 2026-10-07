@@ -77,11 +77,27 @@ struct Server {
     dirs: tempfile::TempDir,
 }
 
-/// An in-memory blueprint store whose writes can be made to fail.
-#[derive(Default)]
+/// An in-memory blueprint store whose replacing writes can be made to fail, or held.
 struct Flaky {
     inner: InMemoryBlueprintStore,
     fail: AtomicBool,
+    /// The next replacing write announces itself on `entered` and waits for a
+    /// `release` permit.
+    hold_next: AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
+
+impl Default for Flaky {
+    fn default() -> Self {
+        Self {
+            inner: InMemoryBlueprintStore::default(),
+            fail: AtomicBool::new(false),
+            hold_next: AtomicBool::new(false),
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -90,6 +106,12 @@ impl BlueprintStore for Flaky {
         self.inner.add_yaml(stored).await
     }
     async fn upsert_yaml(&self, stored: StoredBlueprint) -> Result<bool, StoreError> {
+        if self.hold_next.swap(false, Ordering::SeqCst) {
+            self.entered.notify_one();
+            if let Ok(permit) = self.release.acquire().await {
+                permit.forget();
+            }
+        }
         if self.fail.load(Ordering::SeqCst) {
             return Err(StoreError::Io("disk full".into()));
         }
@@ -419,6 +441,121 @@ async fn a_volume_is_declared_only_once_the_blueprint_is_stored() {
     store.fail.store(false, Ordering::SeqCst);
     let applied = server.apply(&with_volume("notes"), "v3").await;
     assert_eq!(applied.declared_volumes, ["notes"]);
+}
+
+fn with_volumes(volumes: &[&str]) -> String {
+    let mounts: String = volumes
+        .iter()
+        .enumerate()
+        .map(|(i, volume)| format!("    /m{i}: {{mode: named, volume: {volume}}}\n"))
+        .collect();
+    format!(
+        "{V1}    - capability: fs.write\n      action: allow\nvfs:\n  mode: per_session\n  mounts:\n{mounts}"
+    )
+}
+
+async fn declared(server: &Server) -> String {
+    let (status, listed) = server
+        .request("GET", "/v1/volumes", ADMIN_TOKEN, Value::Null)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    listed.to_string()
+}
+
+#[tokio::test]
+async fn a_later_declaration_that_fails_withdraws_the_earlier_ones() {
+    let server = Server::new();
+    server.apply(V1, "v1").await;
+    // Each passes the check alone; declaring `notes` first makes `Notes` a case
+    // conflict.
+    let error = server
+        .state
+        .apply_local_blueprint(&with_volumes(&["notes", "Notes"]), "v2")
+        .await
+        .expect_err("the second declaration is refused");
+    assert_eq!(error.code, "undeclared_volume", "{error:?}");
+    let listed = declared(&server).await;
+    assert!(!listed.contains("otes"), "{listed}");
+    let applied = server.apply(&with_volume("notes"), "v3").await;
+    assert_eq!(applied.declared_volumes, ["notes"]);
+}
+
+#[tokio::test]
+async fn a_refused_write_withdraws_only_the_volumes_it_declared() {
+    let store = Arc::new(Flaky::default());
+    let server = Server::with_blueprints(Some(store.clone()));
+    server.apply(&with_volume("notes"), "v1").await;
+    store.fail.store(true, Ordering::SeqCst);
+    let error = server
+        .state
+        .apply_local_blueprint(&with_volumes(&["notes", "ledger"]), "v2")
+        .await
+        .expect_err("the store refuses the write");
+    assert_eq!(error.code, "store_failed", "{error:?}");
+    let listed = declared(&server).await;
+    assert!(
+        listed.contains("notes"),
+        "the blueprint in force names it: {listed}"
+    );
+    assert!(!listed.contains("ledger"), "{listed}");
+}
+
+#[tokio::test]
+async fn a_registration_never_names_a_volume_a_failed_local_apply_withdrew() {
+    let store = Arc::new(Flaky::default());
+    let server = Server::with_blueprints(Some(store.clone()));
+    server.apply(V1, "v1").await;
+    store.fail.store(true, Ordering::SeqCst);
+    store.hold_next.store(true, Ordering::SeqCst);
+    let entered = store.entered.notified();
+    let local = tokio::spawn({
+        let state = server.state.clone();
+        async move {
+            state
+                .apply_local_blueprint(&with_volume("notes"), "v2")
+                .await
+        }
+    });
+    // The local apply has declared `notes` and holds its write.
+    entered.await;
+    assert!(declared(&server).await.contains("notes"));
+    let other = with_volume("notes").replace("name: demo", "name: other");
+    let registration = tokio::spawn({
+        let state = server.state.clone();
+        async move {
+            let response = app(state)
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/blueprints")
+                        .header("host", "localhost")
+                        .header("authorization", format!("Bearer {ADMIN_TOKEN}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(json!({ "yaml": other }).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            (
+                status,
+                serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
+            )
+        }
+    });
+    // Let the registration pass its first check and wait on the tag lock.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    store.release.add_permits(1);
+    let error = local
+        .await
+        .unwrap()
+        .expect_err("the store refuses the write");
+    assert_eq!(error.code, "store_failed", "{error:?}");
+    let (status, body) = registration.await.unwrap();
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "undeclared_volume", "{body}");
+    assert_eq!(store.get("other").await.unwrap(), None);
 }
 
 #[tokio::test]

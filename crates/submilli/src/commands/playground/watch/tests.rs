@@ -352,6 +352,28 @@ async fn a_restart_with_the_file_unchanged_logs_no_new_version() {
 }
 
 #[tokio::test]
+async fn a_restart_whose_registration_fails_fails_the_start_and_keeps_the_version() {
+    let fixture = Fixture::new(PINNED).await;
+    let (blueprints, applier) = Fixture::serve(fixture.dir.path(), &fixture.store);
+    blueprints.fail.store(true, Ordering::SeqCst);
+    let Outcome::RegisterFailed { version, reason } = applier.apply_file_at(Moment::Start).await
+    else {
+        panic!("registering again failed");
+    };
+    assert_eq!(version, 1);
+    assert!(reason.contains("disk full"), "{reason}");
+    // The version applied before and runs may record it: it is not voided.
+    let changes = fixture.store.changes().unwrap();
+    assert!(changes.voided.is_empty(), "{:?}", changes.voided);
+    assert_eq!(changes.current().map(|v| v.version), Some(1));
+    assert_eq!(applier.status().lock().unwrap().version, None);
+
+    let error = applier.start().await.unwrap_err().to_string();
+    assert!(error.contains("disk full"), "{error}");
+    assert!(fixture.store.changes().unwrap().voided.is_empty());
+}
+
+#[tokio::test]
 async fn a_start_on_a_refused_file_fails_with_its_line() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("demo.yaml"), "name: demo\nbad: [\n").unwrap();

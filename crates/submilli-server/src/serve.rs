@@ -178,12 +178,33 @@ async fn serve_opened(
 /// before it announces itself (writes a lock, prints an address), as [`serve`] does
 /// before it binds, so a signal sent once it is visible is held for the drain rather
 /// than killing the process mid-start.
+///
+/// A signal this process inherited as ignored (a background job of a
+/// non-interactive shell ignores SIGINT; `nohup` ignores SIGHUP) stays ignored: it
+/// is not watched, so it neither drains the server nor stops being ignored.
 pub struct EmbeddedSignals(ShutdownSignals);
 
 impl EmbeddedSignals {
     /// Register the handlers. Needs a Tokio runtime with signal support.
     pub fn install() -> Result<Self> {
-        ShutdownSignals::install().map(Self)
+        ShutdownSignals::install_unless_ignored().map(Self)
+    }
+
+    /// Whether `signal` is ignored in this process now, as inherited or set. Read
+    /// before a handler is installed for it, which would replace the ignoring.
+    #[cfg(unix)]
+    pub fn is_ignored(signal: libc::c_int) -> Result<bool> {
+        // SAFETY: a zeroed sigaction is a valid value for the kernel to fill in; the
+        // new action is null, so sigaction only reads the current one into `current`.
+        let (read, current) = unsafe {
+            let mut current: libc::sigaction = std::mem::zeroed();
+            let read = libc::sigaction(signal, std::ptr::null(), &raw mut current);
+            (read, current)
+        };
+        if read != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(current.sa_sigaction == libc::SIG_IGN)
     }
 }
 
@@ -404,10 +425,11 @@ async fn forced_stop(
 
 /// The signals that mean "shut down", held as streams so they are registered
 /// before the server starts accepting rather than on first poll.
+/// `None` for a signal left ignored ([`EmbeddedSignals`]), which never arrives.
 #[cfg(unix)]
 struct ShutdownSignals {
-    terminate: tokio::signal::unix::Signal,
-    interrupt: tokio::signal::unix::Signal,
+    terminate: Option<tokio::signal::unix::Signal>,
+    interrupt: Option<tokio::signal::unix::Signal>,
 }
 
 #[cfg(unix)]
@@ -415,24 +437,50 @@ impl ShutdownSignals {
     fn install() -> Result<Self> {
         use tokio::signal::unix::{SignalKind, signal};
         Ok(Self {
-            terminate: signal(SignalKind::terminate())?,
-            interrupt: signal(SignalKind::interrupt())?,
+            terminate: Some(signal(SignalKind::terminate())?),
+            interrupt: Some(signal(SignalKind::interrupt())?),
+        })
+    }
+
+    /// [`Self::install`], leaving a signal this process ignores alone.
+    fn install_unless_ignored() -> Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        let watch = |number: libc::c_int, kind: SignalKind| -> Result<_> {
+            if EmbeddedSignals::is_ignored(number)? {
+                return Ok(None);
+            }
+            Ok(Some(signal(kind)?))
+        };
+        Ok(Self {
+            terminate: watch(libc::SIGTERM, SignalKind::terminate())?,
+            interrupt: watch(libc::SIGINT, SignalKind::interrupt())?,
         })
     }
 
     async fn recv(&mut self, shutdown: Arc<Notify>) {
         tokio::select! {
             () = shutdown.notified() => tracing::info!("shutdown requested via /v1/shutdown"),
-            _ = self.terminate.recv() => tracing::info!("SIGTERM received"),
-            _ = self.interrupt.recv() => tracing::info!("SIGINT received"),
+            () = next(&mut self.terminate) => tracing::info!("SIGTERM received"),
+            () = next(&mut self.interrupt) => tracing::info!("SIGINT received"),
         }
     }
 
     async fn recv_signal(&mut self) {
         tokio::select! {
-            _ = self.terminate.recv() => {},
-            _ = self.interrupt.recv() => {},
+            () = next(&mut self.terminate) => {},
+            () = next(&mut self.interrupt) => {},
         }
+    }
+}
+
+/// The next delivery of a watched signal; never, for one not watched.
+#[cfg(unix)]
+async fn next(signal: &mut Option<tokio::signal::unix::Signal>) {
+    match signal {
+        Some(signal) => {
+            signal.recv().await;
+        }
+        None => std::future::pending().await,
     }
 }
 
@@ -445,6 +493,10 @@ struct ShutdownSignals;
 #[cfg(not(unix))]
 impl ShutdownSignals {
     fn install() -> Result<Self> {
+        Ok(Self)
+    }
+
+    fn install_unless_ignored() -> Result<Self> {
         Ok(Self)
     }
 

@@ -15,6 +15,15 @@
 //! the record's own format fixes (an enum tag such as `call-started`, a counter) that a
 //! secret happens to match is left as it is, since the format makes it public anyway; see
 //! [`KnownSecrets::redact_record`].
+//!
+//! Two lengths bound what is found. A value shorter than [`MIN_SECRET_BYTES`] (6 bytes)
+//! is not learned at all, and neither is a value of only whitespace. Inside longer base64
+//! text, a secret's base64 is matched only by the part of it that does not depend on
+//! the bytes around it, and that part must be at least [`MIN_SHIFTED_BASE64_CHARS`]
+//! (8 characters) long. A 6-byte secret's part is that long only when the secret starts
+//! on a three-byte boundary of the encoded data (alignment 0): such a secret is found
+//! base64-encoded on its own or after a multiple of three bytes, but not inside
+//! `btoa("user:" + secret)`. From 7 bytes on, every alignment is found.
 
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -95,17 +104,29 @@ const CUT_MARKER_START: &str = "…[truncated, ";
 const CUT_MARKER_END: &str = " bytes kept]";
 
 impl KnownSecrets {
-    /// Learns a value. Values shorter than [`MIN_SECRET_BYTES`] are ignored.
+    /// Learns a value, and its trimmed form too when that differs (a secret file's
+    /// trailing newline, say, that a program strips before using it). A value, or trimmed
+    /// form, shorter than [`MIN_SECRET_BYTES`] is ignored, and so is a value of only
+    /// whitespace: redacting it would cut ordinary indentation.
     pub(crate) fn add(&self, value: &str) {
-        if value.len() < MIN_SECRET_BYTES {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
             return;
         }
         let mut patterns = self.inner.write().unwrap_or_else(PoisonError::into_inner);
-        if !patterns.values.insert(value.to_owned()) {
+        let mut learned = Vec::new();
+        for candidate in [value, trimmed] {
+            if candidate.len() >= MIN_SECRET_BYTES && patterns.values.insert(candidate.to_owned()) {
+                learned.push(candidate);
+            }
+        }
+        if learned.is_empty() {
             return;
         }
         let mut forms: BTreeSet<Vec<u8>> = patterns.forms.drain(..).collect();
-        forms.extend(encoded_forms(value));
+        for candidate in learned {
+            forms.extend(encoded_forms(candidate));
+        }
         let mut forms: Vec<Vec<u8>> = forms.into_iter().collect();
         forms.sort_by_key(|form| std::cmp::Reverse(form.len()));
         patterns.matcher = AhoCorasick::builder()
@@ -905,5 +926,154 @@ mod tests {
         known.add("abc");
         known.add("");
         assert_eq!(known.redact_text("abc kind"), "abc kind");
+    }
+
+    #[test]
+    fn a_secret_with_surrounding_whitespace_is_also_cut_trimmed() {
+        let known = KnownSecrets::default();
+        known.add("tok_abc123\n");
+        assert_eq!(
+            known.redact_text("using tok_abc123 now"),
+            format!("using {REDACTED} now")
+        );
+        assert_eq!(
+            known.redact_text("raw tok_abc123\n"),
+            format!("raw {REDACTED}")
+        );
+        // A trimmed form shorter than the minimum is not learned on its own.
+        known.add("  abc  ");
+        assert_eq!(known.redact_text("abc"), "abc");
+    }
+
+    #[test]
+    fn a_whitespace_only_value_is_not_treated_as_a_secret() {
+        let known = KnownSecrets::default();
+        known.add("      ");
+        known.add(" \t\n \r\n  ");
+        let text = "fn main() {\n      let x = 1;\n            y();\n}";
+        assert_eq!(known.redact_text(text), text);
+        let value = redact(&known, serde_json::json!({ "code": text }));
+        assert_eq!(value["code"], text);
+    }
+
+    #[test]
+    fn a_six_byte_secret_is_found_in_base64_only_at_alignment_zero() {
+        let known = KnownSecrets::default();
+        known.add("s3cr3t");
+        let alone = STANDARD.encode("s3cr3t");
+        assert_eq!(known.redact_text(&alone), REDACTED);
+        let after_three = STANDARD.encode("abcs3cr3t");
+        assert!(known.redact_text(&after_three).contains(REDACTED));
+        // The documented gap: after one or two other bytes it is not found.
+        let shifted = STANDARD.encode("u:s3cr3t");
+        assert_eq!(known.redact_text(&shifted), shifted);
+    }
+
+    const MULTIBYTE: &str = "pässwörd🔑key";
+
+    #[test]
+    fn a_multibyte_secret_is_cut_from_text_and_next_to_other_matches() {
+        let known = KnownSecrets::default();
+        known.add(MULTIBYTE);
+        known.add(SECRET);
+        assert_eq!(
+            known.redact_text(&format!("é{MULTIBYTE}é 🔑 ok")),
+            format!("é{REDACTED}é 🔑 ok")
+        );
+        // Adjacent to another secret: one span covers both.
+        assert_eq!(
+            known.redact_text(&format!("ü{MULTIBYTE}{SECRET}ü")),
+            format!("ü{REDACTED}ü")
+        );
+        assert_eq!(
+            known.redact_text(&format!("{MULTIBYTE} {MULTIBYTE}")),
+            format!("{REDACTED} {REDACTED}")
+        );
+        let value = redact(&known, serde_json::json!({ "s": format!("→{MULTIBYTE}←") }));
+        assert_eq!(value["s"], format!("→{REDACTED}←"));
+    }
+
+    #[test]
+    fn a_multibyte_secret_is_cut_in_lowercase_percent_and_json_escapes() {
+        let known = KnownSecrets::default();
+        known.add(MULTIBYTE);
+        let mut forms = Vec::new();
+        for set in [NON_ALPHANUMERIC, UNRESERVED, URI_COMPONENT, URL_PATH] {
+            let percent = utf8_percent_encode(MULTIBYTE, set).to_string();
+            assert!(percent.contains("%C3%A4"), "{percent}");
+            forms.push(percent.to_ascii_lowercase());
+            forms.push(percent);
+        }
+        // The emoji as a surrogate pair, in either hex case, as Python's `ensure_ascii`.
+        forms.push("p\\u00e4ssw\\u00f6rd\\ud83d\\udd11key".to_owned());
+        forms.push("p\\u00E4ssw\\u00F6rd\\uD83D\\uDD11key".to_owned());
+        for form in forms {
+            assert_eq!(
+                known.redact_text(&format!("q={form}&x=1")),
+                format!("q={REDACTED}&x=1"),
+                "{form}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_context_cut_inside_a_multibyte_secret_loses_the_kept_start() {
+        let known = KnownSecrets::default();
+        known.add(MULTIBYTE);
+        // Cut at every character boundary inside the secret, the emoji's too.
+        for (at, _) in MULTIBYTE.char_indices().skip(1) {
+            let kept = format!("é: {}", &MULTIBYTE[..at]);
+            let capped = format!("{kept}…[truncated, {} of 400 bytes kept]", kept.len());
+            let value = redact(&known, serde_json::json!({ "c": capped }));
+            let redacted = value["c"].as_str().unwrap();
+            if at >= MIN_SECRET_BYTES {
+                assert!(
+                    redacted.starts_with(&format!("é: {REDACTED}…")),
+                    "{redacted}"
+                );
+            } else {
+                assert_eq!(redacted, capped);
+            }
+        }
+    }
+
+    #[test]
+    fn a_secret_that_is_itself_valid_base64_is_cut() {
+        let secret = "QWxhZGRpbjpvcGVuU2VzYW1l";
+        assert!(STANDARD.decode(secret).is_ok());
+        let known = KnownSecrets::default();
+        known.add(secret);
+        assert_eq!(
+            known.redact_text(&format!("auth {secret}")),
+            format!("auth {REDACTED}")
+        );
+        // A base64 body copy whose data is the secret: its decoded bytes hold no secret,
+        // but its text is one.
+        let value = redact(
+            &known,
+            serde_json::json!({ "encoding": "base64", "data": secret }),
+        );
+        let data = value["data"].as_str().unwrap();
+        assert!(!data.contains(secret), "{data}");
+        // And the secret's own base64.
+        assert_eq!(known.redact_text(&STANDARD.encode(secret)), REDACTED);
+    }
+
+    #[test]
+    fn many_secrets_are_cut_with_the_automaton_and_without_it() {
+        let known = KnownSecrets::default();
+        let secrets: Vec<String> = (0..500).map(|n| format!("secret-{n:04}-é")).collect();
+        known.add_all(&secrets);
+        let text: String = secrets.iter().map(|secret| format!("[{secret}]")).collect();
+        let expected = format!("[{REDACTED}]").repeat(secrets.len());
+        assert!(known.inner.read().unwrap().matcher.is_some());
+        assert_eq!(known.redact_text(&text), expected);
+        let encoded = STANDARD.encode(&secrets[321]);
+        assert_eq!(known.redact_text(&encoded), REDACTED);
+        // The path taken when building the automaton failed: each form searched alone.
+        known.inner.write().unwrap().matcher = None;
+        assert_eq!(known.redact_text(&text), expected);
+        assert_eq!(known.redact_text(&encoded), REDACTED);
+        assert_eq!(known.redact_text("nothing here"), "nothing here");
     }
 }

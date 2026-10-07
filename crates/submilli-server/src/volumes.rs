@@ -28,9 +28,9 @@ pub struct VolumeRegistry {
     /// Fixed at startup, except that the operator-trusted local apply path may add
     /// a `managed-local` volume ([`Self::declare_managed`]), and withdraw one it
     /// just added when the blueprint naming it was not stored
-    /// ([`Self::withdraw_managed`]); nothing changes a declaration. Poison means a panic interrupted such an addition;
-    /// AGENTS.md permits the poisoned-lock panic rather than reading a table that
-    /// may be half-updated.
+    /// ([`Self::withdraw_managed`]); nothing changes a declaration. Poison means a
+    /// panic interrupted such an addition or withdrawal; AGENTS.md permits the
+    /// poisoned-lock panic rather than reading a table that may be half-updated.
     table: RwLock<VolumeTable>,
     managed_root: PathBuf,
     /// One cell per volume with a byte limit, so concurrent first users

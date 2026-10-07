@@ -360,3 +360,85 @@ async fn a_check_whose_caller_stops_waiting_still_finishes_before_the_next_start
         "the second check ran while the first build did"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reinstall_whose_caller_stops_waiting_still_evicts_the_cached_package() {
+    use std::time::Duration;
+    use submilli_server::ServerConfig;
+    use submilli_server::blueprint::InMemoryBlueprintStore;
+    use submilli_server::record::{ProgramRun, run_program};
+
+    let fixture = Fixture::starter();
+    let money = fixture.package_dir.join("packages/money");
+    std::fs::create_dir_all(money.join("src")).unwrap();
+    std::fs::create_dir_all(money.join("docs")).unwrap();
+    std::fs::write(
+        money.join("src/lib.ts"),
+        "/** The release. */\nexport function release(): string { return \"first\"; }\n",
+    )
+    .unwrap();
+    std::fs::write(money.join("docs/readme.md"), "# @acme/money\n").unwrap();
+    let manifest = fixture.package_dir.join("submilli.toml");
+    let mut text = std::fs::read_to_string(&manifest).unwrap();
+    text.push_str("\n[[package]]\nname = \"@acme/money\"\nversion = \"0.1.0\"\ndescription = \"Money helpers.\"\npath = \"packages/money\"\n");
+    std::fs::write(&manifest, text).unwrap();
+    let wanted = BTreeSet::from(["@acme/money".to_owned()]);
+    let packages = Arc::new(fixture.packages());
+    assert!(packages.sync(&wanted).unwrap().evict);
+
+    let blueprint = submilli_blueprint::parse(
+        "name: demo\ndefault: allow\nvfs:\n  mode: none\npackages:\n- '@acme/money'\n",
+    )
+    .unwrap();
+    let sessions = tempfile::tempdir().unwrap();
+    let state = AppState::new(ServerConfig {
+        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
+        session_storage_root: Some(sessions.path().to_path_buf()),
+        package_store_root: Some(fixture.store.clone()),
+        ..ServerConfig::default()
+    })
+    .unwrap();
+    let release = || async {
+        let response = run_program(
+            &state,
+            ProgramRun {
+                label: "test".into(),
+                blueprint: "demo".into(),
+                code: "import { release } from \"@acme/money\";\nfunction main(): string { return release(); }\n".into(),
+                variables: Default::default(),
+                secrets: Default::default(),
+            },
+        )
+        .await;
+        assert!(response.error.is_none(), "{:?}", response.error);
+        response.result.expect("main returned")
+    };
+    assert_eq!(release().await, "first", "the run caches the package");
+
+    edit(&money.join("src/lib.ts"), "\"first\"", "\"second\"");
+    let freshness = Freshness::new(Arc::clone(&packages));
+    let (started, started_rx) = tokio::sync::oneshot::channel();
+    let check = freshness.check(&state, {
+        let wanted = wanted.clone();
+        move |packages| {
+            let _ = started.send(());
+            // A slow build, so the caller is gone before it finishes.
+            std::thread::sleep(Duration::from_millis(300));
+            packages.sync(&wanted)
+        }
+    });
+    tokio::select! {
+        _ = check => panic!("the check finished before it was cancelled"),
+        started = started_rx => started.expect("the check started"),
+    }
+    // The next check takes its turn only after the cancelled one finished.
+    freshness
+        .run_check(|_| Ok(Synced::default()))
+        .await
+        .unwrap();
+    assert_eq!(
+        release().await,
+        "second",
+        "the cancelled check evicted the cached copy it replaced"
+    );
+}

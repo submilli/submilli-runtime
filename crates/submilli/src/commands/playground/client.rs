@@ -1,6 +1,7 @@
-//! How a command reaches a running playground: read the lock, check the instance
-//! lock, and complete the nonce challenge before any credential is sent. Only a
-//! listener that proves it knows the lock's start nonce ever sees the admin token.
+//! How a command reaches a running playground: read the instance record, check the
+//! instance lock, and complete the nonce challenge before any credential is sent.
+//! Only a listener that proves it knows the record's start nonce ever sees the
+//! admin token.
 
 use std::time::Duration;
 
@@ -10,7 +11,9 @@ use serde_json::{Value, json};
 
 use super::control_auth::{CHALLENGE_BYTES, challenge_response};
 use super::host::Status;
-use super::state::{InstanceRecord, StateDir, random_hex};
+use super::state::{Holder, InstanceRecord, StateDir, random_hex};
+
+const NOT_A_STATUS: &str = "the playground's answer to GET /api/status is not a playground status";
 
 /// Long enough for a loaded playground to answer, short enough that a listener
 /// that never answers is reported rather than hanging the command.
@@ -19,7 +22,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) enum Probe {
     NotRunning,
-    /// A lock no serving process holds: what it names is gone.
+    /// A record no serving process holds the instance lock for: what it names is gone.
     Stale(InstanceRecord),
     /// A process serves this project but cannot be reached now: it is still
     /// starting, or it did not answer the challenge in time. Never replaced.
@@ -28,23 +31,29 @@ pub(crate) enum Probe {
 }
 
 pub(crate) enum Busy {
-    /// The instance lock is held but no lock names an instance yet.
-    Starting { pid: Option<u32> },
-    /// The instance is draining and will exit; a start waits for it to end.
+    /// The instance lock is held but no record names an instance yet.
+    Starting(Holder),
+    /// The instance is draining and will exit; a start says so and exits 1.
     Stopping { pid: Option<u32> },
-    /// The lock's listener did not answer the challenge, or answered it wrong.
+    /// The record's listener did not answer the challenge, or answered it wrong.
     NotAnswering { pid: u32 },
 }
 
 impl Busy {
+    /// A running instance that answered that it is draining.
+    pub(crate) fn stopping(pid: u32) -> Self {
+        Self::Stopping { pid: Some(pid) }
+    }
+
     pub(crate) fn pid(&self) -> Option<u32> {
         match self {
-            Self::Starting { pid } | Self::Stopping { pid } => *pid,
+            Self::Starting(holder) => holder.pid(),
+            Self::Stopping { pid } => *pid,
             Self::NotAnswering { pid } => Some(*pid),
         }
     }
 
-    pub(crate) fn stopping(&self) -> bool {
+    pub(crate) fn is_stopping(&self) -> bool {
         matches!(self, Self::Stopping { .. })
     }
 
@@ -53,7 +62,13 @@ impl Busy {
             .pid()
             .map_or_else(String::new, |pid| format!(" (pid {pid})"));
         match self {
-            Self::Starting { .. } => format!(
+            Self::Starting(holder) if holder.pid_from_kernel.is_none() => format!(
+                "a Submilli playground{pid} is starting for this project; the system does not \
+                 say which process holds its instance lock (another PID namespace or a network \
+                 filesystem), so `submilli playground stop` sends it no signal. Try again in a \
+                 moment, or end the process yourself"
+            ),
+            Self::Starting(_) => format!(
                 "a Submilli playground{pid} is starting for this project; try again in a \
                  moment, or end it with `submilli playground stop`"
             ),
@@ -71,56 +86,58 @@ impl Busy {
     }
 }
 
-#[derive(serde::Deserialize)]
+/// Defaults like [`Status`], so a body without a page is refused as no status.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
 pub(crate) struct Page {
     pub(crate) url: String,
-    #[serde(default)]
     pub(crate) stopping: bool,
 }
 
 pub(crate) struct Running {
-    pub(crate) lock: InstanceRecord,
+    pub(crate) record: InstanceRecord,
     agent: ureq::Agent,
     admin: String,
 }
 
-/// What the lock in `state` names, checked. Only a process holding the instance
-/// lock serves the project, so a lock without one is stale however its pid and
-/// port look, and one with it is never stale, however slowly it answers.
+/// What the instance record in `state` names, checked. Only a process holding the
+/// instance lock serves the project, so a record without one is stale however its
+/// pid and port look, and one with it is never stale, however slowly it answers.
 pub(crate) fn probe(state: &StateDir) -> Result<Probe> {
-    // The lock before the instance lock: an instance takes the instance lock before
-    // it writes its lock, so a lock read here and no holder after means it is gone.
-    let lock = state.read_lock()?;
+    // The record before the instance lock: an instance takes the instance lock
+    // before it writes its record, so a record read here and no holder after means
+    // it is gone.
+    let record = state.read_record()?;
     let Some(holder) = state.instance_holder()? else {
-        return Ok(lock.map_or(Probe::NotRunning, Probe::Stale));
+        return Ok(record.map_or(Probe::NotRunning, Probe::Stale));
     };
     if holder.stopping {
-        return Ok(Probe::Busy(Busy::Stopping { pid: holder.pid }));
+        return Ok(Probe::Busy(Busy::Stopping { pid: holder.pid() }));
     }
-    let Some(lock) = lock else {
-        return Ok(Probe::Busy(Busy::Starting { pid: holder.pid }));
+    let Some(record) = record else {
+        return Ok(Probe::Busy(Busy::Starting(holder)));
     };
     let agent = agent(CHALLENGE_TIMEOUT);
-    if !answers_challenge(&agent, &lock) {
-        return Ok(Probe::Busy(Busy::NotAnswering { pid: lock.pid }));
+    if !answers_challenge(&agent, &record) {
+        return Ok(Probe::Busy(Busy::NotAnswering { pid: record.pid }));
     }
     // Read only now: a listener that failed the challenge never gets near it.
     let admin = state.admin_token()?;
     Ok(Probe::Running(Running {
-        lock,
+        record,
         agent: self::agent(REQUEST_TIMEOUT),
         admin,
     }))
 }
 
-fn answers_challenge(agent: &ureq::Agent, lock: &InstanceRecord) -> bool {
+fn answers_challenge(agent: &ureq::Agent, record: &InstanceRecord) -> bool {
     let Ok(challenge) = random_hex(CHALLENGE_BYTES) else {
         return false;
     };
-    let Some(expected) = challenge_response(&lock.nonce, &challenge) else {
+    let Some(expected) = challenge_response(&record.nonce, &challenge) else {
         return false;
     };
-    let url = format!("{}/api/challenge", base(lock));
+    let url = format!("{}/api/challenge", base(record));
     let Ok(mut response) = agent
         .post(&url)
         .send_json(json!({ "challenge": challenge }))
@@ -141,14 +158,24 @@ fn answers_challenge(agent: &ureq::Agent, lock: &InstanceRecord) -> bool {
 }
 
 impl Running {
+    /// The instance's status. Every field defaults when absent, so a success whose
+    /// JSON names no page or another process is refused here, not reported.
     pub(crate) fn status(&self) -> Result<Status> {
-        self.call("GET", "/api/status")
+        let status: Status = self.call("GET", "/api/status")?;
+        if status.description.url.is_empty() || status.description.pid != self.record.pid {
+            bail!(NOT_A_STATUS);
+        }
+        Ok(status)
     }
 
     /// Only the page's address, and whether the instance is stopping: what `open`
     /// needs, from an instance of any version.
     pub(crate) fn page(&self) -> Result<Page> {
-        self.call("GET", "/api/status")
+        let page: Page = self.call("GET", "/api/status")?;
+        if page.url.is_empty() {
+            bail!(NOT_A_STATUS);
+        }
+        Ok(page)
     }
 
     pub(crate) fn mint_login_code(&self) -> Result<String> {
@@ -166,7 +193,7 @@ impl Running {
 
     /// Whether the server listener answers its health probe, which needs no token.
     pub(crate) fn server_healthy(&self) -> bool {
-        let url = format!("http://127.0.0.1:{}/healthz", self.lock.server_port);
+        let url = format!("http://127.0.0.1:{}/healthz", self.record.server_port);
         self.agent
             .get(&url)
             .call()
@@ -176,7 +203,7 @@ impl Running {
     /// A control call's answer. A success whose body is not what the route returns
     /// is an error, never an empty answer.
     fn call<T: DeserializeOwned>(&self, method: &str, path: &str) -> Result<T> {
-        let url = format!("{}{path}", base(&self.lock));
+        let url = format!("{}{path}", base(&self.record));
         let request = ureq::http::Request::builder()
             .method(method)
             .uri(&url)
@@ -207,8 +234,8 @@ impl Running {
     }
 }
 
-fn base(lock: &InstanceRecord) -> String {
-    format!("http://127.0.0.1:{}", lock.control_port)
+fn base(record: &InstanceRecord) -> String {
+    format!("http://127.0.0.1:{}", record.control_port)
 }
 
 fn agent(timeout: Duration) -> ureq::Agent {

@@ -5,10 +5,22 @@
 //! `submilli.toml`. The blueprint is the one `--blueprint` names, otherwise the
 //! single file under `submilli/blueprints/`, or the project's root
 //! `blueprint.yaml`; a playground serves one blueprint. Either way the blueprint's
-//! path is resolved through symlinks, so the watcher watches the file saves land in.
+//! path is resolved through symlinks, so the watcher watches the file saves land in,
+//! and a blueprint inside the playground's state directory is refused: the serving
+//! process never opens its own state through a path the developer chose.
+//!
+//! The project's volumes are the directories under `submilli/volumes/`, each a
+//! read-only volume of its name. A symlinked one, or one that holds the state
+//! directory, is skipped with a warning, so a program cannot read the playground's
+//! tokens or its lock file through a volume.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+
+use submilli_server::config::{Access, VolumeSpec, VolumeTable, is_managed_name};
+
+use super::log::warn;
+use super::state::StateDir;
 
 pub(crate) struct Project {
     /// The directory that holds the project; the playground's state lives under it.
@@ -29,6 +41,10 @@ pub(crate) enum DiscoveryError {
     },
     SeveralBlueprints {
         found: Vec<PathBuf>,
+    },
+    InStateDir {
+        blueprint: PathBuf,
+        state_dir: PathBuf,
     },
     Io {
         path: PathBuf,
@@ -63,6 +79,17 @@ impl fmt::Display for DiscoveryError {
                 }
                 write!(f, "\nChoose one with `--blueprint <path>`.")
             }
+            Self::InStateDir {
+                blueprint,
+                state_dir,
+            } => write!(
+                f,
+                "{} is inside the playground's state directory {}, which holds only what the \
+                 playground writes; keep the blueprint elsewhere in the project and pass that \
+                 path to `--blueprint`.",
+                blueprint.display(),
+                state_dir.display()
+            ),
             Self::Io { path, error } => write!(f, "reading {}: {error}", path.display()),
         }
     }
@@ -78,6 +105,14 @@ pub(crate) fn discover(from: &Path, blueprint: Option<&Path>) -> Result<Project,
         Some(path) => canonical(path)?,
         None => canonical(&only_blueprint(&root, &package_dir)?)?,
     };
+    if let Some(state_dir) =
+        holding_state_dir(&root, &blueprint, |state, path| path.starts_with(state))
+    {
+        return Err(DiscoveryError::InStateDir {
+            blueprint,
+            state_dir,
+        });
+    }
     Ok(Project {
         root,
         package_dir,
@@ -146,6 +181,75 @@ fn only_blueprint(root: &Path, package_dir: &Path) -> Result<PathBuf, DiscoveryE
         1 => Ok(found.remove(0)),
         _ => Err(DiscoveryError::SeveralBlueprints { found }),
     }
+}
+
+/// The project's volumes: each directory under `submilli/volumes/` is a read-only
+/// volume of that name, so a fixture there is read through a recorded file read. A
+/// blueprint naming any other volume gets a managed one under the state directory.
+/// A symlinked directory, or one that holds the state directory, is skipped.
+pub(crate) fn volumes(project: &Project) -> VolumeTable {
+    let mut volumes = VolumeTable::new();
+    let Ok(entries) = std::fs::read_dir(project.package_dir.join("volumes")) else {
+        return volumes;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() && path.is_dir() {
+            warn(&format!(
+                "{} is a symlink, so it is not served as volume `{name}`; copy the files \
+                 into a directory there instead",
+                path.display()
+            ));
+            continue;
+        }
+        if !file_type.is_dir() || !is_managed_name(&name) {
+            continue;
+        }
+        let Ok(resolved) = path.canonicalize() else {
+            continue;
+        };
+        // `volumes/` itself may be a link: a volume that holds the state directory
+        // would serve the playground's tokens and lock file to programs.
+        if holding_state_dir(&project.root, &resolved, |state, path| {
+            state.starts_with(path) || path.starts_with(state)
+        })
+        .is_some()
+        {
+            warn(&format!(
+                "{} holds the playground's state directory, so it is not served as volume \
+                 `{name}`",
+                path.display()
+            ));
+            continue;
+        }
+        volumes.insert(
+            name,
+            VolumeSpec::local_path(resolved).with_access(Access::ReadOnly),
+        );
+    }
+    volumes
+}
+
+/// The playground's state directory under `root`, as written and as resolved, when
+/// `overlaps` holds for it and the canonical `path`.
+fn holding_state_dir(
+    root: &Path,
+    path: &Path,
+    overlaps: impl Fn(&Path, &Path) -> bool,
+) -> Option<PathBuf> {
+    let state_dir = StateDir::for_project(root).root().to_path_buf();
+    let resolved = state_dir.canonicalize().ok();
+    let overlapping = [Some(&state_dir), resolved.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|state| overlaps(state, path));
+    overlapping.then_some(state_dir)
 }
 
 fn canonical(path: &Path) -> Result<PathBuf, DiscoveryError> {
@@ -221,6 +325,61 @@ mod tests {
         assert_eq!(implicit.blueprint, root.join("shared/demo.yaml"));
         let explicit = discover(&root, Some(&root.join("submilli/blueprints/demo.yaml"))).unwrap();
         assert_eq!(explicit.blueprint, implicit.blueprint);
+    }
+
+    #[test]
+    fn a_blueprint_inside_the_state_directory_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        write(&root.join("submilli/submilli.toml"), "");
+        write(&root.join("submilli/blueprints/demo.yaml"), "name: demo\n");
+        let inside = root.join(".submilli/playground/blueprints/demo.yaml");
+        write(&inside, "name: demo\n");
+        let error = discover(&root, Some(&inside)).err().unwrap();
+        assert!(
+            matches!(error, DiscoveryError::InStateDir { .. }),
+            "{error}"
+        );
+        assert!(error.to_string().contains("--blueprint"), "{error}");
+        // The implicit blueprint is refused when a link leads there too.
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(root.join("submilli/blueprints/demo.yaml")).unwrap();
+            std::os::unix::fs::symlink(&inside, root.join("submilli/blueprints/demo.yaml"))
+                .unwrap();
+            let error = discover(&root, None).err().unwrap();
+            assert!(
+                matches!(error, DiscoveryError::InStateDir { .. }),
+                "{error}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_volume_or_one_holding_the_state_directory_is_not_served() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        write(&root.join("submilli/submilli.toml"), "");
+        write(&root.join("submilli/blueprints/demo.yaml"), "name: demo\n");
+        write(&root.join("submilli/volumes/billing/charges.json"), "[]");
+        write(&root.join(".submilli/playground/tokens/admin"), "secret");
+        std::os::unix::fs::symlink(&root, root.join("submilli/volumes/everything")).unwrap();
+        write(&root.join("shared/notes.txt"), "hi");
+        std::os::unix::fs::symlink(root.join("shared"), root.join("submilli/volumes/shared"))
+            .unwrap();
+        let project = discover(&root, None).unwrap();
+        let served = volumes(&project);
+        assert_eq!(served.keys().collect::<Vec<_>>(), ["billing"]);
+        assert_eq!(served["billing"].access, Access::ReadOnly);
+
+        // `volumes/` itself a link: a folder there that is the state directory is
+        // not served, and its neighbours are.
+        std::fs::remove_dir_all(root.join("submilli/volumes")).unwrap();
+        std::fs::create_dir_all(root.join(".submilli/data")).unwrap();
+        std::os::unix::fs::symlink(root.join(".submilli"), root.join("submilli/volumes")).unwrap();
+        let served = volumes(&project);
+        assert_eq!(served.keys().collect::<Vec<_>>(), ["data"]);
     }
 
     #[test]

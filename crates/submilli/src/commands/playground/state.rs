@@ -50,10 +50,22 @@ pub(crate) struct StateDir {
 /// The process holding the instance lock, as another command sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Holder {
-    /// `None` only when neither the kernel nor the file names it.
-    pub(crate) pid: Option<u32>,
+    /// The pid the kernel names as the lock's holder. `None` where it does not
+    /// know it: it reports 0 for a holder in another PID namespace or across a
+    /// network filesystem. Only this pid is ever signaled.
+    pub(crate) pid_from_kernel: Option<u32>,
+    /// The pid the holder wrote into `instance.lock`, for messages only: it may be
+    /// a previous holder's, or a pid in another namespace.
+    pub(crate) recorded_pid: Option<u32>,
     /// It has begun to drain and will exit.
     pub(crate) stopping: bool,
+}
+
+impl Holder {
+    /// The pid to name it by: the kernel's, else the recorded one.
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.pid_from_kernel.or(self.recorded_pid)
+    }
 }
 
 /// What the holder writes into `instance.lock`.
@@ -61,6 +73,22 @@ pub(crate) struct Holder {
 struct HolderRecord {
     pid: u32,
     stopping: bool,
+}
+
+/// The size of every holder record: its JSON padded with trailing spaces, which
+/// JSON allows. The longest record (`{"pid":4294967295,"stopping":false}`) is 36
+/// bytes. One fixed-width write over the same bytes never leaves a reader a torn
+/// or truncated record.
+const HOLDER_RECORD_WIDTH: usize = 64;
+
+/// `record` as [`HOLDER_RECORD_WIDTH`] bytes.
+fn holder_record_bytes(record: &HolderRecord) -> Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec(record)?;
+    if bytes.len() > HOLDER_RECORD_WIDTH {
+        bail!("the instance lock record is longer than {HOLDER_RECORD_WIDTH} bytes");
+    }
+    bytes.resize(HOLDER_RECORD_WIDTH, b' ');
+    Ok(bytes)
 }
 
 /// The instance lock, held until dropped (or the process ends).
@@ -71,16 +99,16 @@ pub(crate) struct InstanceLock {
 
 impl InstanceLock {
     /// Write this process's pid, and whether it is stopping, into the file, through
-    /// the descriptor that holds the lock (opening another would release it).
+    /// the descriptor that holds the lock (opening another would release it): one
+    /// positional write of a fixed-width record, never a truncation.
     pub(crate) fn record(&self, stopping: bool) -> Result<()> {
         use std::os::unix::fs::FileExt;
-        let bytes = serde_json::to_vec(&HolderRecord {
+        let bytes = holder_record_bytes(&HolderRecord {
             pid: std::process::id(),
             stopping,
         })?;
         self.file
-            .set_len(0)
-            .and_then(|()| self.file.write_all_at(&bytes, 0))
+            .write_all_at(&bytes, 0)
             .with_context(|| format!("writing {}", self.path.display()))
     }
 }
@@ -107,7 +135,9 @@ impl StateDir {
         &self.root
     }
 
-    pub(crate) fn lock_path(&self) -> PathBuf {
+    /// The instance record a running playground leaves for other commands (the
+    /// file is named `lock`).
+    pub(crate) fn record_path(&self) -> PathBuf {
         self.root.join("lock")
     }
 
@@ -168,14 +198,8 @@ impl StateDir {
             }
         }
         own_real_dir(parent)?;
-        // Writable by others, `.submilli` would let them swap the state directory.
-        let mode = fs::symlink_metadata(parent)
-            .with_context(|| format!("checking {}", parent.display()))?
-            .permissions()
-            .mode();
-        if mode & 0o022 != 0 {
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
-                .with_context(|| format!("restricting {}", parent.display()))?;
+        if let Some(note) = refuse_others_writing(parent)? {
+            super::log::note(&note);
         }
         for dir in [
             self.root.clone(),
@@ -237,16 +261,16 @@ impl StateDir {
         Ok(token.trim().to_owned())
     }
 
-    pub(crate) fn read_lock(&self) -> Result<Option<InstanceRecord>> {
-        read_record(&self.lock_path())
+    pub(crate) fn read_record(&self) -> Result<Option<InstanceRecord>> {
+        read_instance_record(&self.record_path())
     }
 
     pub(crate) fn read_ready(&self) -> Result<Option<InstanceRecord>> {
-        read_record(&self.ready_path())
+        read_instance_record(&self.ready_path())
     }
 
-    pub(crate) fn write_lock(&self, record: &InstanceRecord) -> Result<()> {
-        write_private(&self.lock_path(), &serde_json::to_vec(record)?)
+    pub(crate) fn write_record(&self, record: &InstanceRecord) -> Result<()> {
+        write_private(&self.record_path(), &serde_json::to_vec(record)?)
     }
 
     pub(crate) fn write_ready(&self, record: &InstanceRecord) -> Result<()> {
@@ -256,8 +280,8 @@ impl StateDir {
     /// Remove the lock and the ready file if they belong to the instance started
     /// with `nonce`, so one instance never removes another's.
     pub(crate) fn remove_if_ours(&self, nonce: &str) {
-        for path in [self.ready_path(), self.lock_path()] {
-            if read_record(&path)
+        for path in [self.ready_path(), self.record_path()] {
+            if read_instance_record(&path)
                 .ok()
                 .flatten()
                 .is_some_and(|record| record.nonce == nonce)
@@ -302,6 +326,10 @@ impl StateDir {
                 _ => Err(error).with_context(|| format!("locking {}", path.display())),
             };
         }
+        // Once, while no record names this holder yet: whatever a crash or an older
+        // version left past the fixed width goes, so every later record is whole.
+        file.set_len(HOLDER_RECORD_WIDTH as u64)
+            .with_context(|| format!("sizing {}", path.display()))?;
         let instance = InstanceLock { file, path };
         instance.record(false)?;
         Ok(Some(instance))
@@ -311,48 +339,28 @@ impl StateDir {
     /// process holding the instance lock, found without taking it. `None` when no
     /// process holds it or there is no `instance.lock`; nothing is created.
     pub(crate) fn instance_holder(&self) -> Result<Option<Holder>> {
-        use std::os::fd::AsRawFd;
         let path = self.instance_lock_path();
-        let mut file = match OpenOptions::new()
-            .read(true)
-            // A FIFO in its place must not hang the command before it is refused.
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&path)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
-                bail!("{} is a symlink", path.display())
-            }
-            Err(error) => {
-                return Err(error).with_context(|| format!("opening {}", path.display()));
-            }
-        };
-        own_private_file(&file, &path)?;
-        let mut lock = whole_file_write_lock();
-        // SAFETY: the descriptor is open for the duration of the call and `lock` is
-        // a live, initialized `flock` the kernel overwrites with the conflicting lock.
-        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETLK, &raw mut lock) } == -1 {
-            return Err(io::Error::last_os_error())
-                .with_context(|| format!("checking {}", path.display()));
-        }
-        if lock.l_type == libc::F_UNLCK as libc::c_short {
+        let Some(mut file) = open_existing_private(&path)? else {
             return Ok(None);
-        }
+        };
+        let Some(lock) = conflicting_lock(&file, &path)? else {
+            return Ok(None);
+        };
         let mut text = String::new();
         let record = file
             .read_to_string(&mut text)
             .ok()
             .and_then(|_| serde_json::from_str::<HolderRecord>(&text).ok());
-        // The kernel's answer first; the pid the holder wrote where the kernel does
-        // not know it (a network filesystem reports 0).
-        let pid = u32::try_from(lock.l_pid)
-            .ok()
-            .filter(|pid| *pid != 0)
-            .or(record.as_ref().map(|record| record.pid));
+        let pid_from_kernel = u32::try_from(lock.l_pid).ok().filter(|pid| *pid != 0);
         // A record another pid wrote is a previous holder's, left by a crash.
-        let stopping = record.is_some_and(|record| record.stopping && Some(record.pid) == pid);
-        Ok(Some(Holder { pid, stopping }))
+        let stopping = record.as_ref().is_some_and(|record| {
+            record.stopping && pid_from_kernel.is_none_or(|pid| pid == record.pid)
+        });
+        Ok(Some(Holder {
+            pid_from_kernel,
+            recorded_pid: record.map(|record| record.pid),
+            stopping,
+        }))
     }
 
     fn instance_lock_path(&self) -> PathBuf {
@@ -365,7 +373,43 @@ impl StateDir {
     }
 }
 
-fn read_record(path: &Path) -> Result<Option<InstanceRecord>> {
+/// The lock that would stop this process taking a write lock on all of `file`, as
+/// the kernel reports it (`F_GETLK`), or `None` when nothing holds one.
+fn conflicting_lock(file: &File, path: &Path) -> Result<Option<libc::flock>> {
+    use std::os::fd::AsRawFd;
+    let mut lock = whole_file_write_lock();
+    // SAFETY: the descriptor is open for the duration of the call and `lock` is a
+    // live, initialized `flock` the kernel overwrites with the conflicting lock.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETLK, &raw mut lock) } == -1 {
+        return Err(io::Error::last_os_error())
+            .with_context(|| format!("checking {}", path.display()));
+    }
+    Ok((lock.l_type != libc::F_UNLCK as libc::c_short).then_some(lock))
+}
+
+/// Clear the group and world write bits of `dir`, which would let others swap what
+/// is inside it, keeping the rest of its mode. What changed, for the developer, or
+/// `None` when nothing did.
+fn refuse_others_writing(dir: &Path) -> Result<Option<String>> {
+    let mode = fs::symlink_metadata(dir)
+        .with_context(|| format!("checking {}", dir.display()))?
+        .permissions()
+        .mode()
+        & 0o7777;
+    if mode & 0o022 == 0 {
+        return Ok(None);
+    }
+    let restricted = mode & !0o022;
+    fs::set_permissions(dir, fs::Permissions::from_mode(restricted))
+        .with_context(|| format!("restricting {}", dir.display()))?;
+    Ok(Some(format!(
+        "note: {} was writable by others, who could replace the playground's state; its \
+         mode is now {restricted:04o} (was {mode:04o})",
+        dir.display()
+    )))
+}
+
+fn read_instance_record(path: &Path) -> Result<Option<InstanceRecord>> {
     let Some(text) = read_private(path).with_context(|| format!("reading {}", path.display()))?
     else {
         return Ok(None);
@@ -461,7 +505,18 @@ fn open_private(path: &Path, truncate: bool) -> Result<File> {
 /// The text of a file the playground wrote, or `None` when there is none. A
 /// symlink, a file of another user, or anything but a regular file is an error.
 fn read_private(path: &Path) -> Result<Option<String>> {
-    let mut file = match OpenOptions::new()
+    let Some(mut file) = open_existing_private(path)? else {
+        return Ok(None);
+    };
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(Some(text))
+}
+
+/// `path` opened to read, or `None` when there is none; nothing is created. A
+/// symlink, a file of another user, or anything but a regular file is an error.
+fn open_existing_private(path: &Path) -> Result<Option<File>> {
+    let file = match OpenOptions::new()
         .read(true)
         // A FIFO in its place is refused below rather than waited on.
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -472,12 +527,12 @@ fn read_private(path: &Path) -> Result<Option<String>> {
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
             bail!("{} is a symlink", path.display())
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("opening {}", path.display()));
+        }
     };
     own_private_file(&file, path)?;
-    let mut text = String::new();
-    file.read_to_string(&mut text)?;
-    Ok(Some(text))
+    Ok(Some(file))
 }
 
 /// Write `bytes` to `path` as a 0600 file, replacing it in one rename so a reader
@@ -619,25 +674,53 @@ mod tests {
         // releases its record lock, and the kernel never reports a process's own
         // lock to it. The lifecycle tests probe it from other processes.
         let held = state.instance_lock().unwrap().expect("first holder");
-        let read = || -> HolderRecord {
-            serde_json::from_slice(&fs::read(state.instance_lock_path()).unwrap()).unwrap()
-        };
+        let bytes = || fs::read(state.instance_lock_path()).unwrap();
+        let read = || -> HolderRecord { serde_json::from_slice(&bytes()).unwrap() };
         assert_eq!(read().pid, std::process::id());
         assert!(!read().stopping);
+        assert_eq!(bytes().len(), HOLDER_RECORD_WIDTH);
         held.record(true).unwrap();
         assert!(read().stopping);
+        assert_eq!(bytes().len(), HOLDER_RECORD_WIDTH);
     }
 
     #[test]
-    fn a_dot_submilli_writable_by_others_is_tightened() {
+    fn a_holder_record_is_fixed_width_json_however_long_its_pid() {
+        for (pid, stopping) in [(0, false), (7, true), (u32::MAX, false), (u32::MAX, true)] {
+            let bytes = holder_record_bytes(&HolderRecord { pid, stopping }).unwrap();
+            assert_eq!(bytes.len(), HOLDER_RECORD_WIDTH);
+            let read: HolderRecord = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!((read.pid, read.stopping), (pid, stopping));
+        }
+    }
+
+    #[test]
+    fn a_long_leftover_instance_lock_is_cut_to_one_record_when_taken() {
         let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join(".submilli")).unwrap();
-        fs::set_permissions(
-            dir.path().join(".submilli"),
-            fs::Permissions::from_mode(0o777),
-        )
-        .unwrap();
+        let state = StateDir::for_project(dir.path());
+        state.create().unwrap();
+        fs::write(state.instance_lock_path(), "x".repeat(200)).unwrap();
+        let _held = state.instance_lock().unwrap().expect("holder");
+        let bytes = fs::read(state.instance_lock_path()).unwrap();
+        assert_eq!(bytes.len(), HOLDER_RECORD_WIDTH);
+        let read: HolderRecord = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(read.pid, std::process::id());
+    }
+
+    #[test]
+    fn a_dot_submilli_writable_by_others_loses_only_its_write_bits() {
+        let dir = tempfile::tempdir().unwrap();
+        let dot = dir.path().join(".submilli");
+        fs::create_dir_all(&dot).unwrap();
+        fs::set_permissions(&dot, fs::Permissions::from_mode(0o775)).unwrap();
+        let note = refuse_others_writing(&dot).unwrap().expect("a note");
+        assert_eq!(mode(&dot), 0o755);
+        assert!(note.contains(&dot.display().to_string()), "{note}");
+        assert!(note.contains("0755") && note.contains("0775"), "{note}");
+        assert_eq!(refuse_others_writing(&dot).unwrap(), None);
+
+        fs::set_permissions(&dot, fs::Permissions::from_mode(0o777)).unwrap();
         StateDir::for_project(dir.path()).create().unwrap();
-        assert_eq!(mode(&dir.path().join(".submilli")), 0o700);
+        assert_eq!(mode(&dot), 0o755);
     }
 }

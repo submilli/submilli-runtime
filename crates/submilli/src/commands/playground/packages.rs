@@ -674,22 +674,29 @@ impl Freshness {
     }
 
     /// Run one check on a blocking thread, one at a time, and evict the server's
-    /// prepared packages when it replaced one.
+    /// prepared packages when it replaced one. The eviction and the notes happen on
+    /// that thread too, so a caller that stops waiting cannot skip them and leave a
+    /// replaced package's cached copy to serve the next run.
     async fn check(
         &self,
         state: &AppState,
         check: impl FnOnce(&ProjectPackages) -> Result<Synced, ResolutionFailure> + Send + 'static,
     ) -> Result<(), ResolutionFailure> {
-        let synced = self.run_check(check).await?;
-        for name in &synced.reinstalled {
-            note(&format!(
-                "reinstalled {name}: its source changed since it was installed"
-            ));
-        }
-        if synced.evict {
-            state.evict_all_prepared_packages();
-        }
-        Ok(())
+        let state = state.clone();
+        self.run_check(move |packages| {
+            let synced = check(packages)?;
+            for name in &synced.reinstalled {
+                note(&format!(
+                    "reinstalled {name}: its source changed since it was installed"
+                ));
+            }
+            if synced.evict {
+                state.evict_all_prepared_packages();
+            }
+            Ok(synced)
+        })
+        .await
+        .map(drop)
     }
 
     /// Run `check` on a blocking thread once every earlier check has finished. The

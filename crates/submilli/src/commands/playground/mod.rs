@@ -426,7 +426,7 @@ mod unix {
     use super::packages::ProjectPackages;
     use super::project::{self, DiscoveryError, Project};
     use super::scaffold;
-    use super::state::{InstanceRecord, StateDir, random_hex};
+    use super::state::{Holder, InstanceRecord, StateDir, random_hex};
     use super::watch::describe_refusal;
     use super::{
         EXIT_BUSY, EXIT_NO_PROJECT, EXIT_PACKAGE_RESOLUTION, EXIT_UNREACHABLE, Egress, Output,
@@ -439,6 +439,9 @@ mod unix {
     const STOP_TIMEOUT: Duration = Duration::from_secs(20);
     const POLL: Duration = Duration::from_millis(25);
     const NONCE_ENV: &str = "SUBMILLI_PLAYGROUND_START_NONCE";
+    /// What a start says when what it launched was stopped before it was ready.
+    const STOPPED_WHILE_STARTING: &str =
+        "the playground was stopped while it was starting (`submilli playground stop` or a signal)";
 
     pub(super) fn start(args: StartArgs) -> Result<ExitCode> {
         let output = super::Output::from_json(args.json);
@@ -522,7 +525,15 @@ mod unix {
         match client::probe(&state)? {
             Probe::Running(running) => {
                 let status = running.status()?;
+                if status.stopping {
+                    eprintln!("{STOPPED_WHILE_STARTING}");
+                    return Ok(ExitCode::from(1));
+                }
                 print_ready(&running, &status, output, false)
+            }
+            Probe::Busy(busy) if busy.is_stopping() => {
+                eprintln!("{STOPPED_WHILE_STARTING}");
+                Ok(ExitCode::from(1))
             }
             Probe::NotRunning | Probe::Stale(_) | Probe::Busy(_) => {
                 eprintln!("the playground started but does not answer its control listener");
@@ -631,10 +642,7 @@ mod unix {
         output: Output,
     ) -> Result<ExitCode> {
         let status = running.status()?;
-        if status.stopping {
-            let busy = Busy::Stopping {
-                pid: Some(status.description.pid),
-            };
+        if let Some(busy) = draining(status.stopping, status.description.pid) {
             eprintln!("{}", busy.message());
             return Ok(ExitCode::from(EXIT_BUSY));
         }
@@ -729,18 +737,38 @@ mod unix {
             .checked_add(timeout)
             .with_context(|| format!("a ready timeout of {}s is too long", timeout.as_secs()))?;
         let mut child = command.spawn().context("starting the playground")?;
-        let abandon = |child: &mut std::process::Child| {
+        let waited = wait_for_ready(&mut child, state, nonce, timeout, deadline, &interrupts);
+        // Whatever ended the wait other than readiness ends the child too, so no
+        // start leaves behind a playground it does not report.
+        if !matches!(waited, Ok(Waited::Ready)) {
             let _ = child.kill();
             let _ = child.wait();
             state.remove_if_ours(nonce);
-        };
+        }
+        waited
+    }
+
+    /// Poll until `child` writes its ready file, exits, or runs out of time, or this
+    /// start is interrupted.
+    fn wait_for_ready(
+        child: &mut std::process::Child,
+        state: &StateDir,
+        nonce: &str,
+        timeout: Duration,
+        deadline: Instant,
+        interrupts: &interrupt::Guard,
+    ) -> Result<Waited> {
+        use std::os::unix::process::ExitStatusExt;
         loop {
             if let Some(signal) = interrupts.interrupted() {
-                abandon(&mut child);
                 return Ok(Waited::Interrupted(signal));
             }
             if let Some(exit) = child.try_wait().context("waiting for the playground")? {
-                state.remove_if_ours(nonce);
+                // It ends cleanly on SIGTERM or SIGINT once its handlers are in,
+                // and by the signal itself before then.
+                if exit.success() || matches!(exit.signal(), Some(libc::SIGTERM | libc::SIGINT)) {
+                    bail!("{STOPPED_WHILE_STARTING}");
+                }
                 let log = std::fs::read_to_string(state.log_path()).unwrap_or_default();
                 bail!(
                     "the playground exited before it was ready ({exit}):\n{}",
@@ -755,7 +783,6 @@ mod unix {
                 break;
             }
             if Instant::now() >= deadline {
-                abandon(&mut child);
                 bail!(
                     "the playground was not ready within {:.1}s and was stopped; its log is {}",
                     timeout.as_secs_f64(),
@@ -766,7 +793,6 @@ mod unix {
         }
         // A signal that arrived after the last check is still this start's to honor.
         if let Some(signal) = interrupts.interrupted() {
-            abandon(&mut child);
             return Ok(Waited::Interrupted(signal));
         }
         Ok(Waited::Ready)
@@ -787,13 +813,8 @@ mod unix {
             Probe::NotRunning | Probe::Stale(_) => return not_running(output),
         };
         let mut status = running.status()?;
-        if status.stopping {
-            return busy_exit(
-                output,
-                &Busy::Stopping {
-                    pid: Some(status.description.pid),
-                },
-            );
+        if let Some(busy) = draining(status.stopping, status.description.pid) {
+            return busy_exit(output, &busy);
         }
         let health = if running.server_healthy() {
             "ok"
@@ -836,13 +857,8 @@ mod unix {
             Probe::NotRunning | Probe::Stale(_) => return not_running(output),
         };
         let page = running.page()?;
-        if page.stopping {
-            return busy_exit(
-                output,
-                &Busy::Stopping {
-                    pid: Some(running.lock.pid),
-                },
-            );
+        if let Some(busy) = draining(page.stopping, running.record.pid) {
+            return busy_exit(output, &busy);
         }
         let code = running.mint_login_code()?;
         let url = &page.url;
@@ -874,8 +890,11 @@ mod unix {
                 state.remove_if_ours(&stale.nonce);
                 return stopped(output, None, "not running (removed a stale lock)");
             }
-            Probe::Busy(Busy::Starting { pid: Some(pid) }) => {
-                return stop_starting(&state, output, pid);
+            Probe::Busy(Busy::Starting(holder)) => {
+                return match starting_target(&holder) {
+                    Some(pid) => stop_starting(&state, output, pid),
+                    None => busy_exit(output, &Busy::Starting(holder)),
+                };
             }
             Probe::Busy(Busy::Stopping { pid: Some(pid) }) => {
                 wait_for_exit(&state, pid, None)?;
@@ -885,10 +904,22 @@ mod unix {
             Probe::Running(running) => running,
         };
         running.stop()?;
-        let lock = running.lock.clone();
-        wait_for_exit(&state, lock.pid, Some(&lock.nonce))?;
-        state.remove_if_ours(&lock.nonce);
-        stopped(output, Some(lock.pid), "stopped")
+        let record = running.record.clone();
+        wait_for_exit(&state, record.pid, Some(&record.nonce))?;
+        state.remove_if_ours(&record.nonce);
+        stopped(output, Some(record.pid), "stopped")
+    }
+
+    /// The busy answer for an instance that answered that it is draining, if it did.
+    fn draining(stopping: bool, pid: u32) -> Option<Busy> {
+        stopping.then(|| Busy::stopping(pid))
+    }
+
+    /// The process `stop` may signal to end an instance that is still starting:
+    /// only one the kernel names as the instance lock's holder. A pid the holder
+    /// only wrote down may be another namespace's, or reused; it is never signaled.
+    fn starting_target(holder: &Holder) -> Option<u32> {
+        holder.pid_from_kernel
     }
 
     /// An instance still starting has no control listener yet: it is sent SIGTERM,
@@ -896,7 +927,11 @@ mod unix {
     fn stop_starting(state: &StateDir, output: Output, pid: u32) -> Result<ExitCode> {
         // Asked again just before the signal: it goes to the process the kernel
         // says holds the instance lock, never to a pid since reused.
-        if state.instance_holder()?.and_then(|holder| holder.pid) != Some(pid) {
+        if state
+            .instance_holder()?
+            .and_then(|holder| starting_target(&holder))
+            != Some(pid)
+        {
             return stopped(output, None, "not running");
         }
         let target = libc::pid_t::try_from(pid)
@@ -922,10 +957,10 @@ mod unix {
         loop {
             let gone = state
                 .instance_holder()?
-                .is_none_or(|holder| holder.pid.is_some_and(|held| held != pid));
+                .is_none_or(|holder| holder.pid().is_some_and(|held| held != pid));
             let replaced = nonce.is_some_and(|nonce| {
                 state
-                    .read_lock()
+                    .read_record()
                     .ok()
                     .flatten()
                     .is_some_and(|current| current.nonce != nonce)
@@ -950,9 +985,9 @@ mod unix {
             Output::Json => println!(
                 "{}",
                 json!({
-                    "running": !busy.stopping(),
+                    "running": !busy.is_stopping(),
                     "busy": true,
-                    "stopping": busy.stopping(),
+                    "stopping": busy.is_stopping(),
                     "pid": busy.pid(),
                 })
             ),
@@ -993,6 +1028,44 @@ mod unix {
     fn state_for_cwd() -> Result<Option<StateDir>> {
         let cwd = std::env::current_dir().context("reading the current directory")?;
         Ok(project::find_project_root(&cwd).map(|root| StateDir::for_project(&root)))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn holder(pid_from_kernel: Option<u32>, recorded_pid: Option<u32>) -> Holder {
+            Holder {
+                pid_from_kernel,
+                recorded_pid,
+                stopping: false,
+            }
+        }
+
+        #[test]
+        fn stop_signals_only_the_pid_the_kernel_names() {
+            assert_eq!(starting_target(&holder(Some(41), Some(41))), Some(41));
+            // A record left by a previous holder never redirects the signal.
+            assert_eq!(starting_target(&holder(Some(41), Some(7))), Some(41));
+            // The kernel named no pid (another PID namespace, a network
+            // filesystem): nothing is signaled, and the recorded pid is only named.
+            let unnamed = holder(None, Some(7));
+            assert_eq!(starting_target(&unnamed), None);
+            let busy = Busy::Starting(unnamed);
+            assert_eq!(busy.pid(), Some(7));
+            let message = busy.message();
+            assert!(message.contains("pid 7"), "{message}");
+            assert!(message.contains("sends it no signal"), "{message}");
+            assert_eq!(starting_target(&holder(None, None)), None);
+        }
+
+        #[test]
+        fn only_a_draining_answer_is_busy() {
+            assert!(draining(false, 9).is_none());
+            let busy = draining(true, 9).expect("busy");
+            assert!(busy.is_stopping());
+            assert_eq!(busy.pid(), Some(9));
+        }
     }
 
     /// SIGINT, SIGTERM, and SIGHUP noted rather than acted on, while a start waits

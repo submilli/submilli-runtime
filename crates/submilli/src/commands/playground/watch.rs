@@ -11,7 +11,9 @@
 //! its line when the parser gave one, and the last good version stays in force. A save
 //! that passes is classified against the version in force (KTD10), logged as a new
 //! version, and only then applied, so no run can record a version the log lacks. If
-//! the apply itself fails, an apply-failed entry voids the version. A save that only
+//! the apply itself fails, an apply-failed entry voids the version; at start, a file
+//! that holds the version in force is registered again, and a failure there fails the
+//! start without voiding a version that applied before. A save that only
 //! changes comments or whitespace (same normalized hash) is not a new version: it
 //! appends a bytes-updated entry for the current one.
 //!
@@ -100,6 +102,9 @@ pub(crate) enum Outcome {
     Refused(Refusal),
     /// Logged, then the apply failed: the version was voided.
     ApplyFailed { version: u64, reason: String },
+    /// At start, registering the version in force again under its tag failed. The
+    /// version applied before and runs may record it, so it is not voided.
+    RegisterFailed { version: u64, reason: String },
 }
 
 /// When the file is read: at start, a file that holds the version in force is
@@ -193,10 +198,9 @@ impl Applier {
                 self.path.display(),
                 describe_refusal(&refusal)
             )),
-            Outcome::ApplyFailed { reason, .. } => Err(anyhow::anyhow!(
-                "the server refused blueprint `{}`: {reason}",
-                self.name
-            )),
+            Outcome::ApplyFailed { reason, .. } | Outcome::RegisterFailed { reason, .. } => Err(
+                anyhow::anyhow!("the server refused blueprint `{}`: {reason}", self.name),
+            ),
             _ => Ok(()),
         }
     }
@@ -274,7 +278,7 @@ impl Applier {
             // Runs record the version's tag, which lives with the registration, not
             // on disk: register again under it.
             if let Err(error) = self.state.apply_local_blueprint(&yaml, &tag(version)).await {
-                return Outcome::ApplyFailed {
+                return Outcome::RegisterFailed {
                     version,
                     reason: error.message,
                 };
@@ -427,6 +431,11 @@ impl Applier {
             Outcome::ApplyFailed { version, reason } => {
                 warn(&format!(
                     "blueprint version {version} could not be applied and is void: {reason}{stays}"
+                ));
+            }
+            Outcome::RegisterFailed { version, reason } => {
+                warn(&format!(
+                    "blueprint version {version} could not be registered again: {reason}"
                 ));
             }
         }
