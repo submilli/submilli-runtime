@@ -1222,6 +1222,73 @@ impl Inferer<'_> {
         })
     }
 
+    /// The type parameters in `inferred` that type at most one of the fields
+    /// the object literal `arg` gives for `param_ty`. Only those fields keep
+    /// the literals a function value returns, as tsc's common supertype of
+    /// two such values (`{ v: () => 1, w: () => 2 }`) widens what they return
+    /// to `() => number`. Every one of `inferred` when `arg` is not an object
+    /// literal or `param_ty` has no single object shape.
+    fn type_params_of_one_field(
+        &self,
+        arg: ExprId,
+        param_ty: &Type,
+        inferred: &[String],
+    ) -> Result<Vec<String>, CompilerFailure> {
+        let ExprKind::ObjectLiteral { members } =
+            &self.ast.try_expr(arg).map_err(super::arena_failure)?.kind
+        else {
+            return Ok(inferred.to_vec());
+        };
+        let Some(fields) = self.object_shape_fields(param_ty) else {
+            return Ok(inferred.to_vec());
+        };
+        let given_field_types: Vec<&Type> = members
+            .iter()
+            .filter_map(|member| match member {
+                crate::ObjectLiteralMember::Field(field) => fields.get(&field.name.name),
+                _ => None,
+            })
+            .map(|field| field.ty.peel())
+            .collect();
+        Ok(inferred
+            .iter()
+            .filter(|name| {
+                let fields_typed_by_it = given_field_types
+                    .iter()
+                    .filter(|ty| matches!(ty, Type::TypeVar(var) if var == *name))
+                    .count();
+                fields_typed_by_it <= 1
+            })
+            .cloned()
+            .collect())
+    }
+
+    /// The fields of `ty` as one object shape: an object type, an interface
+    /// with the members it extends, or the one such member beside `null`.
+    fn object_shape_fields(&self, ty: &Type) -> Option<BTreeMap<String, crate::ObjectField>> {
+        match ty.peel() {
+            Type::Object { fields, .. } => Some(fields.clone()),
+            interface @ Type::InterfaceRef { .. } => {
+                match super::assignable::expand_interface_data_shape(interface, self.resolver()) {
+                    Some(Type::Object { fields, .. }) => Some(fields),
+                    _ => None,
+                }
+            }
+            Type::Union(members) => {
+                let mut rest = members
+                    .iter()
+                    .filter(|member| !matches!(member.peel(), Type::Null));
+                match (rest.next(), rest.next()) {
+                    (Some(member), None) if !matches!(member.peel(), Type::Union(_)) => {
+                        self.object_shape_fields(member)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// The slots of the tuple `param_ty`, keyed by index, that an array
     /// literal argument with `elements` is inferred against one at a time,
     /// when one of them is a function literal with an unannotated parameter:
@@ -1344,8 +1411,10 @@ impl Inferer<'_> {
     /// Whether a function literal in a field of `literal` typed `field_ty`
     /// keeps the literal types it returns: `literal` is an argument of a
     /// generic call and the field is typed as a type parameter the call
-    /// infers, as tsc keeps a literal returned where a type parameter is
-    /// expected (`foo({ a: () => 42, b(a) {} })` binds `() => 42`).
+    /// infers that types no other field the literal gives, as tsc keeps a
+    /// literal returned where a type parameter is expected (`foo({ a: () =>
+    /// 42, b(a) {} })` binds `() => 42`) but widens two such values (`{ v:
+    /// () => 1, w: () => 2 }` binds `() => number`).
     pub(super) fn field_keeps_returned_literals(
         &self,
         literal: ExprId,
@@ -1735,10 +1804,11 @@ impl Inferer<'_> {
             self.arguments_with_replaceable_hints.insert(arg_id);
         }
         let enclosing = self.start_literal_argument_inference(arg_id, param_ty, sub)?;
-        let enclosing_fields = self.fields_keeping_returned_literals.replace((
-            arg_id,
-            type_params_of_one_field(param_ty, arguments.inferred_generics),
-        ));
+        let keeping =
+            self.type_params_of_one_field(arg_id, param_ty, arguments.inferred_generics)?;
+        let enclosing_fields = self
+            .fields_keeping_returned_literals
+            .replace((arg_id, keeping));
         let keeps_literal = arguments.literal_types.keeps(param_ty);
         let inferred = self.with_inferred_positions(
             arg_id,
@@ -2757,26 +2827,6 @@ fn bind_remaining(
         }
     }
     Ok(())
-}
-
-/// The type parameters among `inferred` whose fields of `param_ty` keep the
-/// literals their function values return: those typing one field only, as
-/// tsc's common supertype of two such values (`{ v: () => 1, w: () => 2 }`)
-/// widens what they return to `() => number`.
-fn type_params_of_one_field(param_ty: &Type, inferred: &[String]) -> Vec<String> {
-    let Type::Object { fields, .. } = param_ty.peel() else {
-        return inferred.to_vec();
-    };
-    inferred
-        .iter()
-        .filter(|name| {
-            let typed = fields
-                .values()
-                .filter(|field| matches!(field.ty.peel(), Type::TypeVar(var) if var == *name));
-            typed.count() <= 1
-        })
-        .cloned()
-        .collect()
 }
 
 #[cfg(test)]

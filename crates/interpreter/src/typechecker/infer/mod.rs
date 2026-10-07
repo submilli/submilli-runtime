@@ -728,8 +728,8 @@ pub(super) struct Inferer<'a> {
     /// whose function types couldn't form one callable union.
     next_function_keeps_returned_literals: bool,
     /// An object literal argument of a generic call, and the type parameters
-    /// the call infers: a function literal in a field of the literal typed as
-    /// one of them keeps its returned literals (see
+    /// the call infers that type only one of its fields: a function literal
+    /// in that field keeps its returned literals (see
     /// [`Inferer::field_keeps_returned_literals`]).
     fields_keeping_returned_literals: Option<(crate::ExprId, Vec<String>)>,
     aliased_conditions: aliased_conditions::AliasedConditions,

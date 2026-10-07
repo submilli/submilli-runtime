@@ -429,9 +429,9 @@ impl VarianceWalk<'_, '_> {
         let fresh = vec![Occurrences::default(); self.found.len()];
         let outer = std::mem::replace(&mut self.found, fresh);
         self.walk(ty, Polarity::Covariant);
-        let inner = std::mem::replace(&mut self.found, outer);
-        for (found, inner) in self.found.iter_mut().zip(inner) {
-            match inner.variance() {
+        let found_inside = std::mem::replace(&mut self.found, outer);
+        for (found, inside) in self.found.iter_mut().zip(found_inside) {
+            match inside.variance() {
                 Variance::Independent => {}
                 Variance::Invariant => {
                     found.covariant = true;

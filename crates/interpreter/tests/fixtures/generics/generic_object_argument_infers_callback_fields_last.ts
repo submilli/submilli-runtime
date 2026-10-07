@@ -53,6 +53,35 @@ function later<T>(a: T, o: { cb: (t: T) => number; w: T }): T {
   return o.w;
 }
 
+interface PairOf<T> {
+  v: T;
+  w: T;
+}
+
+interface First<T> {
+  v: T;
+}
+
+interface Extended<T> extends First<T> {
+  w: T;
+}
+
+function pairOf<T>(o: PairOf<T>): T {
+  return o.v;
+}
+
+function extended<T>(o: Extended<T>): T {
+  return o.v;
+}
+
+function orNull<T>(o: { v: T; w: T } | null): T | null {
+  return o === null ? null : o.v;
+}
+
+function optional<T>(o: { v: T; w?: T }): T {
+  return o.v;
+}
+
 function main(): void {
   const picked = pick({ a: new Box(1), cb: (t) => t, z: either(true) });
   const boxes: Box<string> | Box<number> | null = picked;
@@ -72,4 +101,9 @@ function main(): void {
   const returned = common({ v: () => 1, cb: (t) => `${t()}`, w: () => 2 });
   const returnedBoth = both({ v: () => "x", w: () => "y" });
   assert(returned() === 1 && returnedBoth() === "x", "two fields widen what they return");
+  const fromInterface = pairOf({ v: () => 1, w: () => 2 });
+  const fromExtended = extended({ v: () => 1, w: () => 2 });
+  const fromNullable = orNull({ v: () => 1, w: () => 2 });
+  const kept: () => 1 = optional({ v: () => 1 });
+  assert(fromInterface() + fromExtended() === 2 && fromNullable !== null && kept() === 1, "fields of other shapes");
 }
