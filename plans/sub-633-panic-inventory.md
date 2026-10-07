@@ -545,6 +545,33 @@ Keep UTF-16 units and real user range errors. Verify small tenant budgets reject
 large outputs before native growth, boundaries still work, and accounting refunds
 on error. Include concat and the named shared wrappers in the same fix.
 
+**Disposition (2026-10-07): implemented in the working tree.** Repeat, both
+padding methods, concat and the `string_concat` operator now admit native input
+copies and output against tenant memory before allocation. Output reservation is
+fallible and owned by a guarded result through GC marshalling; dropping its
+buffer precedes refunding its bytes. GC retains its separate accounting for the
+simultaneously live copy. Existing UTF-16 semantics, repeat/padding ceilings and
+catchable range errors are preserved. Allocation failures terminate execution;
+memory-cap refusals remain uncatchable. Output COPY fuel is prepaid before
+construction and is not charged again by the GC writer. The Rust helpers now
+accept tenant limits and return guarded, fallible results.
+
+Focused coverage includes exact admission bounds, refusal without native output
+growth, deterministic capacity-layout failure and refunds, UTF-16 edge cases,
+all five runtime entry points, and GC-copy failure cleanup. The new allocator
+measurement is nightly-only and was selected explicitly for development.
+
+**Residual dependency limitation:** the pinned `submilli-wasm` 0.1.10 GC
+writer's `value/gc_aggregate.rs:616` (`i16_body`) still constructs its admitted
+body with infallible iterator collection. Engine admission and checked packed
+lengths precede this unchanged allocation. N16 fixes first-party native builders;
+it does not establish transitive allocator-abort freedom.
+
+**Accepted exception:** the new string-allocation measurement accesses the
+shared `TEST_LOCK` with `expect`: a prior panic may have interrupted the protected
+measurement state. Poisoned access is permitted under the repository policy; this
+is an accepted poisoned-lock panic, not a removed or unresolved N16 violation.
+
 ### N17 — Public reaper timer configuration
 
 **Original site:** `crates/submilli-server/src/session_manager.rs`
