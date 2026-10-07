@@ -1,4 +1,4 @@
-types: 19 of 34 tsc entries compared, 3 differ
+types: 20 of 34 tsc entries compared, 3 differ
 
 line 16: c_2
   tsc:  (null[] | null[][])[]

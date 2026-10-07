@@ -1,24 +1,8 @@
-types: 42 of 96 tsc entries compared, 16 differ
+types: 42 of 96 tsc entries compared, 4 differ
 
 line 8: [1, [2, 3], [4, [5, [6, 7]]]]
   tsc:  (number | (number | (number | number[])[])[])[]
-  ours: ValueOrArray<number>[]
-
-line 8: [2, 3]
-  tsc:  number[]
-  ours: ValueOrArray<number>[]
-
-line 8: [4, [5, [6, 7]]]
-  tsc:  (number | (number | number[])[])[]
-  ours: ValueOrArray<number>[]
-
-line 8: [5, [6, 7]]
-  tsc:  (number | number[])[]
-  ours: ValueOrArray<number>[]
-
-line 8: [6, 7]
-  tsc:  number[]
-  ours: ValueOrArray<number>[]
+  ours: (number | number[] | (number | (number | number[])[])[])[]
 
 line 35: t1
   tsc:  T1
@@ -31,35 +15,3 @@ line 37: t1
 line 38: t2
   tsc:  T2
   ours: T3
-
-line 44: { value: 42 }
-  tsc:  { value: number; }
-  ours: Box<Box1>
-
-line 45: { value: { value: { value: 42 }}}
-  tsc:  { value: { value: { value: number; }; }; }
-  ours: Box<Box1>
-
-line 45: { value: { value: 42 }}
-  tsc:  { value: { value: number; }; }
-  ours: Box<Box1>
-
-line 45: { value: 42 }
-  tsc:  { value: number; }
-  ours: Box<Box1>
-
-line 50: { value: 42 }
-  tsc:  { value: number; }
-  ours: Box<number | Box2>
-
-line 51: { value: { value: { value: 42 }}}
-  tsc:  { value: { value: { value: number; }; }; }
-  ours: Box<number | Box2>
-
-line 51: { value: { value: 42 }}
-  tsc:  { value: { value: number; }; }
-  ours: Box<number | Box2>
-
-line 51: { value: 42 }
-  tsc:  { value: number; }
-  ours: Box<number | Box2>

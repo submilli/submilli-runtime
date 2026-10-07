@@ -1,12 +1,4 @@
-types: 55 of 120 tsc entries compared, 2 differ
-
-line 4: [10, "foo"]
-  tsc:  [number, string]
-  ours: [number, number | string]
-
-line 5: [true, "foo"]
-  tsc:  [true, string]
-  ours: [boolean, number | string]
+types: 55 of 120 tsc entries compared, 0 differ
 
 errors:
 line 13: ours: tuple index must be a non-negative integer literal; tuple has 2 elements (tsc accepts)

@@ -632,7 +632,10 @@ impl<'a> Inferer<'a> {
     /// binding narrows to declared members, as TypeScript's assignment narrowing
     /// does (see [`Self::narrowed_part`]).
     pub(super) fn assignment_narrowed_ty(&self, declared: &Type, written: Type) -> Type {
-        if !self.declares_readonly(declared) && !has_function_part(&written) {
+        if !self.declares_readonly(declared)
+            && !has_function_part(&written)
+            && !has_object_part(&written)
+        {
             return written;
         }
         self.initializer_narrowed_ty(declared, written)
@@ -1763,6 +1766,16 @@ fn has_function_part(ty: &Type) -> bool {
             fields.values().any(|field| has_function_part(&field.ty))
                 || index.as_ref().is_some_and(|i| has_function_part(&i.value))
         }
+        _ => false,
+    }
+}
+
+/// Whether a value is or holds a structural object, whose own type can leave out
+/// an optional field the declaration has: `o = {}` must still read `o.a`.
+fn has_object_part(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Object { .. } => true,
+        Type::Union(members) => members.iter().any(has_object_part),
         _ => false,
     }
 }

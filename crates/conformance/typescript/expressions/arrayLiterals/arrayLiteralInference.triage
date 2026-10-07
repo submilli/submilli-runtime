@@ -1,1 +1,1 @@
-line 26, 27, 28, 29 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 26 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type

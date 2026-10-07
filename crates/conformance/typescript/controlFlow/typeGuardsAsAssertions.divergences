@@ -1,8 +1,4 @@
-types: 121 of 200 tsc entries compared, 5 differ
-
-line 13: { none: '' }
-  tsc:  { none: string; }
-  ours: None
+types: 121 of 200 tsc entries compared, 4 differ
 
 line 27: result
   tsc:  Optional<r>

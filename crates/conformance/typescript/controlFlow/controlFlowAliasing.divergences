@@ -1,4 +1,4 @@
-types: 289 of 512 tsc entries compared, 12 differ
+types: 289 of 512 tsc entries compared, 11 differ
 
 line 52: obj
   tsc:  { readonly x: string | number; }
@@ -27,10 +27,6 @@ line 61: obj
 line 63: obj
   tsc:  { readonly x: string | number; }
   ours: { x: number | string }
-
-line 76: [42]
-  tsc:  [number]
-  ours: [number | string]
 
 line 145: outer
   tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }

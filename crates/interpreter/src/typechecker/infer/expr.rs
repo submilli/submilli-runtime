@@ -5213,6 +5213,7 @@ impl Inferer<'_> {
         {
             return self.infer_computed_object(members, expected, span);
         }
+        let errors_before = self.error_count();
         // Pull `expected` apart at the *Object* shape if it has one,
         // so each field gets a hint matching its declared type.
         // peel the hint so a `type Point = { x: number }`
@@ -5605,6 +5606,16 @@ impl Inferer<'_> {
             }
         }
 
+        // The literal's own type, before the expected shape's optional fields and
+        // an interface's field types are spliced into its layout below.
+        let own_fields: Option<std::collections::BTreeMap<String, crate::ObjectField>> =
+            expected_fields.as_ref().map(|_| {
+                merged
+                    .iter()
+                    .map(|(name, (field, _))| (name.clone(), field.clone()))
+                    .collect()
+            });
+
         // when an expected shape declares optional fields,
         // splice them into the literal's resulting type. The runtime
         // arity and payload slot indices follow
@@ -5693,6 +5704,39 @@ impl Inferer<'_> {
                 ty: field.ty.clone(),
             });
             resolved.insert(name, field);
+        }
+
+        // A literal checked against a structural shape keeps its own type, as in
+        // tsc: `{ value: 10 }` against `{ value: number; error?: string }` is
+        // `{ value: number }`. Codegen builds it from the field origins instead.
+        // Against an interface with methods it stays the interface, whose methods
+        // a value reaches through the interface's own dispatch; against an unbound
+        // type parameter it stays the shape a call site infers that parameter
+        // from. A spread's fields take their optionality from the expected shape.
+        let dispatches_methods = interface_target.is_some()
+            && expected_fields.as_ref().is_some_and(|want| {
+                want.values()
+                    .any(|field| field.method || matches!(field.ty.peel(), Type::Function { .. }))
+            });
+        if let Some(fields) = own_fields
+            && !dispatches_methods
+            && !has_spread
+            && !expected.is_some_and(type_contains_type_var)
+            && self.error_count() == errors_before
+        {
+            let own = Type::Object {
+                index: None,
+                fields,
+            };
+            if expected.is_some_and(|want| assignable(&own, want, self.resolver())) {
+                return Ok((
+                    TypedExprKind::ObjectLiteral {
+                        members: object_members,
+                        fields: field_origins,
+                    },
+                    own,
+                ));
+            }
         }
 
         // when the expected type was an `InterfaceRef`, the
@@ -5958,6 +6002,10 @@ impl Inferer<'_> {
         // Whether the running element type is still the first element's, which
         // mismatch messages name.
         let mut running_is_first = true;
+        // Under a pinning hint the literal still has a type of its own, as in tsc:
+        // `["a"]` checked against `(string | number)[]` is `string[]`.
+        let mut own_element_types = Vec::new();
+        let errors_before = self.error_count();
         for el in elements {
             match el {
                 crate::ArrayLiteralElement::Value(elem_id) => {
@@ -5998,6 +6046,9 @@ impl Inferer<'_> {
                         saw_never = true;
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
+                    }
+                    if hint_pins_element_ty {
+                        own_element_types.push(elem_ty.clone());
                     }
                     let Some(running) = &element_ty else {
                         // First resolved value seeds the running
@@ -6053,6 +6104,9 @@ impl Inferer<'_> {
                     // shapes (primitive, object, unknown, other unions, function)
                     // with a typed diagnostic. Aliases peel first.
                     let peeled_source = source_ty.peel().clone();
+                    if hint_pins_element_ty {
+                        own_element_types.extend(spread_element_type(&peeled_source));
+                    }
                     match spread_element_type(&peeled_source) {
                         // A `Type::Error` source was already reported by inner inference.
                         None if matches!(peeled_source, Type::Error) => {}
@@ -6111,7 +6165,11 @@ impl Inferer<'_> {
         // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
         // `"hello"[]`.
         let element_ty = if hint_pins_element_ty {
-            element_ty
+            if self.error_count() == errors_before && !own_element_types.is_empty() {
+                Type::union(own_element_types)
+            } else {
+                element_ty
+            }
         } else {
             self.kept_element_type(element_ty, &typed_elements)?
         };
@@ -6502,10 +6560,12 @@ impl Inferer<'_> {
             // `[K, V]`, so the call site can bind K and V.
             let slot = if is_type_parameter_position(expected_ty) {
                 self.widen_fresh_literals(typed_id, &elem_ty)?
+            } else if assignable(&elem_ty, expected_ty, self.resolver()) {
+                // The literal keeps its own element type, as in tsc; the slot
+                // it lands in has already accepted it.
+                elem_ty
             } else {
-                if self.error_count() == errors_before
-                    && !assignable(&elem_ty, expected_ty, self.resolver())
-                {
+                if self.error_count() == errors_before {
                     self.error(
                         elem_span,
                         format!("expected `{expected_ty}`, got `{elem_ty}`"),

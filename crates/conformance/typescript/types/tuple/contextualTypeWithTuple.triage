@@ -1,2 +1,1 @@
-line 4, 7, 10, 11, 12, 13, 19, 21 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
-line 5 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 4, 19, 21 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours types the rejected literal as its target)

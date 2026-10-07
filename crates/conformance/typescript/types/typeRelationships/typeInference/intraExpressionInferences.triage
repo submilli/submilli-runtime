@@ -1,3 +1,2 @@
 line 31, 32 extra: bug SUB-1201 a type parameter isn't inferred from a sibling element of the same array literal argument
-line 31, 32 type: bug SUB-1201 a type parameter isn't inferred from a sibling element of the same array literal argument
 line 63, 64, 68, 69, 73 type: bug SUB-1395 a function literal in an object property widens its returned literal where tsc keeps it

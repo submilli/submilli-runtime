@@ -1,12 +1,4 @@
-types: 88 of 258 tsc entries compared, 7 differ
-
-line 31: [() => 0, n => n.toFixed()]
-  tsc:  [() => number, (n: number) => string]
-  ours: [(arg0: number) => T, (arg0: T) => void]
-
-line 32: [_a => 0, n => n.toFixed()]
-  tsc:  [(_a: number) => number, (n: number) => string]
-  ours: [(arg0: number) => T, (arg0: T) => void]
+types: 86 of 258 tsc entries compared, 5 differ
 
 line 63: { a: () => { return 42 }, b(a) {}, }
   tsc:  { a: () => 42; b(a: () => 42): void; }

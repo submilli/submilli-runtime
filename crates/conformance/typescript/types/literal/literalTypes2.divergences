@@ -1,8 +1,4 @@
-types: 107 of 202 tsc entries compared, 6 differ
-
-line 55: [1, "bar"]
-  tsc:  [1, "bar"]
-  ours: [1 | 2, "bar" | "foo"]
+types: 107 of 202 tsc entries compared, 5 differ
 
 line 94: c1
   tsc:  (string | number)[]

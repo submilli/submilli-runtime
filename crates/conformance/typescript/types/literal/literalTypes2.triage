@@ -1,4 +1,3 @@
 line 94, 97 extra: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
-line 55 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
 line 94, 97 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
 line 179 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it

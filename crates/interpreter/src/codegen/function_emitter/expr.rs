@@ -1058,36 +1058,12 @@ fn emit_object_literal(
         emit_computed_object(emitter, ctx, members)?;
         return Ok(());
     }
-    // Interface contextual typing keeps the result nominal; recover the
-    // structural shape from the literal's field metadata for allocation.
-    let structural_ty: Type = match result_ty {
-        Type::Object { .. } => result_ty.clone(),
-        Type::InterfaceRef { .. } => {
-            let field_map: std::collections::BTreeMap<String, crate::ObjectField> = fields
-                .iter()
-                .map(|f| {
-                    (
-                        f.name.name.clone(),
-                        crate::ObjectField {
-                            ty: f.ty.clone(),
-                            optional: f.optional,
-                            readonly: false,
-                            method: false,
-                        },
-                    )
-                })
-                .collect();
-            Type::Object {
-                index: None,
-                fields: field_map,
-            }
-        }
-        _ => {
-            return Err(crate::codegen::internal_failure(
-                "object literal requires an object representation",
-            ));
-        }
-    };
+    if !matches!(result_ty, Type::Object { .. } | Type::InterfaceRef { .. }) {
+        return Err(crate::codegen::internal_failure(
+            "object literal requires an object representation",
+        ));
+    }
+    let structural_ty = crate::typed_ast::object_literal_layout(result_ty, fields);
     if members
         .iter()
         .any(|member| matches!(member, TypedObjectMember::Spread { .. }))

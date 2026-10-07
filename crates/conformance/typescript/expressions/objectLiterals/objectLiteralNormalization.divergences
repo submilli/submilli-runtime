@@ -1,4 +1,4 @@
-types: 101 of 220 tsc entries compared, 42 differ
+types: 101 of 220 tsc entries compared, 40 differ
 
 line 6: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
@@ -27,10 +27,6 @@ line 9: a1
 line 10: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
   ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null }
-
-line 10: { a: 1 }
-  tsc:  { a: number; }
-  ours: { a: number; b?: null; c?: null }
 
 line 11: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
@@ -79,10 +75,6 @@ line 19: a2
 line 20: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
   ours: { a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null }
-
-line 20: {}
-  tsc:  {}
-  ours: { a?: null; b?: null }
 
 line 21: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }

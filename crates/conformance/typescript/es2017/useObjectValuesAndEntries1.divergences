@@ -1,4 +1,4 @@
-types: 56 of 106 tsc entries compared, 25 differ
+types: 56 of 106 tsc entries compared, 24 differ
 
 line 6: x
   tsc:  number
@@ -79,10 +79,6 @@ line 24: values4
 line 24: Object.values(a)
   tsc:  string[]
   ours: unknown[]
-
-line 31: {}
-  tsc:  {}
-  ours: I
 
 line 32: entries6
   tsc:  [string, any][]

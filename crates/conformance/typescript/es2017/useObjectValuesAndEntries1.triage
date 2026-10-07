@@ -1,3 +1,2 @@
 line 6, 7, 10, 11, 13, 14, 23, 24, 32, 33 type: by-design spec §1.6 `Object.values` and `Object.entries` erase values to `unknown`
 line 16, 17 type: bug SUB-1490 an object literal property widens to its base type where tsc keeps the literal type; also by-design spec §1.6 `Object.values` and `Object.entries` erase values to `unknown`
-line 31 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
