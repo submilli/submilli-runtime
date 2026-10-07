@@ -332,28 +332,13 @@ impl<'a> Inferer<'a> {
                     let resolved_params: Vec<Param> = self.resolve_params(params)?;
                     let resolved_ret = self.resolve_type(return_type)?;
                     self.pop_signature_generics();
-                    // These two names fill the class's universal vtable slots
-                    // (used by `String(x)`, interpolation, `JSON.stringify`),
-                    // whose funcref shape is fixed at `(): string`.
-                    if matches!(m_name.name.as_str(), "toString" | "toJson")
-                        && (!resolved_params.is_empty()
-                            || !m_generic_names.is_empty()
-                            || !matches!(resolved_ret.peel(), crate::Type::String))
-                    {
-                        self.error_with_help(
-                            m_name.span,
-                            format!(
-                                "class method `{}` must have signature `(): string`",
-                                m_name.name
-                            ),
-                            vec![format!(
-                                "`{}` overrides the built-in conversion used by `String(x)`, \
-                                 string interpolation, and `JSON.stringify`; declare it as \
-                                 `{}(): string` or pick another method name",
-                                m_name.name, m_name.name
-                            )],
-                        );
-                    }
+                    self.check_conversion_method(
+                        "class",
+                        &m_name,
+                        &resolved_params,
+                        &m_generic_names,
+                        &resolved_ret,
+                    );
                     methods.insert(
                         m_name.name.clone(),
                         MethodSig {

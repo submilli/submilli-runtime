@@ -317,6 +317,39 @@ impl<'a> Inferer<'a> {
         Ok(skip)
     }
 
+    /// `toString` and `toJson` fill the universal vtable slots that `String(x)`,
+    /// string interpolation and `JSON.stringify` call, whose shape is fixed at
+    /// `(): string`, so a class or interface may declare them only so.
+    pub(super) fn check_conversion_method(
+        &mut self,
+        owner: &str,
+        name: &Ident,
+        params: &[Param],
+        generics: &[String],
+        ret: &crate::Type,
+    ) {
+        if !matches!(name.name.as_str(), "toString" | "toJson")
+            || (params.is_empty()
+                && generics.is_empty()
+                && matches!(ret.peel(), crate::Type::String))
+        {
+            return;
+        }
+        self.error_with_help(
+            name.span,
+            format!(
+                "{owner} method `{}` must have signature `(): string`",
+                name.name
+            ),
+            vec![format!(
+                "`{}` overrides the built-in conversion used by `String(x)`, \
+                 string interpolation, and `JSON.stringify`; declare it as \
+                 `{}(): string` or pick another method name",
+                name.name, name.name
+            )],
+        );
+    }
+
     pub(super) fn bind_interface(
         &mut self,
         name: Ident,
@@ -406,6 +439,13 @@ impl<'a> Inferer<'a> {
                     if shadow_rejected {
                         continue;
                     }
+                    self.check_conversion_method(
+                        "interface",
+                        &m_name,
+                        &resolved_params,
+                        &m_generic_names,
+                        &resolved_ret,
+                    );
                     let typed_params: Vec<crate::TypedParam> = params
                         .iter()
                         .zip(resolved_params.iter())
