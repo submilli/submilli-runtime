@@ -11,6 +11,3 @@ line 4: (names: string[]) => // single-line comment names?.filter(x => x)
 line 6: names?.filter(x => x)
   tsc:  string[]
   ours: null | string[]
-
-errors:
-line 6: ours: expected `boolean`, got `string` (tsc accepts)

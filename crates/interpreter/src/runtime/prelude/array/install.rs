@@ -1192,7 +1192,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 "callback",
                                 Type::Function {
                                     params: element_callback_params(Vec::new()),
-                                    ret: Box::new(Type::Boolean),
+                                    ret: Box::new(Type::Unknown),
                                     predicate: None,
                                     has_rest: false,
                                 },
@@ -1203,7 +1203,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the first element for which `callback` returns `true`, or `null` if none match.\n * Short-circuits on the first match.\n * @param callback Function called with `(value, index, array)` for each element until it returns `true`.\n */",
+                                "/**\n * Returns the first element for which `callback` returns a truthy value, or `null` if none match.\n * Short-circuits on the first match.\n * @param callback Function called with `(value, index, array)` for each element until it returns a truthy value.\n */",
                             ),
                         },
                     ),
@@ -1215,7 +1215,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 "callback",
                                 Type::Function {
                                     params: element_callback_params(Vec::new()),
-                                    ret: Box::new(Type::Boolean),
+                                    ret: Box::new(Type::Unknown),
                                     predicate: None,
                                     has_rest: false,
                                 },
@@ -1226,7 +1226,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the last element for which `callback` returns `true`, or `null` if none match.\n * Scans from the end; short-circuits on the first match.\n * @param callback Function called with `(value, index, array)` for each element until it returns `true`.\n */",
+                                "/**\n * Returns the last element for which `callback` returns a truthy value, or `null` if none match.\n * Scans from the end; short-circuits on the first match.\n * @param callback Function called with `(value, index, array)` for each element until it returns a truthy value.\n */",
                             ),
                         },
                     ),
@@ -1238,7 +1238,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 "callback",
                                 Type::Function {
                                     params: element_callback_params(Vec::new()),
-                                    ret: Box::new(Type::Boolean),
+                                    ret: Box::new(Type::Unknown),
                                     predicate: None,
                                     has_rest: false,
                                 },
@@ -1246,7 +1246,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the index of the first element for which `callback` returns `true`, or `-1` if none match.\n * @param callback Function called with `(value, index, array)` for each element until it returns `true`.\n */",
+                                "/**\n * Returns the index of the first element for which `callback` returns a truthy value, or `-1` if none match.\n * @param callback Function called with `(value, index, array)` for each element until it returns a truthy value.\n */",
                             ),
                         },
                     ),
@@ -1258,7 +1258,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 "callback",
                                 Type::Function {
                                     params: element_callback_params(Vec::new()),
-                                    ret: Box::new(Type::Boolean),
+                                    ret: Box::new(Type::Unknown),
                                     predicate: None,
                                     has_rest: false,
                                 },
@@ -1266,7 +1266,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the index of the last element for which `callback` returns `true`, or `-1` if none match.\n * Scans from the end.\n * @param callback Function called with `(value, index, array)` for each element until it returns `true`.\n */",
+                                "/**\n * Returns the index of the last element for which `callback` returns a truthy value, or `-1` if none match.\n * Scans from the end.\n * @param callback Function called with `(value, index, array)` for each element until it returns a truthy value.\n */",
                             ),
                         },
                     ),
@@ -1428,7 +1428,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 "predicate",
                                 Type::Function {
                                     params: element_callback_params(Vec::new()),
-                                    ret: Box::new(Type::Boolean),
+                                    ret: Box::new(Type::Unknown),
                                     predicate: None,
                                     has_rest: false,
                                 },
@@ -1436,7 +1436,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Array(Box::new(Type::TypeVar("T".to_string()))),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns a new array of the elements for which `predicate` returned `true`.\n * Order is preserved; the receiver is not modified.\n * @param predicate Function called with `(value, index, array)` for each element.\n */",
+                                "/**\n * Returns a new array of the elements for which `predicate` returned a truthy value.\n * Order is preserved; the receiver is not modified.\n * @param predicate Function called with `(value, index, array)` for each element.\n */",
                             ),
                         },
                     ),
@@ -1491,7 +1491,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 "predicate",
                                 Type::Function {
                                     params: element_callback_params(Vec::new()),
-                                    ret: Box::new(Type::Boolean),
+                                    ret: Box::new(Type::Unknown),
                                     predicate: None,
                                     has_rest: false,
                                 },
@@ -1499,7 +1499,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns `true` if `predicate` returned `true` for at least one element.\n * Short-circuits on the first match.\n * @param predicate Function called with `(value, index, array)` for each element until it returns `true`.\n */",
+                                "/**\n * Returns `true` if `predicate` returned a truthy value for at least one element.\n * Short-circuits on the first match.\n * @param predicate Function called with `(value, index, array)` for each element until it returns a truthy value.\n */",
                             ),
                         },
                     ),
@@ -1511,7 +1511,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 "predicate",
                                 Type::Function {
                                     params: element_callback_params(Vec::new()),
-                                    ret: Box::new(Type::Boolean),
+                                    ret: Box::new(Type::Unknown),
                                     predicate: None,
                                     has_rest: false,
                                 },
@@ -1519,7 +1519,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns `true` if `predicate` returned `true` for every element.\n * Short-circuits on the first `false`. An empty array returns `true`.\n * @param predicate Function called with `(value, index, array)` for each element until it returns `false`.\n */",
+                                "/**\n * Returns `true` if `predicate` returned a truthy value for every element.\n * Short-circuits on the first falsy one. An empty array returns `true`.\n * @param predicate Function called with `(value, index, array)` for each element until it returns a falsy value.\n */",
                             ),
                         },
                     ),
