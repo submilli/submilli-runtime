@@ -814,6 +814,10 @@ pub struct TypedAst {
     /// the types they give it, an index signature's value type included.
     pub spread_mask_fields:
         std::collections::BTreeMap<ExprId, std::collections::BTreeMap<String, Type>>,
+    /// For each spread source of an object rest, the names the rest leaves out
+    /// whatever their value.
+    pub spread_omitted_fields:
+        std::collections::BTreeMap<ExprId, std::collections::BTreeSet<String>>,
     /// Module name used for mangling. Defaults to `USER_PACKAGE` (`"main"`).
     pub package_name: String,
     exprs: Vec<TypedExpr>,

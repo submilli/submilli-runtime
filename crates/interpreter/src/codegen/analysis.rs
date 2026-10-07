@@ -925,6 +925,13 @@ impl CodegenAnalysis {
                         "#spread",
                     ));
                 }
+                for member in members {
+                    if let crate::TypedObjectMember::Spread { source, .. } = member
+                        && let Some(omitted) = ta.spread_omitted_fields.get(source)
+                    {
+                        self.extra_field_names.extend(omitted.iter().cloned());
+                    }
+                }
                 for field in fields {
                     let mut source = Some(&field.source);
                     while let Some(TypedObjectFieldSource::Spread {

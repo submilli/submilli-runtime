@@ -257,28 +257,23 @@ impl Inferer<'_> {
                 doc,
             } => {
                 let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
-                let (typed_value, source_ty) = self.infer_expr(source, hint.as_ref())?;
-                let narrowed = match source_ty.clone() {
-                    Type::Object { mut fields, .. } => {
-                        for excl in &exclude {
-                            fields.remove(&excl.name);
+                let (typed_source, source_ty) = self.infer_expr(source, hint.as_ref())?;
+                let (typed_value, narrowed) =
+                    match self.object_rest(typed_source, &source_ty, &exclude, span)? {
+                        Some(rest) => rest,
+                        None => {
+                            if !matches!(source_ty.peel(), Type::Error) {
+                                self.error(
+                                    span,
+                                    format!(
+                                        "object rest can only destructure an object with a known \
+                                     shape; source has type `{source_ty}`",
+                                    ),
+                                );
+                            }
+                            (typed_source, Type::Error)
                         }
-                        Type::Object {
-                            index: None,
-                            fields,
-                        }
-                    }
-                    other => {
-                        self.error(
-                            span,
-                            format!(
-                                "object rest can only destructure an object with a known shape; \
-                                 source has type `{other}`",
-                            ),
-                        );
-                        other
-                    }
-                };
+                    };
                 self.scopes
                     .insert(name.name.clone(), narrowed.clone(), true, name.span);
                 Ok(TypedStmtKind::Const {

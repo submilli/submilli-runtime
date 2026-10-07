@@ -2719,11 +2719,19 @@ fn emit_spread_mask(
     source_expr: crate::ExprId,
     shape: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let fields = ctx
+    let checked = ctx
         .ta
         .spread_mask_fields
         .get(&source_expr)
         .ok_or_else(|| crate::codegen::internal_failure("by-name spread fields recorded"))?;
+    // A name an object rest leaves out is masked whatever its value; any other
+    // is masked when its value isn't of the field's type.
+    let omitted = ctx.ta.spread_omitted_fields.get(&source_expr);
+    let fields: Vec<(&String, Option<&Type>)> = checked
+        .iter()
+        .map(|(name, ty)| (name, Some(ty)))
+        .chain(omitted.into_iter().flatten().map(|name| (name, None)))
+        .collect();
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -2733,7 +2741,7 @@ fn emit_spread_mask(
         .vtable_global_idx(shape)
         .ok_or_else(|| crate::codegen::internal_failure("spread shape vtable collected"))?;
     emitter.instruction(Instruction::GlobalGet(vtable));
-    for name in fields.keys() {
+    for (name, _) in &fields {
         let global = ctx
             .symbols
             .field_name_string_global_idx(name)
@@ -2744,11 +2752,15 @@ fn emit_spread_mask(
         array_type_index: intrinsics.field_names,
         array_size: crate::codegen::wasm_u32(fields.len())?,
     });
-    for (name, ty) in fields {
+    for (name, ty) in fields.iter().copied() {
         let global = ctx
             .symbols
             .field_name_string_global_idx(name)
             .ok_or_else(|| crate::codegen::internal_failure("spread name collected"))?;
+        let Some(ty) = ty else {
+            emitter.instruction(Instruction::GlobalGet(global));
+            continue;
+        };
         let index = emitter.add_anonymous_local(ValType::I32)?;
         let value = emitter.add_anonymous_local(object_ref(intrinsics.object))?;
         emit_object_field_index_by_name(emitter, ctx, source, global);

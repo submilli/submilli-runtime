@@ -5662,6 +5662,102 @@ impl Inferer<'_> {
         }))
     }
 
+    /// The object `const { a, ...rest } = source` binds to `rest`: a copy of
+    /// `source` without the names `exclude` lists, built as the spread
+    /// `{ ...source }` that leaves them out. `None` when `source` can't be
+    /// spread: a source that isn't an object, a union of objects, or a
+    /// dictionary.
+    pub(super) fn object_rest(
+        &mut self,
+        typed_source: ExprId,
+        source_ty: &Type,
+        exclude: &[Ident],
+        span: Span,
+    ) -> Result<Option<(ExprId, Type)>, CompilerFailure> {
+        if !self.spreads_as_rest_source(typed_source, source_ty)? {
+            return Ok(None);
+        }
+        let index_value = self.spread_source_index(typed_source, source_ty)?;
+        let Some(SpreadFields { mut fields, .. }) =
+            self.spread_source_fields(typed_source, source_ty, span)?
+        else {
+            return Ok(None);
+        };
+        let omitted: std::collections::BTreeSet<String> =
+            exclude.iter().map(|name| name.name.clone()).collect();
+        fields.retain(|name, _| !omitted.contains(name));
+        // Every rest is read by name, so its mask can leave the excluded names
+        // out; a lone object's fields need no value check.
+        let checked = self
+            .typed_ast
+            .spread_mask_fields
+            .entry(typed_source)
+            .or_default();
+        checked.retain(|name, _| !omitted.contains(name));
+        self.typed_ast
+            .spread_omitted_fields
+            .insert(typed_source, omitted);
+        let origin_ty = Type::Object {
+            index: None,
+            fields: fields.clone(),
+        };
+        let origins = fields
+            .iter()
+            .map(|(name, field)| crate::TypedObjectFieldOrigin {
+                name: Ident {
+                    name: name.clone(),
+                    span,
+                },
+                source: crate::TypedObjectFieldSource::Spread {
+                    source_index: 0,
+                    field_name: name.clone(),
+                    source_ty: origin_ty.clone(),
+                    fallback: None,
+                },
+                optional: field.optional,
+                ty: field.ty.clone(),
+            })
+            .collect();
+        let index = index_value.map(|value| crate::IndexSignature {
+            value: Box::new(Type::union(
+                std::iter::once(value)
+                    .chain(fields.values().map(|field| field.ty.clone()))
+                    .collect(),
+            )),
+            readonly: false,
+        });
+        let ty = Type::Object { index, fields };
+        let rest = self.push_synthetic_expr(
+            TypedExprKind::ObjectLiteral {
+                members: vec![crate::TypedObjectMember::Spread {
+                    source: typed_source,
+                    by_name: true,
+                }],
+                fields: origins,
+            },
+            ty.clone(),
+            span,
+        )?;
+        Ok(Some((rest, ty)))
+    }
+
+    /// Whether every alternative of a rest source is an object type or a
+    /// dictionary, which a spread copies; other sources keep the rest's own
+    /// diagnostic rather than a spread's.
+    fn spreads_as_rest_source(
+        &self,
+        typed_source: ExprId,
+        source_ty: &Type,
+    ) -> Result<bool, CompilerFailure> {
+        let mut alternatives = Vec::new();
+        self.collect_spread_alternatives(typed_source, source_ty, &mut alternatives)?;
+        Ok(!alternatives.is_empty()
+            && alternatives.iter().all(|alternative| {
+                matches!(alternative.peel(), Type::Object { .. })
+                    || self.resolver().index_signature(alternative).is_some()
+            }))
+    }
+
     pub(super) fn spread_source_index(
         &self,
         source: ExprId,

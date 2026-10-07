@@ -243,9 +243,16 @@ impl<'a> Inferer<'a> {
                 .or_else(|| index.as_ref().map(crate::IndexSignature::read_ty))
                 .ok_or(MemberFieldMiss::Absent),
             Type::InterfaceRef { .. } => {
-                let (sig, bindings, _, dispatch) = self
-                    .lookup_interface_property(member, field)
-                    .ok_or(MemberFieldMiss::Absent)?;
+                let Some((sig, bindings, _, dispatch)) =
+                    self.lookup_interface_property(member, field)
+                else {
+                    // An index signature backs every name it doesn't declare.
+                    return self
+                        .resolver()
+                        .index_signature(member)
+                        .map(|index| index.read_ty())
+                        .ok_or(MemberFieldMiss::Absent);
+                };
                 // Every user-declared interface is VTable-dispatched and reads
                 // through the shape scan, which is what a union receiver can
                 // emit. A Direct/Static one reads through a getter import keyed

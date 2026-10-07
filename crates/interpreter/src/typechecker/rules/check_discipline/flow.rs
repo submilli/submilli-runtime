@@ -560,6 +560,14 @@ impl<'a> Walker<'a, '_, '_> {
             TypedExprKind::OptionalChain { base, parts } => {
                 self.optional_chain(*base, parts, span)?
             }
+            // An object rest holds part of its source, so it is the caller's
+            // value whenever the source is.
+            TypedExprKind::ObjectLiteral { members, .. }
+                if let [TypedObjectMember::Spread { source, .. }] = members.as_slice()
+                    && self.package.ta.spread_omitted_fields.contains_key(source) =>
+            {
+                self.eval(*source)?
+            }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 self.object_literal(members, || Usage::Stored("an object literal".to_string()))?;
                 stable()
