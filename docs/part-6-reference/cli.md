@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "37b108fbb93c0f5dcd6943fe72d19e229d1cca5ab4cca058e83e5f1f66d19f77"
+  contentHash: "6f439e56cbc6c94d9f125af06bcd50e6eb40ffe78d31dc3d796e2895fea66fd0"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -457,6 +457,7 @@ Commands:
   check            Compile the project's packages in dependency order without installing
   publish-local    Compile the project's packages and install them into the local store
   test             Compile and run the project's `tests/**/*.test.{ts,subm}` files
+  authority-map    Compile packages and print their full authority call graph as JSON
   security-review  Review package authorization with Codex, Claude Code, or Copilot CLI
   help             Print this message or the help of the given subcommand(s)
 
@@ -537,6 +538,19 @@ Options:
   -h, --help               Print help
 
 Tests receive no credentials by default. Credential precedence (highest first): --env-var > --env-file > --all-env, regardless of argument order.
+```
+
+### `submilli build authority-map`
+
+```text
+Compile packages and print their full authority call graph as JSON
+
+Usage: submilli build authority-map [OPTIONS]
+
+Options:
+  -p, --package <PACKAGE>  Compile only this package and its sibling dependencies
+      --deny-warnings      Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
+  -h, --help               Print help
 ```
 
 ### `submilli build security-review`

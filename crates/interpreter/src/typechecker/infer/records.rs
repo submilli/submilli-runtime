@@ -698,7 +698,10 @@ impl Inferer<'_> {
             for base in extends {
                 match self.interface_base_pending(base, pending, aliases) {
                     Ok(pending) => waits |= pending,
-                    Err(error) => return Ok(Err(error)),
+                    Err(InheritancePreparationError::Diagnostic(span, message)) => {
+                        return Ok(Err((span, message)));
+                    }
+                    Err(InheritancePreparationError::Internal(failure)) => return Err(failure),
                 }
             }
             if !waits {
@@ -713,7 +716,7 @@ impl Inferer<'_> {
         base: &TypeAnnotation,
         pending: &BTreeMap<String, crate::StmtId>,
         aliases: &BTreeMap<String, (Vec<String>, TypeAnnotation)>,
-    ) -> Result<bool, (crate::Span, &'static str)> {
+    ) -> Result<bool, InheritancePreparationError> {
         let mut base = base.clone();
         let mut seen = std::collections::BTreeSet::new();
         // An alias that passes its parameter twice doubles the annotation at
@@ -736,52 +739,9 @@ impl Inferer<'_> {
                 return Ok(false);
             }
             let bindings = generics.iter().cloned().zip(args.iter().cloned()).collect();
-            base = self.substitute_base_names(body, &bindings, 0, &mut nodes_left)?;
+            base = substitute_base_names(body, &bindings, 0, &mut nodes_left)?;
         }
-        Err((base.span, "interface inheritance alias limit exceeded"))
-    }
-
-    fn substitute_base_names(
-        &self,
-        annotation: &TypeAnnotation,
-        bindings: &BTreeMap<String, TypeAnnotation>,
-        depth: usize,
-        nodes_left: &mut u64,
-    ) -> Result<TypeAnnotation, (crate::Span, &'static str)> {
-        if depth >= 64 {
-            return Err((
-                annotation.span,
-                "interface inheritance type nesting limit exceeded",
-            ));
-        }
-        let replacement = match &annotation.kind {
-            crate::TypeAnnotationKind::Name { name, .. } => bindings.get(name.name.as_str()),
-            _ => None,
-        };
-        // Each copy is charged in full, including arguments the recursion
-        // below then substitutes: the depth guard keeps that overcount small.
-        let mut charge = |copied: &TypeAnnotation| {
-            let nodes = crate::tree_height::annotation_nodes(copied, *nodes_left);
-            let left = nodes_left.checked_sub(nodes).ok_or((
-                annotation.span,
-                "interface inheritance type size limit exceeded",
-            ))?;
-            *nodes_left = left;
-            Ok(())
-        };
-        if let Some(replacement) = replacement {
-            charge(replacement)?;
-            return Ok(replacement.clone());
-        }
-        charge(annotation)?;
-        let mut result = annotation.clone();
-        if let crate::TypeAnnotationKind::Name { args, .. } = &mut result.kind {
-            *args = args
-                .iter()
-                .map(|arg| self.substitute_base_names(arg, bindings, depth + 1, nodes_left))
-                .collect::<Result<_, _>>()?;
-        }
-        Ok(result)
+        Err((base.span, "interface inheritance alias limit exceeded").into())
     }
 
     pub(super) fn inherit_interface(
@@ -1134,4 +1094,100 @@ struct InterfaceContract {
 struct InterfaceMemberContract {
     field: ObjectField,
     generic_count: usize,
+}
+
+/// Ordinary inheritance diagnostics remain recoverable; traversal allocation
+/// failures terminate the phase instead of being mistaken for invalid source.
+enum InheritancePreparationError {
+    Diagnostic(crate::Span, &'static str),
+    Internal(CompilerFailure),
+}
+
+impl From<(crate::Span, &'static str)> for InheritancePreparationError {
+    fn from((span, message): (crate::Span, &'static str)) -> Self {
+        Self::Diagnostic(span, message)
+    }
+}
+
+impl From<CompilerFailure> for InheritancePreparationError {
+    fn from(failure: CompilerFailure) -> Self {
+        Self::Internal(failure)
+    }
+}
+
+fn substitute_base_names(
+    annotation: &TypeAnnotation,
+    bindings: &BTreeMap<String, TypeAnnotation>,
+    depth: usize,
+    nodes_left: &mut u64,
+) -> Result<TypeAnnotation, InheritancePreparationError> {
+    if depth >= 64 {
+        return Err((
+            annotation.span,
+            "interface inheritance type nesting limit exceeded",
+        )
+            .into());
+    }
+    let replacement = match &annotation.kind {
+        crate::TypeAnnotationKind::Name { name, .. } => bindings.get(name.name.as_str()),
+        _ => None,
+    };
+    // Each copy is charged in full, including arguments the recursion
+    // below then substitutes: the depth guard keeps that overcount small.
+    let mut charge = |copied: &TypeAnnotation| -> Result<(), InheritancePreparationError> {
+        let nodes = crate::tree_height::annotation_nodes(copied, *nodes_left)
+            .map_err(|failure| failure.with_stage(crate::compiler_error::CompilerStage::Infer))?;
+        let left = nodes_left.checked_sub(nodes).ok_or((
+            annotation.span,
+            "interface inheritance type size limit exceeded",
+        ))?;
+        *nodes_left = left;
+        Ok(())
+    };
+    if let Some(replacement) = replacement {
+        charge(replacement)?;
+        return Ok(replacement.clone());
+    }
+    charge(annotation)?;
+    let mut result = annotation.clone();
+    if let crate::TypeAnnotationKind::Name { args, .. } = &mut result.kind {
+        *args = args
+            .iter()
+            .map(|arg| substitute_base_names(arg, bindings, depth + 1, nodes_left))
+            .collect::<Result<_, _>>()?;
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inheritance_copy_failure_preserves_internal_category_and_span() {
+        let span = Span::at(crate::FileId(5));
+        let leaf = TypeAnnotation {
+            kind: crate::TypeAnnotationKind::BooleanLiteral(true),
+            span,
+        };
+        let annotation = TypeAnnotation {
+            kind: crate::TypeAnnotationKind::Tuple(vec![leaf]),
+            span,
+        };
+        let mut nodes_left = 10;
+        let (result, _) = crate::type_walk::tests::observe(Some(0), || {
+            substitute_base_names(&annotation, &BTreeMap::new(), 0, &mut nodes_left)
+        });
+        assert!(matches!(result,
+            Err(InheritancePreparationError::Internal(CompilerFailure::Internal {
+                stage: crate::compiler_error::CompilerStage::Infer, span: Some(s), ..
+            })) if s == span));
+        assert_eq!(nodes_left, 10);
+        assert!(substitute_base_names(&annotation, &BTreeMap::new(), 0, &mut nodes_left).is_ok());
+        let mut nodes_left = 0;
+        assert!(matches!(
+            substitute_base_names(&annotation, &BTreeMap::new(), 0, &mut nodes_left),
+            Err(InheritancePreparationError::Diagnostic(s, "interface inheritance type size limit exceeded")) if s == span
+        ));
+    }
 }

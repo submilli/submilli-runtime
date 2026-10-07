@@ -557,7 +557,7 @@ fn build_help_lists_subcommands() {
         .expect("invoke submilli");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
-    for subcommand in ["init", "new", "check", "publish-local"] {
+    for subcommand in ["init", "new", "check", "publish-local", "authority-map"] {
         assert!(
             text.contains(subcommand),
             "help missing {subcommand}: {text}"
@@ -571,6 +571,87 @@ fn build_help_lists_subcommands() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(text.contains("--package"), "help missing --package: {text}");
+}
+
+#[test]
+fn authority_map_prints_deterministic_full_graph_json() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        r#"
+[[package]]
+name = "@acme/authority"
+version = "0.1.0"
+description = "Test package."
+path = "authority"
+
+[[package]]
+name = "@acme/other"
+version = "0.1.0"
+description = "Other package."
+path = "other"
+"#,
+    );
+    write_file(
+        &project.join("authority/src/lib.ts"),
+        r#"
+            import { get } from "submilli:http";
+            function helper(): void { get("https://example.com/data"); }
+            export function fetch(): void { helper(); }
+        "#,
+    );
+    write_file(
+        &project.join("other/src/lib.ts"),
+        "export function other(): void {}",
+    );
+
+    let first = build_subcommand("authority-map", &project, tmp.path(), &[]);
+    assert!(first.status.success(), "stderr: {}", stderr(&first));
+    let value: serde_json::Value = serde_json::from_slice(&first.stdout).expect("authority JSON");
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["packages"].as_array().map(Vec::len), Some(2));
+    assert_eq!(value["packages"][0]["name"], "@acme/authority");
+    assert!(
+        value["packages"][0]["callables"]
+            .as_array()
+            .is_some_and(|v| !v.is_empty())
+    );
+    assert!(
+        value["packages"][0]["edges"]
+            .as_array()
+            .is_some_and(|v| !v.is_empty())
+    );
+    let routes = value["packages"][0]["routes"].as_array().expect("routes");
+    assert!(routes.iter().any(|route| {
+        route["callable"]
+            .as_str()
+            .is_some_and(|id| id.ends_with("#fetch"))
+            && route["effects"].as_array().is_some_and(|effects| {
+                effects.iter().any(|effect| {
+                    effect["effect"]["capability"] == "http.get"
+                        && effect["witness"]
+                            .as_array()
+                            .is_some_and(|witness| witness.len() == 1)
+                })
+            })
+    }));
+
+    let second = build_subcommand("authority-map", &project, tmp.path(), &[]);
+    assert!(second.status.success(), "stderr: {}", stderr(&second));
+    assert_eq!(first.stdout, second.stdout);
+
+    let selected = build_subcommand(
+        "authority-map",
+        &project,
+        tmp.path(),
+        &["--package", "@acme/authority"],
+    );
+    assert!(selected.status.success(), "stderr: {}", stderr(&selected));
+    let selected: serde_json::Value =
+        serde_json::from_slice(&selected.stdout).expect("selected authority JSON");
+    assert_eq!(selected["packages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(selected["packages"][0]["name"], "@acme/authority");
 }
 
 #[test]
@@ -956,6 +1037,13 @@ fn build_commands_report_unresolved_http_hosts() {
             let out = build_subcommand(command, &project, tmp.path(), &[]);
             assert!(out.status.success(), "{command}: {}", stderr(&out));
             let diagnostics = stderr(&out);
+            let semantic_warning =
+                "public route `fetch` reaches `http.get` without a direct semantic `check()`";
+            assert_eq!(
+                diagnostics.matches(semantic_warning).count(),
+                1,
+                "{command} with {prefix}: {diagnostics}"
+            );
             let warning = "cannot statically resolve the host in the URL passed to `http.get`";
             assert_eq!(
                 diagnostics.matches(warning).count(),
@@ -1995,6 +2083,15 @@ export function op(customer: string): void {
  const approve = (): void => { check("acme.com/op", { customer }); };
  approve();
 }
+"#,
+        ),
+        (
+            "public route `op` reaches `http.get` without a direct semantic `check()`",
+            r#"import { get } from "submilli:http";
+/** Fetch data.
+ * @returns The response body.
+ */
+export function op(): string { return get("https://api.example.com/data").body; }
 "#,
         ),
         (

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "5ac75e0814de4bae8a50d4393324f7ad56c5c8f97277ef83e1c2ab30ee5b4dac"
+  contentHash: "5f9a811e5b23b4ed98d6f7dc628e6244fd9808c02132fb09a27f25add805e8a8"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -189,6 +189,7 @@ flag. [Session state](#session-state) below opens one by hand.
 :::
 
 ```sh
+mkdir -p workspace
 submilli run --blueprint blueprint.yaml --vfs ./workspace note.ts
 submilli run --blueprint blueprint.yaml --vfs ./workspace note.ts
 ```

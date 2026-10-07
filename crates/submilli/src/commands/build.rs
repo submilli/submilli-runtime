@@ -1,11 +1,12 @@
 //! `submilli build` — package-project tooling around `submilli.toml`:
 //! `init` / `new` scaffold the manifest and package folders, `check` compiles
-//! the packages in dependency order, and `publish-local` compiles and installs
-//! the artifacts into the local package store.
+//! the packages in dependency order, `authority-map` emits their authority
+//! graphs, and `publish-local` compiles and installs the artifacts into the
+//! local package store.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -41,6 +42,8 @@ enum BuildCmd {
     PublishLocal(CompileArgs),
     /// Compile and run the project's `tests/**/*.test.{ts,subm}` files.
     Test(TestArgs),
+    /// Compile packages and print their full authority call graph as JSON.
+    AuthorityMap(CompileArgs),
     /// Review package authorization with Codex, Claude Code, or Copilot CLI.
     SecurityReview(security_review::Args),
 }
@@ -107,13 +110,16 @@ impl Args {
             BuildCmd::Check(_) => "build.check",
             BuildCmd::PublishLocal(_) => "build.publish_local",
             BuildCmd::Test(_) => "build.test",
+            BuildCmd::AuthorityMap(_) => "build.authority_map",
             BuildCmd::SecurityReview(_) => "build.security_review",
         }
     }
 
     pub(crate) fn metric_flags(&self) -> Vec<(&'static str, bool)> {
         match &self.cmd {
-            BuildCmd::Check(compile) | BuildCmd::PublishLocal(compile) => {
+            BuildCmd::Check(compile)
+            | BuildCmd::PublishLocal(compile)
+            | BuildCmd::AuthorityMap(compile) => {
                 vec![("has_package", compile.package.is_some())]
             }
             BuildCmd::Test(test) => vec![("has_package", test.compile.package.is_some())],
@@ -130,8 +136,52 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         BuildCmd::Check(compile) => execute_check(compile),
         BuildCmd::PublishLocal(compile) => execute_publish_local(compile),
         BuildCmd::Test(compile) => test_runner::execute_test(compile),
+        BuildCmd::AuthorityMap(compile) => execute_authority_map(compile),
         BuildCmd::SecurityReview(review) => security_review::execute(review),
     }
+}
+
+#[derive(serde::Serialize)]
+struct AuthorityMapOutput<'a> {
+    schema_version: u32,
+    packages: Vec<AuthorityPackageOutput<'a>>,
+}
+
+#[derive(serde::Serialize)]
+struct AuthorityPackageOutput<'a> {
+    name: &'a str,
+    #[serde(flatten)]
+    map: &'a interpreter::AuthorityMap,
+}
+
+fn execute_authority_map(args: CompileArgs) -> anyhow::Result<ExitCode> {
+    let selected = args.package.clone();
+    let (_, built) = match compile_project(args)? {
+        Ok(compiled) => compiled,
+        Err(code) => return Ok(code),
+    };
+    report_package_warnings(&built);
+    let mut packages = built
+        .iter()
+        .filter(|package| {
+            selected
+                .as_deref()
+                .is_none_or(|name| package.name.as_str() == name)
+        })
+        .map(|package| AuthorityPackageOutput {
+            name: package.name.as_str(),
+            map: &package.authority_map,
+        })
+        .collect::<Vec<_>>();
+    packages.sort_by(|left, right| left.name.cmp(right.name));
+    let output = AuthorityMapOutput {
+        schema_version: 1,
+        packages,
+    };
+    let mut stdout = io::stdout().lock();
+    serde_json::to_writer_pretty(&mut stdout, &output).context("serializing authority map")?;
+    writeln!(stdout).context("writing authority map")?;
+    Ok(ExitCode::SUCCESS)
 }
 
 fn execute_init(args: InitArgs) -> anyhow::Result<ExitCode> {
@@ -1028,7 +1078,7 @@ mod test_runner {
             let mut linker = Linker::<StoreData>::new(engine);
             install_runtime_async(&mut linker, &mut store).await?;
             interpreter::stdlib::test::install(&mut linker)?;
-            let _watchdog = cfg.arm_timeout(engine);
+            let _watchdog = cfg.arm_timeout(engine)?;
             // The packages' top-level statements, then the file's, run here; their
             // failure is the file's first segment failing, as one in `main` would be.
             let result = async {

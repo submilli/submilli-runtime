@@ -416,6 +416,9 @@ impl Tree for SyntaxTree<'_> {
                 stmt.span
             }
         };
+        if let Some(failure) = children.failure {
+            return Err(failure.with_span(span));
+        }
         Ok(NodeInfo {
             span,
             children: children
@@ -431,6 +434,7 @@ impl Tree for SyntaxTree<'_> {
 
 #[derive(Default)]
 struct SyntaxChildren {
+    failure: Option<CompilerFailure>,
     nodes: Vec<Node>,
     /// Children reached through owned levels, measured with that offset.
     behind_owned: Vec<Child>,
@@ -451,7 +455,17 @@ impl SyntaxChildren {
     }
 
     fn annotation(&mut self, ty: &TypeAnnotation) {
-        self.owned_height = self.owned_height.max(annotation_height(ty));
+        self.annotation_at(ty, 0);
+    }
+
+    fn annotation_at(&mut self, ty: &TypeAnnotation, offset: u32) {
+        if self.failure.is_some() {
+            return;
+        }
+        match annotation_height(ty) {
+            Ok(height) => self.owned_height = self.owned_height.max(height.saturating_add(offset)),
+            Err(failure) => self.failure = Some(failure),
+        }
     }
 
     fn annotations<'a>(&mut self, types: impl IntoIterator<Item = &'a TypeAnnotation>) {
@@ -484,9 +498,7 @@ impl SyntaxChildren {
                         self.expr_at(*arg, depth);
                     }
                     for ty in type_args.iter().flatten() {
-                        self.owned_height = self
-                            .owned_height
-                            .max(annotation_height(ty).saturating_add(depth));
+                        self.annotation_at(ty, depth);
                     }
                 }
             }
@@ -765,63 +777,83 @@ impl SyntaxChildren {
 
 /// Annotations are boxed values, measured with an explicit stack for the same
 /// reason as arena nodes.
-fn annotation_height(root: &TypeAnnotation) -> u32 {
-    let mut max_height = 0;
-    let mut pending = vec![(root, 1u32)];
-    while let Some((ty, height)) = pending.pop() {
-        max_height = max_height.max(height);
-        let child_height = height.saturating_add(1);
-        for_each_annotation_child(ty, |child| pending.push((child, child_height)));
-    }
-    max_height
+fn annotation_height(root: &TypeAnnotation) -> Result<u32, CompilerFailure> {
+    measure_annotation(root, u64::MAX, u32::MAX).map(|extent| extent.depth)
 }
 
 /// Nodes in `root`, counted without recursion; stops once past `max_nodes`.
-pub(crate) fn annotation_nodes(root: &TypeAnnotation, max_nodes: u64) -> u64 {
-    let mut nodes = 0u64;
-    let mut pending = vec![root];
-    while let Some(ty) = pending.pop() {
-        nodes = nodes.saturating_add(1);
-        if nodes > max_nodes {
-            break;
-        }
-        for_each_annotation_child(ty, |child| pending.push(child));
-    }
-    nodes
+pub(crate) fn annotation_nodes(
+    root: &TypeAnnotation,
+    max_nodes: u64,
+) -> Result<u64, CompilerFailure> {
+    measure_annotation(root, max_nodes, u32::MAX).map(|extent| extent.nodes)
 }
 
-/// Calls `visit` on each annotation directly inside `ty`.
-fn for_each_annotation_child<'a>(
-    ty: &'a TypeAnnotation,
-    mut visit: impl FnMut(&'a TypeAnnotation),
-) {
-    match &ty.kind {
-        TypeAnnotationKind::Name { args, .. } | TypeAnnotationKind::Qualified { args, .. } => {
-            args.iter().for_each(visit);
+fn measure_annotation(
+    root: &TypeAnnotation,
+    max_nodes: u64,
+    max_depth: u32,
+) -> Result<crate::type_size::TypeExtent, CompilerFailure> {
+    crate::type_walk::measure(root, max_nodes, max_depth, AnnotationChildren::new).map_err(|_| {
+        CompilerFailure::Internal {
+            stage: CompilerStage::Parse,
+            span: Some(root.span),
+            message: "could not allocate annotation traversal frames".into(),
         }
-        TypeAnnotationKind::StringLiteral(_)
-        | TypeAnnotationKind::NumberLiteral(_)
-        | TypeAnnotationKind::BooleanLiteral(_)
-        | TypeAnnotationKind::TypeOf { .. } => {}
-        TypeAnnotationKind::Array(inner)
-        | TypeAnnotationKind::Readonly(inner)
-        | TypeAnnotationKind::KeyOf(inner) => visit(inner),
-        TypeAnnotationKind::Tuple(members) | TypeAnnotationKind::Union(members) => {
-            members.iter().for_each(visit);
-        }
-        TypeAnnotationKind::Object { fields, index } => {
-            fields.iter().for_each(|field| visit(&field.ty));
-            if let Some(index) = index {
-                visit(&index.value);
+    })
+}
+
+struct AnnotationChildren<'a> {
+    members: std::slice::Iter<'a, TypeAnnotation>,
+    fields: std::slice::Iter<'a, crate::ast::TypeAnnotationField>,
+    trailing: Option<&'a TypeAnnotation>,
+}
+
+impl<'a> AnnotationChildren<'a> {
+    fn new(ty: &'a TypeAnnotation) -> Self {
+        let mut children = Self {
+            members: [].iter(),
+            fields: [].iter(),
+            trailing: None,
+        };
+        match &ty.kind {
+            TypeAnnotationKind::Name { args, .. }
+            | TypeAnnotationKind::Qualified { args, .. }
+            | TypeAnnotationKind::Tuple(args)
+            | TypeAnnotationKind::Union(args) => {
+                children.members = args.iter();
+            }
+            TypeAnnotationKind::StringLiteral(_)
+            | TypeAnnotationKind::NumberLiteral(_)
+            | TypeAnnotationKind::BooleanLiteral(_)
+            | TypeAnnotationKind::TypeOf { .. } => {}
+            TypeAnnotationKind::Array(inner)
+            | TypeAnnotationKind::Readonly(inner)
+            | TypeAnnotationKind::KeyOf(inner) => children.trailing = Some(inner),
+            TypeAnnotationKind::Object { fields, index } => {
+                children.fields = fields.iter();
+                children.trailing = index.as_ref().map(|index| &index.value);
+            }
+            TypeAnnotationKind::Function {
+                params,
+                return_type,
+            } => {
+                children.fields = params.iter();
+                children.trailing = Some(return_type);
             }
         }
-        TypeAnnotationKind::Function {
-            params,
-            return_type,
-        } => {
-            params.iter().for_each(|param| visit(&param.ty));
-            visit(return_type);
-        }
+        children
+    }
+}
+
+impl<'a> Iterator for AnnotationChildren<'a> {
+    type Item = &'a TypeAnnotation;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.trailing
+            .take()
+            .or_else(|| self.fields.next_back().map(|field| &field.ty))
+            .or_else(|| self.members.next_back())
     }
 }
 
@@ -1100,6 +1132,189 @@ mod tests {
     use super::*;
     use crate::compile::parse_script;
     use crate::{Expr, FileId, Type, TypedExpr};
+
+    fn annotation(kind: TypeAnnotationKind) -> TypeAnnotation {
+        TypeAnnotation {
+            kind,
+            span: Span::at(FileId(3)),
+        }
+    }
+
+    fn annotation_field(ty: TypeAnnotation) -> crate::ast::TypeAnnotationField {
+        crate::ast::TypeAnnotationField {
+            name: crate::Ident {
+                name: "field".into(),
+                span: ty.span,
+            },
+            ty,
+            optional: false,
+            readonly: false,
+            rest: false,
+        }
+    }
+
+    #[test]
+    fn wide_annotations_use_only_ancestor_frames() {
+        let root = annotation(TypeAnnotationKind::Tuple(vec![
+            annotation(
+                TypeAnnotationKind::BooleanLiteral(true)
+            );
+            100_000
+        ]));
+        for budget in [0, 1, 7, 100_001] {
+            let (nodes, observed) =
+                crate::type_walk::tests::observe(None, || annotation_nodes(&root, budget).unwrap());
+            assert_eq!(nodes, 100_001.min(budget + 1));
+            assert!(observed.peak_frames <= 1);
+            assert!(observed.reservations <= 1);
+        }
+        let (height, observed) =
+            crate::type_walk::tests::observe(None, || annotation_height(&root).unwrap());
+        assert_eq!(height, 2);
+        assert_eq!(observed.peak_frames, 1);
+    }
+
+    #[test]
+    fn mixed_annotations_keep_depth_counts_and_lifo_order() {
+        let leaf = annotation(TypeAnnotationKind::BooleanLiteral(true));
+        let deep = (1..20).fold(leaf.clone(), |inner, _| {
+            annotation(TypeAnnotationKind::Array(Box::new(inner)))
+        });
+        let root = annotation(TypeAnnotationKind::Tuple(vec![
+            annotation(TypeAnnotationKind::Tuple(vec![leaf; 100_000])),
+            deep,
+        ]));
+        let (extent, observed) = crate::type_walk::tests::observe(None, || {
+            measure_annotation(&root, u64::MAX, u32::MAX).unwrap()
+        });
+        assert_eq!(
+            extent,
+            crate::type_size::TypeExtent {
+                nodes: 100_022,
+                depth: 21
+            }
+        );
+        assert_eq!(observed.peak_frames, 20);
+        assert_eq!(
+            measure_annotation(&root, 3, u32::MAX).unwrap(),
+            crate::type_size::TypeExtent { nodes: 4, depth: 4 }
+        );
+        let (failure, _) = crate::type_walk::tests::observe(Some(1), || annotation_height(&root));
+        assert!(matches!(failure, Err(CompilerFailure::Internal { .. })));
+    }
+
+    #[test]
+    fn annotation_variants_preserve_children_and_measurement() {
+        let first = annotation(TypeAnnotationKind::StringLiteral("first".into()));
+        let second = annotation(TypeAnnotationKind::BooleanLiteral(false));
+        let pair = vec![first.clone(), second.clone()];
+        let name = crate::Ident {
+            name: "T".into(),
+            span: first.span,
+        };
+        let cases = vec![
+            (
+                TypeAnnotationKind::Name {
+                    name: name.clone(),
+                    args: pair.clone(),
+                },
+                pair.clone(),
+            ),
+            (
+                TypeAnnotationKind::Qualified {
+                    path: vec![name.clone(), name],
+                    args: pair.clone(),
+                },
+                pair.clone(),
+            ),
+            (TypeAnnotationKind::Tuple(pair.clone()), pair.clone()),
+            (TypeAnnotationKind::Union(pair.clone()), pair.clone()),
+            (
+                TypeAnnotationKind::Array(Box::new(first.clone())),
+                vec![first.clone()],
+            ),
+            (
+                TypeAnnotationKind::Readonly(Box::new(first.clone())),
+                vec![first.clone()],
+            ),
+            (
+                TypeAnnotationKind::KeyOf(Box::new(first.clone())),
+                vec![first.clone()],
+            ),
+            (
+                TypeAnnotationKind::Object {
+                    fields: vec![annotation_field(first.clone())],
+                    index: Some(Box::new(crate::IndexSignatureAnnotation {
+                        value: second.clone(),
+                        readonly: false,
+                        span: second.span,
+                    })),
+                },
+                pair.clone(),
+            ),
+            (
+                TypeAnnotationKind::Function {
+                    params: vec![annotation_field(first.clone())],
+                    return_type: Box::new(second.clone()),
+                },
+                pair,
+            ),
+            (TypeAnnotationKind::TypeOf { path: Vec::new() }, Vec::new()),
+            (TypeAnnotationKind::StringLiteral("leaf".into()), Vec::new()),
+            (
+                TypeAnnotationKind::NumberLiteral(crate::types::LiteralF64(1.0)),
+                Vec::new(),
+            ),
+            (TypeAnnotationKind::BooleanLiteral(true), Vec::new()),
+        ];
+        for (kind, mut expected) in cases {
+            let root = annotation(kind);
+            let nodes = expected.len() as u64 + 1;
+            let height = if expected.is_empty() { 1 } else { 2 };
+            expected.reverse();
+            assert_eq!(
+                AnnotationChildren::new(&root).cloned().collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(annotation_nodes(&root, u64::MAX).unwrap(), nodes);
+            assert_eq!(annotation_height(&root).unwrap(), height);
+        }
+    }
+
+    #[test]
+    fn annotation_failure_terminates_syntax_validation() {
+        let root = annotation(TypeAnnotationKind::Array(Box::new(annotation(
+            TypeAnnotationKind::BooleanLiteral(true),
+        ))));
+        let (count, _) = crate::type_walk::tests::observe(Some(0), || annotation_nodes(&root, 10));
+        assert!(
+            matches!(count, Err(CompilerFailure::Internal { span: Some(s), .. }) if s == root.span)
+        );
+        // Parse before injection, so the assertion targets the public syntax check.
+        let source = "type T = [number, string];";
+        let mut lexer = crate::asi::Asi::new(source, FileId(3));
+        let mut tokens = Vec::new();
+        loop {
+            let token = lexer.next_token();
+            let eof = matches!(token.kind, crate::TokenKind::Eof);
+            tokens.push(token);
+            if eof {
+                break;
+            }
+        }
+        let (ast, diagnostics) = crate::parser::parse_checked(source, tokens, FileId(3)).unwrap();
+        assert!(diagnostics.is_empty());
+        let (result, _) = crate::type_walk::tests::observe(Some(0), || check_syntax(&ast));
+        assert!(matches!(
+            result,
+            Err(CompilerFailure::Internal {
+                stage: CompilerStage::Parse,
+                span: Some(_),
+                ..
+            })
+        ));
+        assert_eq!(check_syntax(&ast), Ok(()));
+    }
 
     /// The syntax-height diagnostic `parse_script` reports for `source`, if any.
     fn syntax_limit(source: &str) -> Option<crate::Diagnostic> {

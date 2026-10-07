@@ -57,6 +57,10 @@ Submilli keeps its typefaces, blue accent, theme preference, content, and routes
   Copy is a small icon beside the authorship icon, revealed by title hover or
   keyboard focus and always visible on touch screens. View Markdown is a footer
   link after chapter navigation and remains usable without JavaScript.
+- Section headings expose a small link-copy icon on hover or keyboard focus;
+  touch screens keep it visible. Copy the current page URL with the heading's
+  fragment, preserving preview links. Keep ordinary permalinks without JavaScript
+  and offer a selectable link if clipboard access fails.
 - Keep authorship tooltips and page-action labels out of the search index. They
   remain accessible on the page without replacing useful article excerpts.
 - Controls hidden at rest must remain discoverable through keyboard focus, with

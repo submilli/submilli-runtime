@@ -7,13 +7,13 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "41710c4637bfbe79411c5b0cf6ad03dc0937da72341c20f0fc409c75baa7f904"
+  contentHash: "fb4166e58d31788571a955d63c16168815c1e076eae4e183c1f924e2ba08939f"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
 The agent needs to reach a system of yours, such as a billing API, a CRM,
 or an internal tool. There are two ways in without writing a Package, and
-neither gives you semantic security:
+neither gives you [semantic permissions](/docs/blueprints/#semantic-permission-model):
 
 - The program calls the system's HTTP API itself, with the credential
   added by the

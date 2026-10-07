@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use crate::stdlib::capabilities::{self, FieldNormalization};
 use crate::{
     BinOp, Diagnostic, DocCapability, DocCapabilityBindingKind, DocCapabilityLiteral, ExprId,
@@ -8,6 +10,8 @@ use crate::{
 pub struct DerivedCapability {
     pub capability: String,
     pub filter: Option<String>,
+    /// Statically known filter operands, keyed by capability field.
+    pub known_bindings: BTreeMap<String, String>,
     pub warnings: Vec<Diagnostic>,
 }
 
@@ -33,9 +37,17 @@ pub fn derive_call_site_capability(
     let filters = filters.map_err(|fatal| {
         crate::compiler_error::CompileError::from(fatal).with_prior_diagnostics(&warnings)
     })?;
+    let known_bindings = filters.iter().cloned().collect();
     Ok(DerivedCapability {
         capability: tag.capability.clone(),
-        filter: (!filters.is_empty()).then(|| filters.join(" and ")),
+        filter: (!filters.is_empty()).then(|| {
+            filters
+                .iter()
+                .map(|(field, operand)| format!("{field} == {operand}"))
+                .collect::<Vec<_>>()
+                .join(" and ")
+        }),
+        known_bindings,
         warnings,
     })
 }
@@ -47,7 +59,7 @@ fn derive_filters(
     actual_args: &[ExprId],
     warnings: &mut Vec<Diagnostic>,
     unresolved_http_host_span: &mut Option<Span>,
-) -> Result<Vec<String>, crate::compiler_error::CompilerFailure> {
+) -> Result<Vec<(String, String)>, crate::compiler_error::CompilerFailure> {
     let mut filters = Vec::new();
     for binding in &tag.bindings {
         match &binding.kind {
@@ -136,7 +148,7 @@ fn binding_filter(
     value: StaticValue,
     warn_at: Option<Span>,
     warnings: &mut Vec<Diagnostic>,
-) -> Option<String> {
+) -> Option<(String, String)> {
     let operand = match value {
         StaticValue::String(value) => {
             if field_normalization(&tag.capability, field) == FieldNormalization::VfsPath
@@ -154,7 +166,7 @@ fn binding_filter(
         StaticValue::Boolean(value) => value.to_string(),
         StaticValue::Null => "null".to_string(),
     };
-    Some(format!("{field} == {operand}"))
+    Some((field.to_string(), operand))
 }
 
 /// The string the runtime checks for `value`. A value the runtime refuses keeps

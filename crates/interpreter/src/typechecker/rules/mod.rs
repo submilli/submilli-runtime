@@ -2,7 +2,7 @@
 //!
 //! Read-only: produces additional diagnostics, never modifies the tree.
 
-mod body_walk;
+pub(crate) mod body_walk;
 mod capability_consistency;
 mod check_calls;
 mod check_discipline;

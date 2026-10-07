@@ -2,9 +2,10 @@
 
 # Submilli
 
-A code-execution runtime with semantic security, for business agents that
-generate code. "Allow a refund up to $500", not as a safeguard in the prompt,
-but as a check outside the model's control.
+A code-execution runtime with a [semantic permission model](https://submilli.ai/docs/blueprints/#semantic-permission-model), for business agents that
+generate code. Think about someone who wants to allow their customer support agent to issue a refund of up to $500 for platinum clients, and up to $100 for all other customer tiers. Currently, there's no elegant way to do this, (that we know of, at least). 
+
+They could try to add it as a safeguard to the prompt, but due to the nature of models, it will likely only work *some* of the time. By using the Submilli Runtime to execute the agent generated code, the owner of that agentic workflow can define these guardrails in advance, and they will be enforced by the runtime, outside the model's control.
 
 [Docs](https://submilli.ai/docs/) ·
 [Set up with your agent](https://submilli.ai/docs/quickstart/#agent-setup) ·
@@ -23,24 +24,23 @@ but as a check outside the model's control.
 
 ---
 
-Code mode and programmatic tool calling started the movement toward agents
-that write code, instead of calling tools one by one.
+Code mode and programmatic tool calling started a movement toward agents
+that write code, instead of calling tools one by one. There are many reasons for that movement and its growinf popularity - you can read more about it [here](https://submilli.ai/docs/why/#video-code-execution-introduction).
 
-Submilli is the runtime for those agents. The agent submits TypeScript code,
+We built Submilli to be the runtime for those agents. The agent submits TypeScript code,
 and the Submilli runtime executes it in WebAssembly for isolation. We rebuilt
 the runtime completely, so there is no `node:http` or `node:fs`. It is a new
 runtime, built purposely for agents.
 
 Submilli comes with governance, but from the inside out. Before any call to
-the outside world, we first check the environment's permissions (the
-Blueprint) to see if the call is allowed. And we don't just check the IP,
+the outside world, the Submilli runtime first checks the environment's permissions (the
+Blueprint) to see if the call is allowed. It doesn't just check the IP,
 domain, or port. The Package author defines a semantic language for each
-operation, and you filter what your agent can do in those terms: "Allow a
-refund up to $500, only for customer 123". These rules are outside the
-model's control. They are not a prompt.
+operation, and that language allows you to control what your agent can do in those terms: "Allow a
+refund up to $500, only for customer 123".
 
 We also gave the ecosystem a reset. All the Packages for Submilli are written
-from scratch, purposely for agents, with semantic security. We don't use npm
+from scratch, purposely for agents, with [semantic permissions](https://submilli.ai/docs/blueprints/#semantic-permission-model). We don't use npm
 Packages, and while we do support MCP servers, Packages are the native way to
 work with Submilli.
 
@@ -51,13 +51,12 @@ Packages. A Blueprint defines the environment the agent's code runs in. You
 write it in YAML.
 
 The permissions block in a Blueprint defines what the code can do, and you
-fill it by adding capabilities. Package authors publish capabilities, and you
-grant them to the agent in the Blueprint. You can also define variables for a
-Blueprint, which is a very strong concept. Now you control not only the
+fill it by adding capabilities. Package authors publish the capabilities the package supports, and you
+grant them (or some of them) to the agent by declaring them in the Blueprint. 
+
+You may also define variables for a Blueprint, which is a very powerful concept. Now you control not only the
 agent's capabilities, but also the context it can use them in. In the example
-below, we allow billing operations only for a specific customer, and credits
-only up to $500. If the agent tries a different customer, the operation
-fails.
+below, we allow the code to access billing operations, bot only for a specific customer (that is bound to the runtime by the host application), and to issue credits of up to $500. If the agent tries a different customer, or a higher amount, the operation fails.
 
 ```yaml
 variables:
@@ -111,8 +110,8 @@ and [plain HTTP](https://submilli.ai/docs/tutorials/use-the-http-api).
   credentials, so generated code never sees a secret. Curated Packages for
   GitHub, Slack, Gmail, Google Drive and Calendar, Linear, Notion, Sentry, and
   web search are [included](packages/README.md).
-- [Limits](https://submilli.ai/docs/server/set-limits) on fuel, memory, time,
-  stack, and model tokens. A failing run ends alone, and the rest of the
+- [Limits](https://submilli.ai/docs/server/set-limits) on memory, time,
+  stack depth, model tokens and more. A failing run ends alone, and the rest of the
   server keeps serving.
 - An [audit trail](https://submilli.ai/docs/reference/audit-trail) of every
   refusal, run, session, and admin change.
@@ -131,7 +130,9 @@ Breaking changes are called out in the release notes, and a Blueprint that
 uses a removed feature fails to load with a message that says what to write
 instead.
 
-Submilli is open source, of course. If you’re thinking of using it, we’d love to talk to you! Contact us at [hello@submilli.ai](mailto:hello@submilli.ai).
+Our short term roadmap is published [here](https://github.com/submilli/submilli-runtime/blob/main/ROADMAP.md). If you have ideas, suggestions, requests or questions, we'd love to chat.
+
+Submilli is open source. If you’re thinking of using it, we’d love to talk to you! Contact us at [hello@submilli.ai](mailto:hello@submilli.ai).
 
 ## Repository
 

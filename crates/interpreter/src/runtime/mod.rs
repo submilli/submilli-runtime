@@ -502,8 +502,15 @@ impl RuntimeConfig {
         Ok(store)
     }
 
-    pub fn arm_timeout(&self, engine: &Engine) -> Option<Watchdog> {
-        self.timeout.map(|d| watchdog::arm(engine, d))
+    /// Arm the configured timeout, failing setup if its thread cannot be created.
+    /// Keep the returned guard alive until guest execution finishes.
+    pub fn arm_timeout(&self, engine: &Engine) -> wasmtime::Result<Option<Watchdog>> {
+        self.timeout
+            .map(|duration| watchdog::arm(engine, duration))
+            .transpose()
+            .map_err(|error| {
+                wasmtime::Error::from(error).context("starting execution timeout watchdog")
+            })
     }
 
     /// One-shot runner: compile, instantiate, call `main`, return typed result
@@ -541,7 +548,7 @@ impl RuntimeConfig {
         let module = Module::new(&engine, wasm_bytes)?;
         let mut linker = Linker::<StoreData>::new(&engine);
         install_runtime_async(&mut linker, &mut store).await?;
-        let _watchdog = self.arm_timeout(&engine);
+        let _watchdog = self.arm_timeout(&engine)?;
         let inst = instantiate_program_async(&linker, &mut store, &module).await?;
         let value = dispatch_main_async(&mut store, &inst).await?;
         // A poisoned ConsoleSink may contain output from an interrupted write.

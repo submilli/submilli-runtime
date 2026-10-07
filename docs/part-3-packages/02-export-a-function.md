@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f6b915dfa61861dfab47e48f6d16d9f33aa7c54c004af48ac608dee86b858b1d"
+  contentHash: "6492b508ce3ee84bd668345a028dd24056f1fbda3e124e84db7b49c1b770b941"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -118,9 +118,11 @@ in the tag is written one of four ways:
 | `kind: "order"` | A fixed value |
 
 Call `check` directly in the body of the exported function. The compiler
-warns about a `check` anywhere else. A function the Package doesn't
-export runs only if some exported function happens to call it, and a
-nested function may run later, more than once, or never:
+warns when an exported function reaches a privileged operation without
+one, including through helper functions or a Package dependency. It also
+warns about a `check` anywhere else. A function the Package doesn't export
+runs only if some exported function happens to call it, and a nested
+function may run later, more than once, or never:
 
 ```text
 warning: `check()` is called inside a nested function in `applyCredit`

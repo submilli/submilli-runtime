@@ -284,7 +284,11 @@ pub fn declare(defs: &mut PackageDeclaration) {
         ctor_key("new"),
         vec![
             Param::new("source", Type::String),
-            Param::new("flags", Type::String),
+            Param::with_default(
+                "flags",
+                Type::String,
+                crate::DefaultValue::String(String::new()),
+            ),
         ],
         regexp(),
     );
@@ -611,12 +615,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         generics: Vec::new(),
                         params: vec![
                             Param::new("source", Type::String),
-                            Param::new("flags", Type::String),
+                            Param::with_default("flags", Type::String, crate::DefaultValue::String(String::new())),
                         ],
                         ret: Type::prelude_interface("RegExp".to_string(), Vec::new()),
                         predicate: None,
                         doc: doc(
-                            "/**\n * Construct a new `RegExp` from `source` and `flags`. Throws on invalid pattern or unsupported feature (lookaround / backreference).\n * @param source The JS regex pattern (without delimiters).\n * @param flags Any subset of `gimsuy`.\n */",
+                            "/**\n * Construct a new `RegExp` from `source` and `flags`. Throws on invalid pattern or unsupported feature (lookaround / backreference).\n * @param source The JS regex pattern (without delimiters).\n * @param flags Any subset of `gimsuy`; defaults to an empty string when omitted.\n */",
                         ),
                     },
                 )]),

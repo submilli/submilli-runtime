@@ -1,5 +1,6 @@
 ---
 import { markdownPath } from '../lib/agent-docs';
+import { Icon } from '@astrojs/starlight/components';
 
 interface Props {
 	slug: string;
@@ -16,6 +17,7 @@ const markdownUrl = markdownPath(slug);
 			<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
 		</svg>
 	</button>
+	<a class="sl-anchor-link section-link-native" href="#_top" aria-label="Link to page heading" title="Link to page heading"><Icon name="link" size="16" /></a>
 	<button type="button" class="page-actions__retry" data-retry hidden>Retry</button>
 	<span class="page-actions__status" data-status role="status" aria-live="polite"></span>
 	<textarea class="page-actions__manual" data-manual readonly hidden aria-label="Page Markdown to copy manually"></textarea>
