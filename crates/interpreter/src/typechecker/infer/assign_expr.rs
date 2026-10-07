@@ -375,7 +375,9 @@ impl Inferer<'_> {
     /// value read at `read`; a write evaluated after it in the same condition
     /// (`x !== null && f(x = null)`) replaces that value before the branch runs.
     /// Expressions are allocated after their operands, so the ids in
-    /// `read + 1 ..= end` are the ones inferred after `read` finished.
+    /// `read + 1 ..= end` are the ones inferred after `read` finished. A call
+    /// among them that may run program code counts as a write of every module
+    /// variable some function assigns.
     pub(super) fn forget_later_writes(
         &self,
         env: &mut narrowing::NarrowEnv,
@@ -386,12 +388,19 @@ impl Inferer<'_> {
             return Ok(());
         }
         for id in read.0 + 1..=end.0 {
-            let TypedExprKind::Sequence { stmts, .. } = &self
+            let kind = &self
                 .typed_ast
                 .try_expr(ExprId(id))
                 .map_err(crate::typechecker::arena_failure)?
-                .kind
-            else {
+                .kind;
+            if self.call_assigns_written_globals(kind)? {
+                let written = self.function_written_global_names();
+                env.retain(|path, _| {
+                    !matches!(&path.root, narrowing::BindingId::Global(mangled) if written.contains(mangled))
+                });
+                continue;
+            }
+            let TypedExprKind::Sequence { stmts, .. } = kind else {
                 continue;
             };
             let Some(written) = self.sequence_written_path(stmts)? else {

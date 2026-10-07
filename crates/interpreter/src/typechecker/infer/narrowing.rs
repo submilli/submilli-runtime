@@ -307,6 +307,9 @@ pub enum InvalidationReason {
     /// Path root is in captured_mutators; the engine refused to install a NarrowedView.
     /// closure_span: one offending closure declaration.
     CapturedMutator { closure_span: Option<crate::Span> },
+    /// A call that may run program code ended the narrowing on a module
+    /// variable some function assigns.
+    Call { span: crate::Span },
 }
 
 impl InvalidationReason {
@@ -318,7 +321,7 @@ impl InvalidationReason {
         match self {
             Self::ShapeUnrebuildable { .. } => None,
             Self::Write { span } => Some(*span),
-            Self::Reassignment { span } => Some(*span),
+            Self::Reassignment { span } | Self::Call { span } => Some(*span),
             Self::CapturedMutator { closure_span } => *closure_span,
         }
     }
