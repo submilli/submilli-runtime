@@ -600,7 +600,7 @@ fn compile_package_sources(
         .map_err(|error| error.with_prior_diagnostics(&diagnostics))?;
     diagnostics.extend(capability_warnings);
     let (prelude_defs, host_defs, internal_defs) = prelude::cached_runtime_package_declarations();
-    let (authority_map, authority_warnings) = crate::authority::analyse(
+    let authority_map = crate::authority::analyse(
         &declaration,
         &ta,
         sources,
@@ -615,7 +615,6 @@ fn compile_package_sources(
         diagnostics: diagnostics.clone(),
         fatal: Some(fatal),
     })?;
-    diagnostics.extend(authority_warnings);
     ta = capture(ta).map_err(|fatal| CompileError {
         diagnostics: diagnostics.clone(),
         fatal: Some(fatal),
