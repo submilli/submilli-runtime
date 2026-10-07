@@ -2553,11 +2553,6 @@ impl Inferer<'_> {
         };
         let shape = self.reduce_interfaces_to_shapes(&target_ty);
         let fits = assignable(&ty, &shape, self.resolver());
-        if !fits
-            && unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new()).is_some()
-        {
-            return Ok((kind, ty));
-        }
         let check = (!fits).then(|| Box::new(shape));
         let value = self
             .typed_ast
