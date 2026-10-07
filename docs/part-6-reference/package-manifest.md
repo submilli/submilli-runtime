@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c79ae1075feef5fdf61d7bd8eff0301abd89f4b9f3b52a3df12f06a073bfa862"
+  contentHash: "83063a3d8b79c3dc5ad3a9855606de06bc24b786c6d3fefaa56b5fdffe785d36"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -347,13 +347,11 @@ joined with `and`:
 | `$url.path` on an `http.*` function | The URL is built only from string literals and top-level string constants joined with `+` |
 | A computed value (`host: string`) | Never |
 
-A field the build can't derive is left out of the filter, with a warning:
+A dynamic field the build can't derive is left out of the filter without a
+warning. The capability remains in `requires`; if no fields can be derived,
+the requirement has no filter. Runtime capability checks still apply.
 
-```text
-warning: non-literal argument for `path`; no static capability filter for `path`
-```
-
-For an HTTP host the warning is ``cannot statically resolve the host in the
+An unresolved HTTP host still produces the warning ``cannot statically resolve the host in the
 URL passed to `http.get`; no host capability filter was derived``. A
 relative path given to a filesystem function gets no path filter, since it
 depends on the session's working directory. A Package that calls

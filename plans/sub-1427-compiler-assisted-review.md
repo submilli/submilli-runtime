@@ -47,6 +47,11 @@ remediations need separate package PRs. Batch reshaping solely to satisfy the
 abandoned analysis is unnecessary. Runtime gates, capability requirements and
 pre-existing declaration/check-discipline diagnostics remain unchanged.
 
+Remove the generic non-literal-argument warning: dynamic paths and lengths are
+valid inputs, and missing static values do not prove a defect. Preserve the
+capability requirement and any known filter fields; runtime checks still enforce
+the actual arguments. The separate unresolved-HTTP-host diagnostic is unchanged.
+
 ## Review evidence contract
 
 `build authority-map` schema version 2 removes `guard` proof statuses and adds

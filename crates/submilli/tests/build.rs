@@ -2087,15 +2087,6 @@ export function op(customer: string): void {
 "#,
         ),
         (
-            "non-literal argument",
-            r#"import { readText } from "submilli:fs";
-/** Read a file.
- * @param path File path.
- */
-export function op(path: string): string | null { return readText(path); }
-"#,
-        ),
-        (
             "cannot statically resolve the host",
             r#"import { get } from "submilli:http";
 /** Fetch a URL.
@@ -2139,6 +2130,35 @@ export function op(path: string): string { return get("https://api.example.com" 
             );
             assert!(stderr(&permissive).contains(warning));
         }
+    }
+}
+
+#[test]
+fn deny_warnings_accepts_dynamic_filesystem_arguments() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    write_file(
+        &project.join("submilli.toml"),
+        "[[package]]\nname = \"@acme/dynamic\"\nversion = \"0.1.0\"\ndescription = \"Dynamic fixture.\"\n",
+    );
+    write_file(
+        &project.join("src/lib.ts"),
+        r#"import { readBytes } from "submilli:fs";
+/** Read part of a file.
+ * @param path File path.
+ * @param length Maximum bytes.
+ * @returns The bytes read.
+ */
+export function readPart(path: string, length: number): Uint8Array {
+    return readBytes(path, 0, length);
+}
+"#,
+    );
+    for command in ["check", "test", "publish-local"] {
+        let home = tmp.path().join(command);
+        let out = build_subcommand(command, &project, &home, &["--deny-warnings"]);
+        assert!(out.status.success(), "{command}: {}", stderr(&out));
+        assert!(!stderr(&out).contains("warning:"), "{}", stderr(&out));
     }
 }
 
