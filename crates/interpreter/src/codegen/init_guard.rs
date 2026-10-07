@@ -93,6 +93,9 @@ fn is_inert(
         | TypedExprKind::Null
         | TypedExprKind::FunctionRef { .. } => true,
         TypedExprKind::Unary { operand, .. } => is_primitive_literal(ta, *operand)?,
+        TypedExprKind::Binary { lhs, rhs, .. } => {
+            is_primitive_literal(ta, *lhs)? && is_primitive_literal(ta, *rhs)?
+        }
         TypedExprKind::TupleLiteral { elements, .. } => all_inert(ta, elements.iter().copied())?,
         TypedExprKind::ArrayLiteral { elements, .. } => {
             let mut values = Vec::with_capacity(elements.len());
@@ -115,7 +118,10 @@ fn is_primitive_literal(
     let expr = ta.try_expr(expr).map_err(crate::codegen::arena_failure)?;
     Ok(matches!(
         expr.kind,
-        TypedExprKind::Number(_) | TypedExprKind::BigInt(_) | TypedExprKind::Boolean(_)
+        TypedExprKind::Number(_)
+            | TypedExprKind::BigInt(_)
+            | TypedExprKind::String(_)
+            | TypedExprKind::Boolean(_)
     ))
 }
 
