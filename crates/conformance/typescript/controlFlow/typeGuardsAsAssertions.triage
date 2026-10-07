@@ -1,7 +1,5 @@
-line 114, 116, 118 extra: bug SUB-1196 (member read on `never`) a member read on `never` is rejected
 line 13 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
 line 38 type: artifact the only node at `x.slice` is from an abandoned first loop pass, the retained call types correctly
 line 50 type: artifact the only node at `x.slice` is from an abandoned first loop pass, the retained call types correctly
 line 83 type: bug SUB-1196 (literals from constant expressions) `!` on an operand of known truthiness isn't a literal type
-line 114, 116, 118 type: bug SUB-1196 (member read on `never`) a member read on `never` is rejected (`x!` after `x = null`, which tsc types by the declared type)
 line 27, 28 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it (the loop head joins `None` and `Some<r>`, which tsc prints as `Optional<r>`)

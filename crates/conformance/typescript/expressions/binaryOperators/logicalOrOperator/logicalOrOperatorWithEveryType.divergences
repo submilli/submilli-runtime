@@ -1,4 +1,4 @@
-types: 183 of 190 tsc entries compared, 26 differ
+types: 183 of 190 tsc entries compared, 24 differ
 
 line 36: rb7
   tsc:  { a: string; }
@@ -48,10 +48,6 @@ line 59: a8 || a4
   tsc:  string[]
   ours: string | string[]
 
-line 91: a7
-  tsc:  never
-  ours: { a: string }
-
 line 92: rh8
   tsc:  string[]
   ours: { a: string } | string[]
@@ -67,10 +63,6 @@ line 102: ri7
 line 102: a7 || a8
   tsc:  { a: string; }
   ours: { a: string } | string[]
-
-line 103: a8
-  tsc:  never
-  ours: string[]
 
 line 113: rj7
   tsc:  { a: string; }

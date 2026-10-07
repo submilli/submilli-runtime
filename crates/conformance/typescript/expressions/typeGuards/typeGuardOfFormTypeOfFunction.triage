@@ -1,2 +1,2 @@
-line 11, 17 type: bug SUB-1196 (`typeof` "function") `typeof x === "function"` doesn't narrow, since there is no `Function` type
-line 23 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`
+line 11, 17 type: bug SUB-1457 there is no `Function` type, so `typeof x === "function"` keeps `unknown` and rules out `{}`
+line 23 type: bug SUB-1440 narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`

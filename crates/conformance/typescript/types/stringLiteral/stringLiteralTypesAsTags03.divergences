@@ -1,4 +1,4 @@
-types: 22 of 41 tsc entries compared, 7 differ
+types: 22 of 41 tsc entries compared, 3 differ
 
 line 31: { kind: "A", a: 100, }
   tsc:  { kind: "A"; a: number; }
@@ -8,22 +8,6 @@ line 36: hasKind
   tsc:  (entity: Entity, kind: Kind) => entity is Entity
   ours: (arg0: Entity, arg1: Kind) => boolean
 
-line 40: b
-  tsc:  never
-  ours: A
-
-line 40: x
-  tsc:  never
-  ours: A
-
 line 43: hasKind
   tsc:  (entity: Entity, kind: Kind) => entity is Entity
   ours: (arg0: Entity, arg1: Kind) => boolean
-
-line 44: c
-  tsc:  never
-  ours: A
-
-line 44: x
-  tsc:  never
-  ours: A

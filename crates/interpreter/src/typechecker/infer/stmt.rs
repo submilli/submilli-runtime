@@ -21,6 +21,19 @@ pub(super) enum StaticWrite {
     },
 }
 
+/// `ty` with its literal types widened to their base types, through aliases.
+/// A type with none keeps its spelling.
+fn widen_literal_members(ty: Type) -> Type {
+    fn widen(ty: &Type) -> Type {
+        match ty.peel() {
+            Type::Union(members) => Type::union(members.iter().map(widen).collect()),
+            peeled => peeled.widen_literal(),
+        }
+    }
+    let widened = widen(&ty);
+    if widened == *ty.peel() { ty } else { widened }
+}
+
 impl Inferer<'_> {
     /// Returns `None` for type-space-only declarations (`interface`, `type`, `import`);
     /// callers `filter_map` those away.
@@ -37,6 +50,11 @@ impl Inferer<'_> {
         // As in `infer_expr`: a limit pending before this statement belongs to
         // whatever enclosing check met it.
         let limit_was_pending = self.type_limits.limit_reached();
+        // The flag describes only the dead code right after the switch; a
+        // statement that runs ends it.
+        if self.reachable {
+            self.unreachable_by_exhaustive_switch = false;
+        }
         // Propagate once after dispatch: per-arm `?` creates large temporary
         // results that inflate every recursive frame in debug builds.
         let typed_kind = (match stmt.kind {
@@ -363,6 +381,31 @@ impl Inferer<'_> {
         Ok(null)
     }
 
+    /// The type a variable declared `declared` holds. Arithmetic written back
+    /// (`x += 1`, `x++`, `x = x * 2`) is checked against the base type of the
+    /// variable's literal types, as in TypeScript, so its value can leave them.
+    /// Closures, other functions and loop heads read the variable as declared,
+    /// so it holds that base type everywhere.
+    pub(super) fn local_storage_ty(&self, name: &Ident, declared: Type) -> Type {
+        if self
+            .arithmetic_targets
+            .contains(&(name.name.clone(), name.span))
+        {
+            widen_literal_members(declared)
+        } else {
+            declared
+        }
+    }
+
+    /// [`local_storage_ty`](Self::local_storage_ty) for a module variable.
+    pub(super) fn global_storage_ty(&self, name: &str, declared: Type) -> Type {
+        if self.arithmetic_written_globals.contains(name) {
+            widen_literal_members(declared)
+        } else {
+            declared
+        }
+    }
+
     fn infer_let_statement(
         &mut self,
         name: Ident,
@@ -385,6 +428,7 @@ impl Inferer<'_> {
             None => self.widen_fresh_literals(typed_value, &value_ty)?,
         };
         let bound = self.pattern_binding_storage_type(value, bound)?;
+        let bound = self.local_storage_ty(&name, bound);
         // Reject a void binding; poison the slot so codegen never
         // sees a void value-type.
         let bound = if self.reject_void_binding(&bound, span) {
@@ -402,7 +446,7 @@ impl Inferer<'_> {
         );
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
-            None => self.assigned_flow_type(&bound, typed_value, value_ty)?,
+            None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
         };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Let {
@@ -455,7 +499,7 @@ impl Inferer<'_> {
         }
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
-            None => self.assigned_flow_type(&bound, typed_value, value_ty)?,
+            None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
         };
         self.narrow_local_initializer(&name, &bound, flow_ty)?;
         Ok(TypedStmtKind::Const {
@@ -610,6 +654,7 @@ impl Inferer<'_> {
         // carry to the next iteration's entry.
         let body_scope_floor = self.scopes.next_scope_id();
         self.scopes.push();
+        let bound_ty = self.local_storage_ty(&name, bound_ty);
         let origin = self.element_literal_origin(ann.is_some(), typed_iter)?;
         self.scopes.insert_with_literal_origin(
             name.name.clone(),
@@ -1052,7 +1097,7 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             (id, ty.clone())
         };
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty.widen_literal()))?;
         let result_ty =
             self.check_compound_arith(op, (synth_lhs, &lhs_ty), (typed_value, &value_ty), op_span)?;
         let synth_binary = self
@@ -1410,7 +1455,7 @@ impl Inferer<'_> {
         if matches!(written, Type::Error) || !assignable(&written, &declared, self.resolver()) {
             return Ok(());
         }
-        let written = self.assigned_flow_type(&declared, value, written)?;
+        let written = self.assigned_flow_type(&declared, true, value, written)?;
         let narrowed_ty = self.assignment_narrowed_ty(&declared, written);
         if narrowed_ty == declared {
             return Ok(());
@@ -1432,6 +1477,30 @@ impl Inferer<'_> {
         };
         self.install_joined_narrowings([(path, view)].into_iter().collect(), name.span)?;
         Ok(())
+    }
+
+    /// A write through a key that names a declared field (`o[key] = v` after
+    /// `const key = "a"`) narrows that field as `o.a = v` does.
+    fn narrow_keyed_field_after_write(
+        &mut self,
+        receiver: ExprId,
+        index: ExprId,
+        receiver_ty: &Type,
+        value: ExprId,
+        span: Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let kind = TypedExprKind::IndexAccess { receiver, index };
+        let Some(path) = self.kind_to_reference_path(&kind)? else {
+            return Ok(());
+        };
+        let Some(narrowing::PathElem::Field(name)) = path.chain.last() else {
+            return Ok(());
+        };
+        let name = Ident {
+            name: name.clone(),
+            span,
+        };
+        self.narrow_field_after_write(path, receiver, receiver_ty, &name, value)
     }
 
     pub(super) fn infer_assign_index(
@@ -1480,10 +1549,14 @@ impl Inferer<'_> {
                 help,
             );
         }
-        self.invalidate_index_write(
+        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+        self.invalidate_index_write(typed_receiver, typed_index, index_span)?;
+        self.narrow_keyed_field_after_write(
             typed_receiver,
             typed_index,
-            self.ast.try_expr(index).map_err(super::arena_failure)?.span,
+            &receiver_ty,
+            typed_value,
+            index_span,
         )?;
         Ok(TypedStmtKind::AssignIndex {
             receiver: typed_receiver,
@@ -1774,7 +1847,8 @@ impl Inferer<'_> {
                     format!("expected `{}`, got `{}`", entry.ty, value_ty),
                 );
             }
-            let flow_ty = self.assigned_flow_type(&entry.ty, typed_value, value_ty)?;
+            let annotated = self.is_local_annotated(&target.name);
+            let flow_ty = self.assigned_flow_type(&entry.ty, annotated, typed_value, value_ty)?;
             let narrowed_shadow_ty =
                 self.renarrow_local_after_write(&target, entry.decl_scope, &entry.ty, flow_ty)?;
             return Ok(TypedStmtKind::AssignLocal {
@@ -1799,7 +1873,8 @@ impl Inferer<'_> {
                     if !reported && !assignable(&value_ty, &ty, self.resolver()) {
                         self.error(value_span, format!("expected `{ty}`, got `{value_ty}`"));
                     }
-                    let flow_ty = self.assigned_flow_type(&ty, typed_value, value_ty)?;
+                    let annotated = self.is_global_annotated(&mangled);
+                    let flow_ty = self.assigned_flow_type(&ty, annotated, typed_value, value_ty)?;
                     self.renarrow_global_after_write(&target, &mangled, &ty, flow_ty)?;
                     TypedStmtKind::AssignGlobal {
                         ident: target,
@@ -1912,7 +1987,7 @@ impl Inferer<'_> {
                     .map_err(crate::typechecker::arena_failure)?;
                 (id, target_ty.clone())
             };
-            let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty))?;
+            let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty.widen_literal()))?;
             let result_ty = self.check_compound_arith(
                 op,
                 (synth_lhs, &lhs_ty),
@@ -2207,7 +2282,7 @@ impl Inferer<'_> {
         stmt_span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&rw.read))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&rw.read.widen_literal()))?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2301,7 +2376,7 @@ impl Inferer<'_> {
             elem_ty.clone()
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty.widen_literal()))?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2671,8 +2746,11 @@ fn next_pass_falsifies(
     view: &narrowing::NarrowedView,
     post: Option<&narrowing::NarrowedView>,
 ) -> bool {
+    // A literal the entry view rules out that the next pass doesn't rule
+    // out disproves it too, though its type may hold the same members.
     post.is_none_or(|post| {
         Type::union(vec![view.narrowed_ty.clone(), post.narrowed_ty.clone()]) != view.narrowed_ty
+            || !post.excluded_literals.is_superset(&view.excluded_literals)
     })
 }
 

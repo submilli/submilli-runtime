@@ -175,6 +175,11 @@ impl Inferer<'_> {
             Ok(ty) => (ty, None),
             Err(why) => (Type::Error, Some((use_span, why))),
         };
+        let ty = if declaration.is_const {
+            ty
+        } else {
+            self.global_storage_ty(&declaration.name.name, ty)
+        };
         let kind = if declaration.is_const {
             ValueKind::Const {
                 ty: ty.clone(),

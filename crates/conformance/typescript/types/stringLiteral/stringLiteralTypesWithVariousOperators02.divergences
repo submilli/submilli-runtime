@@ -1,4 +1,32 @@
-types: 33 of 48 tsc entries compared, 1 differ
+types: 33 of 48 tsc entries compared, 8 differ
+
+line 7: abcOrXyzOrNumber
+  tsc:  number | "ABC" | "XYZ"
+  ours: number | string
+
+line 9: abcOrXyzOrNumber
+  tsc:  number | "ABC" | "XYZ"
+  ours: number | string
+
+line 10: abcOrXyzOrNumber
+  tsc:  number | "ABC" | "XYZ"
+  ours: number | string
+
+line 11: abcOrXyzOrNumber
+  tsc:  number | "ABC" | "XYZ"
+  ours: number | string
+
+line 11: abcOrXyzOrNumber
+  tsc:  number | "ABC" | "XYZ"
+  ours: number | string
+
+line 12: abcOrXyzOrNumber
+  tsc:  number | "ABC" | "XYZ"
+  ours: number | string
+
+line 13: abcOrXyzOrNumber
+  tsc:  number | "ABC" | "XYZ"
+  ours: number | string
 
 line 14: abcOrXyzOrNumber
   tsc:  string | number

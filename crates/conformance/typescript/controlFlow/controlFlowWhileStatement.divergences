@@ -1,5 +1,1 @@
-types: 84 of 128 tsc entries compared, 1 differ
-
-line 55: cond
-  tsc:  never
-  ours: true
+types: 84 of 128 tsc entries compared, 0 differ

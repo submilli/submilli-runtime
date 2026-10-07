@@ -1,6 +1,7 @@
 // A guard on `record[key]` doesn't survive a write to the same entry spelled
-// another way, as a field or with another key.
-// expect-error: expected `string`, got `number | string`
+// another way, as a field or with another key. A constant key naming a
+// declared field reads as that field, so the field's write narrows it.
+// expect-error: expected `string`, got `number`
 // expect-error: expected `string`, got `number | string | null`
 // expect-error-count: 2
 type Pair = { a: string | number; b: string | number };
