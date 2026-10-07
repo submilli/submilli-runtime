@@ -509,6 +509,9 @@ impl Inferer<'_> {
         self.fold_exits_into_outer(natural, frame.breaks, switch_span)?;
 
         self.reachable = any_arm_reachable_exit;
+        if typed_default.is_none() && !any_arm_reachable_exit && residual == Type::Never {
+            self.rule_out_after_exhaustive_switch(&site, switch_span)?;
+        }
 
         Ok(TypedStmtKind::Switch {
             discriminant: typed_disc,
@@ -722,6 +725,29 @@ impl Inferer<'_> {
         } else {
             residual.clone()
         }
+    }
+
+    /// After a `switch` whose cases match every value and all leave, the tested
+    /// local holds no value, as in TypeScript: `assertNever(x)` there checks.
+    /// The code is unreachable, so the narrowing says nothing about a run.
+    fn rule_out_after_exhaustive_switch(
+        &mut self,
+        site: &ResidualSite,
+        switch_span: Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let (ResidualSite::DiscriminatedReceiver { path, .. } | ResidualSite::Scrutinee { path }) =
+            site
+        else {
+            return Ok(());
+        };
+        if !narrowing::rules_out_to_never(path) {
+            return Ok(());
+        }
+        let env = self.build_default_narrow_env(&narrowing::RULED_OUT, site, switch_span)?;
+        if let Some(frame) = self.narrow_scopes.last_mut() {
+            frame.extend_env(env);
+        }
+        Ok(())
     }
 
     fn build_default_narrow_env(

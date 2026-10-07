@@ -1,15 +1,11 @@
-types: 145 of 251 tsc entries compared, 2 differ
-
-line 62: s
-  tsc:  never
-  ours: Shape
+types: 145 of 251 tsc entries compared, 1 differ
 
 line 119: m
   tsc:  { kind: "A"; x: string; } | { kind: "D"; }
   ours: { kind: "D" }
 
 errors:
-line 62: ours: expected `never`, got `Shape` (tsc accepts)
+line 62: ours: unreachable code (tsc accepts)
 line 116: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)
 line 127: ours: non-exhaustive `switch`: missing case(s) "D" for discriminant `.kind` (tsc accepts)
 line 136: ours: non-exhaustive `switch` for discriminant `.kind` (tsc accepts)
