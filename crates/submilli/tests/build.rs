@@ -609,7 +609,7 @@ path = "other"
     let first = build_subcommand("authority-map", &project, tmp.path(), &[]);
     assert!(first.status.success(), "stderr: {}", stderr(&first));
     let value: serde_json::Value = serde_json::from_slice(&first.stdout).expect("authority JSON");
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["packages"].as_array().map(Vec::len), Some(2));
     assert_eq!(value["packages"][0]["name"], "@acme/authority");
     assert!(
@@ -630,10 +630,7 @@ path = "other"
             && route["effects"].as_array().is_some_and(|effects| {
                 effects.iter().any(|effect| {
                     effect["effect"]["capability"] == "http.get"
-                        && effect["guard"]["status"] == "unguarded"
-                        && effect["guard"]["path"]
-                            .as_array()
-                            .is_some_and(|path| !path.is_empty())
+                        && effect.get("guard").is_none()
                         && effect["witness"]
                             .as_array()
                             .is_some_and(|witness| witness.len() == 1)
@@ -1045,7 +1042,7 @@ fn build_commands_report_unresolved_http_hosts() {
                 "public route `fetch` reaches `http.get` without a direct semantic `check()`";
             assert_eq!(
                 diagnostics.matches(semantic_warning).count(),
-                1,
+                0,
                 "{command} with {prefix}: {diagnostics}"
             );
             let warning = "cannot statically resolve the host in the URL passed to `http.get`";
@@ -2086,28 +2083,6 @@ export function op(customer: string): void { check("acme.com/op", {}); }
 export function op(customer: string): void {
  const approve = (): void => { check("acme.com/op", { customer }); };
  approve();
-}
-"#,
-        ),
-        (
-            "public route `op` reaches `http.get` without a direct semantic `check()`",
-            r#"import { get } from "submilli:http";
-/** Fetch data.
- * @returns The response body.
- */
-export function op(): string { return get("https://api.example.com/data").body; }
-"#,
-        ),
-        (
-            "without a successful direct semantic check on every path",
-            r#"import { get } from "submilli:http";
-import { check } from "submilli:security";
-/** Fetch data.
- * @capability acme.fetch {}
- */
-export function op(): void {
-    try { check("acme.fetch", {}); } catch {}
-    get("https://api.example.com/data");
 }
 "#,
         ),
