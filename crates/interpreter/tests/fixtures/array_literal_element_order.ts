@@ -1,6 +1,7 @@
 // An array literal's element type doesn't depend on which element comes first:
-// a `new` of a non-generic class types itself, and a conditional choosing
-// between object literals normalizes with the other literals.
+// a `new` of a non-generic class types itself, a conditional choosing between
+// object literals normalizes with the other literals, and arrays of object
+// literals don't check one another's fields.
 class Animal {
   name: string;
   constructor(name: string) {
@@ -34,4 +35,9 @@ function main(): void {
 
   const first = [big ? { a: 2, b: "s" } : { a: 3 }, { a: 1, d: true }];
   assert(first[0].b === "s" && first[1].d === true, "the conditional may come first");
+
+  const rows = [[{ a: 1 }], [{ a: 2, b: 3 }]];
+  let sum = 0;
+  for (const row of rows) for (const cell of row) sum += cell.a;
+  assert(rows.length === 2 && sum === 3, "an inner array's literal may add a field");
 }

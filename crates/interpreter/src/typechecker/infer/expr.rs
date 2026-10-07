@@ -5802,6 +5802,12 @@ impl Inferer<'_> {
         } else {
             None
         };
+        // Arrays of object literals type themselves, as their literals would:
+        // `[[{ a: 1 }], [{ a: 2, b: 3 }]]` checks no literal against another's
+        // fields, and the arrays then join by type.
+        let arrays_of_object_literals = open_element_type
+            && normalization.is_none()
+            && every_array_of_object_literals(self.ast, &elements)?;
         // Whether the running element type is still the first element's, which
         // mismatch messages name.
         let mut running_is_first = true;
@@ -5824,7 +5830,7 @@ impl Inferer<'_> {
                     // An empty array's `never[]` says nothing of what later elements
                     // hold, so it hints none: `[[], [1]]` holds `number[]`.
                     let running_hint = element_ty.as_ref().filter(|t| !holds_no_element(t));
-                    let hint = if open_element_type && types_itself {
+                    let hint = if open_element_type && (types_itself || arrays_of_object_literals) {
                         None
                     } else if open_element_type && lacks_running_shape {
                         expected_elem
@@ -10735,6 +10741,29 @@ fn fresh_object_fields(
             _ => None,
         })
         .collect())
+}
+
+/// Whether every element is a non-empty array literal whose elements are all
+/// fresh object literals, or conditionals choosing between them.
+fn every_array_of_object_literals(
+    ast: &crate::Ast,
+    elements: &[crate::ArrayLiteralElement],
+) -> Result<bool, CompilerFailure> {
+    for element in elements {
+        let crate::ArrayLiteralElement::Value(id) = element else {
+            return Ok(false);
+        };
+        let id = peel_parens(ast, *id)?;
+        let ExprKind::ArrayLiteral { elements: inner } =
+            &ast.try_expr(id).map_err(super::arena_failure)?.kind
+        else {
+            return Ok(false);
+        };
+        if inner.is_empty() || object_literal_normalization(ast, inner)?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// The fields of each fresh object literal `expr` may evaluate to: itself, or
