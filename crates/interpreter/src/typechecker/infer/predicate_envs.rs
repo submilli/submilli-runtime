@@ -684,7 +684,7 @@ impl<'a> Inferer<'a> {
         // A local whose type can't hold `null` is `never` where it equals
         // `null`. A type parameter can hold anything, so it narrows nothing.
         let never_null = !can_be_null
-            && narrowing::rules_out_to_never(&path)
+            && self.rules_out_to_never(&path)
             && !narrowing::has_erased_member(&path_ty);
         if can_be_null || never_null {
             eq_env.insert(
@@ -705,9 +705,7 @@ impl<'a> Inferer<'a> {
         // A field that is `null` reads as `never` once proven otherwise, but
         // re-reads its live value: an alias may have written it.
         let non_null_ty = match narrowing::strip_null(&path_ty) {
-            ty if narrowing::is_ruled_out(&ty) && !narrowing::rules_out_to_never(&path) => {
-                Type::Never
-            }
+            ty if narrowing::is_ruled_out(&ty) && !self.rules_out_to_never(&path) => Type::Never,
             ty => ty,
         };
         neq_env.insert(
@@ -2145,10 +2143,11 @@ impl<'a> Inferer<'a> {
         let true_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::TRUTHY);
         let false_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::FALSY);
         // An outcome a local's type can't take makes it `never` there (a
-        // ruled-out view), when the type lists every value the local can hold.
+        // ruled-out view), when every member of the type is always truthy or
+        // always falsy: an object is never falsy, as `null` is never truthy.
         let assigns = matches!(fallback_kind, crate::TypedExprKind::Sequence { .. });
         let empty_is_never =
-            narrowing::rules_out_to_never(&path) && narrowing::is_unit_union(&from_ty) && !assigns;
+            self.rules_out_to_never(&path) && narrowing::has_known_truthiness(&from_ty) && !assigns;
         // An assignment tested for truthiness (`c && (x = 10)`) narrows its
         // target to the assigned value where the test holds, even when the
         // test itself rules nothing out: an operand that may not run doesn't
@@ -2456,7 +2455,7 @@ impl<'a> Inferer<'a> {
 
     /// A read of `path` under the narrowing that holds there. A guard that
     /// rules out every value (its view [`narrowing::RULED_OUT`]) reads as `never`, as in
-    /// TypeScript, where [`narrowing::rules_out_to_never`] allows: no value
+    /// TypeScript, where [`Self::rules_out_to_never`] allows: no value
     /// reaches the read, and codegen emits a trap for it.
     pub(super) fn narrowed_read(
         &self,
@@ -2480,8 +2479,11 @@ impl<'a> Inferer<'a> {
     /// Whether a guard that ruled out every value of `path` makes it read as
     /// `never`. A type parameter or `unknown` hides values a guard can't see
     /// ruled out, so `typeof x === "object"` on a `T` is not a contradiction.
+    /// Code that never runs by its syntax reads the declared type, as in
+    /// TypeScript.
     fn reads_as_never(&self, path: &narrowing::ReferencePath) -> bool {
-        narrowing::rules_out_to_never(path)
+        (self.reachable || self.unreachable_by_exhaustive_switch)
+            && self.rules_out_to_never(path)
             && self.declared_root_ty(path).is_some_and(|declared| {
                 !narrowing::has_erased_member(&declared)
                     && !matches!(declared.peel(), Type::Unknown)

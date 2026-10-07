@@ -7678,7 +7678,7 @@ impl Inferer<'_> {
             immediately_invoked && super::iife::returns_before_end(self.ast, &body)?;
         let narrow_seed = self.enter_closure_narrow_boundary(span, immediately_invoked)?;
         // The body's own `return`s end its flow, not the enclosing one's.
-        let prev_reachable = std::mem::replace(&mut self.reachable, true);
+        let prev_reachable = self.enter_body_reachability();
         // Nor can its `break`/`continue` reach a loop or switch outside it.
         let prev_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let prev_switch_depth = std::mem::replace(&mut self.switch_depth, 0);
@@ -7757,7 +7757,7 @@ impl Inferer<'_> {
         }
         // Restore frames.
         self.exit_closure_narrow_boundary()?;
-        self.reachable = prev_reachable;
+        self.restore_reachability(prev_reachable);
         self.loop_depth = prev_loop_depth;
         self.switch_depth = prev_switch_depth;
         self.in_nested_function = prev_nested;

@@ -133,6 +133,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
         reachable: true,
+        unreachable_by_exhaustive_switch: false,
         next_narrow_counter: 0,
         current_return: None,
         current_class: None,

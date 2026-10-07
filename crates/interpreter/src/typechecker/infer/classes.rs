@@ -3636,7 +3636,7 @@ impl<'a> Inferer<'a> {
         let prev_nested = std::mem::replace(&mut self.in_nested_function, false);
         // A constructor returns no value; a bare `return;` is fine.
         let prev_return = self.current_return.replace(Type::Void);
-        let prev_reachable = std::mem::replace(&mut self.reachable, true);
+        let prev_reachable = self.enter_body_reachability();
         let body_id = self
             .infer_body_with_narrowing_boundary(body)?
             .ok_or_else(|| super::inference_failure("constructor body is a Block"))?;
@@ -3665,7 +3665,7 @@ impl<'a> Inferer<'a> {
             );
         }
         self.current_return = prev_return;
-        self.reachable = prev_reachable;
+        self.restore_reachability(prev_reachable);
         self.in_constructor = prev_in_ctor;
         self.super_seen = prev_super_seen;
         self.read_before_super = prev_read_before;
@@ -3754,14 +3754,14 @@ impl<'a> Inferer<'a> {
                 );
             }
             let prev_return = self.current_return.replace(body_ret);
-            let prev_reachable = std::mem::replace(&mut self.reachable, true);
+            let prev_reachable = self.enter_body_reachability();
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
             let body_id = self
                 .infer_body_with_narrowing_boundary(*body)?
                 .ok_or_else(|| super::inference_failure("method body is a Block"))?;
             self.current_return = prev_return;
-            self.reachable = prev_reachable;
+            self.restore_reachability(prev_reachable);
             self.scopes.pop();
             self.pop_body_generics();
             for id in self
@@ -3877,7 +3877,7 @@ impl<'a> Inferer<'a> {
                 );
             }
             let prev_return = self.current_return.replace(body_ret);
-            let prev_reachable = std::mem::replace(&mut self.reachable, true);
+            let prev_reachable = self.enter_body_reachability();
             let prev_static = self
                 .current_static
                 .replace((class_name.to_string(), name.name.clone()));
@@ -3887,7 +3887,7 @@ impl<'a> Inferer<'a> {
                 .infer_body_with_narrowing_boundary(*body)?
                 .ok_or_else(|| super::inference_failure("static method body is a Block"))?;
             self.current_return = prev_return;
-            self.reachable = prev_reachable;
+            self.restore_reachability(prev_reachable);
             self.current_static = prev_static;
             self.scopes.pop();
             self.pop_body_generics();
@@ -4036,12 +4036,12 @@ impl<'a> Inferer<'a> {
                 .insert_annotated_param(p.name.name.clone(), p.ty.clone(), p.name.span);
         }
         let prev_return = self.current_return.replace(ret.clone());
-        let prev_reachable = std::mem::replace(&mut self.reachable, true);
+        let prev_reachable = self.enter_body_reachability();
         let body_id = self
             .infer_body_with_narrowing_boundary(body)?
             .ok_or_else(|| super::inference_failure("accessor body is a Block"))?;
         self.current_return = prev_return;
-        self.reachable = prev_reachable;
+        self.restore_reachability(prev_reachable);
         self.scopes.pop();
         Ok(body_id)
     }

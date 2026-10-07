@@ -37,6 +37,9 @@ impl Inferer<'_> {
         // As in `infer_expr`: a limit pending before this statement belongs to
         // whatever enclosing check met it.
         let limit_was_pending = self.type_limits.limit_reached();
+        if self.reachable {
+            self.unreachable_by_exhaustive_switch = false;
+        }
         // Propagate once after dispatch: per-arm `?` creates large temporary
         // results that inflate every recursive frame in debug builds.
         let typed_kind = (match stmt.kind {

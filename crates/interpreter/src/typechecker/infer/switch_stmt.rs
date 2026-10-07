@@ -510,6 +510,7 @@ impl Inferer<'_> {
 
         self.reachable = any_arm_reachable_exit;
         if typed_default.is_none() && !any_arm_reachable_exit && residual == Type::Never {
+            self.unreachable_by_exhaustive_switch = true;
             self.rule_out_after_exhaustive_switch(&site, switch_span)?;
         }
 
@@ -740,7 +741,7 @@ impl Inferer<'_> {
         else {
             return Ok(());
         };
-        if !narrowing::rules_out_to_never(path) {
+        if !self.rules_out_to_never(path) {
             return Ok(());
         }
         let env = self.build_default_narrow_env(&narrowing::RULED_OUT, site, switch_span)?;

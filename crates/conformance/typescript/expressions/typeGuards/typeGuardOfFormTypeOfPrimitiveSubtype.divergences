@@ -2,19 +2,19 @@ types: 30 of 45 tsc entries compared, 8 differ
 
 line 5: a
   tsc:  number
-  ours: {}
+  ours: never
 
 line 8: a
   tsc:  string
-  ours: {}
+  ours: never
 
 line 11: a
   tsc:  boolean
-  ours: {}
+  ours: never
 
 line 15: b
   tsc:  number
-  ours: { toString: () => string }
+  ours: never
 
 line 17: b
   tsc:  number | { toString(): string; }
@@ -22,7 +22,7 @@ line 17: b
 
 line 18: b
   tsc:  string
-  ours: { toString: () => string }
+  ours: never
 
 line 20: b
   tsc:  string | number | { toString(): string; }
@@ -30,12 +30,4 @@ line 20: b
 
 line 21: b
   tsc:  boolean
-  ours: { toString: () => string }
-
-errors:
-line 5: ours: expected `number`, got `{}` (tsc accepts)
-line 8: ours: expected `string`, got `{}` (tsc accepts)
-line 11: ours: expected `boolean`, got `{}` (tsc accepts)
-line 15: ours: expected `number`, got `{ toString: () => string }` (tsc accepts)
-line 18: ours: expected `string`, got `{ toString: () => string }` (tsc accepts)
-line 21: ours: expected `boolean`, got `{ toString: () => string }` (tsc accepts)
+  ours: never

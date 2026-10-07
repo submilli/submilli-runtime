@@ -580,6 +580,31 @@ impl<'a> Inferer<'a> {
         Ok(true)
     }
 
+    /// Whether a guard that rules out every value of `path` makes it `never`
+    /// where it holds: a local, or a module variable no function assigns. A
+    /// field, an element, or a module variable a function assigns can change
+    /// behind the guard's back, through an alias or in a call.
+    pub(super) fn rules_out_to_never(&self, path: &narrowing::ReferencePath) -> bool {
+        if !path.chain.is_empty() {
+            return false;
+        }
+        match &path.root {
+            narrowing::BindingId::Local { .. } => true,
+            // An imported variable may be assigned by a function of the module
+            // declaring it, which `function_written_globals` doesn't see.
+            narrowing::BindingId::Global(mangled) => {
+                self.top_symbols.iter().any(|(name, entry)| {
+                    &entry.mangled_name == mangled
+                        && self
+                            .mangle_top_symbol(name)
+                            .is_ok_and(|own| &own == mangled)
+                        && !self.function_written_globals.contains(name)
+                })
+            }
+            narrowing::BindingId::This => false,
+        }
+    }
+
     /// Match the declaration, not its spelling: unrelated same-named locals stay stable.
     pub(super) fn path_root_is_captured_mutator(&self, path: &narrowing::ReferencePath) -> bool {
         match &path.root {

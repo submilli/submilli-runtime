@@ -2,4 +2,4 @@ line 47, 48, 49, 51, 52, 53, 59, 60, 61, 63, 64, 65, 67, 68, 69, 75, 76, 77, 79,
 line 135 extra: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected
 line 105, 106, 107, 108, 110, 111, 112, 113 type: by-design spec §Excluded-Features there is no `any`, so `let b = null` is `null`, where tsc makes it an evolving `any`
 line 136, 137, 138 type: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected
-line 101, 102, 103 type: artifact tsc's baseline types the original non-strict `var a = true`, which it doesn't narrow; strict tsc narrows `a` to `true` here (and to `never` after the endless `while`)
+line 101, 103 type: bug SUB-1455 code after the endless `while (true)` on line 44 never runs, and tsc reads declared types there where Submilli keeps narrowing

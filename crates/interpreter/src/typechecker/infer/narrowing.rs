@@ -736,6 +736,9 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
         Type::BigInt => BigIntLike,
         Type::NumberEnum { .. } => NumberLike,
         Type::StringEnum { .. } => StringLike,
+        // `{}` admits every value but `null` and `undefined`, falsy primitives
+        // included.
+        empty if is_empty_object(empty) => Dynamic,
         Type::Object { .. }
         | Type::Array(_)
         | Type::Tuple(_)
@@ -745,6 +748,22 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
         | Type::ClassRef { .. } => AlwaysTruthy,
         _ => Dynamic,
     }
+}
+
+/// Whether `ty` is `{}`, the object type with no members.
+fn is_empty_object(ty: &Type) -> bool {
+    matches!(ty.peel(), Type::Object { fields, index } if fields.is_empty() && index.is_none())
+}
+
+/// Whether every member of `ty` is always truthy or always falsy, so a
+/// truthiness test that rules a member out rules out every value it holds.
+pub fn has_known_truthiness(ty: &Type) -> bool {
+    union_members(ty).into_iter().all(|member| {
+        matches!(
+            truthiness_class(member),
+            TruthinessClass::AlwaysTruthy | TruthinessClass::AlwaysFalsy
+        )
+    })
 }
 
 pub(super) fn union_members(ty: &Type) -> Vec<&Type> {
@@ -794,6 +813,9 @@ pub fn falsy_part(ty: &Type) -> Type {
         .into_iter()
         .filter_map(|m| match truthiness_class(m) {
             TruthinessClass::AlwaysTruthy => None,
+            // TypeScript keeps only the definitely falsy part of `{}`, which
+            // is nothing; Submilli's `{}` holds only objects so far.
+            TruthinessClass::Dynamic if is_empty_object(m) => None,
             TruthinessClass::StringLike => Some(match m.peel() {
                 Type::String => Type::StringLiteral(String::new()),
                 _ => m.clone(),
@@ -1149,16 +1171,6 @@ pub fn union_envs(
     (joined_narrowings, joined_assigned)
 }
 
-/// Whether `ty` is made of unit types only (literals and `null`), so it lists
-/// every value it holds.
-pub fn is_unit_union(ty: &Type) -> bool {
-    match ty.peel() {
-        Type::Union(members) => members.iter().all(is_unit_union),
-        Type::Null => true,
-        other => unit_literal_value(other).is_some(),
-    }
-}
-
 /// The tuple position a number names, if it names one.
 pub(super) fn tuple_position(index: f64) -> Option<usize> {
     (index >= 0.0 && index.fract() == 0.0 && index <= u32::MAX as f64).then_some(index as usize)
@@ -1167,19 +1179,12 @@ pub(super) fn tuple_position(index: f64) -> Option<usize> {
 /// The type of a view whose guard ruled out every value. Narrowing yields
 /// `Error` when nothing is left; a view keeps it, rather than `never`, so
 /// codegen gives the path no shadow local, and a read of the path turns it
-/// into `never` where [`rules_out_to_never`] allows.
+/// into `never` where `Inferer::rules_out_to_never` allows.
 pub const RULED_OUT: Type = Type::Error;
 
 /// Whether a narrowed type is [`RULED_OUT`].
 pub fn is_ruled_out(ty: &Type) -> bool {
     matches!(ty, Type::Error)
-}
-
-/// Whether a guard that rules out every value of `path` makes it `never`
-/// where it holds. Only a local qualifies: a field, an element or a global
-/// can change behind the guard's back (through an alias, or in a call).
-pub fn rules_out_to_never(path: &ReferencePath) -> bool {
-    path.is_bare_local()
 }
 
 /// Flow joins collapse a literal already covered by a broad primitive. Keep

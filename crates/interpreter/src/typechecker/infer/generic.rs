@@ -530,7 +530,7 @@ impl Inferer<'_> {
             // Reset to `true`: a previous function that ended unreachable would
             // otherwise taint this body's reachability joins, dropping post-if
             // narrowings.
-            let prev_reachable = std::mem::replace(&mut self.reachable, true);
+            let prev_reachable = self.enter_body_reachability();
             let prev_predicate = self.current_type_predicate.take();
             if let Some(pred) = &resolved_predicate {
                 let idx = pred.parameter_index as usize;
@@ -549,7 +549,7 @@ impl Inferer<'_> {
                 })?;
             self.current_return = prev_return;
             self.current_type_predicate = prev_predicate;
-            self.reachable = prev_reachable;
+            self.restore_reachability(prev_reachable);
             self.scopes.pop();
             self.pop_body_generics();
             for id in self

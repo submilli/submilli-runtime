@@ -138,6 +138,7 @@ pub fn infer_with_transitive_checked<'a>(
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
         reachable: true,
+        unreachable_by_exhaustive_switch: false,
         next_narrow_counter: 0,
         current_return: None,
         current_class: None,
@@ -408,6 +409,7 @@ pub fn infer_package_checked<'a>(
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
         reachable: true,
+        unreachable_by_exhaustive_switch: false,
         next_narrow_counter: 0,
         current_return: None,
         current_class: None,
@@ -755,6 +757,11 @@ pub(super) struct Inferer<'a> {
     /// The nested functions whose bodies are being inferred, outermost first.
     pub(super) nested_function_bodies: Vec<usize>,
     pub(super) reachable: bool,
+    /// Whether the code is unreachable only because a `switch` without a
+    /// `default` covered every value. TypeScript's flow analysis still reaches
+    /// such code and narrows there, while code after a `return`, `throw`,
+    /// `break`, `continue` or endless loop reads declared types.
+    pub(super) unreachable_by_exhaustive_switch: bool,
     /// All clause writes, including terminating branches, for exceptional entry.
     pub(super) clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
     /// Writes carried by normal flow and used when joining branch exits.
@@ -915,7 +922,30 @@ pub(super) struct Inferer<'a> {
     pub(super) diagnostic_failure: std::cell::Cell<Option<crate::rendering::RenderError>>,
 }
 
+/// The enclosing flow's reachability while a nested body is inferred.
+#[derive(Clone, Copy)]
+pub(super) struct SavedReachability {
+    reachable: bool,
+    unreachable_by_exhaustive_switch: bool,
+}
+
 impl<'a> Inferer<'a> {
+    /// Start a nested function body, whose flow is its own, and give the
+    /// enclosing flow's reachability to restore after it.
+    pub(super) fn enter_body_reachability(&mut self) -> SavedReachability {
+        SavedReachability {
+            reachable: std::mem::replace(&mut self.reachable, true),
+            unreachable_by_exhaustive_switch: std::mem::take(
+                &mut self.unreachable_by_exhaustive_switch,
+            ),
+        }
+    }
+
+    pub(super) fn restore_reachability(&mut self, saved: SavedReachability) {
+        self.reachable = saved.reachable;
+        self.unreachable_by_exhaustive_switch = saved.unreachable_by_exhaustive_switch;
+    }
+
     /// Fails with a type limit recorded since the last checkpoint, reported at
     /// `span`: the source being inferred when an oversized type was met where
     /// no error could be returned.
@@ -981,6 +1011,7 @@ impl<'a> Inferer<'a> {
         self.nested_functions.clear();
         self.diagnostics.extend(bindings.diagnostics);
         self.reachable = true;
+        self.unreachable_by_exhaustive_switch = false;
         self.next_narrow_counter = 0;
         self.current_return = None;
         self.current_class = None;
