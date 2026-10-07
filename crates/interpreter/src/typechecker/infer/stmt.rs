@@ -21,28 +21,17 @@ pub(super) enum StaticWrite {
     },
 }
 
-/// A variable being written: its declared type, and the type the write is
-/// checked against, which a compound write widens to the base type of the
-/// declared literal types.
-pub(super) struct WriteSlot<'a> {
-    pub(super) declared: &'a Type,
-    pub(super) accepted: Type,
-}
-
-impl<'a> WriteSlot<'a> {
-    pub(super) fn plain(declared: &'a Type) -> Self {
-        Self {
-            declared,
-            accepted: declared.clone(),
+/// `ty` with its literal types widened to their base types, through aliases.
+/// A type with none keeps its spelling.
+fn widen_literal_members(ty: Type) -> Type {
+    fn widen(ty: &Type) -> Type {
+        match ty.peel() {
+            Type::Union(members) => Type::union(members.iter().map(widen).collect()),
+            peeled => peeled.widen_literal(),
         }
     }
-
-    pub(super) fn compound(declared: &'a Type) -> Self {
-        Self {
-            declared,
-            accepted: declared.widen_literal(),
-        }
-    }
+    let widened = widen(&ty);
+    if widened == *ty.peel() { ty } else { widened }
 }
 
 impl Inferer<'_> {
@@ -392,6 +381,31 @@ impl Inferer<'_> {
         Ok(null)
     }
 
+    /// The type a variable declared `declared` holds. Arithmetic written back
+    /// (`x += 1`, `x++`, `x = x * 2`) is checked against the base type of the
+    /// variable's literal types, as in TypeScript, so its value can leave them.
+    /// Closures, other functions and loop heads read the variable as declared,
+    /// so it holds that base type everywhere.
+    pub(super) fn local_storage_ty(&self, name: &Ident, declared: Type) -> Type {
+        if self
+            .arithmetic_targets
+            .contains(&(name.name.clone(), name.span))
+        {
+            widen_literal_members(declared)
+        } else {
+            declared
+        }
+    }
+
+    /// [`local_storage_ty`](Self::local_storage_ty) for a module variable.
+    pub(super) fn global_storage_ty(&self, name: &str, declared: Type) -> Type {
+        if self.arithmetic_written_globals.contains(name) {
+            widen_literal_members(declared)
+        } else {
+            declared
+        }
+    }
+
     fn infer_let_statement(
         &mut self,
         name: Ident,
@@ -414,6 +428,7 @@ impl Inferer<'_> {
             None => self.widen_fresh_literals(typed_value, &value_ty)?,
         };
         let bound = self.pattern_binding_storage_type(value, bound)?;
+        let bound = self.local_storage_ty(&name, bound);
         // Reject a void binding; poison the slot so codegen never
         // sees a void value-type.
         let bound = if self.reject_void_binding(&bound, span) {
@@ -639,6 +654,7 @@ impl Inferer<'_> {
         // carry to the next iteration's entry.
         let body_scope_floor = self.scopes.next_scope_id();
         self.scopes.push();
+        let bound_ty = self.local_storage_ty(&name, bound_ty);
         let origin = self.element_literal_origin(ann.is_some(), typed_iter)?;
         self.scopes.insert_with_literal_origin(
             name.name.clone(),
@@ -1080,7 +1096,7 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             (id, ty.clone())
         };
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty.widen_literal()))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty))?;
         let result_ty =
             self.check_compound_arith(op, (synth_lhs, &lhs_ty), (typed_value, &value_ty), op_span)?;
         let synth_binary = self
@@ -1095,7 +1111,7 @@ impl Inferer<'_> {
                 ty: result_ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        self.renarrow_global_after_write(&ident, &mangled, WriteSlot::compound(&ty), result_ty)?;
+        self.renarrow_global_after_write(&ident, &mangled, &ty, result_ty)?;
         Ok(TypedStmtKind::AssignGlobal {
             ident,
             mangled,
@@ -1112,28 +1128,21 @@ impl Inferer<'_> {
         &mut self,
         ident: &Ident,
         mangled: &crate::MangledName,
-        slot: WriteSlot<'_>,
+        declared_ty: &Type,
         written_ty: Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if matches!(written_ty, Type::Error) {
             return Ok(());
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
-        let Some(written_ty) = self.write_narrowing(&slot, written_ty) else {
+        let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
+        // A rejected write narrows to nothing it wrote, as in TypeScript.
+        if written_ty == *declared_ty || !assignable(&written_ty, declared_ty, self.resolver()) {
             self.invalidate_for_reassignment(path, ident.span);
             return Ok(());
-        };
+        }
         self.install_assignment_narrowing(path, ident.clone(), written_ty, ident.span)?;
         Ok(())
-    }
-
-    /// What a write of `written_ty` narrows its variable to, or `None` when it
-    /// narrows to nothing: when it holds the declared type, or when the write
-    /// was rejected, as in TypeScript.
-    fn write_narrowing(&self, slot: &WriteSlot<'_>, written_ty: Type) -> Option<Type> {
-        let written_ty = self.assignment_narrowed_ty(&slot.accepted, written_ty);
-        (written_ty != *slot.declared && assignable(&written_ty, &slot.accepted, self.resolver()))
-            .then_some(written_ty)
     }
 
     /// Poison for a rejected class-name write: the diagnostic is already
@@ -1423,6 +1432,15 @@ impl Inferer<'_> {
         name: &Ident,
         value: ExprId,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let kind = TypedExprKind::FieldAccess {
+            receiver,
+            name: name.clone(),
+        };
+        if self.kind_to_reference_path(&kind)?.is_none()
+            || self.path_root_is_captured_mutator(&path)
+        {
+            return Ok(());
+        }
         let Some(declared) = self.write_target_ty(receiver_ty, &name.name) else {
             return Ok(());
         };
@@ -1437,51 +1455,9 @@ impl Inferer<'_> {
         }
         let written = self.assigned_flow_type(&declared, true, value, written)?;
         let narrowed_ty = self.assignment_narrowed_ty(&declared, written);
-        self.narrow_field_to(path, receiver, name, &declared, narrowed_ty)
-    }
-
-    /// After a compound write (`o.f += 1`, `o.f++`) of a `written_ty` the
-    /// field's base type accepts, the field reads as `written_ty`.
-    pub(super) fn narrow_field_after_compound_write(
-        &mut self,
-        path: narrowing::ReferencePath,
-        receiver: ExprId,
-        receiver_ty: &Type,
-        name: &Ident,
-        written_ty: Type,
-    ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let Some(declared) = self.write_target_ty(receiver_ty, &name.name) else {
-            return Ok(());
-        };
-        if matches!(written_ty, Type::Error) {
+        if narrowed_ty == declared {
             return Ok(());
         }
-        let Some(narrowed_ty) = self.write_narrowing(&WriteSlot::compound(&declared), written_ty)
-        else {
-            return Ok(());
-        };
-        self.narrow_field_to(path, receiver, name, &declared, narrowed_ty)
-    }
-
-    fn narrow_field_to(
-        &mut self,
-        path: narrowing::ReferencePath,
-        receiver: ExprId,
-        name: &Ident,
-        declared: &Type,
-        narrowed_ty: Type,
-    ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let kind = TypedExprKind::FieldAccess {
-            receiver,
-            name: name.clone(),
-        };
-        if narrowed_ty == *declared
-            || self.kind_to_reference_path(&kind)?.is_none()
-            || self.path_root_is_captured_mutator(&path)
-        {
-            return Ok(());
-        }
-        let declared = declared.clone();
         let source = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -1791,7 +1767,7 @@ impl Inferer<'_> {
             return Ok(());
         }
         let narrowed = self.initializer_narrowed_ty(declared, value);
-        self.renarrow_local_after_write(name, scope, WriteSlot::plain(declared), narrowed)?;
+        self.renarrow_local_after_write(name, scope, declared, narrowed)?;
         Ok(())
     }
 
@@ -1805,7 +1781,7 @@ impl Inferer<'_> {
         &mut self,
         target: &Ident,
         decl_scope: narrowing::ScopeId,
-        slot: WriteSlot<'_>,
+        declared_ty: &Type,
         written_ty: Type,
     ) -> Result<Option<Type>, crate::compiler_error::CompilerFailure> {
         // A poisoned RHS leaves the narrowing exactly as it was: the diagnostic for
@@ -1818,10 +1794,12 @@ impl Inferer<'_> {
             name: target.name.clone(),
             decl_scope,
         });
-        let Some(written_ty) = self.write_narrowing(&slot, written_ty) else {
+        let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
+        // A rejected write narrows to nothing it wrote, as in TypeScript.
+        if written_ty == *declared_ty || !assignable(&written_ty, declared_ty, self.resolver()) {
             self.invalidate_for_reassignment(path, target.span);
             return Ok(None);
-        };
+        }
         self.install_assignment_narrowing(path, target.clone(), written_ty.clone(), target.span)?;
         Ok(Some(written_ty))
     }
@@ -1843,35 +1821,6 @@ impl Inferer<'_> {
         Ok((typed_value, value_ty, self.error_count() > errors_before))
     }
 
-    /// The type a variable declared `declared` accepts from `value`. As in
-    /// TypeScript, `x = x + 1` and other arithmetic written back is checked
-    /// like `x += 1`, against the base type of the literal types `x` declares.
-    fn accepted_write_ty(&self, declared: &Type, value: ExprId) -> Result<Type, CompilerFailure> {
-        let value = super::expr::peel_parens(self.ast, value)?;
-        let ExprKind::Binary { op, .. } =
-            self.ast.try_expr(value).map_err(super::arena_failure)?.kind
-        else {
-            return Ok(declared.clone());
-        };
-        let arithmetic = matches!(
-            op,
-            BinOp::Add
-                | BinOp::Sub
-                | BinOp::Mul
-                | BinOp::Div
-                | BinOp::Rem
-                | BinOp::Pow
-                | BinOp::Shl
-                | BinOp::Shr
-                | BinOp::UnsignedShr
-        );
-        Ok(if arithmetic {
-            declared.widen_literal()
-        } else {
-            declared.clone()
-        })
-    }
-
     pub(super) fn infer_assign(
         &mut self,
         target: Ident,
@@ -1887,24 +1836,19 @@ impl Inferer<'_> {
             // since an unannotated const's type is its own initializer's literal, which
             // no new value can match. Infer unhinted; nested errors still surface.
             // Paired with the `is_const` guard on the re-check below: both must stay.
-            let target_ty = self.accepted_write_ty(&entry.ty, value)?;
-            let hint = (!entry.is_const).then(|| target_ty.clone());
+            let hint = (!entry.is_const).then(|| entry.ty.clone());
             let (typed_value, value_ty, reported) =
                 self.infer_assigned_value(value, hint.as_ref())?;
-            if !entry.is_const && !reported && !assignable(&value_ty, &target_ty, self.resolver()) {
+            if !entry.is_const && !reported && !assignable(&value_ty, &entry.ty, self.resolver()) {
                 self.error(
                     value_span,
-                    format!("expected `{target_ty}`, got `{value_ty}`"),
+                    format!("expected `{}`, got `{}`", entry.ty, value_ty),
                 );
             }
             let annotated = self.is_local_annotated(&target.name);
-            let flow_ty = self.assigned_flow_type(&target_ty, annotated, typed_value, value_ty)?;
-            let slot = WriteSlot {
-                declared: &entry.ty,
-                accepted: target_ty,
-            };
+            let flow_ty = self.assigned_flow_type(&entry.ty, annotated, typed_value, value_ty)?;
             let narrowed_shadow_ty =
-                self.renarrow_local_after_write(&target, entry.decl_scope, slot, flow_ty)?;
+                self.renarrow_local_after_write(&target, entry.decl_scope, &entry.ty, flow_ty)?;
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
                 target_ty: entry.ty.clone(),
@@ -1922,23 +1866,14 @@ impl Inferer<'_> {
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-                    let target_ty = self.accepted_write_ty(&ty, value)?;
                     let (typed_value, value_ty, reported) =
-                        self.infer_assigned_value(value, Some(&target_ty))?;
-                    if !reported && !assignable(&value_ty, &target_ty, self.resolver()) {
-                        self.error(
-                            value_span,
-                            format!("expected `{target_ty}`, got `{value_ty}`"),
-                        );
+                        self.infer_assigned_value(value, Some(&ty))?;
+                    if !reported && !assignable(&value_ty, &ty, self.resolver()) {
+                        self.error(value_span, format!("expected `{ty}`, got `{value_ty}`"));
                     }
                     let annotated = self.is_global_annotated(&mangled);
-                    let flow_ty =
-                        self.assigned_flow_type(&target_ty, annotated, typed_value, value_ty)?;
-                    let slot = WriteSlot {
-                        declared: &ty,
-                        accepted: target_ty,
-                    };
-                    self.renarrow_global_after_write(&target, &mangled, slot, flow_ty)?;
+                    let flow_ty = self.assigned_flow_type(&ty, annotated, typed_value, value_ty)?;
+                    self.renarrow_global_after_write(&target, &mangled, &ty, flow_ty)?;
                     TypedStmtKind::AssignGlobal {
                         ident: target,
                         mangled,
@@ -2001,26 +1936,6 @@ impl Inferer<'_> {
         })
     }
 
-    /// Report a compound write (`+=`, `++`) whose result doesn't fit its
-    /// target. As in TypeScript, the target takes the base type of its literal
-    /// types: `m += 5` on `m: 1 | 2` writes a number.
-    /// Whether the write fits.
-    pub(super) fn check_compound_write(
-        &mut self,
-        result_ty: &Type,
-        target_ty: &Type,
-        span: Span,
-    ) -> bool {
-        let target_ty = target_ty.widen_literal();
-        if assignable(result_ty, &target_ty, self.resolver()) {
-            return true;
-        }
-        if !matches!(result_ty, Type::Error) && !matches!(target_ty, Type::Error) {
-            self.error(span, format!("expected `{target_ty}`, got `{result_ty}`"));
-        }
-        false
-    }
-
     /// `x += y` lowers to `x = x + y`; the synthesized LHS reads through any active
     /// narrowing so the binary type rule sees the narrowed view.
     pub(super) fn infer_compound_assign(
@@ -2070,15 +1985,25 @@ impl Inferer<'_> {
                     .map_err(crate::typechecker::arena_failure)?;
                 (id, target_ty.clone())
             };
-            let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty.widen_literal()))?;
+            let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty))?;
             let result_ty = self.check_compound_arith(
                 op,
                 (synth_lhs, &lhs_ty),
                 (typed_value, &value_ty),
                 op_span,
             )?;
+            // Re-check assignability: catches literal-refined slots (e.g. `1|2|3`)
+            // where arithmetic widens the result to `number`.
             let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-            self.check_compound_write(&result_ty, &target_ty, value_span);
+            if !matches!(result_ty, Type::Error)
+                && !matches!(target_ty, Type::Error)
+                && !assignable(&result_ty, &target_ty, self.resolver())
+            {
+                self.error(
+                    value_span,
+                    format!("expected `{target_ty}`, got `{result_ty}`"),
+                );
+            }
             let synth_binary = self
                 .typed_ast
                 .try_push_expr(TypedExpr {
@@ -2091,9 +2016,8 @@ impl Inferer<'_> {
                     ty: result_ty.clone(),
                 })
                 .map_err(crate::typechecker::arena_failure)?;
-            let slot = WriteSlot::compound(&target_ty);
             let narrowed_shadow_ty =
-                self.renarrow_local_after_write(&target, entry.decl_scope, slot, result_ty)?;
+                self.renarrow_local_after_write(&target, entry.decl_scope, &target_ty, result_ty)?;
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
                 target_ty,
@@ -2338,22 +2262,7 @@ impl Inferer<'_> {
             placeholder(self)?
         };
         if let Some(path) = target_path {
-            self.invalidate_for_write(path.clone(), name.span);
-            if let TypedStmtKind::AssignField { value, .. } = &result {
-                let written_ty = self
-                    .typed_ast
-                    .try_expr(*value)
-                    .map_err(crate::typechecker::arena_failure)?
-                    .ty
-                    .clone();
-                self.narrow_field_after_compound_write(
-                    path,
-                    typed_receiver,
-                    &receiver_ty,
-                    &name,
-                    written_ty,
-                )?;
-            }
+            self.invalidate_for_write(path, name.span);
         }
         Ok(result)
     }
@@ -2370,7 +2279,7 @@ impl Inferer<'_> {
         stmt_span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&rw.read.widen_literal()))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&rw.read))?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2390,7 +2299,15 @@ impl Inferer<'_> {
             (typed_value, &value_ty),
             op_span,
         )?;
-        self.check_compound_write(&result_ty, &rw.write, value_span);
+        if !matches!(result_ty, Type::Error)
+            && !matches!(rw.write, Type::Error)
+            && !assignable(&result_ty, &rw.write, self.resolver())
+        {
+            self.error(
+                value_span,
+                format!("expected `{}`, got `{result_ty}`", rw.write),
+            );
+        }
         let synth_binary = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -2456,7 +2373,7 @@ impl Inferer<'_> {
             elem_ty.clone()
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty.widen_literal()))?;
+        let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty))?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2476,7 +2393,15 @@ impl Inferer<'_> {
             (typed_value, &value_ty),
             op_span,
         )?;
-        self.check_compound_write(&result_ty, &elem_ty, value_span);
+        if !matches!(result_ty, Type::Error)
+            && !matches!(elem_ty, Type::Error)
+            && !assignable(&result_ty, &elem_ty, self.resolver())
+        {
+            self.error(
+                value_span,
+                format!("expected `{elem_ty}`, got `{result_ty}`"),
+            );
+        }
         let synth_binary = self
             .typed_ast
             .try_push_expr(TypedExpr {

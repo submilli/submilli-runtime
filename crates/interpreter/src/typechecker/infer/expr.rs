@@ -7660,12 +7660,13 @@ impl Inferer<'_> {
             // A parameter typed only by the expected function type takes
             // whatever literals that type was inferred with, so its literal
             // types count as fresh.
+            let body_ty = self.local_storage_ty(&p.name, p.ty.clone());
             if decl.ty.is_some() {
                 self.scopes
-                    .insert_annotated_param(p.name.name.clone(), p.ty.clone(), p.name.span);
+                    .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
             } else {
                 self.scopes
-                    .insert(p.name.name.clone(), p.ty.clone(), false, p.name.span);
+                    .insert(p.name.name.clone(), body_ty, false, p.name.span);
             }
         }
         // Fresh narrowing stack for the body, seeded with the `const`-rooted
@@ -8090,7 +8091,13 @@ impl Inferer<'_> {
             let result_ty = postfix_result_ty(&operand_ty);
             // For non-error declared types that aren't assignable from
             // the result, mirror `infer_assign`'s rejection.
-            let fits = self.check_compound_write(&result_ty, &entry.ty, span);
+            let fits = assignable(&result_ty, &entry.ty, self.resolver());
+            if !matches!(entry.ty, Type::Error) && !fits {
+                self.error(
+                    span,
+                    format!("expected `{}`, got `{}`", entry.ty, result_ty),
+                );
+            }
             // A rejected write leaves the declared type, as in TypeScript.
             if !fits {
                 self.invalidate_for_reassignment(path, target.span);
@@ -8307,7 +8314,13 @@ impl Inferer<'_> {
             );
         }
         let result_ty = postfix_result_ty(&target_ty);
-        self.check_compound_write(&result_ty, &target_ty, name.span);
+        if !matches!(target_ty, Type::Error) && !assignable(&result_ty, &target_ty, self.resolver())
+        {
+            self.error(
+                name.span,
+                format!("expected `{target_ty}`, got `{result_ty}`"),
+            );
+        }
         if let Some(mut path) = self.expr_to_reference_path(
             self.typed_ast
                 .try_expr(typed_receiver)
@@ -8315,14 +8328,7 @@ impl Inferer<'_> {
         )? {
             path.chain
                 .push(narrowing::PathElem::Field(name.name.clone()));
-            self.invalidate_for_write(path.clone(), name.span);
-            self.narrow_field_after_compound_write(
-                path,
-                typed_receiver,
-                &receiver_ty,
-                &name,
-                result_ty.clone(),
-            )?;
+            self.invalidate_for_write(path, name.span);
         }
         Ok((
             TypedExprKind::PostfixUnary {
@@ -8368,9 +8374,10 @@ impl Inferer<'_> {
                 );
         }
         let result_ty = postfix_result_ty(&operand_ty);
-        self.check_compound_write(&result_ty, &ty, span);
-        let slot = super::stmt::WriteSlot::compound(&ty);
-        self.renarrow_global_after_write(&name, &mangled, slot, result_ty.clone())?;
+        if !matches!(ty, Type::Error) && !assignable(&result_ty, &ty, self.resolver()) {
+            self.error(span, format!("expected `{ty}`, got `{result_ty}`"));
+        }
+        self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone())?;
         Ok((
             TypedExprKind::PostfixUnary {
                 op,
@@ -8472,7 +8479,9 @@ impl Inferer<'_> {
             );
         }
         let result_ty = postfix_result_ty(&read_ty);
-        self.check_compound_write(&result_ty, &elem_ty, span);
+        if !matches!(elem_ty, Type::Error) && !assignable(&result_ty, &elem_ty, self.resolver()) {
+            self.error(span, format!("expected `{elem_ty}`, got `{result_ty}`"));
+        }
         self.invalidate_index_write(typed_receiver, typed_index, span)?;
         Ok((
             TypedExprKind::PostfixUnary {

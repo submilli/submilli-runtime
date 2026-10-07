@@ -3747,11 +3747,9 @@ impl<'a> Inferer<'a> {
 
             self.scopes.push();
             for (p, body_ty) in params.iter().zip(body_param_types.iter()) {
-                self.scopes.insert_annotated_param(
-                    p.name.name.clone(),
-                    body_ty.clone(),
-                    p.name.span,
-                );
+                let body_ty = self.local_storage_ty(&p.name, body_ty.clone());
+                self.scopes
+                    .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
             }
             let prev_return = self.current_return.replace(body_ret);
             let prev_reachable = self.enter_body_reachability();
@@ -3870,11 +3868,9 @@ impl<'a> Inferer<'a> {
 
             self.scopes.push();
             for (p, body_ty) in params.iter().zip(body_param_types.iter()) {
-                self.scopes.insert_annotated_param(
-                    p.name.name.clone(),
-                    body_ty.clone(),
-                    p.name.span,
-                );
+                let body_ty = self.local_storage_ty(&p.name, body_ty.clone());
+                self.scopes
+                    .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
             }
             let prev_return = self.current_return.replace(body_ret);
             let prev_reachable = self.enter_body_reachability();
@@ -4032,8 +4028,9 @@ impl<'a> Inferer<'a> {
     ) -> Result<crate::StmtId, CompilerFailure> {
         self.scopes.push();
         for p in params {
+            let body_ty = self.local_storage_ty(&p.name, p.ty.clone());
             self.scopes
-                .insert_annotated_param(p.name.name.clone(), p.ty.clone(), p.name.span);
+                .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
         }
         let prev_return = self.current_return.replace(ret.clone());
         let prev_reachable = self.enter_body_reachability();
@@ -4520,6 +4517,7 @@ fn bind_params_for_body(
     for (p, sp) in params.iter().zip(sig_params.iter()) {
         let ty = substitute_typevars(&sp.ty, bindings, &tc.type_limits)
             .map_err(type_limit_at(p.name.span))?;
+        let ty = tc.local_storage_ty(&p.name, ty);
         tc.scopes
             .insert_annotated_param(p.name.name.clone(), ty, p.name.span);
     }

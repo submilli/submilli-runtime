@@ -1,1 +1,2 @@
+line 7, 9, 10, 11, 12, 13 type: by-design spec §1.3 a variable that `++` writes holds the base type of its literal types
 line 14 type: artifact the runner pairs tsc's entry for the operand with our postfix node, which has the result type `number`

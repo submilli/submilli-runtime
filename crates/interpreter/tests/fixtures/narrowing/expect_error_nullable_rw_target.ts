@@ -24,7 +24,7 @@
 // a guard would change nothing — so those fall through to the operator's own
 // message rather than blaming the null.
 // expect-error: `+=` not defined for `boolean | null` and `true`
-// expect-error: `+=` not defined for `"a" | "b" | null` and `string`
+// expect-error: `+=` not defined for `"a" | "b" | null` and `"b"`
 // A numeric literal's arithmetic result widens to number, which cannot be stored
 // back into a literal-only field — `lit = lit + 1` would not compile.
 // expect-error: postfix `++` expects `number` or `bigint`, found `1 | null`

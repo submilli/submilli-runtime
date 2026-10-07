@@ -57,6 +57,7 @@ impl<'a> Inferer<'a> {
                         Some(hint) => hint,
                         None => self.widen_fresh_literals(typed_value, &value_ty)?,
                     };
+                    let bound = self.global_storage_ty(&name.name, bound);
                     self.finish_later_global(&name, &bound)?;
                     self.bind_top(
                         &name,
@@ -186,12 +187,7 @@ impl<'a> Inferer<'a> {
         }
         let flow_ty = self.assigned_flow_type(declared, annotated, value, value_ty)?;
         let narrowed = self.initializer_narrowed_ty(declared, flow_ty);
-        self.renarrow_global_after_write(
-            name,
-            mangled,
-            super::stmt::WriteSlot::plain(declared),
-            narrowed,
-        )
+        self.renarrow_global_after_write(name, mangled, declared, narrowed)
     }
 
     /// Top-level statements are not wrapped in narrowing regions, so only a
