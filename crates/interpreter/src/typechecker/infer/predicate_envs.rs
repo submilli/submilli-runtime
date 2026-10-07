@@ -100,6 +100,9 @@ impl<'a> Inferer<'a> {
                 let Some(element) = self.index_path_elem(*index)? else {
                     return Ok(None);
                 };
+                let element = self
+                    .constant_key_field(&element, &receiver_expr.ty)
+                    .unwrap_or(element);
                 state.path.chain.push(element);
                 Some(state)
             }
@@ -144,6 +147,34 @@ impl<'a> Inferer<'a> {
             narrowing::KeyKind::Element
         };
         Ok(Some(narrowing::PathElem::Key(root, kind)))
+    }
+
+    /// The field a string key names, when it is a literal or a constant holding
+    /// one, and the receiver declares that field: TypeScript reads `o["a"]`, and
+    /// `o[key]` after `const key = "a"`, as `o.a`, so a guard or write through
+    /// either spelling is one through the other.
+    fn constant_key_field(
+        &self,
+        element: &narrowing::PathElem,
+        receiver_ty: &Type,
+    ) -> Option<narrowing::PathElem> {
+        let name = match element {
+            narrowing::PathElem::Index(narrowing::LiteralValue::String(name)) => name.clone(),
+            narrowing::PathElem::Key(root, narrowing::KeyKind::Property) => {
+                let Type::StringLiteral(name) = self.constant_root_type(root)?.peel().clone()
+                else {
+                    return None;
+                };
+                name
+            }
+            _ => return None,
+        };
+        let Type::Object { fields, .. } = receiver_ty.peel() else {
+            return None;
+        };
+        fields
+            .contains_key(&name)
+            .then_some(narrowing::PathElem::Field(name))
     }
 
     pub(super) fn type_has_getter(&self, ty: &Type, field: &str) -> bool {

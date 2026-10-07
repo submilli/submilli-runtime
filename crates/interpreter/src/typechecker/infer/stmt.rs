@@ -1432,6 +1432,30 @@ impl Inferer<'_> {
         Ok(())
     }
 
+    /// A write through a key that names a declared field (`o[key] = v` after
+    /// `const key = "a"`) narrows that field as `o.a = v` does.
+    fn narrow_keyed_field_after_write(
+        &mut self,
+        receiver: ExprId,
+        index: ExprId,
+        receiver_ty: &Type,
+        value: ExprId,
+        span: Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let kind = TypedExprKind::IndexAccess { receiver, index };
+        let Some(path) = self.kind_to_reference_path(&kind)? else {
+            return Ok(());
+        };
+        let Some(narrowing::PathElem::Field(name)) = path.chain.last() else {
+            return Ok(());
+        };
+        let name = Ident {
+            name: name.clone(),
+            span,
+        };
+        self.narrow_field_after_write(path, receiver, receiver_ty, &name, value)
+    }
+
     pub(super) fn infer_assign_index(
         &mut self,
         receiver: ExprId,
@@ -1478,10 +1502,14 @@ impl Inferer<'_> {
                 help,
             );
         }
-        self.invalidate_index_write(
+        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+        self.invalidate_index_write(typed_receiver, typed_index, index_span)?;
+        self.narrow_keyed_field_after_write(
             typed_receiver,
             typed_index,
-            self.ast.try_expr(index).map_err(super::arena_failure)?.span,
+            &receiver_ty,
+            typed_value,
+            index_span,
         )?;
         Ok(TypedStmtKind::AssignIndex {
             receiver: typed_receiver,
