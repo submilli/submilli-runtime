@@ -632,9 +632,12 @@ impl<'a> Inferer<'a> {
     /// binding narrows to declared members, as TypeScript's assignment narrowing
     /// does (see [`Self::narrowed_part`]).
     pub(super) fn assignment_narrowed_ty(&self, declared: &Type, written: Type) -> Type {
+        if written == *declared {
+            return written;
+        }
         if !self.declares_readonly(declared)
             && !has_function_part(&written)
-            && !has_object_part(&written)
+            && !has_mutable_container_part(&written)
         {
             return written;
         }
@@ -1772,12 +1775,14 @@ fn has_function_part(ty: &Type) -> bool {
     }
 }
 
-/// Whether a value is or holds a structural object, whose own type can leave out
-/// an optional field the declaration has: `o = {}` must still read `o.a`.
-fn has_object_part(ty: &Type) -> bool {
+/// Whether a value is or holds a structural object or an array, whose own type
+/// can be narrower than what the binding may later store in it: `o = {}` must
+/// still read `o.a`, and `xs = [1]` with `xs: (string | number)[]` must still
+/// take a string.
+fn has_mutable_container_part(ty: &Type) -> bool {
     match ty.peel() {
-        Type::Object { .. } => true,
-        Type::Union(members) => members.iter().any(has_object_part),
+        Type::Object { .. } | Type::Array(_) => true,
+        Type::Union(members) => members.iter().any(has_mutable_container_part),
         _ => false,
     }
 }

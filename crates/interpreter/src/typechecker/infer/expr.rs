@@ -1438,10 +1438,15 @@ impl Inferer<'_> {
                     BinOp::Or => false_env,
                     _ => return Err(super::inference_failure("matched And | Or above")),
                 };
-                // `a || b` is `a` when `a` is never falsy, so only `a` meets
-                // what is expected of it.
+                // `a || b` is `a` when `a` is never falsy, so only `a` meets what
+                // is expected of it; `b` still takes it as context unless it
+                // types itself, as a variable does.
                 let lhs_decides = op == BinOp::Or && super::narrowing::is_never_falsy(&lhs_ty);
-                let rhs_expected = if lhs_decides { None } else { expected };
+                let rhs_expected = if lhs_decides && self.types_itself(rhs)? {
+                    None
+                } else {
+                    expected
+                };
                 let (typed_rhs, rhs_ty) =
                     self.infer_conditional_operand(rhs, &rhs_env, rhs_expected)?;
                 if matches!(rhs_ty.peel(), Type::Void | Type::Never)
