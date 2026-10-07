@@ -5733,6 +5733,16 @@ impl Inferer<'_> {
             if candidates.len() > 1 && candidates.iter().any(|ty| matches!(ty, Type::Tuple(_))) {
                 return self.infer_tuple_union_literal(elements, candidates);
             }
+            if candidates.len() > 1 {
+                let element_types = candidates
+                    .iter()
+                    .filter_map(|member| match member {
+                        Type::Array(element) => Some((**element).clone()),
+                        _ => None,
+                    })
+                    .collect();
+                return self.infer_array_union_literal(elements, element_types, span);
+            }
         }
 
         let expected_elem: Option<&Type> = match expected {
@@ -5960,6 +5970,87 @@ impl Inferer<'_> {
             },
             Type::Array(Box::new(element_ty)),
         ))
+    }
+
+    /// An array literal expected as a union of array types, as tsc types it: each
+    /// element takes any member's element type as its context, and the literal
+    /// is the first member whose element type every element fits. `[]` is the
+    /// first member, as its `never[]` in tsc fits them all. When no member fits
+    /// every element, the literal keeps the union of the elements' context, which
+    /// the caller then reports against the union.
+    fn infer_array_union_literal(
+        &mut self,
+        elements: Vec<crate::ArrayLiteralElement>,
+        member_elements: Vec<Type>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let context = if elements.is_empty() {
+            member_elements.first().cloned().unwrap_or(Type::Error)
+        } else {
+            Type::union(member_elements.clone())
+        };
+        let errors_before = self.error_count();
+        let (kind, ty) =
+            self.infer_array_literal(elements, Some(&Type::Array(Box::new(context))), span)?;
+        let TypedExprKind::ArrayLiteral { elements, .. } = kind else {
+            return Ok((kind, ty));
+        };
+        let element_types = self.array_literal_element_types(&elements)?;
+        let fitting = member_elements.into_iter().find(|member| {
+            element_types
+                .iter()
+                .all(|element| assignable(element, member, self.resolver()))
+        });
+        // An element that failed its context was reported already, and the
+        // literal as a whole needn't be again.
+        let element_ty = match (fitting, ty) {
+            (Some(member), _) => member,
+            _ if self.error_count() > errors_before => Type::Error,
+            (None, Type::Array(element)) => *element,
+            (None, _) => Type::Error,
+        };
+        Ok((
+            TypedExprKind::ArrayLiteral {
+                elements,
+                element_ty: element_ty.clone(),
+            },
+            Type::Array(Box::new(element_ty)),
+        ))
+    }
+
+    /// The type each element of a typed array literal holds: a value's own type,
+    /// and the element type of a spread's source.
+    fn array_literal_element_types(
+        &self,
+        elements: &[crate::TypedArrayElement],
+    ) -> Result<Vec<Type>, CompilerFailure> {
+        let mut types = Vec::with_capacity(elements.len());
+        for element in elements {
+            let ty = &self
+                .typed_ast
+                .try_expr(element.expr_id())
+                .map_err(crate::typechecker::arena_failure)?
+                .ty;
+            match element {
+                crate::TypedArrayElement::Value(_) => types.push(ty.clone()),
+                // A spread literal took the union's context too, so its own
+                // elements say what it holds: `[...[1, 2], 3]` holds numbers.
+                crate::TypedArrayElement::Spread(source) => {
+                    match &self
+                        .typed_ast
+                        .try_expr(*source)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .kind
+                    {
+                        TypedExprKind::ArrayLiteral { elements, .. } => {
+                            types.extend(self.array_literal_element_types(elements)?);
+                        }
+                        _ => types.extend(spread_element_type(ty.peel())),
+                    }
+                }
+            }
+        }
+        Ok(types)
     }
 
     fn report_array_element_mismatch(
