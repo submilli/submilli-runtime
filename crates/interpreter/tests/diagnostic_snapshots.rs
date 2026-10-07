@@ -421,3 +421,26 @@ function main(): void { }
 ";
     insta::assert_snapshot!(render_all(source));
 }
+
+/// A closely matched mismatch inside an object literal argument is reported
+/// at each field, as tsc does, and an error elsewhere in the argument (a
+/// callback's body) does not hide it.
+#[test]
+fn b5_close_match_reported_at_each_field() {
+    let source = "\
+class Box<A> {
+  constructor(public v: A) {}
+}
+function pair<T>(o: { a: T | Box<number>; b: T | Box<number> }, c: T): T {
+  return c;
+}
+function run<T>(o: { a: T | Box<number>; cb: () => void }, c: T): T {
+  return c;
+}
+function main(): void {
+  pair({ a: new Box(true), b: new Box(\"s\") }, 1);
+  run({ a: new Box(true), cb: () => { const n: number = \"x\"; } }, 1);
+}
+";
+    insta::assert_snapshot!(render_all(source));
+}

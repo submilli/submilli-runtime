@@ -1270,9 +1270,13 @@ impl Inferer<'_> {
         };
         if let Some(field) = inference.fields.get(name) {
             let before = inference.sub.clone();
+            let close_matches_before = inference.sub.close_match_count();
             let _ = inference
                 .sub
                 .unify_argument(&field.ty, value_ty, self.resolver());
+            inference
+                .sub
+                .nest_close_matches_after(close_matches_before, name);
             // Only a callback field's parameters took the fallback from the
             // hint; another field binding the same type binds it for real.
             if function_part(&field.ty).is_some() {
@@ -1484,6 +1488,7 @@ impl Inferer<'_> {
                     fix_callback_parameters(sub, &param_ty, inferred_generics);
                 }
                 let errors_before = self.error_count();
+                let diagnostics_before = self.diagnostics.len();
                 let close_matches_before = sub.close_match_count();
                 let (typed_id, arg_ty) =
                     self.infer_generic_argument(arg_id, &param_ty, &arguments, sub)?;
@@ -1504,15 +1509,26 @@ impl Inferer<'_> {
                 } else {
                     sub.unify_argument(&param_ty, &arg_ty, self.resolver())
                 };
-                // A reported argument's close matches, including those its
-                // object literal's fields recorded, would usually report the
-                // same mismatch again. The call is rejected either way, so an
-                // error elsewhere in the argument may hide a close-match one.
-                if already_reported || unified.is_err() {
+                if unified.is_err() {
                     sub.forget_close_matches_after(close_matches_before);
                 } else {
                     let arg_span = self.argument_span(typed_id)?;
-                    sub.locate_close_matches_after(close_matches_before, arg_span);
+                    sub.locate_close_matches_after(close_matches_before, |path| {
+                        self.argument_field_span(arg_id, path).unwrap_or(arg_span)
+                    });
+                    // An error reported inside a close match's field usually
+                    // is that mismatch; one elsewhere in the argument (a
+                    // callback field's body) leaves it to report.
+                    let reported: Vec<Span> = self.diagnostics[diagnostics_before..]
+                        .iter()
+                        .filter(|diagnostic| diagnostic.severity == crate::Severity::Error)
+                        .map(|diagnostic| diagnostic.span)
+                        .collect();
+                    sub.retain_close_matches_after(close_matches_before, |close_match| {
+                        close_match.argument_span.is_some_and(|span| {
+                            !reported.iter().any(|error| span_contains(span, *error))
+                        })
+                    });
                 }
                 match unified {
                     Err(error) => self.unify_argument_error(
@@ -1553,7 +1569,10 @@ impl Inferer<'_> {
                 continue;
             }
             let span = self.argument_span(check.arg)?;
-            if already_reported.contains(&span) {
+            if already_reported
+                .iter()
+                .any(|reported| span_contains(span, *reported))
+            {
                 continue;
             }
             let help =
@@ -1834,6 +1853,34 @@ impl Inferer<'_> {
             }
         };
         Ok(())
+    }
+
+    /// The span of the value of field `path` of the object literal argument
+    /// `arg`, as deep as the literal spells the path out; `None` when it names
+    /// no field of a literal.
+    fn argument_field_span(&self, arg: ExprId, path: &[String]) -> Option<Span> {
+        let mut expr = self.ast.try_expr(arg).ok()?;
+        let mut found = None;
+        for name in path {
+            while let ExprKind::Paren(inner) = expr.kind {
+                expr = self.ast.try_expr(inner).ok()?;
+            }
+            let ExprKind::ObjectLiteral { members } = &expr.kind else {
+                break;
+            };
+            let value = members.iter().rev().find_map(|member| match member {
+                crate::ObjectLiteralMember::Field(field) if field.name.name == *name => {
+                    Some(field.value)
+                }
+                _ => None,
+            });
+            let Some(value) = value else {
+                break;
+            };
+            expr = self.ast.try_expr(value).ok()?;
+            found = Some(expr.span);
+        }
+        found
     }
 
     fn argument_span(&self, arg: ExprId) -> Result<Span, crate::compiler_error::CompilerFailure> {
@@ -2239,6 +2286,11 @@ impl LiteralTypeArguments {
 fn is_literal_member_of(arg: &Type, param: &Type) -> bool {
     arg.literal_base().is_some()
         && matches!(param.peel(), Type::Union(members) if members.iter().any(|member| member.peel() == arg.peel()))
+}
+
+/// Whether `inner` lies within `outer`.
+fn span_contains(outer: Span, inner: Span) -> bool {
+    outer.file == inner.file && outer.start <= inner.start && inner.end <= outer.end
 }
 
 /// The type parameters `ty` is, alone or as a member of a union.

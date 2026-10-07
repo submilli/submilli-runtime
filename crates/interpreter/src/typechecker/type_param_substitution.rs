@@ -52,7 +52,9 @@ pub struct CloseMatch {
     pub param: Type,
     pub matched_member: Type,
     pub arg: Type,
-    /// The call argument it came from, once the call has located it.
+    /// The fields of the argument, outermost first, it was found in.
+    pub field_path: Vec<String>,
+    /// Where in the call it came from, once the call has located it.
     pub argument_span: Option<Span>,
 }
 
@@ -131,12 +133,38 @@ impl TypeParamSubstitution {
         distinct
     }
 
-    /// Locate the close matches recorded after the first `count` in the
-    /// call argument at `argument_span`.
-    pub fn locate_close_matches_after(&mut self, count: usize, argument_span: Span) {
+    /// Locate the close matches recorded after the first `count` in a call
+    /// argument, at the span `locate` gives for each one's field path.
+    pub fn locate_close_matches_after(
+        &mut self,
+        count: usize,
+        mut locate: impl FnMut(&[String]) -> Span,
+    ) {
         for close_match in self.close_matches.iter_mut().skip(count) {
-            close_match.argument_span = Some(argument_span);
+            close_match.argument_span = Some(locate(&close_match.field_path));
         }
+    }
+
+    /// Record that the close matches after the first `count` were found in
+    /// field `name` of the argument.
+    pub fn nest_close_matches_after(&mut self, count: usize, name: &str) {
+        for close_match in self.close_matches.iter_mut().skip(count) {
+            close_match.field_path.insert(0, name.to_string());
+        }
+    }
+
+    /// Keep only the close matches after the first `count` that `keep`
+    /// accepts.
+    pub fn retain_close_matches_after(
+        &mut self,
+        count: usize,
+        mut keep: impl FnMut(&CloseMatch) -> bool,
+    ) {
+        let mut index = 0;
+        self.close_matches.retain(|close_match| {
+            index += 1;
+            index <= count || keep(close_match)
+        });
     }
 
     /// How many close matches wait to be checked.
@@ -502,6 +530,8 @@ struct Unifier<'a> {
     /// Whether the argument is an object or array literal, which widens a
     /// binding other literals gave to the union of the two.
     combines_literals: bool,
+    /// The object fields, outermost first, the walk is inside.
+    field_path: Vec<String>,
 }
 
 impl<'a> Unifier<'a> {
@@ -677,7 +707,7 @@ impl<'a> Unifier<'a> {
                                 got: arg_ty.clone(),
                             });
                         };
-                        self.unify(&expected.ty, &actual.ty)?;
+                        self.in_field(name, |u| u.unify(&expected.ty, &actual.ty))?;
                     }
                     return Ok(());
                 }
@@ -687,14 +717,14 @@ impl<'a> Unifier<'a> {
                         got: arg_ty.clone(),
                     });
                 }
-                for (va, vb) in a.values().zip(b.values()) {
+                for ((name, va), vb) in a.iter().zip(b.values()) {
                     if va.optional != vb.optional {
                         return Err(UnifyError::Mismatch {
                             expected: param_ty.clone(),
                             got: arg_ty.clone(),
                         });
                     }
-                    self.unify(&va.ty, &vb.ty)?;
+                    self.in_field(name, |u| u.unify(&va.ty, &vb.ty))?;
                 }
                 Ok(())
             }
@@ -909,6 +939,7 @@ impl<'a> Unifier<'a> {
             is_argument: false,
             contravariant: false,
             combines_literals: false,
+            field_path: Vec::new(),
         }
     }
 
@@ -1397,8 +1428,16 @@ impl<'a> Unifier<'a> {
             param: Type::union(params.to_vec()),
             matched_member: matched_member.clone(),
             arg: arg.clone(),
+            field_path: self.field_path.clone(),
             argument_span: None,
         });
+    }
+
+    fn in_field<R>(&mut self, name: &str, walk: impl FnOnce(&mut Self) -> R) -> R {
+        self.field_path.push(name.to_string());
+        let walked = walk(self);
+        self.field_path.pop();
+        walked
     }
 
     /// Offer `candidate` as `type_var`'s whole-union fallback. As tsc picks
