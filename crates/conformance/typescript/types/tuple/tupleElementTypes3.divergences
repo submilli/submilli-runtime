@@ -1,12 +1,1 @@
-types: 3 of 5 tsc entries compared, 2 differ
-
-line 2: b
-  tsc:  null
-  ours: number
-
-line 2: [0, null]
-  tsc:  [number, null]
-  ours: number[]
-
-errors:
-line 2: ours: expected `number` (matching first element), got `null` (tsc accepts)
+types: 3 of 5 tsc entries compared, 0 differ

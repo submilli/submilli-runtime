@@ -1,0 +1,25 @@
+// An array literal that an array pattern takes apart is typed as a tuple, as
+// TypeScript does, so each name gets its own element's type.
+let [moduleCount, moduleLabel] = [1, "one"];
+
+function main(): void {
+  const [n, s, flag] = [1, "s", true];
+  const text: string = s;
+  assert(n === 1 && text === "s" && flag, "mixed element types");
+  let [x, , z] = [1, true, "z"];
+  x = 2;
+  const zText: string = z;
+  assert(x === 2 && zText === "z", "a hole skips an element");
+  const [o, list] = [{ k: 1 }, [1, 2]];
+  list.push(3);
+  assert(o.k === 1 && list.length === 3, "object and array elements");
+  const [head, ...tail] = [1, "a", true];
+  const tailText: string = tail[0];
+  assert(head === 1 && tailText === "a" && tail[1] && tail.length === 2, "a rest element takes the remaining elements");
+  const [...whole] = [1, 2, 3];
+  whole.push(4);
+  assert(whole.length === 4, "a pattern of only a rest element keeps the literal an array");
+  const label: string = moduleLabel;
+  moduleCount = 2;
+  assert(moduleCount === 2 && label === "one", "a module-level pattern");
+}

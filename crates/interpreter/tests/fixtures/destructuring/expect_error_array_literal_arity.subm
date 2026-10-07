@@ -1,0 +1,8 @@
+// expect-error: destructuring pattern has 3 elements, but right-hand side tuple has 2 elements
+// expect-error-count: 1
+// TypeScript rejects a pattern longer than the array literal it takes apart;
+// JavaScript would bind `c` to `undefined`.
+function main(): void {
+  let [a, b, c] = [1, 2];
+  console.log(a + b + c);
+}
