@@ -4614,7 +4614,7 @@ impl Inferer<'_> {
 
     /// Wrap an already-typed interpolation expression in a
     /// `MethodCall { name: "toString" }` unless its type is already
-    /// `Type::String`. Uses the exact valid-types allowlist /
+    /// `Type::String`; a `never` value converts as `"" + value`. Uses the exact valid-types allowlist /
     /// diagnostic shape as the `String(x)` coercion call, so `String(x)` and
     /// `${x}` route through the same dispatch path at codegen time.
     ///
@@ -4637,7 +4637,7 @@ impl Inferer<'_> {
             return Ok(expr_id);
         }
         // A `never` value has no `toString` to call, yet a read of a `never[]`
-        // an alias filled holds one, so it converts as `"" + value` does.
+        // an alias filled holds a value.
         if matches!(peeled, Type::Never) {
             return self.concatenated_onto_empty_string(expr_id, substitution_span);
         }
@@ -4743,25 +4743,14 @@ impl Inferer<'_> {
         value: ExprId,
         span: Span,
     ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
-        let empty = self
-            .typed_ast
-            .try_push_expr(TypedExpr {
-                kind: TypedExprKind::String(String::new()),
-                span,
-                ty: Type::String,
-            })
-            .map_err(crate::typechecker::arena_failure)?;
-        self.typed_ast
-            .try_push_expr(TypedExpr {
-                kind: TypedExprKind::Binary {
-                    op: BinOp::Add,
-                    lhs: empty,
-                    rhs: value,
-                },
-                span,
-                ty: Type::String,
-            })
-            .map_err(crate::typechecker::arena_failure)
+        let empty =
+            self.push_synthetic_expr(TypedExprKind::String(String::new()), Type::String, span)?;
+        let kind = TypedExprKind::Binary {
+            op: BinOp::Add,
+            lhs: empty,
+            rhs: value,
+        };
+        self.push_synthetic_expr(kind, Type::String, span)
     }
 
     /// The value of an object literal's field when it is spelled as a literal.

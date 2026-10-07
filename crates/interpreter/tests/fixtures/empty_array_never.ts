@@ -4,6 +4,10 @@ function fill(list: number[]): void {
   list.push(41);
 }
 
+function flag(list: boolean[]): void {
+  list.push(true);
+}
+
 function main(): void {
   let visits = 0;
   for (const v of []) {
@@ -41,4 +45,7 @@ function main(): void {
   const shown = `${filled.list[0]}`;
   assert(shown.length === 2 && shown === "41", "interpolating an element it was given");
   assert(`${filled.list[0]}${filled.list[0]}` === "4141", "interpolations concatenate as strings");
+  const flags = { list: [] };
+  flag(flags.list);
+  assert(`is ${flags.list[0]}${1}` === "is true1", "interpolating a boolean beside text and a number");
 }
