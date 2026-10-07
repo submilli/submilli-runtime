@@ -10956,6 +10956,8 @@ fn has_to_string(ty: &Type) -> bool {
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Array(_)
+            // A tuple is an array at runtime, and answers `toString` as one.
+            | Type::Tuple(_)
             | Type::Object { .. }
             // Class instances answer `toString` through vtable slot 0
             // (a user method fills it, else "[object Object]").
