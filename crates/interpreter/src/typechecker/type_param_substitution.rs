@@ -240,7 +240,7 @@ impl TypeParamSubstitution {
             .cloned()
     }
 
-    fn is_unbound(&self, name: &str) -> bool {
+    pub(crate) fn is_unbound(&self, name: &str) -> bool {
         match self.bindings.get(name) {
             None => true,
             Some(bound) => matches!(bound.peel(), Type::TypeVar(other) if other == name),
@@ -847,6 +847,9 @@ impl<'a> Unifier<'a> {
                 if self.defer_to_fitting_fallback(pa, arg_ty) {
                     return Ok(());
                 }
+                if self.infer_through_structured_member(pa, arg_ty) {
+                    return Ok(());
+                }
                 for m in self.fallback_type_vars_last(pa) {
                     let snap = self.snapshot();
                     if self.unify(m, arg_ty).is_ok() {
@@ -1287,6 +1290,34 @@ impl<'a> Unifier<'a> {
         self.record_close_match(params, sibling, arg);
         self.offer_whole_union_fallback(type_var, arg.clone());
         true
+    }
+
+    /// tsc infers from an argument to a union parameter's members that name
+    /// a type parameter inside them before the bare type parameter, which
+    /// takes the whole argument only at a lower priority: `{ v: m }` for
+    /// `A | Box<A>` binds `A` to `m`'s type. Returns whether such a member
+    /// took the argument and bound the lone unbound type parameter.
+    fn infer_through_structured_member(&mut self, params: &[Type], arg: &Type) -> bool {
+        if !self.infers_from_covariant_argument() {
+            return false;
+        }
+        let Some((Type::TypeVar(name), others)) = self
+            .split_lone_unbound_type_var(params)
+            .map(|(type_var, others)| (type_var.peel().clone(), others))
+        else {
+            return false;
+        };
+        for other in others {
+            if !super::infer::expr::mentions_type_var(other, &|var| var == name) {
+                continue;
+            }
+            let snap = self.snapshot();
+            if self.unify(other, arg).is_ok() && !self.sub.is_unbound(&name) {
+                return true;
+            }
+            self.restore(snap);
+        }
+        false
     }
 
     /// Unify `arg` with one of `others`, keeping its bindings, when
