@@ -99,9 +99,9 @@ pub fn import_shared_closure_caches(
 /// Allocates the globals that cache a function's closure, so every read of a
 /// top-level function yields the same value and `f === f` holds. The closure
 /// has no environment, so one instance serves every read. Each starts null and
-/// is filled on first read. A function read here gets a cache of its own
-/// unless it imported one; each function `exported` names gets a shared cache.
-/// Returns how many globals were added.
+/// is filled on first read. Each function this module exports gets one shared
+/// `anyref` cache; any other function read here gets a typed cache of its own,
+/// unless it imported a shared one. Returns how many globals were added.
 pub fn allocate_closure_globals(
     metas: &[AdapterMeta],
     exported: &BTreeMap<MangledName, MangledName>,
@@ -112,9 +112,8 @@ pub fn allocate_closure_globals(
     let shared: BTreeSet<&MangledName> = exported.values().collect();
     let mut count = 0usize;
     for meta in metas {
-        if shared.contains(&meta.mangled)
-            || symbols.adapter_closure_global_idx(&meta.mangled).is_some()
-        {
+        let has_imported_cache = symbols.adapter_closure_global_idx(&meta.mangled).is_some();
+        if shared.contains(&meta.mangled) || has_imported_cache {
             continue;
         }
         let closure_struct_idx = symbols

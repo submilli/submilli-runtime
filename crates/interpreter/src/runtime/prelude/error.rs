@@ -635,9 +635,8 @@ fn error_equals(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
 /// JavaScript does: `message` never is, and `name` is one only when the
 /// instance assigned it. An assigned `name` can't be told from the one the
 /// constructor stored, so a `name` equal to a built-in error class's is taken
-/// as the constructor's. Likewise a subclass that
-/// redeclares `message` as a class field still has it left out. `None` for a
-/// non-Error value.
+/// as the constructor's. Likewise a subclass that redeclares `message` as a
+/// class field still has it left out. `None` for a non-Error value.
 pub(crate) fn non_enumerable_slots(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
