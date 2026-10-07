@@ -1141,7 +1141,9 @@ impl<'a> Parser<'a> {
         self.advance();
 
         let mut members: Vec<crate::InterfaceMember> = Vec::new();
-        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
+        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof)
+            && !self.peek_starts_declaration()
+        {
             // Call signatures `(params): ret;` are stored under the sentinel name `@call`.
             // The `@` prefix is not a valid identifier start, so collisions with user methods
             // are impossible.
@@ -3557,7 +3559,9 @@ impl<'a> Parser<'a> {
         let open = self.advance();
         let mut fields: Vec<TypeAnnotationField> = Vec::new();
         let mut index = None;
-        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof) {
+        while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof)
+            && !self.peek_starts_declaration()
+        {
             let member_start = self.peek().span.start;
             let readonly = self.eat_readonly_property_modifier();
             if self.peek_is_parameterless_index_signature() {
@@ -3598,6 +3602,23 @@ impl<'a> Parser<'a> {
             kind: TypeAnnotationKind::Object { index, fields },
             span: self.span(open.span.start, close.span.end),
         })
+    }
+
+    /// Whether the next tokens start a declaration (`function f`, `class C`, `type T`,
+    /// …), which no type member can: a keyword is a member name only before `:`, `?`
+    /// or `(`. A member list that reaches one was left unclosed, so it stops there
+    /// and leaves the declaration to be parsed.
+    fn peek_starts_declaration(&self) -> bool {
+        let declaration_keyword = matches!(
+            self.peek().kind,
+            TokenKind::Function
+                | TokenKind::Class
+                | TokenKind::Let
+                | TokenKind::Const
+                | TokenKind::Enum
+                | TokenKind::Interface
+        ) || self.peek_identifier_text_is("type");
+        declaration_keyword && matches!(self.peek_at(1).kind, TokenKind::Identifier)
     }
 
     /// `new (params): T` or `new <T>(params): T` inside a type literal: a construct
