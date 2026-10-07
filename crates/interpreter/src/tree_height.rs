@@ -1094,6 +1094,12 @@ impl TypedChildren {
                 ..
             } => {
                 self.expr(*discriminant);
+                self.nodes.extend(
+                    cases
+                        .iter()
+                        .flat_map(crate::TypedSwitchCase::label_comparisons)
+                        .map(Node::Expr),
+                );
                 self.nodes
                     .extend(cases.iter().map(|case| Node::Stmt(case.body)));
                 self.nodes.extend(default.map(Node::Stmt));

@@ -992,6 +992,9 @@ fn emit_case_comparison(
         return Ok(());
     }
     match value {
+        TypedSwitchValue::Expr { comparison, .. } => {
+            emit_expr(emitter, ctx, *comparison)?;
+        }
         TypedSwitchValue::Null { .. } => {
             // case null: accepted only when discriminant can hold null (nullable ref)
             emitter.instruction(Instruction::LocalGet(disc_local));
@@ -1074,7 +1077,7 @@ fn switch_case_primitive_type(value: &TypedSwitchValue) -> Option<Type> {
             ..
         } => Some(Type::String),
         TypedSwitchValue::Boolean { .. } => Some(Type::Boolean),
-        TypedSwitchValue::Null { .. } => None,
+        TypedSwitchValue::Null { .. } | TypedSwitchValue::Expr { .. } => None,
     }
 }
 

@@ -2464,6 +2464,9 @@ mod tests {
                 ..
             } => {
                 collect_expr_types(ta, *discriminant, out);
+                for comparison in cases.iter().flat_map(crate::TypedSwitchCase::label_comparisons) {
+                    collect_expr_types(ta, comparison, out);
+                }
                 for case in cases {
                     collect_body_expr_types(ta, case.body, out);
                 }

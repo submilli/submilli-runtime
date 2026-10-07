@@ -127,15 +127,17 @@ impl Inferer<'_> {
         }
         self.switch_frames.pop();
         let switch = switch?;
-        if opening.is_empty() {
+        if opening.is_empty() && !has_expression_label(&switch) {
             return Ok(switch);
         }
-        self.wrap_with_hoisted_functions(switch_id, switch, opening, switch_span)
+        self.bind_discriminant_first(switch_id, switch, opening, switch_span)
     }
 
-    /// Put the hoisted functions' opening statements ahead of the switch, after
-    /// the discriminant: `{ let temp = discriminant; opening…; switch (temp) }`.
-    fn wrap_with_hoisted_functions(
+    /// Bind the discriminant to a temporary ahead of the switch, which a label
+    /// that isn't a literal compares against, and put the hoisted functions'
+    /// opening statements after it: `{ let temp = discriminant; opening…;
+    /// switch (temp) }`.
+    fn bind_discriminant_first(
         &mut self,
         switch_id: StmtId,
         mut switch: TypedStmtKind,
@@ -180,11 +182,7 @@ impl Inferer<'_> {
             .try_expr(*discriminant)
             .map_err(crate::typechecker::arena_failure)?
             .span;
-        let name = Ident {
-            // `#` cannot occur in a source identifier.
-            name: format!("#switch_discriminant_{}", switch_id.0),
-            span,
-        };
+        let name = discriminant_temporary(switch_id, span);
         let value = std::mem::replace(
             discriminant,
             self.typed_ast
@@ -397,10 +395,22 @@ impl Inferer<'_> {
                     None => signed_number()?,
                 };
                 let Some(lit) = lit else {
-                    self.error(
-                        value_span,
-                        "`case` label must be a literal (string, number, boolean, `null`, or enum member)".to_string(),
-                    );
+                    let label = self.expression_case_label(
+                        switch_id,
+                        typed_disc,
+                        &disc_ty,
+                        typed_val,
+                        &case_operand.ty,
+                        case_span,
+                    )?;
+                    if let TypedSwitchValue::Expr {
+                        literal: Some(literal),
+                        ..
+                    } = &label
+                    {
+                        seen.entry(literal.clone()).or_insert(value_span);
+                    }
+                    typed_values.push(label);
                     continue;
                 };
                 if let Some(prev) = duplicate_key(&lit, &mut seen, &mut saw_null) {
@@ -416,22 +426,7 @@ impl Inferer<'_> {
                 typed_values.push(lit);
             }
 
-            let mut iter = typed_values.iter();
-            let true_env = match iter.next() {
-                None => narrowing::NarrowEnv::new(),
-                Some(first) => {
-                    let mut acc =
-                        self.predicate_env_for_case_value(typed_disc, disc_source_span, first)?;
-                    for value in iter {
-                        let next =
-                            self.predicate_env_for_case_value(typed_disc, disc_source_span, value)?;
-                        let (joined, _) =
-                            narrowing::union_envs(acc, BTreeSet::new(), next, BTreeSet::new());
-                        acc = joined;
-                    }
-                    acc
-                }
-            };
+            let true_env = self.case_true_env(typed_disc, disc_source_span, &typed_values)?;
 
             let body_span = self
                 .ast
@@ -528,6 +523,104 @@ impl Inferer<'_> {
         })
     }
 
+    /// A `case` label that isn't a literal, compared with `===` at run time as
+    /// `tsc` allows. `label_ty` is its type as compared, which keeps literal types.
+    /// The comparison spans the whole clause, `case_span`: it is no expression
+    /// in the source, so it must not take the label's own span.
+    fn expression_case_label(
+        &mut self,
+        switch_id: StmtId,
+        typed_disc: ExprId,
+        disc_ty: &Type,
+        label: ExprId,
+        label_ty: &Type,
+        case_span: Span,
+    ) -> Result<TypedSwitchValue, CompilerFailure> {
+        let span = self
+            .typed_ast
+            .try_expr(label)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        let disc_span = self
+            .typed_ast
+            .try_expr(typed_disc)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        let discriminant = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::LocalRef {
+                    ident: discriminant_temporary(switch_id, disc_span),
+                    boxed: false,
+                },
+                span: disc_span,
+                ty: disc_ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        let comparison = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Binary {
+                    op: BinOp::Eq,
+                    lhs: discriminant,
+                    rhs: label,
+                },
+                span: case_span,
+                ty: Type::Boolean,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(TypedSwitchValue::Expr {
+            label,
+            comparison,
+            literal: narrowing::unit_literal_value(label_ty),
+            span,
+        })
+    }
+
+    /// The narrowing a clause's body runs under: the discriminant equals one of
+    /// its labels.
+    fn case_true_env(
+        &mut self,
+        typed_disc: ExprId,
+        disc_source_span: Span,
+        values: &[TypedSwitchValue],
+    ) -> Result<narrowing::NarrowEnv, CompilerFailure> {
+        let mut literal_values: Vec<TypedSwitchValue> = Vec::new();
+        for value in values {
+            let TypedSwitchValue::Expr { label, span, .. } = value else {
+                literal_values.push(value.clone());
+                continue;
+            };
+            // A label of literal type narrows to its literals; any other leaves
+            // the discriminant as it is.
+            let label_ty = self
+                .typed_ast
+                .try_expr(*label)
+                .map_err(crate::typechecker::arena_failure)?
+                .ty
+                .clone();
+            let Some(literals) = literal_members(&label_ty) else {
+                return Ok(narrowing::NarrowEnv::new());
+            };
+            literal_values.extend(
+                literals
+                    .into_iter()
+                    .map(|literal| literal_switch_value(literal, *span)),
+            );
+        }
+        let mut iter = literal_values.iter();
+        let Some(first) = iter.next() else {
+            return Ok(narrowing::NarrowEnv::new());
+        };
+        let mut acc = self.predicate_env_for_case_value(typed_disc, disc_source_span, first)?;
+        for value in iter {
+            let next = self.predicate_env_for_case_value(typed_disc, disc_source_span, value)?;
+            let (joined, _) = narrowing::union_envs(acc, BTreeSet::new(), next, BTreeSet::new());
+            acc = joined;
+        }
+        Ok(acc)
+    }
+
     fn push_switch_value_expr(
         &mut self,
         value: &TypedSwitchValue,
@@ -547,6 +640,7 @@ impl Inferer<'_> {
                 (TypedExprKind::Boolean(*value), Type::Boolean, *span)
             }
             TypedSwitchValue::Null { span } => (TypedExprKind::Null, Type::Null, *span),
+            TypedSwitchValue::Expr { label, .. } => return Ok(*label),
             TypedSwitchValue::Enum {
                 enum_name,
                 member,
@@ -843,6 +937,49 @@ fn classify_switch_case_value(kind: &TypedExprKind, span: Span) -> Option<TypedS
     }
 }
 
+fn has_expression_label(switch: &TypedStmtKind) -> bool {
+    let TypedStmtKind::Switch { cases, .. } = switch else {
+        return false;
+    };
+    cases.iter().any(|case| {
+        case.values
+            .iter()
+            .any(|value| matches!(value, TypedSwitchValue::Expr { .. }))
+    })
+}
+
+/// The name of the temporary a switch's discriminant is bound to, when a hoisted
+/// function or a label that isn't a literal needs it read more than once.
+fn discriminant_temporary(switch_id: StmtId, span: Span) -> Ident {
+    Ident {
+        // `#` cannot occur in a source identifier.
+        name: format!("#switch_discriminant_{}", switch_id.0),
+        span,
+    }
+}
+
+/// The literals `ty` is made of, or `None` if it holds any other value.
+fn literal_members(ty: &Type) -> Option<Vec<narrowing::LiteralValue>> {
+    match ty.peel() {
+        Type::Union(members) => members
+            .iter()
+            .map(narrowing::unit_literal_value)
+            .collect(),
+        other => narrowing::unit_literal_value(other).map(|literal| vec![literal]),
+    }
+}
+
+fn literal_switch_value(literal: narrowing::LiteralValue, span: Span) -> TypedSwitchValue {
+    match literal {
+        narrowing::LiteralValue::String(value) => TypedSwitchValue::String { value, span },
+        narrowing::LiteralValue::Number(value) => TypedSwitchValue::Number {
+            value: value.0,
+            span,
+        },
+        narrowing::LiteralValue::Boolean(value) => TypedSwitchValue::Boolean { value, span },
+    }
+}
+
 /// Null uses `saw_null` separately because there's no `LiteralValue::Null` variant.
 fn duplicate_key(
     value: &TypedSwitchValue,
@@ -855,7 +992,8 @@ fn duplicate_key(
         | TypedSwitchValue::Number { span, .. }
         | TypedSwitchValue::Boolean { span, .. }
         | TypedSwitchValue::Null { span }
-        | TypedSwitchValue::Enum { span, .. } => *span,
+        | TypedSwitchValue::Enum { span, .. }
+        | TypedSwitchValue::Expr { span, .. } => *span,
     };
     if let Some(k) = key {
         if let Some(prev) = seen.insert(k, span) {
@@ -880,6 +1018,7 @@ fn switch_value_to_literal_value(value: &TypedSwitchValue) -> Option<narrowing::
         )),
         TypedSwitchValue::Boolean { value, .. } => Some(narrowing::LiteralValue::Boolean(*value)),
         TypedSwitchValue::Null { .. } => None,
+        TypedSwitchValue::Expr { literal, .. } => literal.clone(),
         TypedSwitchValue::Enum { value, .. } => match value {
             EnumVariantPayload::Number(n) => Some(narrowing::LiteralValue::Number(
                 crate::types::LiteralF64(*n),
