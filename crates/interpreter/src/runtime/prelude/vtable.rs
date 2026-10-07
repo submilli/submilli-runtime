@@ -583,7 +583,12 @@ fn build_object_vtable(
                     *abi_result(results, 0)? = value;
                     return Ok(());
                 }
-                let st = write_submilli_string_struct(&mut *caller, "[object Object]")?;
+                let tag = match collection_backing_kind(&mut *caller, abi_arg(params, 0)?)? {
+                    Some(CollectionBacking::Map) => "[object Map]",
+                    Some(CollectionBacking::Set) => "[object Set]",
+                    None => "[object Object]",
+                };
+                let st = write_submilli_string_struct(&mut *caller, tag)?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             })
@@ -712,7 +717,7 @@ fn json_property_slots(
     entries
         .try_reserve_exact(count as usize)
         .map_err(fatal_host_error)?;
-    let error_slots = super::error::json_hidden_slots(caller, recv)?;
+    let error_slots = super::error::non_enumerable_slots(caller, recv)?;
     for slot in 0..count {
         if error_slots
             .as_ref()

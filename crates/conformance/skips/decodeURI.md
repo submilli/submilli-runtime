@@ -3,7 +3,7 @@
 Source: `test/built-ins/decodeURI/**` (55 files). The function exists as an
 auto-imported free function (spec.md "URI handling"). The port covers every
 malformed-escape family, the valid 1- to 4-byte UTF-8 decodings, the reserved
-set, and the literal-URL vectors. 44 ported: 43 passing and 1 `expect-fail`.
+set, and the literal-URL vectors. 44 ported, all passing.
 Representative rejected originals are under `rejected/decodeURI/`.
 
 Blanket rules (SKIPS.md) cover `name.js`, `not-a-constructor.js` and
@@ -20,19 +20,12 @@ Porting adaptations used throughout (README rules):
 - The `indexO`/`indexP` range reporting before each `Test262Error` becomes one
   assert that names the first failing value and the failure count.
 - Labeled `continue l` becomes an early return from a small helper.
-- `URIError` is erased to the base `Error` (README: there are no error
-  subclasses), so "throws URIError" checks become "throws". The throwing checks
-  inline their try/catch instead of calling a helper.
+- The throwing checks inline their try/catch, which tests for the built-in
+  `URIError`, instead of calling a helper.
 
 One loop is trimmed for run time, and the case says so in its header.
 `A2.5_T1` walks all ~983k four-byte sequences upstream. The port samples the
 third byte at five values and keeps every first, second and fourth byte.
-
-## Known gaps (`expect-fail`)
-
-| Case | Gap |
-|:--|:--|
-| `S15.1.3.1_A2.1_T1` | A lone surrogate in the input comes back as U+FFFD (`decodeURI("\uD800")` is `"\uFFFD"`). The standard copies code units outside an escape unchanged, so all 2,048 surrogate code units differ, and every other code unit passes. spec.md documents the U+FFFD replacement only for the encoders. SUB-1158. |
 
 ## Rejected (design decisions)
 

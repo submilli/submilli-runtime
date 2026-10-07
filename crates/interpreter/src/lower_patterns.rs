@@ -267,7 +267,14 @@ impl LowerCtx {
         let pattern_span = binding.span();
         let dst = self.fresh("dst", pattern_span)?;
         let is_const = matches!(binding_kind, BindingKind::Const);
-        let mut decompose = self.emit_decompose(ast, binding, dst.clone(), is_const, None)?;
+        let mut decompose = self.emit_decompose(
+            ast,
+            binding,
+            dst.clone(),
+            is_const,
+            /*doc=*/ None,
+            /*tuple_len=*/ None,
+        )?;
         let mut source_bindings = Vec::new();
         for &id in &decompose {
             match &ast
@@ -404,6 +411,13 @@ impl LowerCtx {
             }
         };
 
+        let tuple_len = match ty {
+            None => tuple_source_len(ast, &binding, value)?,
+            Some(_) => None,
+        };
+        if tuple_len.is_some() {
+            ast.tuple_pattern_sources.insert(value);
+        }
         let pattern_span = binding.span();
         let dst = self.fresh("dst", pattern_span)?;
 
@@ -421,7 +435,7 @@ impl LowerCtx {
             .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
 
         let mut out = vec![dst_stmt];
-        out.extend(self.emit_decompose(ast, binding, dst, is_const, doc)?);
+        out.extend(self.emit_decompose(ast, binding, dst, is_const, doc, tuple_len)?);
         Ok(out)
     }
 
@@ -437,13 +451,17 @@ impl LowerCtx {
             };
             let fresh = self.fresh(PATTERN_PARAM, pattern.span())?;
             param.name = fresh.clone();
-            decompose.extend(self.emit_decompose(ast, pattern, fresh, /*is_const=*/ true, None)?);
+            decompose.extend(self.emit_decompose(
+                ast, pattern, fresh, /*is_const=*/ true, /*doc=*/ None,
+                /*tuple_len=*/ None,
+            )?);
         }
 
         Ok(())
     }
 
-    /// `doc` attaches to the first emitted stmt only.
+    /// `doc` attaches to the first emitted stmt only. `tuple_len` is the length
+    /// of the tuple-typed array literal `source` holds, if it holds one.
     fn emit_decompose(
         &mut self,
         ast: &mut Ast,
@@ -451,6 +469,7 @@ impl LowerCtx {
         source: Ident,
         is_const: bool,
         mut doc: Option<crate::DocComment>,
+        tuple_len: Option<usize>,
     ) -> Result<Vec<StmtId>, CompilerFailure> {
         let mut out = Vec::new();
         match binding {
@@ -552,62 +571,15 @@ impl LowerCtx {
                     out.push(decl);
                 }
                 if let Some(rest_ident) = rest {
-                    // prelude slice(start, end) — pass source.length as end to copy remaining
-                    let from_lit = ast
-                        .try_push_expr(Expr {
-                            kind: ExprKind::Number(elems_len as f64),
-                            span: rest_ident.span,
-                        })
-                        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
-                    let recv_for_slice = ast
-                        .try_push_expr(Expr {
-                            kind: ExprKind::Identifier(source.clone()),
-                            span: rest_ident.span,
-                        })
-                        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
-                    let slice_callee = ast
-                        .try_push_expr(Expr {
-                            kind: ExprKind::FieldAccess {
-                                receiver: recv_for_slice,
-                                name: Ident {
-                                    name: "slice".to_string(),
-                                    span: rest_ident.span,
-                                },
-                            },
-                            span: rest_ident.span,
-                        })
-                        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
-                    let recv_for_len = ast
-                        .try_push_expr(Expr {
-                            kind: ExprKind::Identifier(source.clone()),
-                            span: rest_ident.span,
-                        })
-                        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
-                    let length_access = ast
-                        .try_push_expr(Expr {
-                            kind: ExprKind::FieldAccess {
-                                receiver: recv_for_len,
-                                name: Ident {
-                                    name: "length".to_string(),
-                                    span: rest_ident.span,
-                                },
-                            },
-                            span: rest_ident.span,
-                        })
-                        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
-                    let slice_call = ast
-                        .try_push_expr(Expr {
-                            kind: ExprKind::Call {
-                                callee: slice_callee,
-                                type_args: None,
-                                args: vec![from_lit, length_access],
-                            },
-                            span: rest_ident.span,
-                        })
-                        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+                    let rest_value = match tuple_len {
+                        Some(len) if len > elems_len => {
+                            remaining_elements(ast, &source, elems_len..len, rest_ident.span)?
+                        }
+                        _ => array_rest(ast, &source, elems_len, rest_ident.span)?,
+                    };
                     let decl = ast
                         .try_push_stmt(Stmt {
-                            kind: make_decl(is_const, rest_ident.clone(), slice_call, doc.take()),
+                            kind: make_decl(is_const, rest_ident.clone(), rest_value, doc.take()),
                             span: rest_ident.span,
                         })
                         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
@@ -646,6 +618,128 @@ impl LowerCtx {
 
         Ok(())
     }
+}
+
+/// The length of `value` when it is an array literal without spreads that
+/// `binding`, an array pattern, takes apart slot by slot, so TypeScript types
+/// it as a tuple. A pattern of only a rest element takes the literal whole, as
+/// an array.
+fn tuple_source_len(
+    ast: &Ast,
+    binding: &Binding,
+    value: ExprId,
+) -> Result<Option<usize>, CompilerFailure> {
+    let Binding::Array { elems, .. } = binding else {
+        return Ok(None);
+    };
+    if elems.is_empty() {
+        return Ok(None);
+    }
+    let ExprKind::ArrayLiteral { elements } = &ast
+        .try_expr(value)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+        .kind
+    else {
+        return Ok(None);
+    };
+    let has_spread = elements
+        .iter()
+        .any(|element| matches!(element, crate::ArrayLiteralElement::Spread { .. }));
+    Ok((!has_spread).then_some(elements.len()))
+}
+
+/// `source.slice(from, source.length)`: the elements an array pattern's rest
+/// element collects.
+fn array_rest(
+    ast: &mut Ast,
+    source: &Ident,
+    from: usize,
+    span: Span,
+) -> Result<ExprId, CompilerFailure> {
+    let from_lit = push_expr(ast, ExprKind::Number(from as f64), span)?;
+    let slice_receiver = push_expr(ast, ExprKind::Identifier(source.clone()), span)?;
+    let slice_callee = push_expr(
+        ast,
+        ExprKind::FieldAccess {
+            receiver: slice_receiver,
+            name: Ident {
+                name: "slice".to_string(),
+                span,
+            },
+        },
+        span,
+    )?;
+    let length_receiver = push_expr(ast, ExprKind::Identifier(source.clone()), span)?;
+    let length_access = push_expr(
+        ast,
+        ExprKind::FieldAccess {
+            receiver: length_receiver,
+            name: Ident {
+                name: "length".to_string(),
+                span,
+            },
+        },
+        span,
+    )?;
+    let slice_call = push_expr(
+        ast,
+        ExprKind::Call {
+            callee: slice_callee,
+            type_args: None,
+            args: vec![from_lit, length_access],
+        },
+        span,
+    )?;
+    Ok(slice_call)
+}
+
+/// `[source[from], …, source[to - 1]].slice(0, to - from)`: the rest of a
+/// tuple-typed literal. The remaining elements form a tuple of their own, and
+/// slicing it yields an array of their types: one that can grow, where
+/// TypeScript types the rest as a tuple.
+fn remaining_elements(
+    ast: &mut Ast,
+    source: &Ident,
+    indices: std::ops::Range<usize>,
+    span: Span,
+) -> Result<ExprId, CompilerFailure> {
+    let count = indices.len();
+    let mut elements = Vec::with_capacity(count);
+    for i in indices {
+        let receiver = push_expr(ast, ExprKind::Identifier(source.clone()), span)?;
+        let index = push_expr(ast, ExprKind::Number(i as f64), span)?;
+        let access = push_expr(ast, ExprKind::IndexAccess { receiver, index }, span)?;
+        elements.push(crate::ArrayLiteralElement::Value(access));
+    }
+    let remaining = push_expr(ast, ExprKind::ArrayLiteral { elements }, span)?;
+    ast.tuple_pattern_sources.insert(remaining);
+    let slice = push_expr(
+        ast,
+        ExprKind::FieldAccess {
+            receiver: remaining,
+            name: Ident {
+                name: "slice".to_string(),
+                span,
+            },
+        },
+        span,
+    )?;
+    let from = push_expr(ast, ExprKind::Number(0.0), span)?;
+    let to = push_expr(ast, ExprKind::Number(count as f64), span)?;
+    push_expr(
+        ast,
+        ExprKind::Call {
+            callee: slice,
+            type_args: None,
+            args: vec![from, to],
+        },
+        span,
+    )
+}
+
+fn push_expr(ast: &mut Ast, kind: ExprKind, span: Span) -> Result<ExprId, CompilerFailure> {
+    ast.try_push_expr(Expr { kind, span })
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))
 }
 
 fn make_decl(

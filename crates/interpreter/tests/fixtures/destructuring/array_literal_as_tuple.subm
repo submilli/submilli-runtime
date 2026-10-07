@@ -1,0 +1,32 @@
+// An array literal that an array pattern takes apart is typed as a tuple, as
+// TypeScript does, so each name gets its own element's type.
+let [moduleCount, moduleLabel] = [1, "one"];
+
+function main(): void {
+  const [n, s, flag] = [1, "s", true];
+  const text: string = s;
+  assert(n === 1 && text === "s" && flag, "mixed element types");
+  let [x, , z] = [1, true, "z"];
+  x = 2;
+  const zText: string = z;
+  assert(x === 2 && zText === "z", "a hole skips an element");
+  const [o, list] = [{ k: 1 }, [1, 2]];
+  list.push(3);
+  assert(o.k === 1 && list.length === 3, "object and array elements");
+  // The rest is an array of the remaining elements' types, so it can grow and
+  // be indexed by any number.
+  const [id, ...names] = [7, "ann", "bob"];
+  const nameList: string[] = names;
+  assert(id === 7 && nameList.join(",") === "ann,bob", "a rest of one element type");
+  const [head, ...tail] = [1, "a", true];
+  const index = tail.length - 1;
+  assert(head === 1 && tail[0] === "a" && tail[index] === true, "a rest element takes the remaining elements");
+  tail.push("b");
+  assert(tail.length === 3, "a rest element is an array");
+  const [...whole] = [1, 2, 3];
+  whole.push(4);
+  assert(whole.length === 4, "a pattern of only a rest element keeps the literal an array");
+  const label: string = moduleLabel;
+  moduleCount = 2;
+  assert(moduleCount === 2 && label === "one", "a module-level pattern");
+}

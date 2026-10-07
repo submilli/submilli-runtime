@@ -196,7 +196,8 @@ fn allocate_response(
     fuel::settle_result(caller, |caller| {
         fuel::settle(&mut *caller, fuel::ELEM, response.visited_nodes())?;
         let allocator = crate::runtime::json::JsonUnknownAllocator::new(caller)?;
-        allocator.allocate(caller, response.value())
+        let value = crate::runtime::json::JsonValue::from(response.value());
+        allocator.allocate(caller, &value)
     })
 }
 

@@ -74,6 +74,13 @@ pub fn static_member(class: &MangledName, member: &str) -> MangledName {
     extend(&extend(class, "static"), member)
 }
 
+/// Export key of the global that caches a function's closure, shared by every
+/// module that reads the function as a value. The angle brackets keep it apart
+/// from any source identifier.
+pub fn closure_cache(function: &MangledName) -> MangledName {
+    extend(function, "<closure>")
+}
+
 pub fn host(host_module: &str, symbol: &str) -> MangledName {
     package_symbol(host_module, symbol)
 }

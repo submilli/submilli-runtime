@@ -1,5 +1,1 @@
-types: 3 of 4 tsc entries compared, 1 differ
-
-line 4: [null, null]
-  tsc:  [null, null]
-  ours: null[]
+types: 3 of 4 tsc entries compared, 0 differ

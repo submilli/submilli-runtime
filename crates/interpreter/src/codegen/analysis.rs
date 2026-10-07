@@ -104,6 +104,19 @@ impl CodegenAnalysis {
         for g in &ta.globals {
             analysis.visit_type_at(&g.ty, g.span)?;
         }
+        let init_guards = super::init_guard::guarded_globals(ta)?;
+        if !init_guards.is_empty() {
+            analysis
+                .dependency_usage
+                .note_type(crate::mangle::prelude("ReferenceError"));
+        }
+        for guard in init_guards {
+            analysis
+                .string_pool
+                .intern_text(&super::init_guard::before_initialization_message(
+                    &guard.binding,
+                ));
+        }
 
         for f in &ta.functions {
             for p in &f.params {
