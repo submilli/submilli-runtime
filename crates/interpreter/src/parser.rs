@@ -1098,8 +1098,12 @@ impl<'a> Parser<'a> {
     /// A contextual modifier keyword counts as a modifier only when another member token
     /// (the real name, or a further modifier) follows — otherwise the word is the member
     /// name itself (e.g. a field named `private`). Mirrors `eat_readonly_property_modifier`.
+    /// As in TypeScript, only `static` may be followed by a line break.
     fn peek_word_is_class_modifier(&self, word: &str) -> bool {
         if !self.peek_identifier_text_is(word) {
+            return false;
+        }
+        if word != "static" && self.line_break_after_peek() {
             return false;
         }
         let next = &self.peek_at(1).kind;
@@ -3823,6 +3827,7 @@ impl<'a> Parser<'a> {
 
     fn eat_readonly_property_modifier(&mut self) -> bool {
         if self.peek_identifier_text_is("readonly")
+            && !self.line_break_after_peek()
             && (self.peek_starts_property_after_readonly()
                 || matches!(self.peek_at(1).kind, TokenKind::LeftBracket))
         {
@@ -5507,6 +5512,15 @@ impl<'a> Parser<'a> {
 
     /// Whether a line break separates the next token from the one before it. The
     /// ASI pass drops newline tokens, so the source between the two is read instead.
+    /// Whether a line break separates the next token from the one after it.
+    fn line_break_after_peek(&self) -> bool {
+        let start = self.peek().span.end as usize;
+        let end = self.peek_at(1).span.start as usize;
+        self.source
+            .get(start..end)
+            .is_some_and(|gap| gap.contains(['\n', '\r']))
+    }
+
     fn line_break_before_peek(&self) -> bool {
         let start = self.prev_token_end() as usize;
         let end = self.peek().span.start as usize;
