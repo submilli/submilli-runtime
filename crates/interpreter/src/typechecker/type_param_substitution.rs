@@ -19,6 +19,19 @@ pub struct TypeParamSubstitution {
     /// an argument may still replace: as in tsc, what the arguments say comes
     /// first. One stays replaceable until an argument agrees with it.
     replaceable: std::collections::BTreeSet<String>,
+    /// Bindings taken from an argument at a covariant position, which a later
+    /// argument of a wider type may widen: tsc infers the common supertype of
+    /// such candidates (`pick(dog, animal)` is an `Animal`). One used at a
+    /// contravariant position, as a callback's parameter, stays as it is.
+    widenable: std::collections::BTreeSet<String>,
+    /// The reverse, for bindings taken only at contravariant positions: tsc
+    /// infers the common subtype of those candidates, so a later callback
+    /// taking a narrower parameter narrows the binding.
+    narrowable: std::collections::BTreeSet<String>,
+    /// Candidate bindings taken only from object and array literals. tsc
+    /// combines those candidates into their union, which another literal may
+    /// join; a non-literal candidate wins over them.
+    literal_candidates: std::collections::BTreeSet<String>,
     /// For a type parameter in a union parameter whose other members took
     /// every member of a union argument, that whole argument: tsc infers it at
     /// the lowest priority, so it binds the type parameter only when nothing
@@ -71,6 +84,9 @@ impl TypeParamSubstitution {
                 .map(|(name, ty)| (name.clone(), ty.clone()))
                 .collect(),
             replaceable: Default::default(),
+            widenable: Default::default(),
+            narrowable: Default::default(),
+            literal_candidates: Default::default(),
             whole_union_fallbacks: Default::default(),
             close_matches: Vec::new(),
         }
@@ -84,6 +100,9 @@ impl TypeParamSubstitution {
         Self {
             bindings,
             replaceable: Default::default(),
+            widenable: Default::default(),
+            narrowable: Default::default(),
+            literal_candidates: Default::default(),
             whole_union_fallbacks: Default::default(),
             close_matches: Vec::new(),
         }
@@ -214,6 +233,13 @@ impl TypeParamSubstitution {
     }
 
     /// Whether `name` has no binding yet, or is bound only to itself.
+    fn bound_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.bindings
+            .keys()
+            .filter(|name| !self.is_unbound(name))
+            .cloned()
+    }
+
     fn is_unbound(&self, name: &str) -> bool {
         match self.bindings.get(name) {
             None => true,
@@ -225,6 +251,34 @@ impl TypeParamSubstitution {
     /// still replace.
     pub fn mentions_replaceable_binding(&self, ty: &Type) -> bool {
         super::infer::expr::mentions_type_var(ty, &|name| self.replaceable.contains(name))
+    }
+
+    /// Whether `ty` mentions a type parameter bound to a candidate that a
+    /// later argument may still widen or narrow.
+    pub fn mentions_candidate_binding(&self, ty: &Type) -> bool {
+        super::infer::expr::mentions_type_var(ty, &|name| self.is_candidate_binding(name))
+    }
+
+    /// Whether `ty` mentions a candidate binding that some argument other
+    /// than an object or array literal gave.
+    pub fn mentions_non_literal_candidate_binding(&self, ty: &Type) -> bool {
+        super::infer::expr::mentions_type_var(ty, &|name| {
+            self.is_candidate_binding(name) && !self.literal_candidates.contains(name)
+        })
+    }
+
+    /// These bindings without the candidates a later argument may still
+    /// widen or narrow.
+    pub fn without_candidate_bindings(&self) -> TypeParamSubstitution {
+        let mut loose = self.clone();
+        loose
+            .bindings
+            .retain(|name, _| !self.is_candidate_binding(name));
+        loose
+    }
+
+    fn is_candidate_binding(&self, name: &str) -> bool {
+        self.widenable.contains(name) || self.narrowable.contains(name)
     }
 
     /// Make the replaceable bindings that `ty` mentions final, so no argument
@@ -360,18 +414,56 @@ impl TypeParamSubstitution {
         arg_ty: &Type,
         types: TypeResolver<'_>,
     ) -> Result<(), UnifyError> {
+        self.unify_argument_as(param_ty, arg_ty, types, false)
+    }
+
+    /// [`Self::unify_argument`] for an argument that is an object or array
+    /// literal, whose type joins the other literals' candidates.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn unify_literal_argument(
+        &mut self,
+        param_ty: &Type,
+        arg_ty: &Type,
+        types: TypeResolver<'_>,
+    ) -> Result<(), UnifyError> {
+        self.unify_argument_as(param_ty, arg_ty, types, true)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn unify_argument_as(
+        &mut self,
+        param_ty: &Type,
+        arg_ty: &Type,
+        types: TypeResolver<'_>,
+        from_literal: bool,
+    ) -> Result<(), UnifyError> {
+        if !from_literal {
+            self.literal_candidates.retain(|name| {
+                !super::infer::expr::mentions_type_var(param_ty, &|var| var == name)
+            });
+        }
+        let bound_before: std::collections::BTreeSet<String> = self.bound_names().collect();
         let resolved = self.apply_or_record(param_ty, types.limits);
         if !super::infer::expr::type_contains_type_var(&resolved)
             && assignable(arg_ty, &resolved, types)
         {
             return Ok(());
         }
-        self.keeping_close_matches_on_success(|sub| {
+        let unified = self.keeping_close_matches_on_success(|sub| {
             let mut unifier = Unifier::new(sub, Some(types), types.limits);
             unifier.subtype_widening = true;
             unifier.is_argument = true;
+            unifier.combines_literals = from_literal;
             unifier.unify(param_ty, arg_ty)
-        })
+        });
+        if from_literal {
+            let newly_bound: Vec<String> = self
+                .bound_names()
+                .filter(|name| !bound_before.contains(name))
+                .collect();
+            self.literal_candidates.extend(newly_bound);
+        }
+        unified
     }
 }
 
@@ -379,6 +471,8 @@ impl TypeParamSubstitution {
 struct Snapshot {
     bindings: BTreeMap<String, Type>,
     replaceable: std::collections::BTreeSet<String>,
+    widenable: std::collections::BTreeSet<String>,
+    narrowable: std::collections::BTreeSet<String>,
     whole_union_fallbacks: BTreeMap<String, Type>,
     close_matches_len: usize,
     assumed_len: usize,
@@ -405,6 +499,9 @@ struct Unifier<'a> {
     /// Whether the walk is inside a function type's parameter, where an
     /// argument may be wider than the type parameter's binding.
     contravariant: bool,
+    /// Whether the argument is an object or array literal, which widens a
+    /// binding other literals gave to the union of the two.
+    combines_literals: bool,
 }
 
 impl<'a> Unifier<'a> {
@@ -461,6 +558,17 @@ impl<'a> Unifier<'a> {
                 // Unified with an argument, a replaceable binding is the
                 // arguments' own from here on, whether or not it is replaced.
                 let replaceable = self.sub.replaceable.remove(name) && self.is_argument;
+                if self.contravariant {
+                    self.sub.widenable.remove(name);
+                } else {
+                    self.sub.narrowable.remove(name);
+                }
+                if self
+                    .unify_bound_by_assignability(name, &resolved, &arg_resolved, arg_ty)
+                    .is_some()
+                {
+                    return Ok(());
+                }
                 // Recurse instead of `==` to peel aliases at every level; remap to Conflict to pin the offending param.
                 return match self.unify(&resolved, &arg_resolved) {
                     Ok(()) => Ok(()),
@@ -470,6 +578,14 @@ impl<'a> Unifier<'a> {
                         self.sub.bindings.insert(name.clone(), arg_ty.clone());
                         Ok(())
                     }
+                    // An argument that neither fits a candidate binding nor
+                    // widens it is reported against it, as tsc reports it.
+                    Err(_) if self.subtype_widening && self.sub.widenable.contains(name) => {
+                        Err(UnifyError::Mismatch {
+                            expected: resolved,
+                            got: arg_resolved,
+                        })
+                    }
                     Err(_) => Err(UnifyError::Conflict {
                         name: name.clone(),
                         prev: resolved,
@@ -478,6 +594,11 @@ impl<'a> Unifier<'a> {
                 };
             }
             self.sub.bindings.insert(name.clone(), arg_ty.clone());
+            if self.infers_from_covariant_argument() {
+                self.sub.widenable.insert(name.clone());
+            } else if self.is_argument {
+                self.sub.narrowable.insert(name.clone());
+            }
             return Ok(());
         }
 
@@ -781,6 +902,7 @@ impl<'a> Unifier<'a> {
             subtype_widening: false,
             is_argument: false,
             contravariant: false,
+            combines_literals: false,
         }
     }
 
@@ -791,6 +913,98 @@ impl<'a> Unifier<'a> {
             return false;
         };
         self.subtype_widening && assignable(arg, bound, types)
+    }
+
+    /// What `name`'s binding widens to for a covariant argument it doesn't
+    /// take, as tsc infers the common supertype of an argument's candidates:
+    /// the argument's own type when it is a supertype of the binding, and
+    /// with `null` set aside and added back otherwise (`pick(1, null)` is a
+    /// `number | null`). `None` when the binding is not a candidate an
+    /// argument may widen, or the two have no common supertype.
+    fn widened_binding(
+        &self,
+        name: &str,
+        arg: &Type,
+        bound: &Type,
+        unresolved_arg: &Type,
+    ) -> Option<Type> {
+        let types = self.types?;
+        if !self.subtype_widening || !self.sub.widenable.contains(name) {
+            return None;
+        }
+        if assignable(bound, arg, types) {
+            return Some(unresolved_arg.clone());
+        }
+        if self.combines_literals && self.sub.literal_candidates.contains(name) {
+            return Some(Type::union(vec![bound.clone(), unresolved_arg.clone()]));
+        }
+        let non_null = |ty: &Type| {
+            (!matches!(ty.peel(), Type::Null)).then(|| super::infer::narrowing::strip_null(ty))
+        };
+        if non_null(bound).as_ref() == Some(bound) && non_null(arg).as_ref() == Some(arg) {
+            return None;
+        }
+        let supertype = match (non_null(bound), non_null(arg)) {
+            (None, None) => return None,
+            (Some(only), None) | (None, Some(only)) => only,
+            (Some(bound), Some(arg)) if assignable(&arg, &bound, types) => bound,
+            (Some(bound), Some(arg)) if assignable(&bound, &arg, types) => arg,
+            _ => return None,
+        };
+        Some(Type::union(vec![supertype, Type::Null]))
+    }
+
+    /// An argument against the type parameter `name` once it is bound to
+    /// `bound`, both fully known, decided by assignability as tsc checks
+    /// arguments: a covariant argument fits a supertype binding, or widens a
+    /// candidate binding to its own type; a callback's parameter must accept
+    /// the binding, or narrows a binding every use of which only passes values
+    /// in. `None` when neither holds, or outside an argument, for structural
+    /// unification to decide.
+    fn unify_bound_by_assignability(
+        &mut self,
+        name: &str,
+        bound: &Type,
+        arg: &Type,
+        unresolved_arg: &Type,
+    ) -> Option<()> {
+        let types = self.types?;
+        if !self.is_argument
+            || super::infer::expr::type_contains_type_var(bound)
+            || super::infer::expr::type_contains_type_var(arg)
+        {
+            return None;
+        }
+        let fits = if self.contravariant {
+            assignable(bound, arg, types)
+        } else {
+            self.subtype_widening && assignable(arg, bound, types)
+        };
+        if fits {
+            return Some(());
+        }
+        let rebound = if self.contravariant {
+            self.narrows_to_subtype(name, arg, bound)
+                .then(|| unresolved_arg.clone())
+        } else {
+            self.widened_binding(name, arg, bound, unresolved_arg)
+        }?;
+        self.sub.bindings.insert(name.to_string(), rebound);
+        Some(())
+    }
+
+    /// Whether a callback's parameter that failed to unify with `name`'s
+    /// binding is a subtype of it that the binding may narrow to: every use
+    /// of the binding so far only passes values in, so a narrower one still
+    /// fits them all.
+    fn narrows_to_subtype(&self, name: &str, arg: &Type, bound: &Type) -> bool {
+        let Some(types) = self.types else {
+            return false;
+        };
+        self.is_argument
+            && self.contravariant
+            && self.sub.narrowable.contains(name)
+            && assignable(arg, bound, types)
     }
 
     /// Unify a fixed-arity function type, `param_ty`, with an argument that
@@ -1224,6 +1438,8 @@ impl<'a> Unifier<'a> {
         Snapshot {
             bindings: self.sub.bindings.clone(),
             replaceable: self.sub.replaceable.clone(),
+            widenable: self.sub.widenable.clone(),
+            narrowable: self.sub.narrowable.clone(),
             whole_union_fallbacks: self.sub.whole_union_fallbacks.clone(),
             close_matches_len: self.sub.close_matches.len(),
             assumed_len: self.assumed_pairs.len(),
@@ -1233,6 +1449,8 @@ impl<'a> Unifier<'a> {
     fn restore(&mut self, snapshot: Snapshot) {
         self.sub.bindings = snapshot.bindings;
         self.sub.replaceable = snapshot.replaceable;
+        self.sub.widenable = snapshot.widenable;
+        self.sub.narrowable = snapshot.narrowable;
         self.sub.whole_union_fallbacks = snapshot.whole_union_fallbacks;
         self.sub.close_matches.truncate(snapshot.close_matches_len);
         self.assumed_pairs.truncate(snapshot.assumed_len);

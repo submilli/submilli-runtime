@@ -406,8 +406,9 @@ impl Inferer<'_> {
         };
         for member in &members {
             // An object type routes to the `Object` interface, whose members
-            // every value has; its own fields are unified directly.
-            if matches!(member.peel(), Type::Object { .. }) {
+            // every value has; its own fields are unified directly. A type
+            // parameter's binding is not a structural member to fill in.
+            if matches!(member.peel(), Type::Object { .. } | Type::TypeVar(_)) {
                 continue;
             }
             let Some((me, _pe, ne, ae)) = member.interface_routing() else {
@@ -750,7 +751,7 @@ impl Inferer<'_> {
         } else {
             &sig.generics
         };
-        let mut typed_args = self.infer_generic_arguments(
+        let (mut typed_args, argument_checks) = self.infer_generic_arguments(
             &args,
             &sig.params,
             &sig.ret,
@@ -806,7 +807,7 @@ impl Inferer<'_> {
         }
 
         sub.bind_whole_union_fallbacks();
-        self.check_deferred_close_matches(&mut sub, span);
+        let close_match_spans = self.check_deferred_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(
             &mut sub,
             &sig.generics,
@@ -837,6 +838,7 @@ impl Inferer<'_> {
             );
         }
 
+        self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         self.check_inferred_void_arguments(&sig.params, &sig.ret, &sub, span);
         let mut result_ty = self.instantiate(&sub, &sig.ret, span)?;
         if array_from_mapper && mapper_type.as_ref().is_some_and(|ty| {
@@ -1040,7 +1042,13 @@ impl Inferer<'_> {
     /// member while inference ran and fits no member of the parameter now
     /// that it is done, against the member it closely matched, at its
     /// argument (or at the call at `span` when no argument was located).
-    fn check_deferred_close_matches(&mut self, sub: &mut TypeParamSubstitution, span: Span) {
+    /// Returns where each was reported.
+    fn check_deferred_close_matches(
+        &mut self,
+        sub: &mut TypeParamSubstitution,
+        span: Span,
+    ) -> Vec<Span> {
+        let mut reported = Vec::new();
         for close_match in sub.take_close_matches() {
             if sub
                 .clone()
@@ -1056,7 +1064,9 @@ impl Inferer<'_> {
                 format!("expected `{expected}`, got `{got}`"),
                 self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
             );
+            reported.push(error_span);
         }
+        reported
     }
 
     /// The types to report a close match under: where the argument departs
@@ -1298,9 +1308,10 @@ impl Inferer<'_> {
         rest_elem_ty: &Type,
         sub: &mut TypeParamSubstitution,
         signature_help: impl Fn(&mut Self) -> String,
-    ) -> Result<Vec<ExprId>, CompilerFailure> {
+    ) -> Result<(Vec<ExprId>, Vec<ArgumentCheck>), CompilerFailure> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
+        let mut checks = Vec::new();
         let args_with_param_types: Vec<(ExprId, Type)> = args
             .iter()
             .enumerate()
@@ -1357,7 +1368,11 @@ impl Inferer<'_> {
                 if already_reported {
                     sub.keep_replaceable_bindings(&param_ty);
                 }
-                let unified = sub.unify_argument(&param_ty, &arg_ty, self.resolver());
+                let unified = if self.builds_literal(arg_id)? {
+                    sub.unify_literal_argument(&param_ty, &arg_ty, self.resolver())
+                } else {
+                    sub.unify_argument(&param_ty, &arg_ty, self.resolver())
+                };
                 // A reported argument's close matches, including those its
                 // object literal's fields recorded, would usually report the
                 // same mismatch again. The call is rejected either way, so an
@@ -1368,19 +1383,57 @@ impl Inferer<'_> {
                     let arg_span = self.argument_span(typed_id)?;
                     sub.locate_close_matches_after(close_matches_before, arg_span);
                 }
-                if let Err(error) = unified {
-                    self.unify_argument_error(
+                match unified {
+                    Err(error) => self.unify_argument_error(
                         error,
                         sub,
                         (&param_ty, &arg_ty),
                         typed_id,
                         already_reported,
                         &signature_help,
-                    )?;
+                    )?,
+                    Ok(()) if !already_reported => checks.push(ArgumentCheck {
+                        arg: typed_id,
+                        param_ty,
+                        arg_ty,
+                    }),
+                    Ok(()) => {}
                 }
             }
         }
-        Ok(typed_slots.into_iter().flatten().collect())
+        Ok((typed_slots.into_iter().flatten().collect(), checks))
+    }
+
+    /// Check each argument against its parameter once the call's type
+    /// parameters are all bound, as tsc does after inference: unification
+    /// takes an argument as a candidate, which a later one may widen past
+    /// what an earlier one accepts. One `already_reported` at is skipped.
+    fn check_arguments_after_inference(
+        &mut self,
+        sub: &TypeParamSubstitution,
+        checks: Vec<ArgumentCheck>,
+        already_reported: &[Span],
+    ) -> Result<(), CompilerFailure> {
+        for check in checks {
+            let param = sub.apply_or_record(&check.param_ty, &self.type_limits);
+            if super::expr::type_contains_type_var(&param)
+                || super::assignable(&check.arg_ty, &param, self.resolver())
+            {
+                continue;
+            }
+            let span = self.argument_span(check.arg)?;
+            if already_reported.contains(&span) {
+                continue;
+            }
+            let help =
+                self.render_help_list(super::type_diff::type_mismatch_help(&param, &check.arg_ty));
+            self.error_with_help(
+                span,
+                format!("expected `{param}`, got `{}`", check.arg_ty),
+                help,
+            );
+        }
+        Ok(())
     }
 
     /// Infer one argument of a generic call against `param_ty`, with what
@@ -1395,6 +1448,48 @@ impl Inferer<'_> {
     ) -> Result<(ExprId, Type), CompilerFailure> {
         // An oversized hint fails at the argument's own checkpoint.
         let hint = sub.apply_or_record(param_ty, &self.type_limits);
+        let diagnostics_before = self.diagnostics.len();
+        let errors_before = self.error_count();
+        let first = self.infer_generic_argument_with(arg_id, param_ty, hint, arguments, sub)?;
+        // An object or array literal widens only what other literals bound,
+        // as in tsc: one is checked against what a non-literal inferred.
+        if self.error_count() == errors_before
+            || !sub.mentions_candidate_binding(param_ty)
+            || self.builds_literal(arg_id)? && sub.mentions_non_literal_candidate_binding(param_ty)
+        {
+            return Ok(first);
+        }
+        // The binding the hint came from is only a candidate, which this
+        // argument may widen: tsc infers the common supertype of the two.
+        // Inferred without it, an argument that fits is not reported. A
+        // callback's parameters stay fixed, as tsc fixes them.
+        let first_diagnostics = self.diagnostics.split_off(diagnostics_before);
+        let mut loose = sub.without_candidate_bindings();
+        for name in arguments.inferred_generics {
+            if let Some(bound) = sub.get(name).filter(|_| takes_in_callback(param_ty, name)) {
+                loose.insert(name.clone(), bound.clone());
+            }
+        }
+        let loose_hint = loose.apply_or_record(param_ty, &self.type_limits);
+        let second =
+            self.infer_generic_argument_with(arg_id, param_ty, loose_hint, arguments, sub)?;
+        if self.error_count() == errors_before {
+            return Ok(second);
+        }
+        self.diagnostics.truncate(diagnostics_before);
+        self.diagnostics.extend(first_diagnostics);
+        Ok(first)
+    }
+
+    /// [`Self::infer_generic_argument`] against one hint for the argument.
+    fn infer_generic_argument_with(
+        &mut self,
+        arg_id: ExprId,
+        param_ty: &Type,
+        hint: Type,
+        arguments: &GenericArguments,
+        sub: &mut TypeParamSubstitution,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
         let hint = self.literal_argument_hint(arg_id, hint, arguments.inferred_generics)?;
         let hinted_by_replaceable_binding = sub.mentions_replaceable_binding(param_ty);
         if hinted_by_replaceable_binding {
@@ -1647,7 +1742,7 @@ impl Inferer<'_> {
         };
         let errors_before_args = self.error_count();
         let inferred_generics: &[String] = if type_args_written { &[] } else { &generics };
-        let mut typed_args = self.infer_generic_arguments(
+        let (mut typed_args, argument_checks) = self.infer_generic_arguments(
             &args,
             &params,
             &ret,
@@ -1695,7 +1790,7 @@ impl Inferer<'_> {
         }
 
         sub.bind_whole_union_fallbacks();
-        self.check_deferred_close_matches(&mut sub, span);
+        let close_match_spans = self.check_deferred_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
         self.bind_uninferred_to_unknown(&mut sub, &generics, &mangled, span)?;
         if let Err(unbound) = sub
@@ -1721,6 +1816,7 @@ impl Inferer<'_> {
             );
         }
 
+        self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         self.check_inferred_void_arguments(&params, &ret, &sub, span);
         let result_ty = self.instantiate(&sub, &ret, span)?;
 
@@ -1827,6 +1923,14 @@ impl Inferer<'_> {
         }
         Ok((call, result_ty))
     }
+}
+
+/// An argument that unified with its parameter, to check against the
+/// parameter once inference is done.
+struct ArgumentCheck {
+    arg: ExprId,
+    param_ty: Type,
+    arg_ty: Type,
 }
 
 /// What every argument of one generic call is inferred with.
@@ -2111,18 +2215,23 @@ fn function_part(ty: &Type) -> Option<&Type> {
 /// when there is none, as tsc fixes them before typing the callback:
 /// `Array.from({ length: 3 }, (_, i) => i)` types `_` as `unknown`.
 fn fix_callback_parameters(sub: &mut TypeParamSubstitution, param_ty: &Type, inferred: &[String]) {
-    let Some(Type::Function { params, .. }) = function_part(param_ty) else {
-        return;
-    };
     for name in inferred {
-        let taken = params
-            .iter()
-            .any(|param| super::expr::mentions_type_var(param, &|var| var == name));
-        if taken && sub.get(name).is_none() {
+        if takes_in_callback(param_ty, name) && sub.get(name).is_none() {
             let fixed = sub.whole_union_fallback(name).cloned();
             sub.insert(name.clone(), fixed.unwrap_or(Type::Unknown));
         }
     }
+}
+
+/// Whether the callback `param_ty` describes takes the type parameter `name`
+/// in one of its parameters.
+fn takes_in_callback(param_ty: &Type, name: &str) -> bool {
+    let Some(Type::Function { params, .. }) = function_part(param_ty) else {
+        return false;
+    };
+    params
+        .iter()
+        .any(|param| super::expr::mentions_type_var(param, &|var| var == name))
 }
 
 /// An object literal argument whose fields bind a generic call's type

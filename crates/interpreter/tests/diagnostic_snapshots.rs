@@ -92,7 +92,8 @@ fn b2_generic_function_arg_unify_mismatch_lifts_signature_and_diff() {
     let source = "\
 function pick<T>(a: T, b: T): T { return a; }
 function main(): void {
-  let p = pick({ x: 1, y: 2 }, { x: 1, z: 3 });
+  const first: { x: number; y: number } = { x: 1, y: 2 };
+  let p = pick(first, { x: 1, z: 3 });
 }
 ";
     insta::assert_snapshot!(render_all(source));
