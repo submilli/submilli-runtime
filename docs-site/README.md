@@ -180,3 +180,40 @@ curl --fail https://submilli.ai/docs/llms.txt
 curl --fail https://submilli.ai/docs/llms-full.txt
 curl --fail https://submilli.ai/docs/blueprints.md
 ```
+
+## Analytics
+
+The docs site uses the existing PostHog project when `PUBLIC_POSTHOG_KEY` and
+`PUBLIC_POSTHOG_HOST` are set in the hosting environment. The key is a public
+capture token; do not put a secret in source or commit an environment file.
+
+Analytics follows the marketing site’s opt-out behavior and respects the existing
+`submilli.analytics-consent.v1` preference and PostHog opt-out. Readers can change
+the preference using the docs analytics settings. Automatic capture, automatic
+pageviews, feature flags, surveys, session recording, and recorded request
+bodies are disabled. Pageviews are emitted once per canonical
+docs URL, including client-side `astro:page-load` navigation. URL properties are
+reduced to origin and path before capture. Session recording is disabled for the
+docs site; the masking configuration remains defensive if that setting changes.
+
+The event inventory is `$pageview` (`page_path`, `$current_url`),
+`link_clicked` (`destination`, `external`), and `docs_cta_clicked`
+(`cta_id`, `destination`, `external`). Meeting clicks also emit the existing
+`booking_cta_clicked` contract (`cta_location: docs`,
+`booking_provider: google_calendar`, `destination`, `external`) so website
+funnels can include docs traffic. CTA IDs cover `meeting`, `website`, `github`,
+`discord`, `agent_setup`, `view_markdown`, and `agent_docs`.
+Synthetic verification can add `?analytics_test=1`; every captured event then
+has `is_test: true` for the rest of the browser tab session so it can be excluded
+from reporting, including after navigating to another docs page.
+
+At `https://submilli.ai/docs/`, the same capture key and `localStorage` persistence
+reuse marketing’s PostHog identity and `submilli.attribution.v1` first/latest touch.
+The direct Render hostname is a separate origin and cannot join that identity.
+Production capture requires configuring both public environment values in the
+docs Render service and rebuilding after merge; repository checks alone do not
+verify received production events.
+
+Coverage is limited to JavaScript-enabled HTML visits. Direct Markdown, `llms.txt`,
+and bot requests without JavaScript are not counted; agent-docs CTA clicks measure
+navigation intent, not confirmed retrieval.

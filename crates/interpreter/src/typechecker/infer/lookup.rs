@@ -606,6 +606,7 @@ impl<'a> Inferer<'a> {
                     },
                     optional: false,
                     readonly: true,
+                    method: true,
                 },
             );
         }
@@ -617,6 +618,7 @@ impl<'a> Inferer<'a> {
                     ty,
                     optional: sig.optional,
                     readonly: sig.readonly,
+                    method: false,
                 },
             );
         }

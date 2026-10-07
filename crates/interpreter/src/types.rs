@@ -99,6 +99,10 @@ pub struct ObjectField {
     /// freshly-synthesized shapes are writable (`false`); only an explicit `readonly`
     /// modifier on an object-type/interface property sets this.
     pub readonly: bool,
+    /// A method rather than a function-typed property. `tsc` compares a method's
+    /// parameters bivariantly and a property's contravariantly.
+    #[serde(default)]
+    pub method: bool,
 }
 
 impl ObjectField {
@@ -107,6 +111,7 @@ impl ObjectField {
             ty,
             optional: false,
             readonly: false,
+            method: false,
         }
     }
     pub fn optional(ty: Type) -> Self {
@@ -114,6 +119,7 @@ impl ObjectField {
             ty,
             optional: true,
             readonly: false,
+            method: false,
         }
     }
 

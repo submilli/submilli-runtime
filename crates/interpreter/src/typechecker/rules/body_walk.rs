@@ -147,6 +147,12 @@ impl<V: Visitor> Walk<'_, V> {
                 ..
             } => {
                 self.expr(*discriminant)?;
+                for comparison in cases
+                    .iter()
+                    .flat_map(crate::TypedSwitchCase::label_comparisons)
+                {
+                    self.expr(comparison)?;
+                }
                 for case in cases {
                     self.stmt(case.body)?;
                 }

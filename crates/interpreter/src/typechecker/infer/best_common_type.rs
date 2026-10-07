@@ -120,7 +120,8 @@ impl Inferer<'_> {
         candidates
             .iter()
             .zip(kept)
-            .filter_map(|(candidate, kept)| kept.then(|| candidate.ty.clone()))
+            .filter(|(_, kept)| *kept)
+            .map(|(candidate, _)| candidate.ty.clone())
             .collect()
     }
 

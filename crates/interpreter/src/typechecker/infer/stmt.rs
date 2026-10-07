@@ -258,14 +258,13 @@ impl Inferer<'_> {
             } => {
                 let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
                 let (typed_source, source_ty) = self.infer_expr(source, hint.as_ref())?;
-                let (typed_value, narrowed) =
-                    match self.object_rest(typed_source, &source_ty, &exclude, span)? {
-                        Some(rest) => rest,
-                        None => {
-                            self.report_unshaped_rest_source(&source_ty, span);
-                            (typed_source, Type::Error)
-                        }
-                    };
+                let rest = self.object_rest(typed_source, &source_ty, &exclude, span)?;
+                let (typed_value, narrowed) = if let Some(rest) = rest {
+                    rest
+                } else {
+                    self.report_unshaped_rest_source(&source_ty, span);
+                    (typed_source, Type::Error)
+                };
                 self.scopes
                     .insert(name.name.clone(), narrowed.clone(), true, name.span);
                 Ok(TypedStmtKind::Const {
@@ -755,10 +754,11 @@ impl Inferer<'_> {
         for clause in catches {
             let clause_ty = self.infer_catch_type(&clause, &mut prior)?;
             self.scopes.push();
+            // A `catch` binding is an ordinary mutable local, as in TypeScript.
             self.scopes.insert(
                 clause.binding.name.clone(),
                 clause_ty.clone(),
-                true,
+                false,
                 clause.binding.span,
             );
             let outcome =
@@ -1347,6 +1347,7 @@ impl Inferer<'_> {
                         ty: *i.value,
                         optional: false,
                         readonly: i.readonly,
+                        method: false,
                     })
             });
             if let Some(field) = field_lookup {
@@ -2167,6 +2168,7 @@ impl Inferer<'_> {
                         ty: *index.value,
                         optional: true,
                         readonly: index.readonly,
+                        method: false,
                     })
             }) {
                 if field.readonly {
@@ -3249,19 +3251,19 @@ impl Inferer<'_> {
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
             // A union of arrays and tuples is one `$Array` at runtime too. It
             // follows the string arm, which takes unions of string literals.
-            Type::Union(_) => match iter_ty.array_like_union_element() {
-                Some(element) => Some((element, crate::ForOfKind::Array)),
+            Type::Union(_) => {
+                if let Some(element) = iter_ty.array_like_union_element() {
+                    return Some((element, crate::ForOfKind::Array));
+                }
                 // A union of strings with arrays has no shared representation;
                 // the desugar picks the string's or the array's iterator.
-                None => {
-                    let arrays = iter_ty.string_or_array_union_arrays()?;
-                    let (element, _) = self.classify_for_of_source(&arrays)?;
-                    Some((
-                        Type::union(vec![Type::String, element]),
-                        crate::ForOfKind::Iterable,
-                    ))
-                }
-            },
+                let arrays = iter_ty.string_or_array_union_arrays()?;
+                let (element, _) = self.classify_for_of_source(&arrays)?;
+                Some((
+                    Type::union(vec![Type::String, element]),
+                    crate::ForOfKind::Iterable,
+                ))
+            }
             // Exact-name match keeps Iterator<U> on its own desugar path
             // (it declares `next()`, not `iterator()`, so it fails the structural check below).
             Type::InterfaceRef { name, args, .. } if name == "Iterator" && args.len() == 1 => {
