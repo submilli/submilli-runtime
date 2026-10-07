@@ -627,12 +627,7 @@ fn replace_type(ty: &Type, from: &Type, to: &Type) -> Type {
     if ty == from {
         return to.clone();
     }
-    let mapped: Result<Type, std::convert::Infallible> =
-        crate::type_size::map_children(ty, |child| Ok(replace_type(child, from, to)));
-    match mapped {
-        Ok(ty) => ty,
-        Err(never) => match never {},
-    }
+    crate::type_size::map_children_infallible(ty, |child| replace_type(child, from, to))
 }
 
 fn instance_shape(ty: &Type, types: TypeResolver) -> InstanceShape {

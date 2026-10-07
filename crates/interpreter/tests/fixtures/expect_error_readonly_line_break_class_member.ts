@@ -1,6 +1,6 @@
 // expect-error: expected `:` and a type for the class field
-// A class modifier other than `static` must share a line with the member it
-// modifies; otherwise it is the member's own name, as in TypeScript.
+// A modifier at the end of a line doesn't modify the member on the next line:
+// the line break ends `readonly` as a member of its own, as tsc reads it.
 class C {
   readonly
   a: number = 1;

@@ -4645,7 +4645,9 @@ impl Inferer<'_> {
             span: expr_span,
         };
         // A union of arrays answers `toString` as an array, through its joined view.
-        if !has_to_string(peeled) && !peeled.is_array_like_union() {
+        let converts = (has_to_string(peeled) || peeled.is_array_like_union())
+            && !self.is_static_interface_value(peeled);
+        if !converts {
             let nullable = matches!(peeled, Type::Null)
                 || matches!(
                     peeled,
@@ -4734,6 +4736,13 @@ impl Inferer<'_> {
                 },
             })
             .map_err(crate::typechecker::arena_failure)
+    }
+
+    /// A static-dispatch interface's value is an inert null, so it has no
+    /// `toString` to call.
+    fn is_static_interface_value(&self, ty: &Type) -> bool {
+        matches!(ty, Type::InterfaceRef { mangled, name, .. }
+            if self.resolver().is_static_interface(mangled, name))
     }
 
     /// The value of an object literal's field when it is spelled as a literal.
@@ -10150,12 +10159,9 @@ impl Inferer<'_> {
         ) {
             return ty.clone();
         }
-        let mapped: Result<Type, std::convert::Infallible> =
-            map_children(peeled, |inner| Ok(self.reduce_enums_to_members(inner)));
-        match mapped {
-            Ok(ty) => ty,
-            Err(never) => match never {},
-        }
+        crate::type_size::map_children_infallible(peeled, |inner| {
+            self.reduce_enums_to_members(inner)
+        })
     }
 
     /// regex literal inference. Runs the JS→regex-crate

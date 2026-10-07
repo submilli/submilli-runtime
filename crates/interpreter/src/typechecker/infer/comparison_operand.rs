@@ -110,9 +110,7 @@ impl super::Inferer<'_> {
             label: format!("{}.{}", typed.ty, variant.name),
         })
     }
-}
 
-impl super::Inferer<'_> {
     /// Whether `typed` reads the global `NaN`, not a local of that name. `tsc`
     /// reports comparing it with `===` or `!==` (TS2845), since `NaN` equals
     /// nothing, itself included. Like `tsc`, `Number.NaN` is not checked.

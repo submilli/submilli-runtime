@@ -1098,12 +1098,8 @@ impl<'a> Parser<'a> {
     /// A contextual modifier keyword counts as a modifier only when another member token
     /// (the real name, or a further modifier) follows — otherwise the word is the member
     /// name itself (e.g. a field named `private`). Mirrors `eat_readonly_property_modifier`.
-    /// As in TypeScript, only `static` may be followed by a line break.
     fn peek_word_is_class_modifier(&self, word: &str) -> bool {
         if !self.peek_identifier_text_is(word) {
-            return false;
-        }
-        if word != "static" && self.line_break_after_peek() {
             return false;
         }
         let next = &self.peek_at(1).kind;
@@ -1745,12 +1741,20 @@ impl<'a> Parser<'a> {
                 self.expect_identifier_name(&format!("expected {what} specifier name"))?;
             let imported_name = self.ident_from_token(&imported_tok);
 
+            // An import binds a local name, which strict mode restricts; an
+            // export's names are module export names, which it doesn't.
+            let binds_local = what == "import";
             let local_name = if self.peek_identifier_text_is("as") {
                 self.advance();
-                let local_tok = self.expect_identifier("expected local name after `as`")?;
+                let local_tok = self.expect_identifier_name("expected local name after `as`")?;
+                if binds_local {
+                    self.reject_strict_mode_reserved_word(&local_tok);
+                }
                 self.ident_from_token(&local_tok)
             } else {
-                self.reject_strict_mode_reserved_word(&imported_tok);
+                if binds_local {
+                    self.reject_strict_mode_reserved_word(&imported_tok);
+                }
                 imported_name.clone()
             };
 
@@ -3616,16 +3620,28 @@ impl<'a> Parser<'a> {
     /// or `(`. A member list that reaches one was left unclosed, so it stops there
     /// and leaves the declaration to be parsed.
     fn peek_starts_declaration(&self) -> bool {
+        let mut offset = 0;
+        while self.peek_at_is_declaration_modifier(offset) {
+            offset += 1;
+        }
         let declaration_keyword = matches!(
-            self.peek().kind,
+            self.peek_at(offset).kind,
             TokenKind::Function
                 | TokenKind::Class
                 | TokenKind::Let
                 | TokenKind::Const
                 | TokenKind::Enum
                 | TokenKind::Interface
-        ) || self.peek_identifier_text_is("type");
-        declaration_keyword && matches!(self.peek_at(1).kind, TokenKind::Identifier)
+        ) || self.peek_at_is_word(offset, "type");
+        declaration_keyword && matches!(self.peek_at(offset + 1).kind, TokenKind::Identifier)
+    }
+
+    /// `export`, `declare`, `async` or `abstract` before a declaration keyword.
+    fn peek_at_is_declaration_modifier(&self, offset: usize) -> bool {
+        matches!(self.peek_at(offset).kind, TokenKind::Export)
+            || ["declare", "async", "abstract"]
+                .iter()
+                .any(|word| self.peek_at_is_word(offset, word))
     }
 
     /// `new (params): T` or `new <T>(params): T` inside a type literal: a construct
@@ -3732,23 +3748,6 @@ impl<'a> Parser<'a> {
         Some(tok)
     }
 
-    /// Reports a binding named by a word strict mode reserves. Parsing continues
-    /// with the name: nothing else about it is wrong.
-    fn reject_strict_mode_reserved_word(&mut self, tok: &Token) {
-        let word = &self.source[tok.span.start as usize..tok.span.end as usize];
-        if !STRICT_MODE_RESERVED_WORDS.contains(&word) {
-            return;
-        }
-        self.error_at_with_help(
-            tok.span,
-            format!("`{word}` is a reserved word in strict mode and can't be used as a name"),
-            vec![format!(
-                "rename it, for example: `{}`",
-                reserved_keyword_rename_example(word)
-            )],
-        );
-    }
-
     /// An identifier in a position where strict mode's reserved words are allowed: an
     /// enum member, a property, or the name an import specifier refers to.
     fn expect_identifier_name(&mut self, message: &str) -> Option<Token> {
@@ -3770,6 +3769,23 @@ impl<'a> Parser<'a> {
         }
         self.error_at_peek(message.to_string());
         None
+    }
+
+    /// Reports a binding named by a word strict mode reserves. Parsing continues
+    /// with the name: nothing else about it is wrong.
+    fn reject_strict_mode_reserved_word(&mut self, tok: &Token) {
+        let word = &self.source[tok.span.start as usize..tok.span.end as usize];
+        if !STRICT_MODE_RESERVED_WORDS.contains(&word) {
+            return;
+        }
+        self.error_at_with_help(
+            tok.span,
+            format!("`{word}` is a reserved word in strict mode and can't be used as a name"),
+            vec![format!(
+                "rename it, for example: `{}`",
+                reserved_keyword_rename_example(word)
+            )],
+        );
     }
 
     fn ident_from_token(&self, tok: &Token) -> Ident {
@@ -5510,22 +5526,21 @@ impl<'a> Parser<'a> {
         self.fatal.is_some() || matches!(self.peek().kind, TokenKind::Eof)
     }
 
-    /// Whether a line break separates the next token from the one before it. The
-    /// ASI pass drops newline tokens, so the source between the two is read instead.
-    /// Whether a line break separates the next token from the one after it.
-    fn line_break_after_peek(&self) -> bool {
-        let start = self.peek().span.end as usize;
-        let end = self.peek_at(1).span.start as usize;
-        self.source
-            .get(start..end)
-            .is_some_and(|gap| gap.contains(['\n', '\r']))
+    /// Whether a line break separates the next token from the one before it.
+    fn line_break_before_peek(&self) -> bool {
+        self.source_has_line_break(self.prev_token_end(), self.peek().span.start)
     }
 
-    fn line_break_before_peek(&self) -> bool {
-        let start = self.prev_token_end() as usize;
-        let end = self.peek().span.start as usize;
+    /// Whether a line break separates the next token from the one after it.
+    fn line_break_after_peek(&self) -> bool {
+        self.source_has_line_break(self.peek().span.end, self.peek_at(1).span.start)
+    }
+
+    /// The ASI pass drops newline tokens, so line breaks between tokens are read
+    /// from the source.
+    fn source_has_line_break(&self, start: u32, end: u32) -> bool {
         self.source
-            .get(start..end)
+            .get(start as usize..end as usize)
             .is_some_and(|gap| gap.contains(['\n', '\r']))
     }
 

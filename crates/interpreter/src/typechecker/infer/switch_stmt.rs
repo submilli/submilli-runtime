@@ -334,6 +334,13 @@ impl Inferer<'_> {
             source: disc_source,
         } = discriminant;
         let disc_operand = self.comparison_operand(disc_source, typed_disc)?;
+        let case_discriminant = CaseDiscriminant {
+            switch_id,
+            typed: typed_disc,
+            ty: &disc_ty,
+            operand: &disc_operand,
+        };
+        let mut expression_covered: BTreeSet<narrowing::LiteralValue> = BTreeSet::new();
         let entry_reachable = self.reachable;
         self.push_pending_join_frame(narrowing::PendingJoinKind::Switch);
         let mut typed_cases: Vec<TypedSwitchCase> = Vec::new();
@@ -354,69 +361,17 @@ impl Inferer<'_> {
             let case_span = case.span;
             let mut typed_values: Vec<TypedSwitchValue> = Vec::new();
             for value_expr in &case.values {
-                let value_span = self
-                    .ast
-                    .try_expr(*value_expr)
-                    .map_err(super::arena_failure)?
-                    .span;
-                let (typed_val, _) = self.infer_expr(*value_expr, None)?;
-                let val_kind = self
-                    .typed_ast
-                    .try_expr(typed_val)
-                    .map_err(crate::typechecker::arena_failure)?
-                    .kind
-                    .clone();
-                let case_operand = self.comparison_operand(*value_expr, typed_val)?;
-                if !super::comparison_operand::operands_comparable(
-                    &case_operand,
-                    &disc_operand,
-                    self.resolver(),
-                ) {
-                    self.error(
-                        value_span,
-                        format!(
-                            "case label of type `{}` is not compatible with switch discriminant of type `{}`",
-                            case_operand.label, disc_operand.label
-                        ),
-                    );
-                    continue;
-                }
-                let signed_number = || -> Result<_, CompilerFailure> {
-                    // `-1` and `+2` are literals to `tsc`. Adding `0.0` makes `-0`
-                    // the same label as `0`, which `===` can't tell apart either.
-                    Ok(
-                        super::comparison_operand::constant_number(self.ast, *value_expr)?.map(
-                            |value| TypedSwitchValue::Number {
-                                value: value + 0.0,
-                                span: value_span,
-                            },
-                        ),
-                    )
-                };
-                let lit = match classify_switch_case_value(&val_kind, value_span) {
-                    Some(lit) => Some(lit),
-                    None => signed_number()?,
-                };
-                let Some(lit) = lit else {
-                    let label = self.expression_case_label(
-                        switch_id,
-                        typed_disc,
-                        &disc_ty,
-                        typed_val,
-                        &case_operand.ty,
-                        case_span,
-                    )?;
-                    if let TypedSwitchValue::Expr {
-                        literal: Some(literal),
-                        ..
-                    } = &label
-                    {
-                        seen.entry(literal.clone()).or_insert(value_span);
-                    }
-                    typed_values.push(label);
+                let Some(label) =
+                    self.infer_case_label(&case_discriminant, *value_expr, case_span)?
+                else {
                     continue;
                 };
-                if let Some(prev) = duplicate_key(&lit, &mut seen, &mut saw_null) {
+                if let TypedSwitchValue::Expr { literal, .. } = &label {
+                    // tsc reports no duplicate for an expression label, but one of a
+                    // single literal type still covers that value.
+                    expression_covered.extend(literal.iter().cloned());
+                } else if let Some(prev) = duplicate_key(&label, &mut seen, &mut saw_null) {
+                    let value_span = case_value_span(&label);
                     self.diagnostics.push(Diagnostic {
                         severity: Severity::Error,
                         span: value_span,
@@ -426,7 +381,7 @@ impl Inferer<'_> {
                     });
                     continue;
                 }
-                typed_values.push(lit);
+                typed_values.push(label);
             }
 
             let true_env = self.case_true_env(typed_disc, disc_source_span, &typed_values)?;
@@ -457,7 +412,8 @@ impl Inferer<'_> {
             });
         }
 
-        let covered: BTreeSet<narrowing::LiteralValue> = seen.keys().cloned().collect();
+        let covered: BTreeSet<narrowing::LiteralValue> =
+            seen.keys().cloned().chain(expression_covered).collect();
         let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered)?;
 
         let typed_default = if let Some(d) = default {
@@ -530,6 +486,77 @@ impl Inferer<'_> {
     /// `tsc` allows. `label_ty` is its type as compared, which keeps literal types.
     /// The comparison spans the whole clause, `case_span`: it is no expression
     /// in the source, so it must not take the label's own span.
+    /// Type one `case` label and check it against the discriminant: a literal
+    /// label, or an expression label compared at run time. `None` after an error.
+    fn infer_case_label(
+        &mut self,
+        discriminant: &CaseDiscriminant<'_>,
+        value_expr: ExprId,
+        case_span: Span,
+    ) -> Result<Option<TypedSwitchValue>, CompilerFailure> {
+        let value_span = self
+            .ast
+            .try_expr(value_expr)
+            .map_err(super::arena_failure)?
+            .span;
+        let (typed_val, _) = self.infer_expr(value_expr, None)?;
+        let case_operand = self.comparison_operand(value_expr, typed_val)?;
+        if !super::comparison_operand::operands_comparable(
+            &case_operand,
+            discriminant.operand,
+            self.resolver(),
+        ) {
+            self.error(
+                value_span,
+                format!(
+                    "case label of type `{}` is not compatible with switch discriminant of type `{}`",
+                    case_operand.label, discriminant.operand.label
+                ),
+            );
+            return Ok(None);
+        }
+        if let Some(literal) = self.literal_case_label(value_expr, typed_val, value_span)? {
+            return Ok(Some(literal));
+        }
+        self.expression_case_label(
+            discriminant.switch_id,
+            discriminant.typed,
+            discriminant.ty,
+            typed_val,
+            &case_operand.ty,
+            case_span,
+        )
+        .map(Some)
+    }
+
+    /// A label spelled as a literal: `"a"`, `1`, `null`, `E.A`, or a signed number,
+    /// which `tsc` also reads as a literal.
+    fn literal_case_label(
+        &self,
+        value_expr: ExprId,
+        typed_val: ExprId,
+        value_span: Span,
+    ) -> Result<Option<TypedSwitchValue>, CompilerFailure> {
+        let kind = &self
+            .typed_ast
+            .try_expr(typed_val)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind;
+        if let Some(literal) = classify_switch_case_value(kind, value_span) {
+            return Ok(Some(literal));
+        }
+        // Adding `0.0` makes `-0` the same label as `0`, which `===` can't tell
+        // apart either.
+        Ok(
+            super::comparison_operand::constant_number(self.ast, value_expr)?.map(|value| {
+                TypedSwitchValue::Number {
+                    value: value + 0.0,
+                    span: value_span,
+                }
+            }),
+        )
+    }
+
     fn expression_case_label(
         &mut self,
         switch_id: StmtId,
@@ -981,20 +1008,32 @@ fn literal_switch_value(literal: narrowing::LiteralValue, span: Span) -> TypedSw
 }
 
 /// Null uses `saw_null` separately because there's no `LiteralValue::Null` variant.
-fn duplicate_key(
-    value: &TypedSwitchValue,
-    seen: &mut BTreeMap<narrowing::LiteralValue, Span>,
-    saw_null: &mut Option<Span>,
-) -> Option<Span> {
-    let key = switch_value_to_literal_value(value);
-    let span = match value {
+/// The discriminant every `case` label of one `switch` is checked against.
+struct CaseDiscriminant<'d> {
+    switch_id: StmtId,
+    typed: ExprId,
+    ty: &'d Type,
+    operand: &'d super::comparison_operand::ComparisonOperand,
+}
+
+fn case_value_span(value: &TypedSwitchValue) -> Span {
+    match value {
         TypedSwitchValue::String { span, .. }
         | TypedSwitchValue::Number { span, .. }
         | TypedSwitchValue::Boolean { span, .. }
         | TypedSwitchValue::Null { span }
         | TypedSwitchValue::Enum { span, .. }
         | TypedSwitchValue::Expr { span, .. } => *span,
-    };
+    }
+}
+
+fn duplicate_key(
+    value: &TypedSwitchValue,
+    seen: &mut BTreeMap<narrowing::LiteralValue, Span>,
+    saw_null: &mut Option<Span>,
+) -> Option<Span> {
+    let key = switch_value_to_literal_value(value);
+    let span = case_value_span(value);
     if let Some(k) = key {
         if let Some(prev) = seen.insert(k, span) {
             return Some(prev);
