@@ -1353,6 +1353,9 @@ impl Inferer<'_> {
                         ),
                     );
                 }
+                if self.is_global_nan(typed_lhs)? || self.is_global_nan(typed_rhs)? {
+                    self.error_nan_comparison(op, span);
+                }
                 // `void` has no runtime value to compare, and the comparison
                 // otherwise typechecks clean and panics in codegen.
                 let rhs_void = rt.carries_void().then(|| rt.clone());
@@ -4642,7 +4645,9 @@ impl Inferer<'_> {
             span: expr_span,
         };
         // A union of arrays answers `toString` as an array, through its joined view.
-        if !has_to_string(peeled) && !peeled.is_array_like_union() {
+        let converts = (has_to_string(peeled) || peeled.is_array_like_union())
+            && !self.is_static_interface_value(peeled);
+        if !converts {
             let nullable = matches!(peeled, Type::Null)
                 || matches!(
                     peeled,
@@ -4731,6 +4736,13 @@ impl Inferer<'_> {
                 },
             })
             .map_err(crate::typechecker::arena_failure)
+    }
+
+    /// A static-dispatch interface's value is an inert null, so it has no
+    /// `toString` to call.
+    fn is_static_interface_value(&self, ty: &Type) -> bool {
+        matches!(ty, Type::InterfaceRef { mangled, name, .. }
+            if self.resolver().is_static_interface(mangled, name))
     }
 
     /// The value of an object literal's field when it is spelled as a literal.
@@ -8225,6 +8237,7 @@ impl Inferer<'_> {
                         ty: *index.value,
                         optional: true,
                         readonly: index.readonly,
+                        method: false,
                     })
             }) {
                 if field.readonly {
@@ -9677,6 +9690,7 @@ impl Inferer<'_> {
         let check = if inner_to_target {
             None
         } else {
+            let shape = self.reduce_enums_to_members(&shape);
             if let Some(reason) =
                 unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
             {
@@ -10089,6 +10103,7 @@ impl Inferer<'_> {
                                 ty: self.reduce_interfaces_rec(&f.ty, seen, child, budget)?,
                                 optional: f.optional,
                                 readonly: f.readonly,
+                                method: f.method,
                             },
                         ))
                     })
@@ -10123,6 +10138,30 @@ impl Inferer<'_> {
                 Ok(other.clone())
             }
         }
+    }
+
+    /// Replace every enum in a cast's runtime check with the union of its
+    /// variant values: a value is one of the enum's members exactly when it
+    /// equals one of them. Relatedness is decided before this, against the
+    /// enum itself, because a member literal is not assignable to its enum.
+    fn reduce_enums_to_members(&self, ty: &Type) -> Type {
+        let peeled = ty.peel_preserving_readonly();
+        if let Some(members) = self.enum_runtime_members(peeled) {
+            return members;
+        }
+        if !matches!(
+            peeled,
+            Type::Object { .. }
+                | Type::Array(_)
+                | Type::Readonly(_)
+                | Type::Tuple(_)
+                | Type::Union(_)
+        ) {
+            return ty.clone();
+        }
+        crate::type_size::map_children_infallible(peeled, |inner| {
+            self.reduce_enums_to_members(inner)
+        })
     }
 
     /// regex literal inference. Runs the JS→regex-crate
@@ -10347,6 +10386,8 @@ fn unsupported_cast_target_reason(
             }
             unsupported_cast_target_reason(&expanded, types, seen)
         }
+        // Infer reduces an enum to its variant values before asking, so one
+        // left here sits behind a recursive alias it doesn't expand.
         Type::NumberEnum { .. } | Type::StringEnum { .. } => {
             Some("enum targets need a per-variant value check at runtime")
         }
@@ -10960,6 +11001,10 @@ fn has_to_string(ty: &Type) -> bool {
             // Class instances answer `toString` through vtable slot 0
             // (a user method fills it, else "[object Object]").
             | Type::ClassRef { .. }
+            // An interface value is an object, whose vtable answers `toString`
+            // whether the interface declares it as a method, a function-typed
+            // property, or not at all.
+            | Type::InterfaceRef { .. }
             | Type::TypeVar(_)
             | Type::GenericParam { .. }
             | Type::Unknown
@@ -11038,6 +11083,7 @@ fn merge_spread_field_type(
         ty: Type::union(vec![earlier.ty, field.ty]),
         optional: earlier.optional,
         readonly: false,
+        method: false,
     }
 }
 
@@ -11095,6 +11141,7 @@ fn merge_spread_alternatives(alternatives: &[SpreadAlternative]) -> ObjectFields
                     ty,
                     optional,
                     readonly: false,
+                    method: false,
                 },
             )
         })

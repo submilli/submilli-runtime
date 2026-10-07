@@ -718,10 +718,11 @@ impl Inferer<'_> {
         for clause in catches {
             let clause_ty = self.infer_catch_type(&clause, &mut prior)?;
             self.scopes.push();
+            // A `catch` binding is an ordinary mutable local, as in TypeScript.
             self.scopes.insert(
                 clause.binding.name.clone(),
                 clause_ty.clone(),
-                true,
+                false,
                 clause.binding.span,
             );
             let outcome =
@@ -1310,6 +1311,7 @@ impl Inferer<'_> {
                         ty: *i.value,
                         optional: false,
                         readonly: i.readonly,
+                        method: false,
                     })
             });
             if let Some(field) = field_lookup {
@@ -2130,6 +2132,7 @@ impl Inferer<'_> {
                         ty: *index.value,
                         optional: true,
                         readonly: index.readonly,
+                        method: false,
                     })
             }) {
                 if field.readonly {

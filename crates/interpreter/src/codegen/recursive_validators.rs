@@ -73,6 +73,7 @@ impl ValidatorBodies {
                                             ty: sig.ty.clone(),
                                             optional: sig.optional,
                                             readonly: sig.readonly,
+                                            method: false,
                                         },
                                     )
                                 })
@@ -222,6 +223,7 @@ impl ValidatorBodies {
                                 ty,
                                 optional: f.optional,
                                 readonly: f.readonly,
+                                method: false,
                             },
                         ))
                     })
@@ -256,6 +258,7 @@ fn data_only_fields(members: &[TypedInterfaceMember]) -> Option<BTreeMap<String,
                         ty: ty.clone(),
                         optional: *optional,
                         readonly: *readonly,
+                        method: false,
                     },
                 );
             }
