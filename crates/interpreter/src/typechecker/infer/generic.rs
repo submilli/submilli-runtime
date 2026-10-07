@@ -1167,7 +1167,7 @@ impl Inferer<'_> {
         sub: &TypeParamSubstitution,
     ) -> Result<Option<LiteralArgumentInference>, CompilerFailure> {
         let enclosing = self.literal_argument_inference.take();
-        let fields = match self
+        let slots = match self
             .ast
             .try_expr(arg)
             .map_err(super::arena_failure)?
@@ -1182,7 +1182,7 @@ impl Inferer<'_> {
             }
             _ => None,
         };
-        if let Some(slots) = fields {
+        if let Some(slots) = slots {
             self.literal_argument_inference = Some(LiteralArgumentInference {
                 literal: arg,
                 slots,
@@ -1293,12 +1293,19 @@ impl Inferer<'_> {
             .literal_argument_inference
             .as_ref()
             .filter(|inference| inference.literal == literal)?;
-        let field = inference.slots.get(name)?;
-        let mut sub = inference.sub.clone();
-        if let Some(Type::Function { params, .. }) = function_part(&field.ty) {
+        let slot = inference.slots.get(name)?;
+        // A slot typed as a bare type parameter may still widen an earlier
+        // field's candidate (`{ v: new Dog(), w: new Animal() }`), so its
+        // value is not held to it.
+        let mut sub = if matches!(slot.ty.peel(), Type::TypeVar(_)) {
+            inference.sub.without_widenable_bindings()
+        } else {
+            inference.sub.clone()
+        };
+        if let Some(Type::Function { params, .. }) = function_part(&slot.ty) {
             sub.bind_whole_union_fallbacks_in(params);
         }
-        Some(sub.apply_or_record(&field.ty, &self.type_limits))
+        Some(sub.apply_or_record(&slot.ty, &self.type_limits))
     }
 
     /// Whether a function literal in a field of `literal` typed `field_ty`
@@ -1332,18 +1339,18 @@ impl Inferer<'_> {
         else {
             return;
         };
-        if let Some(field) = inference.slots.get(name) {
+        if let Some(slot) = inference.slots.get(name) {
             let before = inference.sub.clone();
             let close_matches_before = inference.sub.close_match_count();
             let _ = inference
                 .sub
-                .unify_argument(&field.ty, value_ty, self.resolver());
+                .unify_argument(&slot.ty, value_ty, self.resolver());
             inference
                 .sub
                 .nest_close_matches_after(close_matches_before, name);
             // Only a callback field's parameters took the fallback from the
             // hint; another field binding the same type binds it for real.
-            if function_part(&field.ty).is_some() {
+            if function_part(&slot.ty).is_some() {
                 let echoes = inference.sub.unbind_fallback_echoes(&before);
                 inference.fallback_echoes.extend(echoes);
             }

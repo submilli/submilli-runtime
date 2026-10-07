@@ -306,6 +306,15 @@ impl TypeParamSubstitution {
         loose
     }
 
+    /// These bindings without the candidates a later argument may still widen.
+    pub fn without_widenable_bindings(&self) -> TypeParamSubstitution {
+        let mut loose = self.clone();
+        loose
+            .bindings
+            .retain(|name, _| !self.widenable.contains(name));
+        loose
+    }
+
     fn is_candidate_binding(&self, name: &str) -> bool {
         self.widenable.contains(name) || self.narrowable.contains(name)
     }
@@ -473,7 +482,10 @@ impl TypeParamSubstitution {
         }
         let bound_before: std::collections::BTreeSet<String> = self.bound_names().collect();
         let resolved = self.apply_or_record(param_ty, types.limits);
+        // An argument that fits the expected result's binding still replaces
+        // it, so the arguments, not the expected type, decide the inference.
         if !super::infer::expr::type_contains_type_var(&resolved)
+            && !self.mentions_replaceable_binding(param_ty)
             && assignable(arg_ty, &resolved, types)
         {
             return Ok(());
@@ -590,10 +602,15 @@ impl<'a> Unifier<'a> {
                 // arguments' own from here on, whether or not it is replaced.
                 let replaceable = self.sub.replaceable.remove(name) && self.is_argument;
                 let from_callback_parameter = self.sub.narrowable.contains(name);
-                // The expected result's binding is only a hint: an argument it
-                // takes is the first candidate, which later ones widen.
+                // The expected result's binding is only a hint, as tsc gives a
+                // return type's inference the lowest priority: the first
+                // argument replaces it as the first candidate, which later
+                // ones widen, and the result is checked against the expected
+                // type afterwards.
                 if replaceable && self.infers_from_covariant_argument() {
+                    self.sub.bindings.insert(name.clone(), arg_ty.clone());
                     self.sub.widenable.insert(name.clone());
+                    return Ok(());
                 }
                 if self.contravariant {
                     self.sub.widenable.remove(name);
@@ -821,6 +838,9 @@ impl<'a> Unifier<'a> {
             // two passes pair matching members first, then unify leftovers in order.
             (Type::Union(pa), Type::Union(pb)) => {
                 if let Some(unified) = self.unify_union_into_lone_type_var(pa, pb) {
+                    return unified;
+                }
+                if let Some(unified) = self.unify_union_into_lone_candidate(pa, pb) {
                     return unified;
                 }
                 if pa.len() != pb.len() {
@@ -1221,6 +1241,43 @@ impl<'a> Unifier<'a> {
         }
         self.offer_whole_union_fallback(type_var, Type::union(args.to_vec()));
         Some(Ok(()))
+    }
+
+    /// A union argument against a union whose only type parameter is bound to
+    /// a candidate a later argument may still widen, or to the expected
+    /// result's hint an argument replaces: the members that fit
+    /// none of the concrete siblings are one more candidate, as tsc infers
+    /// them. `orNullD(5, pick)` with `pick: 1 | 2` widens `T` to `number`
+    /// from `1 | 2`, rather than pairing `2` with `null`. `None` when the
+    /// parameter has another shape or every member fits a sibling.
+    #[allow(clippy::result_large_err)]
+    fn unify_union_into_lone_candidate(
+        &mut self,
+        params: &[Type],
+        args: &[Type],
+    ) -> Option<Result<(), UnifyError>> {
+        let (type_vars, others): (Vec<&Type>, Vec<&Type>) = params
+            .iter()
+            .partition(|member| super::infer::expr::type_contains_type_var(member));
+        let [type_var] = type_vars[..] else {
+            return None;
+        };
+        let Type::TypeVar(name) = type_var.peel() else {
+            return None;
+        };
+        let replaceable = self.sub.replaceable.contains(name) && self.is_argument;
+        if !self.sub.is_candidate_binding(name) && !replaceable {
+            return None;
+        }
+        let rest: Vec<Type> = args
+            .iter()
+            .filter(|arg| !others.iter().any(|other| self.would_unify(other, arg)))
+            .cloned()
+            .collect();
+        if rest.is_empty() {
+            return None;
+        }
+        Some(self.unify(type_var, &Type::union(rest)))
     }
 
     /// Defer `arg` when it fits the whole-union fallback of a member that is

@@ -11,7 +11,7 @@
 //!   `Logger<number | string>`, but not a `Logger<string>`.
 //! - A parameter that appears nowhere relates any instantiation to any other.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{MangledName, Type, TypeKind};
 
@@ -112,7 +112,7 @@ impl<'a> TypeResolver<'a> {
         mangled: &MangledName,
         name: &str,
     ) -> Option<Vec<Variance>> {
-        let mut measuring = Vec::new();
+        let mut measuring = Measuring::default();
         self.measure_variances(mangled, name, &mut measuring)
             .variances
     }
@@ -133,11 +133,13 @@ impl<'a> TypeResolver<'a> {
     /// Measured once per declaration and remembered: a declaration referenced
     /// from several members (`a: Next<T>; b: Next<T>`) would otherwise be
     /// measured again at each reference, doubling the work at every level.
+    /// One that skipped only a reference back to where the walk started is
+    /// remembered for the rest of this walk, which is still inside it.
     fn measure_variances(
         &self,
         mangled: &MangledName,
         name: &str,
-        measuring: &mut Vec<MangledName>,
+        measuring: &mut Measuring,
     ) -> Measured {
         if let Some(variances) = self.registry.measured_variances(mangled) {
             return Measured {
@@ -145,10 +147,24 @@ impl<'a> TypeResolver<'a> {
                 ..Measured::default()
             };
         }
+        if let Some(variances) = measuring.within_root.get(mangled) {
+            return Measured {
+                variances: variances.clone(),
+                skipped: BTreeSet::from([0]),
+                cut_short: false,
+            };
+        }
         let measured = self.walk_declaration(mangled, name, measuring);
-        if !measured.is_partial {
+        if measured.cut_short {
+            return measured;
+        }
+        if measured.skipped.is_empty() {
             self.registry
                 .remember_variances(mangled, measured.variances.clone());
+        } else if measured.skipped == BTreeSet::from([0]) {
+            measuring
+                .within_root
+                .insert(mangled.clone(), measured.variances.clone());
         }
         measured
     }
@@ -157,7 +173,7 @@ impl<'a> TypeResolver<'a> {
         &self,
         mangled: &MangledName,
         name: &str,
-        measuring: &mut Vec<MangledName>,
+        measuring: &mut Measuring,
     ) -> Measured {
         let Some(sym) = self.lookup(mangled, name) else {
             return Measured::default();
@@ -169,42 +185,62 @@ impl<'a> TypeResolver<'a> {
         let markers: Vec<Type> = (0..generics.len())
             .map(|i| Type::TypeVar(marker(i)))
             .collect();
+        let depth = measuring.stack.len();
         let mut walk = VarianceWalk {
             resolver: *self,
             found: vec![Occurrences::default(); generics.len()],
             measuring,
-            is_partial: false,
+            skipped: BTreeSet::new(),
+            cut_short: false,
         };
-        walk.measuring.push(mangled.clone());
+        walk.measuring.stack.push(mangled.clone());
         let walked = walk.members(sym, &markers);
-        walk.measuring.pop();
+        walk.measuring.stack.pop();
         Measured {
             variances: walked.map(|()| walk.found.into_iter().map(Occurrences::variance).collect()),
-            is_partial: walk.is_partial,
+            // A reference back to the declaration itself is skipped wherever
+            // it is measured from, and leaves the measurement whole.
+            skipped: walk
+                .skipped
+                .into_iter()
+                .filter(|&index| index < depth)
+                .collect(),
+            cut_short: walk.cut_short,
         }
     }
 }
 
-/// A declaration's variances, and whether they are partial: measured without
-/// following a reference back to a declaration further up the walk (directly
-/// or through a partial measurement it read), or cut short by the work limit.
-/// A partial measurement depends on where the walk started, so only a whole
-/// one is remembered; a reference back to the declaration itself is skipped
-/// wherever it is measured from, and leaves it whole.
+/// The declarations whose variance is being measured further up one walk.
+#[derive(Default)]
+struct Measuring {
+    stack: Vec<MangledName>,
+    /// Measurements that skipped only a reference back to the walk's first
+    /// declaration, which stays on the stack until the walk ends.
+    within_root: BTreeMap<MangledName, Option<Vec<Variance>>>,
+}
+
+/// A declaration's variances, and whether they are partial: `skipped` holds
+/// the stack positions of the declarations further up the walk that a
+/// reference back to was skipped (directly or in a partial measurement it
+/// read), and `cut_short` that the work limit ended the walk. A partial
+/// measurement depends on where the walk started, so it is not remembered
+/// for other walks.
 #[derive(Default)]
 struct Measured {
     variances: Option<Vec<Variance>>,
-    is_partial: bool,
+    skipped: BTreeSet<usize>,
+    cut_short: bool,
 }
 
 struct VarianceWalk<'r, 'a> {
     resolver: TypeResolver<'a>,
     found: Vec<Occurrences>,
-    /// Declarations whose variance is being measured further up this walk. A
-    /// reference back to one of them adds nothing: its other members decide.
-    measuring: &'r mut Vec<MangledName>,
-    /// Whether the measurement is partial; see [`Measured`].
-    is_partial: bool,
+    /// A reference back to a declaration on the stack adds nothing: its
+    /// other members decide.
+    measuring: &'r mut Measuring,
+    /// See [`Measured`].
+    skipped: BTreeSet<usize>,
+    cut_short: bool,
 }
 
 impl VarianceWalk<'_, '_> {
@@ -289,7 +325,7 @@ impl VarianceWalk<'_, '_> {
 
     fn walk(&mut self, ty: &Type, polarity: Polarity) {
         if !self.resolver.limits.spend_work(1) {
-            self.is_partial = true;
+            self.cut_short = true;
             return;
         }
         match ty {
@@ -355,14 +391,15 @@ impl VarianceWalk<'_, '_> {
         if args.is_empty() {
             return;
         }
-        if self.measuring.contains(mangled) {
-            self.is_partial |= self.measuring.last() != Some(mangled);
+        if let Some(index) = self.measuring.stack.iter().position(|m| m == mangled) {
+            self.skipped.insert(index);
             return;
         }
         let measured = self
             .resolver
             .measure_variances(mangled, name, self.measuring);
-        self.is_partial |= measured.is_partial;
+        self.skipped.extend(measured.skipped);
+        self.cut_short |= measured.cut_short;
         let variances = measured
             .variances
             .unwrap_or_else(|| vec![Variance::Covariant; args.len()]);

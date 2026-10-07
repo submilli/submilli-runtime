@@ -53,4 +53,6 @@ function main(): void {
   const animal: Animal = common({ v: new Dog(), cb: (t) => t.name, w: new Animal() });
   assert(boxes === null && n === 3 && order === "ab", "callback fields last");
   assert(text === "abc" && animal.name === "a", "fields before the callback");
+  const unexpected = common({ v: new Dog(), cb: (t) => t.name, w: new Animal() });
+  assert(unexpected.name === "a", "a later field widens an earlier one");
 }

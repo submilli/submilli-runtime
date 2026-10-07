@@ -277,6 +277,31 @@ impl Inferer<'_> {
         Ok(widen_only(&flow, &fresh))
     }
 
+    /// The type a generic call's result `ty` is reported at when it doesn't
+    /// fit `expected`: tsc widens the fresh literals an argument kept unless
+    /// the expected type names a literal of their kind, so `const n: number
+    /// = orNull(5)` reports `number | null`, where `const w: 1 | string =
+    /// first(1, 2)` reports `1 | 2`.
+    pub(super) fn reported_result_type(
+        &self,
+        kind: &TypedExprKind,
+        ty: &Type,
+        expected: &Type,
+    ) -> Result<Type, CompilerFailure> {
+        let (TypedExprKind::GenericCall { args, .. }
+        | TypedExprKind::GenericMethodCall { args, .. }) = kind
+        else {
+            return Ok(ty.clone());
+        };
+        let mut fresh = self.kept_fresh_literals(args)?;
+        let named_kinds: BTreeSet<Type> = declared_literals_unreduced(expected)
+            .iter()
+            .map(Type::widen_literal)
+            .collect();
+        fresh.retain(|literal| !named_kinds.contains(&literal.widen_literal()));
+        Ok(widen_only(ty, &fresh))
+    }
+
     /// The origin of the literal types of a binding initialized with `value`:
     /// declared when `annotated`, else inferred from `value`, whose type the
     /// binding takes as `bound`.

@@ -137,7 +137,18 @@ function single(flag: boolean): [number] | boolean {
   return flag ? [1] : false;
 }
 
+function orDefault<T>(fallback: T, value: T | null): T {
+  return value === null ? fallback : value;
+}
+
+function first<T>(a: T, b: T): T {
+  return a;
+}
+
 function main(): void {
+  const widened = orDefault(5, first(1, 2));
+  const pickedMode = orDefault(5, lookupEither(0));
+  assert(widened === 1 && pickedMode === 5, "a union argument widens a bound type parameter");
   const found: Mode[] = unwrap(lookup(1));
   const chosen: Mode = orElse(lookup(0), "off");
   const either: (string | number)[] = unwrap(lookupEither(1));

@@ -774,7 +774,8 @@ impl Inferer<'_> {
             if let Some((narrow_help, _)) = self.narrowing_refusal_hint(&kind, &ty, want)? {
                 help.extend(narrow_help);
             }
-            self.error_with_help(span, format!("expected `{want}`, got `{ty}`"), help);
+            let shown = self.reported_result_type(&kind, &ty, want)?;
+            self.error_with_help(span, format!("expected `{want}`, got `{shown}`"), help);
         }
         self.check_expression_arity(&kind, &ty, span);
         let id = self
