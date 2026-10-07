@@ -13,6 +13,7 @@
 //! [`StreamableHttpService`]: rmcp::transport::streamable_http_server::StreamableHttpService
 //! [`AppState`]: crate::app::AppState
 
+mod protocol;
 mod router;
 mod server;
 mod session;

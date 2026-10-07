@@ -25,6 +25,7 @@ struct ControlledStore {
     inner: InMemoryBlueprintStore,
     reads_left: AtomicUsize,
     fail_writes: AtomicBool,
+    fail_parsed_reads: AtomicBool,
     missing: AtomicBool,
 }
 
@@ -43,6 +44,7 @@ impl ControlledStore {
             inner: InMemoryBlueprintStore::seed([blueprint]).unwrap(),
             reads_left: AtomicUsize::new(usize::MAX),
             fail_writes: AtomicBool::new(false),
+            fail_parsed_reads: AtomicBool::new(false),
             missing: AtomicBool::new(false),
         }
     }
@@ -92,6 +94,11 @@ impl BlueprintStore for ControlledStore {
         self.inner.list_blueprints().await
     }
     async fn get(&self, name: &str) -> Result<Option<Blueprint>, StoreError> {
+        if self.fail_parsed_reads.load(Ordering::SeqCst) {
+            return Err(StoreError::Io(
+                "injected audit metadata read failure".into(),
+            ));
+        }
         self.read()?;
         if self.missing.load(Ordering::SeqCst) {
             Ok(None)
@@ -453,11 +460,26 @@ async fn session_lookup_failure_does_not_reserve_the_idempotency_key() {
 #[tokio::test]
 async fn audit_metadata_read_failure_does_not_block_blueprint_deletion() {
     let harness = Harness::new();
-    harness.store.reads_left.store(0, Ordering::SeqCst);
+    harness
+        .store
+        .fail_parsed_reads
+        .store(true, Ordering::SeqCst);
     let (status, _, body) = harness
         .request("DELETE", "/v1/blueprints/tenant", Value::Null, None)
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["name"], "tenant");
     assert!(harness.store.inner.list().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn authoritative_read_failure_blocks_blueprint_deletion() {
+    let harness = Harness::new();
+    harness.store.reads_left.store(0, Ordering::SeqCst);
+    let (status, _, body) = harness
+        .request("DELETE", "/v1/blueprints/tenant", Value::Null, None)
+        .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(!body.to_string().contains("injected private store detail"));
+    assert_eq!(harness.store.inner.list().await.unwrap(), ["tenant"]);
 }

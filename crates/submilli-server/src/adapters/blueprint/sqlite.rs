@@ -7,7 +7,7 @@ use submilli_blueprint::Blueprint;
 use super::{BlueprintStore, StoreError, StoredBlueprint};
 use crate::database::{DatabaseError, ServerDatabase};
 
-mod archive;
+use crate::import_archive as archive;
 
 /// SQLite is authoritative after initialization; imported files are archived.
 pub struct SqliteBlueprintStore {
@@ -39,23 +39,12 @@ impl SqliteBlueprintStore {
     }
 
     async fn write(&self, stored: StoredBlueprint, replace: bool) -> Result<bool, StoreError> {
-        self.database.transaction(move |connection| Box::pin(async move {
-            let name = stored.blueprint.name;
-            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM blueprints WHERE name=?1)")
-                .bind(&name).fetch_one(&mut *connection).await?;
-            if exists && !replace {
-                return Err(DatabaseError::AlreadyExists);
-            }
-            let previous: Option<i64> = sqlx::query_scalar("SELECT MAX(revision) FROM blueprint_revisions WHERE name=?1")
-                .bind(&name).fetch_one(&mut *connection).await?;
-            let revision = previous.unwrap_or(0).checked_add(1)
-                .ok_or_else(|| DatabaseError::RevisionExhausted { name: name.clone() })?;
-            sqlx::query("INSERT INTO blueprint_revisions (name, revision, yaml) VALUES (?1, ?2, ?3)")
-                .bind(&name).bind(revision).bind(stored.yaml).execute(&mut *connection).await?;
-            sqlx::query("INSERT INTO blueprints (name, current_revision) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET current_revision=excluded.current_revision")
-                .bind(name).bind(revision).execute(connection).await?;
-            Ok(!exists)
-        })).await.map_err(Into::into)
+        self.database
+            .transaction(move |connection| {
+                Box::pin(async move { write(connection, stored, replace).await })
+            })
+            .await
+            .map_err(Into::into)
     }
 
     async fn current<T, F>(&self, name: &str, decode: F) -> Result<Option<T>, StoreError>
@@ -84,6 +73,10 @@ impl SqliteBlueprintStore {
 
 #[async_trait::async_trait]
 impl BlueprintStore for SqliteBlueprintStore {
+    fn database(&self) -> Option<Arc<ServerDatabase>> {
+        Some(self.database.clone())
+    }
+
     async fn add_yaml(&self, stored: StoredBlueprint) -> Result<(), StoreError> {
         self.write(stored, false).await.map(|_| ())
     }
@@ -126,19 +119,55 @@ impl BlueprintStore for SqliteBlueprintStore {
     async fn remove(&self, name: &str) -> Result<bool, StoreError> {
         let name = name.to_owned();
         self.database
-            .transaction(move |connection| {
-                Box::pin(async move {
-                    Ok(sqlx::query("DELETE FROM blueprints WHERE name=?1")
-                        .bind(name)
-                        .execute(connection)
-                        .await?
-                        .rows_affected()
-                        != 0)
-                })
-            })
+            .transaction(move |connection| Box::pin(async move { remove(connection, &name).await }))
             .await
             .map_err(Into::into)
     }
+}
+
+pub(crate) async fn write(
+    connection: &mut SqliteConnection,
+    stored: StoredBlueprint,
+    replace: bool,
+) -> Result<bool, DatabaseError> {
+    let name = stored.blueprint.name;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM blueprints WHERE name=?1)")
+        .bind(&name)
+        .fetch_one(&mut *connection)
+        .await?;
+    if exists && !replace {
+        return Err(DatabaseError::AlreadyExists);
+    }
+    let previous: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(revision) FROM blueprint_revisions WHERE name=?1")
+            .bind(&name)
+            .fetch_one(&mut *connection)
+            .await?;
+    let revision = previous
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| DatabaseError::RevisionExhausted { name: name.clone() })?;
+    sqlx::query("INSERT INTO blueprint_revisions (name, revision, yaml) VALUES (?1, ?2, ?3)")
+        .bind(&name)
+        .bind(revision)
+        .bind(stored.yaml)
+        .execute(&mut *connection)
+        .await?;
+    sqlx::query("INSERT INTO blueprints (name, current_revision) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET current_revision=excluded.current_revision")
+                .bind(name).bind(revision).execute(connection).await?;
+    Ok(!exists)
+}
+
+pub(crate) async fn remove(
+    connection: &mut SqliteConnection,
+    name: &str,
+) -> Result<bool, DatabaseError> {
+    Ok(sqlx::query("DELETE FROM blueprints WHERE name=?")
+        .bind(name)
+        .execute(connection)
+        .await?
+        .rows_affected()
+        != 0)
 }
 
 fn parse_current(name: &str, yaml: &str) -> Result<Blueprint, String> {

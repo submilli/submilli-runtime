@@ -84,16 +84,18 @@ async fn check_mutations(cancel: bool) {
             ..Default::default()
         })
         .unwrap();
-        state
-            .session_manager()
-            .bind(
-                "session",
-                &submilli_blueprint::parse("name: demo").unwrap(),
-                Arc::new(Default::default()),
-                Arc::new(Default::default()),
-            )
-            .await
-            .unwrap();
+        if !creating {
+            state
+                .session_manager()
+                .bind(
+                    "session",
+                    &submilli_blueprint::parse("name: demo").unwrap(),
+                    Arc::new(Default::default()),
+                    Arc::new(Default::default()),
+                )
+                .await
+                .unwrap();
+        }
         let generation = state.inner.mcp_catalog_generation.load(Ordering::Acquire);
         let router = app(state.clone());
         let request = tokio::spawn(async move {
@@ -163,7 +165,7 @@ async fn check_mutations(cancel: bool) {
                 .find(|line| line.contains("event=evicted"))
                 .unwrap();
             assert!(eviction.contains("principal=operator"), "{eviction}");
-            assert!(!state.session_manager().contains("session"));
+            assert!(!state.session_manager().contains("session").await.unwrap());
         } else if creating {
             assert!(mutation.contains("event=blueprint_created"), "{mutation}");
         } else {

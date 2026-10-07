@@ -368,11 +368,8 @@ async fn a_key_on_an_unknown_session_reports_the_unknown_session() {
 
 /// KTD2: a session-level refusal answers before the key is ever considered.
 ///
-/// The restart is what makes this test mean what it says. Harness secrets are
-/// memory-only, so a rehydrated session is *known* (no 404) but *unbound* —
-/// the one state that reaches the `session_requires_secrets` branch. Share no
-/// session store and the second process 404s instead, and the test passes on a
-/// path the previous test already covers.
+/// Imported legacy sessions have metadata but no recoverable harness bindings.
+/// The missing-secrets refusal must precede idempotency reservation.
 #[tokio::test]
 async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
     const NEEDS_SECRET: &str = "name: needs-secret\ndefault: deny\nvfs: none\nsecrets:\n  TOKEN:\n    harness:\n      required: true\n";
@@ -407,7 +404,11 @@ async fn an_unbound_harness_secret_is_reported_before_the_key_is_considered() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let session = as_json(&body)["session_id"].as_str().unwrap().to_string();
 
-    // Restart: the durable record comes back, the memory-only binding does not.
+    // Model legacy import: metadata survives, but no credential was persisted.
+    drop(router);
+    let mut record = sessions.load(&session).await.unwrap().unwrap();
+    record.ephemeral_bindings = None;
+    sessions.put(record).await.unwrap();
     let restarted_state = build();
     restarted_state.boot().await.expect("boot");
     let restarted = app(restarted_state);

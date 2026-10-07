@@ -244,12 +244,13 @@ pub(crate) async fn one_shot_with(
         test,
     )
     .await;
-    // `execute_core` registers the session so a VFS and a KV store exist for the
-    // run, and a one-shot's must not outlive it: left registered it would hold
+    // A one-shot session must not outlive its run: retaining it would hold
     // its share of the server-wide session-state budget until `idle_timeout`, a
     // day by default. The last-run record lives in a separate store, so the
     // teardown does not take it.
-    state.session_manager().wipe_now(&session_id).await;
+    if let Err(error) = state.session_manager().wipe_now(&session_id).await {
+        tracing::warn!(%error, "transient session cleanup failed");
+    }
     (session_id, outcome.response)
 }
 
@@ -577,6 +578,7 @@ async fn prepare_and_run(
         },
     );
     let services = runner::HostServices {
+        session_manager: Some(manager.clone()),
         audit: execution_audit.clone(),
         git: submilli_shared::resolve_git(&blueprint, &variables)
             .map_err(|error| error.to_string()),
@@ -627,7 +629,6 @@ async fn prepare_and_run(
         },
     )
     .await;
-    manager.touch(session_id).await;
 
     let console_lines = split_console(&outcome.console_raw);
     let response = into_response(audit, session_id, &outcome, &console_lines);
@@ -747,7 +748,7 @@ async fn live_world(
 /// run, taking its idempotency reservation with it. This buys the program a full idle
 /// window rather than whatever was left of one; it does not make the run un-reapable,
 /// and an execution that outlasts `idle_timeout` on its own is still collected
-/// mid-flight. The write is debounced (`PERSIST_INTERVAL`), so this costs nothing per call.
+/// mid-flight. Session activity is committed before dispatch.
 pub(crate) async fn open_session(
     state: &AppState,
     session_id: &str,
@@ -758,7 +759,10 @@ pub(crate) async fn open_session(
         .ensure(session_id, blueprint)
         .await
         .map_err(|err| format!("internal: session init failed: {err}"))?;
-    manager.touch(session_id).await;
+    manager
+        .start_execution(session_id)
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 

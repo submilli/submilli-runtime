@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 pub use crate::host::{SecretStore, SecretStoreError};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use chacha20poly1305::aead::{Aead, OsRng};
-use chacha20poly1305::{AeadCore, KeyInit, XChaCha20Poly1305, XNonce};
+use chacha20poly1305::aead::{Aead, OsRng, Payload, rand_core::RngCore};
+use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 
 /// Length of the XChaCha20-Poly1305 key, in bytes.
 const KEY_LEN: usize = 32;
@@ -75,18 +75,73 @@ fn filename_to_key(name: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
+/// Shared authenticated encryption for server-owned secret material.
+/// The key stays outside persistent stores; associated data binds a blob to its owner.
+pub struct SecretCipher {
+    cipher: XChaCha20Poly1305,
+}
+
+impl SecretCipher {
+    pub fn new(source: &KeySource) -> Result<Self, SecretStoreError> {
+        Ok(Self {
+            cipher: cipher_for(source)?,
+        })
+    }
+
+    pub fn seal(&self, plaintext: &[u8], owner: &[u8]) -> Result<Vec<u8>, SecretStoreError> {
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        OsRng
+            .try_fill_bytes(&mut nonce_bytes)
+            .map_err(|_| SecretStoreError::Crypto("secure randomness unavailable".into()))?;
+        let nonce = XNonce::from_slice(&nonce_bytes);
+        let ciphertext = self
+            .cipher
+            .encrypt(
+                nonce,
+                Payload {
+                    msg: plaintext,
+                    aad: owner,
+                },
+            )
+            .map_err(|_| SecretStoreError::Crypto("could not encrypt bindings".into()))?;
+        let mut blob = Vec::new();
+        blob.extend_from_slice(nonce.as_slice());
+        blob.extend_from_slice(&ciphertext);
+        Ok(blob)
+    }
+
+    pub fn open(&self, blob: &[u8], owner: &[u8]) -> Result<Vec<u8>, SecretStoreError> {
+        let (nonce, ciphertext) = blob
+            .split_at_checked(NONCE_LEN)
+            .ok_or_else(|| SecretStoreError::Crypto("sealed blob too short".into()))?;
+        self.cipher
+            .decrypt(
+                XNonce::from_slice(nonce),
+                Payload {
+                    msg: ciphertext,
+                    aad: owner,
+                },
+            )
+            .map_err(|_| {
+                SecretStoreError::Crypto(
+                    "cannot decrypt bindings; restore the configured secret-store key".into(),
+                )
+            })
+    }
+}
+
 /// Encrypted-at-rest, file-per-secret store. One XChaCha20-Poly1305-sealed file
 /// per key in `dir`. Reads decrypt on demand; no plaintext is held resident.
 pub struct FileSecretStore {
     dir: PathBuf,
-    cipher: XChaCha20Poly1305,
+    cipher: SecretCipher,
 }
 
 impl FileSecretStore {
     /// Open the store, creating `dir` if absent. No secrets are read here — the
     /// store holds only the key (the cipher); values are decrypted per lookup.
     pub fn open(dir: PathBuf, key_src: &KeySource) -> Result<Self, SecretStoreError> {
-        let cipher = cipher_for(key_src)?;
+        let cipher = SecretCipher::new(key_src)?;
         fs::create_dir_all(&dir).map_err(io)?;
         Ok(Self { dir, cipher })
     }
@@ -122,27 +177,13 @@ impl FileSecretStore {
     }
 
     fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, SecretStoreError> {
-        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
-        let ciphertext = self
-            .cipher
-            .encrypt(&nonce, plaintext)
-            .map_err(|e| SecretStoreError::Crypto(e.to_string()))?;
-        let mut out = Vec::with_capacity(NONCE_LEN + ciphertext.len());
-        out.extend_from_slice(nonce.as_slice());
-        out.extend_from_slice(&ciphertext);
-        Ok(out)
+        self.cipher.seal(plaintext, b"")
     }
 }
 
 /// Split the nonce prefix and decrypt the rest.
-fn open_sealed(cipher: &XChaCha20Poly1305, blob: &[u8]) -> Result<Vec<u8>, SecretStoreError> {
-    if blob.len() < NONCE_LEN {
-        return Err(SecretStoreError::Crypto("sealed blob too short".into()));
-    }
-    let (nonce, ciphertext) = blob.split_at(NONCE_LEN);
-    cipher
-        .decrypt(XNonce::from_slice(nonce), ciphertext)
-        .map_err(|e| SecretStoreError::Crypto(e.to_string()))
+fn open_sealed(cipher: &SecretCipher, blob: &[u8]) -> Result<Vec<u8>, SecretStoreError> {
+    cipher.open(blob, b"")
 }
 
 #[async_trait::async_trait]
