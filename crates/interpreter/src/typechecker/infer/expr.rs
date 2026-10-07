@@ -361,7 +361,7 @@ fn postfix_result_ty(operand_ty: &Type) -> Type {
 
 /// The type an array literal reads its hint as: peeled, and narrowed to the sole
 /// array-like member of a union.
-fn array_literal_hint_shape(hint: &Type) -> &Type {
+pub(super) fn array_literal_hint_shape(hint: &Type) -> &Type {
     let peeled = hint.peel();
     sole_array_like_member(peeled).unwrap_or(peeled)
 }
@@ -602,7 +602,7 @@ impl Inferer<'_> {
                 self.infer_object_literal(expr_id, members, expected, span)
             }
             ExprKind::ArrayLiteral { elements } => {
-                self.infer_array_literal(elements, expected, span)
+                self.infer_array_literal(expr_id, elements, expected, span)
             }
             ExprKind::FieldAccess { receiver, name } => {
                 self.infer_field_access(receiver, name, span)
@@ -5702,6 +5702,7 @@ impl Inferer<'_> {
 
     fn infer_array_literal(
         &mut self,
+        literal: ExprId,
         elements: Vec<crate::ArrayLiteralElement>,
         expected: Option<&Type>,
         span: Span,
@@ -5730,7 +5731,7 @@ impl Inferer<'_> {
                     )),
                 })
                 .collect::<Result<_, _>>()?;
-            return self.infer_tuple_literal(plain, expected_elems.clone(), span);
+            return self.infer_tuple_literal(literal, plain, expected_elems.clone(), span);
         }
 
         if let Some(Type::Union(members)) = expected {
@@ -6301,6 +6302,7 @@ impl Inferer<'_> {
     /// annotation so downstream type-checking doesn't cascade.
     fn infer_tuple_literal(
         &mut self,
+        literal: ExprId,
         elements: Vec<ExprId>,
         expected_elems: Vec<Type>,
         span: Span,
@@ -6336,14 +6338,21 @@ impl Inferer<'_> {
 
         let mut typed_elements: Vec<ExprId> = Vec::with_capacity(elements.len());
         let mut slot_types: Vec<Type> = Vec::with_capacity(elements.len());
-        for (elem_id, expected_ty) in elements.iter().zip(expected_elems.iter()) {
+        for (index, (elem_id, expected_ty)) in
+            elements.iter().zip(expected_elems.iter()).enumerate()
+        {
             let elem_span = self
                 .ast
                 .try_expr(*elem_id)
                 .map_err(super::arena_failure)?
                 .span;
             let errors_before = self.error_count();
-            let (typed_id, elem_ty) = self.infer_expr(*elem_id, Some(expected_ty))?;
+            // A generic call's argument types each element with what the
+            // elements before it bound, as tsc's intra-expression inference.
+            let index = index.to_string();
+            let hint = self.object_argument_field_hint(literal, &index);
+            let (typed_id, elem_ty) =
+                self.infer_expr(*elem_id, Some(hint.as_ref().unwrap_or(expected_ty)))?;
             // Unbound generic-param slots take the inferred element type —
             // `new Map([["a", 1]])` must report `[string, number]`, not
             // `[K, V]`, so the call site can bind K and V.
@@ -6365,6 +6374,7 @@ impl Inferer<'_> {
                 }
                 expected_ty.clone()
             };
+            self.infer_from_object_argument_field(literal, &index, &slot);
             slot_types.push(slot);
             typed_elements.push(typed_id);
         }

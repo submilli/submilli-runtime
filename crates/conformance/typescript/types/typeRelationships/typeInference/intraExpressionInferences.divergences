@@ -1,5 +1,1 @@
-types: 86 of 258 tsc entries compared, 0 differ
-
-errors:
-line 31: ours: field `toFixed` does not exist on `T` (tsc accepts)
-line 32: ours: field `toFixed` does not exist on `T` (tsc accepts)
+types: 92 of 258 tsc entries compared, 0 differ

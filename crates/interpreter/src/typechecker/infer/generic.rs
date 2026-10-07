@@ -1166,32 +1166,22 @@ impl Inferer<'_> {
         sub: &TypeParamSubstitution,
     ) -> Result<Option<ObjectArgumentInference>, CompilerFailure> {
         let enclosing = self.object_argument_inference.take();
-        let ExprKind::ObjectLiteral { members } = self
+        let fields = match self
             .ast
             .try_expr(arg)
             .map_err(super::arena_failure)?
             .kind
             .clone()
-        else {
-            return Ok(enclosing);
-        };
-        let mut has_context_sensitive_field = false;
-        for member in &members {
-            if let crate::ObjectLiteralMember::Field(field) = member {
-                has_context_sensitive_field |= self.is_context_sensitive_function(field.value)?;
+        {
+            ExprKind::ObjectLiteral { members } => {
+                self.object_argument_fields(&members, param_ty)?
             }
-        }
-        let fields = match param_ty.peel() {
-            Type::Object { fields, .. } => Some(fields.clone()),
-            interface @ Type::InterfaceRef { .. } => {
-                match super::assignable::expand_interface_data_shape(interface, self.resolver()) {
-                    Some(Type::Object { fields, .. }) => Some(fields),
-                    _ => None,
-                }
+            ExprKind::ArrayLiteral { elements } => {
+                self.tuple_argument_slots(&elements, param_ty)?
             }
             _ => None,
         };
-        if let Some(fields) = fields.filter(|_| has_context_sensitive_field) {
+        if let Some(fields) = fields {
             self.object_argument_inference = Some(ObjectArgumentInference {
                 literal: arg,
                 fields,
@@ -1200,6 +1190,71 @@ impl Inferer<'_> {
             });
         }
         Ok(enclosing)
+    }
+
+    /// The fields of `param_ty` an object literal argument with `members` is
+    /// inferred against one at a time, when one of them is a function literal
+    /// with an unannotated parameter.
+    fn object_argument_fields(
+        &self,
+        members: &[crate::ObjectLiteralMember],
+        param_ty: &Type,
+    ) -> Result<Option<BTreeMap<String, crate::ObjectField>>, CompilerFailure> {
+        let mut has_context_sensitive_field = false;
+        for member in members {
+            if let crate::ObjectLiteralMember::Field(field) = member {
+                has_context_sensitive_field |= self.is_context_sensitive_function(field.value)?;
+            }
+        }
+        if !has_context_sensitive_field {
+            return Ok(None);
+        }
+        Ok(match param_ty.peel() {
+            Type::Object { fields, .. } => Some(fields.clone()),
+            interface @ Type::InterfaceRef { .. } => {
+                match super::assignable::expand_interface_data_shape(interface, self.resolver()) {
+                    Some(Type::Object { fields, .. }) => Some(fields),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+    }
+
+    /// The slots of the tuple `param_ty`, keyed by index, that an array
+    /// literal argument with `elements` is inferred against one at a time,
+    /// when one of them is a function literal with an unannotated parameter:
+    /// `callIt([() => 0, (n) => n.toFixed()])` types `n` from the first.
+    fn tuple_argument_slots(
+        &self,
+        elements: &[crate::ArrayLiteralElement],
+        param_ty: &Type,
+    ) -> Result<Option<BTreeMap<String, crate::ObjectField>>, CompilerFailure> {
+        let Type::Tuple(slots) = super::expr::array_literal_hint_shape(param_ty) else {
+            return Ok(None);
+        };
+        if slots.len() != elements.len() {
+            return Ok(None);
+        }
+        let mut has_context_sensitive_element = false;
+        for element in elements {
+            let crate::ArrayLiteralElement::Value(value) = element else {
+                return Ok(None);
+            };
+            has_context_sensitive_element |= self.is_context_sensitive_function(*value)?;
+        }
+        Ok(has_context_sensitive_element.then(|| {
+            slots
+                .iter()
+                .enumerate()
+                .map(|(index, slot)| {
+                    (
+                        index.to_string(),
+                        crate::ObjectField::required(slot.clone()),
+                    )
+                })
+                .collect()
+        }))
     }
 
     /// Keep what the fields of the argument bound, and resume `enclosing`.
