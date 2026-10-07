@@ -326,18 +326,22 @@ fn lower_iterator_like(
         Box::new(result_union),
     );
 
+    let source_ty = ctx
+        .ta
+        .try_expr(iter)
+        .map_err(crate::typechecker::arena_failure)?
+        .ty
+        .clone();
+    let mut setup = Vec::new();
     // For Iterable path: use receiver's own iface, not hardcoded "Iterable",
     // so Map/Set route through their Direct-dispatch wrappers.
     let it_init = match kind {
         ForOfKind::Iterator => iter,
+        ForOfKind::Iterable if let Some(arrays) = source_ty.string_or_array_union_arrays() => {
+            string_or_array_iterator(ctx, iter, &source_ty, arrays, &iter_ty, &mut setup, span)?
+        }
         ForOfKind::Iterable => {
-            let receiver_iface = match ctx
-                .ta
-                .try_expr(iter)
-                .map_err(crate::typechecker::arena_failure)?
-                .ty
-                .peel()
-            {
+            let receiver_iface = match source_ty.peel() {
                 Type::InterfaceRef { mangled, .. } | Type::ClassRef { mangled, .. } => {
                     mangled.clone()
                 }
@@ -537,8 +541,118 @@ fn lower_iterator_like(
     ctx.ta
         .try_stmt_mut(id)
         .map_err(crate::typechecker::arena_failure)?
-        .kind = TypedStmtKind::Block(vec![const_it, try_stmt]);
+        .kind = TypedStmtKind::Block(setup.into_iter().chain([const_it, try_stmt]).collect());
     Ok(())
+}
+
+/// The iterator over `iter`, a union of strings with arrays or tuples:
+/// `typeof src === "string" ? src.iterator() : src.values()`, with `src` bound
+/// once by a statement pushed onto `setup`. A string iterates by code point,
+/// and an array through its live `values()` cursor, as each does on its own.
+fn string_or_array_iterator(
+    ctx: &mut DesugarCtx,
+    iter: ExprId,
+    source_ty: &Type,
+    arrays: Type,
+    iter_ty: &Type,
+    setup: &mut Vec<StmtId>,
+    span: Span,
+) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+    let src_ident = ctx.fresh_name("src")?;
+    setup.push(ctx.push_stmt(
+        TypedStmtKind::Const {
+            name: src_ident.clone(),
+            ty: source_ty.clone(),
+            value: iter,
+            doc: None,
+        },
+        span,
+    )?);
+    let tested = ctx.local_ref(src_ident.clone(), source_ty.clone())?;
+    let is_string = push_expr(
+        ctx,
+        TypedExprKind::TypeofTag {
+            value: tested,
+            tag: crate::TypeofTagKind::String,
+        },
+        Type::Boolean,
+        span,
+    )?;
+    let string_iterator = narrowed_method_call(
+        ctx,
+        (&src_ident, source_ty),
+        (Type::String, crate::mangle::prelude("String")),
+        "iterator",
+        iter_ty,
+        span,
+    )?;
+    let array_iterator = narrowed_method_call(
+        ctx,
+        (&src_ident, source_ty),
+        (arrays, crate::mangle::prelude("Array")),
+        "values",
+        iter_ty,
+        span,
+    )?;
+    push_expr(
+        ctx,
+        TypedExprKind::Ternary {
+            cond: is_string,
+            then_: string_iterator,
+            else_: array_iterator,
+        },
+        iter_ty.clone(),
+        span,
+    )
+}
+
+/// `(src as narrowed).name()` on the `iface` the narrowed type dispatches
+/// through, for a `src` already known to hold the narrowed type.
+fn narrowed_method_call(
+    ctx: &mut DesugarCtx,
+    (src_ident, source_ty): (&Ident, &Type),
+    (narrowed, iface): (Type, crate::MangledName),
+    name: &str,
+    ret: &Type,
+    span: Span,
+) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+    let src = ctx.local_ref(src_ident.clone(), source_ty.clone())?;
+    let receiver = push_expr(
+        ctx,
+        TypedExprKind::Cast {
+            value: src,
+            target_ty: narrowed.clone(),
+            check: None,
+        },
+        narrowed,
+        span,
+    )?;
+    push_expr(
+        ctx,
+        TypedExprKind::MethodCall {
+            receiver,
+            iface,
+            name: Ident {
+                name: name.to_string(),
+                span,
+            },
+            args: Vec::new(),
+            type_predicate: None,
+        },
+        ret.clone(),
+        span,
+    )
+}
+
+fn push_expr(
+    ctx: &mut DesugarCtx,
+    kind: TypedExprKind,
+    ty: Type,
+    span: Span,
+) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+    ctx.ta
+        .try_push_expr(TypedExpr { kind, span, ty })
+        .map_err(crate::typechecker::arena_failure)
 }
 
 fn synthesize_close_finally(

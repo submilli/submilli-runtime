@@ -3249,9 +3249,19 @@ impl Inferer<'_> {
             ty if ty.is_string_shaped() => Some((Type::String, crate::ForOfKind::Iterable)),
             // A union of arrays and tuples is one `$Array` at runtime too. It
             // follows the string arm, which takes unions of string literals.
-            Type::Union(_) => iter_ty
-                .array_like_union_element()
-                .map(|element| (element, crate::ForOfKind::Array)),
+            Type::Union(_) => match iter_ty.array_like_union_element() {
+                Some(element) => Some((element, crate::ForOfKind::Array)),
+                // A union of strings with arrays has no shared representation;
+                // the desugar picks the string's or the array's iterator.
+                None => {
+                    let arrays = iter_ty.string_or_array_union_arrays()?;
+                    let (element, _) = self.classify_for_of_source(&arrays)?;
+                    Some((
+                        Type::union(vec![Type::String, element]),
+                        crate::ForOfKind::Iterable,
+                    ))
+                }
+            },
             // Exact-name match keeps Iterator<U> on its own desugar path
             // (it declares `next()`, not `iterator()`, so it fails the structural check below).
             Type::InterfaceRef { name, args, .. } if name == "Iterator" && args.len() == 1 => {

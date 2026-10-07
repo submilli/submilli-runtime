@@ -6669,6 +6669,85 @@ impl Inferer<'_> {
         self.infer_property_access(receiver, name, span)
     }
 
+    /// `u.length` where `u` is a union of strings with arrays or tuples, which
+    /// have no shared representation: `typeof u === "string"` picks the
+    /// string's length or the array's, with `u` evaluated once.
+    fn string_or_array_length(
+        &mut self,
+        typed_receiver: ExprId,
+        arrays: Type,
+        name: Ident,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let mut stmts = Vec::new();
+        let held = self.hold_in_temp(typed_receiver, "length_receiver", &mut stmts)?;
+        let is_string = self.push_synthetic_expr(
+            TypedExprKind::TypeofTag {
+                value: held,
+                tag: crate::TypeofTagKind::String,
+            },
+            Type::Boolean,
+            span,
+        )?;
+        let string_length = self.narrowed_length(held, Type::String, &name, span)?;
+        let array_length = self.narrowed_length(held, arrays, &name, span)?;
+        let result = self.push_synthetic_expr(
+            TypedExprKind::Ternary {
+                cond: is_string,
+                then_: string_length,
+                else_: array_length,
+            },
+            Type::Number,
+            span,
+        )?;
+        Ok((TypedExprKind::Sequence { stmts, result }, Type::Number))
+    }
+
+    /// `(held as narrowed).length`, for a `held` known to hold `narrowed`.
+    fn narrowed_length(
+        &mut self,
+        held: ExprId,
+        narrowed: Type,
+        name: &Ident,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        let Some((_, _, iface, _)) = self.lookup_interface_property(&narrowed, &name.name) else {
+            return Err(super::inference_failure(&format!(
+                "`{narrowed}` has no `length` property"
+            )));
+        };
+        let value = self.reread_temp(held)?;
+        let receiver = self.push_synthetic_expr(
+            TypedExprKind::Cast {
+                value,
+                target_ty: narrowed.clone(),
+                check: None,
+            },
+            narrowed,
+            span,
+        )?;
+        self.push_synthetic_expr(
+            TypedExprKind::InterfacePropertyAccess {
+                receiver,
+                iface,
+                name: name.clone(),
+            },
+            Type::Number,
+            span,
+        )
+    }
+
+    fn push_synthetic_expr(
+        &mut self,
+        kind: TypedExprKind,
+        ty: Type,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        self.typed_ast
+            .try_push_expr(TypedExpr { kind, span, ty })
+            .map_err(crate::typechecker::arena_failure)
+    }
+
     fn infer_property_access(
         &mut self,
         receiver: ExprId,
@@ -6699,6 +6778,11 @@ impl Inferer<'_> {
             && let Some(read) = self.narrowed_read(path)
         {
             return Ok(read);
+        }
+        if name.name == "length"
+            && let Some(arrays) = receiver_ty.string_or_array_union_arrays()
+        {
+            return self.string_or_array_length(typed_receiver, arrays, name, span);
         }
         // interface-property dispatch lands here BEFORE the
         // user-object field path. `lookup_interface_property` returns `None`

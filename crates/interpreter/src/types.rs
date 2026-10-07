@@ -511,6 +511,24 @@ impl Type {
         Some(Type::union(elements))
     }
 
+    /// The arrays and tuples of a union of strings with arrays or tuples, and
+    /// nothing else, as their own union. Such a union has no shared
+    /// representation, so each use tests `typeof` and takes the string's or the
+    /// array's path.
+    pub fn string_or_array_union_arrays(&self) -> Option<Type> {
+        let Type::Union(members) = self.peel() else {
+            return None;
+        };
+        let (strings, arrays): (Vec<Type>, Vec<Type>) = members
+            .iter()
+            .cloned()
+            .partition(|member| member.peel().is_string_shaped());
+        let all_arrays = arrays
+            .iter()
+            .all(|member| matches!(member.peel(), Type::Array(_) | Type::Tuple(_)));
+        (!strings.is_empty() && !arrays.is_empty() && all_arrays).then(|| Type::union(arrays))
+    }
+
     /// The array a union of arrays and tuples reads as: see
     /// [`Self::array_like_union_element`].
     pub fn array_like_union_view(&self) -> Option<Type> {
