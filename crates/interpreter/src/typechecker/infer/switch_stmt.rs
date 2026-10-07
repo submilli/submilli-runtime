@@ -448,16 +448,7 @@ impl Inferer<'_> {
             });
         }
 
-        let covered = CaseCoverage {
-            literals: seen.keys().cloned().collect(),
-            named_members: typed_cases
-                .iter()
-                .flat_map(|case| &case.values)
-                .filter(|value| matches!(value, TypedSwitchValue::Enum { .. }))
-                .filter_map(switch_value_to_literal_value)
-                .collect(),
-            null: saw_null.is_some(),
-        };
+        let covered = CaseCoverage::of(&typed_cases, saw_null.is_some());
         let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered)?;
 
         let typed_default = if let Some(d) = default {
@@ -631,11 +622,13 @@ impl Inferer<'_> {
                     .zip(field_tys)
                     .filter(|(_, field_ty)| {
                         !field_ty.as_ref().is_some_and(|ty| {
-                            narrowing::is_covered_by_literals(
-                                &self.enums_as_literals(ty, &covered.named_members),
-                                &covered.literals,
-                                covered.null,
-                            )
+                            let rest = self.without_named_enums(ty, covered);
+                            rest == Type::Never
+                                || narrowing::is_covered_by_literals(
+                                    &rest,
+                                    &covered.literals,
+                                    covered.null,
+                                )
                         })
                     })
                     .map(|(m, _)| m.clone())
@@ -695,7 +688,7 @@ impl Inferer<'_> {
         // An enum leaves only when the cases name every member, since it has
         // no type for the members left.
         let enum_covered = narrowing::subtract_literals(
-            &self.enums_as_literals(disc_ty, &covered.named_members),
+            &self.without_named_enums(disc_ty, covered),
             &covered.literals,
         ) == Type::Never;
         let residual = if enum_covered {
@@ -712,23 +705,27 @@ impl Inferer<'_> {
         )
     }
 
-    /// `ty` with each enum whose members the cases all name spelled as the
-    /// literals those members hold. A bare literal names no member, as in
-    /// TypeScript: `case 0` leaves `E.A` unmatched.
-    fn enums_as_literals(&self, ty: &Type, named: &BTreeSet<narrowing::LiteralValue>) -> Type {
+    /// `ty` without the enums whose members the cases all name.
+    fn without_named_enums(&self, ty: &Type, covered: &CaseCoverage) -> Type {
         Type::union(
             narrowing::union_members(ty)
                 .into_iter()
-                .map(|member| {
-                    match super::comparable::enum_literal_values(member.peel(), self.resolver()) {
-                        Some(values) if values.iter().all(|value| named.contains(value)) => {
-                            Type::union(values.iter().map(narrowing::literal_type).collect())
-                        }
-                        _ => member.clone(),
-                    }
-                })
+                .filter(|member| !self.names_every_member(member, covered))
+                .cloned()
                 .collect(),
         )
+    }
+
+    fn names_every_member(&self, ty: &Type, covered: &CaseCoverage) -> bool {
+        let (Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. }) = ty.peel()
+        else {
+            return false;
+        };
+        super::comparable::enum_literal_values(ty.peel(), self.resolver()).is_some_and(|values| {
+            values
+                .into_iter()
+                .all(|value| covered.named_members.contains(&(mangled.clone(), value)))
+        })
     }
 
     /// What the discriminant can be when no case matched: the residual, less
@@ -904,15 +901,42 @@ fn classify_switch_case_value(kind: &TypedExprKind, span: Span) -> Option<TypedS
     }
 }
 
-/// Null uses `saw_null` separately because there's no `LiteralValue::Null` variant.
-/// The values a `switch`'s cases match.
+/// The values a `switch`'s cases match. A case naming an enum member matches
+/// only that enum's member, and a bare literal case no member, as in
+/// TypeScript: `case 0` leaves `E.A` unmatched, and `case E.A` leaves `0`.
 struct CaseCoverage {
+    /// The values of the bare literal cases.
     literals: BTreeSet<narrowing::LiteralValue>,
-    /// The values of the enum members the cases name.
-    named_members: BTreeSet<narrowing::LiteralValue>,
+    /// The enum members the cases name, by enum and value.
+    named_members: BTreeSet<(crate::MangledName, narrowing::LiteralValue)>,
     null: bool,
 }
 
+impl CaseCoverage {
+    fn of(cases: &[TypedSwitchCase], null: bool) -> Self {
+        let mut coverage = Self {
+            literals: BTreeSet::new(),
+            named_members: BTreeSet::new(),
+            null,
+        };
+        for value in cases.iter().flat_map(|case| &case.values) {
+            let Some(literal) = switch_value_to_literal_value(value) else {
+                continue;
+            };
+            match value {
+                TypedSwitchValue::Enum { enum_name, .. } => {
+                    coverage.named_members.insert((enum_name.clone(), literal));
+                }
+                _ => {
+                    coverage.literals.insert(literal);
+                }
+            }
+        }
+        coverage
+    }
+}
+
+/// Null uses `saw_null` separately because there's no `LiteralValue::Null` variant.
 fn duplicate_key(
     value: &TypedSwitchValue,
     seen: &mut BTreeMap<narrowing::LiteralValue, Span>,
