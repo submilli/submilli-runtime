@@ -580,6 +580,18 @@ impl<'a> Inferer<'a> {
         Ok(true)
     }
 
+    /// Whether `mangled` is a variable this module declares that none of its
+    /// functions assigns.
+    fn is_own_unassigned_global(&self, mangled: &crate::MangledName) -> bool {
+        self.top_symbols.iter().any(|(name, entry)| {
+            &entry.mangled_name == mangled
+                && self
+                    .mangle_top_symbol(name)
+                    .is_ok_and(|own| &own == mangled)
+                && !self.function_written_globals.contains(name)
+        })
+    }
+
     /// Whether a guard that rules out every value of `path` makes it `never`
     /// where it holds: a local, or a module variable no function assigns. A
     /// field, an element, or a module variable a function assigns can change
@@ -592,15 +604,7 @@ impl<'a> Inferer<'a> {
             narrowing::BindingId::Local { .. } => true,
             // An imported variable may be assigned by a function of the module
             // declaring it, which `function_written_globals` doesn't see.
-            narrowing::BindingId::Global(mangled) => {
-                self.top_symbols.iter().any(|(name, entry)| {
-                    &entry.mangled_name == mangled
-                        && self
-                            .mangle_top_symbol(name)
-                            .is_ok_and(|own| &own == mangled)
-                        && !self.function_written_globals.contains(name)
-                })
-            }
+            narrowing::BindingId::Global(mangled) => self.is_own_unassigned_global(mangled),
             narrowing::BindingId::This => false,
         }
     }

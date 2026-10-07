@@ -343,6 +343,8 @@ impl Inferer<'_> {
         let mut saw_null: Option<Span> = None;
         let mut all_assigned: BTreeSet<narrowing::ReferencePath> = BTreeSet::new();
         let mut any_arm_reachable_exit = false;
+        // Whether the `case`s, with no `default`, match every value.
+        let mut covers_every_value = false;
         // The clause last in the source leaves the switch when it runs off
         // its end, as a `break` there would.
         let last_clause = cases
@@ -483,6 +485,7 @@ impl Inferer<'_> {
                 any_arm_reachable_exit |= entry_reachable;
             } else {
                 self.typed_ast.exhaustive_switches.insert(typed_disc);
+                covers_every_value = true;
             }
             None
         };
@@ -509,7 +512,7 @@ impl Inferer<'_> {
         self.fold_exits_into_outer(natural, frame.breaks, switch_span)?;
 
         self.reachable = any_arm_reachable_exit;
-        if typed_default.is_none() && !any_arm_reachable_exit && residual == Type::Never {
+        if covers_every_value && !any_arm_reachable_exit {
             self.unreachable_by_exhaustive_switch = true;
             self.rule_out_after_exhaustive_switch(&site, switch_span)?;
         }

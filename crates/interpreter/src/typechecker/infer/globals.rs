@@ -80,12 +80,12 @@ impl<'a> Inferer<'a> {
                         doc,
                         span,
                     })?;
-                    let written = ty.is_some();
+                    let annotated = ty.is_some();
                     self.narrow_global_initializer(
                         &name,
                         &mangled,
                         &bound,
-                        written,
+                        annotated,
                         typed_value,
                         value_ty,
                     )?;
@@ -168,14 +168,14 @@ impl<'a> Inferer<'a> {
     }
 
     /// A module `let` declared as a union starts narrowed to its initializer,
-    /// as a local one does, unless the initializer was rejected. `written`
+    /// as a local one does, unless the initializer was rejected. `annotated`
     /// tells whether `declared` was written or inferred.
     fn narrow_global_initializer(
         &mut self,
         name: &crate::Ident,
         mangled: &crate::MangledName,
         declared: &crate::Type,
-        written: bool,
+        annotated: bool,
         value: crate::ExprId,
         value_ty: crate::Type,
     ) -> Result<(), CompilerFailure> {
@@ -184,7 +184,7 @@ impl<'a> Inferer<'a> {
         {
             return Ok(());
         }
-        let flow_ty = self.assigned_flow_type(declared, written, value, value_ty)?;
+        let flow_ty = self.assigned_flow_type(declared, annotated, value, value_ty)?;
         let narrowed = self.initializer_narrowed_ty(declared, flow_ty);
         self.renarrow_global_after_write(
             name,

@@ -8090,8 +8090,7 @@ impl Inferer<'_> {
             let result_ty = postfix_result_ty(&operand_ty);
             // For non-error declared types that aren't assignable from
             // the result, mirror `infer_assign`'s rejection.
-            let fits = assignable(&result_ty, &entry.ty.widen_literal(), self.resolver());
-            self.check_compound_write(&result_ty, &entry.ty, span);
+            let fits = self.check_compound_write(&result_ty, &entry.ty, span);
             // A rejected write leaves the declared type, as in TypeScript.
             if !fits {
                 self.invalidate_for_reassignment(path, target.span);
@@ -8370,11 +8369,7 @@ impl Inferer<'_> {
         }
         let result_ty = postfix_result_ty(&operand_ty);
         self.check_compound_write(&result_ty, &ty, span);
-        let accepted = ty.widen_literal();
-        let slot = super::stmt::WriteSlot {
-            declared: &ty,
-            accepted: &accepted,
-        };
+        let slot = super::stmt::WriteSlot::compound(&ty);
         self.renarrow_global_after_write(&name, &mangled, slot, result_ty.clone())?;
         Ok((
             TypedExprKind::PostfixUnary {
@@ -10562,7 +10557,7 @@ struct ElementMismatch {
 }
 
 /// The expression inside any parentheses around `expr`.
-fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
+pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
     loop {
         match &ast.try_expr(expr).map_err(super::arena_failure)?.kind {
             ExprKind::Paren(inner) => expr = *inner,

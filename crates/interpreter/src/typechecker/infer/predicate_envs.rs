@@ -1701,7 +1701,6 @@ impl<'a> Inferer<'a> {
             Type::Union(members) => members.as_slice(),
             ty => std::slice::from_ref(ty),
         };
-        let literal_ty = literal_to_type(&literal);
         let mut excluded: std::collections::BTreeSet<narrowing::LiteralValue> = self
             .lookup_narrowed_view(&path)
             .map(|view| view.excluded_literals.clone())
@@ -1709,37 +1708,10 @@ impl<'a> Inferer<'a> {
         excluded.insert(literal.clone());
         let mut matched: Vec<Type> = Vec::new();
         let mut remaining: Vec<Type> = Vec::new();
-        for m in members {
-            if let Some(values) = super::comparable::enum_literal_values(m.peel(), self.resolver())
-                && values.contains(&literal)
-            {
-                // An enum has no type for one member: equal, the value keeps
-                // the enum's type, and unequal, it leaves once every member's
-                // value has been ruled out.
-                matched.push(m.clone());
-                if !values.iter().all(|value| excluded.contains(value)) {
-                    remaining.push(m.clone());
-                }
-            } else if m.peel() == &literal_ty {
-                matched.push(m.clone());
-            } else if let (Type::Boolean, narrowing::LiteralValue::Boolean(value)) =
-                (m.peel(), &literal)
-            {
-                // `boolean` is `true | false`: `b === true` leaves `false`.
-                matched.push(literal_ty.clone());
-                remaining.push(Type::BooleanLiteral(!value));
-            } else {
-                if matches!(m.peel(), Type::Unknown) || m.peel() == &literal_ty.widen_literal() {
-                    matched.push(literal_ty.clone());
-                } else if !narrowing::has_erased_member(m)
-                    && super::comparable::comparable(m, &literal_ty, self.resolver())
-                {
-                    // As in TypeScript, a member that can be compared with
-                    // the literal (a weak object type a string matches) stays.
-                    matched.push(m.clone());
-                }
-                remaining.push(m.clone());
-            }
+        for member in members {
+            let (equal, unequal) = self.split_by_literal(member, &literal, &excluded);
+            matched.extend(equal);
+            remaining.extend(unequal);
         }
         if matched.is_empty() {
             // Predicate is statically false — typechecker accepted
@@ -1798,11 +1770,10 @@ impl<'a> Inferer<'a> {
             .map_err(crate::typechecker::arena_failure)?;
         let mut true_env = narrowing::NarrowEnv::new();
         let mut false_env = narrowing::NarrowEnv::new();
-        let false_excluded = excluded;
         let (true_excluded, false_excluded) = if op == BinOp::NotEq {
-            (false_excluded, std::collections::BTreeSet::new())
+            (excluded, std::collections::BTreeSet::new())
         } else {
-            (std::collections::BTreeSet::new(), false_excluded)
+            (std::collections::BTreeSet::new(), excluded)
         };
         true_env.insert(
             path.clone(),
@@ -1825,6 +1796,50 @@ impl<'a> Inferer<'a> {
             },
         );
         Ok(Some((true_env, false_env)))
+    }
+
+    /// What `member` leaves when the value equals `literal`, and when it
+    /// doesn't, given the literals already ruled out with it (`excluded`).
+    fn split_by_literal(
+        &self,
+        member: &Type,
+        literal: &narrowing::LiteralValue,
+        excluded: &std::collections::BTreeSet<narrowing::LiteralValue>,
+    ) -> (Option<Type>, Option<Type>) {
+        let literal_ty = literal_to_type(literal);
+        if let Some(values) = super::comparable::enum_literal_values(member.peel(), self.resolver())
+            && values.contains(literal)
+        {
+            // An enum has no type for one member: equal, the value keeps the
+            // enum's type, and unequal, it leaves once every member's value
+            // has been ruled out.
+            let all_excluded = values.iter().all(|value| excluded.contains(value));
+            return (
+                Some(member.clone()),
+                (!all_excluded).then(|| member.clone()),
+            );
+        }
+        if member.peel() == &literal_ty {
+            return (Some(member.clone()), None);
+        }
+        if let (Type::Boolean, narrowing::LiteralValue::Boolean(value)) = (member.peel(), literal) {
+            // `boolean` is `true | false`: `b === true` leaves `false`.
+            return (Some(literal_ty), Some(Type::BooleanLiteral(!value)));
+        }
+        let equal = if matches!(member.peel(), Type::Unknown)
+            || member.peel() == &literal_ty.widen_literal()
+        {
+            Some(literal_ty)
+        } else if !narrowing::has_erased_member(member)
+            && super::comparable::comparable(member, &literal_ty, self.resolver())
+        {
+            // As in TypeScript, a member that can be compared with the literal
+            // (a weak object type a string matches) stays.
+            Some(member.clone())
+        } else {
+            None
+        };
+        (equal, Some(member.clone()))
     }
 
     fn predicate_envs_typeof_tag(

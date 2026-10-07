@@ -445,7 +445,6 @@ pub fn has_unit_member(ty: &Type) -> bool {
     }
 }
 
-/// Whether every value `ty` holds is one of the `covered` literals.
 /// Whether `case` labels for the `covered` literals, and for `null` when
 /// `covers_null`, match every value of `ty`.
 pub fn is_covered_by_literals(
@@ -813,8 +812,8 @@ pub fn falsy_part(ty: &Type) -> Type {
         .into_iter()
         .filter_map(|m| match truthiness_class(m) {
             TruthinessClass::AlwaysTruthy => None,
-            // TypeScript keeps only the definitely falsy part of `{}`, which
-            // is nothing; Submilli's `{}` holds only objects so far.
+            // `{}` has no definitely falsy part, which is all TypeScript keeps
+            // of a member whose truthiness is unknown.
             TruthinessClass::Dynamic if is_empty_object(m) => None,
             TruthinessClass::StringLike => Some(match m.peel() {
                 Type::String => Type::StringLiteral(String::new()),

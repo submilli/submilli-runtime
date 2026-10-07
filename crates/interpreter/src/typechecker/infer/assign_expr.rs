@@ -85,22 +85,22 @@ impl Inferer<'_> {
         else {
             return Ok(value_ty);
         };
-        let (target_ty, value, written) = match assignment {
+        let (target_ty, value, annotated) = match assignment {
             TypedStmtKind::AssignLocal {
                 ident,
                 target_ty,
                 value,
                 ..
-            } => (target_ty, value, self.is_local_type_written(&ident.name)),
+            } => (target_ty, value, self.is_local_annotated(&ident.name)),
             TypedStmtKind::AssignGlobal {
                 mangled,
                 target_ty,
                 value,
                 ..
-            } => (target_ty, value, self.is_global_type_written(mangled)),
+            } => (target_ty, value, self.is_global_annotated(mangled)),
             _ => return Ok(value_ty),
         };
-        let flow_ty = self.assigned_flow_type(target_ty, written, *value, value_ty)?;
+        let flow_ty = self.assigned_flow_type(target_ty, annotated, *value, value_ty)?;
         Ok(self.assignment_narrowed_ty(target_ty, flow_ty))
     }
 
