@@ -5778,6 +5778,14 @@ impl Inferer<'_> {
             expected_elem,
             Some(t) if !type_contains_type_var(t)
         );
+        let errors_before = self.error_count();
+        let object_literals = elements
+            .iter()
+            .map(|element| match element {
+                crate::ArrayLiteralElement::Value(id) => is_object_literal(self.ast, *id),
+                crate::ArrayLiteralElement::Spread { .. } => Ok(false),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut typed_elements: Vec<crate::TypedArrayElement> = Vec::with_capacity(elements.len());
         let mut element_ty: Option<Type> = if hint_pins_element_ty {
             expected_elem.cloned()
@@ -5956,6 +5964,10 @@ impl Inferer<'_> {
         // `"hello"[]`.
         let element_ty = if hint_pins_element_ty {
             element_ty
+        } else if normalization.is_none() && self.error_count() == errors_before {
+            let element_ty =
+                self.best_common_element_type(element_ty, &typed_elements, &object_literals)?;
+            self.kept_element_type(element_ty, &typed_elements)?
         } else {
             self.kept_element_type(element_ty, &typed_elements)?
         };
@@ -10129,7 +10141,7 @@ impl Inferer<'_> {
     /// interfaces: a re-encountered interface is left as `InterfaceRef`. Leftover
     /// `InterfaceRef`s are rejected by `unsupported_cast_target_reason` when a runtime
     /// check is actually needed.
-    fn reduce_interfaces_to_shapes(&self, ty: &Type) -> Type {
+    pub(super) fn reduce_interfaces_to_shapes(&self, ty: &Type) -> Type {
         let mut budget = self.type_limits.budget();
         self.type_limits.type_or_error(self.reduce_interfaces_rec(
             ty,
@@ -10576,6 +10588,14 @@ fn holds_no_element(ty: &Type) -> bool {
         Type::Array(element) => matches!(element.peel(), Type::Never) || holds_no_element(element),
         _ => false,
     }
+}
+
+fn is_object_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
+    let id = peel_parens(ast, expr)?;
+    Ok(matches!(
+        &ast.try_expr(id).map_err(super::arena_failure)?.kind,
+        ExprKind::ObjectLiteral { .. }
+    ))
 }
 
 fn is_empty_object_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {

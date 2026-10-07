@@ -1118,7 +1118,7 @@ fn is_single_literal(ty: &Type) -> bool {
 
 /// Whether `ty` is made only of `string`, `number`, `boolean`, `null` and
 /// their literal types.
-fn is_primitive_union(ty: &Type) -> bool {
+pub(super) fn is_primitive_union(ty: &Type) -> bool {
     flattened_union_members(ty).into_iter().all(|member| {
         matches!(
             member,

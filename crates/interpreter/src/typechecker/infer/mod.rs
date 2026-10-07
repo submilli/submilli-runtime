@@ -3,6 +3,7 @@
 mod aliased_conditions;
 mod assign_expr;
 pub(crate) mod assignable;
+mod best_common_type;
 mod binding_analysis;
 mod classes;
 mod closure_arity;
