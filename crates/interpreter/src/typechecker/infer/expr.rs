@@ -9672,10 +9672,11 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let target_ty = self.resolve_type(&ty)?;
         // An empty `[]` has no element type of its own, so it takes the target's
-        // array element type, as under an annotation. Other operands infer
-        // unhinted: a hint is enforced (an object literal rejects fields the target
-        // lacks), while a cast only needs one type assignable to the other.
-        let operand_hint = if is_empty_array_literal(self.ast, inner)? {
+        // array element type, as under an annotation, also as a ternary branch or
+        // nested in an array literal. Other operands infer unhinted: a hint is
+        // enforced (an object literal rejects fields the target lacks), while a
+        // cast only needs one type assignable to the other.
+        let operand_hint = if holds_empty_array_literal(self.ast, inner)? {
             empty_array_cast_hint(&target_ty)
         } else {
             None
@@ -10587,11 +10588,18 @@ fn has_only_optional_fields(ty: &Type) -> bool {
 }
 
 /// The hint an empty array literal cast to `ty` takes its element type from: `ty`
-/// itself when it is an array, or a union's first array member, which the empty
-/// literal then satisfies as it would any other.
+/// itself when it is an array or a union of arrays, which an array literal is
+/// typed against as under an annotation. Otherwise a union's first array member,
+/// which the empty literal then satisfies as it would any other.
 fn empty_array_cast_hint(ty: &Type) -> Option<&Type> {
     match ty.peel() {
         Type::Array(_) => Some(ty),
+        Type::Union(members) if !members.iter().any(|m| matches!(m.peel(), Type::Tuple(_))) => {
+            members
+                .iter()
+                .any(|member| matches!(member.peel(), Type::Array(_)))
+                .then_some(ty)
+        }
         Type::Union(members) => members
             .iter()
             .find(|member| matches!(member.peel(), Type::Array(_))),
@@ -10900,12 +10908,26 @@ fn fields_with_missing<'a>(
     fields
 }
 
-fn is_empty_array_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
+/// Whether `expr` is an empty `[]`, or holds one as a ternary branch or an
+/// array literal's element, where it would take its type from `expr`'s hint.
+fn holds_empty_array_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
     let id = peel_parens(ast, expr)?;
-    Ok(matches!(
-        &ast.try_expr(id).map_err(super::arena_failure)?.kind,
-        ExprKind::ArrayLiteral { elements } if elements.is_empty()
-    ))
+    Ok(
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::ArrayLiteral { elements } if elements.is_empty() => true,
+            ExprKind::ArrayLiteral { elements } => {
+                elements.iter().try_fold(false, |found, element| {
+                    Ok::<_, CompilerFailure>(
+                        found || holds_empty_array_literal(ast, element.value())?,
+                    )
+                })?
+            }
+            ExprKind::Ternary { then_, else_, .. } => {
+                holds_empty_array_literal(ast, *then_)? || holds_empty_array_literal(ast, *else_)?
+            }
+            _ => false,
+        },
+    )
 }
 
 fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> Result<bool, CompilerFailure> {
