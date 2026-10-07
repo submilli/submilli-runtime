@@ -47,6 +47,7 @@ futures = { workspace = true }
 ureq = { workspace = true }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 thiserror = "2"
+tempfile = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 
 rustls.workspace = true
@@ -67,7 +68,7 @@ wasm-encoder = { workspace = true }
 async-trait = { workspace = true }
 http-body-util = { workspace = true }
 submilli-blueprint = { path = "../submilli-blueprint" }
-tempfile = { workspace = true }
 httpmock = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 libc = { workspace = true }
+sentry = { workspace = true, features = ["test"] }

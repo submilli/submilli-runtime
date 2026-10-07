@@ -164,6 +164,27 @@ pub fn build_packages(
     Ok(results)
 }
 
+/// The inputs of one manifest package as [`build_packages`] would read them now: its
+/// source modules, in the form an installed artifact embeds them, and its
+/// `docs/readme.md`. Comparing them with [`crate::read_installed_sources`] says whether
+/// the installed copy was built from what is on disk.
+pub fn package_sources(
+    manifest_dir: &Path,
+    package: &PackageManifest,
+) -> Result<(Vec<ArtifactSource>, String), DriverError> {
+    let src_dir = manifest_dir.join(package.path.as_path()).join("src");
+    let modules = discover_modules(&src_dir, manifest_dir)?;
+    let documentation = read_package_docs(manifest_dir, package)?;
+    let sources = modules
+        .into_iter()
+        .map(|module| ArtifactSource {
+            path: module.path,
+            text: module.text,
+        })
+        .collect();
+    Ok((sources, documentation))
+}
+
 /// Write each built package into the store layout (`<root>/@scope/name/`).
 /// Returns the installed directories in build order.
 pub fn install_packages(

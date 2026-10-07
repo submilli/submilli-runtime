@@ -456,6 +456,10 @@ pub struct LlmFailure {
     /// set to grow with every provider quirk or silently discard the detail that
     /// makes an unclassified stop diagnosable.
     pub finish_reason: Option<String>,
+    /// Refused by this host's own configuration or network policy before the provider
+    /// was reached, rather than answered by it. Not part of what a guest sees: the call
+    /// log records such a failure as kind `local`, so a replay does not serve it.
+    pub local: bool,
 }
 
 impl LlmFailure {
@@ -469,6 +473,7 @@ impl LlmFailure {
             retryable: reason.retryable_by_default(),
             status: None,
             finish_reason: None,
+            local: false,
         }
     }
 
@@ -481,6 +486,12 @@ impl LlmFailure {
     /// Record the observed HTTP status. Left absent when none was seen.
     pub fn with_status(mut self, status: u16) -> Self {
         self.status = Some(status);
+        self
+    }
+
+    /// Mark the failure as this host's own refusal; see [`Self::local`].
+    pub fn refused_locally(mut self) -> Self {
+        self.local = true;
         self
     }
 

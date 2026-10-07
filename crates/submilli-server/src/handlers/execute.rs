@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
@@ -12,9 +12,9 @@ use submilli_blueprint::{
 };
 use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
-use crate::app::AppState;
+use crate::app::{AppState, BlueprintForRun};
 use crate::error::{ErrorKind, ExecuteError};
-use crate::record::RunEntry;
+use crate::record::{RunEntry, TestWorld};
 use interpreter::runtime::{Vfs, VfsInfo};
 
 use crate::runner::{self, RunOutcome};
@@ -104,6 +104,18 @@ pub(crate) async fn one_shot(
     audit: Option<Arc<crate::audit::ExecutionAudit>>,
     run_entry: RunEntry,
 ) -> (String, ExecuteResponse) {
+    one_shot_with(state, req, audit, run_entry, None).await
+}
+
+/// [`one_shot`] as a test run when `test` is given: the run's outside connectors and local
+/// state come from it, and it is recorded as a test of its source.
+pub(crate) async fn one_shot_with(
+    state: &AppState,
+    req: ExecuteRequest,
+    audit: Option<Arc<crate::audit::ExecutionAudit>>,
+    run_entry: RunEntry,
+    test: Option<TestWorld>,
+) -> (String, ExecuteResponse) {
     // Stateless one-shot: every call gets a fresh transient session, torn down
     // once the run returns. A caller that wants state across executes (a
     // persistent `per_session` VFS, reused variable bindings) uses the session
@@ -128,7 +140,13 @@ pub(crate) async fn one_shot(
 
     // Blueprint and variables are supplied inline and validated here, before the
     // shared core runs them.
-    let found = match state.blueprints().get(&req.blueprint).await {
+    // A test run was prepared under a blueprint it already looked up; it runs under
+    // that one.
+    let found = match test.as_ref().map(TestWorld::blueprint) {
+        Some(found) => Ok(Some(found.clone())),
+        None => state.blueprint_for_run(&req.blueprint).await,
+    };
+    let found = match found {
         Ok(found) => found,
         Err(error) => {
             return failed(
@@ -137,7 +155,11 @@ pub(crate) async fn one_shot(
             );
         }
     };
-    let Some(blueprint) = found else {
+    let Some(BlueprintForRun {
+        blueprint,
+        version_tag,
+    }) = found
+    else {
         return match blueprint_miss_message(state, &req.blueprint).await {
             Ok(message) => failed(ErrorKind::BlueprintNotFound, message),
             Err(error) => failed(
@@ -202,13 +224,14 @@ pub(crate) async fn one_shot(
     // The one-shot path mints a fresh session per call, so a key would have
     // nothing durable to bind to: `dispatched` is irrelevant here and any
     // `Idempotency-Key` header is ignored rather than rejected.
-    let outcome = execute_core(
+    let outcome = execute_core_with(
         state,
         ExecuteInputs {
             session_id: &session_id,
             code: &req.code,
             blueprint_name: &req.blueprint,
             blueprint,
+            version_tag,
             variables,
             harness_secrets,
             audit,
@@ -218,6 +241,7 @@ pub(crate) async fn one_shot(
             tool_call_id: None,
             idempotency_key: None,
         },
+        test,
     )
     .await;
     // `execute_core` registers the session so a VFS and a KV store exist for the
@@ -244,6 +268,9 @@ pub(crate) struct ExecuteInputs<'a> {
     pub blueprint_name: &'a str,
     /// The blueprint the run is decided under.
     pub blueprint: Arc<Blueprint>,
+    /// The version tag read with `blueprint`, in the same lookup; `None` when it was
+    /// registered without one.
+    pub version_tag: Option<String>,
     /// The validated `${vars.NAME}` bindings.
     pub variables: Arc<VarBindings>,
     /// Trusted harness credentials for this run alone.
@@ -308,7 +335,33 @@ impl ExecuteOutcome {
 /// to be cancelled, prepares and runs it, and reports to its recorder what the caller
 /// got. See [`prepare_and_run`] for the work itself.
 pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) -> ExecuteOutcome {
-    let recording = crate::record::Recording::start(state, || run_start(&inputs));
+    execute_core_with(state, inputs, None).await
+}
+
+/// [`execute_core`] as a test run when `test` is given.
+async fn execute_core_with(
+    state: &AppState,
+    inputs: ExecuteInputs<'_>,
+    test: Option<TestWorld>,
+) -> ExecuteOutcome {
+    let recording = crate::record::Recording::start_tapped(
+        state,
+        || run_start(&inputs, test.as_ref()),
+        test.as_ref().map(TestWorld::tap),
+    );
+    // A test run is reported from its own record, so one the recorder declined is refused
+    // before it can have any effect.
+    if let Some(test) = &test
+        && recording.is_none()
+    {
+        test.tap().declined();
+        return ExecuteOutcome::undispatched(failure_response(
+            inputs.audit.as_deref(),
+            inputs.session_id,
+            ErrorKind::RuntimeError,
+            crate::record::TestError::NoRecorder.to_string(),
+        ));
+    }
     // Only a recorded run can be cancelled from outside (the registry exists for a stop
     // control over recorded runs), so an unrecorded run pays for no registration. The
     // guard keeps the entry until this function returns, which is after the run has
@@ -320,7 +373,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
         }
         _ => (None, None),
     };
-    let outcome = prepare_and_run(state, inputs, recording.clone(), cancel_requested).await;
+    let outcome = prepare_and_run(state, inputs, recording.clone(), cancel_requested, test).await;
     if let Some(recording) = &recording {
         match (&outcome.response.error, outcome.dispatched) {
             // The runner finishes a dispatched run itself; one that never got there is
@@ -333,7 +386,7 @@ pub(crate) async fn execute_core(state: &AppState, inputs: ExecuteInputs<'_>) ->
 }
 
 /// The run as its recorder first sees it.
-fn run_start(inputs: &ExecuteInputs<'_>) -> crate::record::RunStart {
+fn run_start(inputs: &ExecuteInputs<'_>, test: Option<&TestWorld>) -> crate::record::RunStart {
     let audit = inputs.audit.as_deref();
     crate::record::RunStart {
         execution_id: execution_id_of(audit),
@@ -342,6 +395,7 @@ fn run_start(inputs: &ExecuteInputs<'_>) -> crate::record::RunStart {
             |audit| audit.principal.clone(),
         ),
         entry: inputs.run_entry.clone(),
+        test_of: test.map(|test| test.source_run().to_owned()),
         client: inputs.client.clone(),
         tool_call_id: inputs.tool_call_id.clone(),
         session_id: (!inputs.session_id.is_empty()).then(|| inputs.session_id.to_owned()),
@@ -349,7 +403,12 @@ fn run_start(inputs: &ExecuteInputs<'_>) -> crate::record::RunStart {
         blueprint_name: inputs.blueprint_name.to_owned(),
         blueprint: Arc::clone(&inputs.blueprint),
         blueprint_hash: crate::audit::blueprint_hash(&inputs.blueprint),
+        blueprint_version: inputs
+            .version_tag
+            .clone()
+            .or_else(|| crate::audit::blueprint_hash(&inputs.blueprint)),
         variables: Arc::clone(&inputs.variables),
+        harness_secrets: Arc::clone(&inputs.harness_secrets),
         code: Some(Arc::from(inputs.code)),
     }
 }
@@ -379,12 +438,14 @@ async fn prepare_and_run(
     inputs: ExecuteInputs<'_>,
     recording: Option<crate::record::Recording>,
     cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
+    test: Option<TestWorld>,
 ) -> ExecuteOutcome {
     let ExecuteInputs {
         session_id,
         code,
         blueprint_name,
         blueprint,
+        version_tag: _,
         variables,
         harness_secrets,
         audit: execution_audit,
@@ -425,6 +486,27 @@ async fn prepare_and_run(
         Ok(imports) => imports,
         Err(message) => return fail_to_parse(message),
     };
+    // Every entry point reaches here before anything is compiled, so the embedder's
+    // check runs for every run, whoever sent it.
+    if let Some(hook) = state.pre_execute() {
+        let packages: BTreeSet<String> = script_imports
+            .registry_packages
+            .iter()
+            .filter(|package| blueprint.packages.contains(*package))
+            .cloned()
+            .collect();
+        let checked = hook
+            .before_execute(crate::config::PreExecute {
+                state,
+                blueprint_name,
+                blueprint: &blueprint,
+                packages: &packages,
+            })
+            .await;
+        if let Err(refusal) = checked {
+            return fail(ErrorKind::PackageResolution, refusal.message);
+        }
+    }
 
     let network_policy = execution_audit.as_ref().map_or_else(
         || state.network_policy().clone(),
@@ -447,70 +529,41 @@ async fn prepare_and_run(
             }
         };
 
-    let mcp_catalog = match state
-        .mcp_catalog_for_imports(
-            blueprint_name,
-            &blueprint,
-            &script_imports.mcp_servers,
-            &harness_secrets,
-            &network_policy,
-        )
-        .await
-    {
-        Ok(catalog) => catalog,
-        Err(error) => {
-            tracing::error!(error = ?error, "MCP discovery initialization failed");
-            return fail(ErrorKind::RuntimeError, error.to_string());
-        }
+    let context = WorldContext {
+        state,
+        session_id,
+        blueprint_name,
+        blueprint: &blueprint,
+        variables: &variables,
+        harness_secrets: &harness_secrets,
+        network_policy: &network_policy,
+        llm_provider,
+        embedding_provider,
+        cancel_requested,
     };
-
+    // The one place a test run's world replaces the run's own.
+    let world = match test {
+        Some(test) => test.into_world(context).await,
+        None => live_world(context, vfs_source, &script_imports.mcp_servers).await,
+    };
+    let RunWorld {
+        mcp_catalog,
+        vfs,
+        vfs_info,
+        session_kv,
+        http_client,
+        mcp_transport,
+        llm_provider,
+        llm_budget,
+        embedding_provider,
+        embedding_budget,
+        cancel_requested,
+        throwaway,
+    } = match world {
+        Ok(world) => world,
+        Err(message) => return fail(ErrorKind::RuntimeError, message),
+    };
     let manager = state.session_manager();
-    let (vfs, vfs_info) = match vfs_source {
-        VfsSource::Mcp { vfs, vfs_info } => (vfs, vfs_info),
-        VfsSource::Rest => {
-            if let Err(err) = manager.ensure(session_id, &blueprint).await {
-                return fail(
-                    ErrorKind::RuntimeError,
-                    format!("internal: session init failed: {err}"),
-                );
-            }
-            // Mark activity at entry as well as at exit. The idle reaper is
-            // wall-clock and has no notion of an execution in flight, so a session
-            // that was already nearly idle when this call arrived would otherwise
-            // be reaped moments into the run — taking its idempotency reservation
-            // with it. This buys the program a full idle window rather than
-            // whatever was left of one; it does not make the run un-reapable, and
-            // an execution that outlasts `idle_timeout` on its own is still
-            // collected mid-flight. The write is debounced (`PERSIST_INTERVAL`),
-            // so this costs nothing per call.
-            manager.touch(session_id).await;
-            match manager
-                .vfs_for_execute_with_variables(session_id, &blueprint, &variables)
-                .await
-            {
-                Ok(pair) => pair,
-                Err(err) => {
-                    return fail(
-                        ErrorKind::RuntimeError,
-                        format!("internal: vfs init failed: {err}"),
-                    );
-                }
-            }
-        }
-    };
-
-    let http_client = manager.http_client(session_id);
-    let session_kv = manager.session_kv_for_execute(session_id);
-    let mcp_transport = Arc::new(
-        submilli_shared::mcp::transport::StreamableHttpTransport::new(
-            blueprint_name.to_string(),
-            Arc::clone(&blueprint),
-            state.oauth_token_manager().cloned(),
-            state.secret_store().cloned(),
-            Arc::clone(&network_policy),
-        )
-        .with_harness_secrets(Arc::clone(&harness_secrets)),
-    );
     let policy: Arc<dyn interpreter::runtime::SecurityCheck> = Arc::new(
         PolicyCheck::with_variables(Arc::clone(&blueprint), Arc::clone(&variables)),
     );
@@ -542,11 +595,12 @@ async fn prepare_and_run(
         mcp_transport,
         session_kv,
         llm_provider,
-        llm_budget: Some(manager.llm_budget_for_execute()),
+        llm_budget: Some(llm_budget),
         embedding_provider,
-        embedding_budget: Some(manager.embedding_budget_for_execute()),
+        embedding_budget: Some(embedding_budget),
         recording,
         cancel_requested,
+        throwaway,
     };
     let packages =
         match state.prepared_packages_for_imports(blueprint_name, &blueprint, &script_imports) {
@@ -562,6 +616,7 @@ async fn prepare_and_run(
             engine: state.engine(),
             base_linker: state.base_linker(),
             config: state.runtime(),
+            telemetry: state.run_telemetry(),
         },
         vfs,
         vfs_info,
@@ -598,6 +653,136 @@ async fn prepare_and_run(
     }
 
     ExecuteOutcome::dispatched(response)
+}
+
+/// What a run's world is built from: the run's own inputs, and the cancel signal its
+/// caller registered.
+pub(crate) struct WorldContext<'a> {
+    pub state: &'a AppState,
+    pub session_id: &'a str,
+    pub blueprint_name: &'a str,
+    pub blueprint: &'a Arc<Blueprint>,
+    pub variables: &'a Arc<VarBindings>,
+    pub harness_secrets: &'a Arc<HarnessSecretBindings>,
+    pub network_policy: &'a Arc<interpreter::runtime::NetworkPolicy>,
+    pub llm_provider: Option<Arc<dyn interpreter::runtime::LlmProvider>>,
+    pub embedding_provider: Option<Arc<dyn interpreter::runtime::EmbeddingProvider>>,
+    pub cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+/// What a run executes in and reaches outside through: its compile-time MCP catalog, its
+/// files and data, its connectors, and its token budgets.
+pub(crate) struct RunWorld {
+    pub mcp_catalog: Arc<crate::record::McpCatalog>,
+    pub vfs: Vfs,
+    pub vfs_info: VfsInfo,
+    pub session_kv: Arc<dyn interpreter::runtime::SessionKvStore>,
+    pub http_client: Arc<dyn interpreter::stdlib::http::HttpClient>,
+    pub mcp_transport: Arc<dyn interpreter::runtime::McpTransport>,
+    pub llm_provider: Option<Arc<dyn interpreter::runtime::LlmProvider>>,
+    pub llm_budget: Arc<interpreter::runtime::ExecutionTokenBudget>,
+    pub embedding_provider: Option<Arc<dyn interpreter::runtime::EmbeddingProvider>>,
+    pub embedding_budget: Arc<interpreter::runtime::EmbeddingTokenBudget>,
+    pub cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
+    /// A test run's throwaway copies, kept until the run's owner task is done with them.
+    pub throwaway: Option<Arc<crate::record::Throwaway>>,
+}
+
+/// A normal run's world: discovery against its MCP servers, its session's files and data,
+/// its session's HTTP client, and budgets charged to the server's.
+async fn live_world(
+    context: WorldContext<'_>,
+    vfs_source: VfsSource,
+    mcp_servers: &BTreeSet<String>,
+) -> Result<RunWorld, String> {
+    let mcp_catalog = context
+        .state
+        .mcp_catalog_for_imports(
+            context.blueprint_name,
+            context.blueprint,
+            mcp_servers,
+            context.harness_secrets,
+            context.network_policy,
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(error = ?error, "MCP discovery initialization failed");
+            error.to_string()
+        })?;
+    let manager = context.state.session_manager();
+    let (vfs, vfs_info) = match vfs_source {
+        VfsSource::Mcp { vfs, vfs_info } => (vfs, vfs_info),
+        VfsSource::Rest => {
+            open_session(context.state, context.session_id, context.blueprint).await?;
+            manager
+                .vfs_for_execute_with_variables(
+                    context.session_id,
+                    context.blueprint,
+                    context.variables,
+                )
+                .await
+                .map_err(|err| format!("internal: vfs init failed: {err}"))?
+        }
+    };
+    let (http_client, mcp_transport) = outside_clients(&context);
+    Ok(RunWorld {
+        mcp_catalog,
+        vfs,
+        vfs_info,
+        session_kv: manager.session_kv_for_execute(context.session_id),
+        http_client,
+        mcp_transport,
+        llm_provider: context.llm_provider,
+        llm_budget: manager.llm_budget_for_execute(),
+        embedding_provider: context.embedding_provider,
+        embedding_budget: manager.embedding_budget_for_execute(),
+        cancel_requested: context.cancel_requested,
+        throwaway: None,
+    })
+}
+
+/// Registers the session and marks activity at entry as well as at exit. The idle reaper
+/// is wall-clock and has no notion of an execution in flight, so a session that was
+/// already nearly idle when this call arrived would otherwise be reaped moments into the
+/// run, taking its idempotency reservation with it. This buys the program a full idle
+/// window rather than whatever was left of one; it does not make the run un-reapable,
+/// and an execution that outlasts `idle_timeout` on its own is still collected
+/// mid-flight. The write is debounced (`PERSIST_INTERVAL`), so this costs nothing per call.
+pub(crate) async fn open_session(
+    state: &AppState,
+    session_id: &str,
+    blueprint: &Arc<Blueprint>,
+) -> Result<(), String> {
+    let manager = state.session_manager();
+    manager
+        .ensure(session_id, blueprint)
+        .await
+        .map_err(|err| format!("internal: session init failed: {err}"))?;
+    manager.touch(session_id).await;
+    Ok(())
+}
+
+/// The session's HTTP client and the blueprint's MCP transport: what a run reaches
+/// outside through when nothing stands in for them.
+pub(crate) fn outside_clients(
+    context: &WorldContext<'_>,
+) -> (
+    Arc<dyn interpreter::stdlib::http::HttpClient>,
+    Arc<dyn interpreter::runtime::McpTransport>,
+) {
+    let state = context.state;
+    let mcp_transport = submilli_shared::mcp::transport::StreamableHttpTransport::new(
+        context.blueprint_name.to_string(),
+        Arc::clone(context.blueprint),
+        state.oauth_token_manager().cloned(),
+        state.secret_store().cloned(),
+        Arc::clone(context.network_policy),
+    )
+    .with_harness_secrets(Arc::clone(context.harness_secrets));
+    (
+        state.session_manager().http_client(context.session_id),
+        Arc::new(mcp_transport),
+    )
 }
 
 pub(crate) fn with_session_header(

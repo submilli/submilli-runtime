@@ -48,6 +48,26 @@ pub enum McpCallError {
     Upstream { status: u16, body: String },
     /// The request never completed (connection / transport failure).
     Transport(String),
+    /// Refused by this host's own configuration before anything was sent: unavailable
+    /// credentials, or the network policy. Reads as a transport error to the script.
+    Local(String),
+}
+
+impl McpCallError {
+    /// The failure as the call log keeps it: a stable kind, a message, and the HTTP
+    /// status of an upstream refusal.
+    fn record(&self) -> serde_json::Value {
+        let (kind, message, status) = match self {
+            McpCallError::ResponseTooLarge => ("response-too-large", String::new(), None),
+            McpCallError::Internal { message } => ("internal", (*message).to_owned(), None),
+            McpCallError::AuthExpired => ("auth-expired", String::new(), None),
+            McpCallError::Mcp { message } => ("mcp", message.clone(), None),
+            McpCallError::Upstream { status, body } => ("upstream", body.clone(), Some(*status)),
+            McpCallError::Transport(detail) => ("transport", detail.clone(), None),
+            McpCallError::Local(detail) => ("local", detail.clone(), None),
+        };
+        serde_json::json!({ "kind": kind, "message": message, "status": status })
+    }
 }
 
 /// Completed transport work, retained even when the tool result is an error.
@@ -119,8 +139,7 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                     serde_json::json!({ "tool": tool, "transport": "streamable_http" }),
                 )?;
                 record_payload(&*caller, ticket, Side::Request, || {
-                    Payload::meta(serde_json::json!({ "server": server, "tool": tool }))
-                        .with_body(args_json.as_bytes())
+                    request_payload(&server, &tool, &args_json)
                 });
 
                 let transport = caller.data().mcp_transport.clone().ok_or_else(|| {
@@ -136,9 +155,7 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                         Ok(response) => Payload::meta(serde_json::Value::Null).with_owned_body(
                             serde_json::to_vec(response.value()).unwrap_or_default(),
                         ),
-                        Err(error) => {
-                            Payload::meta(serde_json::json!({ "error": format!("{error:?}") }))
-                        }
+                        Err(error) => Payload::meta(error.record()),
                     };
                     payload.with_size(outcome.received_bytes)
                 });
@@ -158,6 +175,18 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
             })
         },
     )
+}
+
+/// A call's request as the recorder keeps it.
+fn request_payload<'a>(server: &str, tool: &str, args_json: &'a str) -> Payload<'a> {
+    Payload::meta(serde_json::json!({ "server": server, "tool": tool }))
+        .with_body(args_json.as_bytes())
+}
+
+/// The digest the call log records for a call's request: what a transport sees of it, so a
+/// transport can recognize a call it saw recorded.
+pub fn request_digest(server: &str, tool: &str, args_json: &str) -> String {
+    request_payload(server, tool, args_json).digest()
 }
 
 fn allocate_response(
@@ -222,7 +251,7 @@ fn mcp_error_to_throw(server: &str, tool: &str, err: McpCallError) -> wasmtime::
         McpCallError::Upstream { status, body } => {
             format!("@mcp/{server}.{tool}: server returned HTTP {status}: {body}")
         }
-        McpCallError::Transport(detail) => {
+        McpCallError::Transport(detail) | McpCallError::Local(detail) => {
             format!("@mcp/{server}.{tool}: transport error: {detail}")
         }
     };

@@ -21,7 +21,10 @@ use submilli_server::record::{
     FinishedRun, ProgramRun, RetryLink, RunEntry, RunRecorder, RunRecorderFactory, RunStart,
     run_program,
 };
-use submilli_server::{ApiToken, AppState, AuthConfig, Role, ServerConfig, app};
+use submilli_server::{
+    ApiToken, AppState, AuthConfig, PreExecute, PreExecuteHook, PreExecuteRefusal, Role,
+    ServerConfig, app,
+};
 use tower::ServiceExt;
 
 const BLUEPRINT: &str = "rec";
@@ -171,6 +174,14 @@ struct Server {
 }
 
 fn server(record: bool, runtime: RuntimeConfig) -> Server {
+    server_with(record, runtime, None)
+}
+
+fn server_with(
+    record: bool,
+    runtime: RuntimeConfig,
+    pre_execute: Option<Arc<dyn PreExecuteHook>>,
+) -> Server {
     let blueprint = submilli_blueprint::parse(BLUEPRINT_YAML).expect("blueprint");
     // Declares a package the store does not hold.
     let with_package = submilli_blueprint::parse(
@@ -191,6 +202,7 @@ fn server(record: bool, runtime: RuntimeConfig) -> Server {
         package_store_root: Some(dirs.path().join("packages")),
         runtime,
         run_recorder: record.then(|| Arc::new(Factory(runs.clone())) as _),
+        pre_execute,
         ..in_memory_config::config()
     };
     Server {
@@ -371,6 +383,7 @@ async fn rest_session_and_mcp_execute_each_record_exactly_one_run() {
     assert_eq!(entries, [RunEntry::Http, RunEntry::Session, RunEntry::Mcp]);
     for run in finished.iter() {
         assert_eq!(run.start.label, "app");
+        assert_eq!(run.start.test_of, None);
         assert!(run.dispatched);
         assert_eq!(run.error, None);
         assert_eq!(run.result.as_deref(), Some("done"));
@@ -728,4 +741,135 @@ async fn responses_are_the_same_with_and_without_a_recorder() {
         );
     }
     assert!(plain.runs.finished().is_empty());
+}
+
+// ---- the pre-execute hook --------------------------------------------------------------
+
+/// A hook that notes what each run imports and refuses it when `refuse` is set.
+struct Gate {
+    refuse: bool,
+    seen: Mutex<Vec<(String, Vec<String>)>>,
+}
+
+#[async_trait::async_trait]
+impl PreExecuteHook for Gate {
+    async fn before_execute(&self, run: PreExecute<'_>) -> Result<(), PreExecuteRefusal> {
+        self.seen.lock().unwrap().push((
+            run.blueprint_name.to_owned(),
+            run.packages.iter().cloned().collect(),
+        ));
+        if self.refuse {
+            return Err(PreExecuteRefusal {
+                message: "package `@acme/billing` failed to build: expected `;`".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn gated(refuse: bool) -> (Server, Arc<Gate>) {
+    let gate = Arc::new(Gate {
+        refuse,
+        seen: Mutex::new(Vec::new()),
+    });
+    let server = server_with(true, RuntimeConfig::default(), Some(gate.clone() as _));
+    (server, gate)
+}
+
+#[tokio::test]
+async fn every_entry_point_is_checked_before_compiling_and_a_refusal_is_a_recorded_resolution_failure()
+ {
+    let (server, gate) = gated(true);
+    let rest = server.execute(ALLOWED).await;
+    let session = server.open_session(json!({})).await;
+    let in_session = server.session_execute(&session, ALLOWED, None).await;
+    for response in [&rest, &in_session] {
+        assert_eq!(
+            response["error"]["kind"], "package_resolution",
+            "{response}"
+        );
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("`@acme/billing` failed to build"),
+            "{response}"
+        );
+    }
+    let mcp = server.mcp_session(json!({})).await;
+    let tool = server
+        .mcp_tool(
+            &mcp,
+            "submilli__typescript__execute",
+            json!({ "code": ALLOWED }),
+        )
+        .await;
+    assert!(
+        tool["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("`@acme/billing` failed to build")),
+        "{tool}"
+    );
+    let program = run_program(
+        &server.state,
+        ProgramRun {
+            label: "assistant".into(),
+            blueprint: BLUEPRINT.into(),
+            code: ALLOWED.into(),
+            variables: BTreeMap::new(),
+            secrets: Default::default(),
+        },
+    )
+    .await;
+    assert_eq!(
+        program.error.as_ref().map(|error| error.kind),
+        Some(ErrorKind::PackageResolution)
+    );
+
+    assert_eq!(
+        gate.seen.lock().unwrap().len(),
+        4,
+        "each run was checked once"
+    );
+    let finished = server.runs.finished();
+    let entries: Vec<_> = finished.iter().map(|run| run.start.entry.clone()).collect();
+    assert_eq!(
+        entries,
+        [
+            RunEntry::Http,
+            RunEntry::Session,
+            RunEntry::Mcp,
+            RunEntry::Program
+        ]
+    );
+    for run in finished.iter() {
+        assert!(!run.dispatched, "the program never reached the runner");
+        assert_eq!(run.error, Some(ErrorKind::PackageResolution));
+        assert!(run.decisions.is_empty(), "nothing ran: {:?}", run.decisions);
+    }
+}
+
+#[tokio::test]
+async fn the_hook_is_told_the_listed_packages_the_program_imports() {
+    let (server, gate) = gated(false);
+    let body = server
+        .execute_on(
+            "withpkg",
+            "import { x } from \"@acme/missing\";\nfunction main(): string { return \"ran\"; }",
+        )
+        .await;
+    assert_eq!(
+        gate.seen.lock().unwrap().as_slice(),
+        [("withpkg".to_owned(), vec!["@acme/missing".to_owned()])]
+    );
+    // The hook let it through; the store does not hold the package, and the failure
+    // says how to install it rather than reading as a denial.
+    assert_eq!(body["error"]["kind"], "package_resolution", "{body}");
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("`@acme/missing`"), "{message}");
+    assert!(message.contains("submilli install"), "{message}");
+    assert!(body["error"].get("capability").is_none(), "{body}");
+    let ran = server.execute(ALLOWED).await;
+    assert_eq!(ran["result"], "done", "{ran}");
+    assert_eq!(gate.seen.lock().unwrap()[1].1, Vec::<String>::new());
 }
