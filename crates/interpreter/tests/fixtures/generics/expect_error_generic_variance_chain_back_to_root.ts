@@ -7,13 +7,17 @@
 // is invariant in `S` and `P`. A doubly linked chain, where every level is
 // in one such group, is walked again only from its first level, so it too
 // stays linear. A method's callback parameter is compared strictly, as in
-// tsc, so `Source<T>` is covariant.
+// tsc, so `Source<T>` and `Hub<T>` are covariant, while a callback's return
+// and any other method parameter are compared both ways, unless a type
+// parameter is invariant inside it, as in `Mapper<T>`.
 // expect-error: expected `L5<number>`, got `L5<1>`
 // expect-error: expected `S<number>`, got `S<1>`
 // expect-error: expected `P<number>`, got `P<1>`
 // expect-error: expected `D0<number>`, got `D0<number | string>`
 // expect-error: expected `Source<number>`, got `Source<number | string>`
-// expect-error-count: 5
+// expect-error: expected `Mapper<number>`, got `Mapper<number | string>`
+// expect-error: expected `Hub<number>`, got `Hub<number | string>`
+// expect-error-count: 7
 interface L0<T> {
   a: L1<T>;
   b: L1<T>;
@@ -338,6 +342,41 @@ function narrowerSource(s: Source<1>): Source<number> {
 
 function widerSource(s: Source<number | string>): Source<number> {
   return s;
+}
+
+class Store<T> {
+  constructor(public value: T) {}
+  update(fn: (prev: T) => T): void {
+    this.value = fn(this.value);
+  }
+}
+
+interface Lazy<T> {
+  set(make: () => T): void;
+}
+
+interface Mapper<T> {
+  run(p: { k: (x: T) => T }): void;
+}
+
+interface Hub<T> {
+  on(...listeners: ((value: T) => void)[]): void;
+}
+
+function widerStore(s: Store<1>): Store<number> {
+  return s;
+}
+
+function widerLazy(s: Lazy<1>): Lazy<number> {
+  return s;
+}
+
+function narrowerMapper(m: Mapper<number | string>): Mapper<number> {
+  return m;
+}
+
+function narrowerHub(h: Hub<number | string>): Hub<number> {
+  return h;
 }
 
 function main(): void {}

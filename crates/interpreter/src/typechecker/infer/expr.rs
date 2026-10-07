@@ -756,8 +756,7 @@ impl Inferer<'_> {
             && !arrow_reported
             && !self.arguments_with_replaceable_hints.contains(&expr_id)
             && !assignable(&ty, want, self.resolver())
-            && !(self.values_widening_candidates.contains(&expr_id)
-                && assignable(want, &ty, self.resolver()))
+            && !self.widens_candidate(expr_id, want, &ty)
         {
             let has_structural_diff = self
                 .render_optional_help(super::type_diff::format_type_diff(want, &ty))
@@ -797,6 +796,13 @@ impl Inferer<'_> {
             self.type_size_checkpoint(Some(span))?;
         }
         Ok((id, ty))
+    }
+
+    /// Whether `expr_id`, a literal argument slot's value, widens the earlier
+    /// candidate `want` it was hinted with rather than mismatching it: the
+    /// candidate fits the value's type `ty`.
+    fn widens_candidate(&self, expr_id: ExprId, want: &Type, ty: &Type) -> bool {
+        self.values_widening_candidates.contains(&expr_id) && assignable(want, ty, self.resolver())
     }
 
     /// A primitive literal's type: the literal itself where it is kept or the

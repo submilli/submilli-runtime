@@ -191,37 +191,39 @@ impl<'a> TypeResolver<'a> {
         let revised_outside = std::mem::take(&mut measuring.revised);
         let mut revised_inside = false;
         let mut walks = 0;
-        let measured = loop {
+        let settled = loop {
             measuring.forget_from(depth);
-            let measured = self.walk_once(sym, generics.len(), measuring);
-            let revised = std::mem::take(&mut measuring.revised)
-                | measuring.revise_estimate(mangled, &measured);
+            let pass = self.walk_once(sym, generics.len(), measuring);
+            let revised_below = std::mem::take(&mut measuring.revised);
+            let revised_here = measuring.revise_estimate(mangled, &pass);
+            let revised = revised_below || revised_here;
             revised_inside |= revised;
             walks += 1;
-            let heads_group = measured.read.first() == Some(&depth);
-            if !(revised && heads_group && !measured.cut_short) {
-                break measured;
+            let heads_group = pass.read.first() == Some(&depth);
+            let rewalk = revised && heads_group && !pass.cut_short;
+            if !rewalk {
+                break pass;
             }
             if walks > measuring.max_walks() {
                 break Measured {
                     variances: Some(vec![Variance::Invariant; generics.len()]),
                     cut_short: true,
-                    ..measured
+                    ..pass
                 };
             }
         };
-        measuring.revised = revised_outside | revised_inside;
+        measuring.revised = revised_outside || revised_inside;
         measuring.stack.pop();
         measuring.forget_from(depth);
         Measured {
             // A reference back to the declaration itself read an estimate
             // it settled, not one from further up the walk.
-            read: measured
+            read: settled
                 .read
                 .into_iter()
                 .filter(|&index| index < depth)
                 .collect(),
-            ..measured
+            ..settled
         }
     }
 
@@ -253,9 +255,14 @@ impl<'a> TypeResolver<'a> {
 struct Measuring {
     stack: Vec<MangledName>,
     /// What a reference back to a declaration on the stack takes its
-    /// variances to be; see [`TypeResolver::walk_declaration`].
+    /// variances to be; see [`TypeResolver::walk_declaration`]. Estimates
+    /// last for the whole measurement, so a group's later walks start from
+    /// what its earlier ones found.
     estimates: BTreeMap<MangledName, Vec<Variance>>,
-    /// Whether an estimate changed during the current walk.
+    /// Set when an estimate changes. Each `walk_declaration` takes it on
+    /// entry and sets it again on exit if it or a declaration below it
+    /// revised one, so a group's outermost declaration sees revisions made
+    /// anywhere in its walk.
     revised: bool,
     /// Measurements that read the estimates of declarations on the stack, at
     /// those stack positions, kept while the estimates hold.
@@ -291,7 +298,8 @@ impl Measuring {
     }
 
     /// More walks of a group than its estimates can change in: three
-    /// changes per type parameter, from independent to invariant.
+    /// changes per type parameter estimated so far, from independent to
+    /// invariant.
     fn max_walks(&self) -> usize {
         3 * self.estimates.values().map(Vec::len).sum::<usize>() + 1
     }
@@ -389,19 +397,51 @@ impl VarianceWalk<'_, '_> {
         }
     }
 
-    /// A method's parameters are compared both ways, except a callback,
-    /// which tsc compares strictly: `subscribe(listener: (value: T) => void)`
-    /// is covariant in `T`.
+    /// A method's parameters are compared both ways, as tsc compares them:
+    /// `Logger<number>` is a `Logger<1>`. A callback is the exception: tsc
+    /// compares its parameters strictly and only its return both ways, so
+    /// `subscribe(listener: (value: T) => void)` is covariant in `T`. A rest
+    /// parameter is compared by its elements.
     fn method(&mut self, params: &[crate::Param], ret: &Type, bindings: &BTreeMap<String, Type>) {
         for param in params {
-            let polarity = if is_callback(&param.ty) {
-                Polarity::Contravariant
-            } else {
-                Polarity::Bivariant
+            let ty = substitute_or_record(&param.ty, bindings, self.resolver.limits);
+            let compared = match ty.peel() {
+                Type::Array(element) if param.rest => element.as_ref(),
+                _ => &ty,
             };
-            self.substituted(&param.ty, bindings, polarity);
+            match callback_signature(compared) {
+                Some((callback_params, callback_ret)) => {
+                    for callback_param in callback_params {
+                        self.walk(callback_param, Polarity::Covariant);
+                    }
+                    self.both_ways(callback_ret);
+                }
+                None => self.both_ways(compared),
+            }
         }
         self.substituted(ret, bindings, Polarity::Covariant);
+    }
+
+    /// `ty` compared both ways: a type parameter found in it in one direction
+    /// is bivariant, while one it is invariant in stays invariant, since
+    /// neither direction then holds (`run(p: { k: (x: T) => T })`).
+    fn both_ways(&mut self, ty: &Type) {
+        let fresh = vec![Occurrences::default(); self.found.len()];
+        let outer = std::mem::replace(&mut self.found, fresh);
+        self.walk(ty, Polarity::Covariant);
+        let inner = std::mem::replace(&mut self.found, outer);
+        for (found, inner) in self.found.iter_mut().zip(inner) {
+            match inner.variance() {
+                Variance::Independent => {}
+                Variance::Invariant => {
+                    found.covariant = true;
+                    found.contravariant = true;
+                }
+                Variance::Covariant | Variance::Contravariant | Variance::Bivariant => {
+                    found.bivariant = true;
+                }
+            }
+        }
     }
 
     fn substituted(&mut self, ty: &Type, bindings: &BTreeMap<String, Type>, polarity: Polarity) {
@@ -505,20 +545,25 @@ impl VarianceWalk<'_, '_> {
     }
 }
 
-/// A function type, alone or beside `null`, as tsc takes a parameter to be
-/// a callback.
-fn is_callback(ty: &Type) -> bool {
-    match ty.peel() {
-        Type::Function { .. } => true,
+/// The parameters and return of a function type, alone or beside `null`,
+/// which tsc takes a parameter of that type to be a callback.
+fn callback_signature(ty: &Type) -> Option<(&[Type], &Type)> {
+    let function = match ty.peel() {
+        function @ Type::Function { .. } => function,
         Type::Union(members) => {
             let mut rest = members
                 .iter()
-                .filter(|member| !matches!(member.peel(), Type::Null));
-            matches!(
-                (rest.next().map(Type::peel), rest.next()),
-                (Some(Type::Function { .. }), None)
-            )
+                .map(Type::peel)
+                .filter(|member| !matches!(member, Type::Null));
+            match (rest.next(), rest.next()) {
+                (Some(function), None) => function,
+                _ => return None,
+            }
         }
-        _ => false,
-    }
+        _ => return None,
+    };
+    let Type::Function { params, ret, .. } = function else {
+        return None;
+    };
+    Some((params, ret))
 }

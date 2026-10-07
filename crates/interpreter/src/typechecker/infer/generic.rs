@@ -1735,9 +1735,10 @@ impl Inferer<'_> {
             self.arguments_with_replaceable_hints.insert(arg_id);
         }
         let enclosing = self.start_literal_argument_inference(arg_id, param_ty, sub)?;
-        let enclosing_fields = self
-            .fields_keeping_returned_literals
-            .replace((arg_id, arguments.inferred_generics.to_vec()));
+        let enclosing_fields = self.fields_keeping_returned_literals.replace((
+            arg_id,
+            type_params_of_one_field(param_ty, arguments.inferred_generics),
+        ));
         let keeps_literal = arguments.literal_types.keeps(param_ty);
         let inferred = self.with_inferred_positions(
             arg_id,
@@ -2756,6 +2757,26 @@ fn bind_remaining(
         }
     }
     Ok(())
+}
+
+/// The type parameters among `inferred` whose fields of `param_ty` keep the
+/// literals their function values return: those typing one field only, as
+/// tsc's common supertype of two such values (`{ v: () => 1, w: () => 2 }`)
+/// widens what they return to `() => number`.
+fn type_params_of_one_field(param_ty: &Type, inferred: &[String]) -> Vec<String> {
+    let Type::Object { fields, .. } = param_ty.peel() else {
+        return inferred.to_vec();
+    };
+    inferred
+        .iter()
+        .filter(|name| {
+            let typed = fields
+                .values()
+                .filter(|field| matches!(field.ty.peel(), Type::TypeVar(var) if var == *name));
+            typed.count() <= 1
+        })
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]

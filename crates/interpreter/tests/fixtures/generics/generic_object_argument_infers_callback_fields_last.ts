@@ -69,4 +69,7 @@ function main(): void {
   const map = later(new Map<string, number>(), { cb: (t) => t.size, w: new Map() });
   map.set("k", 1);
   assert(doubled(2) === 2 && lists.length === 1 && map.size === 1, "an earlier binding types a later field");
+  const returned = common({ v: () => 1, cb: (t) => `${t()}`, w: () => 2 });
+  const returnedBoth = both({ v: () => "x", w: () => "y" });
+  assert(returned() === 1 && returnedBoth() === "x", "two fields widen what they return");
 }
