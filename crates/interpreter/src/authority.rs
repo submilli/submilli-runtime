@@ -132,7 +132,8 @@ pub struct AuthorityRouteEffect {
 }
 
 /// Ordering evidence only: selector correspondence and result confinement are
-/// separate analyses. `checked` never claims either of those properties.
+/// separate analyses. `checked` never claims either of those properties, nor
+/// that an effect's target has been resolved: discovery and ordering are independent.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityGuardEvidence {
     pub status: AuthorityGuardStatus,

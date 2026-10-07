@@ -51,6 +51,7 @@ struct CheckFacts {
     sites: BTreeSet<AuthoritySpan>,
     dependencies: BTreeSet<String>,
     dynamic: bool,
+    scope_invalidated: bool,
 }
 
 impl CheckFacts {
@@ -59,6 +60,7 @@ impl CheckFacts {
         self.sites.extend(other.sites.iter().cloned());
         self.dependencies.extend(other.dependencies.iter().cloned());
         self.dynamic |= other.dynamic;
+        self.scope_invalidated |= other.scope_invalidated;
     }
 }
 
@@ -109,14 +111,22 @@ impl State {
     }
 
     fn invalidate(&mut self, binding: Option<&str>) {
-        self.scopes.retain(|_, facts| {
-            facts.dependencies.is_empty()
+        self.scopes.retain(|scope, facts| {
+            let valid = facts.dependencies.is_empty()
                 || binding.is_some_and(|binding| {
                     !facts
                         .dependencies
                         .iter()
                         .any(|dependency| reference_matches(dependency, binding))
-                })
+                });
+            if scope.is_empty() {
+                // Mutation cannot undo successful-check ordering, but known
+                // sinks must not reuse its invalidated applicability evidence.
+                facts.scope_invalidated |= !valid;
+                true
+            } else {
+                valid
+            }
         });
     }
 }
@@ -205,6 +215,7 @@ fn summarize(
                     Action::Invalidate(None) | Action::Coverage => summary.mutates = true,
                     _ => {}
                 }
+                summary.mutates |= node.effects.iter().any(|effect| effect.unresolved);
                 for effect in &node.effects {
                     summary.effects.insert(effect.clone(), Vec::new());
                     if mutated {
@@ -260,6 +271,7 @@ fn summarize(
                 }
                 let mutated_after = mutated
                     || matches!(node.action, Action::Invalidate(None) | Action::Coverage)
+                    || node.effects.iter().any(|effect| effect.unresolved)
                     || node.calls.iter().any(|call| summaries[call.target].mutates);
                 queue.extend(
                     successors(node, &summaries)
@@ -374,6 +386,7 @@ fn analyse_route(
                     dependencies: roots.clone(),
                     dynamic: name.is_none()
                         || roots.iter().any(|root| root.starts_with("?shadowed")),
+                    scope_invalidated: false,
                 };
                 // Computed payloads have no proven item/collection identity.
                 // Record normal-success ordering, but leave selector scope to
@@ -394,6 +407,7 @@ fn analyse_route(
                             .dependencies
                             .extend(facts.dependencies.iter().cloned());
                         previous.dynamic &= facts.dynamic;
+                        previous.scope_invalidated = false;
                     } else {
                         normal.scopes.insert(scope, facts.clone());
                     }
@@ -404,12 +418,19 @@ fn analyse_route(
                 normal.invalidate(None);
                 state.invalidate(None);
             }
-            Action::Iteration => normal
-                .scopes
-                .retain(|_, facts| !facts.dependencies.iter().any(|root| root.ends_with("[]"))),
+            Action::Iteration => normal.scopes.retain(|scope, facts| {
+                let indexed = facts.dependencies.iter().any(|root| root.ends_with("[]"));
+                if scope.is_empty() {
+                    facts.scope_invalidated |= indexed;
+                    true
+                } else {
+                    !indexed
+                }
+            }),
             _ => {}
         }
-        let mutates = node.calls.iter().any(|call| summaries[call.target].mutates);
+        let mutates = node.effects.iter().any(|effect| effect.unresolved)
+            || node.calls.iter().any(|call| summaries[call.target].mutates);
         if mutates {
             normal.invalidate(None);
             state.invalidate(None);
@@ -467,11 +488,16 @@ fn observe(
         unproven,
         index,
     } = context;
-    let facts = if node.item_scopes.is_empty() {
+    // Unknown dispatch still occurs at this modeled invocation point. Proving
+    // an earlier check does not require discovering its target. Item selectors
+    // apply to known sinks; unknown effects retain unresolved discovery metadata.
+    let known_sink = effect.capability.is_some() && !effect.unresolved;
+    let facts = if node.item_scopes.is_empty() || !known_sink {
         state
             .scopes
             .get("")
-            .or_else(|| state.scopes.values().next())
+            .filter(|facts| !known_sink || !facts.scope_invalidated)
+            .or_else(|| state.scopes.get("*"))
     } else {
         // Each iterated value needs a matching item or whole-collection scope.
         // Checks with no payload roots explicitly describe route-wide work.
@@ -487,12 +513,14 @@ fn observe(
         })
     };
     let facts = facts.filter(|facts| {
-        facts.dependencies.is_empty()
-            || required
-                .iter()
-                .all(|scope| state.scopes.contains_key(scope))
+        !known_sink
+            || (!facts.scope_invalidated
+                && (facts.dependencies.is_empty()
+                    || required
+                        .iter()
+                        .all(|scope| state.scopes.contains_key(scope))))
     });
-    let status = if unproven || effect.unresolved || effect.capability.is_none() {
+    let status = if unproven {
         AuthorityGuardStatus::Unproven
     } else if let Some(facts) = facts {
         if facts.dynamic {
@@ -500,7 +528,9 @@ fn observe(
         } else {
             AuthorityGuardStatus::Checked
         }
-    } else if required.iter().any(|scope| scope.starts_with('?'))
+    } else if state.scopes.contains_key("")
+        || !known_sink
+        || required.iter().any(|scope| scope.starts_with('?'))
         || (!node.item_scopes.is_empty()
             && state
                 .scopes
@@ -518,10 +548,11 @@ fn observe(
         span: source_span(builder.sources, node.span)?,
         description: "effect is invoked on this path".into(),
     });
+    let evidence = facts.or_else(|| state.scopes.get(""));
     let guard = AuthorityGuardEvidence {
         status,
-        capabilities: facts.map_or_else(Vec::new, |facts| facts.names.iter().cloned().collect()),
-        checks: facts.map_or_else(Vec::new, |facts| facts.sites.iter().cloned().collect()),
+        capabilities: evidence.map_or_else(Vec::new, |facts| facts.names.iter().cloned().collect()),
+        checks: evidence.map_or_else(Vec::new, |facts| facts.sites.iter().cloned().collect()),
         path,
     };
     let key = (index, effect.clone());
@@ -578,7 +609,7 @@ fn guard_warning(
             "performs a pre-check authorization lookup; denial-path confinement is unproven"
         }
         AuthorityGuardStatus::Unproven => {
-            "has an authority coverage gap; guard ordering cannot be proved"
+            "has an authority coverage gap; authorization cannot be proved"
         }
         _ => "reaches an effect without a successful direct semantic check on every path",
     };

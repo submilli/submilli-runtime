@@ -147,7 +147,7 @@ fn loops_require_current_item_or_aggregate_checks() {
     for (body, expected) in [
         (
             r#"check("fetch", { first: urls[0] }); for (const url of urls) { get(url); }"#,
-            AuthorityGuardStatus::Unguarded,
+            AuthorityGuardStatus::Unproven,
         ),
         (
             r#"for (const url of urls) { check("fetch", { url }); get(url); }"#,
@@ -241,7 +241,16 @@ fn reassignment_invalidates_item_facts() {
     let compiled = compile_body(
         r#"let url = "https://example.com/a"; check("fetch", { url }); url = "https://example.com/b"; get(url);"#,
     );
-    assert_eq!(statuses(&compiled), [AuthorityGuardStatus::Unguarded]);
+    assert_eq!(statuses(&compiled), [AuthorityGuardStatus::Unproven]);
+    let effect = &route(&compiled.authority_map, "#fetch").effects[0];
+    assert_eq!(effect.guard.capabilities, ["fetch"]);
+    assert_eq!(effect.guard.checks.len(), 1);
+    assert!(
+        compiled
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("authority coverage gap"))
+    );
 }
 
 #[test]
@@ -264,7 +273,7 @@ fn authority_guard_fields_are_backward_compatible() {
 #[test]
 fn helper_loops_require_aggregate_scope_from_the_public_check() {
     for (payload, expected) in [
-        ("{ first: urls[0] }", AuthorityGuardStatus::Unguarded),
+        ("{ first: urls[0] }", AuthorityGuardStatus::Unproven),
         ("{ urls }", AuthorityGuardStatus::Checked),
     ] {
         let source = format!(
@@ -345,29 +354,45 @@ fn stable_item_aliases_and_route_wide_checks_survive_unrelated_mutations() {
 }
 
 #[test]
-fn dynamic_calls_have_explicit_coverage_warnings() {
-    let compiled = compile_output(
-        &[(
-            "lib",
+fn dynamic_call_targets_remain_unresolved_with_independent_guard_ordering() {
+    for (body, expected) in [
+        (
+            r#"check("fetch", {}); callback();"#,
+            AuthorityGuardStatus::Checked,
+        ),
+        (
+            r#"callback(); check("fetch", {});"#,
+            AuthorityGuardStatus::Unproven,
+        ),
+        (
+            r#"try { check("fetch", {}); } catch {} callback();"#,
+            AuthorityGuardStatus::Unproven,
+        ),
+    ] {
+        let source = format!(
             r#"
-        import { check } from "submilli:security";
-        export function fetch(callback: () => void): void { check("fetch", {}); callback(); }
-    "#,
-        )],
-        &[],
-    );
-    let effects = &route(&compiled.authority_map, "#fetch").effects;
-    assert!(
-        effects
-            .iter()
-            .any(|effect| effect.guard.status == AuthorityGuardStatus::Unproven)
-    );
-    assert!(
-        compiled
-            .warnings
-            .iter()
-            .any(|warning| warning.message.contains("authority coverage gap"))
-    );
+            import {{ check }} from "submilli:security";
+            export function fetch(callback: () => void): void {{ {body} }}
+        "#
+        );
+        let compiled = compile_output(&[("lib", &source)], &[]);
+        let effects = &route(&compiled.authority_map, "#fetch").effects;
+        assert!(!effects.is_empty());
+        assert!(effects.iter().all(|effect| effect.effect.unresolved));
+        assert!(
+            effects.iter().all(|effect| effect.guard.status == expected),
+            "{body}"
+        );
+        assert_eq!(
+            !compiled
+                .warnings
+                .iter()
+                .any(|warning| warning.message.starts_with("public route")),
+            expected == AuthorityGuardStatus::Checked,
+            "{body}: {:#?}",
+            compiled.warnings
+        );
+    }
 }
 
 #[test]
@@ -457,7 +482,7 @@ fn helper_mutation_order_is_preserved_at_effects() {
     for (body, expected) in [
         (
             r#"urls[0] = "https://example.com/new"; get(urls[0]);"#,
-            AuthorityGuardStatus::Unguarded,
+            AuthorityGuardStatus::Unproven,
         ),
         (
             r#"get(urls[0]); urls[0] = "https://example.com/new";"#,
@@ -708,7 +733,7 @@ fn narrowed_index_payload_does_not_authorize_the_whole_collection() {
         )],
         &[],
     );
-    assert_eq!(statuses(&compiled), [AuthorityGuardStatus::Unguarded]);
+    assert_eq!(statuses(&compiled), [AuthorityGuardStatus::Unproven]);
 }
 
 #[test]
@@ -736,4 +761,123 @@ fn computed_loop_conditions_and_updates_remain_unproven() {
         };
         assert_eq!(statuses(&compiled), [expected], "{body}");
     }
+}
+
+#[test]
+fn quickstart_ledger_access_has_proven_guard_ordering() {
+    let compiled = compile_output(
+        &[(
+            "lib",
+            include_str!("../../../../../examples/quickstart/package/src/lib.ts"),
+        )],
+        &[],
+    );
+    let effects = &route(&compiled.authority_map, "#listCharges").effects;
+    assert!(!effects.is_empty());
+    assert!(
+        effects
+            .iter()
+            .all(|effect| effect.guard.status == AuthorityGuardStatus::Checked)
+    );
+    assert!(effects.iter().any(|effect| effect.effect.unresolved));
+    assert!(compiled.warnings.is_empty(), "{:#?}", compiled.warnings);
+}
+
+#[test]
+fn unknown_accessor_dispatch_preserves_separate_guard_evidence() {
+    for (body, expected) in [
+        (
+            "check(\"read\", {}); return value.property;",
+            AuthorityGuardStatus::Checked,
+        ),
+        (
+            "const result = value.property; check(\"read\", {}); return result;",
+            AuthorityGuardStatus::Unproven,
+        ),
+        (
+            "try { check(\"read\", {}); } catch {} return value.property;",
+            AuthorityGuardStatus::Unproven,
+        ),
+    ] {
+        let source = format!(
+            r#"
+            import {{ check }} from "submilli:security";
+            export interface Shaped {{ readonly property: string; }}
+            export function read(value: Shaped): string {{ {body} }}
+        "#
+        );
+        let compiled = compile_output(&[("lib", &source)], &[]);
+        let effects = &route(&compiled.authority_map, "#read").effects;
+        let accessor = effects
+            .iter()
+            .find(|effect| {
+                effect.effect.reason.as_deref()
+                    == Some("structural property may invoke an accessor")
+            })
+            .expect("accessor uncertainty remains visible");
+        assert!(accessor.effect.unresolved);
+        assert_eq!(accessor.guard.status, expected, "{body}");
+        assert_eq!(
+            !compiled
+                .warnings
+                .iter()
+                .any(|warning| warning.message.starts_with("public route")),
+            expected == AuthorityGuardStatus::Checked,
+            "{body}: {:#?}",
+            compiled.warnings
+        );
+    }
+}
+
+#[test]
+fn opaque_dispatch_keeps_ordering_but_invalidates_collection_scopes() {
+    for body in [
+        "callback(urls);",
+        "invoke(urls, callback);",
+        "try { callback(urls); } catch {}",
+    ] {
+        let source = format!(
+            r#"
+            import {{ check }} from "submilli:security";
+            import {{ get }} from "submilli:http";
+            function invoke(urls: string[], callback: (urls: string[]) => void): void {{ callback(urls); }}
+            export function fetch(urls: string[], callback: (urls: string[]) => void): void {{
+                check("batch", {{ urls }});
+                {body}
+                for (const url of urls) {{ get(url); }}
+            }}
+        "#
+        );
+        let compiled = compile_output(&[("lib", &source)], &[]);
+        assert_eq!(
+            statuses(&compiled),
+            [AuthorityGuardStatus::Unproven],
+            "{body}"
+        );
+        let effects = &route(&compiled.authority_map, "#fetch").effects;
+        assert!(
+            effects
+                .iter()
+                .filter(|effect| effect.effect.unresolved)
+                .all(|effect| effect.guard.status == AuthorityGuardStatus::Checked)
+        );
+    }
+}
+
+#[test]
+fn opaque_dispatch_does_not_revoke_successful_check_ordering() {
+    let compiled = compile_output(
+        &[(
+            "lib",
+            r#"
+        import { check } from "submilli:security";
+        import { get } from "submilli:http";
+        export function fetch(url: string, callback: () => void): void {
+            check("fetch", {}); callback(); get(url);
+        }
+    "#,
+        )],
+        &[],
+    );
+    assert_eq!(statuses(&compiled), [AuthorityGuardStatus::Checked]);
 }
