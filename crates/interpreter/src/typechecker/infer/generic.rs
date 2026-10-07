@@ -992,6 +992,24 @@ impl Inferer<'_> {
     /// A mismatch is reported later, where the call's result is checked
     /// against the expected type.
     fn bind_from_expected_type(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
+        // A result with several bare type parameters (`A | B`) can't say which
+        // of them takes which part of `want`: tsc gives each the whole of it,
+        // where pairing members would bind `A` to one literal of a `Mode`.
+        if let Type::Union(members) = ret.peel() {
+            let bare: Vec<&String> = members
+                .iter()
+                .filter_map(|member| match member.peel() {
+                    Type::TypeVar(name) if sub.is_unbound(name) => Some(name),
+                    _ => None,
+                })
+                .collect();
+            if bare.len() > 1 {
+                for name in bare {
+                    sub.insert(name.clone(), want.clone());
+                }
+                return;
+            }
+        }
         let unifies_with_whole_union = matches!(ret.peel(), Type::TypeVar(_) | Type::Union(_));
         let members = match want.peel() {
             Type::Union(members) if !unifies_with_whole_union => members,

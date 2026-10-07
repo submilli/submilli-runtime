@@ -779,7 +779,7 @@ impl Inferer<'_> {
             return match literals {
                 BoundLiterals::Fresh => self.possibly_fresh_literals(value),
                 BoundLiterals::Regular => {
-                    self.whole_value_regular_literals(value, &expr.ty, Some(param))
+                    self.whole_value_regular_literals(value, &expr.ty, Some(param), is_counted)
                 }
             };
         };
@@ -799,7 +799,7 @@ impl Inferer<'_> {
             .try_expr(value)
             .map_err(crate::typechecker::arena_failure)?;
         let Some(parts) = literal_parts(&expr.kind) else {
-            return self.whole_value_regular_literals(value, &expr.ty, None);
+            return self.whole_value_regular_literals(value, &expr.ty, None, &|_| true);
         };
         let mut regular = BTreeSet::new();
         for part in parts {
@@ -811,16 +811,21 @@ impl Inferer<'_> {
     /// The regular literals `value`, of type `ty`, binds checked against
     /// `param`: its top-level ones and, when it binds what it holds inside
     /// (see [`binds_nested_literals`]) and every nested one is regular, those
-    /// too.
+    /// at the positions of `param` that name a type parameter `is_counted`
+    /// accepts.
     fn whole_value_regular_literals(
         &self,
         value: ExprId,
         ty: &Type,
         param: Option<&Type>,
+        is_counted: &dyn Fn(&str) -> bool,
     ) -> Result<BTreeSet<Type>, CompilerFailure> {
         let mut regular = self.regular_literals(value)?;
         if binds_nested_literals(param, ty) && self.are_nested_literals_regular(value)? {
-            regular.extend(deep_literals(ty));
+            regular.extend(match param {
+                Some(param) => deep_literals_bound_to(param, ty, is_counted),
+                None => deep_literals(ty),
+            });
         }
         Ok(regular)
     }
@@ -1241,6 +1246,42 @@ fn union_of<'a>(positions: impl Iterator<Item = &'a Type>) -> Option<Type> {
 /// parameter to what it holds inside: always for `A[]`, never for `A`, and
 /// for `A | A[]` only an array the parameter's array member can take. A
 /// receiver, with no `param`, binds all it holds.
+/// The literals nested in `ty` that a value of that type, checked against
+/// `param`, binds to a type parameter `is_counted` accepts: those at the
+/// positions of a tuple, array or object that name one, so the `"on"` of a
+/// `[number, Mode]` checked against `[K, V]` counts only when `V` does. A
+/// position this can't pair up counts every literal under it.
+fn deep_literals_bound_to(
+    param: &Type,
+    ty: &Type,
+    is_counted: &dyn Fn(&str) -> bool,
+) -> BTreeSet<Type> {
+    if !super::expr::mentions_type_var(param, &is_counted) {
+        return BTreeSet::new();
+    }
+    match (param.peel(), ty.peel()) {
+        (Type::TypeVar(_), _) => deep_literals(ty),
+        (Type::Tuple(params), Type::Tuple(parts)) if params.len() == parts.len() => params
+            .iter()
+            .zip(parts)
+            .flat_map(|(param, part)| deep_literals_bound_to(param, part, is_counted))
+            .collect(),
+        (Type::Array(param), Type::Array(element)) => {
+            deep_literals_bound_to(param, element, is_counted)
+        }
+        (Type::Array(param), Type::Tuple(parts)) => parts
+            .iter()
+            .flat_map(|part| deep_literals_bound_to(param, part, is_counted))
+            .collect(),
+        (Type::Object { fields: params, .. }, Type::Object { fields: parts, .. }) => parts
+            .iter()
+            .filter_map(|(name, part)| Some((params.get(name)?, part)))
+            .flat_map(|(param, part)| deep_literals_bound_to(&param.ty, &part.ty, is_counted))
+            .collect(),
+        _ => deep_literals(ty),
+    }
+}
+
 fn binds_nested_literals(param: Option<&Type>, ty: &Type) -> bool {
     let Some(param) = param else {
         return true;
