@@ -110,7 +110,8 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
         Some(Arc::new(Recorder::new(Arc::clone(&store), secrets))),
     );
     config.volumes = project_volumes(&options.project.package_dir);
-    config.pre_execute = Some(Arc::new(Freshness::new(Arc::clone(&packages))));
+    let freshness = Arc::new(Freshness::new(Arc::clone(&packages)));
+    config.pre_execute = Some(Arc::clone(&freshness) as _);
     let runtime = submilli_server::runtime(&config).context("starting the async runtime")?;
     let result = runtime.block_on(run(
         options,
@@ -121,6 +122,7 @@ pub(crate) fn serve(options: HostOptions) -> Result<()> {
             name: blueprint.name.clone(),
             store,
             packages,
+            freshness,
             closure,
         },
     ));
@@ -135,6 +137,8 @@ struct Served {
     name: String,
     store: Arc<Store>,
     packages: Arc<ProjectPackages>,
+    /// The package check runs get, which the blueprint watcher shares.
+    freshness: Arc<Freshness>,
     /// The closure as it was at start, for the ready record.
     closure: Vec<ClosureEntry>,
 }
@@ -152,12 +156,15 @@ async fn run(
     state.boot().await?;
     let _store_watch = packages::watch_store(state.clone(), blueprint.packages.store_root())?;
     // The file as it is now, then every save, through the trusted local path.
-    let applier = Arc::new(Applier::new(
-        state.clone(),
-        blueprint.store,
-        options.project.blueprint.clone(),
-        blueprint.name.clone(),
-    ));
+    let applier = Arc::new(
+        Applier::new(
+            state.clone(),
+            blueprint.store,
+            options.project.blueprint.clone(),
+            blueprint.name.clone(),
+        )
+        .with_packages(blueprint.freshness),
+    );
     applier.start().await?;
     let blueprint_status = applier.status();
     let _watch = watch::watch(applier, watch::DEBOUNCE)?;

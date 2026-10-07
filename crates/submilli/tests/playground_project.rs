@@ -170,6 +170,52 @@ mod unix {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
+
+        /// Polls `status` until `done` holds for its `blueprint_status`.
+        fn wait_for_blueprint(&self, what: &str, done: impl Fn(&Value) -> bool) -> Value {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                let status = self.status()["blueprint_status"].clone();
+                if done(&status) {
+                    return status;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for {what}: {status}\n{}",
+                    self.log()
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+
+        /// The versions the change log holds.
+        fn versions(&self) -> Vec<u64> {
+            std::fs::read_to_string(self.state().join("store/changes.jsonl"))
+                .unwrap_or_default()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|line| line["kind"] == "version")
+                .filter_map(|line| line["version"].as_u64())
+                .collect()
+        }
+
+        /// A new project package `@acme/rates` under `packages/rates`, with `lib` as its
+        /// source, listed in the project's `submilli.toml`.
+        fn add_rates_package(&self, lib: &str) -> PathBuf {
+            let rates = self.submilli().join("packages/rates");
+            std::fs::create_dir_all(rates.join("src")).unwrap();
+            std::fs::create_dir_all(rates.join("docs")).unwrap();
+            std::fs::write(rates.join("docs/readme.md"), "# @acme/rates\n").unwrap();
+            std::fs::write(rates.join("src/lib.ts"), lib).unwrap();
+            let manifest = self.submilli().join("submilli.toml");
+            let mut text = std::fs::read_to_string(&manifest).unwrap();
+            text.push_str(
+                "\n[[package]]\nname = \"@acme/rates\"\nversion = \"0.1.0\"\n\
+                 description = \"Rates.\"\npath = \"packages/rates\"\n",
+            );
+            std::fs::write(&manifest, text).unwrap();
+            rates
+        }
     }
 
     impl Drop for Workspace {
@@ -648,6 +694,83 @@ mod unix {
             );
             std::thread::sleep(Duration::from_millis(100));
         }
+    }
+
+    const RATES_PROGRAM: &str = "import { rate } from \"@acme/rates\";\nfunction main(): string { return `rate ${rate()}`; }\n";
+
+    #[test]
+    fn a_blueprint_edit_naming_a_new_project_package_builds_it_and_applies() {
+        let workspace = Workspace::starter();
+        let record = workspace.start();
+        workspace.wait_for_blueprint("version 1", |status| status["version"] == 1);
+
+        workspace
+            .add_rates_package("/** The rate. */\nexport function rate(): number { return 1; }\n");
+        edit(
+            &workspace.blueprint(),
+            "- '@acme/billing'",
+            "- '@acme/billing'\n- '@acme/rates'",
+        );
+        let status = workspace.wait_for_blueprint("version 2", |status| {
+            status["version"] == 2 || status["refused"].is_object()
+        });
+        assert_eq!(status["version"], 2, "{status}\n{}", workspace.log());
+        assert!(status["refused"].is_null(), "{status}");
+        assert_eq!(workspace.versions(), [1, 2]);
+
+        let response = execute(&record, &workspace.token("app"), RATES_PROGRAM);
+        assert_eq!(response["result"], "rate 1", "{response}");
+
+        // A package that is neither the project's nor installed is still missing.
+        edit(
+            &workspace.blueprint(),
+            "- '@acme/rates'",
+            "- '@acme/rates'\n- '@acme/absent'",
+        );
+        let status =
+            workspace.wait_for_blueprint("the refusal", |status| status["refused"].is_object());
+        assert_eq!(status["refused"]["code"], "package_missing", "{status}");
+        let message = status["refused"]["message"].as_str().unwrap();
+        assert!(message.contains("`@acme/absent`"), "{message}");
+        assert!(message.contains("install it with"), "{message}");
+        assert_eq!(status["version"], 2, "{status}");
+        assert_eq!(workspace.versions(), [1, 2]);
+    }
+
+    #[test]
+    fn a_blueprint_edit_naming_a_new_package_that_does_not_build_is_refused() {
+        let workspace = Workspace::starter();
+        let record = workspace.start();
+        workspace.wait_for_blueprint("version 1", |status| status["version"] == 1);
+
+        workspace.add_rates_package(
+            "/** The rate. */\nexport function rate(): number { return 1 +; }\n",
+        );
+        edit(
+            &workspace.blueprint(),
+            "- '@acme/billing'",
+            "- '@acme/billing'\n- '@acme/rates'",
+        );
+        let status =
+            workspace.wait_for_blueprint("the refusal", |status| status["refused"].is_object());
+        let message = status["refused"]["message"].as_str().unwrap();
+        assert!(message.contains("`@acme/rates`"), "{message}");
+        assert!(
+            message.contains("lib.ts"),
+            "the build diagnostic: {message}"
+        );
+        assert_ne!(status["refused"]["code"], "package_missing", "{status}");
+        assert_eq!(status["version"], 1, "{status}");
+        assert_eq!(workspace.versions(), [1], "no version was logged");
+        assert!(
+            workspace.log().contains("`@acme/rates`"),
+            "{}",
+            workspace.log()
+        );
+
+        // The last good version is still in force.
+        let response = execute(&record, &workspace.token("app"), &example(&workspace));
+        assert_eq!(response["result"], EXAMPLE_RESULT, "{response}");
     }
 
     #[test]

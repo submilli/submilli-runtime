@@ -69,6 +69,8 @@ pub(crate) enum ResolutionFailure {
     Store(PackageStoreError),
     /// The rebuilt package could not be written to the store.
     Install { package: String, message: String },
+    /// The check's blocking task ended before it finished.
+    Stopped(String),
 }
 
 impl fmt::Display for ResolutionFailure {
@@ -99,6 +101,9 @@ impl fmt::Display for ResolutionFailure {
                 "package `{package}` was rebuilt but could not be installed: {message}; run \
                  `submilli build publish-local` to retry"
             ),
+            Self::Stopped(error) => {
+                write!(f, "the package check stopped before it finished: {error}")
+            }
         }
     }
 }
@@ -439,7 +444,9 @@ impl Fingerprint {
 }
 
 /// The server's pre-execute hook: a run's project packages are brought up to date
-/// before it compiles. Checks are serialized, so two runs after one edit rebuild once.
+/// before it compiles. The blueprint watcher brings the project packages an edit newly
+/// names up to date through it too, before the edit is validated. Checks are
+/// serialized, so two runs after one edit rebuild once.
 pub(crate) struct Freshness {
     packages: Arc<ProjectPackages>,
     turn: tokio::sync::Mutex<()>,
@@ -452,6 +459,60 @@ impl Freshness {
             turn: tokio::sync::Mutex::new(()),
         }
     }
+
+    /// Before an edit is validated: build and install the project packages it needs
+    /// that the store lacks or that the version in force did not list. A package both
+    /// list stays the pre-execute check's to refresh, so an edit elsewhere in the
+    /// blueprint is not refused while that package's source is mid-change.
+    pub(crate) async fn prepare_edit(
+        &self,
+        state: &AppState,
+        blueprint: Blueprint,
+        in_force: Option<Blueprint>,
+    ) -> Result<(), ResolutionFailure> {
+        if blueprint.packages.is_empty() {
+            return Ok(());
+        }
+        self.check(state, move |packages| {
+            let store = packages.store();
+            let wanted: BTreeSet<String> = blueprint
+                .packages
+                .iter()
+                .filter(|name| {
+                    in_force
+                        .as_ref()
+                        .is_none_or(|in_force| !in_force.packages.contains(*name))
+                        || !matches!(store.locate(name), Ok(Some(_)))
+                })
+                .cloned()
+                .collect();
+            packages.sync(&wanted)
+        })
+        .await
+    }
+
+    /// Run one check on a blocking thread, one at a time, and evict the server's
+    /// prepared packages when it replaced one.
+    async fn check(
+        &self,
+        state: &AppState,
+        check: impl FnOnce(&ProjectPackages) -> Result<Synced, ResolutionFailure> + Send + 'static,
+    ) -> Result<(), ResolutionFailure> {
+        let _turn = self.turn.lock().await;
+        let packages = Arc::clone(&self.packages);
+        let synced = tokio::task::spawn_blocking(move || check(&packages))
+            .await
+            .map_err(|error| ResolutionFailure::Stopped(error.to_string()))??;
+        for name in &synced.reinstalled {
+            note(&format!(
+                "reinstalled {name}: its source changed since it was installed"
+            ));
+        }
+        if synced.evict {
+            state.evict_all_prepared_packages();
+        }
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -460,30 +521,12 @@ impl PreExecuteHook for Freshness {
         if run.packages.is_empty() {
             return Ok(());
         }
-        let _turn = self.turn.lock().await;
-        let packages = Arc::clone(&self.packages);
         let wanted = run.packages.clone();
-        let checked = tokio::task::spawn_blocking(move || packages.sync(&wanted))
+        self.check(run.state, move |packages| packages.sync(&wanted))
             .await
-            .map_err(|error| PreExecuteRefusal {
-                message: format!("the package check stopped before it finished: {error}"),
-            })?;
-        match checked {
-            Ok(synced) => {
-                for name in &synced.reinstalled {
-                    note(&format!(
-                        "reinstalled {name}: its source changed since it was installed"
-                    ));
-                }
-                if synced.evict {
-                    run.state.evict_all_prepared_packages();
-                }
-                Ok(())
-            }
-            Err(failure) => Err(PreExecuteRefusal {
+            .map_err(|failure| PreExecuteRefusal {
                 message: failure.to_string(),
-            }),
-        }
+            })
     }
 }
 

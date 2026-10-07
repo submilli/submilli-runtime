@@ -2,8 +2,12 @@
 //! editor or tool, is checked, logged as a version, and applied, with no restart and
 //! no approval step (R9, R37).
 //!
-//! A save is read whole and validated as registration would validate it (parse, the
-//! filter-field check, volumes, secrets, packages); a refused save is reported, with
+//! A save is read whole. The project packages it newly names are built and installed
+//! first, through the same serialized check runs get, so a package created in the
+//! same edit as the line that lists it is in the store when the save is validated; a
+//! package that does not build refuses the save with its diagnostic. The save is then
+//! validated as registration would validate it (parse, the filter-field check,
+//! volumes, secrets, packages); a refused save is reported, with
 //! its line when the parser gave one, and the last good version stays in force. A save
 //! that passes is classified against the version in force (KTD10), logged as a new
 //! version, and only then applied, so no run can record a version the log lacks. If
@@ -28,6 +32,7 @@ use submilli_blueprint::Blueprint;
 use submilli_blueprint::diff::{self, BlueprintDiff};
 use submilli_server::{AppState, LocalApplyError};
 
+use super::packages::{Freshness, ResolutionFailure};
 use super::store::Store;
 use super::store::changes::NewVersion;
 
@@ -94,6 +99,9 @@ pub(crate) struct Applier {
     path: PathBuf,
     /// The name the playground serves; a save that changes it is refused.
     name: String,
+    /// Builds the project packages a save names before it is validated; `None` when
+    /// nothing builds them.
+    packages: Option<Arc<Freshness>>,
     // Poison means a panic interrupted a status update. It is read through anyway, as
     // the store's locks are: the status is only a report, and each update sets whole
     // fields.
@@ -107,8 +115,16 @@ impl Applier {
             store,
             path,
             name,
+            packages: None,
             status: Arc::default(),
         }
+    }
+
+    /// Build the project packages each save names, through `packages`, before it is
+    /// validated.
+    pub(crate) fn with_packages(mut self, packages: Arc<Freshness>) -> Self {
+        self.packages = Some(packages);
+        self
     }
 
     pub(crate) fn status(&self) -> Arc<Mutex<BlueprintStatus>> {
@@ -160,6 +176,9 @@ impl Applier {
                 });
             }
         };
+        if let Err(failure) = self.prepare_packages(&yaml).await {
+            return self.refuse(package_refusal(&failure));
+        }
         let blueprint = match self.state.check_local_blueprint(&yaml).await {
             Ok(blueprint) => blueprint,
             Err(error) => return self.refuse(Refusal::of(error)),
@@ -277,6 +296,25 @@ impl Applier {
         }
     }
 
+    /// Build and install the project packages `yaml` newly names. Text that does not
+    /// parse is left for validation to report.
+    async fn prepare_packages(&self, yaml: &str) -> Result<(), ResolutionFailure> {
+        let Some(packages) = &self.packages else {
+            return Ok(());
+        };
+        let Ok(blueprint) = submilli_blueprint::parse(yaml) else {
+            return Ok(());
+        };
+        let in_force = self.store.changes().ok().and_then(|changes| {
+            changes
+                .current()
+                .and_then(|current| submilli_blueprint::parse(&current.bytes).ok())
+        });
+        packages
+            .prepare_edit(&self.state, blueprint, in_force)
+            .await
+    }
+
     fn refuse(&self, refusal: Refusal) -> Outcome {
         self.set_status(|status| status.refused = Some(refusal.clone()));
         Outcome::Refused(refusal)
@@ -344,6 +382,33 @@ pub(crate) fn tag(version: u64) -> String {
 pub(crate) fn normalized_hash(blueprint: &Blueprint) -> String {
     let digest = Sha256::digest(submilli_blueprint::to_yaml(blueprint).as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// A save refused because a project package it names could not be built or installed.
+fn package_refusal(failure: &ResolutionFailure) -> Refusal {
+    let (code, message) = match failure {
+        ResolutionFailure::Build {
+            package,
+            diagnostic,
+            manifest_dir,
+        } => (
+            "package_build_failed",
+            format!(
+                "package `{package}` does not build, so the edit was not applied. Fix the \
+                 error and save the blueprint again; `submilli build check` in {} shows it \
+                 too.\n{}",
+                manifest_dir.display(),
+                diagnostic.trim_end()
+            ),
+        ),
+        other => ("package_resolution", other.to_string()),
+    };
+    Refusal {
+        code: code.to_owned(),
+        message,
+        line: None,
+        column: None,
+    }
 }
 
 fn describe_refusal(refusal: &Refusal) -> String {
