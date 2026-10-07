@@ -9681,6 +9681,7 @@ impl Inferer<'_> {
         let check = if inner_to_target {
             None
         } else {
+            let shape = self.reduce_enums_to_members(&shape);
             if let Some(reason) =
                 unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
             {
@@ -10130,6 +10131,33 @@ impl Inferer<'_> {
         }
     }
 
+    /// Replace every enum in a cast's runtime check with the union of its
+    /// variant values: a value is one of the enum's members exactly when it
+    /// equals one of them. Relatedness is decided before this, against the
+    /// enum itself, because a member literal is not assignable to its enum.
+    fn reduce_enums_to_members(&self, ty: &Type) -> Type {
+        let peeled = ty.peel_preserving_readonly();
+        if let Some(members) = self.enum_runtime_members(peeled) {
+            return members;
+        }
+        if !matches!(
+            peeled,
+            Type::Object { .. }
+                | Type::Array(_)
+                | Type::Readonly(_)
+                | Type::Tuple(_)
+                | Type::Union(_)
+        ) {
+            return ty.clone();
+        }
+        let mapped: Result<Type, std::convert::Infallible> =
+            map_children(peeled, |inner| Ok(self.reduce_enums_to_members(inner)));
+        match mapped {
+            Ok(ty) => ty,
+            Err(never) => match never {},
+        }
+    }
+
     /// regex literal inference. Runs the JS→regex-crate
     /// translator (`runtime::prelude::regex::engine::translate_js_pattern`) and the
     /// underlying `RegexBuilder::new` call at compile time so
@@ -10352,6 +10380,8 @@ fn unsupported_cast_target_reason(
             }
             unsupported_cast_target_reason(&expanded, types, seen)
         }
+        // Infer reduces an enum to its variant values before asking, so one
+        // left here sits behind a recursive alias it doesn't expand.
         Type::NumberEnum { .. } | Type::StringEnum { .. } => {
             Some("enum targets need a per-variant value check at runtime")
         }
