@@ -718,10 +718,11 @@ impl Inferer<'_> {
         for clause in catches {
             let clause_ty = self.infer_catch_type(&clause, &mut prior)?;
             self.scopes.push();
+            // A `catch` binding is an ordinary mutable local, as in TypeScript.
             self.scopes.insert(
                 clause.binding.name.clone(),
                 clause_ty.clone(),
-                true,
+                false,
                 clause.binding.span,
             );
             let outcome =

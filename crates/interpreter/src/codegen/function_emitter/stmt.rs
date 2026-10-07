@@ -831,11 +831,9 @@ fn emit_catch_dispatch(
     for clause in catches {
         let Some((vtable_global, struct_idx)) = catch_filter_class(ctx, &clause.ty)? else {
             emitter.push_scope();
-            let slot =
-                emitter.define_local(&clause.binding, ctx.symbols.value_type(&clause.ty)?)?;
             emitter.instruction(Instruction::LocalGet(err_stash));
             emitter.instruction(Instruction::RefAsNonNull);
-            emitter.instruction(Instruction::LocalSet(slot));
+            bind_catch_local(emitter, ctx, clause)?;
             emit_statement(emitter, ctx, clause.body)?;
             emitter.pop_scope()?;
             // Falling through reaches the matched-arm exit in both topologies.
@@ -845,11 +843,10 @@ fn emit_catch_dispatch(
         super::cast::emit_nominal_instance_test(emitter, ctx, vtable_global)?;
         emitter.emit_if(BlockType::Empty);
         emitter.push_scope();
-        let slot = emitter.define_local(&clause.binding, ctx.symbols.value_type(&clause.ty)?)?;
         emitter.instruction(Instruction::LocalGet(err_stash));
         // Shape-only cast is sound here: the brand matched.
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(struct_idx)));
-        emitter.instruction(Instruction::LocalSet(slot));
+        bind_catch_local(emitter, ctx, clause)?;
         emit_statement(emitter, ctx, clause.body)?;
         emitter.pop_scope()?;
         // Matched-arm exit is label 0 at chain level; +1 for the `if` frame.
@@ -863,6 +860,30 @@ fn emit_catch_dispatch(
     emitter.instruction(Instruction::LocalGet(err_stash));
     emitter.instruction(Instruction::RefAsNonNull);
     emitter.instruction(Instruction::Throw(tag_idx));
+    Ok(())
+}
+
+/// Store the caught error on top of the stack in the clause's binding, boxed
+/// when a closure captures the binding and may reassign it.
+fn bind_catch_local(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    clause: &crate::TypedCatchClause,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let slot_ty = if clause.boxed {
+        let box_idx = ctx.symbols.box_type_idx(&clause.ty)?.ok_or_else(|| {
+            crate::codegen::internal_failure("box type registered for every boxed catch binding")
+        })?;
+        emitter.instruction(Instruction::StructNew(box_idx));
+        ValType::Ref(RefType {
+            nullable: false,
+            heap_type: HeapType::Concrete(box_idx),
+        })
+    } else {
+        ctx.symbols.value_type(&clause.ty)?
+    };
+    let slot = emitter.define_local(&clause.binding, slot_ty)?;
+    emitter.instruction(Instruction::LocalSet(slot));
     Ok(())
 }
 

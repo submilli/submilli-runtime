@@ -214,6 +214,9 @@ impl Collector<'_> {
             } => {
                 self.walk_stmt(*body)?;
                 for c in catches {
+                    if c.boxed {
+                        self.note(&c.ty)?;
+                    }
                     self.walk_stmt(c.body)?;
                 }
                 if let Some(f) = finally {
