@@ -639,14 +639,15 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?
                 .ty
                 .clone();
-            let Some(literals) = literal_members(&label_ty) else {
-                return Ok(narrowing::NarrowEnv::new());
-            };
-            literal_values.extend(
+            let Some(literals) = literal_members(&label_ty).and_then(|literals| {
                 literals
                     .into_iter()
-                    .map(|literal| literal_switch_value(literal, *span)),
-            );
+                    .map(|literal| literal_switch_value(literal, *span))
+                    .collect::<Option<Vec<_>>>()
+            }) else {
+                return Ok(narrowing::NarrowEnv::new());
+            };
+            literal_values.extend(literals);
         }
         let mut iter = literal_values.iter();
         let Some(first) = iter.next() else {
@@ -1147,15 +1148,18 @@ fn literal_members(ty: &Type) -> Option<Vec<narrowing::LiteralValue>> {
     }
 }
 
-fn literal_switch_value(literal: narrowing::LiteralValue, span: Span) -> TypedSwitchValue {
-    match literal {
+/// The literal `case` value a label of literal type compares as; a bigint has
+/// none, so its label narrows nothing.
+fn literal_switch_value(literal: narrowing::LiteralValue, span: Span) -> Option<TypedSwitchValue> {
+    Some(match literal {
         narrowing::LiteralValue::String(value) => TypedSwitchValue::String { value, span },
         narrowing::LiteralValue::Number(value) => TypedSwitchValue::Number {
             value: value.0,
             span,
         },
         narrowing::LiteralValue::Boolean(value) => TypedSwitchValue::Boolean { value, span },
-    }
+        narrowing::LiteralValue::BigInt(_) => return None,
+    })
 }
 
 /// The discriminant every `case` label of one `switch` is checked against.

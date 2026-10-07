@@ -1500,7 +1500,9 @@ impl<'a> Inferer<'a> {
                 crate::TypedExprKind::String(key.clone()),
                 Type::StringLiteral(key.clone()),
             ),
-            narrowing::PathElem::Index(narrowing::LiteralValue::Boolean(_)) => return Ok(None),
+            narrowing::PathElem::Index(
+                narrowing::LiteralValue::Boolean(_) | narrowing::LiteralValue::BigInt(_),
+            ) => return Ok(None),
             narrowing::PathElem::Key(binding, _) => {
                 let key_path = narrowing::ReferencePath::root(binding.clone());
                 let (Some(kind), Some(key_ty)) = (

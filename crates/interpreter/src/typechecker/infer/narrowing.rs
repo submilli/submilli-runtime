@@ -63,6 +63,9 @@ impl ReferencePath {
                         LiteralValue::Boolean(b) => {
                             let _ = write!(out, "[{b}]");
                         }
+                        LiteralValue::BigInt(digits) => {
+                            let _ = write!(out, "[{digits}n]");
+                        }
                     }
                 }
             }
@@ -131,6 +134,8 @@ pub enum LiteralValue {
     Number(LiteralF64),
     String(String),
     Boolean(bool),
+    /// A bigint's canonical decimal digits, as [`Type::BigIntLiteral`] holds them.
+    BigInt(String),
 }
 
 impl LiteralValue {
@@ -442,6 +447,7 @@ pub fn literal_type(literal: &LiteralValue) -> Type {
         LiteralValue::String(s) => Type::StringLiteral(s.clone()),
         LiteralValue::Number(n) => Type::NumberLiteral(*n),
         LiteralValue::Boolean(b) => Type::BooleanLiteral(*b),
+        LiteralValue::BigInt(digits) => Type::BigIntLiteral(digits.clone()),
     }
 }
 
@@ -488,6 +494,7 @@ pub(super) fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
         Type::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
         Type::NumberLiteral(n) => Some(LiteralValue::Number(*n)),
         Type::BooleanLiteral(b) => Some(LiteralValue::Boolean(*b)),
+        Type::BigIntLiteral(digits) => Some(LiteralValue::BigInt(digits.clone())),
         other => LiteralValue::of_enum_member(other),
     }
 }
@@ -1109,12 +1116,13 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
                 .collect();
             Type::union(remaining)
         }
-        single @ (Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)) => {
-            match unit_literal_value(single) {
-                Some(lit) if covered.contains(&lit) => Type::Never,
-                _ => ty.clone(),
-            }
-        }
+        single @ (Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::BigIntLiteral(_)) => match unit_literal_value(single) {
+            Some(lit) if covered.contains(&lit) => Type::Never,
+            _ => ty.clone(),
+        },
         _ => ty.clone(),
     }
 }

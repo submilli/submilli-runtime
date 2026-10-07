@@ -1393,6 +1393,10 @@ pub(super) fn literal_value_of(kind: &crate::TypedExprKind) -> Option<narrowing:
         )),
         TypedExprKind::String(s) => Some(narrowing::LiteralValue::String(s.clone())),
         TypedExprKind::Boolean(b) => Some(narrowing::LiteralValue::Boolean(*b)),
+        TypedExprKind::BigInt(digits) => match crate::types::bigint_literal_type(digits) {
+            Type::BigIntLiteral(canonical) => Some(narrowing::LiteralValue::BigInt(canonical)),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -1402,6 +1406,7 @@ pub(super) fn literal_to_type(lit: &narrowing::LiteralValue) -> Type {
         narrowing::LiteralValue::Number(n) => Type::NumberLiteral(*n),
         narrowing::LiteralValue::String(s) => Type::StringLiteral(s.clone()),
         narrowing::LiteralValue::Boolean(b) => Type::BooleanLiteral(*b),
+        narrowing::LiteralValue::BigInt(digits) => Type::BigIntLiteral(digits.clone()),
     }
 }
 
