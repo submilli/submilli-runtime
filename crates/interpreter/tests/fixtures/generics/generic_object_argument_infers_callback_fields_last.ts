@@ -82,6 +82,12 @@ function optional<T>(o: { v: T; w?: T }): T {
   return o.v;
 }
 
+type Choice<T> = { kind: "a"; get: T; fallback: T } | { kind: "b"; get: T };
+
+function choose<T>(o: Choice<T>): T {
+  return o.get;
+}
+
 function main(): void {
   const picked = pick({ a: new Box(1), cb: (t) => t, z: either(true) });
   const boxes: Box<string> | Box<number> | null = picked;
@@ -106,4 +112,6 @@ function main(): void {
   const fromNullable = orNull({ v: () => 1, w: () => 2 });
   const kept: () => 1 = optional({ v: () => 1 });
   assert(fromInterface() + fromExtended() === 2 && fromNullable !== null && kept() === 1, "fields of other shapes");
+  const chosen = choose({ kind: "a", get: () => 1, fallback: () => 2 });
+  assert(chosen() === 1, "a union of object shapes");
 }

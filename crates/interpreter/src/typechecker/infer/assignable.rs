@@ -758,7 +758,21 @@ fn assignable_rec(
                 ..
             },
         ) => {
-            if ma == me && type_args_relate(ma, na, aa, ae, types, seen) {
+            // Measured variances decide, as in tsc: comparing the members of
+            // a recursive interface instead would expand ever larger
+            // instantiations (`I0<I1<T, U>, T>`). A type parameter still
+            // being inferred (`Sink<T>` for a `Sink<void>`) is left to the
+            // members, where it matches anything.
+            if ma == me {
+                match args_relate_at_variances(ma, na, aa, ae, types, seen) {
+                    Some(true) => return true,
+                    Some(false) if !ae.iter().any(super::expr::type_contains_type_var) => {
+                        return false;
+                    }
+                    _ => {}
+                }
+            }
+            if ma == me && args_relate_covariantly(aa, ae, types, seen) {
                 return true;
             }
             satisfies_structurally(actual, expected, types, seen)
@@ -788,7 +802,8 @@ fn assignable_rec(
                 types.class_args_at_ancestor(ma, aa, me)
             };
             match actual_at_expected {
-                Some(at) => type_args_relate(me, ne, &at, ae, types, seen),
+                Some(at) => args_relate_at_variances(me, ne, &at, ae, types, seen)
+                    .unwrap_or_else(|| args_relate_covariantly(&at, ae, types, seen)),
                 None => false,
             }
         }
@@ -986,29 +1001,42 @@ fn assignable_rec(
 }
 
 /// Whether one instantiation's type arguments relate to another's, for the
-/// generic class or interface `mangled`, at each parameter's variance.
-fn type_args_relate(
+/// generic class or interface `mangled`, at each parameter's variance. `None`
+/// when the variances couldn't be measured in full.
+fn args_relate_at_variances(
     mangled: &MangledName,
     name: &str,
     actual_args: &[Type],
     expected_args: &[Type],
     types: TypeResolver,
     seen: &mut Vec<(Type, Type)>,
-) -> bool {
+) -> Option<bool> {
     if actual_args.len() != expected_args.len() {
-        return false;
+        return Some(false);
     }
     if actual_args == expected_args {
-        return true;
+        return Some(true);
     }
-    let variances = types.variances_or_covariant(mangled, name, actual_args.len());
-    actual_args
-        .iter()
-        .zip(expected_args)
-        .zip(variances)
-        .all(|((actual, expected), variance)| {
+    let variances = types.settled_variances(mangled, name, actual_args.len())?;
+    Some(actual_args.iter().zip(expected_args).zip(variances).all(
+        |((actual, expected), variance)| {
             variance.relates(actual, expected, |a, e| assignable_rec(a, e, types, seen))
-        })
+        },
+    ))
+}
+
+/// Whether each type argument is assignable to the one at its position.
+fn args_relate_covariantly(
+    actual_args: &[Type],
+    expected_args: &[Type],
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    actual_args.len() == expected_args.len()
+        && actual_args
+            .iter()
+            .zip(expected_args)
+            .all(|(actual, expected)| assignable_rec(actual, expected, types, seen))
 }
 
 /// Whether `actual` is a `readonly` array or tuple and `expected` a mutable one.

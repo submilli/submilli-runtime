@@ -1239,53 +1239,58 @@ impl Inferer<'_> {
         else {
             return Ok(inferred.to_vec());
         };
-        let Some(fields) = self.object_shape_fields(param_ty) else {
+        let shapes = self.object_shapes(param_ty);
+        if shapes.is_empty() {
             return Ok(inferred.to_vec());
-        };
-        let given_field_types: Vec<&Type> = members
+        }
+        let given: Vec<&str> = members
             .iter()
             .filter_map(|member| match member {
-                crate::ObjectLiteralMember::Field(field) => fields.get(&field.name.name),
+                crate::ObjectLiteralMember::Field(field) => Some(field.name.name.as_str()),
                 _ => None,
             })
-            .map(|field| field.ty.peel())
             .collect();
+        // Each object shape of the parameter (`{ kind: "a"; get: T; fallback:
+        // T } | { kind: "b"; get: T }`) may be the one the literal fits.
+        let fields_typed_by = |name: &str| {
+            shapes
+                .iter()
+                .map(|fields| {
+                    given
+                        .iter()
+                        .filter_map(|field| fields.get(*field))
+                        .filter(
+                            |field| matches!(field.ty.peel(), Type::TypeVar(var) if var == name),
+                        )
+                        .count()
+                })
+                .max()
+                .unwrap_or(0)
+        };
         Ok(inferred
             .iter()
-            .filter(|name| {
-                let fields_typed_by_it = given_field_types
-                    .iter()
-                    .filter(|ty| matches!(ty, Type::TypeVar(var) if var == *name))
-                    .count();
-                fields_typed_by_it <= 1
-            })
+            .filter(|name| fields_typed_by(name) <= 1)
             .cloned()
             .collect())
     }
 
-    /// The fields of `ty` as one object shape: an object type, an interface
-    /// with the members it extends, or the one such member beside `null`.
-    fn object_shape_fields(&self, ty: &Type) -> Option<BTreeMap<String, crate::ObjectField>> {
+    /// The object shapes of `ty`: an object type, an interface with the
+    /// members it extends, or those among a union's members.
+    fn object_shapes(&self, ty: &Type) -> Vec<BTreeMap<String, crate::ObjectField>> {
         match ty.peel() {
-            Type::Object { fields, .. } => Some(fields.clone()),
+            Type::Object { fields, .. } => vec![fields.clone()],
             interface @ Type::InterfaceRef { .. } => {
                 match super::assignable::expand_interface_data_shape(interface, self.resolver()) {
-                    Some(Type::Object { fields, .. }) => Some(fields),
-                    _ => None,
+                    Some(Type::Object { fields, .. }) => vec![fields],
+                    _ => Vec::new(),
                 }
             }
-            Type::Union(members) => {
-                let mut rest = members
-                    .iter()
-                    .filter(|member| !matches!(member.peel(), Type::Null));
-                match (rest.next(), rest.next()) {
-                    (Some(member), None) if !matches!(member.peel(), Type::Union(_)) => {
-                        self.object_shape_fields(member)
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
+            Type::Union(members) => members
+                .iter()
+                .filter(|member| !matches!(member.peel(), Type::Union(_)))
+                .flat_map(|member| self.object_shapes(member))
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -1804,11 +1809,11 @@ impl Inferer<'_> {
             self.arguments_with_replaceable_hints.insert(arg_id);
         }
         let enclosing = self.start_literal_argument_inference(arg_id, param_ty, sub)?;
-        let keeping =
+        let params_keeping_returned_literals =
             self.type_params_of_one_field(arg_id, param_ty, arguments.inferred_generics)?;
         let enclosing_fields = self
             .fields_keeping_returned_literals
-            .replace((arg_id, keeping));
+            .replace((arg_id, params_keeping_returned_literals));
         let keeps_literal = arguments.literal_types.keeps(param_ty);
         let inferred = self.with_inferred_positions(
             arg_id,

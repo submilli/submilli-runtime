@@ -118,6 +118,24 @@ impl<'a> TypeResolver<'a> {
     }
 
     /// [`Self::type_param_variances`] for an instantiation with `arity`
+    /// arguments, when they were measured in full rather than cut short by
+    /// the work limit, so that they decide how its instantiations relate.
+    pub(crate) fn settled_variances(
+        &self,
+        mangled: &MangledName,
+        name: &str,
+        arity: usize,
+    ) -> Option<Vec<Variance>> {
+        let measured = self.measure_variances(mangled, name, &mut Measuring::default());
+        if measured.cut_short {
+            return None;
+        }
+        measured
+            .variances
+            .filter(|variances| variances.len() == arity)
+    }
+
+    /// [`Self::type_param_variances`] for an instantiation with `arity`
     /// arguments, covariant for each when they can't be measured.
     pub(crate) fn variances_or_covariant(
         &self,
