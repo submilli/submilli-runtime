@@ -180,3 +180,24 @@ curl --fail https://submilli.ai/docs/llms.txt
 curl --fail https://submilli.ai/docs/llms-full.txt
 curl --fail https://submilli.ai/docs/blueprints.md
 ```
+
+## Analytics
+
+The docs site uses the existing PostHog project when `PUBLIC_POSTHOG_KEY` and
+`PUBLIC_POSTHOG_HOST` are set in the hosting environment. The key is a public
+capture token; do not put a secret in source or commit an environment file.
+
+Analytics starts only after the reader grants consent through the existing
+`submilli.analytics-consent.v1` preference. Automatic capture, automatic
+pageviews, feature flags, surveys, session recording, and recorded request
+bodies are disabled. Pageviews are emitted once per canonical
+docs URL, including client-side `astro:page-load` navigation. URL properties are
+reduced to origin and path before capture. Session recording is disabled for the
+docs site; the masking configuration remains defensive if that setting changes.
+
+The event inventory is `$pageview` (`page_path`, `$current_url`),
+`link_clicked` (`destination`, `external`), and `docs_cta_clicked`
+(`cta_id`, `destination`, `external`). CTA IDs cover `meeting`, `website`,
+`github`, `discord`, `agent_setup`, `view_markdown`, and `agent_docs`.
+Synthetic verification can add `?analytics_test=1`; every captured event then
+has `is_test: true` so it can be excluded from reporting.

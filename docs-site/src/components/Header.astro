@@ -17,7 +17,7 @@ const WEBSITE_URL = 'https://submilli.ai';
 		<Search />
 	</div>
 	<nav class="header-actions print:hidden" aria-label="Documentation resources">
-		<a href={WEBSITE_URL} class="website-link">
+		<a href={WEBSITE_URL} data-analytics-cta="website" class="website-link">
 			submilli.ai
 			<svg
 				width="12"
@@ -33,7 +33,7 @@ const WEBSITE_URL = 'https://submilli.ai';
 				<path d="M7 17 17 7M8 7h9v9"></path>
 			</svg>
 		</a>
-		<a href="/docs/quickstart/#agent-setup" class="setup-link">Agent setup</a>
+		<a href="/docs/quickstart/#agent-setup" data-analytics-cta="agent_setup" class="setup-link">Agent setup</a>
 		<div class="utilities">
 			<GitHubLink variant="icon" />
 			<DiscordLink variant="icon" />
