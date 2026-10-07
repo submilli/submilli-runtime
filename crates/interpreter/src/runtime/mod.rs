@@ -13,6 +13,7 @@ pub mod gc_singleton;
 pub mod host;
 pub mod intrinsic_types;
 pub mod json;
+pub(crate) mod json_text;
 pub mod limits;
 pub mod llm;
 pub mod mcp;
