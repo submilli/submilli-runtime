@@ -129,6 +129,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         captured_mutators: bindings.mutators,
         function_written_globals: bindings.function_written_globals,
         last_assignments: bindings.last_assignments,
+        grown_bindings: bindings.grown_bindings,
         nested_function_creation_points: bindings.nested_function_creation_points,
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),

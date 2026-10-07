@@ -1,4 +1,4 @@
-types: 44 of 98 tsc entries compared, 2 differ
+types: 51 of 98 tsc entries compared, 2 differ
 
 line 17: b
   tsc:  (string | number | boolean)[]
@@ -10,4 +10,3 @@ line 17: ["hello", ...a, true]
 
 errors:
 line 17: ours: expected `string` (matching first element), got `number` (tsc accepts)
-line 22: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)

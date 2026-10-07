@@ -1,4 +1,4 @@
-types: 69 of 133 tsc entries compared, 14 differ
+types: 74 of 133 tsc entries compared, 15 differ
 
 line 101: a
   tsc:  boolean
@@ -44,17 +44,21 @@ line 113: c
   tsc:  any
   ours: null
 
+line 135: h
+  tsc:  any[]
+  ours: never[]
+
 line 136: h
   tsc:  any[]
-  ours: <error>[]
+  ours: never[]
 
 line 137: h
   tsc:  any[]
-  ours: <error>[]
+  ours: never[]
 
 line 138: h
   tsc:  any[]
-  ours: <error>[]
+  ours: never[]
 
 errors:
 line 47: tsc TS2873: This kind of expression is always falsy. (we accept)
@@ -72,6 +76,9 @@ line 65: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 67: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 68: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 69: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 71: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 72: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 73: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 75: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 76: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 77: tsc TS2872: This kind of expression is always truthy. (we accept)
@@ -84,4 +91,3 @@ line 85: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 87: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 88: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 89: tsc TS2872: This kind of expression is always truthy. (we accept)
-line 135: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)

@@ -1,17 +1,1 @@
-types: 3 of 8 tsc entries compared, 3 differ
-
-line 4: v
-  tsc:  never
-  ours: <error>
-
-line 6: x
-  tsc:  never
-  ours: <error>
-
-line 6: v
-  tsc:  never
-  ours: <error>
-
-errors:
-line 3: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
-line 5: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
+types: 7 of 8 tsc entries compared, 0 differ

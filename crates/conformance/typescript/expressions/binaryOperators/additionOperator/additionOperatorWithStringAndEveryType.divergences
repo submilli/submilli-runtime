@@ -1,4 +1,4 @@
-types: 37 of 65 tsc entries compared, 1 differ
+types: 38 of 65 tsc entries compared, 1 differ
 
 line 35: E.a
   tsc:  E.a
@@ -12,4 +12,4 @@ line 27: ours: `+` not defined for `number` and `string` (tsc accepts)
 line 35: ours: `+` not defined for `string` and `E` (tsc accepts)
 line 37: ours: `+` not defined for `string` and `number` (tsc accepts)
 line 38: ours: `+` not defined for `string` and `{ a: string }` (tsc accepts)
-line 39: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
+line 39: ours: `+` not defined for `string` and `never[]` (tsc accepts)

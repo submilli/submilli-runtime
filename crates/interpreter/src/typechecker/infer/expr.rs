@@ -5751,17 +5751,9 @@ impl Inferer<'_> {
         };
 
         if elements.is_empty() {
-            // Empty `[]` requires an expected hint to know the element
-            // type. Without one, we can't pick a concrete `Type::Array(T)`.
-            let elem_ty = if let Some(t) = expected_elem {
-                t.clone()
-            } else {
-                self.error(
-                    span,
-                    "cannot infer element type of empty array; add a `: T[]` annotation".into(),
-                );
-                Type::Error
-            };
+            // Without a hint, `[]` holds no element, so it is `never[]`, as in
+            // tsc, and fits any array type it is later used as.
+            let elem_ty = expected_elem.cloned().unwrap_or(Type::Never);
             return Ok((
                 TypedExprKind::ArrayLiteral {
                     elements: Vec::new(),
@@ -5821,12 +5813,15 @@ impl Inferer<'_> {
                     // Such a literal still takes the expected element type, which only
                     // reaches here when it holds an unbound type parameter: its empty
                     // arrays and callbacks need that context, as in tsc.
+                    // An empty array's `never[]` says nothing of what later elements
+                    // hold, so it hints none: `[[], [1]]` holds `number[]`.
+                    let running_hint = element_ty.as_ref().filter(|t| !holds_no_element(t));
                     let hint = if open_element_type && types_itself {
                         None
                     } else if open_element_type && lacks_running_shape {
                         expected_elem
                     } else {
-                        element_ty.as_ref().or(expected_elem)
+                        running_hint.or(expected_elem)
                     };
                     let ValueOperand {
                         typed_expr: typed_id,
@@ -5903,6 +5898,8 @@ impl Inferer<'_> {
                     match spread_element_type(&peeled_source) {
                         // A `Type::Error` source was already reported by inner inference.
                         None if matches!(peeled_source, Type::Error) => {}
+                        // An empty source adds no element, as a `never` value doesn't.
+                        Some(Type::Never) => saw_never = true,
                         None => self.error(
                             spread_span,
                             format!("expected an array to spread, got `{peeled_source}`"),
@@ -10572,6 +10569,15 @@ fn empty_literal_join(
     Ok(None)
 }
 
+/// Whether `ty` is the type of an array that holds no element at any depth:
+/// `never[]`, `never[][]`, as an empty literal is typed.
+fn holds_no_element(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Array(element) => matches!(element.peel(), Type::Never) || holds_no_element(element),
+        _ => false,
+    }
+}
+
 fn is_empty_object_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
     let id = peel_parens(ast, expr)?;
     Ok(matches!(
@@ -11909,12 +11915,18 @@ mod tests {
     }
 
     #[test]
-    fn empty_array_without_hint_diagnoses() {
-        let (_, d) = run("function main(): void { let xs = []; }");
+    fn empty_array_without_hint_is_never_array() {
+        let (_, d) = run("function main(): void { let xs = []; console.log(xs.length); }");
+        assert!(d.is_empty(), "expected no diagnostics, got: {d:?}");
+    }
+
+    #[test]
+    fn empty_array_that_grows_without_hint_diagnoses() {
+        let (_, d) = run("function main(): void { let xs = []; xs.push(1); }");
         assert!(
             d.iter().any(|x| x
                 .message
-                .contains("cannot infer element type of empty array")),
+                .contains("cannot infer the element type of `xs` from an empty array")),
             "expected empty-array diag, got: {d:?}"
         );
     }

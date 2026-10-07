@@ -376,6 +376,7 @@ impl Inferer<'_> {
         // narrowing: `let done = false` reads as `false` until reassigned.
         let (typed_value, value_ty) =
             self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
+        let value_ty = self.reject_evolving_empty_array(&name, hint.is_some(), value, value_ty)?;
         // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
         // let b = a;` binds `number`, not `1`. A literal type the value got from
         // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
@@ -430,6 +431,7 @@ impl Inferer<'_> {
         let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
         let (typed_value, value_ty) =
             self.infer_expr_keeping_literals(value, hint.as_ref(), hint.is_none())?;
+        let value_ty = self.reject_evolving_empty_array(&name, hint.is_some(), value, value_ty)?;
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());
         let bound = self.pattern_binding_storage_type(value, bound)?;
@@ -464,6 +466,41 @@ impl Inferer<'_> {
             value: typed_value,
             doc,
         })
+    }
+
+    /// An unannotated `[]` bound to a variable the code later reassigns or adds
+    /// elements to is, in tsc, an array typed by those writes. Submilli types
+    /// a value where it is declared, so it asks for the element type there.
+    /// Any other unannotated `[]` holds nothing, as its `never[]` says.
+    fn reject_evolving_empty_array(
+        &mut self,
+        name: &Ident,
+        annotated: bool,
+        value: ExprId,
+        value_ty: Type,
+    ) -> Result<Type, CompilerFailure> {
+        if annotated || !self.grown_bindings.contains(&name.span) {
+            return Ok(value_ty);
+        }
+        let value = self.ast.try_expr(value).map_err(super::arena_failure)?;
+        let crate::ExprKind::ArrayLiteral { elements } = &value.kind else {
+            return Ok(value_ty);
+        };
+        if !elements.is_empty() {
+            return Ok(value_ty);
+        }
+        self.error_with_help(
+            value.span,
+            format!(
+                "cannot infer the element type of `{}` from an empty array",
+                name.name
+            ),
+            vec![format!(
+                "`{}` is reassigned or gains elements later; annotate its element type, as in `{}: T[] = []`",
+                name.name, name.name
+            )],
+        );
+        Ok(Type::Array(Box::new(Type::Error)))
     }
 
     fn infer_if_statement(

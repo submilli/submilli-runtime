@@ -1,8 +1,16 @@
-types: 35 of 87 tsc entries compared, 8 differ
+types: 37 of 87 tsc entries compared, 10 differ
 
 line 31: [2, 3, 4]
   tsc:  [number, number, number]
   ours: number[]
+
+line 44: c2
+  tsc:  undefined
+  ours: never
+
+line 44: []
+  tsc:  []
+  ours: never[]
 
 line 47: [1, 2, 3]
   tsc:  [number, number, number]
@@ -33,6 +41,7 @@ line 52: [1, 2, "string"]
   ours: number[]
 
 errors:
+line 44: tsc TS2493: Tuple type '[]' of length '0' has no element at index '0'. (we accept)
 line 50: ours: expected `number` (matching first element), got `string` (tsc accepts)
 line 51: ours: expected `number` (matching first element), got `string` (tsc accepts)
 line 52: ours: expected `number` (matching first element), got `string` (tsc accepts)
