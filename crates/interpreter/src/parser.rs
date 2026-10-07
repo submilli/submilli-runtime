@@ -485,6 +485,7 @@ impl<'a> Parser<'a> {
                     self.error_at_peek("expected `:` after keyword field name in object pattern");
                     return None;
                 }
+                self.reject_strict_mode_reserved_word(&source_tok);
                 let end = source.span.end;
                 (source.clone(), end)
             };
@@ -1362,7 +1363,7 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let member_doc = self.take_leading_doc();
-            let member_name_tok = self.expect_identifier("expected enum member name")?;
+            let member_name_tok = self.expect_identifier_name("expected enum member name")?;
             let member_name = self.ident_from_token(&member_name_tok);
 
             let value = if matches!(self.peek().kind, TokenKind::Equals) {
@@ -1737,7 +1738,7 @@ impl<'a> Parser<'a> {
                 self.advance();
             }
             let imported_tok =
-                self.expect_identifier(&format!("expected {what} specifier name"))?;
+                self.expect_identifier_name(&format!("expected {what} specifier name"))?;
             let imported_name = self.ident_from_token(&imported_tok);
 
             let local_name = if self.peek_identifier_text_is("as") {
@@ -1745,6 +1746,7 @@ impl<'a> Parser<'a> {
                 let local_tok = self.expect_identifier("expected local name after `as`")?;
                 self.ident_from_token(&local_tok)
             } else {
+                self.reject_strict_mode_reserved_word(&imported_tok);
                 imported_name.clone()
             };
 
@@ -3040,7 +3042,7 @@ impl<'a> Parser<'a> {
                 let mut end = first.span.end;
                 while matches!(self.peek().kind, TokenKind::Dot) {
                     self.advance();
-                    let seg = self.expect_identifier("expected a property name after `.`")?;
+                    let seg = self.expect_identifier_name("expected a property name after `.`")?;
                     end = seg.span.end;
                     path.push(self.type_name(seg.span)?);
                 }
@@ -3715,7 +3717,34 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// An identifier that names a binding or a type, which rejects the words strict
+    /// mode reserves (see [`STRICT_MODE_RESERVED_WORDS`]).
     fn expect_identifier(&mut self, message: &str) -> Option<Token> {
+        let tok = self.expect_identifier_name(message)?;
+        self.reject_strict_mode_reserved_word(&tok);
+        Some(tok)
+    }
+
+    /// Reports a binding named by a word strict mode reserves. Parsing continues
+    /// with the name: nothing else about it is wrong.
+    fn reject_strict_mode_reserved_word(&mut self, tok: &Token) {
+        let word = &self.source[tok.span.start as usize..tok.span.end as usize];
+        if !STRICT_MODE_RESERVED_WORDS.contains(&word) {
+            return;
+        }
+        self.error_at_with_help(
+            tok.span,
+            format!("`{word}` is a reserved word in strict mode and can't be used as a name"),
+            vec![format!(
+                "rename it, for example: `{}`",
+                reserved_keyword_rename_example(word)
+            )],
+        );
+    }
+
+    /// An identifier in a position where strict mode's reserved words are allowed: an
+    /// enum member, a property, or the name an import specifier refers to.
+    fn expect_identifier_name(&mut self, message: &str) -> Option<Token> {
         if matches!(self.peek().kind, TokenKind::Identifier) {
             return Some(self.advance());
         }
@@ -5664,6 +5693,12 @@ fn is_reserved_identifier_word(kind: &TokenKind) -> bool {
             | TokenKind::This
     )
 }
+
+/// Words strict mode reserves that Submilli otherwise lexes as identifiers: they
+/// can't name a binding or a type, but stay valid as property names and modifiers.
+/// (`implements`, `interface` and `let` are keywords already.)
+const STRICT_MODE_RESERVED_WORDS: [&str; 6] =
+    ["package", "private", "protected", "public", "static", "yield"];
 
 fn reserved_keyword_rename_example(keyword: &str) -> &'static str {
     match keyword {
