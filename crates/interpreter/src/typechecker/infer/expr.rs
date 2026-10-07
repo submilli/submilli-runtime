@@ -5134,6 +5134,13 @@ impl Inferer<'_> {
 
         let (receiver_hint, mut inferred_fields) =
             self.infer_object_receiver(&members, expected_fields.as_ref())?;
+        let inferred_ahead = self.infer_fields_ahead_of_callbacks(
+            literal,
+            &members,
+            expected_fields.as_ref(),
+            expected_index.as_ref(),
+            &mut inferred_fields,
+        )?;
 
         // walk members in source order, applying last-writer-wins
         // for both literal-position fields and spread sources. `merged`
@@ -5175,22 +5182,19 @@ impl Inferer<'_> {
                     // wins (the override is invariant, the surrounding
                     // hint can only restate it).
                     let override_sig = override_field_signature(&field.name.name);
-                    let hint: Option<Type> = override_sig
-                        .clone()
-                        .or_else(|| self.object_argument_field_hint(literal, &field.name.name))
-                        .or_else(|| {
-                            expected_fields
-                                .as_ref()
-                                .and_then(|m| m.get(&field.name.name))
-                                .map(|f| f.ty.clone())
-                                .or_else(|| expected_index.as_ref().map(|i| (*i.value).clone()))
-                        });
+                    let hint = self.object_field_hint(
+                        literal,
+                        &field.name.name,
+                        expected_fields.as_ref(),
+                        expected_index.as_ref(),
+                    );
                     let expected_field_ty = expected_fields
                         .as_ref()
                         .and_then(|m| m.get(&field.name.name))
                         .map(|f| f.ty.clone());
-                    self.next_function_keeps_returned_literals =
-                        self.field_keeps_returned_literals(literal, expected_field_ty.as_ref());
+                    self.next_function_keeps_returned_literals = !inferred_ahead
+                        .contains(&field.value)
+                        && self.field_keeps_returned_literals(literal, expected_field_ty.as_ref());
                     let previous_hint = self.object_this_hint.take();
                     if matches!(
                         self.ast
@@ -5222,7 +5226,9 @@ impl Inferer<'_> {
                     } else {
                         value_ty
                     };
-                    self.infer_from_object_argument_field(literal, &field.name.name, &value_ty);
+                    if !inferred_ahead.contains(&field.value) {
+                        self.infer_from_object_argument_field(literal, &field.name.name, &value_ty);
+                    }
                     if !has_spread {
                         object_members.push(crate::TypedObjectMember::Value(typed_value));
                     }

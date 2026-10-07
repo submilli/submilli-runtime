@@ -1283,6 +1283,102 @@ impl Inferer<'_> {
         self.object_argument_inference = Some(inference);
     }
 
+    /// The hint for field `name` of the object literal `literal`: an
+    /// override slot's own signature, then what the literal's earlier fields
+    /// bound when it is a generic call's argument, then the expected type.
+    pub(super) fn object_field_hint(
+        &self,
+        literal: ExprId,
+        name: &str,
+        expected_fields: Option<&BTreeMap<String, crate::ObjectField>>,
+        expected_index: Option<&crate::IndexSignature>,
+    ) -> Option<Type> {
+        super::reserved::override_field_signature(name)
+            .or_else(|| self.object_argument_field_hint(literal, name))
+            .or_else(|| {
+                expected_fields
+                    .and_then(|fields| fields.get(name))
+                    .map(|field| field.ty.clone())
+                    .or_else(|| expected_index.map(|index| (*index.value).clone()))
+            })
+    }
+
+    /// Infer the fields of a generic call's object literal argument that come
+    /// after a function literal with an unannotated parameter, ahead of it:
+    /// tsc infers such a context-sensitive field last, so a later field still
+    /// binds the type parameter its parameters read (`{ cb: (t) => t.length,
+    /// value: "abc" }` types `t` as `string`). The values land in `inferred`
+    /// for the field loop to reuse; returns the ones already unified. Only a
+    /// literal without spreads or methods is reordered, since a spread's
+    /// fields and a method's `this` depend on the members before them.
+    pub(super) fn infer_fields_ahead_of_callbacks(
+        &mut self,
+        literal: ExprId,
+        members: &[crate::ObjectLiteralMember],
+        expected_fields: Option<&BTreeMap<String, crate::ObjectField>>,
+        expected_index: Option<&crate::IndexSignature>,
+        inferred: &mut super::expr::InferredObjectFields,
+    ) -> Result<std::collections::BTreeSet<ExprId>, CompilerFailure> {
+        let mut ahead = std::collections::BTreeSet::new();
+        if !self
+            .object_argument_inference
+            .as_ref()
+            .is_some_and(|inference| inference.literal == literal)
+        {
+            return Ok(ahead);
+        }
+        let mut fields = Vec::new();
+        for member in members {
+            let crate::ObjectLiteralMember::Field(field) = member else {
+                return Ok(ahead);
+            };
+            if matches!(
+                self.ast
+                    .try_expr(field.value)
+                    .map_err(super::arena_failure)?
+                    .kind,
+                ExprKind::FunctionExpression { .. }
+            ) {
+                return Ok(ahead);
+            }
+            fields.push(field);
+        }
+        let mut after_callback = false;
+        for field in fields {
+            if self.is_context_sensitive_function(field.value)? {
+                after_callback = true;
+                continue;
+            }
+            if !after_callback
+                || inferred.contains_key(&field.value)
+                || super::reserved::is_reserved_object_field(&field.name.name)
+            {
+                continue;
+            }
+            let name = &field.name.name;
+            let hint = self.object_field_hint(literal, name, expected_fields, expected_index);
+            let expected_field_ty = expected_fields
+                .and_then(|fields| fields.get(name))
+                .map(|field| &field.ty);
+            self.next_function_keeps_returned_literals =
+                self.field_keeps_returned_literals(literal, expected_field_ty);
+            let errors_before = self.error_count();
+            let (typed_value, value_ty) = self.infer_expr(field.value, hint.as_ref())?;
+            self.next_function_keeps_returned_literals = false;
+            let errored = self.error_count() > errors_before;
+            let unified_ty =
+                if expected_field_ty.is_some_and(super::expr::is_type_parameter_position) {
+                    self.widen_fresh_literals(typed_value, &value_ty)?
+                } else {
+                    value_ty.clone()
+                };
+            self.infer_from_object_argument_field(literal, name, &unified_ty);
+            inferred.insert(field.value, (typed_value, value_ty, errored));
+            ahead.insert(field.value);
+        }
+        Ok(ahead)
+    }
+
     fn function_literal_params(
         &self,
         expr: ExprId,
