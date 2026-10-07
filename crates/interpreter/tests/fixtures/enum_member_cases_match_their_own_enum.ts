@@ -74,6 +74,31 @@ function literalLeft(v: E | 0): string {
   }
 }
 
+enum Tag {
+  P = "p",
+  Q = "q",
+}
+interface TaggedByEnum {
+  tag: Tag;
+  c: number;
+}
+interface TaggedQ {
+  tag: "q";
+  d: string;
+}
+
+// `case Tag.Q` and `case "q"` leave only `Tag.P`, which no `TaggedQ` holds.
+function partlyNamed(u: TaggedByEnum | TaggedQ): number {
+  switch (u.tag) {
+    case Tag.Q:
+      return 1;
+    case "q":
+      return 2;
+    default:
+      return u.c;
+  }
+}
+
 function main(): void {
   assert(bothEnums(F.X) === "ea");
   assert(enumAndLiterals(0) === "ea");
@@ -81,4 +106,5 @@ function main(): void {
   assert(withNull(E.B) === "b");
   assert(twins(Twin.Second) === "first");
   assert(literalLeft(E.B) === "b");
+  assert(partlyNamed({ tag: Tag.P, c: 7 }) === 7);
 }

@@ -733,16 +733,17 @@ impl Inferer<'_> {
                         && narrowing::union_members(field_ty)
                             .iter()
                             .any(|m| matches!(m.peel(), Type::Null)))
-                    || self.shares_a_value(field_ty, &values_left)
+                    || self.shares_a_value(field_ty, &values_left, covered)
             })
             .map(|(member, _)| member.clone())
             .collect()
     }
 
-    /// Whether a value of `field_ty` can be one of `values`, as TypeScript's
-    /// comparability decides it for a discriminant: an enum shares a value
-    /// with its own members' literals, never with another enum.
-    fn shares_a_value(&self, field_ty: &Type, values: &Type) -> bool {
+    /// Whether a value of `field_ty` can be one of the unmatched `values`, as
+    /// TypeScript's comparability decides it for a discriminant. An enum
+    /// shares a value with its own members' literals, never with another enum,
+    /// and an unmatched enum holds only the members no case names.
+    fn shares_a_value(&self, field_ty: &Type, values: &Type, covered: &CaseCoverage) -> bool {
         let types = self.resolver();
         narrowing::union_members(field_ty).into_iter().any(|field| {
             narrowing::union_members(values).into_iter().any(|value| {
@@ -752,14 +753,19 @@ impl Inferer<'_> {
                         Type::NumberEnum { mangled: a, .. } | Type::StringEnum { mangled: a, .. },
                         Type::NumberEnum { mangled: b, .. } | Type::StringEnum { mangled: b, .. },
                     ) => a == b,
-                    (enum_ty, literal) | (literal, enum_ty)
-                        if super::comparable::enum_admits_literal(enum_ty, literal, types)
-                            .is_some() =>
-                    {
-                        super::comparable::enum_admits_literal(enum_ty, literal, types)
-                            == Some(true)
-                    }
-                    (field, value) => super::comparable::comparable(field, value, types),
+                    (
+                        literal,
+                        unmatched @ (Type::NumberEnum { mangled, .. }
+                        | Type::StringEnum { mangled, .. }),
+                    ) => narrowing::unit_literal_value(literal).is_some_and(|literal| {
+                        !covered
+                            .named_members
+                            .contains(&(mangled.clone(), literal.clone()))
+                            && super::comparable::enum_literal_values(unmatched, types)
+                                .is_some_and(|members| members.contains(&literal))
+                    }),
+                    (field, value) => super::comparable::enum_admits_literal(field, value, types)
+                        .unwrap_or_else(|| super::comparable::comparable(field, value, types)),
                 }
             })
         })
@@ -1021,7 +1027,6 @@ fn case_key(value: &TypedSwitchValue) -> CaseKey {
         TypedSwitchValue::Enum {
             enum_name, member, ..
         } => CaseKey::Member(enum_name.clone(), member.name.clone()),
-        TypedSwitchValue::Null { .. } => CaseKey::Null,
         _ => switch_value_to_literal_value(value).map_or(CaseKey::Null, CaseKey::Literal),
     }
 }
