@@ -938,6 +938,11 @@ impl<'a> Unifier<'a> {
         if self.combines_literals && self.sub.literal_candidates.contains(name) {
             return Some(Type::union(vec![bound.clone(), unresolved_arg.clone()]));
         }
+        // Literal candidates of one primitive form their union, as tsc infers
+        // where they are kept: `pick(1, 2)` is a `1 | 2`.
+        if bound.literal_base().is_some() && bound.literal_base() == arg.literal_base() {
+            return Some(Type::union(vec![bound.clone(), arg.clone()]));
+        }
         let non_null = |ty: &Type| {
             (!matches!(ty.peel(), Type::Null)).then(|| super::infer::narrowing::strip_null(ty))
         };

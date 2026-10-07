@@ -4,7 +4,7 @@
 // not a candidate, so nothing widens it.
 // expect-error: object literal is missing required field `bark` of type `Dog`
 // expect-error: expected `Dog`, got `Animal`
-// expect-error: expected `number`, got `string`
+// expect-error: expected `1`, got `"s"`
 // expect-error: field `bark` does not exist on `Animal`
 // expect-error-count: 4
 interface Animal {

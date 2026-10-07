@@ -5185,6 +5185,12 @@ impl Inferer<'_> {
                                 .map(|f| f.ty.clone())
                                 .or_else(|| expected_index.as_ref().map(|i| (*i.value).clone()))
                         });
+                    let expected_field_ty = expected_fields
+                        .as_ref()
+                        .and_then(|m| m.get(&field.name.name))
+                        .map(|f| f.ty.clone());
+                    self.next_function_keeps_returned_literals =
+                        self.field_keeps_returned_literals(literal, expected_field_ty.as_ref());
                     let previous_hint = self.object_this_hint.take();
                     if matches!(
                         self.ast
@@ -7823,9 +7829,10 @@ impl Inferer<'_> {
 
     /// The types of a block body's returns to unify. Literal types kept for a
     /// function literal passed as the sole candidate of a type parameter that
-    /// is the call's result (see `returns_keep_literals`) widen when no one of
-    /// them covers the rest, as they would have without it: tsc would infer
-    /// their union, which one return type can't be.
+    /// is the call's result (see `returns_keep_literals`) form their union
+    /// when every return is a literal, as tsc infers (`() => { if (b) return
+    /// 1; return 2; }` returns `1 | 2`), and widen otherwise when no one of
+    /// them covers the rest.
     fn returned_types(&self, collected: Vec<(Type, Span)>) -> Vec<(Type, Span)> {
         if !self.returns_keep_literals {
             return collected;
@@ -7837,6 +7844,12 @@ impl Inferer<'_> {
         });
         if covered {
             return collected;
+        }
+        if let Some((_, span)) = collected.first().cloned()
+            && collected.iter().all(|(ty, _)| ty.literal_base().is_some())
+        {
+            let union = Type::union(collected.into_iter().map(|(ty, _)| ty).collect());
+            return vec![(union, span)];
         }
         collected
             .into_iter()

@@ -1219,6 +1219,23 @@ impl Inferer<'_> {
         Some(sub.apply_or_record(&field.ty, &self.type_limits))
     }
 
+    /// Whether a function literal in a field of `literal` typed `field_ty`
+    /// keeps the literal types it returns: `literal` is an argument of a
+    /// generic call and the field is typed as a type parameter the call
+    /// infers, as tsc keeps a literal returned where a type parameter is
+    /// expected (`foo({ a: () => 42, b(a) {} })` binds `() => 42`).
+    pub(super) fn field_keeps_returned_literals(
+        &self,
+        literal: ExprId,
+        field_ty: Option<&Type>,
+    ) -> bool {
+        let Some((argument, inferred)) = &self.fields_keeping_returned_literals else {
+            return false;
+        };
+        *argument == literal
+            && matches!(field_ty.map(Type::peel), Some(Type::TypeVar(name)) if inferred.contains(name))
+    }
+
     /// Bind the type parameters field `name` of `literal` determines, for the
     /// fields after it. A mismatch is reported when the whole argument is.
     pub(super) fn infer_from_object_argument_field(
@@ -1496,6 +1513,9 @@ impl Inferer<'_> {
             self.arguments_with_replaceable_hints.insert(arg_id);
         }
         let enclosing = self.start_object_argument_inference(arg_id, param_ty, sub)?;
+        let enclosing_fields = self
+            .fields_keeping_returned_literals
+            .replace((arg_id, arguments.inferred_generics.to_vec()));
         let keeps_literal = arguments.literal_types.keeps(param_ty);
         let inferred = self.with_inferred_positions(
             arg_id,
@@ -1503,11 +1523,13 @@ impl Inferer<'_> {
             &arguments.sourced_by_literals,
             |this| {
                 this.keeps_literal_types = keeps_literal;
-                this.next_function_keeps_returned_literals = keeps_literal;
+                this.next_function_keeps_returned_literals =
+                    arguments.literal_types.keeps_returned(param_ty);
                 this.infer_expr(arg_id, Some(&hint))
             },
         );
         self.finish_object_argument_inference(enclosing, sub);
+        self.fields_keeping_returned_literals = enclosing_fields;
         self.arguments_with_replaceable_hints.remove(&arg_id);
         let (typed_id, arg_ty) = inferred?;
         if keeps_literal {
@@ -1952,12 +1974,14 @@ struct GenericArguments<'a> {
 ///
 /// This applies only to a type parameter every parameter names at its top
 /// level: one nested in another (`append<T>(a: T[], x: T)`) has candidates
-/// tsc doesn't widen. A literal is kept only when its argument is the type
-/// parameter's sole candidate: tsc would infer a union of several, which a
-/// conflicting binding can't express, so those widen (`two(c, "x")` binds
-/// `string`).
+/// tsc doesn't widen. Several kept literals of one primitive bind their
+/// union (`pick(1, 2)` is a `1 | 2`).
 struct LiteralTypeArguments {
     kept: Vec<String>,
+    /// Those of `kept` with one candidate: a function literal passed for one
+    /// keeps the literals it returns, where several such candidates widen
+    /// theirs (`pick(() => "a", () => "b")` binds `() => string`).
+    sole: Vec<String>,
     widened: Vec<String>,
 }
 
@@ -1965,6 +1989,7 @@ impl LiteralTypeArguments {
     fn new(args: &[(ExprId, Type)], ret: &Type, inferred_generics: &[String]) -> Self {
         let in_result = top_level_type_params(ret);
         let mut kept = Vec::new();
+        let mut sole = Vec::new();
         let mut widened = Vec::new();
         for name in inferred_generics {
             let mentioning: Vec<&Type> = args
@@ -1978,14 +2003,20 @@ impl LiteralTypeArguments {
             if mentioning.is_empty() || !only_top_level {
                 continue;
             }
-            let sole_candidate = mentioning.len() == 1;
-            if sole_candidate && in_result.contains(&name.as_str()) {
+            if in_result.contains(&name.as_str()) {
+                if mentioning.len() == 1 {
+                    sole.push(name.clone());
+                }
                 kept.push(name.clone());
             } else {
                 widened.push(name.clone());
             }
         }
-        Self { kept, widened }
+        Self {
+            kept,
+            sole,
+            widened,
+        }
     }
 
     /// Whether an argument for `param` keeps its literal type.
@@ -1993,6 +2024,14 @@ impl LiteralTypeArguments {
         top_level_type_params(param)
             .iter()
             .any(|name| self.kept.iter().any(|kept| kept == name))
+    }
+
+    /// Whether a function literal passed for `param` keeps the literal types
+    /// it returns.
+    fn keeps_returned(&self, param: &Type) -> bool {
+        top_level_type_params(param)
+            .iter()
+            .any(|name| self.sole.iter().any(|sole| sole == name))
     }
 
     /// Whether an argument for `param` widens its fresh literal types.
@@ -2771,8 +2810,7 @@ mod tests {
             "#);
         assert!(!diags.is_empty(), "expected at least one diagnostic");
         let saw_clean = diags.iter().any(|d| {
-            (d.message.contains("number") && d.message.contains("string"))
-                && !d.message.contains("to `T`")
+            d.message.contains("`1`") && d.message.contains("`\"x\"`") && !d.message.contains("`T`")
         });
         assert!(
             saw_clean,

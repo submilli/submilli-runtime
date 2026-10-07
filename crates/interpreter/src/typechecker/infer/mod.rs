@@ -129,6 +129,7 @@ pub fn infer_with_transitive_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         invoked_body_exit: None,
@@ -399,6 +400,7 @@ pub fn infer_package_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         invoked_body_exit: None,
@@ -723,6 +725,11 @@ pub(super) struct Inferer<'a> {
     /// `keeps_literal_types`, so it doesn't reach a conditional's branches,
     /// whose function types couldn't form one callable union.
     next_function_keeps_returned_literals: bool,
+    /// An object literal argument of a generic call, and the type parameters
+    /// the call infers: a function literal in a field of the literal typed as
+    /// one of them keeps its returned literals (see
+    /// [`Inferer::field_keeps_returned_literals`]).
+    fields_keeping_returned_literals: Option<(crate::ExprId, Vec<String>)>,
     aliased_conditions: aliased_conditions::AliasedConditions,
     /// The span of the arrow an immediately-invoked call is about to infer;
     /// see [`iife::immediately_invoked_arrow`].
