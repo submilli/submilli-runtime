@@ -422,9 +422,9 @@ impl Inferer<'_> {
 
         // An absent field is `undefined` in JavaScript, which `case null`
         // doesn't match, though Submilli reads it as `null`.
-        let matches_null =
+        let case_null_matches =
             saw_null.is_some() && !self.discriminant_may_be_absent_field(typed_disc)?;
-        let covered = CaseCoverage::of(&typed_cases, matches_null);
+        let covered = CaseCoverage::of(&typed_cases, case_null_matches);
         let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered)?;
 
         let typed_default = if let Some(d) = default {
@@ -433,7 +433,7 @@ impl Inferer<'_> {
                 .try_stmt(d.body)
                 .map_err(super::arena_failure)?
                 .span;
-            let default_residual = self.unmatched_residual(&residual, &site, matches_null);
+            let default_residual = self.unmatched_residual(&residual, &site, case_null_matches);
             let env = self.build_default_narrow_env(&default_residual, &site, body_span)?;
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
@@ -450,7 +450,7 @@ impl Inferer<'_> {
             any_arm_reachable_exit |= body_reachable;
             Some(typed_body)
         } else {
-            let unmatched = self.unmatched_residual(&residual, &site, matches_null);
+            let unmatched = self.unmatched_residual(&residual, &site, case_null_matches);
             let leaves_values_unmatched =
                 !matches!(unmatched, Type::Never) && !narrowing::is_ruled_out(&unmatched);
             if leaves_values_unmatched {
@@ -476,7 +476,7 @@ impl Inferer<'_> {
             // narrowing to the rest, as a `default` arm would.
             let mut natural = entry_env;
             natural.extend_env(self.build_default_narrow_env(
-                &self.unmatched_residual(&residual, &site, matches_null),
+                &self.unmatched_residual(&residual, &site, case_null_matches),
                 &site,
                 switch_span,
             )?);
@@ -987,9 +987,14 @@ impl Inferer<'_> {
     }
 
     /// What the discriminant can be when no case matched: the residual, less
-    /// `null` when a `case null` matched it.
-    fn unmatched_residual(&self, residual: &Type, site: &ResidualSite, saw_null: bool) -> Type {
-        if saw_null && matches!(site, ResidualSite::Scrutinee { .. }) {
+    /// `null` when a `case null` matches every null it can be.
+    fn unmatched_residual(
+        &self,
+        residual: &Type,
+        site: &ResidualSite,
+        case_null_matches: bool,
+    ) -> Type {
+        if case_null_matches && matches!(site, ResidualSite::Scrutinee { .. }) {
             narrowing::strip_null(residual)
         } else {
             residual.clone()
