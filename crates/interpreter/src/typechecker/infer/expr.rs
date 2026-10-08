@@ -2115,7 +2115,7 @@ impl Inferer<'_> {
             if self.reject_unsupported_array_call(&recv_ty, name) {
                 return Ok((TypedExprKind::Null, Type::Error));
             }
-            if let Some(branches) = self.string_or_array_methods(&recv_ty, &name.name) {
+            if let Some(methods) = self.string_or_array_methods(&recv_ty, &name.name) {
                 let call = MethodCallSite {
                     name: name.clone(),
                     type_args,
@@ -2123,7 +2123,7 @@ impl Inferer<'_> {
                     expected,
                     span,
                 };
-                return self.string_or_array_method_call(typed_receiver, branches, call);
+                return self.string_or_array_method_call(typed_receiver, methods, call);
             }
             if let Some(method) = self.find_method(&recv_ty, &name.name) {
                 let call = MethodCallSite {
@@ -4850,7 +4850,7 @@ impl Inferer<'_> {
 
         // As for a single target, only a field unknown to members whose fields
         // are all optional is left out of the literal's type.
-        let weak_target = candidates
+        let is_weak_target = candidates
             .iter()
             .all(|shape| shape.values().all(|field| field.optional));
         let mut known = std::collections::BTreeMap::new();
@@ -4862,7 +4862,7 @@ impl Inferer<'_> {
         for field in literal_fields {
             if !known.contains_key(&field.name.name) {
                 self.report_unknown_field(field, &known);
-                if weak_target {
+                if is_weak_target {
                     unknown.insert(field.name.name.clone());
                 }
             }
@@ -5241,13 +5241,13 @@ impl Inferer<'_> {
             // Against a type whose fields are all optional, an unknown field
             // would also fail the weak-type check; elsewhere the mismatch
             // names it as an extra field.
-            let weak_target = want.values().all(|field| field.optional);
+            let is_weak_target = want.values().all(|field| field.optional);
             for member in &members {
                 if let crate::ObjectLiteralMember::Field(field) = member
                     && !want.contains_key(&field.name.name)
                 {
                     self.report_unknown_field(field, want);
-                    if weak_target {
+                    if is_weak_target {
                         unknown_fields.insert(field.name.name.clone());
                     }
                 }
@@ -7425,9 +7425,14 @@ impl Inferer<'_> {
     fn string_or_array_method_call(
         &mut self,
         typed_receiver: ExprId,
-        [(string_ty, string_method), (arrays, array_method)]: [(Type, FoundMethod); 2],
+        methods: StringOrArrayMethods,
         call: MethodCallSite<'_>,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let StringOrArrayMethods {
+            string_method,
+            arrays,
+            array_method,
+        } = methods;
         let span = call.span;
         let mut stmts = Vec::new();
         let held = self.hold_in_temp(typed_receiver, "method_receiver", &mut stmts)?;
@@ -7442,7 +7447,7 @@ impl Inferer<'_> {
         let (string_call, string_ret, array_call, array_ret) =
             self.with_held_arguments(held_arguments, |this| {
                 let (string_call, string_ret) =
-                    this.narrowed_method_call(held, string_ty, string_method, call.clone())?;
+                    this.narrowed_method_call(held, Type::String, string_method, call.clone())?;
                 // The array's call reports what the string's already did
                 // only once: a wrong argument count, say.
                 let reported = this.diagnostics.len();
@@ -7473,16 +7478,14 @@ impl Inferer<'_> {
     }
 
     /// When `recv_ty` is a union of strings with arrays or tuples that both
-    /// declare `name`, each side's type and method.
-    fn string_or_array_methods(
-        &self,
-        recv_ty: &Type,
-        name: &str,
-    ) -> Option<[(Type, FoundMethod); 2]> {
+    /// declare `name`, each side's method.
+    fn string_or_array_methods(&self, recv_ty: &Type, name: &str) -> Option<StringOrArrayMethods> {
         let arrays = recv_ty.string_or_array_union_arrays()?;
-        let string_method = self.find_method(&Type::String, name)?;
-        let array_method = self.find_method(&arrays, name)?;
-        Some([(Type::String, string_method), (arrays, array_method)])
+        Some(StringOrArrayMethods {
+            string_method: self.find_method(&Type::String, name)?,
+            array_method: self.find_method(&arrays, name)?,
+            arrays,
+        })
     }
 
     /// Runs `infer` with `held` (source argument to its temporary) in
@@ -7503,21 +7506,15 @@ impl Inferer<'_> {
 
     /// Drops each diagnostic from `since` on that repeats an earlier one.
     fn drop_repeated_diagnostics(&mut self, since: usize) {
-        let (earlier, later) = self.diagnostics.split_at(since);
-        let repeated = later
-            .iter()
-            .map(|diagnostic| {
-                earlier
-                    .iter()
-                    .any(|seen| seen.span == diagnostic.span && seen.message == diagnostic.message)
-            })
-            .collect::<Vec<_>>();
-        let mut index = 0;
-        self.diagnostics.retain(|_| {
-            let keep = index < since || !repeated[index - since];
-            index += 1;
-            keep
-        });
+        let later = self.diagnostics.split_off(since);
+        for diagnostic in later {
+            let repeats = self.diagnostics[..since]
+                .iter()
+                .any(|seen| seen.span == diagnostic.span && seen.message == diagnostic.message);
+            if !repeats {
+                self.diagnostics.push(diagnostic);
+            }
+        }
     }
 
     /// `(held as narrowed).name(args)`, for a `held` known to hold `narrowed`.
@@ -11558,6 +11555,14 @@ type FoundMethod = (
     crate::MangledName,
     crate::Dispatch,
 );
+
+/// The methods a union of strings with arrays or tuples (`arrays`, their
+/// union) calls for one name, on each side.
+struct StringOrArrayMethods {
+    string_method: FoundMethod,
+    arrays: Type,
+    array_method: FoundMethod,
+}
 
 /// A method call's parts after its callee: what dispatch needs once the
 /// receiver is typed.

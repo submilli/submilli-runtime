@@ -150,9 +150,11 @@ pub(super) fn has_running_shape(
     Ok(true)
 }
 
-/// The fields of a fresh object literal: one that only names its fields, with
-/// no spread or computed key that could bring in fields its type doesn't list.
-pub(super) fn fresh_object_fields(
+/// The fields of a fresh object literal that normalizes: one that only names
+/// its fields, with no spread or computed key that could bring in fields its
+/// type doesn't list. (An excess-field check, `is_fresh_literal`, also covers a
+/// literal that spreads values beside its own fields, as tsc's does.)
+fn fresh_object_fields(
     ast: &crate::Ast,
     expr: ExprId,
 ) -> Result<Option<Vec<&crate::ObjectLiteralField>>, CompilerFailure> {
@@ -171,8 +173,8 @@ pub(super) fn fresh_object_fields(
 }
 
 /// The nested fields of sibling literals: those that hold a fresh object
-/// literal in every literal that names them, apart from `null` and primitive
-/// literals, which tsc leaves out of a field's siblings.
+/// literal in every literal that names them. `null`, a choice with no fields,
+/// and primitive literals are left out of a field's siblings, as in tsc.
 fn normalizing_fields(
     ast: &crate::Ast,
     siblings: Vec<Vec<&crate::ObjectLiteralField>>,
@@ -198,13 +200,12 @@ fn normalizing_fields(
     Ok(NormalizingFields { nested })
 }
 
-/// Whether `expr` is `null` or a primitive literal, signed or negated.
+/// Whether `expr` is a primitive literal, signed or negated.
 fn is_primitive_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
     let id = peel_parens(ast, expr)?;
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
-            ExprKind::Null
-            | ExprKind::Number(_)
+            ExprKind::Number(_)
             | ExprKind::BigInt(_)
             | ExprKind::String(_)
             | ExprKind::Boolean(_) => true,
@@ -250,13 +251,6 @@ fn branch_choices(
     Ok(Some(choices))
 }
 
-/// `ty`, the join of sibling fresh object literals, with each object member
-/// normalized against the others, and the `normalizing` fields against the
-/// objects they hold in the others.
-pub(super) fn normalized(ty: &Type, normalizing: &NormalizingFields) -> Type {
-    with_sibling_fields(ty, &object_parts(ty), normalizing)
-}
-
 /// Whether `source`, a fresh literal's type, has a field `target` lacks in an
 /// object both reach in the same place: tsc's excess field check, which keeps
 /// it from being `target`'s subtype.
@@ -288,6 +282,13 @@ pub(super) fn has_excess_field(source: &Type, target: &Type) -> bool {
 /// A field normalization added. It says nothing about the field's type.
 pub(super) fn is_added_missing_field(field: &crate::ObjectField) -> bool {
     field.optional && field.ty == Type::Never
+}
+
+/// `ty`, the join of sibling fresh object literals, with each object member
+/// normalized against the others, and the `normalizing` fields against the
+/// objects they hold in the others.
+pub(super) fn normalized(ty: &Type, normalizing: &NormalizingFields) -> Type {
+    with_sibling_fields(ty, &object_parts(ty), normalizing)
 }
 
 fn with_sibling_fields(ty: &Type, siblings: &[&Type], normalizing: &NormalizingFields) -> Type {
