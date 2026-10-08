@@ -173,6 +173,7 @@ pub fn infer_with_transitive_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
+        held_arguments: BTreeMap::new(),
         values_widening_candidates: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
@@ -450,6 +451,7 @@ pub fn infer_package_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
+        held_arguments: BTreeMap::new(),
         values_widening_candidates: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
@@ -894,6 +896,11 @@ pub(super) struct Inferer<'a> {
     /// their inference without being a requirement:
     /// an argument that doesn't fit it decides the type parameter instead.
     pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
+    /// Arguments a call already evaluated into temporaries, by source
+    /// expression: inferring one reads its temporary again. A method on a
+    /// union of strings with arrays checks each argument against both
+    /// signatures this way.
+    pub(super) held_arguments: BTreeMap<crate::ExprId, crate::ExprId>,
     /// Values of literal argument slots typed as a type parameter an earlier
     /// value bound to a candidate: one the candidate fits widens it rather
     /// than mismatching it (`{ v: new Dog(), w: new Animal() }`).

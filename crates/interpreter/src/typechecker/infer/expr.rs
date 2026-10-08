@@ -565,191 +565,208 @@ impl Inferer<'_> {
         let mut arrow_reported = false;
         // Propagate once after dispatch: per-arm `?` creates large temporary
         // results that inflate every recursive frame in debug builds.
-        let (kind, ty) = (match expr.kind {
-            // narrow primitive literals to their literal type
-            // when the expected hint (directly or as a member of an
-            // expected union) calls for it. Without the hint, widen
-            // to the base primitive — `let x = "hi"` stays
-            // `x: string`, not `x: "hi"`.
-            ExprKind::Number(v) => {
-                let canonical = if v == 0.0 { 0.0 } else { v };
-                let literal = Type::NumberLiteral(crate::types::LiteralF64(canonical));
-                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
-                    matches!(t, Type::NumberLiteral(_))
-                });
-                Ok((TypedExprKind::Number(v), ty))
-            }
-            // bigint literal — always widens to `Type::BigInt`
-            // (no `Type::BigIntLiteral` narrowing variant in v1).
-            ExprKind::BigInt(digits) => Ok((TypedExprKind::BigInt(digits), Type::BigInt)),
-            ExprKind::String(s) => {
-                let literal = Type::StringLiteral(s.clone());
-                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
-                    matches!(t, Type::StringLiteral(_))
-                });
-                Ok((TypedExprKind::String(s), ty))
-            }
-            ExprKind::Boolean(b) => {
-                let literal = Type::BooleanLiteral(b);
-                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
-                    matches!(t, Type::BooleanLiteral(_))
-                });
-                Ok((TypedExprKind::Boolean(b), ty))
-            }
-            ExprKind::Null => Ok((TypedExprKind::Null, Type::Null)),
-            ExprKind::Identifier(ident) => {
-                if let Some(index) = self
-                    .scopes
-                    .get(&ident.name)
-                    .and_then(|entry| entry.nested_function)
-                {
-                    self.check_nested_function_use(index, span)?;
+        let held_argument = match self.held_arguments.get(&expr_id) {
+            Some(&held) => Some(
+                self.typed_ast
+                    .try_expr(held)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .clone(),
+            ),
+            None => None,
+        };
+        // An argument already evaluated into a temporary reads it again, and
+        // is checked against this signature's parameter below.
+        let (kind, ty) = if let Some(held) = held_argument {
+            (held.kind, held.ty)
+        } else {
+            (match expr.kind {
+                // narrow primitive literals to their literal type
+                // when the expected hint (directly or as a member of an
+                // expected union) calls for it. Without the hint, widen
+                // to the base primitive — `let x = "hi"` stays
+                // `x: string`, not `x: "hi"`.
+                ExprKind::Number(v) => {
+                    let canonical = if v == 0.0 { 0.0 } else { v };
+                    let literal = Type::NumberLiteral(crate::types::LiteralF64(canonical));
+                    let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                        matches!(t, Type::NumberLiteral(_))
+                    });
+                    Ok((TypedExprKind::Number(v), ty))
                 }
-                self.resolve_ident(ident, span)
-            }
-            ExprKind::Binary { op, lhs, rhs } => {
-                self.infer_binary(op, lhs, rhs, expected, keeps_literal, span)
-            }
-            ExprKind::Unary { op, operand } => self.infer_unary(op, operand),
-            ExprKind::Call {
-                callee,
-                type_args,
-                args,
-            } => self.infer_call_running_invoked_body(callee, type_args, args, expected, span),
-            ExprKind::Paren(inner) => {
-                self.next_function_keeps_returned_literals = keeps_returned_literals;
-                return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
-            }
-            ExprKind::ObjectLiteral { members } => {
-                self.infer_object_literal_expr(expr_id, members, expected, span)
-            }
-            ExprKind::ArrayLiteral { elements }
-                if expected.is_none() && self.ast.tuple_pattern_sources.contains(&expr_id) =>
-            {
-                self.infer_pattern_tuple_literal(expr_id, elements, span)
-            }
-            ExprKind::ArrayLiteral { elements } => {
-                self.infer_array_literal(expr_id, elements, expected, span)
-            }
-            ExprKind::FieldAccess { receiver, name } => {
-                self.infer_field_access(receiver, name, span)
-            }
-            ExprKind::IndexAccess { receiver, index } => {
-                self.infer_index_access(receiver, index, span, expr_id)
-            }
-            ExprKind::FunctionExpression { .. } => {
-                return Err(super::inference_failure(
-                    "handled before ordinary expressions",
-                ));
-            }
-            ExprKind::Arrow {
-                params,
-                return_type,
-                type_predicate,
-                body,
-            } => {
-                let (kind, ty, reported) = self.infer_arrow(
+                // bigint literal — always widens to `Type::BigInt`
+                // (no `Type::BigIntLiteral` narrowing variant in v1).
+                ExprKind::BigInt(digits) => Ok((TypedExprKind::BigInt(digits), Type::BigInt)),
+                ExprKind::String(s) => {
+                    let literal = Type::StringLiteral(s.clone());
+                    let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                        matches!(t, Type::StringLiteral(_))
+                    });
+                    Ok((TypedExprKind::String(s), ty))
+                }
+                ExprKind::Boolean(b) => {
+                    let literal = Type::BooleanLiteral(b);
+                    let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                        matches!(t, Type::BooleanLiteral(_))
+                    });
+                    Ok((TypedExprKind::Boolean(b), ty))
+                }
+                ExprKind::Null => Ok((TypedExprKind::Null, Type::Null)),
+                ExprKind::Identifier(ident) => {
+                    if let Some(index) = self
+                        .scopes
+                        .get(&ident.name)
+                        .and_then(|entry| entry.nested_function)
+                    {
+                        self.check_nested_function_use(index, span)?;
+                    }
+                    self.resolve_ident(ident, span)
+                }
+                ExprKind::Binary { op, lhs, rhs } => {
+                    self.infer_binary(op, lhs, rhs, expected, keeps_literal, span)
+                }
+                ExprKind::Unary { op, operand } => self.infer_unary(op, operand),
+                ExprKind::Call {
+                    callee,
+                    type_args,
+                    args,
+                } => self.infer_call_running_invoked_body(callee, type_args, args, expected, span),
+                ExprKind::Paren(inner) => {
+                    self.next_function_keeps_returned_literals = keeps_returned_literals;
+                    return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
+                }
+                ExprKind::ObjectLiteral { members } => {
+                    self.infer_object_literal_expr(expr_id, members, expected, span)
+                }
+                ExprKind::ArrayLiteral { elements }
+                    if expected.is_none() && self.ast.tuple_pattern_sources.contains(&expr_id) =>
+                {
+                    self.infer_pattern_tuple_literal(expr_id, elements, span)
+                }
+                ExprKind::ArrayLiteral { elements } => {
+                    self.infer_array_literal(expr_id, elements, expected, span)
+                }
+                ExprKind::FieldAccess { receiver, name } => {
+                    self.infer_field_access(receiver, name, span)
+                }
+                ExprKind::IndexAccess { receiver, index } => {
+                    self.infer_index_access(receiver, index, span, expr_id)
+                }
+                ExprKind::FunctionExpression { .. } => {
+                    return Err(super::inference_failure(
+                        "handled before ordinary expressions",
+                    ));
+                }
+                ExprKind::Arrow {
                     params,
                     return_type,
                     type_predicate,
                     body,
-                    expected,
-                    keeps_returned_literals,
-                    span,
-                )?;
-                arrow_reported = reported;
-                Ok((kind, ty))
-            }
-            ExprKind::Delete { operand } => {
-                // An object can't record one of its fields as absent unless it
-                // was built with that field optional: other objects share one
-                // immutable names array per shape (SUB-971). The operand is still
-                // inferred, so its own errors surface.
-                self.infer_expr(operand, None)?;
-                self.error_with_help(
-                    span,
-                    "the `delete` operator is not supported".into(),
-                    vec!["type the field `T | null` and assign `null` to clear it".into()],
-                );
-                Ok((TypedExprKind::Null, Type::Error))
-            }
-            ExprKind::Typeof { operand: _ } => {
-                // Reaching `Typeof` here means it didn't get folded by
-                // `try_typeof_fold` in `infer_binary` — i.e. it's used
-                // outside the narrowing-guard shape. Spec §921 rejects
-                // `typeof` as a value-producing expression.
-                self.error_with_help(
-                    span,
-                    "`typeof` is only valid in the narrowing-guard form \
+                } => {
+                    let (kind, ty, reported) = self.infer_arrow(
+                        params,
+                        return_type,
+                        type_predicate,
+                        body,
+                        expected,
+                        keeps_returned_literals,
+                        span,
+                    )?;
+                    arrow_reported = reported;
+                    Ok((kind, ty))
+                }
+                ExprKind::Delete { operand } => {
+                    // An object can't record one of its fields as absent unless it
+                    // was built with that field optional: other objects share one
+                    // immutable names array per shape (SUB-971). The operand is still
+                    // inferred, so its own errors surface.
+                    self.infer_expr(operand, None)?;
+                    self.error_with_help(
+                        span,
+                        "the `delete` operator is not supported".into(),
+                        vec!["type the field `T | null` and assign `null` to clear it".into()],
+                    );
+                    Ok((TypedExprKind::Null, Type::Error))
+                }
+                ExprKind::Typeof { operand: _ } => {
+                    // Reaching `Typeof` here means it didn't get folded by
+                    // `try_typeof_fold` in `infer_binary` — i.e. it's used
+                    // outside the narrowing-guard shape. Spec §921 rejects
+                    // `typeof` as a value-producing expression.
+                    self.error_with_help(
+                        span,
+                        "`typeof` is only valid in the narrowing-guard form \
                      `typeof x === \"T\"`"
-                        .into(),
-                    vec![
-                        "use `x is T` directly — `is` is the canonical \
-                         narrowing predicate"
                             .into(),
-                    ],
-                );
-                Ok((TypedExprKind::Null, Type::Error))
-            }
-            ExprKind::New {
-                callee,
-                type_args,
-                args,
-            } => self.infer_new(callee, type_args, args, expected, span),
-            ExprKind::TemplateLiteral {
-                parts,
-                exprs,
-                substitution_spans,
-            } => self.lower_template_literal(parts, exprs, substitution_spans, expected, span),
-            ExprKind::Ternary { cond, then_, else_ } => {
-                self.infer_ternary(cond, then_, else_, expected, keeps_literal, span)
-            }
-            ExprKind::OptionalChain { base, parts } => {
-                self.infer_optional_chain(base, parts, expected, span)
-            }
-            ExprKind::PostfixUnary { op, operand } => self.infer_postfix_unary(op, operand, span),
-            ExprKind::Assign {
-                target,
-                op,
-                op_span,
-                value,
-            } => self.infer_assign_expr(target, op.map(|op| (op, op_span)), value, span),
-            ExprKind::As { expr: inner, ty } => self.infer_as(inner, ty, span),
-            ExprKind::InstanceOf { value, ty } => self.infer_instanceof(value, ty, span),
-            ExprKind::Regex { source, flags } => Ok(self.infer_regex(source, flags, span)),
-            ExprKind::ThisOutsideReceiver => {
-                self.error_with_help(
-                    span,
-                    "`this` is only valid inside a class method or constructor body".into(),
-                    vec!["reference `this` from within a class method or `constructor`".into()],
-                );
-                Ok((TypedExprKind::Null, Type::Error))
-            }
-            ExprKind::This => Ok(if let Some(ty) = &self.function_this {
-                (TypedExprKind::This, ty.clone())
-            } else if let Some(ty) = self.current_class.clone() {
-                self.note_read_before_super(span);
-                (TypedExprKind::This, ty)
-            } else if let Some((class, member)) = self.current_static.clone() {
-                self.error_with_help(
-                    span,
-                    "`this` is not available in a static member".to_string(),
-                    vec![format!(
-                        "`{class}.{member}` runs without an instance; take the instance as \
+                        vec![
+                            "use `x is T` directly — `is` is the canonical \
+                         narrowing predicate"
+                                .into(),
+                        ],
+                    );
+                    Ok((TypedExprKind::Null, Type::Error))
+                }
+                ExprKind::New {
+                    callee,
+                    type_args,
+                    args,
+                } => self.infer_new(callee, type_args, args, expected, span),
+                ExprKind::TemplateLiteral {
+                    parts,
+                    exprs,
+                    substitution_spans,
+                } => self.lower_template_literal(parts, exprs, substitution_spans, expected, span),
+                ExprKind::Ternary { cond, then_, else_ } => {
+                    self.infer_ternary(cond, then_, else_, expected, keeps_literal, span)
+                }
+                ExprKind::OptionalChain { base, parts } => {
+                    self.infer_optional_chain(base, parts, expected, span)
+                }
+                ExprKind::PostfixUnary { op, operand } => {
+                    self.infer_postfix_unary(op, operand, span)
+                }
+                ExprKind::Assign {
+                    target,
+                    op,
+                    op_span,
+                    value,
+                } => self.infer_assign_expr(target, op.map(|op| (op, op_span)), value, span),
+                ExprKind::As { expr: inner, ty } => self.infer_as(inner, ty, span),
+                ExprKind::InstanceOf { value, ty } => self.infer_instanceof(value, ty, span),
+                ExprKind::Regex { source, flags } => Ok(self.infer_regex(source, flags, span)),
+                ExprKind::ThisOutsideReceiver => {
+                    self.error_with_help(
+                        span,
+                        "`this` is only valid inside a class method or constructor body".into(),
+                        vec!["reference `this` from within a class method or `constructor`".into()],
+                    );
+                    Ok((TypedExprKind::Null, Type::Error))
+                }
+                ExprKind::This => Ok(if let Some(ty) = &self.function_this {
+                    (TypedExprKind::This, ty.clone())
+                } else if let Some(ty) = self.current_class.clone() {
+                    self.note_read_before_super(span);
+                    (TypedExprKind::This, ty)
+                } else if let Some((class, member)) = self.current_static.clone() {
+                    self.error_with_help(
+                        span,
+                        "`this` is not available in a static member".to_string(),
+                        vec![format!(
+                            "`{class}.{member}` runs without an instance; take the instance as \
                          a parameter, or make it an instance method. To use another static, \
                          qualify it: `{class}.<member>`"
-                    )],
-                );
-                (TypedExprKind::Null, Type::Error)
-            } else {
-                self.error(
-                    span,
-                    "`this` is only valid inside a class method or constructor body".to_string(),
-                );
-                (TypedExprKind::Null, Type::Error)
-            }),
-            ExprKind::Super => {
-                self.error_with_help(
+                        )],
+                    );
+                    (TypedExprKind::Null, Type::Error)
+                } else {
+                    self.error(
+                        span,
+                        "`this` is only valid inside a class method or constructor body"
+                            .to_string(),
+                    );
+                    (TypedExprKind::Null, Type::Error)
+                }),
+                ExprKind::Super => {
+                    self.error_with_help(
                     span,
                     "`super` is only valid as `super(...)` or `super.method(...)`".to_string(),
                     vec![
@@ -757,9 +774,10 @@ impl Inferer<'_> {
                             .to_string(),
                     ],
                 );
-                Ok((TypedExprKind::Null, Type::Error))
-            }
-        })?;
+                    Ok((TypedExprKind::Null, Type::Error))
+                }
+            })?
+        };
         // an expression's type must be free of bare recursion
         // back-edges — codegen lowers `AliasRef` to the universal
         // `$Object`, but the equivalent inline alias-to-object peels to
@@ -2102,48 +2120,28 @@ impl Inferer<'_> {
             if self.reject_unsupported_array_call(&recv_ty, name) {
                 return Ok((TypedExprKind::Null, Type::Error));
             }
-            if let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
-                self.find_method(&recv_ty, &name.name)
+            if let Some(arrays) = recv_ty.string_or_array_union_arrays()
+                && self.find_method(&Type::String, &name.name).is_some()
+                && self.find_method(&arrays, &name.name).is_some()
             {
-                // `flat` un-nests `depth` array levels — a return type the
-                // generic machinery can't express. Validate the literal depth
-                // and override the resolved return type before dispatch.
-                let mut sig = sig;
-                if name.name == "flat" && matches!(recv_ty.peel(), Type::Array(_)) {
-                    sig.ret = self.array_flat_return_type(&recv_ty, &args)?;
-                }
-                // Anything with substitution work — interface generics
-                // (`Array<T>`), method generics (`map<U>`), or both —
-                // goes through the unified pipeline. Only the no-
-                // generics-anywhere case (e.g. `console.log`,
-                // `(42).toString()`) takes the trivial path.
-                if interface_bindings.is_empty() && sig.generics.is_empty() {
-                    return self.infer_method_call(
-                        typed_receiver,
-                        iface_mangled,
-                        name.clone(),
-                        sig,
-                        type_args,
-                        args,
-                        span,
-                    );
-                }
-                let is_array = matches!(recv_ty.peel(), Type::Array(_));
-                let call = self.infer_generic_method_call(
-                    typed_receiver,
-                    iface_mangled,
-                    name.clone(),
-                    sig,
-                    interface_bindings,
+                let call = MethodCallSite {
+                    name: name.clone(),
                     type_args,
                     args,
                     expected,
                     span,
-                )?;
-                if is_array {
-                    return self.narrow_by_callback_predicate(&name.name, call, span);
-                }
-                return Ok(call);
+                };
+                return self.string_or_array_method_call(typed_receiver, arrays, call);
+            }
+            if self.find_method(&recv_ty, &name.name).is_some() {
+                let call = MethodCallSite {
+                    name: name.clone(),
+                    type_args,
+                    args,
+                    expected,
+                    span,
+                };
+                return self.infer_found_method_call(typed_receiver, &recv_ty, call);
             }
             if matches!(recv_ty.peel(), Type::InterfaceRef { .. })
                 && self
@@ -7355,6 +7353,136 @@ impl Inferer<'_> {
         Ok((TypedExprKind::Sequence { stmts, result }, Type::Number))
     }
 
+    /// `receiver.name(args)` for a method `find_method` finds on `recv_ty`.
+    fn infer_found_method_call(
+        &mut self,
+        typed_receiver: ExprId,
+        recv_ty: &Type,
+        call: MethodCallSite<'_>,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let MethodCallSite {
+            name,
+            type_args,
+            args,
+            expected,
+            span,
+        } = call;
+        let Some((mut sig, interface_bindings, iface_mangled, _dispatch)) =
+            self.find_method(recv_ty, &name.name)
+        else {
+            return Err(
+                super::inference_failure("method dispatch without a method").with_span(span)
+            );
+        };
+        // `flat` un-nests `depth` array levels — a return type the
+        // generic machinery can't express. Validate the literal depth
+        // and override the resolved return type before dispatch.
+        if name.name == "flat" && matches!(recv_ty.peel(), Type::Array(_)) {
+            sig.ret = self.array_flat_return_type(recv_ty, &args)?;
+        }
+        // Anything with substitution work — interface generics
+        // (`Array<T>`), method generics (`map<U>`), or both —
+        // goes through the unified pipeline. Only the no-
+        // generics-anywhere case (e.g. `console.log`,
+        // `(42).toString()`) takes the trivial path.
+        if interface_bindings.is_empty() && sig.generics.is_empty() {
+            return self.infer_method_call(
+                typed_receiver,
+                iface_mangled,
+                name,
+                sig,
+                type_args,
+                args,
+                span,
+            );
+        }
+        let is_array = matches!(recv_ty.peel(), Type::Array(_));
+        let method = name.name.clone();
+        let call = self.infer_generic_method_call(
+            typed_receiver,
+            iface_mangled,
+            name,
+            sig,
+            interface_bindings,
+            type_args,
+            args,
+            expected,
+            span,
+        )?;
+        if is_array {
+            return self.narrow_by_callback_predicate(&method, call, span);
+        }
+        Ok(call)
+    }
+
+    /// `u.name(args)` where `u` is a union of strings with arrays or tuples,
+    /// and both declare `name`: as tsc calls a union's method, each argument
+    /// must fit both signatures. The two have no shared representation, so
+    /// `typeof u === "string"` picks the string's call or the array's, with
+    /// `u` and each argument evaluated once, before either.
+    fn string_or_array_method_call(
+        &mut self,
+        typed_receiver: ExprId,
+        arrays: Type,
+        call: MethodCallSite<'_>,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let span = call.span;
+        let mut stmts = Vec::new();
+        let held = self.hold_in_temp(typed_receiver, "method_receiver", &mut stmts)?;
+        for &arg in &call.args {
+            let (typed_arg, _) = self.infer_expr(arg, None)?;
+            let held_arg = self.hold_in_temp(typed_arg, "method_argument", &mut stmts)?;
+            self.held_arguments.insert(arg, held_arg);
+        }
+        let string_call = self.narrowed_method_call(held, Type::String, call.clone());
+        let array_call = self.narrowed_method_call(held, arrays, call.clone());
+        for arg in &call.args {
+            self.held_arguments.remove(arg);
+        }
+        let ((string_call, string_ty), (array_call, array_ty)) = (string_call?, array_call?);
+        let is_string = self.push_synthetic_expr(
+            TypedExprKind::TypeofTag {
+                value: held,
+                tag: crate::TypeofTagKind::String,
+            },
+            Type::Boolean,
+            span,
+        )?;
+        let result_ty = Type::union(vec![string_ty, array_ty]);
+        let result = self.push_synthetic_expr(
+            TypedExprKind::Ternary {
+                cond: is_string,
+                then_: string_call,
+                else_: array_call,
+            },
+            result_ty.clone(),
+            span,
+        )?;
+        Ok((TypedExprKind::Sequence { stmts, result }, result_ty))
+    }
+
+    /// `(held as narrowed).name(args)`, for a `held` known to hold `narrowed`.
+    fn narrowed_method_call(
+        &mut self,
+        held: ExprId,
+        narrowed: Type,
+        call: MethodCallSite<'_>,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let span = call.span;
+        let value = self.reread_temp(held)?;
+        let receiver = self.push_synthetic_expr(
+            TypedExprKind::Cast {
+                value,
+                target_ty: narrowed.clone(),
+                check: None,
+            },
+            narrowed.clone(),
+            span,
+        )?;
+        let (kind, ty) = self.infer_found_method_call(receiver, &narrowed, call)?;
+        Ok((self.push_synthetic_expr(kind, ty.clone(), span)?, ty))
+    }
+
     /// `(held as narrowed).length`, for a `held` known to hold `narrowed`.
     fn narrowed_length(
         &mut self,
@@ -11353,6 +11481,17 @@ struct ElementJoin {
     /// Whether elements that don't fit one another join as a union, which
     /// the literal reduces and normalizes once every element is typed.
     unions: bool,
+}
+
+/// A method call's parts after its callee: what dispatch needs once the
+/// receiver is typed.
+#[derive(Clone)]
+struct MethodCallSite<'a> {
+    name: Ident,
+    type_args: Option<Vec<TypeAnnotation>>,
+    args: Vec<ExprId>,
+    expected: Option<&'a Type>,
+    span: Span,
 }
 
 #[derive(Clone, Copy)]
