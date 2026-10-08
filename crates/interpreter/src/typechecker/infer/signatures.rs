@@ -539,12 +539,6 @@ impl<'a> Inferer<'a> {
                         });
                         continue;
                     }
-                    // `JSON.stringify` calls `toJson` through the vtable, which an
-                    // absent one would leave null. An absent `toString` falls back
-                    // to `[object Object]`, as JavaScript does.
-                    if optional && p_name.name == "toJson" {
-                        self.error(p_name.span, format!("`{}` cannot be optional", p_name.name));
-                    }
                     let resolved_ty = self.resolve_value_type(&ty, ValuePosition::FieldType)?;
                     self.check_conversion_property(&p_name, &resolved_ty);
                     typed_members.push(crate::TypedInterfaceMember::Property {

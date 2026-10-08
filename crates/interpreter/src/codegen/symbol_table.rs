@@ -123,6 +123,9 @@ pub struct SymbolTable {
     // Closures, adapters, and direct-dispatch wrappers are NOT in this map.
     top_level_fns: BTreeMap<MangledName, TopLevelFn>,
     iface_dispatch: BTreeMap<MangledName, Dispatch>,
+    /// The JavaScript string form of each static-dispatch interface's binding,
+    /// which names the object the binding reads as when used as a value.
+    static_value_tags: BTreeMap<MangledName, String>,
     /// Physical signature of each Direct/Static-dispatch interface wrapper,
     /// keyed by its `iface#method` dispatch key.
     iface_method_abi: BTreeMap<MangledName, MethodSlotAbi>,
@@ -899,6 +902,14 @@ impl SymbolTable {
 
     pub fn record_iface_dispatch(&mut self, iface: MangledName, dispatch: Dispatch) {
         self.iface_dispatch.insert(iface, dispatch);
+    }
+
+    pub fn record_static_value_tag(&mut self, iface: MangledName, tag: String) {
+        self.static_value_tags.insert(iface, tag);
+    }
+
+    pub fn static_value_tag(&self, iface: &MangledName) -> Option<&str> {
+        self.static_value_tags.get(iface).map(String::as_str)
     }
 
     pub fn iface_dispatch(&self, iface: &MangledName) -> Option<Dispatch> {

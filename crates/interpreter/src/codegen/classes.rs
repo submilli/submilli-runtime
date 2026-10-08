@@ -1045,6 +1045,9 @@ impl ClassPlan {
                 });
             let to_string = match user_method_thunk("toString")? {
                 Some(thunk) => thunk,
+                None if class.fields.iter().any(|field| field.name == "toString") => {
+                    emit_class_to_string_field_body(ctx.symbols, intrinsics)?
+                }
                 None if extends_error => {
                     emit_error_slot_body(ctx.symbols, intrinsics, 0, intrinsics.to_string_fn)?
                 }
@@ -2221,6 +2224,28 @@ fn emit_class_to_string_body(
         string_vtable_global_idx,
         "[object Object]",
     )?;
+    f.instruction(&Instruction::End);
+    Ok(f)
+}
+
+/// A class whose `toString` is a field converts through the host object vtable,
+/// which calls the field when it holds a function and gives `[object Object]`
+/// otherwise, as when an optional one is absent.
+fn emit_class_to_string_field_body(
+    symbols: &SymbolTable,
+    intrinsics: IntrinsicTypeIndices,
+) -> Result<Function, CompilerFailure> {
+    let object_vtable = symbols
+        .prelude_global_idx("object_vtable")
+        .ok_or_else(|| internal_failure("object_vtable is not imported from the prelude"))?;
+    let mut f = Function::new([]);
+    f.instruction(&Instruction::LocalGet(0));
+    f.instruction(&Instruction::GlobalGet(object_vtable));
+    f.instruction(&Instruction::StructGet {
+        struct_type_index: intrinsics.vtable,
+        field_index: 0,
+    });
+    f.instruction(&Instruction::CallRef(intrinsics.to_string_fn));
     f.instruction(&Instruction::End);
     Ok(f)
 }

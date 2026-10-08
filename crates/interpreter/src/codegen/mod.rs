@@ -103,6 +103,17 @@ fn index_space_exhausted() -> CompilerFailure {
     }
 }
 
+/// How JavaScript prints the static-dispatch binding `name`. The capitalized
+/// ones (`Number`, `Map`, `Temporal.Instant`) are constructors, which print as
+/// native functions; `console` is the one plain object, printed by its tag.
+fn static_value_tag(name: &str) -> String {
+    if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+        format!("function {name}() {{ [native code] }}")
+    } else {
+        format!("[object {name}]")
+    }
+}
+
 /// The `Dispatch::Static` interface `ty` names in `defs`, if any. Constructor
 /// and namespace receiver bindings (`console`, `Map`, `Temporal.Instant`) are
 /// typed by these; every call site drops the receiver, so the bindings are
@@ -209,6 +220,10 @@ fn import_value_symbol(
             // references to a typed null, and import nothing.
             if let Some(ts) = static_interface_of(defs, ty) {
                 symbols.record_iface_dispatch(ts.mangled_name.clone(), crate::Dispatch::Static);
+                symbols.record_static_value_tag(
+                    ts.mangled_name.clone(),
+                    static_value_tag(&value.name),
+                );
                 return Ok(());
             }
             // Every exported value-global is Wasm-mutable across the board — a

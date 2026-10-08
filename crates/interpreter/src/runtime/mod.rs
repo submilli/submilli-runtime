@@ -192,6 +192,9 @@ pub struct StoreData {
     pub(crate) call_metadata_type: Option<wasmtime::StructType>,
     pub(crate) iterator_functions: [Option<wasmtime::Func>; 10],
     pub(crate) iterator_constants: [Option<wasmtime::Global>; 6],
+    /// The object each static-dispatch binding is as a value, by its string
+    /// form; see `prelude::object::static_value`.
+    pub(crate) static_values: std::collections::BTreeMap<Vec<u16>, wasmtime::Global>,
     pub(crate) parameter_cache: prelude::arguments::ParameterCache,
     pub(crate) regex_input: Option<prelude::regex::input::InputCache>,
     /// Runtime type metadata keyed by package name.
@@ -281,6 +284,7 @@ impl StoreData {
             call_metadata_type: None,
             iterator_functions: [None; 10],
             iterator_constants: [None; 6],
+            static_values: std::collections::BTreeMap::new(),
             parameter_cache: Default::default(),
             regex_input: None,
             type_info: std::collections::BTreeMap::new(),

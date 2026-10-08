@@ -653,7 +653,15 @@ async fn object_override(
     for (key, value) in read_object_entries(caller, recv, name)? {
         if key == wanted && is_function(caller, &value)? {
             let closure = super::closure::read(caller, &value, name)?;
-            return closure.call(caller, &[]).await.map(Some);
+            let result = closure.call_with_arguments(caller, *recv, &[]).await?;
+            // A `Record` field can hold a conversion of any return type, and
+            // every reader of the result takes its payload as code units.
+            if !super::collection::is_a(caller, &result, &intr.string)? {
+                let error =
+                    crate::runtime::host::type_error(format!("{name} must return a string"));
+                return Err(crate::runtime::host::throw_host_error(caller, error));
+            }
+            return Ok(Some(result));
         }
     }
     Ok(None)

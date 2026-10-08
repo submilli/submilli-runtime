@@ -1154,15 +1154,16 @@ impl StringAbi {
 
 /// Read a `$Array` of boxed numbers (the packed rest args of a `fromCharCode` /
 /// `fromCodePoint` call) into their `f64` payloads.
-/// `String(value)`: a bigint renders its decimal text; anything else re-enters
-/// its vtable `toString` slot. Null mirrors the Wasm wrapper's trap as a
-/// catchable error.
+/// `String(value)`: null renders `"null"`, as ECMAScript's ToString does; a
+/// bigint renders its decimal text; anything else re-enters its vtable
+/// `toString` slot.
 async fn string_ctor_call(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
 ) -> wasmtime::Result<Val> {
     let Val::AnyRef(Some(any)) = value else {
-        return Err(wasmtime::Error::msg("String(value): value is null"));
+        let st = write_submilli_string_struct(caller, "null")?;
+        return Ok(Val::AnyRef(Some(st.to_anyref())));
     };
     let intr = intrinsic_types(&mut *caller)?;
     if let Some(st) = any.as_struct(&mut *caller)?

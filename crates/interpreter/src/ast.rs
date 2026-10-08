@@ -848,6 +848,10 @@ pub struct Ast {
     pub tuple_pattern_sources: std::collections::BTreeSet<ExprId>,
     /// Source names in lowered for-of heads, whose TDZ includes the iterable.
     pub for_of_pattern_bindings: std::collections::BTreeMap<StmtId, Vec<Ident>>,
+    /// The `let` names a destructuring `for` initializer declared, by the
+    /// lowered `for`, whose initializer now precedes it (populated by
+    /// `lower_patterns`).
+    pub for_pattern_init_bindings: std::collections::BTreeMap<StmtId, Vec<Ident>>,
     /// Top-level declarations carrying a leading `export` (Form 1).
     pub exported_decls: Vec<ExportedDecl>,
 }
