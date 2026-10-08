@@ -175,7 +175,7 @@ fn execute_authority_map(args: CompileArgs) -> anyhow::Result<ExitCode> {
         .collect::<Vec<_>>();
     packages.sort_by(|left, right| left.name.cmp(right.name));
     let output = AuthorityMapOutput {
-        schema_version: 1,
+        schema_version: 2,
         packages,
     };
     let mut stdout = io::stdout().lock();
