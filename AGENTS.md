@@ -29,6 +29,53 @@ Changes must build and test from this repository without private documentation.
 - Runtime strings are UTF-16 code units. Operate on those units rather than
   round-tripping through Rust UTF-8 strings, which loses lone surrogates.
 
+## Server domain and application layers
+
+These rules govern `crates/submilli-server/src/domain/` and
+`crates/submilli-server/src/application/`, with implementations of ports in
+`crates/submilli-server/src/adapters/`.
+
+- **Ubiquitous language comes first.** Domain types, use-cases, and port contracts
+  must express business concepts and actual behavior. Agree on what a concept
+  means before naming or abstracting it. `SessionCache` and
+  `SessionCleanupQueue` describe infrastructure; wrapping them in traits does
+  not make them domain concepts. Existing exceptions are not precedents.
+- **Domain is pure.** It owns business rules and state transitions, with no I/O,
+  clock reads, or dependencies on server modules outside `domain`. It may depend
+  on the shared kernel, currently `submilli-blueprint`. Reuse its `Blueprint`
+  type rather than introducing a wrapper solely for storage concerns.
+- Aggregates protect their invariants through meaningful operations such as
+  `close`, `expire`, `recover`, and `replace_credentials`. Application code calls
+  those operations rather than changing fields directly. Names must describe
+  what happens: recording execution timestamps is not acquiring or releasing
+  execution ownership.
+- **Application knows domain; all other collaborators come through ports.**
+  Organize use-cases under `application/blueprints/` and `application/sessions/`.
+  Inject focused ports through use-case constructors. Do not depend directly on
+  managers, storage implementations, transport types, caches, or other
+  infrastructure, and do not collect unrelated operations in an environment
+  trait. Application orchestrates work and may read the current time; it does
+  not need to be pure.
+- Define ports in application and implement them in adapters. Keep persistence
+  records, serialization formats, and infrastructure details out of domain and
+  application contracts. Session repositories work with the domain `Session`.
+  Cross-aggregate use-case orchestration belongs in application, not storage.
+- Unit of work and repositories are separate patterns here. `UnitOfWork` has
+  the direct operations its callers need, such as `get_session` and
+  `save_session`; it must not extend repositories or expose repository
+  accessors. Independent repositories use names such as `get` and `save`.
+  Add only methods needed by current use-cases. A unit of work accumulates
+  changes, reads its own changes, and commits them without a separate changes
+  argument. Dropping it without committing must discard uncommitted changes.
+
+Domain events are a future direction, not a requirement to add an event system
+to each change. The domain can produce business facts such as `SessionClosed`,
+with orchestration outside application dispatching them to handlers for effects
+such as scheduling cleanup. This can reduce application ports while keeping
+infrastructure out of its vocabulary. When introduced, event delivery must
+preserve transaction guarantees so a committed transition cannot lose its
+required follow-up work.
+
 ## Errors and capabilities
 
 Compile errors should include source context, a caret, relevant type or function

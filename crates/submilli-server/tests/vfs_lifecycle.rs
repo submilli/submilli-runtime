@@ -327,14 +327,14 @@ async fn per_session_resumes_after_restart() {
     let restarted = restartable_state(vfs_root.path(), store_dir.path());
     assert_eq!(
         active_sessions(&restarted).await,
-        0,
-        "a fresh process knows nothing until boot"
+        1,
+        "a fresh process reads authoritative session records before boot"
     );
     restarted.boot().await.expect("boot");
     assert_eq!(
         active_sessions(&restarted).await,
         1,
-        "boot rehydrates the persisted session"
+        "boot preserves the persisted session"
     );
 
     let r = execute_on(&restarted, READ, &session).await;

@@ -20,6 +20,8 @@ type CloseResult = Option<Result<(), Arc<DatabaseError>>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DatabaseError {
+    #[error("session revision conflict or retired binding")]
+    SessionConflict,
     #[error("database path {0} has no file name or parent directory")]
     InvalidPath(PathBuf),
     #[error("database I/O at {path}: {source}")]
@@ -450,3 +452,15 @@ fn windows_link_count(path: &Path) -> std::io::Result<u64> {
 
 #[cfg(test)]
 mod tests;
+
+impl From<crate::database::DatabaseError> for crate::application::error::StoreError {
+    fn from(error: crate::database::DatabaseError) -> Self {
+        match error {
+            crate::database::DatabaseError::AlreadyExists => Self::AlreadyExists,
+            crate::database::DatabaseError::RevisionExhausted { name } => {
+                Self::RevisionExhausted { name }
+            }
+            error => Self::Database(Box::new(error)),
+        }
+    }
+}

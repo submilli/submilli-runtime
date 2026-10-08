@@ -426,11 +426,13 @@ pub async fn remove(
     let removed = {
         let mut tags = state.blueprint_tags_for_write().await;
         let removed = state
-            .blueprints()
-            .remove(&name)
+            .remove_blueprint(&name)
             .await
-            .map_err(store_error)?;
-        // Only once the store no longer holds it, so a failed remove keeps its tag.
+            .map_err(|error| match error {
+                crate::application::blueprints::remove::RemoveBlueprintError::Storage(error) => {
+                    store_error(error)
+                }
+            })?;
         if removed {
             tags.remove(&name);
         }
@@ -439,10 +441,6 @@ pub async fn remove(
     if !removed {
         return Err(not_found(name));
     }
-    state.wipe_blueprint_sessions(&name).await;
-    state.evict_mcp_service(&name);
-    state.evict_mcp_catalog(&name);
-    state.evict_prepared_packages(&name);
     Ok((StatusCode::OK, Json(AddResponse { name })))
 }
 
