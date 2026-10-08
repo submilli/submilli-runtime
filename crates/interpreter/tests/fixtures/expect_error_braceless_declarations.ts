@@ -1,5 +1,5 @@
 // expect-error: a `function` declaration can't be the body of a statement without braces
-// expect-error: a `class` declaration can't be the body of a statement without braces
+// expect-error: a `class` must be declared at the top level of the module
 // expect-error: an `interface` declaration can't be the body of a statement without braces
 // expect-error: an `enum` declaration can't be the body of a statement without braces
 // expect-error: a `type` declaration can't be the body of a statement without braces

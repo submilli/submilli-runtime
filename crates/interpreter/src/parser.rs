@@ -685,6 +685,15 @@ impl<'a> Parser<'a> {
     fn parse_class_decl(&mut self) -> Option<StmtId> {
         let doc = self.take_leading_doc();
         let kw = self.advance();
+        // Classes are collected from the module's top level only; a nested one
+        // would otherwise be dropped unchecked.
+        if self.block_depth > 0 {
+            self.error_at_with_help(
+                kw.span,
+                "a `class` must be declared at the top level of the module",
+                vec!["move this `class` outside any block or function body".to_string()],
+            );
+        }
         let name = self.parse_type_decl_name("a", "class")?;
 
         let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
@@ -2198,7 +2207,7 @@ impl<'a> Parser<'a> {
             TokenKind::Let => Some(("a", "let")),
             TokenKind::Const => Some(("a", "const")),
             TokenKind::Function => Some(("a", "function")),
-            TokenKind::Class => Some(("a", "class")),
+            // A nested `class` is reported wherever it is: see `parse_class_decl`.
             TokenKind::Interface => Some(("an", "interface")),
             TokenKind::Enum => Some(("an", "enum")),
             _ if self.peek_identifier_text_is("type") => Some(("a", "type")),
