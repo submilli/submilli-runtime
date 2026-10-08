@@ -87,33 +87,66 @@ pub(super) fn every_array_of_object_literals(
     Ok(true)
 }
 
-/// Whether `expr`'s type lists every field it holds, at the top level and in
-/// the objects an array of it holds: an object literal, or an array literal of
-/// them. tsc checks such a type for excess fields when it reduces subtypes; a
-/// literal that only spreads takes its fields from values, which it doesn't
-/// check.
-pub(super) fn is_fresh_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
+/// What an array literal's element tells tsc's subtype reduction about its
+/// type, from the literal that wrote it, at the top level and in the objects
+/// an array of it holds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct LiteralElement {
+    /// An object literal's type lists every field it holds, so tsc relates it
+    /// to an optional field it lacks. Spreads included.
+    pub(super) object_literal: bool,
+    /// A literal naming its own fields is fresh, and tsc checks it for excess
+    /// fields. One that only spreads takes its fields from values, which
+    /// aren't checked.
+    pub(super) excess_checked: bool,
+}
+
+impl LiteralElement {
+    pub(super) const NONE: Self = Self {
+        object_literal: false,
+        excess_checked: false,
+    };
+    pub(super) const FIELD_LITERAL: Self = Self {
+        object_literal: true,
+        excess_checked: true,
+    };
+
+    /// What two literals of the same type tell together.
+    pub(super) fn and(self, other: Self) -> Self {
+        Self {
+            object_literal: self.object_literal && other.object_literal,
+            excess_checked: self.excess_checked && other.excess_checked,
+        }
+    }
+}
+
+/// What the literal `expr` is, for subtype reduction: an object literal, or an
+/// array literal of them.
+pub(super) fn literal_element(
+    ast: &crate::Ast,
+    expr: ExprId,
+) -> Result<LiteralElement, CompilerFailure> {
     let id = peel_parens(ast, expr)?;
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
-            ExprKind::ObjectLiteral { members } => {
-                members.is_empty()
+            ExprKind::ObjectLiteral { members } => LiteralElement {
+                object_literal: true,
+                excess_checked: members.is_empty()
                     || members
                         .iter()
-                        .any(|member| !matches!(member, crate::ObjectLiteralMember::Spread { .. }))
-            }
+                        .any(|member| !matches!(member, crate::ObjectLiteralMember::Spread { .. })),
+            },
             ExprKind::ArrayLiteral { elements } => {
+                let mut literal = LiteralElement::FIELD_LITERAL;
                 for element in elements {
                     let crate::ArrayLiteralElement::Value(id) = element else {
-                        return Ok(false);
+                        return Ok(LiteralElement::NONE);
                     };
-                    if !is_fresh_literal(ast, *id)? {
-                        return Ok(false);
-                    }
+                    literal = literal.and(literal_element(ast, *id)?);
                 }
-                true
+                literal
             }
-            _ => false,
+            _ => LiteralElement::NONE,
         },
     )
 }
@@ -152,7 +185,7 @@ pub(super) fn has_running_shape(
 
 /// The fields of a fresh object literal that normalizes: one that only names
 /// its fields, with no spread or computed key that could bring in fields its
-/// type doesn't list. (An excess-field check, `is_fresh_literal`, also covers a
+/// type doesn't list. (The excess-field check, `literal_element`, also covers a
 /// literal that spreads values beside its own fields, as tsc's does.)
 fn fresh_object_fields(
     ast: &crate::Ast,

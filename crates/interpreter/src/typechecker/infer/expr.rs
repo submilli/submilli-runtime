@@ -4817,8 +4817,8 @@ impl Inferer<'_> {
     /// ruled out, since the spread may overwrite a tag.
     ///
     /// Returns the unknown fields the literal's type leaves out: those of a
-    /// target whose fields are all optional, which would otherwise fail its
-    /// weak-type check too and report twice.
+    /// target with a member whose fields are all optional, which would
+    /// otherwise fail its weak-type check too and report twice.
     fn report_unknown_union_fields(
         &mut self,
         union_members: &[Type],
@@ -4848,11 +4848,12 @@ impl Inferer<'_> {
             candidates
         };
 
-        // As for a single target, only a field unknown to members whose fields
-        // are all optional is left out of the literal's type.
-        let is_weak_target = candidates
+        // As for a single target, a field is left out of the literal's type
+        // only when a member it may be has only optional fields, whose
+        // weak-type check would report it again.
+        let has_weak_candidate = candidates
             .iter()
-            .all(|shape| shape.values().all(|field| field.optional));
+            .any(|shape| shape.values().all(|field| field.optional));
         let mut known = std::collections::BTreeMap::new();
         for shape in candidates {
             for (name, field) in shape {
@@ -4862,7 +4863,7 @@ impl Inferer<'_> {
         for field in literal_fields {
             if !known.contains_key(&field.name.name) {
                 self.report_unknown_field(field, &known);
-                if is_weak_target {
+                if has_weak_candidate {
                     unknown.insert(field.name.name.clone());
                 }
             }
@@ -6157,9 +6158,11 @@ impl Inferer<'_> {
             .iter()
             .map(|element| match element {
                 crate::ArrayLiteralElement::Value(id) => {
-                    object_normalization::is_fresh_literal(self.ast, *id)
+                    object_normalization::literal_element(self.ast, *id)
                 }
-                crate::ArrayLiteralElement::Spread { .. } => Ok(false),
+                crate::ArrayLiteralElement::Spread { .. } => {
+                    Ok(object_normalization::LiteralElement::NONE)
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         let mut typed_elements: Vec<crate::TypedArrayElement> = Vec::with_capacity(elements.len());
