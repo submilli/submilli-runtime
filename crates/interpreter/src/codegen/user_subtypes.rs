@@ -286,97 +286,7 @@ fn emit_subtype_to_string_body(
         return Ok(f);
     }
 
-    // The typechecker guarantees a `toString` field is `() => string`. It may be
-    // optional, and an absent one falls back to `[object Object]`, as in
-    // JavaScript, where the property lookup reaches `Object.prototype`.
-    let to_string_sig = crate::codegen::closures::ClosureSig {
-        arity: 0,
-        is_void: false,
-    };
-    let closure_struct_idx = symbols
-        .closure_struct_type_idx(to_string_sig)
-        .ok_or_else(|| {
-            crate::codegen::internal_failure(
-                "closure struct for `() => string` registered when any shape declares a toString \
-         override (collect_from_dependencies walks every shape field type)",
-            )
-        })?;
-    let closure_func_type_idx = symbols
-        .closure_func_type_idx(to_string_sig)
-        .ok_or_else(|| {
-            crate::codegen::internal_failure(
-                "closure funcref type for `() => string` registered alongside its struct",
-            )
-        })?;
-
-    let object_shape_ref = ref_to(intrinsics.object_shape);
-    let closure_ref = ref_to(closure_struct_idx);
-
-    // Locals (after 1 param: self=0):
-    //   1: self_t  (ref $object_shape)
-    //   2: closure (ref $Closure_string)
-    let locals: Vec<(u32, ValType)> = vec![(1, object_shape_ref), (1, closure_ref)];
-    let mut f = Function::new(locals);
-    let self_t = 1u32;
-    let closure = 2u32;
-
-    f.instruction(&Instruction::LocalGet(0));
-    f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
-        intrinsics.object_shape,
-    )));
-    f.instruction(&Instruction::LocalSet(self_t));
-
-    // The outer block yields the result string; the inner one is left for the
-    // `[object Object]` fallback below it when the field slot is null.
-    f.instruction(&Instruction::Block(BlockType::Result(ref_to(
-        intrinsics.string,
-    ))));
-    f.instruction(&Instruction::Block(BlockType::Empty));
-    // The field slot is `(ref null $Object)`; null when an optional `toString`
-    // is absent.
-    let to_string_slot = field_index(&subtype.ty, "toString")?
-        .ok_or_else(|| internal_failure("an object shape lost its toString field slot"))?;
-    f.instruction(&Instruction::LocalGet(self_t));
-    f.instruction(&Instruction::StructGet {
-        struct_type_index: intrinsics.object_shape,
-        field_index: 2,
-    });
-    f.instruction(&Instruction::I32Const(to_string_slot.cast_signed()));
-    f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
-    f.instruction(&Instruction::BrOnNull(0));
-    f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
-        closure_struct_idx,
-    )));
-    f.instruction(&Instruction::LocalSet(closure));
-
-    f.instruction(&Instruction::LocalGet(closure));
-    f.instruction(&Instruction::StructGet {
-        struct_type_index: closure_struct_idx,
-        field_index: 2,
-    });
-    f.instruction(&Instruction::LocalGet(closure));
-    f.instruction(&Instruction::StructGet {
-        struct_type_index: closure_struct_idx,
-        field_index: 1,
-    });
-    f.instruction(&Instruction::CallRef(closure_func_type_idx));
-
-    // The closure returns its result boxed as `(ref $Object)`; unbox
-    // to `(ref $string)` to match `$toStringFn`'s return type.
-    f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
-        intrinsics.string,
-    )));
-    f.instruction(&Instruction::Br(1));
-    f.instruction(&Instruction::End);
-    crate::codegen::intrinsics::push_string_literal(
-        &mut f,
-        intrinsics,
-        string_vtable_global_idx,
-        "[object Object]",
-    )?;
-    f.instruction(&Instruction::End);
-    f.instruction(&Instruction::End);
-    Ok(f)
+    emit_conversion_override_body(subtype, intrinsics, symbols, ConversionSlot::ToString)
 }
 
 fn emit_subtype_to_json_body(
@@ -391,7 +301,7 @@ fn emit_subtype_to_json_body(
     let fields = subtype.fields()?;
 
     if fields.contains_key("toJson") {
-        return emit_subtype_to_json_override_body(subtype, intrinsics, symbols);
+        return emit_conversion_override_body(subtype, intrinsics, symbols, ConversionSlot::ToJson);
     }
 
     let Some(type_id) = host_json_type else {
@@ -619,62 +529,111 @@ fn emit_subtype_to_json_vtable_body(
     Ok(f)
 }
 
-fn emit_subtype_to_json_override_body(
+/// The vtable slots a `toString` or `toJson` field overrides.
+#[derive(Clone, Copy)]
+enum ConversionSlot {
+    ToString,
+    ToJson,
+}
+
+impl ConversionSlot {
+    fn field_name(self) -> &'static str {
+        match self {
+            Self::ToString => "toString",
+            Self::ToJson => "toJson",
+        }
+    }
+
+    fn vtable_field(self) -> u32 {
+        match self {
+            Self::ToString => 0,
+            Self::ToJson => 1,
+        }
+    }
+
+    fn function_type(self, intrinsics: IntrinsicTypeIndices) -> u32 {
+        match self {
+            Self::ToString => intrinsics.to_string_fn,
+            Self::ToJson => intrinsics.to_json_fn,
+        }
+    }
+}
+
+/// A conversion slot backed by the shape's `toString`/`toJson` field. A
+/// `() => string` closure in the field is called directly. Anything else (an
+/// absent optional field, or a function that takes defaults or a rest
+/// parameter) goes to the host object vtable's slot, which calls the field
+/// with JavaScript's argument rules, or converts the object as if it had no
+/// such field.
+fn emit_conversion_override_body(
     subtype: &UserSubtype,
     intrinsics: IntrinsicTypeIndices,
     symbols: &SymbolTable,
+    slot: ConversionSlot,
 ) -> Result<Function, CompilerFailure> {
-    let to_json_sig = crate::codegen::closures::ClosureSig {
+    let object_vtable_global = symbols
+        .prelude_global_idx("object_vtable")
+        .ok_or_else(|| internal_failure("object_vtable is not imported from the prelude"))?;
+    let conversion_sig = crate::codegen::closures::ClosureSig {
         arity: 0,
         is_void: false,
     };
     let closure_struct_idx = symbols
-        .closure_struct_type_idx(to_json_sig)
+        .closure_struct_type_idx(conversion_sig)
         .ok_or_else(|| {
-            crate::codegen::internal_failure(
-                "closure struct for `() => string` registered when any shape declares a toJson \
-         override (collect_from_dependencies walks every shape field type)",
+            internal_failure(
+                "closure struct for `() => string` registered when any shape declares a \
+                 conversion override (collect_from_dependencies walks every shape field type)",
             )
         })?;
-    let closure_func_type_idx = symbols.closure_func_type_idx(to_json_sig).ok_or_else(|| {
-        crate::codegen::internal_failure(
-            "closure funcref type for `() => string` registered alongside its struct",
-        )
-    })?;
-
-    let object_shape_ref = ref_to(intrinsics.object_shape);
-    let closure_ref = ref_to(closure_struct_idx);
+    let closure_func_type_idx = symbols
+        .closure_func_type_idx(conversion_sig)
+        .ok_or_else(|| {
+            internal_failure(
+                "closure funcref type for `() => string` registered alongside its struct",
+            )
+        })?;
+    let field_slot = field_index(&subtype.ty, slot.field_name())?
+        .ok_or_else(|| internal_failure("an object shape lost its conversion field slot"))?;
 
     // Locals (after 1 param: self=0):
-    //   1: self_t  (ref $object_shape)
-    //   2: closure (ref $Closure_string)
-    let locals: Vec<(u32, ValType)> = vec![(1, object_shape_ref), (1, closure_ref)];
-    let mut f = Function::new(locals);
-    let self_t = 1u32;
-    let closure = 2u32;
+    //   1: closure (ref $Closure_string)
+    let mut f = Function::new([(1, ref_to(closure_struct_idx))]);
+    let closure = 1u32;
 
+    // The outer block yields the result string; the inner one is left, with
+    // the field value, for the host fallback below it.
+    f.instruction(&Instruction::Block(BlockType::Result(ref_to(
+        intrinsics.string,
+    ))));
+    f.instruction(&Instruction::Block(BlockType::Result(ValType::Ref(
+        RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(intrinsics.object),
+        },
+    ))));
     f.instruction(&Instruction::LocalGet(0));
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         intrinsics.object_shape,
     )));
-    f.instruction(&Instruction::LocalSet(self_t));
-
-    // The typechecker guarantees `toJson` is non-optional `() => string`.
-    let to_json_slot = field_index(&subtype.ty, "toJson")?
-        .ok_or_else(|| internal_failure("an object shape lost its toJson field slot"))?;
-    f.instruction(&Instruction::LocalGet(self_t));
     f.instruction(&Instruction::StructGet {
         struct_type_index: intrinsics.object_shape,
         field_index: 2,
     });
-    f.instruction(&Instruction::I32Const(to_json_slot.cast_signed()));
+    f.instruction(&Instruction::I32Const(field_slot.cast_signed()));
     f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
-    f.instruction(&Instruction::RefAsNonNull);
-    f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
-        closure_struct_idx,
-    )));
+    f.instruction(&Instruction::BrOnCastFail {
+        relative_depth: 0,
+        from_ref_type: RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(intrinsics.object),
+        },
+        to_ref_type: RefType {
+            nullable: false,
+            heap_type: HeapType::Concrete(closure_struct_idx),
+        },
+    });
     f.instruction(&Instruction::LocalSet(closure));
-
     f.instruction(&Instruction::LocalGet(closure));
     f.instruction(&Instruction::StructGet {
         struct_type_index: closure_struct_idx,
@@ -686,9 +645,22 @@ fn emit_subtype_to_json_override_body(
         field_index: 1,
     });
     f.instruction(&Instruction::CallRef(closure_func_type_idx));
+    // The closure returns its result boxed as `(ref $Object)`; the slot
+    // returns `(ref $string)`.
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         intrinsics.string,
     )));
+    f.instruction(&Instruction::Br(1));
+    f.instruction(&Instruction::End);
+    f.instruction(&Instruction::Drop);
+    f.instruction(&Instruction::LocalGet(0));
+    f.instruction(&Instruction::GlobalGet(object_vtable_global));
+    f.instruction(&Instruction::StructGet {
+        struct_type_index: intrinsics.vtable,
+        field_index: slot.vtable_field(),
+    });
+    f.instruction(&Instruction::CallRef(slot.function_type(intrinsics)));
+    f.instruction(&Instruction::End);
     f.instruction(&Instruction::End);
     Ok(f)
 }

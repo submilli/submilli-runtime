@@ -89,7 +89,11 @@ async fn lookup(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
     require_receiver(abi_arg(params, 0)?)?;
     let name = host::read_string_arg(caller, abi_arg(params, 1)?, "member")?;
     let fallback = host::read_string_arg(caller, abi_arg(params, 2)?, "interface")?;
-    let method = value::conversion_method(caller, abi_arg(params, 0)?, &name).await?;
+    // An optional conversion field left out reads as null; the call then takes
+    // the inherited conversion, as `String(value)` does.
+    let method = value::conversion_method(caller, abi_arg(params, 0)?, &name)
+        .await?
+        .filter(|method| !matches!(method, Val::AnyRef(None)));
     let interface = receiver_interface(caller, abi_arg(params, 0)?)?.unwrap_or(fallback);
     let key = if method.is_some() {
         String::new()

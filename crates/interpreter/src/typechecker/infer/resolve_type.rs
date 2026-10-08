@@ -696,25 +696,17 @@ impl<'a> Inferer<'a> {
                         return Ok(Type::Error);
                     }
                     let ty = self.resolve_value_type(&field.ty, ValuePosition::FieldType)?;
-                    // Optional override fields rejected — would require null-check on every dispatch.
-                    if let Some(expected) = override_field_signature(&field.name.name) {
-                        if field.optional {
-                            self.error(
-                                field.name.span,
-                                format!("`{}` cannot be optional", field.name.name),
-                            );
-                            return Ok(Type::Error);
-                        }
-                        if !super::assignable(&ty, &expected, self.resolver()) {
-                            self.error(
-                                field.name.span,
-                                format!(
-                                    "field `{}` must have type `{}` (got `{}`)",
-                                    field.name.name, expected, ty,
-                                ),
-                            );
-                            return Ok(Type::Error);
-                        }
+                    if let Some(expected) = override_field_signature(&field.name.name)
+                        && !super::assignable(&ty, &expected, self.resolver())
+                    {
+                        self.error(
+                            field.name.span,
+                            format!(
+                                "field `{}` must have type `{}` (got `{}`)",
+                                field.name.name, expected, ty,
+                            ),
+                        );
+                        return Ok(Type::Error);
                     }
                     resolved
                         .entry(field.name.name.clone())
