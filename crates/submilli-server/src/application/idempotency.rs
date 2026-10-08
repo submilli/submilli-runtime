@@ -13,11 +13,14 @@ pub(crate) enum RequestFailure {
     Rule(#[from] crate::domain::idempotent_request::RequestError),
     #[error("session is unavailable")]
     SessionUnavailable,
+    #[error("the previous request outcome is indeterminate")]
+    Indeterminate,
 }
 
 pub(crate) enum RequestDisposition {
     Proceed,
-    Existing(IdempotentRequest),
+    Wait(String),
+    Completed(RecordedOutcome),
 }
 
 pub(crate) struct ReserveRequest<'a> {
@@ -30,6 +33,25 @@ impl<'a> ReserveRequest<'a> {
     pub async fn execute(
         &self,
         request: IdempotentRequest,
+    ) -> Result<RequestDisposition, RequestFailure> {
+        match self.reserve(&request).await {
+            Ok(disposition) => Ok(disposition),
+            Err(error @ RequestFailure::Store(_)) => {
+                // A lost acknowledgement can hide a successful claim. Only this
+                // invocation's reservation identity permits it to proceed.
+                if self.owns_reservation(&request).await.unwrap_or(false) {
+                    Ok(RequestDisposition::Proceed)
+                } else {
+                    Err(error)
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn reserve(
+        &self,
+        request: &IdempotentRequest,
     ) -> Result<RequestDisposition, RequestFailure> {
         let mut unit = self.units.begin().await?;
         let session = unit
@@ -44,28 +66,30 @@ impl<'a> ReserveRequest<'a> {
             .await?
         {
             existing.verify_fingerprint(request.fingerprint())?;
-            return Ok(RequestDisposition::Existing(existing));
+            return match existing.state() {
+                RequestState::Reserved => Ok(RequestDisposition::Wait(
+                    existing.reservation_id().to_owned(),
+                )),
+                RequestState::Completed(outcome) => {
+                    Ok(RequestDisposition::Completed(outcome.clone()))
+                }
+                RequestState::Indeterminate => Err(RequestFailure::Indeterminate),
+            };
         }
-        unit.save_request(request).await?;
+        unit.save_request(request.clone()).await?;
         unit.commit().await?;
         Ok(RequestDisposition::Proceed)
     }
-}
 
-pub(crate) struct ReadRequest<'a> {
-    units: &'a dyn UnitOfWorkFactory,
-}
-impl<'a> ReadRequest<'a> {
-    pub fn new(units: &'a dyn UnitOfWorkFactory) -> Self {
-        Self { units }
-    }
-    pub async fn execute(
-        &self,
-        session: &str,
-        key: &str,
-    ) -> Result<Option<IdempotentRequest>, RequestFailure> {
+    async fn owns_reservation(&self, request: &IdempotentRequest) -> Result<bool, RequestFailure> {
         let mut unit = self.units.begin().await?;
-        Ok(unit.get_request(session, key).await?)
+        let existing = unit
+            .get_request(request.session_id(), request.key())
+            .await?;
+        Ok(existing.is_some_and(|existing| {
+            existing.reservation_id() == request.reservation_id()
+                && existing.state() == &RequestState::Reserved
+        }))
     }
 }
 

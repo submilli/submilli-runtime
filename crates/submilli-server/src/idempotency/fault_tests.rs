@@ -1,4 +1,4 @@
-use super::tests::{fixture, proceed};
+use super::tests::{fixture, proceed, read_request};
 use super::*;
 use crate::application::error::StoreError;
 use crate::application::unit_of_work::UnitOfWork;
@@ -310,8 +310,7 @@ async fn failed_request_cleanup_rolls_back_expiry() {
     assert_eq!(expiry.execute(later).await.unwrap(), 1);
     guard.complete(200, "late".into()).await;
     assert!(
-        ReadRequest::new(units.as_ref())
-            .execute("session", "key")
+        read_request(units.as_ref(), "session", "key")
             .await
             .unwrap()
             .is_none()

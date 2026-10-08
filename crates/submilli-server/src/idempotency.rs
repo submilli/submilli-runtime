@@ -1,11 +1,11 @@
 //! HTTP-facing coordination; the application and database decide ownership.
 use crate::application::idempotency::{
-    ReadRequest, RecoverRequests, RequestDisposition, RequestFailure, RequestResolution,
-    ReserveRequest, ResolveRequest,
+    RecoverRequests, RequestDisposition, RequestFailure, RequestResolution, ReserveRequest,
+    ResolveRequest,
 };
 use crate::application::unit_of_work::UnitOfWorkFactory;
 pub use crate::domain::idempotent_request::RecordedOutcome;
-use crate::domain::idempotent_request::{IdempotentRequest, RequestError, RequestState};
+use crate::domain::idempotent_request::{IdempotentRequest, RequestError};
 use axum::http::StatusCode;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -149,7 +149,7 @@ impl Coordinator {
         // against this identity, even when its acknowledgement never reaches us.
         let guard = self.supervise(request.clone());
         let deadline = tokio::time::Instant::now() + self.waiter_timeout;
-        let mut observed_owner = false;
+        let mut waiting_for = None;
         loop {
             let reserve = async {
                 ReserveRequest::new(self.units.as_ref())
@@ -158,43 +158,28 @@ impl Coordinator {
             };
             let disposition = match tokio::time::timeout_at(deadline, reserve).await {
                 Ok(disposition) => disposition,
-                Err(_) if observed_owner => return Reservation::Refused(Refusal::InProgress),
+                Err(_) if waiting_for.is_some() => {
+                    return Reservation::Refused(Refusal::InProgress);
+                }
                 Err(_) => {
                     return Reservation::Refused(Refusal::Unavailable(
                         "reservation deadline exceeded".into(),
                     ));
                 }
             };
-            let existing = match disposition {
+            match disposition {
                 Ok(RequestDisposition::Proceed) => return Reservation::Proceed(guard),
-                Ok(RequestDisposition::Existing(existing)) => existing,
+                Ok(RequestDisposition::Wait(id)) => waiting_for = Some(id),
+                Ok(RequestDisposition::Completed(outcome)) => return Reservation::Replay(outcome),
                 Err(RequestFailure::Rule(RequestError::Conflict)) => {
                     return Reservation::Refused(Refusal::Conflict);
                 }
-                Err(error) => {
-                    // The same invocation has not dispatched. Only its own durable
-                    // reservation proves an uncertain claim commit succeeded.
-                    match tokio::time::timeout_at(deadline, async {
-                        ReadRequest::new(self.units.as_ref())
-                            .execute(session, key)
-                            .await
-                    })
-                    .await
-                    {
-                        Ok(Ok(Some(existing)))
-                            if existing.reservation_id() == request.reservation_id()
-                                && existing.state() == &RequestState::Reserved =>
-                        {
-                            return Reservation::Proceed(guard);
-                        }
-                        _ => return Reservation::Refused(Refusal::Unavailable(error.to_string())),
-                    }
+                Err(RequestFailure::Indeterminate) => {
+                    return Reservation::Refused(Refusal::Indeterminate);
                 }
-            };
-            match existing.state() {
-                RequestState::Completed(outcome) => return Reservation::Replay(outcome.clone()),
-                RequestState::Indeterminate => return Reservation::Refused(Refusal::Indeterminate),
-                RequestState::Reserved => observed_owner = true,
+                Err(error) => {
+                    return Reservation::Refused(Refusal::Unavailable(error.to_string()));
+                }
             }
             if tokio::time::Instant::now() >= deadline {
                 return Reservation::Refused(Refusal::InProgress);
@@ -290,11 +275,20 @@ mod tests {
     use crate::adapters::unit_of_work::SqliteUnitOfWorkFactory;
     use crate::application::sessions::close::CloseSession;
     use crate::database::ServerDatabase;
+    use crate::domain::idempotent_request::RequestState;
     use crate::domain::session::{RootVfs, Session, SessionBinding, SessionId, SessionLifetime};
 
     struct Audit;
     impl crate::application::sessions::ports::AuditLog for Audit {
         fn record(&self, _: &str, _: crate::application::sessions::ports::SessionEvent) {}
+    }
+
+    pub(super) async fn read_request(
+        units: &dyn UnitOfWorkFactory,
+        session: &str,
+        key: &str,
+    ) -> Result<Option<IdempotentRequest>, crate::application::error::StoreError> {
+        units.begin().await?.get_request(session, key).await
     }
 
     pub(super) async fn fixture() -> (
@@ -396,8 +390,7 @@ mod tests {
         let guard = proceed(coordinator.reserve("session", "key", "code").await);
         coordinator.recover().await.unwrap();
         assert_eq!(
-            ReadRequest::new(units.as_ref())
-                .execute("session", "key")
+            read_request(units.as_ref(), "session", "key")
                 .await
                 .unwrap()
                 .unwrap()
@@ -407,8 +400,7 @@ mod tests {
         let next = Coordinator::new(units.clone(), "next-generation".into());
         next.recover().await.unwrap();
         assert_eq!(
-            ReadRequest::new(units.as_ref())
-                .execute("session", "key")
+            read_request(units.as_ref(), "session", "key")
                 .await
                 .unwrap()
                 .unwrap()
@@ -435,8 +427,7 @@ mod tests {
         unit.remove_session_requests("session").await.unwrap();
         drop(unit);
         assert!(
-            ReadRequest::new(units.as_ref())
-                .execute("session", "key")
+            read_request(units.as_ref(), "session", "key")
                 .await
                 .unwrap()
                 .is_some()
@@ -448,8 +439,7 @@ mod tests {
             .unwrap();
         guard.complete(200, "late".into()).await;
         assert!(
-            ReadRequest::new(units.as_ref())
-                .execute("session", "key")
+            read_request(units.as_ref(), "session", "key")
                 .await
                 .unwrap()
                 .is_none()
