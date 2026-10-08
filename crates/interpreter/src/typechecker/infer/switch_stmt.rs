@@ -1116,14 +1116,9 @@ fn format_one_literal(ty: &Type) -> Option<String> {
         Type::Object { fields, .. } => {
             // Discriminated-union residuals are object variants; find the discriminant field's literal.
             for field in fields.values() {
-                if let Some(lit) = match field.ty.peel() {
-                    Type::StringLiteral(s) => {
-                        Some(format!("\"{}\"", crate::types::escape_string_literal(s)))
-                    }
-                    Type::NumberLiteral(n) => Some(format!("{}", n.0)),
-                    Type::BooleanLiteral(b) => Some(b.to_string()),
-                    _ => None,
-                } {
+                if !matches!(field.ty.peel(), Type::Object { .. })
+                    && let Some(lit) = format_one_literal(&field.ty)
+                {
                     return Some(lit);
                 }
             }

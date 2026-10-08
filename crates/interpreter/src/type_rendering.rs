@@ -267,16 +267,21 @@ fn push<'a>(frames: &mut Vec<Frame<'a>>, frame: Frame<'a>) -> Result<(), RenderE
 /// A field name as TypeScript prints it: bare when it is an identifier (keywords
 /// included), otherwise a quoted string, as `"a b"` and `"1"` are.
 fn write_field_name(out: &mut Writer, name: &str) -> Result<(), RenderError> {
-    let mut chars = name.chars();
-    let is_identifier = chars
-        .next()
-        .is_some_and(|c| c == '_' || c == '$' || unicode_ident::is_xid_start(c))
-        && chars.all(|c| c == '_' || c == '$' || unicode_ident::is_xid_continue(c));
-    if is_identifier {
+    if is_identifier_name(name) {
         out.push(name)
     } else {
         write_string(out, name)
     }
+}
+
+/// Whether a member name can be written bare, as an identifier (keywords
+/// included), rather than as a quoted string.
+pub(crate) fn is_identifier_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c == '_' || c == '$' || unicode_ident::is_xid_start(c))
+        && chars.all(|c| c == '_' || c == '$' || unicode_ident::is_xid_continue(c))
 }
 
 pub(crate) fn write_string(out: &mut Writer, value: &str) -> Result<(), RenderError> {

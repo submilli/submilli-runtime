@@ -7,6 +7,7 @@
 //! `packages.*` / `builtins.docs` tools, the server's REST surface, and the
 //! `submilli docs` / `search` / `builtins` CLI commands.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
@@ -1440,6 +1441,7 @@ fn render_ts_type(
                         );
                     }
                     _ => {
+                        let mname = member_name(mname);
                         let _ = writeln!(
                             out,
                             "{inner}{mname}{}({}): {ret};",
@@ -1512,6 +1514,7 @@ fn render_ts_type(
                 }
                 push_doc(out, &m.doc, &inner);
                 let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}static {mname}{}({}): {ret};",
@@ -1552,6 +1555,7 @@ fn render_ts_type(
                 }
                 push_doc(out, &m.doc, &inner);
                 let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}{mname}{}({}): {ret};",
@@ -1589,6 +1593,7 @@ fn render_class_accessors(
         if fields.get(name).map(|f| f.visibility) == Some(crate::Visibility::Private) {
             continue;
         }
+        let name = member_name(name);
         match (get, set) {
             (Some(r), Some(p)) if r == &p.ty => {
                 let _ = writeln!(out, "{inner}{name}: {};", fmt_ty(r));
@@ -1946,6 +1951,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
             }
             for (mname, m) in methods {
                 push_doc(out, &m.doc, &inner);
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}{mname}{}({}): {};",
@@ -2009,6 +2015,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                     continue;
                 }
                 push_doc(out, &m.doc, &inner);
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}static {mname}{}({}): {};",
@@ -2042,6 +2049,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                     continue;
                 }
                 push_doc(out, &m.doc, &inner);
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}{mname}{}({}): {};",
@@ -2281,16 +2289,11 @@ fn type_doc(kind: &TypeKind) -> &Option<DocComment> {
 
 /// A member name as declaration source: bare when it is an identifier, else
 /// quoted and escaped, as `"a b"` or `"\uD800"` must be.
-fn member_name(name: &str) -> std::borrow::Cow<'_, str> {
-    let mut chars = name.chars();
-    let is_identifier = chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
-    if is_identifier {
-        return std::borrow::Cow::Borrowed(name);
+fn member_name(name: &str) -> Cow<'_, str> {
+    if crate::type_rendering::is_identifier_name(name) {
+        return Cow::Borrowed(name);
     }
-    std::borrow::Cow::Owned(format!("\"{}\"", escape_string_literal(name)))
+    Cow::Owned(format!("\"{}\"", escape_string_literal(name)))
 }
 
 #[cfg(test)]
@@ -2303,6 +2306,7 @@ mod tests {
         crate::literal_units::push_lone_surrogate(&mut lone, 0xD800);
         assert_eq!(member_name("count"), "count");
         assert_eq!(member_name("$el_2"), "$el_2");
+        assert_eq!(member_name("café"), "café");
         assert_eq!(member_name("a b"), "\"a b\"");
         assert_eq!(member_name("0"), "\"0\"");
         assert_eq!(member_name(&lone), "\"\\uD800\"");

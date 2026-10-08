@@ -3,6 +3,7 @@
 //! value, and a template of literals is the string it spells.
 
 use crate::compiler_error::CompilerFailure;
+use crate::literal_units::push_literal_text;
 use crate::{BinOp, ExprId, ExprKind, MangledName, Type, TypedExprKind, UnOp};
 
 use super::assignable::TypeResolver;
@@ -170,14 +171,14 @@ pub(super) fn constant_template(
     };
     let mut text = String::new();
     for (index, part) in parts.iter().enumerate() {
-        crate::literal_units::push_literal_text(&mut text, part);
+        push_literal_text(&mut text, part);
         let Some(expr) = exprs.get(index) else {
             continue;
         };
         let Some(value) = constant_substitution(ast, *expr)? else {
             return Ok(None);
         };
-        crate::literal_units::push_literal_text(&mut text, &value);
+        push_literal_text(&mut text, &value);
     }
     Ok(Some(text))
 }
@@ -202,7 +203,7 @@ pub(super) fn constant_substitution(
                     constant_substitution(ast, *rhs)?,
                 ) {
                     (Some(mut left), Some(right)) => {
-                        crate::literal_units::push_literal_text(&mut left, &right);
+                        push_literal_text(&mut left, &right);
                         Some(left)
                     }
                     _ => None,
