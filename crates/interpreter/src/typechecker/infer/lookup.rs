@@ -256,6 +256,24 @@ impl<'a> Inferer<'a> {
         Some((sig, bindings, sym.mangled_name.clone(), *dispatch))
     }
 
+    /// Whether a read of `field` on a receiver of type `receiver` can find it
+    /// absent, which JavaScript reads as `undefined` and Submilli as `null`.
+    pub(super) fn field_may_be_absent(&self, receiver: &Type, field: &str) -> bool {
+        match receiver.peel() {
+            Type::Union(members) => members
+                .iter()
+                .any(|member| self.field_may_be_absent(member, field)),
+            Type::Object { fields, .. } => fields.get(field).is_some_and(|f| f.optional),
+            member @ Type::InterfaceRef { .. } => self
+                .lookup_interface_property(member, field)
+                .is_some_and(|(sig, ..)| sig.optional),
+            Type::ClassRef { mangled, args, .. } => self
+                .class_field_visible(mangled, args, field)
+                .is_some_and(|(sig, _)| sig.optional),
+            _ => false,
+        }
+    }
+
     /// Field read type for one member of a union receiver, resolved by the same
     /// authority the single-member receiver uses — the interface's *property*
     /// map, not its methods; `class_field_visible`, so module-scoped privacy

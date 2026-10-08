@@ -420,7 +420,11 @@ impl Inferer<'_> {
             });
         }
 
-        let covered = CaseCoverage::of(&typed_cases, saw_null.is_some());
+        // An absent field is `undefined` in JavaScript, which `case null`
+        // doesn't match, though Submilli reads it as `null`.
+        let matches_null =
+            saw_null.is_some() && !self.discriminant_may_be_absent_field(typed_disc)?;
+        let covered = CaseCoverage::of(&typed_cases, matches_null);
         let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered)?;
 
         let typed_default = if let Some(d) = default {
@@ -429,7 +433,7 @@ impl Inferer<'_> {
                 .try_stmt(d.body)
                 .map_err(super::arena_failure)?
                 .span;
-            let default_residual = self.unmatched_residual(&residual, &site, saw_null.is_some());
+            let default_residual = self.unmatched_residual(&residual, &site, matches_null);
             let env = self.build_default_narrow_env(&default_residual, &site, body_span)?;
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
@@ -446,7 +450,7 @@ impl Inferer<'_> {
             any_arm_reachable_exit |= body_reachable;
             Some(typed_body)
         } else {
-            let unmatched = self.unmatched_residual(&residual, &site, saw_null.is_some());
+            let unmatched = self.unmatched_residual(&residual, &site, matches_null);
             let leaves_values_unmatched =
                 !matches!(unmatched, Type::Never) && !narrowing::is_ruled_out(&unmatched);
             if leaves_values_unmatched {
@@ -472,7 +476,7 @@ impl Inferer<'_> {
             // narrowing to the rest, as a `default` arm would.
             let mut natural = entry_env;
             natural.extend_env(self.build_default_narrow_env(
-                &self.unmatched_residual(&residual, &site, saw_null.is_some()),
+                &self.unmatched_residual(&residual, &site, matches_null),
                 &site,
                 switch_span,
             )?);
@@ -956,6 +960,30 @@ impl Inferer<'_> {
                 .into_iter()
                 .all(|value| covered.named_members.contains(&(mangled.clone(), value)))
         })
+    }
+
+    /// Whether the discriminant reads a field that may be absent, directly or
+    /// through an optional chain.
+    fn discriminant_may_be_absent_field(&self, typed: ExprId) -> Result<bool, CompilerFailure> {
+        let expr = self
+            .typed_ast
+            .try_expr(typed)
+            .map_err(crate::typechecker::arena_failure)?;
+        let (receiver, name) = match &expr.kind {
+            TypedExprKind::Narrowed { inner, .. } => {
+                return self.discriminant_may_be_absent_field(*inner);
+            }
+            TypedExprKind::OptionalChain { .. } => return Ok(true),
+            TypedExprKind::FieldAccess { receiver, name }
+            | TypedExprKind::InterfacePropertyAccess { receiver, name, .. } => (*receiver, name),
+            _ => return Ok(false),
+        };
+        let receiver_ty = &self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        Ok(self.field_may_be_absent(receiver_ty, &name.name))
     }
 
     /// What the discriminant can be when no case matched: the residual, less
