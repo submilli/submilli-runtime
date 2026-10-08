@@ -118,12 +118,7 @@ pub fn guarded_classes(ta: &TypedAst) -> Result<Vec<ClassGuard>, CompilerFailure
             mangled.clone(),
             crate::mangle::extend(mangled, "constructor"),
         ];
-        uses.extend(
-            class
-                .static_methods
-                .keys()
-                .map(|method| crate::mangle::static_member(mangled, method)),
-        );
+        uses.extend(static_method_names(class));
         guards.push(ClassGuard {
             name: class.name.name.clone(),
             uses,
@@ -257,7 +252,8 @@ pub(crate) fn emit_mark_initialized(
     emitter.instruction(Instruction::GlobalSet(flag.flag_idx));
 }
 
-/// Whether evaluating `expr` can never run a function body.
+/// Whether evaluating `expr` can never run a function body or read a class
+/// binding that may still be uninitialized.
 fn is_inert(ta: &TypedAst, expr: crate::ExprId) -> Result<bool, CompilerFailure> {
     let expr = ta.try_expr(expr).map_err(crate::codegen::arena_failure)?;
     Ok(match &expr.kind {
@@ -293,11 +289,15 @@ fn is_class_static_method(ta: &TypedAst, mangled: &MangledName) -> bool {
         let crate::TypedTypeDecl::Class(class) = decl else {
             return false;
         };
-        class
-            .static_methods
-            .keys()
-            .any(|method| crate::mangle::static_member(&class.mangled_name, method) == *mangled)
+        static_method_names(class).any(|method| method == *mangled)
     })
+}
+
+fn static_method_names(class: &crate::TypedClassDecl) -> impl Iterator<Item = MangledName> + '_ {
+    class
+        .static_methods
+        .keys()
+        .map(|method| crate::mangle::static_member(&class.mangled_name, method))
 }
 
 fn is_primitive_literal(ta: &TypedAst, expr: crate::ExprId) -> Result<bool, CompilerFailure> {

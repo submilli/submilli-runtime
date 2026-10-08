@@ -1,6 +1,7 @@
 // A class used before its declaration has run throws a ReferenceError, as
 // JavaScript's temporal dead zone does: constructing it, calling a static
-// method, reading one as a value or testing instanceof. Its own static fields can already use it.
+// method, reading one as a value or testing instanceof. Its own static fields
+// can already use it.
 function make(): Box<number> {
   return new Box<number>(1);
 }
