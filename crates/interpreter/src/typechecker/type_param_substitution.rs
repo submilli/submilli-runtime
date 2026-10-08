@@ -32,6 +32,10 @@ pub struct TypeParamSubstitution {
     /// combines those candidates into their union, which another literal may
     /// join; a non-literal candidate wins over them.
     literal_candidates: std::collections::BTreeSet<String>,
+    /// Literal candidates bound by more than one literal argument: tsc
+    /// relates them as the literals' union, so no non-literal candidate
+    /// takes them over.
+    several_literal_candidates: std::collections::BTreeSet<String>,
     /// For a type parameter in a union parameter whose other members took
     /// every member of a union argument, that whole argument: tsc infers it at
     /// the lowest priority, so it binds the type parameter only when nothing
@@ -89,6 +93,7 @@ impl TypeParamSubstitution {
             widenable: Default::default(),
             narrowable: Default::default(),
             literal_candidates: Default::default(),
+            several_literal_candidates: Default::default(),
             whole_union_fallbacks: Default::default(),
             close_matches: Vec::new(),
         }
@@ -105,6 +110,7 @@ impl TypeParamSubstitution {
             widenable: Default::default(),
             narrowable: Default::default(),
             literal_candidates: Default::default(),
+            several_literal_candidates: Default::default(),
             whole_union_fallbacks: Default::default(),
             close_matches: Vec::new(),
         }
@@ -471,10 +477,22 @@ impl TypeParamSubstitution {
         types: TypeResolver<'_>,
         from_literal: bool,
     ) -> Result<(), UnifyError> {
-        if !from_literal {
-            self.literal_candidates.retain(|name| {
-                !super::infer::expr::mentions_type_var(param_ty, &|var| var == name)
+        let mentions_literal_candidate = !from_literal
+            && super::infer::expr::mentions_type_var(param_ty, &|name| {
+                self.literal_candidates.contains(name)
             });
+        // Marked before unifying, since a name the literal binds first
+        // becomes a literal candidate only afterwards.
+        if from_literal {
+            let joined: Vec<String> = self
+                .literal_candidates
+                .iter()
+                .filter(|name| {
+                    super::infer::expr::mentions_type_var(param_ty, &|var| var == name.as_str())
+                })
+                .cloned()
+                .collect();
+            self.several_literal_candidates.extend(joined);
         }
         let bound_before: std::collections::BTreeSet<String> = self.bound_names().collect();
         let resolved = self.apply_or_record(param_ty, types.limits);
@@ -482,7 +500,11 @@ impl TypeParamSubstitution {
             && assignable(arg_ty, &resolved, types);
         // An argument that fits the expected result's binding still replaces
         // it, so the arguments, not the expected type, decide the inference.
-        if fits_binding && !self.mentions_replaceable_binding(param_ty) {
+        // So does one that fits only literals' candidates.
+        if fits_binding
+            && !self.mentions_replaceable_binding(param_ty)
+            && !mentions_literal_candidate
+        {
             return Ok(());
         }
         // Unless the argument gives no one binding (`[["a", 1], ["b", 2]]` is
@@ -498,11 +520,26 @@ impl TypeParamSubstitution {
             unifier.unify(param_ty, arg_ty)
         });
         if from_literal {
+            // Only a binding to the literal's own object or array type is a
+            // literal candidate, as in tsc; `T` bound to `Mode` from `[m]`
+            // against `T[]` is an ordinary one.
             let newly_bound: Vec<String> = self
                 .bound_names()
                 .filter(|name| !bound_before.contains(name))
+                .filter(|name| {
+                    self.bindings.get(name).is_some_and(|bound| {
+                        matches!(
+                            bound.peel(),
+                            Type::Object { .. } | Type::Array(_) | Type::Tuple(_)
+                        )
+                    })
+                })
                 .collect();
             self.literal_candidates.extend(newly_bound);
+        } else {
+            self.literal_candidates.retain(|name| {
+                !super::infer::expr::mentions_type_var(param_ty, &|var| var == name)
+            });
         }
         if let (Err(_), Some(before)) = (&unified, before) {
             *self = before;
@@ -548,6 +585,10 @@ struct Unifier<'a> {
     /// Whether the argument is an object or array literal, which widens a
     /// binding other literals gave to the union of the two.
     combines_literals: bool,
+    /// Whether the walk is inside a function type's result, where a
+    /// candidate never takes over literal candidates (see `takes_over` in
+    /// [`Self::unify`]).
+    inside_function_result: bool,
     /// The object fields, outermost first, the walk is inside.
     field_path: Vec<String>,
 }
@@ -607,12 +648,39 @@ impl<'a> Unifier<'a> {
                 // arguments' own from here on, whether or not it is replaced.
                 let replaceable = self.sub.replaceable.remove(name) && self.is_argument;
                 let from_callback_parameter = self.sub.narrowable.contains(name);
+                let covariant = self.infers_from_covariant_argument();
                 // The expected result's binding is only a hint, as tsc gives a
                 // return type's inference the lowest priority: the first
                 // argument replaces it as the first candidate, which later
                 // ones widen, and the result is checked against the expected
                 // type afterwards.
-                if replaceable && self.infers_from_covariant_argument() {
+                let replaces_hint = replaceable && covariant;
+                // A non-literal candidate wins over object and array literal
+                // candidates, as in tsc: it takes the binding, and the
+                // literals are checked against it once inference is done, the
+                // name no longer a literal candidate. It doesn't take over
+                // when it is:
+                // - `null`, which only makes the binding nullable, or `never`,
+                //   which adds nothing;
+                // - holding a class instance, which no literal would fit, as
+                //   classes are nominal;
+                // - a callback's result, checked against the type parameters
+                //   tsc fixed from the candidates before it for its parameters;
+                // - against several literals, which tsc relates as their
+                //   union rather than as the one type Submilli binds;
+                // - a subtype of the literal's type, which tsc's common
+                //   supertype keeps (see `is_subtype_of_literal`).
+                let takes_over =
+                    !matches!(arg_resolved.peel(), Type::Null | Type::Never | Type::Error)
+                        && !holds_class_instance(&arg_resolved)
+                        && !self.inside_function_result
+                        && !self.sub.several_literal_candidates.contains(name)
+                        && !self.is_subtype_of_literal(&arg_resolved, &resolved);
+                let mut replaces_literals = false;
+                if covariant && takes_over && !self.combines_literals {
+                    replaces_literals = self.sub.literal_candidates.remove(name);
+                }
+                if replaces_hint || replaces_literals {
                     self.sub.bindings.insert(name.clone(), arg_ty.clone());
                     self.sub.widenable.insert(name.clone());
                     return Ok(());
@@ -712,7 +780,7 @@ impl<'a> Unifier<'a> {
                 for (p, a) in pa.iter().zip(pb.iter()) {
                     self.in_function_parameter(|u| u.unify(p, a))?;
                 }
-                self.unify(ra, rb)
+                self.in_function_result(|u| u.unify(ra, rb))
             }
             (
                 Type::Object {
@@ -987,7 +1055,31 @@ impl<'a> Unifier<'a> {
             is_argument: false,
             contravariant: false,
             combines_literals: false,
+            inside_function_result: false,
             field_path: Vec::new(),
+        }
+    }
+
+    /// Whether `arg` is a subtype of the object or array literal type
+    /// `literal` as tsc's subtype relation has it, which unlike assignability
+    /// lets an object have no property the object literal lacks: a `Pt` is
+    /// one of `{ x: number; y: number | null }`, but a `Dog` is not one of
+    /// `{ name: string }`. The rule applies to an object literal itself
+    /// only: its fields may hold values of declared types, which ordinary
+    /// subtyping relates, so below the top level, and for an array literal,
+    /// assignability decides.
+    fn is_subtype_of_literal(&self, arg: &Type, literal: &Type) -> bool {
+        let Some(types) = self.types else {
+            return false;
+        };
+        if !assignable(arg, literal, types) {
+            return false;
+        }
+        match (object_fields(arg, types), object_fields(literal, types)) {
+            (Some(arg_fields), Some(literal_fields)) => arg_fields
+                .keys()
+                .all(|name| literal_fields.contains_key(name)),
+            _ => true,
         }
     }
 
@@ -1130,7 +1222,7 @@ impl<'a> Unifier<'a> {
                 got: arg_ty.clone(),
             }));
         }
-        self.unify(ret, arg_ret)
+        self.in_function_result(|u| u.unify(ret, arg_ret))
     }
 
     /// Whether `arg` is a literal type of the primitive `param`, which binds
@@ -1169,6 +1261,18 @@ impl<'a> Unifier<'a> {
         let known_param = self.sub.apply_or_record(param, self.limits);
         !super::infer::expr::type_contains_type_var(&known_param)
             && self.accepts_as_subtype(arg, &known_param)
+    }
+
+    /// Unify within a function type's result.
+    #[allow(clippy::result_large_err)]
+    fn in_function_result(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<(), UnifyError>,
+    ) -> Result<(), UnifyError> {
+        let outer = std::mem::replace(&mut self.inside_function_result, true);
+        let out = f(self);
+        self.inside_function_result = outer;
+        out
     }
 
     /// Unify within a function type's parameter: subtype-widening stops (see
@@ -1809,6 +1913,39 @@ fn closely_matches(param: &Type, arg: &Type) -> bool {
         (Type::InterfaceRef { mangled: p, .. }, Type::InterfaceRef { mangled: a, .. }) => p == a,
         (Type::ClassRef { mangled: p, .. }, Type::ClassRef { mangled: a, .. }) => p == a,
         (Type::Array(_), Type::Array(_)) => param.is_readonly_array() == arg.is_readonly_array(),
+        _ => false,
+    }
+}
+
+/// The fields of `ty` when it is an object type or a data-only interface.
+fn object_fields(
+    ty: &Type,
+    types: TypeResolver<'_>,
+) -> Option<BTreeMap<String, crate::ObjectField>> {
+    match expand_interface_data_shape(ty, types) {
+        Some(Type::Object { fields, .. }) => Some(fields),
+        _ => match ty.peel() {
+            Type::Object { fields, .. } => Some(fields.clone()),
+            _ => None,
+        },
+    }
+}
+
+/// Whether a value of type `ty` is, or structurally holds, a class instance:
+/// in an element, a field, a union member or a function's result.
+fn holds_class_instance(ty: &Type) -> bool {
+    match ty {
+        Type::ClassRef { .. } => true,
+        Type::Array(elem) | Type::Readonly(elem) => holds_class_instance(elem),
+        Type::Tuple(elems) | Type::Union(elems) => elems.iter().any(holds_class_instance),
+        Type::Function { ret, .. } => holds_class_instance(ret),
+        Type::Object { fields, index } => {
+            index
+                .as_ref()
+                .is_some_and(|i| holds_class_instance(&i.value))
+                || fields.values().any(|f| holds_class_instance(&f.ty))
+        }
+        Type::Alias { ty: inner, .. } => holds_class_instance(inner),
         _ => false,
     }
 }
