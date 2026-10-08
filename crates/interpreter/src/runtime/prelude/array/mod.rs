@@ -456,7 +456,8 @@ async fn sort(
     cmp: Option<Closure>,
 ) -> wasmtime::Result<Val> {
     sort_elems(caller, &mut elements, cmp.as_ref()).await?;
-    replace_elements(caller, receiver, &elements)?;
+    // Re-read the storage: the comparator may have pushed or popped.
+    ArrayStorage::read(caller, receiver)?.overwrite_prefix(caller, &elements)?;
     Ok(*receiver)
 }
 

@@ -159,6 +159,25 @@ impl ArrayStorage {
         self.set_len(caller, len)
     }
 
+    /// Writes `elements` over the first `elements.len()` slots, keeping any
+    /// elements past them and growing the array if it is shorter. This is how
+    /// `Array#sort` writes back: elements its comparator appended survive.
+    pub fn overwrite_prefix(
+        &mut self,
+        caller: &mut Caller<'_, StoreData>,
+        elements: &[Val],
+    ) -> wasmtime::Result<()> {
+        let len = checked_length(elements.len())?.max(self.len);
+        self.reserve(caller, len)?;
+        fuel::charge(&mut *caller, fuel::ELEM, elements.len() as u64)?;
+        for (index, &element) in elements.iter().enumerate() {
+            self.backing
+                .set(&mut *caller, index as u32, element)
+                .map_err(fatal_host_error)?;
+        }
+        self.set_len(caller, len)
+    }
+
     fn reserve(
         &mut self,
         caller: &mut Caller<'_, StoreData>,
