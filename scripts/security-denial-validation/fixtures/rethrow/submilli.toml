@@ -1,0 +1,4 @@
+[[package]]
+name = "@acme/denial-validation"
+version = "0.1.0"
+description = "Denial-path contract validation."
