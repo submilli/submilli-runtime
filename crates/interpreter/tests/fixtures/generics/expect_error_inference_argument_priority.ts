@@ -4,7 +4,9 @@
 // expect-error: expected `string`, got `number`
 // expect-error: cannot read field `length` on non-object type `number`
 // expect-error: expected `Pair<T, U>`, got `{ first: number }`
-// expect-error-count: 4
+// expect-error: expected `1`, got `"s"`
+// expect-error: expected `1 | string`, got `1 | 2`
+// expect-error-count: 6
 interface Pair<T, U> {
   first: T;
   second: U;
@@ -24,10 +26,18 @@ function id<T>(x: T): T {
   return x;
 }
 
+function first<T>(a: T, b: T): T {
+  return a;
+}
+
 function main(): void {
   const notNull: number = orNull(5);
   const text: string = id(5);
   test({ produce: (n: number) => n, consume: (x) => x.length });
   const half: { first: number } = { first: 1 };
   second(half);
+  // The first argument decides, not the expected `number`, so only the
+  // second is reported.
+  const n: number = first(1, "s");
+  const one: 1 | string = first(1, 2);
 }

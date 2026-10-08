@@ -1,8 +1,12 @@
 //! Static package reviews run through installed coding-agent CLIs.
 
 mod agent;
+mod authority;
 mod report;
 mod snapshot;
+
+#[cfg(test)]
+mod evaluation;
 
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
@@ -118,8 +122,17 @@ fn review(args: &Args, report: &mut Report) -> anyhow::Result<()> {
     if args.model == "astra" && matches!(args.agent, Agent::Claude) {
         bail!("astra is a Codex/Copilot alias; select a Claude model for --agent claude");
     }
-    let snapshot = snapshot::collect(args.package.as_deref())?;
-    report.set_snapshot(&snapshot);
+    let (mut snapshot, manifest) = snapshot::collect(args.package.as_deref())?;
+    report.set_snapshot(&snapshot)?;
+    if snapshot.coverage_gaps.is_empty() {
+        snapshot.authority = Some(authority::collect(
+            &snapshot,
+            &manifest,
+            args.package.as_deref(),
+        )?);
+        report.set_snapshot(&snapshot)?;
+    }
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

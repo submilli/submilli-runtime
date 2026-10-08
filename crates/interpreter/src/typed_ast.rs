@@ -865,6 +865,10 @@ pub struct TypedAst {
     /// the types they give it, an index signature's value type included.
     pub spread_mask_fields:
         std::collections::BTreeMap<ExprId, std::collections::BTreeMap<String, Type>>,
+    /// For each spread source of an object rest, the names the rest leaves out
+    /// whatever their value.
+    pub spread_omitted_fields:
+        std::collections::BTreeMap<ExprId, std::collections::BTreeSet<String>>,
     /// The discriminants of the `switch`es without a `default` whose cases the
     /// typechecker found match every value the discriminant can hold.
     pub exhaustive_switches: std::collections::BTreeSet<ExprId>,

@@ -16,4 +16,3 @@ errors:
 line 5: tsc TS2783: 'b' is specified more than once, so this usage will be overwritten. (we accept)
 line 11: tsc TS2783: 'x' is specified more than once, so this usage will be overwritten. (we accept)
 line 26: tsc TS2783: 'command' is specified more than once, so this usage will be overwritten. (we accept)
-line 14: ours: cannot spread `null` into an object literal (tsc accepts)

@@ -1,17 +1,4 @@
-types: 4 of 10 tsc entries compared, 3 differ
-
-line 4: v
-  tsc:  never
-  ours: <error>
-
-line 6: x
-  tsc:  never
-  ours: <error>
-
-line 6: v
-  tsc:  never
-  ours: <error>
+types: 8 of 10 tsc entries compared, 0 differ
 
 errors:
-line 3: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
-line 5: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
+line 7: ours: postfix `++` expects `number` or `bigint`, found `never` (tsc accepts)

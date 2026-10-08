@@ -14,6 +14,13 @@ use interpreter::{
 use wasmtime::{Linker, Module};
 
 fn cap_run(src: &str, max_store_bytes: u64) -> wasmtime::Result<()> {
+    cap_run_with_host_bytes(src, max_store_bytes)?.0
+}
+
+fn cap_run_with_host_bytes(
+    src: &str,
+    max_store_bytes: u64,
+) -> wasmtime::Result<(wasmtime::Result<()>, u64)> {
     let compiled = compile_script(src, "test.subm", interpreter::FileId(0), &[], &[])
         .map_err(|d| wasmtime::Error::msg(format!("compile failed: {d:#?}")))?;
     // One engine may serve tenants with smaller caps than its own defaults.
@@ -24,7 +31,7 @@ fn cap_run(src: &str, max_store_bytes: u64) -> wasmtime::Result<()> {
     install_tenant_limits(&mut store);
     let module = Module::new(&engine, &compiled.wasm)?;
     let mut linker = Linker::<StoreData>::new(&engine);
-    pollster::block_on(async {
+    let result = pollster::block_on(async {
         install_runtime_async(&mut linker, &mut store)
             .await
             .expect("runtime initialization fits within cap");
@@ -33,7 +40,8 @@ fn cap_run(src: &str, max_store_bytes: u64) -> wasmtime::Result<()> {
             .await
             .expect("script globals fit within cap");
         dispatch_main_async(&mut store, &instance).await.map(|_| ())
-    })
+    });
+    Ok((result, store.data().tenant_limits.host_attached_bytes()))
 }
 
 /// Asserts `src` ends at the cap rather than in its own `catch`: each program
@@ -577,4 +585,60 @@ function main(): void {
     });
     pollster::block_on(dispatch_main_async(&mut store, &instance))
         .expect("the overwrite freed 500 KB for the next write");
+}
+
+#[test]
+fn string_builders_refuse_native_output_and_refund_inputs() {
+    for expression in [
+        "\"x\".repeat(1048576)",
+        "\"x\".padStart(1048576, \"a\")",
+        "\"x\".padEnd(1048576, \"a\")",
+        "\"x\".repeat(60000).concat(\"y\".repeat(60000))",
+        "\"x\".repeat(60000) + \"y\".repeat(60000)",
+    ] {
+        let src = format!(
+            "function main(): void {{ try {{ const text = {expression}; }} catch (e) {{ }} }}"
+        );
+        let (result, host_bytes) = cap_run_with_host_bytes(&src, 512 * 1024).unwrap();
+        let err = result.expect_err(expression);
+        assert!(err.is::<MemoryExhausted>(), "{expression}: {err:#}");
+        assert_eq!(host_bytes, 0, "{expression}: all native buffers refunded");
+        assert!(
+            err.is::<interpreter::runtime::limits::MemoryCapExceeded>(),
+            "{expression}: native admission refused before GC: {err:#}"
+        );
+    }
+}
+
+#[test]
+fn string_builder_gc_failure_refunds_native_output() {
+    let src = "function main(): void { try { const text = \"x\".repeat(100000); } catch (e) { } }";
+    let (result, host_bytes) = cap_run_with_host_bytes(src, 384 * 1024).unwrap();
+    let err = result.expect_err("native output fits but simultaneous GC copy does not");
+    assert!(err.is::<MemoryExhausted>(), "{err:#}");
+    assert!(
+        err.is::<wasmtime::GcHeapOutOfMemory<()>>(),
+        "GC refused: {err:#}"
+    );
+    assert_eq!(host_bytes, 0, "GC failure refunds native output and input");
+}
+
+#[test]
+fn string_builder_success_and_range_errors_refund_native_buffers() {
+    let src = r#"
+function main(): void {
+    assert("ab".repeat(3) === "ababab");
+    assert("a".concat("b") === "ab");
+    assert("a" + "b" === "ab");
+    assert("a".padStart(3, "x") === "xxa");
+    assert("a".padEnd(3, "x") === "axx");
+    for (let i = 0; i < 20; i++) {
+        try { const bad = "x".repeat(-1); } catch (e) { }
+        try { const bad = "x".padStart(33554433, "a"); } catch (e) { }
+    }
+}
+"#;
+    let (result, host_bytes) = cap_run_with_host_bytes(src, 256 * 1024).unwrap();
+    result.expect("successful builders and catchable range errors");
+    assert_eq!(host_bytes, 0);
 }

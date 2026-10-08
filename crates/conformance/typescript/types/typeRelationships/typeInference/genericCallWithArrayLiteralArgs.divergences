@@ -1,4 +1,4 @@
-types: 17 of 37 tsc entries compared, 5 differ
+types: 20 of 37 tsc entries compared, 5 differ
 
 line 10: []
   tsc:  never[]
@@ -21,6 +21,5 @@ line 13: [1, '']
   ours: Object[]
 
 errors:
-line 9: ours: cannot infer element type of empty array; add a `: T[]` annotation (tsc accepts)
 line 11: ours: expected `number` (matching first element), got `string` (tsc accepts)
 line 13: ours: expected `Object`, got `number` (tsc accepts)

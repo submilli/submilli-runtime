@@ -1,0 +1,9 @@
+namespace: acme
+provides:
+- name: acme.replace
+  description: Replace a selected record.
+  fields:
+    id:
+      type: string
+requires:
+- capability: fs.write

@@ -1,4 +1,4 @@
 line 8 extra: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
-line 11 extra: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected
 line 8 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
 line 10 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours types the rejected literal as its target)
+line 11 type: by-design spec §Excluded-Features there is no `any`, so an unannotated `let x = []` is `never[]`, where tsc makes it an evolving `any[]`

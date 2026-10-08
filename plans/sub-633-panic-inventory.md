@@ -32,8 +32,9 @@ by [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 Entries marked **fixed on main** were merged in PR #151, PR #152, PR #163 or PR #169. Entries marked **fixed
 on branch** have completed focused verification and review; other N entries
-remain open. Four N entries remain open, twelve are fixed on main, and N17 is
-fixed on this branch. Evidence means:
+remain open unless explicitly accepted as an operational limitation. Three N
+entries remain open, twelve are fixed on main, N17 is fixed on this branch, and
+N09 is an accepted operational limitation. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
   The entry says whether this was a public API, source input, or only a dependency
@@ -53,7 +54,7 @@ fixed on this branch. Evidence means:
 | N06 | **Fixed on main:** validate sibling dependencies at public build entry | Typed-error regression passes |
 | N07 | **Fixed on main:** make resolver error formatting safe for arbitrary UTF-8 | Public formatting regression passes |
 | N08 | **Fixed on main:** make watchdog thread creation fallible | Injected setup failure, recovery and timer lifecycle regressions |
-| N09 | Handle blocking-pool thread admission failures | Inspection; dependency OS failure |
+| N09 | **Accepted operational limitation:** Tokio blocking-pool admission panic | Pinned dependency inspection; explicit maintainer decision, 2026-10-08 |
 | N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
 | N11 | **Fixed on main:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
 | N12 | **Fixed on main:** traverse validation children lazily with fallible ancestor frames | Wide-input and allocation-failure regressions |
@@ -72,7 +73,9 @@ fixed on this branch. Evidence means:
 
 Keep N/Q identifiers stable from this reset onward. Close an N entry only after
 its mechanism and directly affected siblings are fixed or a genuine scoped
-invariant is established, with focused evidence. Resolve a Q into an N finding
+invariant is established, with focused evidence. An explicit maintainer decision
+may instead accept a scoped operational limitation, as in N09; record it separately
+from fixed mechanisms and proven guarantees. Resolve a Q into an N finding
 or an accepted guarantee; lack of a reproducer is not a proof. Record revision,
 short disposition and verification in the entry, not repeated progress essays.
 
@@ -329,27 +332,39 @@ in the working handoff. Final workspace tests and 134 package/documentation
 checks passed before PR #169; HTTP/nightly-only coverage was excluded and 35
 network package files were skipped.
 
-### N09 — Tokio blocking-pool admission can panic before a join exists
+### N09 — Tokio blocking-pool admission panic: accepted operational limitation
 
-**Sites:** `crates/submilli-server/src/idempotency_store.rs:369`,
-`session_manager.rs:1164`, `volumes.rs:189`, `handlers/packages.rs:360`.
+**Disposition (2026-10-08):** explicitly accepted by the maintainer for now.
+Do not add a `catch_unwind` recovery wrapper around blocking-pool admission.
+This is a scoped exception for a real operational failure, not a proven invariant
+or a removed panic. The existing direct calls remain unchanged.
+
+**Sites:** server `idempotency_store.rs` (`blocking`), `session_manager.rs`
+(`attach_size_limit`), `volumes.rs` (`quota`), `handlers/packages.rs` (`install`),
+and `record/throwaway.rs` (`copy_capped` and `Drop`), all under
+`crates/submilli-server/src/`; CLI `current_closure` in
+`crates/submilli/src/commands/playground/host.rs` and `Freshness::run_check` in
+`crates/submilli/src/commands/playground/packages.rs`.
 Dependency: Tokio 1.52.3 `src/runtime/blocking/pool.rs:320–325`.
 
-These server preparation/storage paths call `tokio::task::spawn_blocking`.
-Tokio panics on `SpawnError::NoThreads`; handling the returned `JoinError` does
-not handle a panic during admission. A configured runtime and a pool ceiling do
-not guarantee OS thread availability. This finding concerns those concrete direct
-calls; implicit Tokio filesystem/DNS worker admission is a residual dependency
-coverage limitation, not a claim it was fully audited.
+Tokio can panic on `SpawnError::NoThreads` before returning a `JoinHandle`.
+Handling a returned `JoinError` does not handle that admission panic. A configured
+runtime and a pool ceiling do not guarantee OS thread availability. Merely
+reaching the pool's thread limit queues work; that is not this failure.
 
-**Evidence:** pinned dependency source and first-party callers inspected; no OS
-failure injection. `runtime::BlockingWork` demonstrates existing fallible native
-worker creation with bounded admission, but changes must respect caller ownership.
+Tokio queues the task before attempting native thread creation. Unwinding does
+not undo that shared queue, so retained work can run later if the runtime survives
+and a worker becomes available. Accepting this limitation does not establish
+recovery, cleanup, or absence of delayed effects after failed admission.
+An uncaught admission panic also does not guarantee process termination: with
+unwinding enabled, an enclosing Tokio task boundary can catch it. This exception
+does not introduce an abort policy.
 
-**Direction/done:** arrange fallible worker admission for these operations or a
-narrow error boundary for this documented admission failure. Preserve completed
-writes and drain ownership. Test setup failure, operation errors and a healthy
-follow-up; do not broaden this into a cancellation redesign.
+**Evidence and scope:** pinned dependency source and the eight explicit production
+call sites were inspected. OS thread exhaustion has not been induced. Implicit
+Tokio filesystem/DNS worker admission remains a dependency coverage limitation;
+this is not a complete transitive-dependency audit. Revisit this exception if a
+fallible admission API or a different blocking-pool design becomes available.
 
 ### N10 — UUID generation panics if OS entropy fails
 
@@ -544,6 +559,33 @@ building, reserve fallibly, then preserve GC accounting without double charging.
 Keep UTF-16 units and real user range errors. Verify small tenant budgets reject
 large outputs before native growth, boundaries still work, and accounting refunds
 on error. Include concat and the named shared wrappers in the same fix.
+
+**Disposition (2026-10-07): implemented in the working tree.** Repeat, both
+padding methods, concat and the `string_concat` operator now admit native input
+copies and output against tenant memory before allocation. Output reservation is
+fallible and owned by a guarded result through GC marshalling; dropping its
+buffer precedes refunding its bytes. GC retains its separate accounting for the
+simultaneously live copy. Existing UTF-16 semantics, repeat/padding ceilings and
+catchable range errors are preserved. Allocation failures terminate execution;
+memory-cap refusals remain uncatchable. Output COPY fuel is prepaid before
+construction and is not charged again by the GC writer. The Rust helpers now
+accept tenant limits and return guarded, fallible results.
+
+Focused coverage includes exact admission bounds, refusal without native output
+growth, deterministic capacity-layout failure and refunds, UTF-16 edge cases,
+all five runtime entry points, and GC-copy failure cleanup. The new allocator
+measurement is nightly-only and was selected explicitly for development.
+
+**Residual dependency limitation:** the pinned `submilli-wasm` 0.1.10 GC
+writer's `value/gc_aggregate.rs:616` (`i16_body`) still constructs its admitted
+body with infallible iterator collection. Engine admission and checked packed
+lengths precede this unchanged allocation. N16 fixes first-party native builders;
+it does not establish transitive allocator-abort freedom.
+
+**Accepted exception:** the new string-allocation measurement accesses the
+shared `TEST_LOCK` with `expect`: a prior panic may have interrupted the protected
+measurement state. Poisoned access is permitted under the repository policy; this
+is an accepted poisoned-lock panic, not a removed or unresolved N16 violation.
 
 ### N17 — Public reaper timer configuration
 

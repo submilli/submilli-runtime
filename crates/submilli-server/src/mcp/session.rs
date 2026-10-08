@@ -1,7 +1,5 @@
-//! Session manager wrapping rmcp's in-memory `LocalSessionManager` with one
-//! added behaviour: terminating a session (HTTP `DELETE`) wipes the bound
-//! `per_session` VFS directory immediately. Every other method delegates
-//! verbatim.
+//! MCP transport workers backed by authoritative durable session bindings.
+//! Explicit HTTP deletion retires the binding; worker shutdown preserves it.
 //!
 //! Each blueprint's MCP service owns its own wrapper, so a session id minted at
 //! `/mcp/A` is unknown at `/mcp/B` (rmcp answers `has_session` = false → 404).
@@ -29,8 +27,12 @@ use submilli_blueprint::{
 
 use crate::app::AppState;
 use crate::handlers::execute::blueprint_miss_message;
-use crate::session_manager::SessionManager as VfsSessions;
-use crate::session_store::DurableSessionStore;
+
+tokio::task_local! {
+    // rmcp also calls close_session from spawned worker cleanup. Task-local
+    // scope distinguishes the validated DELETE call from that background work.
+    pub(super) static EXPLICIT_DELETE: bool;
+}
 
 pub(crate) struct VfsSessionManager {
     inner: LocalSessionManager,
@@ -60,25 +62,123 @@ impl VfsSessionManager {
         if uuid::Uuid::parse_str(id).is_err() {
             return Ok(false);
         }
-        // Persistence is best effort during initialization. A live worker
-        // bound in the runtime ledger must remain terminable if writing fails.
-        if self
+        super::protocol::load(&self.state, id, &self.blueprint_name)
+            .await
+            .map(|state| state.is_some())
+            .map_err(|error| crate::blueprint::StoreError::Io(error.to_string()))
+    }
+}
+
+impl VfsSessionManager {
+    async fn initialize_bound_session(
+        &self,
+        id: &SessionId,
+        message: ClientJsonRpcMessage,
+    ) -> Result<ServerJsonRpcMessage, LocalSessionManagerError> {
+        // Bind and validate the caller's variables before the session opens; a
+        // missing required (or undeclared) variable fails `initialize`. `bind`
+        // registers the session entry (via `ensure`) carrying the bindings, so the
+        // first execute — and rmcp's own session-state store — read it back.
+        // The blueprint is re-fetched (not a captured snapshot) so a mid-flight
+        // `apply` is honoured; the handler's pre-check already validated against
+        // this same store, so a well-formed request won't reach the 500-mapped
+        // error path here.
+        let Some(blueprint) = self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(|error| init_error(crate::blueprint::store_failure_message(error).into()))?
+        else {
+            let reason = blueprint_miss_message(&self.state, &self.blueprint_name)
+                .await
+                .map_err(|error| {
+                    init_error(crate::blueprint::store_failure_message(error).into())
+                })?;
+            return Err(init_error(reason));
+        };
+        if let Some(record) = self
+            .state
+            .session_store()
+            .load(id.as_ref())
+            .await
+            .map_err(|error| init_error(error.to_string()))?
+            && record.mcp_state.is_some()
+        {
+            self.validate_restored_bindings(id, &blueprint).await?;
+            return self
+                .inner
+                .initialize_session(id, redact_secrets(message))
+                .await;
+        }
+        let supplied = supplied_variables(&message).map_err(init_error)?;
+        let resolved = resolve_variables(&blueprint.variables, &supplied)
+            .map_err(|err| init_error(format!("invalid variables: {err}")))?;
+        blueprint
+            .vfs
+            .resolve(&resolved)
+            .map_err(|error| init_error(error.to_string()))?;
+        submilli_shared::resolve_git(&blueprint, &resolved)
+            .map_err(|error| init_error(error.to_string()))?;
+        let supplied_secrets = supplied_secrets(&message).map_err(init_error)?;
+        let secrets = resolve_harness_secrets(&blueprint.secrets, &supplied_secrets)
+            .map_err(|err| init_error(format!("invalid secrets: {err}")))?;
+        self.state
+            .session_manager()
+            .bind(
+                id.as_ref(),
+                &blueprint,
+                Arc::new(resolved),
+                Arc::new(secrets),
+            )
+            .await
+            .map_err(to_local_error)?;
+        let message = redact_secrets(message);
+        let params = match &message {
+            JsonRpcMessage::Request(JsonRpcRequest {
+                request: ClientRequest::InitializeRequest(request),
+                ..
+            }) => request.params.clone(),
+            _ => return Err(init_error("expected initialize request".into())),
+        };
+        let response = self.inner.initialize_session(id, message).await?;
+        super::protocol::store(
+            &self.state,
+            id.as_ref(),
+            &self.blueprint_name,
+            SessionState::new(params),
+        )
+        .await
+        .map_err(to_local_error)?;
+        Ok(response)
+    }
+}
+
+impl VfsSessionManager {
+    async fn validate_restored_bindings(
+        &self,
+        id: &SessionId,
+        blueprint: &Blueprint,
+    ) -> Result<(), LocalSessionManagerError> {
+        let (binding, secrets) = self
             .state
             .session_manager()
-            .is_bound_to(id, &self.blueprint_name)
-            && self.inner.sessions.read().await.contains_key(id)
-        {
-            return Ok(true);
+            .execution_bindings(id.as_ref())
+            .await
+            .map_err(to_local_error)?;
+        if binding.blueprint() != blueprint.name {
+            return Err(init_error("session blueprint mismatch".into()));
         }
-        // Persisted sessions survive restarts; the idle reaper removes their
-        // records even if rmcp still has a worker in memory.
-        let Some(record) = self.state.session_store().load(id).await? else {
-            return Ok(false);
-        };
-        if record.blueprint_name != self.blueprint_name {
-            return Ok(false);
-        }
-        Ok(record.mcp_state.is_some())
+        resolve_variables(&blueprint.variables, binding.variables())
+            .map_err(|error| init_error(error.to_string()))?;
+        resolve_harness_secrets(
+            &blueprint.secrets,
+            &secrets.as_deref().cloned().unwrap_or_default(),
+        )
+        .map_err(|_| {
+            init_error("session_requires_secrets: rebind the required harness secrets".into())
+        })?;
+        Ok(())
     }
 }
 
@@ -321,65 +421,43 @@ impl SessionManager for VfsSessionManager {
         id: &SessionId,
         message: ClientJsonRpcMessage,
     ) -> Result<ServerJsonRpcMessage, Self::Error> {
-        // Bind and validate the caller's variables before the session opens; a
-        // missing required (or undeclared) variable fails `initialize`. `bind`
-        // registers the session entry (via `ensure`) carrying the bindings, so the
-        // first execute — and rmcp's own session-state store — read it back.
-        // The blueprint is re-fetched (not a captured snapshot) so a mid-flight
-        // `apply` is honoured; the handler's pre-check already validated against
-        // this same store, so a well-formed request won't reach the 500-mapped
-        // error path here.
-        let Some(blueprint) = self
-            .state
-            .blueprints()
-            .get(&self.blueprint_name)
-            .await
-            .map_err(|error| init_error(crate::blueprint::store_failure_message(error).into()))?
-        else {
-            let reason = blueprint_miss_message(&self.state, &self.blueprint_name)
-                .await
-                .map_err(|error| {
-                    init_error(crate::blueprint::store_failure_message(error).into())
-                })?;
-            return Err(init_error(reason));
-        };
-        let supplied = supplied_variables(&message).map_err(init_error)?;
-        let resolved = resolve_variables(&blueprint.variables, &supplied)
-            .map_err(|err| init_error(format!("invalid variables: {err}")))?;
-        blueprint
-            .vfs
-            .resolve(&resolved)
-            .map_err(|error| init_error(error.to_string()))?;
-        submilli_shared::resolve_git(&blueprint, &resolved)
-            .map_err(|error| init_error(error.to_string()))?;
-        let supplied_secrets = supplied_secrets(&message).map_err(init_error)?;
-        let secrets = resolve_harness_secrets(&blueprint.secrets, &supplied_secrets)
-            .map_err(|err| init_error(format!("invalid secrets: {err}")))?;
-        self.state
-            .session_manager()
-            .bind(
-                id.as_ref(),
-                &blueprint,
-                Arc::new(resolved),
-                Arc::new(secrets),
-            )
-            .await
-            .map_err(to_local_error)?;
-        self.inner
-            .initialize_session(id, redact_secrets(message))
-            .await
+        let result = self.initialize_bound_session(id, message).await;
+        if result.is_err() {
+            // Keep this generation registered until rmcp's worker-completion
+            // callback removes it. Removing it here would let that late callback
+            // close a replacement worker restored under the same durable ID.
+            let handle = self.inner.sessions.read().await.get(id).cloned();
+            if let Some(handle) = handle
+                && let Err(error) = handle.close().await
+            {
+                tracing::debug!(%error, "uninitialized MCP worker already closed");
+            }
+        }
+        result
     }
 
     async fn has_session(&self, id: &SessionId) -> Result<bool, Self::Error> {
-        self.inner.has_session(id).await
+        if !self.inner.has_session(id).await? {
+            return Ok(false);
+        }
+        self.contains_session(id.as_ref())
+            .await
+            .map_err(|error| init_error(error.to_string()))
     }
 
     async fn close_session(&self, id: &SessionId) -> Result<(), Self::Error> {
-        let result = self.inner.close_session(id).await;
-        // Explicit termination: wipe the `per_session` VFS now rather than
-        // waiting for the idle reaper.
-        self.state.session_manager().wipe_now(id.as_ref()).await;
-        result
+        if !EXPLICIT_DELETE
+            .try_with(|explicit| *explicit)
+            .unwrap_or(false)
+        {
+            return self.inner.close_session(id).await;
+        }
+        self.state
+            .session_manager()
+            .wipe_now(id.as_ref())
+            .await
+            .map_err(|error| init_error(error.to_string()))?;
+        self.inner.close_session(id).await
     }
 
     async fn create_stream(
@@ -420,6 +498,14 @@ impl SessionManager for VfsSessionManager {
         rmcp::transport::streamable_http_server::session::RestoreOutcome<Self::Transport>,
         Self::Error,
     > {
+        let blueprint = self
+            .state
+            .blueprints()
+            .get(&self.blueprint_name)
+            .await
+            .map_err(|error| init_error(error.to_string()))?
+            .ok_or_else(|| init_error("session blueprint no longer exists".into()))?;
+        self.validate_restored_bindings(&id, &blueprint).await?;
         self.inner.restore_session(id).await
     }
 }
@@ -431,62 +517,88 @@ fn to_local_error(err: crate::session_manager::SessionError) -> LocalSessionMana
 }
 
 pub(crate) struct RmcpSessionStore {
-    inner: Arc<dyn DurableSessionStore>,
-    sessions: Arc<VfsSessions>,
+    state: AppState,
     blueprint: Blueprint,
 }
 
 impl RmcpSessionStore {
-    pub(crate) fn new(
-        inner: Arc<dyn DurableSessionStore>,
-        sessions: Arc<VfsSessions>,
-        blueprint: Blueprint,
-    ) -> Self {
-        Self {
-            inner,
-            sessions,
-            blueprint,
-        }
+    pub(crate) fn new(state: AppState, blueprint: Blueprint) -> Self {
+        Self { state, blueprint }
     }
 }
 
 #[async_trait::async_trait]
 impl SessionStore for RmcpSessionStore {
     async fn load(&self, session_id: &str) -> Result<Option<SessionState>, SessionStoreError> {
-        let record = self.inner.load(session_id).await.map_err(store_error)?;
-        Ok(record.and_then(|record| {
-            (record.blueprint_name == self.blueprint.name)
-                .then_some(record.mcp_state)
-                .flatten()
-        }))
+        super::protocol::load(&self.state, session_id, &self.blueprint.name)
+            .await
+            .map_err(Into::into)
     }
 
     async fn store(&self, session_id: &str, state: &SessionState) -> Result<(), SessionStoreError> {
-        self.sessions.ensure(session_id, &self.blueprint).await?;
-        let Some(mut record) = self.inner.load(session_id).await.map_err(store_error)? else {
-            return Ok(());
-        };
-        record.mcp_state = Some(state.clone());
-        self.inner.put(record).await.map_err(store_error)?;
+        self.state
+            .session_manager()
+            .ensure(session_id, &self.blueprint)
+            .await?;
+        super::protocol::store(&self.state, session_id, &self.blueprint.name, state.clone())
+            .await?;
         Ok(())
     }
 
     async fn delete(&self, session_id: &str) -> Result<(), SessionStoreError> {
-        self.inner.remove(session_id).await.map_err(store_error)?;
+        self.state.session_manager().wipe_now(session_id).await?;
         Ok(())
     }
-}
-
-fn store_error(err: crate::blueprint::StoreError) -> SessionStoreError {
-    Box::new(std::io::Error::other(format!("{err:?}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_store::SessionStatus;
 
     #[tokio::test]
-    async fn session_lookup_accepts_unpersisted_worker_until_runtime_session_expires() {
+    async fn failed_initialization_keeps_generation_until_worker_cleanup() {
+        let state = AppState::new(crate::config::test_config()).unwrap();
+        let manager = VfsSessionManager::new(state.clone(), "missing".into());
+        let (id, _transport) = manager.create_session().await.unwrap();
+        let record = crate::session_store::SessionRecord {
+            session_id: id.to_string(),
+            blueprint_name: "missing".into(),
+            idle_timeout: std::time::Duration::from_secs(60),
+            last_activity: std::time::SystemTime::now(),
+            ..Default::default()
+        };
+        state.session_store().put(record).await.unwrap();
+        let message = serde_json::from_value(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "ping"
+        }))
+        .unwrap();
+        assert!(manager.initialize_session(&id, message).await.is_err());
+        assert!(matches!(
+            manager.inner.restore_session(id.clone()).await.unwrap(),
+            rmcp::transport::streamable_http_server::session::RestoreOutcome::AlreadyPresent
+        ));
+        // Model the delayed service-completion callback. It owns the only
+        // removal, and cannot run after a replacement has been published.
+        manager.close_session(&id).await.unwrap();
+        assert!(
+            state
+                .session_store()
+                .load(id.as_ref())
+                .await
+                .unwrap()
+                .unwrap()
+                .status
+                == SessionStatus::Active
+        );
+        assert!(matches!(
+            manager.inner.restore_session(id.clone()).await.unwrap(),
+            rmcp::transport::streamable_http_server::session::RestoreOutcome::Restored(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn session_lookup_requires_authoritative_handshake_even_with_live_worker() {
         let state = AppState::new(crate::config::test_config()).expect("state");
         let manager = VfsSessionManager::new(state.clone(), "test".into());
         let (id, _transport) = manager.inner.create_session().await.expect("session");
@@ -495,11 +607,12 @@ mod tests {
             blueprint_name: "test".into(),
             idle_timeout: std::time::Duration::from_secs(60),
             last_activity: std::time::SystemTime::now(),
-            owns_vfs_dir: false,
+            root_vfs_type: crate::session_store::RootVfsType::Ephemeral,
             mcp_state: Some(SessionState::new(
                 rmcp::model::InitializeRequestParams::default(),
             )),
             variables: BTreeMap::new(),
+            ..crate::session_store::SessionRecord::default()
         };
         state.session_store().put(record).await.expect("record");
         assert!(manager.contains_session(id.as_ref()).await.expect("lookup"));
@@ -524,13 +637,20 @@ mod tests {
             )
             .await
             .expect("bind");
+        record.revision = state
+            .session_store()
+            .load(id.as_ref())
+            .await
+            .unwrap()
+            .unwrap()
+            .revision;
         state
             .session_store()
             .put(record)
             .await
             .expect("record without handshake");
         assert!(
-            manager
+            !manager
                 .contains_session(id.as_ref())
                 .await
                 .expect("live worker")
@@ -541,7 +661,7 @@ mod tests {
             .await
             .expect("remove");
         assert!(
-            manager
+            !manager
                 .contains_session(id.as_ref())
                 .await
                 .expect("unpersisted worker")
@@ -550,8 +670,9 @@ mod tests {
             state
                 .session_manager()
                 .reap(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
-                .await,
-            1
+                .await
+                .unwrap(),
+            0
         );
         assert!(manager.inner.has_session(&id).await.expect("worker"));
         assert!(!manager.contains_session(id.as_ref()).await.expect("lookup"));

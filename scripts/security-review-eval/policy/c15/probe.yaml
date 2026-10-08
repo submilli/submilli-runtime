@@ -1,0 +1,14 @@
+kind: blueprint
+name: records-policy
+packages: ["@acme/records"]
+default: deny
+permissions:
+  main:
+    - capability: acme.deliver
+      action: allow
+      filter: source == "/secret" and destination == "/trusted"
+  '@acme/records':
+    - capability: fs.write
+      action: allow
+    - capability: fs.read
+      action: allow

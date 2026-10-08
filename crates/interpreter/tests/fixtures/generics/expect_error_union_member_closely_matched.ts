@@ -7,7 +7,7 @@
 // expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `string`
-// expect-error: type parameter `T` already bound to `number`, cannot bind to `string`
+// expect-error: expected `number`, got `string`
 // expect-error: expected `number`, got `boolean`
 // expect-error: expected `number`, got `boolean`
 // expect-error: expected `number`, got `string`

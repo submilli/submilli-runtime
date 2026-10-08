@@ -3,6 +3,7 @@
 mod aliased_conditions;
 mod assign_expr;
 pub(crate) mod assignable;
+mod best_common_type;
 mod binding_analysis;
 mod classes;
 mod closure_arity;
@@ -43,6 +44,7 @@ mod type_diff;
 mod type_namespace;
 mod type_predicate;
 mod type_registry;
+pub(crate) mod variance;
 mod void_type_arguments;
 mod void_value;
 
@@ -128,6 +130,7 @@ pub fn infer_with_transitive_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         invoked_body_exit: None,
@@ -136,6 +139,7 @@ pub fn infer_with_transitive_checked<'a>(
         arithmetic_targets: bindings.arithmetic_targets,
         arithmetic_written_globals: bindings.arithmetic_written_globals,
         last_assignments: bindings.last_assignments,
+        grown_bindings: bindings.grown_bindings,
         nested_function_creation_points: bindings.nested_function_creation_points,
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
@@ -168,7 +172,8 @@ pub fn infer_with_transitive_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
-        object_argument_inference: None,
+        values_widening_candidates: BTreeSet::new(),
+        literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,
@@ -402,6 +407,7 @@ pub fn infer_package_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         invoked_body_exit: None,
@@ -410,6 +416,7 @@ pub fn infer_package_checked<'a>(
         arithmetic_targets: Default::default(),
         arithmetic_written_globals: Default::default(),
         last_assignments: Default::default(),
+        grown_bindings: Default::default(),
         nested_function_creation_points: Default::default(),
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
@@ -442,7 +449,8 @@ pub fn infer_package_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
-        object_argument_inference: None,
+        values_widening_candidates: BTreeSet::new(),
+        literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,
@@ -730,6 +738,11 @@ pub(super) struct Inferer<'a> {
     /// `keeps_literal_types`, so it doesn't reach a conditional's branches,
     /// whose function types couldn't form one callable union.
     next_function_keeps_returned_literals: bool,
+    /// An object literal argument of a generic call, and the type parameters
+    /// the call infers that type only one of its fields: a function literal
+    /// in that field keeps its returned literals (see
+    /// [`Inferer::field_keeps_returned_literals`]).
+    fields_keeping_returned_literals: Option<(crate::ExprId, Vec<String>)>,
     aliased_conditions: aliased_conditions::AliasedConditions,
     /// The span of the arrow an immediately-invoked call is about to infer;
     /// see [`iife::immediately_invoked_arrow`].
@@ -759,6 +772,8 @@ pub(super) struct Inferer<'a> {
     pub(super) arithmetic_targets: std::collections::HashSet<(String, Span)>,
     pub(super) arithmetic_written_globals: std::collections::HashSet<String>,
     pub(super) last_assignments: std::collections::HashMap<Span, u32>,
+    /// See `binding_analysis::Analysis::grown_bindings`.
+    pub(super) grown_bindings: std::collections::HashSet<Span>,
     /// From the binding analysis: nested functions that capture a local of
     /// their block, by name span, with the last declared of those locals. See
     /// [`nested_functions`].
@@ -878,9 +893,13 @@ pub(super) struct Inferer<'a> {
     /// their inference without being a requirement:
     /// an argument that doesn't fit it decides the type parameter instead.
     pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
-    /// The object literal argument whose fields a generic call is inferring
-    /// one at a time; see [`generic::ObjectArgumentInference`].
-    pub(super) object_argument_inference: Option<generic::ObjectArgumentInference>,
+    /// Values of literal argument slots typed as a type parameter an earlier
+    /// value bound to a candidate: one the candidate fits widens it rather
+    /// than mismatching it (`{ v: new Dog(), w: new Animal() }`).
+    pub(super) values_widening_candidates: BTreeSet<crate::ExprId>,
+    /// The object or tuple literal argument whose slots a generic call is
+    /// inferring one at a time; see [`generic::LiteralArgumentInference`].
+    pub(super) literal_argument_inference: Option<generic::LiteralArgumentInference>,
     pub(super) generics_in_scope: Vec<Vec<String>>,
     /// Empty during the signature pass; populated with fresh `GenericParam` ids at body entry.
     pub(super) body_instantiations: Vec<BTreeMap<String, Type>>,
@@ -1022,6 +1041,7 @@ impl<'a> Inferer<'a> {
         self.arithmetic_targets = bindings.arithmetic_targets;
         self.arithmetic_written_globals = bindings.arithmetic_written_globals;
         self.last_assignments = bindings.last_assignments;
+        self.grown_bindings = bindings.grown_bindings;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
         self.nested_functions.clear();
         self.diagnostics.extend(bindings.diagnostics);

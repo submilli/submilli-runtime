@@ -1,10 +1,10 @@
 // A cast gives an empty `[]` its element type only when the target has one; a
-// tuple target has fixed positions an empty literal can't fill.
-// Each line reports two errors, the uninferable empty array and the failed
-// cast, and none from using the target as a hint.
-// expect-error: cannot infer element type of empty array
-// expect-error: cannot cast `<error>[]` to `string`
-// expect-error-count: 6
+// tuple target has fixed positions an empty literal can't fill. Otherwise the
+// literal is `never[]`, which no such target relates to, as in tsc.
+// expect-error: cannot cast `never[]` to `string`
+// expect-error: cannot cast `never[]` to `number`
+// expect-error: cannot cast `never[]` to `null | [number]`
+// expect-error-count: 3
 function main(): void {
   const s = [] as string;
   const n = [] as number;

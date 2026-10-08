@@ -1,0 +1,276 @@
+[
+  {
+    "id": "c01",
+    "pair": "p01",
+    "family": "missing-authorization",
+    "unsafe": true,
+    "mechanism": "save reaches a package-owned write without checking its caller",
+    "probe_result": "completed",
+    "effect_path": "/restricted",
+    "effect_value": "record",
+    "allowed_capabilities": [
+      "acme.write"
+    ],
+    "allowed_effect_path": "/restricted",
+    "allowed_body": "save(\"/restricted\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c02",
+    "pair": "p01",
+    "family": "missing-authorization",
+    "unsafe": false,
+    "mechanism": "save reaches a package-owned write without checking its caller",
+    "probe_result": "denied",
+    "effect_path": "/restricted",
+    "effect_value": null,
+    "allowed_capabilities": [
+      "acme.write"
+    ],
+    "allowed_effect_path": "/restricted",
+    "allowed_body": "save(\"/restricted\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c03",
+    "pair": "p02",
+    "family": "missing-authorization",
+    "unsafe": true,
+    "mechanism": "save calls persist in the same package and neither gates the caller before writeText",
+    "probe_result": "completed",
+    "effect_path": "/restricted",
+    "effect_value": "record",
+    "allowed_capabilities": [
+      "acme.write"
+    ],
+    "allowed_effect_path": "/restricted",
+    "allowed_body": "save(\"/restricted\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c04",
+    "pair": "p02",
+    "family": "missing-authorization",
+    "unsafe": false,
+    "mechanism": "save calls persist in the same package and neither gates the caller before writeText",
+    "probe_result": "denied",
+    "effect_path": "/restricted",
+    "effect_value": null,
+    "allowed_capabilities": [
+      "acme.write"
+    ],
+    "allowed_effect_path": "/restricted",
+    "allowed_body": "save(\"/restricted\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c05",
+    "pair": "p03",
+    "family": "swallowed-denial",
+    "unsafe": true,
+    "mechanism": "catch swallows the acme.write denial then writeText performs the denied effect",
+    "probe_result": "completed",
+    "effect_path": "/restricted",
+    "effect_value": "record",
+    "allowed_capabilities": [
+      "acme.write"
+    ],
+    "allowed_effect_path": "/restricted",
+    "allowed_body": "save(\"/restricted\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c06",
+    "pair": "p03",
+    "family": "swallowed-denial",
+    "unsafe": false,
+    "mechanism": "catch swallows the acme.write denial then writeText performs the denied effect",
+    "probe_result": "denied",
+    "effect_path": "/restricted",
+    "effect_value": null,
+    "allowed_capabilities": [
+      "acme.write"
+    ],
+    "allowed_effect_path": "/restricted",
+    "allowed_body": "save(\"/restricted\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c07",
+    "pair": "p04",
+    "family": "swallowed-denial",
+    "unsafe": true,
+    "mechanism": "primary denial reaches a fallback write without the required independent fallback check",
+    "probe_result": "completed",
+    "effect_path": "/restricted",
+    "effect_value": "record",
+    "allowed_capabilities": [
+      "acme.fallback"
+    ],
+    "allowed_effect_path": "/restricted",
+    "allowed_body": "save(\"/restricted\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c08",
+    "pair": "p04",
+    "family": "swallowed-denial",
+    "unsafe": false,
+    "mechanism": "primary denial reaches a fallback write without the required independent fallback check",
+    "probe_result": "denied",
+    "effect_path": "/restricted",
+    "effect_value": null,
+    "allowed_capabilities": [
+      "acme.fallback"
+    ],
+    "allowed_effect_path": "/restricted",
+    "allowed_body": "save(\"/restricted\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c09",
+    "pair": "p05",
+    "family": "selector-mismatch",
+    "unsafe": true,
+    "mechanism": "check authorizes hintId alpha but writeText changes targetId beta",
+    "probe_result": "completed",
+    "effect_path": "/beta",
+    "effect_value": "record",
+    "allowed_capabilities": [
+      "acme.replace"
+    ],
+    "allowed_effect_path": "/alpha",
+    "allowed_body": "save(\"alpha\", \"alpha\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c10",
+    "pair": "p05",
+    "family": "selector-mismatch",
+    "unsafe": false,
+    "mechanism": "check authorizes hintId alpha but writeText changes targetId beta",
+    "probe_result": "denied",
+    "effect_path": "/beta",
+    "effect_value": null,
+    "allowed_capabilities": [
+      "acme.replace"
+    ],
+    "allowed_effect_path": "/alpha",
+    "allowed_body": "save(\"alpha\", \"alpha\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c11",
+    "pair": "p06",
+    "family": "selector-mismatch",
+    "unsafe": true,
+    "mechanism": "raw /public/../restricted passes a public-prefix policy but the canonical effect targets /restricted",
+    "probe_result": "completed",
+    "effect_path": "/restricted",
+    "effect_value": "record",
+    "allowed_capabilities": [
+      "acme.write"
+    ],
+    "allowed_effect_path": "/public/record",
+    "allowed_body": "save(\"/public/record\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c12",
+    "pair": "p06",
+    "family": "selector-mismatch",
+    "unsafe": false,
+    "mechanism": "raw /public/../restricted passes a public-prefix policy but the canonical effect targets /restricted",
+    "probe_result": "denied",
+    "effect_path": "/restricted",
+    "effect_value": null,
+    "allowed_capabilities": [
+      "acme.write"
+    ],
+    "allowed_effect_path": "/public/record",
+    "allowed_body": "save(\"/public/record\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c13",
+    "pair": "p07",
+    "family": "state-egress",
+    "unsafe": true,
+    "mechanism": "load is authorized to refresh private state but current discloses it without acme.read",
+    "probe_result": "sensitive",
+    "effect_path": null,
+    "effect_value": "record",
+    "allowed_capabilities": [
+      "acme.refresh",
+      "acme.read"
+    ],
+    "allowed_effect_path": null,
+    "allowed_body": "load(\"/secret\"); return current();",
+    "allowed_result": "sensitive",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c14",
+    "pair": "p07",
+    "family": "state-egress",
+    "unsafe": false,
+    "mechanism": "load is authorized to refresh private state but current discloses it without acme.read",
+    "probe_result": "denied",
+    "effect_path": null,
+    "effect_value": null,
+    "allowed_capabilities": [
+      "acme.refresh",
+      "acme.read"
+    ],
+    "allowed_effect_path": null,
+    "allowed_body": "load(\"/secret\"); return current();",
+    "allowed_result": "sensitive",
+    "allowed_effect_value": "record"
+  },
+  {
+    "id": "c15",
+    "pair": "p08",
+    "family": "state-egress",
+    "unsafe": true,
+    "mechanism": "deliver checks a fixed trusted destination but writes sensitive input to caller-selected /untrusted",
+    "probe_result": "completed",
+    "effect_path": "/untrusted",
+    "effect_value": "sensitive",
+    "allowed_capabilities": [
+      "acme.deliver"
+    ],
+    "allowed_effect_path": "/trusted",
+    "allowed_body": "deliver(\"/secret\", \"/trusted\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "sensitive"
+  },
+  {
+    "id": "c16",
+    "pair": "p08",
+    "family": "state-egress",
+    "unsafe": false,
+    "mechanism": "deliver checks a fixed trusted destination but writes sensitive input to caller-selected /untrusted",
+    "probe_result": "denied",
+    "effect_path": "/untrusted",
+    "effect_value": null,
+    "allowed_capabilities": [
+      "acme.deliver"
+    ],
+    "allowed_effect_path": "/trusted",
+    "allowed_body": "deliver(\"/secret\", \"/trusted\"); return \"completed\";",
+    "allowed_result": "completed",
+    "allowed_effect_value": "sensitive"
+  }
+]

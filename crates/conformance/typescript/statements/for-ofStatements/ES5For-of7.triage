@@ -1,2 +1,0 @@
-line 2, 6 extra: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected
-line 3 type: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected

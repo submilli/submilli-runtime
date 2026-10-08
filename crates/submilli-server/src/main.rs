@@ -80,9 +80,9 @@ pub struct Cli {
     #[arg(long)]
     blueprint_dir: Option<PathBuf>,
 
-    /// Directory the session lifecycle store persists to and loads from on
-    /// startup — the bookkeeping that makes resume and idle reaping survive a
-    /// restart. Mount on durable storage. [default: ~/.submilli/server/sessions]
+    /// Source directory for session JSON import into SQLite; also holds the
+    /// file-backed idempotency ledger. Mount on durable storage.
+    /// [default: ~/.submilli/server/sessions]
     /// Env: `$SUBMILLI_SESSION_STORE_DIR`.
     #[arg(long)]
     session_store_dir: Option<PathBuf>,

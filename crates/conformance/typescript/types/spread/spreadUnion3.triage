@@ -1,1 +1,0 @@
-line 4 type: bug SUB-1196 (spreading a falsy or nullable value) spreading `c && {…}` or a nullable value is rejected

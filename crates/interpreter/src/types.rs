@@ -680,6 +680,24 @@ impl Type {
         Some(Type::union(elements))
     }
 
+    /// The arrays and tuples of a union of strings with arrays or tuples, and
+    /// nothing else, as their own union. Such a union has no shared
+    /// representation, so each use tests `typeof` and takes the string's or the
+    /// array's path.
+    pub fn string_or_array_union_arrays(&self) -> Option<Type> {
+        let Type::Union(members) = self.peel() else {
+            return None;
+        };
+        let (strings, arrays): (Vec<Type>, Vec<Type>) = members
+            .iter()
+            .cloned()
+            .partition(|member| member.peel().is_string_shaped());
+        let all_arrays = arrays
+            .iter()
+            .all(|member| matches!(member.peel(), Type::Array(_) | Type::Tuple(_)));
+        (!strings.is_empty() && !arrays.is_empty() && all_arrays).then(|| Type::union(arrays))
+    }
+
     /// The array a union of arrays and tuples reads as: see
     /// [`Self::array_like_union_element`].
     pub fn array_like_union_view(&self) -> Option<Type> {
@@ -794,6 +812,15 @@ impl Type {
             Type::Union(members) => Type::union(members.iter().map(Type::widen_literal).collect()),
             _ => self.clone(),
         }
+    }
+
+    /// The primitive this literal type, or union of literals of one
+    /// primitive, is a literal of: `number` for `1 | 2`, `None` for
+    /// `1 | "a"` or a type that is no literal.
+    pub fn literal_base(&self) -> Option<Type> {
+        let widened = self.widen_literal();
+        (widened != *self && matches!(widened, Type::Number | Type::String | Type::Boolean))
+            .then_some(widened)
     }
 
     /// Whether every part of this type is a string — a `string`, a

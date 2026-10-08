@@ -1,0 +1,14 @@
+namespace: acme
+provides:
+- name: acme.fallback
+  description: Save through primary or fallback authority.
+  fields:
+    path:
+      type: string
+- name: acme.primary
+  description: Save through primary or fallback authority.
+  fields:
+    path:
+      type: string
+requires:
+- capability: fs.write

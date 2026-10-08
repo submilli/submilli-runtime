@@ -43,11 +43,9 @@ pub struct ServerConfig {
     /// Explicit durable session store. Takes precedence over `session_store_dir`;
     /// mainly for tests and embedded callers that inject their own store.
     pub session_store: Option<Arc<dyn DurableSessionStore>>,
-    /// Directory backing a file-persisted session store (the lifecycle metadata
-    /// that makes resume and idle reaping survive a restart). Used only when
-    /// `session_store` is `None`; when both are `None`, `AppState::new` installs
-    /// an in-memory store. Mount this on **durable** storage alongside
-    /// `session_storage_root`.
+    /// JSON import source when a database is configured; its idempotency ledger
+    /// stays file-backed. Without a database, selects the compatibility file store.
+    /// Explicit stores take precedence; no database or directory selects memory.
     pub session_store_dir: Option<PathBuf>,
     /// SQLite database opened by `serve` before accepting requests. Embedded
     /// callers leave this unset and may inject their own stores.
@@ -69,6 +67,7 @@ pub struct ServerConfig {
     /// secrets fail to resolve, while `env:`/`file:` are unaffected. Built at the
     /// binary boundary so the encryption-key source lives there, not here.
     pub secret_store: Option<Arc<dyn SecretStore>>,
+    pub session_cipher: Option<Arc<submilli_shared::secret_store::SecretCipher>>,
     /// Root for `ephemeral` scratch directories (one temp dir per execute,
     /// wiped at return). `None` uses the OS temp dir. Mount this on volatile
     /// storage (tmpfs / k8s `emptyDir`) — ephemeral VFSes are not meant to

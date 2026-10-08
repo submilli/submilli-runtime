@@ -1,3 +1,2 @@
 line 21 extra: by-design spec §1.8 `throw` accepts only `Error` values
-line 9 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
-line 11 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
+line 11 type: bug SUB-1493 a destructured module-level `let` doesn't narrow to its initializer

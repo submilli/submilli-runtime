@@ -2,6 +2,4 @@ line 12 extra: by-design spec §1.5 code after an exhaustive `switch` is unreach
 line 15 extra: by-design spec §1.8 `throw` accepts only `Error` values
 line 236 extra: bug SUB-1196 (non-exhaustive `switch`) a `switch` without `default` must cover every case, which the spec doesn't state
 line 237 extra: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough
-line 7 type: bug SUB-1196 (literals from constant expressions) `!` on an operand of known truthiness isn't a literal type
-line 43, 44, 104, 105, 113, 114, 122, 123 type: bug SUB-1196 (enum member types) an enum member has its enum's type, where tsc gives it a member literal type
 line 240, 241 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it

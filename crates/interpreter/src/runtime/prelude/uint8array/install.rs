@@ -1120,13 +1120,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
                                 params: byte_callback_params(Vec::new()),
-                                ret: Box::new(Type::Boolean),
+                                ret: Box::new(Type::Unknown),
                                 predicate: None,
                                 has_rest: false,
                             })],
                             ret: Type::Uint8Array,
                             predicate: None,
-                            doc: doc("/** Returns a new `Uint8Array` containing every byte for which `predicate(byte, index, array)` returns `true`. */"),
+                            doc: doc("/** Returns a new `Uint8Array` containing every byte for which `predicate(byte, index, array)` returns a truthy value. */"),
                         },
                     ),
                     (
@@ -1135,13 +1135,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
                                 params: byte_callback_params(Vec::new()),
-                                ret: Box::new(Type::Boolean),
+                                ret: Box::new(Type::Unknown),
                                 predicate: None,
                                 has_rest: false,
                             })],
                             ret: Type::Boolean,
                             predicate: None,
-                            doc: doc("/** Returns `true` if `predicate` returns `true` for any byte. */"),
+                            doc: doc("/** Returns `true` if `predicate` returns a truthy value for any byte. */"),
                         },
                     ),
                     (
@@ -1150,13 +1150,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
                                 params: byte_callback_params(Vec::new()),
-                                ret: Box::new(Type::Boolean),
+                                ret: Box::new(Type::Unknown),
                                 predicate: None,
                                 has_rest: false,
                             })],
                             ret: Type::Boolean,
                             predicate: None,
-                            doc: doc("/** Returns `true` iff `predicate(byte, index, array)` returns `true` for every byte. */"),
+                            doc: doc("/** Returns `true` iff `predicate(byte, index, array)` returns a truthy value for every byte. */"),
                         },
                     ),
                     (
@@ -1265,13 +1265,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
                                 params: byte_callback_params(Vec::new()),
-                                ret: Box::new(Type::Boolean),
+                                ret: Box::new(Type::Unknown),
                                 predicate: None,
                                 has_rest: false,
                             })],
                             ret: Type::Union(vec![Type::Number, Type::Null]),
                             predicate: None,
-                            doc: doc("/** Returns the last byte for which `predicate(byte, index, array)` returns `true`, or `null`. */"),
+                            doc: doc("/** Returns the last byte for which `predicate(byte, index, array)` returns a truthy value, or `null`. */"),
                         },
                     ),
                     (
@@ -1295,7 +1295,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
                                 params: byte_callback_params(Vec::new()),
-                                ret: Box::new(Type::Boolean),
+                                ret: Box::new(Type::Unknown),
                                 predicate: None,
                                 has_rest: false,
                             })],

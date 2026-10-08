@@ -1,2 +1,1 @@
-line 17, 18, 26, 27, 35, 37, 38 extra: by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand
-line 39 extra: bug SUB-1196 (empty array literal) an empty array literal with no expected type is rejected; also by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand
+line 17, 18, 26, 27, 35, 37, 38, 39 extra: by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand

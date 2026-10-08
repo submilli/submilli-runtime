@@ -2,18 +2,22 @@
 
 pub mod audit;
 
+mod adapters;
 pub mod app;
+mod application;
 pub mod auth;
 pub mod blueprint;
 mod compiler_thread;
 pub mod config;
 pub mod database;
+pub mod domain;
 pub mod error;
 mod execution_timeout;
 mod graceful_shutdown;
 pub mod handlers;
 pub mod idempotency;
 pub mod idempotency_store;
+mod import_archive;
 pub mod local_apply;
 pub mod logging;
 mod mcp;

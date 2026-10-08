@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, bail};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use submilli_build::{DependencyKind, find_manifest_upwards, parse_manifest};
+use submilli_build::{DependencyKind, ProjectManifest, find_manifest_upwards, parse_manifest};
 
 const MAX_BYTES: usize = 512 * 1024;
 const MAX_FILES: usize = 1024;
@@ -15,6 +15,7 @@ const MAX_ENTRIES: usize = 20_000;
 #[derive(Serialize)]
 pub(super) struct Snapshot {
     pub packages: Vec<String>,
+    pub authority: Option<super::authority::Evidence>,
     pub files: BTreeMap<String, Source>,
     pub coverage_gaps: Vec<String>,
 }
@@ -25,9 +26,34 @@ pub(super) struct Source {
     pub content: String,
 }
 
-pub(super) fn collect(only_package: Option<&str>) -> anyhow::Result<Snapshot> {
+impl Snapshot {
+    pub fn source_hash(&self) -> anyhow::Result<String> {
+        let hashes: BTreeMap<_, _> = self
+            .files
+            .iter()
+            .map(|(path, source)| (path, &source.sha256))
+            .collect();
+        Ok(format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(
+                env!("CARGO_PKG_VERSION"),
+                &self.packages,
+                hashes
+            ))?)
+        ))
+    }
+}
+
+pub(super) fn collect(only_package: Option<&str>) -> anyhow::Result<(Snapshot, ProjectManifest)> {
     let cwd = std::env::current_dir()?;
-    let manifest_path = find_manifest_upwards(&cwd)
+    collect_from(&cwd, only_package)
+}
+
+pub(super) fn collect_from(
+    directory: &Path,
+    only_package: Option<&str>,
+) -> anyhow::Result<(Snapshot, ProjectManifest)> {
+    let manifest_path = find_manifest_upwards(directory)
         .context("no submilli.toml found; run security-review from a package project")?;
     let root = manifest_path
         .parent()
@@ -35,6 +61,7 @@ pub(super) fn collect(only_package: Option<&str>) -> anyhow::Result<Snapshot> {
         .canonicalize()?;
     let mut snapshot = Snapshot {
         packages: Vec::new(),
+        authority: None,
         files: BTreeMap::new(),
         coverage_gaps: Vec::new(),
     };
@@ -97,7 +124,7 @@ pub(super) fn collect(only_package: Option<&str>) -> anyhow::Result<Snapshot> {
         }
     }
     snapshot.packages.sort();
-    Ok(snapshot)
+    Ok((snapshot, manifest))
 }
 
 fn collect_package(

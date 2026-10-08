@@ -2,43 +2,43 @@ types: 101 of 220 tsc entries compared, 40 differ
 
 line 6: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
-  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null }
+  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never }
 
 line 6: [{ a: 0 }, { a: 1, b: "x" }, { a: 2, b: "y", c: true }][0]
   tsc:  { a: number; } | { a: number; b: string; } | { a: number; b: string; c: boolean; }
-  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null }
+  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never }
 
 line 6: [{ a: 0 }, { a: 1, b: "x" }, { a: 2, b: "y", c: true }]
   tsc:  ({ a: number; } | { a: number; b: string; } | { a: number; b: string; c: boolean; })[]
-  ours: ({ a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null })[]
+  ours: ({ a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never })[]
 
 line 7: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
-  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null }
+  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never }
 
 line 8: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
-  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null }
+  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never }
 
 line 9: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
-  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null }
+  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never }
 
 line 10: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
-  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null }
+  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never }
 
 line 11: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
-  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null }
+  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never }
 
 line 12: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
-  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null }
+  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never }
 
 line 13: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
-  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: null } | { a: number; b?: null; c?: null }
+  ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never }
 
 line 13: { c: true }
   tsc:  { c: true; }
@@ -46,43 +46,43 @@ line 13: { c: true }
 
 line 15: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null }
+  ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
 
 line 15: [{ a: 1, b: 2 }, { a: "abc" }, {}][0]
   tsc:  { a: number; b: number; } | { a: string; } | {}
-  ours: { a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null }
+  ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
 
 line 15: [{ a: 1, b: 2 }, { a: "abc" }, {}]
   tsc:  ({ a: number; b: number; } | { a: string; } | {})[]
-  ours: ({ a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null })[]
+  ours: ({ a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never })[]
 
 line 16: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null }
+  ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
 
 line 17: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null }
+  ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
 
 line 18: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null }
+  ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
 
 line 19: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null }
+  ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
 
 line 20: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null }
+  ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
 
 line 21: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null }
+  ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
 
 line 22: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
-  ours: { a: number; b: number } | { a: string; b?: null } | { a?: null; b?: null }
+  ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
 
 line 26: b2
   tsc:  { z: number; a: string; b: string; } | { z: number; b: string; c: string; }
@@ -106,56 +106,56 @@ line 27: b2
 
 line 38: d1
   tsc:  { kind: string; pos: { x: number; y: number; a?: undefined; b?: undefined; }; } | { kind: string; pos: { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }; }
-  ours: { kind: string; pos: { a?: null; b?: null; x: number; y: number } } | { kind: string; pos: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } }
+  ours: { kind: string; pos: { a?: never; b?: never; x: number; y: number } } | { kind: string; pos: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } }
 
 line 38: [{ kind: 'a', pos: { x: 0, y: 0 } }, { kind: 'b', pos: !true ? { a: "x" } : { b: 0 } }][0]
   tsc:  { kind: string; pos: { x: number; y: number; }; } | { kind: string; pos: { a: string; } | { b: number; }; }
-  ours: { kind: string; pos: { a?: null; b?: null; x: number; y: number } } | { kind: string; pos: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } }
+  ours: { kind: string; pos: { a?: never; b?: never; x: number; y: number } } | { kind: string; pos: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } }
 
 line 38: [{ kind: 'a', pos: { x: 0, y: 0 } }, { kind: 'b', pos: !true ? { a: "x" } : { b: 0 } }]
   tsc:  ({ kind: string; pos: { x: number; y: number; }; } | { kind: string; pos: { a: string; } | { b: number; }; })[]
-  ours: ({ kind: string; pos: { a?: null; b?: null; x: number; y: number } } | { kind: string; pos: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } })[]
+  ours: ({ kind: string; pos: { a?: never; b?: never; x: number; y: number } } | { kind: string; pos: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } })[]
 
 line 39: d1
   tsc:  { kind: string; pos: { x: number; y: number; a?: undefined; b?: undefined; }; } | { kind: string; pos: { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }; }
-  ours: { kind: string; pos: { a?: null; b?: null; x: number; y: number } } | { kind: string; pos: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } }
+  ours: { kind: string; pos: { a?: never; b?: never; x: number; y: number } } | { kind: string; pos: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } }
 
 line 40: d1.pos
   tsc:  { x: number; y: number; a?: undefined; b?: undefined; } | { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }
-  ours: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } | { a?: null; b?: null; x: number; y: number }
+  ours: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } | { a?: never; b?: never; x: number; y: number }
 
 line 40: d1
   tsc:  { kind: string; pos: { x: number; y: number; a?: undefined; b?: undefined; }; } | { kind: string; pos: { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }; }
-  ours: { kind: string; pos: { a?: null; b?: null; x: number; y: number } } | { kind: string; pos: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } }
+  ours: { kind: string; pos: { a?: never; b?: never; x: number; y: number } } | { kind: string; pos: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } }
 
 line 41: d1.pos
   tsc:  { x: number; y: number; a?: undefined; b?: undefined; } | { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }
-  ours: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } | { a?: null; b?: null; x: number; y: number }
+  ours: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } | { a?: never; b?: never; x: number; y: number }
 
 line 41: d1
   tsc:  { kind: string; pos: { x: number; y: number; a?: undefined; b?: undefined; }; } | { kind: string; pos: { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }; }
-  ours: { kind: string; pos: { a?: null; b?: null; x: number; y: number } } | { kind: string; pos: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } }
+  ours: { kind: string; pos: { a?: never; b?: never; x: number; y: number } } | { kind: string; pos: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } }
 
 line 42: d1.pos
   tsc:  { x: number; y: number; a?: undefined; b?: undefined; } | { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }
-  ours: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } | { a?: null; b?: null; x: number; y: number }
+  ours: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } | { a?: never; b?: never; x: number; y: number }
 
 line 42: d1
   tsc:  { kind: string; pos: { x: number; y: number; a?: undefined; b?: undefined; }; } | { kind: string; pos: { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }; }
-  ours: { kind: string; pos: { a?: null; b?: null; x: number; y: number } } | { kind: string; pos: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } }
+  ours: { kind: string; pos: { a?: never; b?: never; x: number; y: number } } | { kind: string; pos: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } }
 
 line 43: d1.pos
   tsc:  { x: number; y: number; a?: undefined; b?: undefined; } | { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }
-  ours: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } | { a?: null; b?: null; x: number; y: number }
+  ours: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } | { a?: never; b?: never; x: number; y: number }
 
 line 43: d1
   tsc:  { kind: string; pos: { x: number; y: number; a?: undefined; b?: undefined; }; } | { kind: string; pos: { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }; }
-  ours: { kind: string; pos: { a?: null; b?: null; x: number; y: number } } | { kind: string; pos: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } }
+  ours: { kind: string; pos: { a?: never; b?: never; x: number; y: number } } | { kind: string; pos: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } }
 
 line 44: d1.pos
   tsc:  { x: number; y: number; a?: undefined; b?: undefined; } | { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }
-  ours: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } | { a?: null; b?: null; x: number; y: number }
+  ours: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } | { a?: never; b?: never; x: number; y: number }
 
 line 44: d1
   tsc:  { kind: string; pos: { x: number; y: number; a?: undefined; b?: undefined; }; } | { kind: string; pos: { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }; }
-  ours: { kind: string; pos: { a?: null; b?: null; x: number; y: number } } | { kind: string; pos: { a: string; b?: null; x?: null; y?: null } | { a?: null; b: number; x?: null; y?: null } }
+  ours: { kind: string; pos: { a?: never; b?: never; x: number; y: number } } | { kind: string; pos: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } }

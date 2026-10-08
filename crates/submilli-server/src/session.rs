@@ -1,5 +1,8 @@
 //! Per-session retention of the most recent `/v1/execute` run.
 
+// Compatibility path for callers of the earlier session domain module.
+pub use crate::domain::session as domain;
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 

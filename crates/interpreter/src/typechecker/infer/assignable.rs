@@ -10,6 +10,7 @@ use super::generic::substitute_or_record;
 use super::narrowing;
 use super::type_namespace::TypeNamespace;
 use super::type_registry::TypeRegistry;
+use super::variance::Variance;
 
 /// The pair of tables structural resolution needs: the import-scoped namespace
 /// plus the import-independent FQN registry. Carried (by `Copy`) wherever
@@ -126,7 +127,7 @@ impl<'a> TypeResolver<'a> {
         Some(out)
     }
 
-    fn sym_by_mangled(&self, mangled: &MangledName) -> Option<&'a crate::TypeSymbol> {
+    pub(super) fn sym_by_mangled(&self, mangled: &MangledName) -> Option<&'a crate::TypeSymbol> {
         self.registry
             .lookup(mangled)
             .or_else(|| self.types.lookup_by_mangled(mangled))
@@ -888,22 +889,26 @@ fn assignable_rec(
                 ..
             },
         ) => {
-            if ma == me
-                && aa.len() == ae.len()
-                && aa
-                    .iter()
-                    .zip(ae.iter())
-                    .all(|(a, e)| assignable_rec(a, e, types, seen))
-            {
-                return true;
+            // Measured variances decide first, as in tsc: comparing the members
+            // of a recursive interface instead would expand ever larger
+            // instantiations (`I0<I1<T, U>, T>`). Arguments that fail only
+            // where the members may still accept them fall back to plain
+            // covariance, then to the members.
+            if ma == me {
+                match args_relate_at_variances(ma, na, aa, ae, types, seen) {
+                    Some(ArgsRelation::Related) => return true,
+                    Some(ArgsRelation::Unrelated) => return false,
+                    Some(ArgsRelation::MembersDecide) | None => {}
+                }
+                if args_relate_covariantly(aa, ae, types, seen) {
+                    return true;
+                }
             }
-            let _ = na;
             satisfies_structurally(actual, expected, types, seen)
         }
         // Classes are nominal: assignable only up the `extends` chain. Generic
-        // classes additionally compare args pairwise (covariant, the
-        // InterfaceRef convention — TS-style unsound covariance for mutable
-        // members, matching the interface behavior).
+        // classes additionally compare args pairwise, at each type parameter's
+        // variance (mutable fields count as covariant, as in TypeScript).
         (
             Type::ClassRef {
                 mangled: ma,
@@ -912,6 +917,7 @@ fn assignable_rec(
             },
             Type::ClassRef {
                 mangled: me,
+                name: ne,
                 args: ae,
                 ..
             },
@@ -925,13 +931,12 @@ fn assignable_rec(
                 types.class_args_at_ancestor(ma, aa, me)
             };
             match actual_at_expected {
-                Some(at) => {
-                    at.len() == ae.len()
-                        && at
-                            .iter()
-                            .zip(ae.iter())
-                            .all(|(a, e)| assignable_rec(a, e, types, seen))
-                }
+                // Classes are nominal and have no member fallback, so arguments
+                // the members might accept still leave them unrelated.
+                Some(at) => match args_relate_at_variances(me, ne, &at, ae, types, seen) {
+                    Some(relation) => relation == ArgsRelation::Related,
+                    None => args_relate_covariantly(&at, ae, types, seen),
+                },
                 None => false,
             }
         }
@@ -1128,10 +1133,71 @@ fn assignable_rec(
     }
 }
 
+/// How one instantiation's type arguments relate to another's at the measured
+/// variances.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArgsRelation {
+    Related,
+    Unrelated,
+    /// Every failing argument may still fit through the members: a `void`
+    /// at a covariant parameter (tsc's `hasCovariantVoidArgument`, so a
+    /// `Task<number>` serves as a `Task<void>`), or a type parameter still
+    /// being inferred (`Sink<T>` for a `Sink<void>`).
+    MembersDecide,
+}
+
+/// How one instantiation's type arguments relate to another's, for the generic
+/// class or interface `mangled`, at each parameter's variance. `None` when the
+/// variances couldn't be measured in full.
+fn args_relate_at_variances(
+    mangled: &MangledName,
+    name: &str,
+    actual_args: &[Type],
+    expected_args: &[Type],
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> Option<ArgsRelation> {
+    if actual_args.len() != expected_args.len() {
+        return Some(ArgsRelation::Unrelated);
+    }
+    if actual_args == expected_args {
+        return Some(ArgsRelation::Related);
+    }
+    let variances = types.settled_variances(mangled, name, actual_args.len())?;
+    let mut relation = ArgsRelation::Related;
+    for ((actual, expected), variance) in actual_args.iter().zip(expected_args).zip(variances) {
+        if variance.relates(actual, expected, |a, e| assignable_rec(a, e, types, seen)) {
+            continue;
+        }
+        let members_may_accept = (variance == Variance::Covariant
+            && matches!(expected, Type::Void))
+            || super::expr::type_contains_type_var(expected);
+        if !members_may_accept {
+            return Some(ArgsRelation::Unrelated);
+        }
+        relation = ArgsRelation::MembersDecide;
+    }
+    Some(relation)
+}
+
+/// Whether each type argument is assignable to the one at its position.
+fn args_relate_covariantly(
+    actual_args: &[Type],
+    expected_args: &[Type],
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    actual_args.len() == expected_args.len()
+        && actual_args
+            .iter()
+            .zip(expected_args)
+            .all(|(actual, expected)| assignable_rec(actual, expected, types, seen))
+}
+
 /// Whether `actual` is a `readonly` array or tuple and `expected` a mutable one.
 /// The element types still decide assignability everywhere else: `readonly` is
 /// shallow and otherwise covariant, like the array it wraps.
-pub(super) fn drops_readonly(actual: &Type, expected: &Type) -> bool {
+pub(crate) fn drops_readonly(actual: &Type, expected: &Type) -> bool {
     actual.is_readonly_array()
         && !expected.is_readonly_array()
         && matches!(expected.peel(), Type::Array(_) | Type::Tuple(_))

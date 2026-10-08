@@ -107,13 +107,9 @@ fn derive_filters(
                             *unresolved_http_host_span = Some(actual_span);
                         }
                     }
-                    None => warnings.push(warning(
-                        actual_span,
-                        format!(
-                            "non-literal argument for `{param}`; no static capability filter for `{}`",
-                            binding.field
-                        ),
-                    )),
+                    // Dynamic arguments leave the requirement broad; they do not
+                    // demonstrate an error in the caller.
+                    None => {}
                 }
             }
         }
@@ -542,15 +538,17 @@ mod tests {
     }
 
     #[test]
-    fn non_literal_arg_warns_without_filter() {
+    fn non_literal_arg_retains_requirement_without_warning() {
         let (ta, tag, params, args) = first_doc_capability(
             "/** @capability secrets.get { name } */\n\
              function callee(name: string): void { }\n\
              function main(): void { let token = \"TOKEN\"; callee(token); }\n",
         );
         let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(derived.capability, "secrets.get");
         assert_eq!(derived.filter, None);
-        assert_eq!(derived.warnings.len(), 1);
+        assert!(derived.known_bindings.is_empty());
+        assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
     }
 
     #[test]
