@@ -1,4 +1,4 @@
-types: 187 of 273 tsc entries compared, 37 differ
+types: 187 of 273 tsc entries compared, 39 differ
 
 line 30: x
   tsc:  {}
@@ -139,6 +139,14 @@ line 259: b
 line 270: y
   tsc:  T & ({} | undefined)
   ours: T
+
+line 366: x
+  tsc:  string | number
+  ours: number
+
+line 375: x
+  tsc:  string | number
+  ours: number
 
 line 382: encoding
   tsc:  {} | undefined

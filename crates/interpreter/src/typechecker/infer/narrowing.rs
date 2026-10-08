@@ -452,11 +452,12 @@ pub fn literal_type(literal: &LiteralValue) -> Type {
 }
 
 /// Whether `ty` is, or has a member that is, a literal or `null`: what makes
-/// a property a discriminant in TypeScript.
+/// a property a discriminant in TypeScript. An enum is the union of its
+/// members' literals.
 pub fn has_unit_member(ty: &Type) -> bool {
     match ty.peel() {
         Type::Union(members) => members.iter().any(has_unit_member),
-        Type::Null => true,
+        Type::Null | Type::NumberEnum { .. } | Type::StringEnum { .. } => true,
         other => unit_literal_value(other).is_some(),
     }
 }
