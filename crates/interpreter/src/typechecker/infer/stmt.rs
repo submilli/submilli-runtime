@@ -1115,6 +1115,7 @@ impl Inferer<'_> {
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let lhs_path =
             narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
+        let reads_never = self.reads_ruled_out_as_never(&lhs_path);
         let (synth_lhs, lhs_ty) = if let Some(view) = self.lookup_narrowed_view(&lhs_path) {
             let binding = view.binding.clone();
             let narrowed_ty = view.narrowed_ty.clone();
@@ -1144,16 +1145,21 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             (id, ty.clone())
         };
+        let lhs_ty = if reads_never { Type::Never } else { lhs_ty };
         let (typed_value, value_ty) =
             self.infer_expr(value, compound_value_hint(&lhs_ty).as_ref())?;
         let result_ty =
             self.check_compound_arith(op, (synth_lhs, &lhs_ty), (typed_value, &value_ty), op_span)?;
+        let check_ty = compound_result_target(&lhs_ty, &ty);
         if !matches!(result_ty, Type::Error)
-            && !matches!(ty, Type::Error)
-            && !assignable(&result_ty, &ty, self.resolver())
+            && !matches!(check_ty, Type::Error)
+            && !assignable(&result_ty, check_ty, self.resolver())
         {
             let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-            self.error(value_span, format!("expected `{ty}`, got `{result_ty}`"));
+            self.error(
+                value_span,
+                format!("expected `{check_ty}`, got `{result_ty}`"),
+            );
         }
         let synth_binary = self
             .typed_ast
@@ -2013,6 +2019,7 @@ impl Inferer<'_> {
                     name: target.name.clone(),
                     decl_scope: entry.decl_scope,
                 });
+            let reads_never = self.reads_ruled_out_as_never(&lhs_path);
             let (synth_lhs, lhs_ty) = if let Some(view) = self.lookup_narrowed_view(&lhs_path) {
                 let binding = view.binding.clone();
                 let narrowed_ty = view.narrowed_ty.clone();
@@ -2042,6 +2049,7 @@ impl Inferer<'_> {
                     .map_err(crate::typechecker::arena_failure)?;
                 (id, target_ty.clone())
             };
+            let lhs_ty = if reads_never { Type::Never } else { lhs_ty };
             let (typed_value, value_ty) =
                 self.infer_expr(value, compound_value_hint(&lhs_ty).as_ref())?;
             let result_ty = self.check_compound_arith(
@@ -2053,13 +2061,14 @@ impl Inferer<'_> {
             // Re-check assignability: catches literal-refined slots (e.g. `1|2|3`)
             // where arithmetic widens the result to `number`.
             let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
+            let check_ty = compound_result_target(&lhs_ty, &target_ty);
             if !matches!(result_ty, Type::Error)
-                && !matches!(target_ty, Type::Error)
-                && !assignable(&result_ty, &target_ty, self.resolver())
+                && !matches!(check_ty, Type::Error)
+                && !assignable(&result_ty, check_ty, self.resolver())
             {
                 self.error(
                     value_span,
-                    format!("expected `{target_ty}`, got `{result_ty}`"),
+                    format!("expected `{check_ty}`, got `{result_ty}`"),
                 );
             }
             let synth_binary = self
@@ -2359,13 +2368,14 @@ impl Inferer<'_> {
             (typed_value, &value_ty),
             op_span,
         )?;
+        let check_ty = compound_result_target(&rw.read, &rw.write);
         if !matches!(result_ty, Type::Error)
-            && !matches!(rw.write, Type::Error)
-            && !assignable(&result_ty, &rw.write, self.resolver())
+            && !matches!(check_ty, Type::Error)
+            && !assignable(&result_ty, check_ty, self.resolver())
         {
             self.error(
                 value_span,
-                format!("expected `{}`, got `{result_ty}`", rw.write),
+                format!("expected `{check_ty}`, got `{result_ty}`"),
             );
         }
         let synth_binary = self
@@ -2454,13 +2464,14 @@ impl Inferer<'_> {
             (typed_value, &value_ty),
             op_span,
         )?;
+        let check_ty = compound_result_target(&read_ty, &elem_ty);
         if !matches!(result_ty, Type::Error)
-            && !matches!(elem_ty, Type::Error)
-            && !assignable(&result_ty, &elem_ty, self.resolver())
+            && !matches!(check_ty, Type::Error)
+            && !assignable(&result_ty, check_ty, self.resolver())
         {
             self.error(
                 value_span,
-                format!("expected `{elem_ty}`, got `{result_ty}`"),
+                format!("expected `{check_ty}`, got `{result_ty}`"),
             );
         }
         let synth_binary = self
@@ -2524,6 +2535,16 @@ fn compound_value_hint(read_ty: &Type) -> Option<Type> {
         return None;
     }
     Some(read_ty.widen_literal())
+}
+
+/// The type a compound assignment's result must fit: the declared type, or
+/// `never` when the target reads as `never` here, as tsc checks the result
+/// against the narrowed read.
+fn compound_result_target<'a>(read_ty: &'a Type, declared_ty: &'a Type) -> &'a Type {
+    if matches!(read_ty.peel(), Type::Never) {
+        return read_ty;
+    }
+    declared_ty
 }
 
 /// The arithmetic operator a compound assignment applies, as source text.

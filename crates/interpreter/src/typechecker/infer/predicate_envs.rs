@@ -2564,6 +2564,16 @@ impl<'a> Inferer<'a> {
         ))
     }
 
+    /// Whether `path` reads as `never` because a guard ruled out every value,
+    /// as [`Self::narrowed_read`] types a plain read of it.
+    pub(super) fn reads_ruled_out_as_never(&self, path: &narrowing::ReferencePath) -> bool {
+        self.declared_read.as_ref() != Some(path)
+            && self
+                .innermost_narrowing(path)
+                .is_some_and(|view| narrowing::is_ruled_out(&view.narrowed_ty))
+            && self.reads_as_never(path)
+    }
+
     /// Whether a guard that ruled out every value of `path` makes it read as
     /// `never`. A type parameter or `unknown` hides values a guard can't see
     /// ruled out, so `typeof x === "object"` on a `T` is not a contradiction.
