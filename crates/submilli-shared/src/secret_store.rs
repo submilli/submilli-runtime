@@ -82,6 +82,13 @@ pub struct SecretCipher {
 }
 
 impl SecretCipher {
+    /// Build a cipher from an embedder-owned key, already loaded securely.
+    pub fn from_key(key: [u8; KEY_LEN]) -> Self {
+        Self {
+            cipher: XChaCha20Poly1305::new(&key.into()),
+        }
+    }
+
     pub fn new(source: &KeySource) -> Result<Self, SecretStoreError> {
         Ok(Self {
             cipher: cipher_for(source)?,

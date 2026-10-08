@@ -17,6 +17,8 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsE
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use submilli_server::{ApiToken, Role};
 
@@ -125,6 +127,29 @@ fn whole_file_write_lock() -> libc::flock {
 }
 
 impl StateDir {
+    /// Keep session encryption stable across restarts. Like the local secret
+    /// store, this key is protected by filesystem ownership, not from its owner.
+    pub(crate) fn session_cipher(&self) -> Result<submilli_shared::secret_store::SecretCipher> {
+        let path = self.root.join("session.key");
+        let encoded = if let Some(encoded) = read_private(&path)? {
+            encoded
+        } else {
+            let mut key = [0_u8; 32];
+            getrandom::getrandom(&mut key)
+                .map_err(|error| anyhow::anyhow!("generating session encryption key: {error}"))?;
+            write_private_new(&path, STANDARD.encode(key).as_bytes())?;
+            File::open(&self.root)?.sync_all()?;
+            read_private(&path)?.context("session encryption key disappeared after creation")?
+        };
+        let decoded = STANDARD
+            .decode(encoded.trim())
+            .context("session encryption key is not valid base64")?;
+        let key: [u8; 32] = decoded
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("session encryption key must contain 32 bytes"))?;
+        Ok(submilli_shared::secret_store::SecretCipher::from_key(key))
+    }
+
     pub(crate) fn for_project(project_root: &Path) -> Self {
         Self {
             root: project_root.join(".submilli").join("playground"),
@@ -590,6 +615,34 @@ mod tests {
 
     fn mode(path: &Path) -> u32 {
         fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn session_key_survives_reopening_and_refuses_corruption_or_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = StateDir::for_project(dir.path());
+        state.create().unwrap();
+        let cipher = state.session_cipher().unwrap();
+        let sealed = cipher.seal(b"harness secret", b"session").unwrap();
+        let path = state.root().join("session.key");
+        assert_eq!(mode(&path), 0o600);
+        let reopened = StateDir::for_project(dir.path()).session_cipher().unwrap();
+        assert_eq!(
+            reopened.open(&sealed, b"session").unwrap(),
+            b"harness secret"
+        );
+        assert!(reopened.open(&sealed, b"another session").is_err());
+
+        for invalid in ["not base64!", "YQ=="] {
+            fs::write(&path, invalid).unwrap();
+            assert!(state.session_cipher().is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), invalid);
+        }
+        fs::remove_file(&path).unwrap();
+        let elsewhere = dir.path().join("outside.key");
+        fs::write(&elsewhere, STANDARD.encode([7_u8; 32])).unwrap();
+        symlink(&elsewhere, &path).unwrap();
+        assert!(state.session_cipher().is_err());
     }
 
     #[test]
