@@ -133,6 +133,17 @@ impl Recorder {
     pub(crate) fn store(&self) -> &Arc<Store> {
         &self.shared.store
     }
+
+    /// The server's execution id of run `id` while it is in flight: started, and not yet
+    /// finished. A run's id is handed out when it starts, so this is how a playground run
+    /// id reaches the server's cancellation.
+    pub(crate) fn in_flight(&self, id: u64) -> Option<String> {
+        self.shared
+            .tracks()
+            .values()
+            .find(|track| track.id == id && track.finished_at.is_none())
+            .map(|track| track.execution_id.clone())
+    }
 }
 
 impl RunRecorderFactory for Recorder {

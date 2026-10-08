@@ -510,7 +510,7 @@ mod unix {
             { "name": "@acme/billing", "version": "0.1.0", "origin": "blueprint",
               "importable": true, "project": true },
             { "name": "@acme/money", "version": "0.1.0", "origin": "dependency",
-              "importable": false, "project": true },
+              "importable": false, "project": true, "required_by": ["@acme/billing"] },
         ]);
         assert_eq!(record["packages"], expected);
         assert_eq!(workspace.status()["packages"], expected);

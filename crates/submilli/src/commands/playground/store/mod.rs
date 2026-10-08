@@ -11,6 +11,7 @@
 //!   changes.jsonl       the change log: blueprint versions and clear markers
 //!   retries.jsonl       idempotent retries answered without running
 //!   sessions.jsonl      sessions the playground started, and when each ended
+//!   links.jsonl         runs the playground ran again live, linked to their source
 //! ```
 //!
 //! The directory is 0700 and every file 0600. Each file carries the format version it
@@ -51,6 +52,7 @@ use super::log::warn;
 
 pub(crate) mod changes;
 pub(crate) mod events;
+pub(crate) mod links;
 pub(crate) mod recorder;
 pub(crate) mod redact;
 pub(crate) mod run;
@@ -331,6 +333,23 @@ impl Store {
         append_line(&self.index_path(), &summary)
     }
 
+    /// Replaces a stored run's file in one rename and leaves its index line as it is: for
+    /// what is kept with a run after it was recorded (a test run's report), which changes
+    /// nothing its summary holds. The run must already be redacted.
+    pub(crate) fn rewrite_run(&self, run: &StoredRun) -> Result<()> {
+        self.writer()?;
+        let path = self.run_path(run.id);
+        let staged = stage(&path, &json_bytes(run))?;
+        let _inner = self.lock();
+        staged
+            .persist(&path)
+            .map(drop)
+            .map_err(|error| StoreError::Io {
+                path: path.clone(),
+                source: error.error,
+            })
+    }
+
     /// A stored run, or `None` when there is none with that id.
     pub(crate) fn load_run(&self, id: u64) -> Result<Option<StoredRun>> {
         let path = self.run_path(id);
@@ -476,6 +495,7 @@ impl Store {
             self.changes_path(),
             self.retries_path(),
             self.sessions_path(),
+            self.links_path(),
         ];
         let events = self.root.join("events");
         for entry in fs::read_dir(&events).map_err(io_error(&events))? {

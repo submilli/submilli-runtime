@@ -1,10 +1,11 @@
 //! The playground's controls: one function per control, taking typed inputs and
-//! returning a typed result, behind the CLI (and later the control API and the page).
+//! returning a typed result, behind the CLI, the control API, and the page.
 //!
 //! The reads ([`read`]) open the store read-only and never reach the running
 //! playground, so they work with it stopped; a running one only adds page links,
-//! found from its instance record without a request. [`render`] holds the output
-//! contract every control shares.
+//! found from its instance record without a request. The actions ([`act`]) run in the
+//! running playground, which the CLI reaches through the control API. [`render`] holds
+//! the output contract every control shares.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -20,6 +21,7 @@ use super::state::StateDir;
 use super::store::run::DecisionRef;
 use super::store::{Store, StoreError};
 
+pub(crate) mod act;
 pub(crate) mod read;
 pub(crate) mod render;
 
@@ -92,7 +94,7 @@ impl std::fmt::Display for ReadError {
 }
 
 impl ReadError {
-    fn kind(&self) -> &'static str {
+    pub(crate) fn kind(&self) -> &'static str {
         match self {
             Self::NoProject => "no-project",
             Self::UnknownRun(_) => "unknown-run",
@@ -102,14 +104,14 @@ impl ReadError {
         }
     }
 
-    fn exit(&self) -> u8 {
+    pub(crate) fn exit(&self) -> u8 {
         match self {
             Self::Store(_) => 1,
             _ => EXIT_USAGE,
         }
     }
 
-    fn next(&self) -> Vec<String> {
+    pub(crate) fn next(&self) -> Vec<String> {
         match self {
             Self::UnknownRun(_) => next([Next::Runs]),
             Self::UnknownDecision { decision, .. } => next([Next::Show(decision.run)]),
@@ -136,6 +138,21 @@ impl Reader {
             store,
             page: running_page(&state),
             project_dir: Some(cwd),
+            fixed_closure: None,
+        })
+    }
+
+    /// The reader the running playground answers the page's reads with: its own store,
+    /// opened read-only like any reader's, and its page.
+    pub(crate) fn for_host(
+        store_root: &std::path::Path,
+        page: Page,
+        project_root: &std::path::Path,
+    ) -> Result<Self, ReadError> {
+        Ok(Self {
+            store: Some(Store::open_read_only(store_root)?),
+            page,
+            project_dir: Some(project_root.to_path_buf()),
             fixed_closure: None,
         })
     }

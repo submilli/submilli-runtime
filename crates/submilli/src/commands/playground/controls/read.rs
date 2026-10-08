@@ -328,6 +328,14 @@ impl Reader {
         }
     }
 
+    /// Each rerun's source run, by the rerun's id.
+    fn reruns(&self) -> Result<BTreeMap<u64, u64>, ReadError> {
+        match &self.store {
+            Some(store) => Ok(store.reruns()?),
+            None => Ok(BTreeMap::new()),
+        }
+    }
+
     fn load(&self, id: u64) -> Result<StoredRun, ReadError> {
         let store = self.store.as_ref().ok_or(ReadError::UnknownRun(id))?;
         store.load_run(id)?.ok_or(ReadError::UnknownRun(id))
@@ -405,6 +413,8 @@ pub(crate) struct RunRow {
     pub(crate) denied: usize,
     pub(crate) session: Option<String>,
     pub(crate) test_of: Option<u64>,
+    /// For a rerun, the run whose program it ran again.
+    pub(crate) rerun_of: Option<u64>,
 }
 
 pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, ReadError> {
@@ -431,6 +441,7 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
     let limit = query.limit.max(1);
     let more = summaries.len().saturating_sub(limit);
     summaries.truncate(limit);
+    let reruns = reader.reruns()?;
     let mut rows = Vec::with_capacity(summaries.len());
     for summary in &summaries {
         // Only a run with denials is read in full, for its denials' refs.
@@ -463,6 +474,7 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
             denied: summary.denied,
             session: summary.session_id.clone(),
             test_of: summary.test_of.as_ref().and_then(|link| link.run),
+            rerun_of: reruns.get(&summary.id).copied(),
         });
     }
     let mut suggestions = Vec::new();
@@ -515,6 +527,9 @@ pub(crate) struct ShowResult {
     pub(crate) note: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) test: Option<TestInfo>,
+    /// For a rerun, the run whose program it ran again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rerun_of: Option<u64>,
     pub(crate) decision_count: usize,
     /// Identical allowed decisions collapsed into one line; denials one per line.
     pub(crate) decisions: Vec<DecisionLine>,
@@ -571,13 +586,64 @@ impl CallSummary {
 pub(crate) struct TestInfo {
     pub(crate) source_run: Option<u64>,
     pub(crate) status: String,
+    /// `recorded`, `reads-live`, or `live`, when the report is stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) mode: Option<String>,
     /// Variables the test run bound that the tested run did not.
     pub(crate) variables_filled: Vec<String>,
     /// Variables the tested run bound that the test run did not.
     pub(crate) variables_dropped: Vec<String>,
-    pub(crate) local_state: &'static str,
+    pub(crate) local_state: String,
+    /// Calls answered from the recording; their keys are in `untrusted.test`.
+    pub(crate) served: Vec<ServedOut>,
+    /// The call the run stopped at; its key and detail are in `untrusted.test`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stopped: Option<StopOut>,
+    /// Calls with nothing recorded that went live; their keys are in `untrusted.test`.
+    pub(crate) went_live: Vec<LiveOut>,
+    /// After a stop: that running on live takes an explicit opt-in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) live_note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) not_stored: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ServedOut {
+    pub(crate) source_call: u64,
+    pub(crate) capability: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct StopOut {
+    /// Why the recording could not answer it (`no-recording`, `request-differs`, ...).
+    pub(crate) reason: String,
+    pub(crate) caller: Option<String>,
+    pub(crate) capability: Option<String>,
+    pub(crate) line: Option<u32>,
+    pub(crate) test_call: Option<u64>,
+    /// The recorded call nearest to it.
+    pub(crate) nearest: Option<ServedOut>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct LiveOut {
+    pub(crate) reason: String,
+    pub(crate) test_call: Option<u64>,
+}
+
+/// What came from inside a test run's calls: their keys (URLs, tool names) and why the
+/// run stopped.
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct TestUntrusted {
+    /// Each served call's key, in `served` order.
+    pub(crate) served_keys: Vec<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stop_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stop_detail: Option<String>,
+    /// Each live call's key, in `went_live` order.
+    pub(crate) went_live_keys: Vec<String>,
 }
 
 /// Everything in a shown run that came from inside it.
@@ -600,6 +666,8 @@ pub(crate) struct ShowUntrusted {
     /// Each call's request and response, with bodies: only with `--include-payloads`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) calls: BTreeMap<u64, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) test: Option<TestUntrusted>,
 }
 
 /// What a test run says about its local state: true of every test run.
@@ -698,14 +766,22 @@ pub(crate) fn show(
     untrusted.console = cap_text(&run.console, include_payloads);
 
     let is_test = run.entry == "test" || run.test_of.is_some();
+    // A test run whose stored report names no stop was cancelled, not stopped.
+    let stopped_by_test = is_test
+        && run
+            .test_report
+            .as_ref()
+            .is_none_or(|report| report.stopped.is_some());
     let outcome = Outcome::of(
         run.error.as_ref().map(|error| error.kind),
         run.dispatched,
-        is_test,
+        stopped_by_test,
         last_denial,
     );
     let test = if is_test {
-        Some(test_info(reader, &run, &outcome))
+        let (info, test_untrusted) = test_info(reader, &run, &outcome);
+        untrusted.test = test_untrusted;
+        Some(info)
     } else {
         None
     };
@@ -727,6 +803,10 @@ pub(crate) fn show(
         suggestions.push(Next::DraftRule(*denial));
     }
     if let Some(source) = test.as_ref().and_then(|test| test.source_run) {
+        suggestions.push(Next::Compare(source, run.id));
+    }
+    let rerun_of = reader.reruns()?.get(&run.id).copied();
+    if let Some(source) = rerun_of {
         suggestions.push(Next::Compare(source, run.id));
     }
     if suggestions.is_empty()
@@ -755,6 +835,7 @@ pub(crate) fn show(
         variables: run.recording.variables.clone(),
         note: (run.label == "app").then_some(APP_NOTE),
         test,
+        rerun_of,
         decision_count: run.recording.decisions.len(),
         decisions: lines,
         decisions_dropped: run.decisions_dropped,
@@ -766,40 +847,129 @@ pub(crate) fn show(
     })
 }
 
-fn test_info(reader: &Reader, run: &StoredRun, outcome: &Outcome) -> TestInfo {
+fn test_info(
+    reader: &Reader,
+    run: &StoredRun,
+    outcome: &Outcome,
+) -> (TestInfo, Option<TestUntrusted>) {
     let source_run = run.test_of.as_ref().and_then(|link| link.run);
-    let source = source_run.and_then(|id| reader.load(id).ok());
-    let (filled, dropped) = match &source {
-        Some(source) => {
-            let before: BTreeSet<&String> = source.recording.variables.keys().collect();
-            let after: BTreeSet<&String> = run.recording.variables.keys().collect();
-            (
-                after
-                    .difference(&before)
-                    .map(|name| (*name).clone())
-                    .collect(),
-                before
-                    .difference(&after)
-                    .map(|name| (*name).clone())
-                    .collect(),
-            )
-        }
-        None => (Vec::new(), Vec::new()),
-    };
     let status = match outcome {
         Outcome::Stopped => {
             "stopped at a call with nothing recorded (what it stopped at is in run-data)".to_owned()
         }
         other => other.text(),
     };
-    TestInfo {
+    let Some(report) = &run.test_report else {
+        let source = source_run.and_then(|id| reader.load(id).ok());
+        let (filled, dropped) = match &source {
+            Some(source) => {
+                let before: BTreeSet<&String> = source.recording.variables.keys().collect();
+                let after: BTreeSet<&String> = run.recording.variables.keys().collect();
+                (
+                    after
+                        .difference(&before)
+                        .map(|name| (*name).clone())
+                        .collect(),
+                    before
+                        .difference(&after)
+                        .map(|name| (*name).clone())
+                        .collect(),
+                )
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        let info = TestInfo {
+            source_run,
+            status,
+            mode: None,
+            variables_filled: filled,
+            variables_dropped: dropped,
+            local_state: TEST_LOCAL_STATE.to_owned(),
+            served: Vec::new(),
+            stopped: None,
+            went_live: Vec::new(),
+            live_note: None,
+            not_stored: Some(TEST_NOT_STORED),
+        };
+        return (info, None);
+    };
+    let mut untrusted = TestUntrusted::default();
+    let served = report
+        .served
+        .iter()
+        .map(|call| {
+            untrusted.served_keys.push(call.key.clone());
+            ServedOut {
+                source_call: call.source_call_index,
+                capability: call.capability.clone(),
+            }
+        })
+        .collect();
+    let went_live = report
+        .went_live
+        .iter()
+        .map(|call| {
+            untrusted.went_live_keys.push(call.key.clone());
+            LiveOut {
+                reason: call.reason.clone(),
+                test_call: call.test_call_index,
+            }
+        })
+        .collect();
+    let stopped = report.stopped.as_ref().map(|stop| {
+        untrusted.stop_key = Some(stop.key.clone());
+        untrusted.stop_detail = Some(stop.detail.clone());
+        StopOut {
+            reason: stop.reason.clone(),
+            caller: stop.caller.clone(),
+            capability: stop.capability.clone(),
+            line: stop.line.map(|line| line.line),
+            test_call: stop.test_call_index,
+            nearest: stop.nearest.as_ref().map(|nearest| ServedOut {
+                source_call: nearest.call_index,
+                capability: nearest.capability.clone(),
+            }),
+        }
+    });
+    let live_note = match (&stopped, source_run) {
+        (Some(_), Some(source)) => Some(format!(
+            "nothing was recorded for this call, so the test stopped before making it; it \
+             continues only live, and live execution takes an explicit opt-in: `submilli \
+             playground test {source} --reads-live` lets unrecorded reads through, `--live` \
+             every call"
+        )),
+        (Some(_), None) => Some(
+            "nothing was recorded for this call, so the test stopped before making it; it \
+             continues only live, which takes an explicit opt-in"
+                .to_owned(),
+        ),
+        (None, _) => None,
+    };
+    let local = &report.local_state;
+    let mut local_state = TEST_LOCAL_STATE.to_owned();
+    if !local.session_found {
+        local_state.push_str(" (the recorded session was gone, so it started empty)");
+    }
+    if !local.volumes_copied.is_empty() {
+        local_state.push_str(&format!(
+            "; writable volumes copied: {}",
+            local.volumes_copied.join(", ")
+        ));
+    }
+    let info = TestInfo {
         source_run,
         status,
-        variables_filled: filled,
-        variables_dropped: dropped,
-        local_state: TEST_LOCAL_STATE,
-        not_stored: Some(TEST_NOT_STORED),
-    }
+        mode: Some(report.mode.clone()),
+        variables_filled: report.variables.filled.keys().cloned().collect(),
+        variables_dropped: report.variables.dropped.clone(),
+        local_state,
+        served,
+        stopped,
+        went_live,
+        live_note,
+        not_stored: None,
+    };
+    (info, Some(untrusted))
 }
 
 // ---- explain -------------------------------------------------------------------------------

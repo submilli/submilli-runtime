@@ -14,7 +14,7 @@ use submilli_server::record::RecordedRun;
 use crate::commands::playground::packages::ClosureEntry;
 use crate::commands::playground::store::Store;
 use crate::commands::playground::store::changes::{NewVersion, version_tag};
-use crate::commands::playground::store::run::{RunLink, StoredError, StoredRun};
+use crate::commands::playground::store::run::{RunLink, StoredError, StoredRun, StoredTestReport};
 
 use super::Reader;
 use super::render::Page;
@@ -102,6 +102,7 @@ impl Fixture {
                 log_truncated: false,
                 mcp_catalog: None,
             },
+            test_report: run.test_report,
         };
         self.store.write_run(&stored).unwrap();
         id
@@ -134,6 +135,7 @@ pub(crate) struct RunSpec {
     pub(crate) console: String,
     pub(crate) test_of: Option<u64>,
     pub(crate) started_at: Option<u64>,
+    pub(crate) test_report: Option<StoredTestReport>,
 }
 
 impl RunSpec {
@@ -154,6 +156,7 @@ impl RunSpec {
             console: String::new(),
             test_of: None,
             started_at: None,
+            test_report: None,
         }
     }
 

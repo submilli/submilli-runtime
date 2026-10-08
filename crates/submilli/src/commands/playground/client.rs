@@ -100,6 +100,15 @@ pub(crate) struct Running {
     admin: String,
 }
 
+/// One server-sent event of a control feed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct FeedEvent {
+    /// `message` when the event names none.
+    pub(crate) name: String,
+    pub(crate) id: Option<String>,
+    pub(crate) data: String,
+}
+
 /// What the instance record in `state` names, checked. Only a process holding the
 /// instance lock serves the project, so a record without one is stale however its
 /// pid and port look, and one with it is never stale, however slowly it answers.
@@ -200,6 +209,98 @@ impl Running {
             .is_ok_and(|response| response.status().is_success())
     }
 
+    /// An action's answer. Actions run programs, so the request has no overall deadline
+    /// (a run ends by its own limits); only connecting is bounded.
+    pub(crate) fn send<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<T> {
+        let url = format!("{}{path}", base(&self.record));
+        let builder = ureq::http::Request::builder()
+            .method(method)
+            .uri(&url)
+            .header("authorization", format!("Bearer {}", self.admin))
+            .header("content-type", "application/json");
+        let request = builder
+            .body(body.map_or_else(String::new, Value::to_string))
+            .context("building a control request")?;
+        let mut response = long_agent()
+            .run(request)
+            .with_context(|| format!("calling the playground at {url}"))?;
+        decode(method, path, &mut response)
+    }
+
+    /// Follows a server-sent event feed, handing each event to `each` until it returns
+    /// `false` or the feed ends (the playground stopped). `last_event_id` resumes after
+    /// that event.
+    pub(crate) fn follow(
+        &self,
+        path: &str,
+        last_event_id: Option<&str>,
+        mut each: impl FnMut(FeedEvent) -> bool,
+    ) -> Result<()> {
+        use std::io::BufRead as _;
+        let url = format!("{}{path}", base(&self.record));
+        let mut builder = ureq::http::Request::builder()
+            .method("GET")
+            .uri(&url)
+            .header("authorization", format!("Bearer {}", self.admin))
+            .header("accept", "text/event-stream");
+        if let Some(id) = last_event_id {
+            builder = builder.header("last-event-id", id);
+        }
+        let request = builder.body(()).context("building a control request")?;
+        let mut response = long_agent()
+            .run(request)
+            .with_context(|| format!("calling the playground at {url}"))?;
+        if !response.status().is_success() {
+            return decode::<Value>("GET", path, &mut response).map(drop);
+        }
+        let reader =
+            std::io::BufReader::new(response.body_mut().with_config().limit(u64::MAX).reader());
+        let mut event = FeedEvent::default();
+        for line in reader.lines() {
+            // An error here is the playground closing the stream as it stopped.
+            let Ok(line) = line else {
+                return Ok(());
+            };
+            if line.is_empty() {
+                let done = std::mem::take(&mut event);
+                if done.data.is_empty() && done.name.is_empty() {
+                    continue;
+                }
+                let name = if done.name.is_empty() {
+                    "message".to_owned()
+                } else {
+                    done.name.clone()
+                };
+                if !each(FeedEvent { name, ..done }) {
+                    return Ok(());
+                }
+                continue;
+            }
+            if line.starts_with(':') {
+                continue;
+            }
+            let (field, value) = line.split_once(':').unwrap_or((line.as_str(), ""));
+            let value = value.strip_prefix(' ').unwrap_or(value);
+            match field {
+                "event" => event.name = value.to_owned(),
+                "id" => event.id = Some(value.to_owned()),
+                "data" => {
+                    if !event.data.is_empty() {
+                        event.data.push('\n');
+                    }
+                    event.data.push_str(value);
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// A control call's answer. A success whose body is not what the route returns
     /// is an error, never an empty answer.
     fn call<T: DeserializeOwned>(&self, method: &str, path: &str) -> Result<T> {
@@ -214,24 +315,43 @@ impl Running {
             .agent
             .run(request)
             .with_context(|| format!("calling the playground at {url}"))?;
-        let status = response.status();
-        let body = response
-            .body_mut()
-            .with_config()
-            .limit(1 << 20)
-            .read_json::<Value>();
-        if !status.is_success() {
-            let message = body
-                .ok()
-                .and_then(|body| body["message"].as_str().map(str::to_owned))
-                .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
-            bail!("the playground refused {method} {path}: {message}");
-        }
-        let body = body
-            .with_context(|| format!("the playground's answer to {method} {path} is not JSON"))?;
-        serde_json::from_value(body)
-            .with_context(|| format!("the playground's answer to {method} {path} is malformed"))
+        decode(method, path, &mut response)
     }
+}
+
+/// A control response's JSON. A refusal is an error naming the playground's message.
+fn decode<T: DeserializeOwned>(
+    method: &str,
+    path: &str,
+    response: &mut ureq::http::Response<ureq::Body>,
+) -> Result<T> {
+    let status = response.status();
+    let body = response
+        .body_mut()
+        .with_config()
+        .limit(16 << 20)
+        .read_json::<Value>();
+    if !status.is_success() {
+        let message = body
+            .ok()
+            .and_then(|body| body["message"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
+        bail!("the playground refused {method} {path}: {message}");
+    }
+    let body =
+        body.with_context(|| format!("the playground's answer to {method} {path} is not JSON"))?;
+    serde_json::from_value(body)
+        .with_context(|| format!("the playground's answer to {method} {path} is malformed"))
+}
+
+/// An agent for actions and feeds: they last as long as a run does.
+fn long_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .timeout_connect(Some(CHALLENGE_TIMEOUT))
+        .build()
+        .into()
 }
 
 fn base(record: &InstanceRecord) -> String {

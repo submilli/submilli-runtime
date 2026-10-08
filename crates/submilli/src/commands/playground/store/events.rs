@@ -149,6 +149,9 @@ pub(crate) struct Appender {
     /// The last sequence number per session log file, read from the file the first time
     /// the session is appended to in this process.
     last: Mutex<HashMap<String, u64>>,
+    /// Counts the lines appended to any log, so a reader following one wakes when it may
+    /// have grown instead of polling it.
+    appended: tokio::sync::watch::Sender<u64>,
 }
 
 impl Appender {
@@ -157,7 +160,13 @@ impl Appender {
             dir,
             writable,
             last: Mutex::new(HashMap::new()),
+            appended: tokio::sync::watch::Sender::new(0),
         }
+    }
+
+    /// Changes after every line appended to any session's log, in this process.
+    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.appended.subscribe()
     }
 
     /// Appends `event` to its session's log, numbered next in that session, and returns
@@ -191,6 +200,9 @@ impl Appender {
         };
         file.write_all(&line).map_err(io_error(&path))?;
         last.insert(name, event.session_seq);
+        drop(last);
+        self.appended
+            .send_modify(|count| *count = count.wrapping_add(1));
         Ok(Some(event.session_seq))
     }
 

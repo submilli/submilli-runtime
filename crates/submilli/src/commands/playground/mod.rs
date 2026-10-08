@@ -19,6 +19,8 @@ use clap::{Args as ClapArgs, Subcommand};
 use ipnet::IpNet;
 
 #[cfg(unix)]
+mod api;
+#[cfg(unix)]
 mod client;
 #[cfg(unix)]
 mod control_auth;
@@ -99,6 +101,164 @@ pub enum PlaygroundCmd {
     Changes(ChangesArgs),
     /// List sessions, newest first.
     Sessions(SessionsArgs),
+    /// Run a program in the running playground, labeled `assistant` (or the scaffolded
+    /// example, labeled `example`), under the binding or in a started session.
+    Exec(ExecArgs),
+    /// Set the variables and harness-secret development values new runs use, or print
+    /// them. Held in the running playground's memory only.
+    Bind(BindArgs),
+    /// Start a session with its variables fixed, or end one.
+    Session(SessionArgs),
+    /// Re-resolve a run's decisions under the blueprint in force. Runs nothing and
+    /// records nothing.
+    Recheck(RunArg),
+    /// Run a recorded program again under the blueprint in force, with its calls answered
+    /// from the recording; it stops at a call with nothing recorded.
+    Test(TestArgs),
+    /// Run a recorded program again live under the current binding, as a new run linked
+    /// to its source.
+    Rerun(RunArg),
+    /// Draft a rule that allows exactly one refused call; `--write` puts it in the
+    /// blueprint file. Works with the playground stopped.
+    DraftRule(DraftRuleArgs),
+    /// Remove every stored run and start a new audit window. Run ids keep counting.
+    Clear(OutputArgs),
+    /// Cancel a run in flight.
+    Cancel(RunArg),
+    /// Follow a session's events as JSON lines until its last run finishes. Without a
+    /// session, follows the most recent one.
+    Watch(WatchArgs),
+}
+
+#[derive(ClapArgs)]
+#[command(group(clap::ArgGroup::new("program").required(true).args(["file", "example"])))]
+pub struct ExecArgs {
+    /// The program to run.
+    #[arg(value_name = "FILE")]
+    file: Option<PathBuf>,
+    /// Run the scaffolded example program instead.
+    #[arg(long)]
+    example: bool,
+    /// Run in this started session, under its fixed variables.
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
+    /// A variable for this run over the binding (repeatable). In a started session it
+    /// must match the session's value.
+    #[arg(long = "var", value_name = "NAME=VALUE", value_parser = parse_var)]
+    vars: Vec<(String, String)>,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct BindArgs {
+    /// Variables to bind.
+    #[arg(value_name = "NAME=VALUE", value_parser = parse_var)]
+    vars: Vec<(String, String)>,
+    /// A harness secret to bind, its value read from the environment variable of the
+    /// same name or the local secret store; never from the command line (repeatable).
+    #[arg(long = "secret", value_name = "NAME")]
+    secrets: Vec<String>,
+    /// Remove a variable or secret from the binding (repeatable).
+    #[arg(long, value_name = "NAME")]
+    unset: Vec<String>,
+    /// Remove everything from the binding first.
+    #[arg(long)]
+    clear: bool,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct SessionArgs {
+    #[command(subcommand)]
+    cmd: SessionCmd,
+}
+
+#[derive(Subcommand)]
+pub enum SessionCmd {
+    /// Start a session. Variables not given come from the binding; secrets from the
+    /// binding.
+    Start(SessionStartArgs),
+    /// End a session.
+    End(SessionEndArgs),
+}
+
+#[derive(ClapArgs)]
+pub struct SessionStartArgs {
+    /// A variable for the session (repeatable).
+    #[arg(long = "var", value_name = "NAME=VALUE", value_parser = parse_var)]
+    vars: Vec<(String, String)>,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct SessionEndArgs {
+    #[arg(value_name = "ID")]
+    session: String,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct RunArg {
+    /// The run id.
+    #[arg(value_name = "RUN")]
+    run: u64,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct TestArgs {
+    /// The run to test.
+    #[arg(value_name = "RUN")]
+    run: u64,
+    /// Let unrecorded reads (`GET`, `HEAD`) go live; anything else still stops the run.
+    #[arg(long, conflicts_with = "live")]
+    reads_live: bool,
+    /// Let every unrecorded call go live.
+    #[arg(long)]
+    live: bool,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct DraftRuleArgs {
+    /// The refused decision, as `<run>.<n>`.
+    #[arg(value_name = "RUN.N")]
+    decision: String,
+    /// Write the rule into the blueprint file.
+    #[arg(long)]
+    write: bool,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct WatchArgs {
+    /// The session to follow.
+    #[arg(value_name = "SESSION")]
+    session: Option<String>,
+    /// Accepted for symmetry; `watch` always prints JSON lines.
+    #[arg(long)]
+    json: bool,
+}
+
+fn parse_var(text: &str) -> Result<(String, String), String> {
+    match text.split_once('=') {
+        Some((name, value)) if !name.is_empty() => Ok((name.to_owned(), value.to_owned())),
+        _ => Err(format!("expected NAME=VALUE, got `{text}`")),
+    }
 }
 
 #[derive(ClapArgs)]
@@ -274,6 +434,21 @@ impl Args {
             Some(PlaygroundCmd::Audit(_)) => "playground.audit",
             Some(PlaygroundCmd::Changes(_)) => "playground.changes",
             Some(PlaygroundCmd::Sessions(_)) => "playground.sessions",
+            Some(PlaygroundCmd::Exec(_)) => "playground.exec",
+            Some(PlaygroundCmd::Bind(_)) => "playground.bind",
+            Some(PlaygroundCmd::Session(SessionArgs {
+                cmd: SessionCmd::Start(_),
+            })) => "playground.session.start",
+            Some(PlaygroundCmd::Session(SessionArgs {
+                cmd: SessionCmd::End(_),
+            })) => "playground.session.end",
+            Some(PlaygroundCmd::Recheck(_)) => "playground.recheck",
+            Some(PlaygroundCmd::Test(_)) => "playground.test",
+            Some(PlaygroundCmd::Rerun(_)) => "playground.rerun",
+            Some(PlaygroundCmd::DraftRule(_)) => "playground.draft-rule",
+            Some(PlaygroundCmd::Clear(_)) => "playground.clear",
+            Some(PlaygroundCmd::Cancel(_)) => "playground.cancel",
+            Some(PlaygroundCmd::Watch(_)) => "playground.watch",
         }
     }
 }
@@ -293,8 +468,187 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         Some(PlaygroundCmd::Open(output)) => unix::open(Output::from_json(output.json)),
         Some(PlaygroundCmd::Stop(output)) => unix::stop(Output::from_json(output.json)),
         Some(PlaygroundCmd::Init(output)) => unix::init(Output::from_json(output.json)),
-        Some(cmd) => read_command(cmd),
+        Some(
+            cmd @ (PlaygroundCmd::Runs(_)
+            | PlaygroundCmd::Show(_)
+            | PlaygroundCmd::Explain(_)
+            | PlaygroundCmd::Compare(_)
+            | PlaygroundCmd::Audit(_)
+            | PlaygroundCmd::Changes(_)
+            | PlaygroundCmd::Sessions(_)),
+        ) => read_command(cmd),
+        Some(cmd) => action_command(cmd),
     }
+}
+
+/// An action control: reaches the running playground, except `draft-rule`, which works
+/// on the store and the blueprint file.
+#[cfg(unix)]
+fn action_command(cmd: PlaygroundCmd) -> anyhow::Result<ExitCode> {
+    use controls::act::{
+        ActionRequest, BindRequest, ExecRequest, Mode, SessionEndRequest, SessionStartRequest,
+        TestRequest, execute_action, execute_draft, execute_watch,
+    };
+    let usage = |message: String| {
+        eprintln!("{message}");
+        Ok(ExitCode::from(controls::render::EXIT_USAGE))
+    };
+    let (request, json) = match cmd {
+        PlaygroundCmd::Exec(args) => {
+            let output = Output::from_json(args.json);
+            // Not running is said before anything else is checked.
+            if let Err(answer) = controls::act::connect()? {
+                return Ok(answer.print(output));
+            }
+            let code = match exec_program(args.file.as_deref(), args.example) {
+                Ok(code) => code,
+                Err(message) => return usage(message),
+            };
+            (
+                ActionRequest::Exec(ExecRequest {
+                    code,
+                    example: args.example,
+                    session: args.session,
+                    variables: args.vars.into_iter().collect(),
+                }),
+                args.json,
+            )
+        }
+        PlaygroundCmd::Bind(args) => {
+            let output = Output::from_json(args.json);
+            if let Err(answer) = controls::act::connect()? {
+                return Ok(answer.print(output));
+            }
+            let changes = !args.vars.is_empty()
+                || !args.secrets.is_empty()
+                || !args.unset.is_empty()
+                || args.clear;
+            let request = if changes {
+                let mut secrets = std::collections::BTreeMap::new();
+                for name in &args.secrets {
+                    match secret_value(name) {
+                        Ok(value) => {
+                            secrets.insert(name.clone(), value);
+                        }
+                        Err(message) => return usage(message),
+                    }
+                }
+                Some(BindRequest {
+                    variables: args.vars.into_iter().collect(),
+                    secrets,
+                    unset: args.unset,
+                    clear: args.clear,
+                })
+            } else {
+                None
+            };
+            (ActionRequest::Bind(request), args.json)
+        }
+        PlaygroundCmd::Session(SessionArgs {
+            cmd: SessionCmd::Start(args),
+        }) => (
+            ActionRequest::SessionStart(SessionStartRequest {
+                variables: args.vars.into_iter().collect(),
+            }),
+            args.json,
+        ),
+        PlaygroundCmd::Session(SessionArgs {
+            cmd: SessionCmd::End(args),
+        }) => (
+            ActionRequest::SessionEnd(SessionEndRequest {
+                session: args.session,
+            }),
+            args.json,
+        ),
+        PlaygroundCmd::Recheck(args) => (ActionRequest::Recheck(args.run), args.json),
+        PlaygroundCmd::Test(args) => {
+            let mode = if args.live {
+                Mode::Live
+            } else if args.reads_live {
+                Mode::ReadsLive
+            } else {
+                Mode::Recorded
+            };
+            (
+                ActionRequest::Test(TestRequest {
+                    run: args.run,
+                    mode,
+                }),
+                args.json,
+            )
+        }
+        PlaygroundCmd::Rerun(args) => (ActionRequest::Rerun(args.run), args.json),
+        PlaygroundCmd::Clear(args) => (ActionRequest::Clear, args.json),
+        PlaygroundCmd::Cancel(args) => (ActionRequest::Cancel(args.run), args.json),
+        PlaygroundCmd::DraftRule(args) => {
+            let output = Output::from_json(args.json);
+            return match args.decision.parse() {
+                Ok(decision) => Ok(execute_draft(decision, args.write, output)),
+                Err(message) => usage(message),
+            };
+        }
+        PlaygroundCmd::Watch(args) => {
+            return execute_watch(args.session, Output::from_json(args.json));
+        }
+        PlaygroundCmd::Start(_)
+        | PlaygroundCmd::Status(_)
+        | PlaygroundCmd::Open(_)
+        | PlaygroundCmd::Stop(_)
+        | PlaygroundCmd::Init(_)
+        | PlaygroundCmd::Runs(_)
+        | PlaygroundCmd::Show(_)
+        | PlaygroundCmd::Explain(_)
+        | PlaygroundCmd::Compare(_)
+        | PlaygroundCmd::Audit(_)
+        | PlaygroundCmd::Changes(_)
+        | PlaygroundCmd::Sessions(_) => {
+            unreachable!("execute dispatches the lifecycle commands and the reads first")
+        }
+    };
+    execute_action(&request, Output::from_json(json))
+}
+
+/// The program `exec` sends: the file's text, or the scaffolded example's.
+#[cfg(unix)]
+fn exec_program(file: Option<&std::path::Path>, example: bool) -> Result<String, String> {
+    let path = if example {
+        let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+        let root = project::find_project_root(&cwd)
+            .ok_or("no Submilli project here; create one with `submilli playground init`")?;
+        root.join(scaffold::FOLDER).join(scaffold::EXAMPLE)
+    } else {
+        file.ok_or("name a program file, or pass --example")?
+            .to_path_buf()
+    };
+    std::fs::read_to_string(&path).map_err(|error| {
+        if example {
+            format!(
+                "the example {} cannot be read ({error}); `submilli playground init` creates it                  in a new project",
+                path.display()
+            )
+        } else {
+            format!("reading {}: {error}", path.display())
+        }
+    })
+}
+
+/// A harness secret's development value: the environment variable of that name, or the
+/// local secret store's entry. Never taken from the command line.
+#[cfg(unix)]
+fn secret_value(name: &str) -> Result<String, String> {
+    if let Some(value) = std::env::var(name).ok().filter(|value| !value.is_empty()) {
+        return Ok(value);
+    }
+    let store =
+        crate::commands::local::open_secret_store().map_err(|error| format!("{error:#}"))?;
+    let found = crate::commands::local::block_on(async { store.get(name).await })
+        .map_err(|error| format!("{error:#}"))?
+        .map_err(|error| format!("reading secret `{name}`: {error}"))?;
+    found.filter(|value| !value.is_empty()).ok_or_else(|| {
+        format!(
+            "no value for `{name}`: export ${name}, or store one with `submilli secret put {name}`"
+        )
+    })
 }
 
 /// A read control: works against the store, with the playground running or not.
@@ -346,19 +700,13 @@ fn read_command(cmd: PlaygroundCmd) -> anyhow::Result<ExitCode> {
         ),
         PlaygroundCmd::Changes(args) => (ReadRequest::Changes(args.version), args.json),
         PlaygroundCmd::Sessions(args) => (ReadRequest::Sessions { limit: args.limit }, args.json),
-        PlaygroundCmd::Start(_)
-        | PlaygroundCmd::Status(_)
-        | PlaygroundCmd::Open(_)
-        | PlaygroundCmd::Stop(_)
-        | PlaygroundCmd::Init(_) => {
-            unreachable!("execute dispatches the lifecycle commands before the reads")
-        }
+        _ => unreachable!("execute dispatches only the reads here"),
     };
     execute_read(request, Output::from_json(json))
 }
 
 #[cfg(unix)]
-fn now_micros() -> u64 {
+pub(crate) fn now_micros() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| {

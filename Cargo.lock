@@ -5433,6 +5433,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "dialoguer",
+ "futures",
  "getrandom 0.2.17",
  "hmac 0.12.1",
  "interpreter",

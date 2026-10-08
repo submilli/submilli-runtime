@@ -29,28 +29,23 @@ use crate::commands::playground::store::run::DecisionRef;
 
 use super::read::{
     AuditResult, ChangesResult, CompareResult, ExplainResult, RunsResult, SessionsResult,
-    ShowResult,
+    ShowResult, TestInfo, TestUntrusted,
 };
 
 /// Success, including a run whose denials the program caught.
 pub(crate) const EXIT_SUCCESS: u8 = 0;
 /// Any other failure.
-#[allow(dead_code, reason = "the action controls exit with it")]
 pub(crate) const EXIT_FAILURE: u8 = 1;
 /// A usage error: an unknown run or decision, missing variables or secrets, a run with
 /// no program, a blueprint that is gone. Same value as the lifecycle's "no project".
 pub(crate) const EXIT_USAGE: u8 = super::super::EXIT_NO_PROJECT;
 /// A run ended by a policy denial the program did not catch.
-#[allow(dead_code, reason = "the action controls exit with it")]
 pub(crate) const EXIT_DENIED: u8 = 3;
 /// A test run stopped at a call it would have to make live.
-#[allow(dead_code, reason = "the action controls exit with it")]
 pub(crate) const EXIT_AWAITING_LIVE: u8 = 4;
 /// A package the blueprint needs could not be built or found.
-#[allow(dead_code, reason = "the action controls exit with it")]
 pub(crate) const EXIT_PACKAGE_RESOLUTION: u8 = super::super::EXIT_PACKAGE_RESOLUTION;
 /// The playground is not running (actions only; reads work without it).
-#[allow(dead_code, reason = "the action controls exit with it")]
 pub(crate) const EXIT_NOT_RUNNING: u8 = super::super::EXIT_UNREACHABLE;
 
 /// The command every suggestion starts with.
@@ -73,6 +68,13 @@ pub(crate) enum Next {
     },
     Changes,
     Sessions,
+    /// Re-resolves a run's decisions under the blueprint in force; runs nothing.
+    Recheck(u64),
+    /// Runs a recorded program again with its calls answered from the recording; it
+    /// stops at a call with nothing recorded, and never goes live from here.
+    Test(u64),
+    /// Follows a session's events.
+    Watch(String),
 }
 
 impl Next {
@@ -95,6 +97,9 @@ impl Next {
             }
             Self::Changes => format!("{COMMAND} changes"),
             Self::Sessions => format!("{COMMAND} sessions"),
+            Self::Recheck(run) => format!("{COMMAND} recheck {run}"),
+            Self::Test(run) => format!("{COMMAND} test {run}"),
+            Self::Watch(session) => format!("{COMMAND} watch {}", shell_word(session)),
         }
     }
 }
@@ -353,6 +358,9 @@ pub(crate) fn runs_text(result: &RunsResult) -> String {
         if let Some(of) = row.test_of {
             let _ = write!(line, " · tests run {of}");
         }
+        if let Some(of) = row.rerun_of {
+            let _ = write!(line, " · reruns run {of}");
+        }
         if let Some(page) = &row.header.page {
             let _ = write!(line, "  {page}");
         }
@@ -401,25 +409,13 @@ pub(crate) fn show_text(result: &ShowResult) -> String {
         let _ = writeln!(out, "note: {note}");
     }
     if let Some(test) = &result.test {
+        test_lines(&mut out, &mut fence, test, result.untrusted.test.as_ref());
+    }
+    if let Some(source) = result.rerun_of {
         let _ = writeln!(
             out,
-            "test of run {}: {}",
-            test.source_run
-                .map_or_else(|| "(not stored)".to_owned(), |run| run.to_string()),
-            test.status
+            "rerun of run {source}, live under the binding in force"
         );
-        if !test.variables_filled.is_empty() || !test.variables_dropped.is_empty() {
-            let _ = writeln!(
-                out,
-                "  variables: filled {}; dropped {}",
-                list_or_none(&test.variables_filled),
-                list_or_none(&test.variables_dropped)
-            );
-        }
-        let _ = writeln!(out, "  {}", test.local_state);
-        if let Some(missing) = &test.not_stored {
-            let _ = writeln!(out, "  {missing}");
-        }
     }
     if result.decisions.is_empty() {
         let _ = writeln!(out, "decisions: none");
@@ -473,6 +469,92 @@ pub(crate) fn show_text(result: &ShowResult) -> String {
     fence.render(&mut out);
     next_lines(&mut out, &result.next);
     out
+}
+
+/// A test run's report: what was served, where it stopped, what went live.
+fn test_lines(
+    out: &mut String,
+    fence: &mut Fence,
+    test: &TestInfo,
+    untrusted: Option<&TestUntrusted>,
+) {
+    let _ = writeln!(
+        out,
+        "test of run {}: {}{}",
+        test.source_run
+            .map_or_else(|| "(not stored)".to_owned(), |run| run.to_string()),
+        test.status,
+        test.mode
+            .as_deref()
+            .map_or_else(String::new, |mode| format!(" (mode {})", clean(mode)))
+    );
+    if !test.served.is_empty() {
+        let calls: Vec<String> = test
+            .served
+            .iter()
+            .map(|call| format!("#{} {}", call.source_call, clean(&call.capability)))
+            .collect();
+        let _ = writeln!(
+            out,
+            "  served from the recording: {} (recorded {})",
+            plural(test.served.len(), "call"),
+            shown_refs(&calls, 6)
+        );
+    }
+    if let Some(stop) = &test.stopped {
+        let mut line = format!("  stopped at: {}", clean(&stop.reason));
+        if let Some(capability) = &stop.capability {
+            let _ = write!(line, ", {}", clean(capability));
+        }
+        if let Some(caller) = &stop.caller {
+            let _ = write!(line, " by {}", clean(caller));
+        }
+        if let Some(number) = stop.line {
+            let _ = write!(line, ", program line {number}");
+        }
+        if let Some(nearest) = &stop.nearest {
+            let _ = write!(
+                line,
+                "; nearest recording: recorded #{} {}",
+                nearest.source_call,
+                clean(&nearest.capability)
+            );
+        }
+        let _ = writeln!(out, "{line}; its key and detail are in run-data");
+    }
+    if !test.went_live.is_empty() {
+        let _ = writeln!(
+            out,
+            "  went live: {} (keys in run-data)",
+            plural(test.went_live.len(), "call")
+        );
+    }
+    if !test.variables_filled.is_empty() || !test.variables_dropped.is_empty() {
+        let _ = writeln!(
+            out,
+            "  variables: filled {}; dropped {}",
+            list_or_none(&test.variables_filled),
+            list_or_none(&test.variables_dropped)
+        );
+    }
+    let _ = writeln!(out, "  {}", test.local_state);
+    if let Some(missing) = &test.not_stored {
+        let _ = writeln!(out, "  {missing}");
+    }
+    if let Some(note) = &test.live_note {
+        let _ = writeln!(out, "  {note}");
+    }
+    if let Some(untrusted) = untrusted {
+        if let Some(key) = &untrusted.stop_key {
+            fence.text("test stopped at", key, 2);
+        }
+        if let Some(detail) = &untrusted.stop_detail {
+            fence.text("test stop detail", detail, 4);
+        }
+        for (index, key) in untrusted.went_live_keys.iter().enumerate() {
+            fence.text(&format!("went live {}", index + 1), key, 1);
+        }
+    }
 }
 
 pub(crate) fn explain_text(result: &ExplainResult) -> String {
@@ -787,6 +869,10 @@ mod tests {
             },
             Next::Changes,
             Next::Sessions,
+            Next::Recheck(3),
+            Next::Test(3),
+            Next::Watch("s-1".into()),
+            Next::Watch("--live".into()),
         ];
         for command in next(every) {
             for word in command.split_whitespace() {
