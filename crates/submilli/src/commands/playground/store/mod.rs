@@ -10,6 +10,7 @@
 //!   events/<session>.jsonl  each session's events, appended as they arrive
 //!   changes.jsonl       the change log: blueprint versions and clear markers
 //!   retries.jsonl       idempotent retries answered without running
+//!   sessions.jsonl      sessions the playground started, and when each ended
 //! ```
 //!
 //! The directory is 0700 and every file 0600. Each file carries the format version it
@@ -53,6 +54,7 @@ pub(crate) mod events;
 pub(crate) mod recorder;
 pub(crate) mod redact;
 pub(crate) mod run;
+pub(crate) mod sessions;
 
 #[cfg(test)]
 mod tests;
@@ -469,7 +471,12 @@ impl Store {
 
     /// Cuts the unfinished last line, which a crash left, off every append-only file.
     fn repair_tails(&self) -> Result<()> {
-        let mut files = vec![self.index_path(), self.changes_path(), self.retries_path()];
+        let mut files = vec![
+            self.index_path(),
+            self.changes_path(),
+            self.retries_path(),
+            self.sessions_path(),
+        ];
         let events = self.root.join("events");
         for entry in fs::read_dir(&events).map_err(io_error(&events))? {
             let path = entry.map_err(io_error(&events))?.path();

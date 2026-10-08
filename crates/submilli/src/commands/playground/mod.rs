@@ -23,6 +23,8 @@ mod client;
 #[cfg(unix)]
 mod control_auth;
 #[cfg(unix)]
+mod controls;
+#[cfg(unix)]
 mod fsx;
 #[cfg(unix)]
 mod host;
@@ -82,6 +84,108 @@ pub enum PlaygroundCmd {
     /// pins charges to the signed-in customer, and an example program. Writes
     /// nothing outside `submilli/`.
     Init(OutputArgs),
+    /// List stored runs, newest first. Works with the playground stopped.
+    Runs(RunsArgs),
+    /// Show one run: its decisions, calls, and outcome.
+    Show(ShowArgs),
+    /// Explain one decision: the rule that decided it (or the default) and every rule
+    /// that nearly matched.
+    Explain(ExplainArgs),
+    /// Compare two runs: only the decisions that changed.
+    Compare(CompareArgs),
+    /// Audit the runs since the last blueprint edit.
+    Audit(AuditArgs),
+    /// List the blueprint versions and what each changed.
+    Changes(ChangesArgs),
+    /// List sessions, newest first.
+    Sessions(SessionsArgs),
+}
+
+#[derive(ClapArgs)]
+pub struct RunsArgs {
+    /// Only runs with this source label (`stand-in`, `app`, `assistant`, ...).
+    #[arg(long, value_name = "LABEL")]
+    source: Option<String>,
+    /// Only runs that started within this long (`30s`, `10m`, `2h`, `1d`), or after
+    /// this run id.
+    #[arg(long, value_name = "DURATION|RUN")]
+    since: Option<String>,
+    /// Only runs in this session.
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
+    /// How many runs to list.
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct ShowArgs {
+    /// The run id.
+    #[arg(value_name = "RUN")]
+    run: u64,
+    /// Include call request and response bodies, and results and console output in full.
+    #[arg(long)]
+    include_payloads: bool,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct ExplainArgs {
+    /// The decision, as `<run>.<n>` (for example `12.3`).
+    #[arg(value_name = "RUN.N")]
+    decision: String,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct CompareArgs {
+    #[arg(value_name = "RUN-A")]
+    a: u64,
+    #[arg(value_name = "RUN-B")]
+    b: u64,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct AuditArgs {
+    /// Only calls allowed by the default, which no rule names.
+    #[arg(long)]
+    default_only: bool,
+    /// Only calls made by packages.
+    #[arg(long)]
+    packages_only: bool,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct ChangesArgs {
+    /// Only this version, with its file text.
+    #[arg(long, value_name = "N")]
+    version: Option<u64>,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct SessionsArgs {
+    /// How many sessions to list.
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(ClapArgs, Clone, Default)]
@@ -163,6 +267,13 @@ impl Args {
             Some(PlaygroundCmd::Open(_)) => "playground.open",
             Some(PlaygroundCmd::Stop(_)) => "playground.stop",
             Some(PlaygroundCmd::Init(_)) => "playground.init",
+            Some(PlaygroundCmd::Runs(_)) => "playground.runs",
+            Some(PlaygroundCmd::Show(_)) => "playground.show",
+            Some(PlaygroundCmd::Explain(_)) => "playground.explain",
+            Some(PlaygroundCmd::Compare(_)) => "playground.compare",
+            Some(PlaygroundCmd::Audit(_)) => "playground.audit",
+            Some(PlaygroundCmd::Changes(_)) => "playground.changes",
+            Some(PlaygroundCmd::Sessions(_)) => "playground.sessions",
         }
     }
 }
@@ -182,7 +293,77 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         Some(PlaygroundCmd::Open(output)) => unix::open(Output::from_json(output.json)),
         Some(PlaygroundCmd::Stop(output)) => unix::stop(Output::from_json(output.json)),
         Some(PlaygroundCmd::Init(output)) => unix::init(Output::from_json(output.json)),
+        Some(cmd) => read_command(cmd),
     }
+}
+
+/// A read control: works against the store, with the playground running or not.
+#[cfg(unix)]
+fn read_command(cmd: PlaygroundCmd) -> anyhow::Result<ExitCode> {
+    use controls::read::{AuditQuery, RunsQuery};
+    use controls::{ReadRequest, execute_read};
+    let (request, json) = match cmd {
+        PlaygroundCmd::Runs(args) => {
+            let since = match args.since.as_deref().map(str::parse).transpose() {
+                Ok(since) => since,
+                Err(message) => {
+                    eprintln!("--since: {message}");
+                    return Ok(ExitCode::from(controls::render::EXIT_USAGE));
+                }
+            };
+            (
+                ReadRequest::Runs(RunsQuery {
+                    source: args.source,
+                    since,
+                    session: args.session,
+                    limit: args.limit,
+                    now_micros: now_micros(),
+                }),
+                args.json,
+            )
+        }
+        PlaygroundCmd::Show(args) => (
+            ReadRequest::Show {
+                run: args.run,
+                include_payloads: args.include_payloads,
+            },
+            args.json,
+        ),
+        PlaygroundCmd::Explain(args) => match args.decision.parse() {
+            Ok(decision) => (ReadRequest::Explain(decision), args.json),
+            Err(message) => {
+                eprintln!("{message}");
+                return Ok(ExitCode::from(controls::render::EXIT_USAGE));
+            }
+        },
+        PlaygroundCmd::Compare(args) => (ReadRequest::Compare(args.a, args.b), args.json),
+        PlaygroundCmd::Audit(args) => (
+            ReadRequest::Audit(AuditQuery {
+                default_only: args.default_only,
+                packages_only: args.packages_only,
+            }),
+            args.json,
+        ),
+        PlaygroundCmd::Changes(args) => (ReadRequest::Changes(args.version), args.json),
+        PlaygroundCmd::Sessions(args) => (ReadRequest::Sessions { limit: args.limit }, args.json),
+        PlaygroundCmd::Start(_)
+        | PlaygroundCmd::Status(_)
+        | PlaygroundCmd::Open(_)
+        | PlaygroundCmd::Stop(_)
+        | PlaygroundCmd::Init(_) => {
+            unreachable!("execute dispatches the lifecycle commands before the reads")
+        }
+    };
+    execute_read(request, Output::from_json(json))
+}
+
+#[cfg(unix)]
+fn now_micros() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX)
+        })
 }
 
 /// The resolved egress grants: the flags plus their `SUBMILLI_ALLOW_*` variables.

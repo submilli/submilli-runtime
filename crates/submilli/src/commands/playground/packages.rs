@@ -52,6 +52,9 @@ pub(crate) struct ClosureEntry {
     /// Whether the project's `submilli.toml` builds it, so the playground rebuilds it
     /// when its source changes.
     pub(crate) project: bool,
+    /// The packages of the closure that depend on it, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) required_by: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -394,6 +397,15 @@ impl ProjectPackages {
             .store()
             .load_closure(blueprint.packages.iter().map(String::as_str))
             .map_err(ResolutionFailure::Store)?;
+        let mut required_by: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for artifact in &artifacts {
+            for dependency in &artifact.metadata.dependencies {
+                required_by
+                    .entry(dependency.name.clone())
+                    .or_default()
+                    .insert(artifact.metadata.package_name.clone());
+            }
+        }
         let mut entries: Vec<ClosureEntry> = artifacts
             .into_iter()
             .map(|artifact| {
@@ -408,6 +420,10 @@ impl ProjectPackages {
                     },
                     importable: listed,
                     project: project.contains(&name),
+                    required_by: required_by
+                        .remove(&name)
+                        .map(|names| names.into_iter().collect())
+                        .unwrap_or_default(),
                     name,
                 }
             })
