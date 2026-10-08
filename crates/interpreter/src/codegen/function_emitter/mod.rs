@@ -1302,10 +1302,13 @@ fn closure_return_target(
 
 /// Ends a block body that may produce a value. Control reaches the end of a
 /// body returning `unknown` when it falls off without a `return`, which
-/// yields `null` as JavaScript yields `undefined`. The missing-return rule
-/// rejects such a body for every other value type, so there the end is
-/// unreachable; the trap keeps the function statically total for Wasm
-/// validation, which cannot prove that.
+/// yields `null` as JavaScript yields `undefined`. For every other value type
+/// the missing-return rule rejects such a body unless the fall-through runs
+/// through an exhaustive `switch`. A narrowing that a call left stale can
+/// still bring a value no case matches, so a module with such a switch
+/// throws a `TypeError` there. Elsewhere the end is unreachable; the trap
+/// keeps the function statically total for Wasm validation, which cannot
+/// prove that.
 pub(crate) fn emit_body_end(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
@@ -1315,6 +1318,13 @@ pub(crate) fn emit_body_end(
         return Ok(());
     }
     if !matches!(return_type.peel(), Type::Unknown) {
+        if !ctx.ta.exhaustive_switches.is_empty() {
+            crate::codegen::throw::emit_type_error_throw(
+                emitter,
+                ctx,
+                crate::codegen::throw::MISSING_RETURN_VALUE_MESSAGE,
+            );
+        }
         emitter.instruction(Instruction::Unreachable);
         return Ok(());
     }

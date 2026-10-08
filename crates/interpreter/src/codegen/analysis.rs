@@ -118,6 +118,11 @@ impl CodegenAnalysis {
                 ));
         }
 
+        if !ta.exhaustive_switches.is_empty() {
+            analysis
+                .string_pool
+                .intern_text(throw::MISSING_RETURN_VALUE_MESSAGE);
+        }
         for f in &ta.functions {
             for p in &f.params {
                 analysis

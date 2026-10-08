@@ -26,6 +26,14 @@ pub const NON_NULL_ASSERT_MESSAGE: &str = "non-null assertion failed: value is n
 pub const READ_ONLY_PROPERTY_MESSAGE: &str =
     "cannot assign to a property backed by a getter with no setter";
 
+/// Thrown when a function that must return a value reaches its end. The
+/// missing-return rule leaves that possible only through an exhaustive
+/// `switch` whose value a call or closure moved outside the type a narrowing
+/// gave it. JavaScript returns `undefined` there, which the declared return
+/// type cannot hold.
+pub const MISSING_RETURN_VALUE_MESSAGE: &str =
+    "function ended without returning a value: no `case` of an exhaustive `switch` matched";
+
 /// Raise a `TypeError` carrying `message`. Every message thrown this way must
 /// also be interned by the analysis pass, or the string pool has no entry to
 /// point at. Diverges, like [`emit_error_throw`].
