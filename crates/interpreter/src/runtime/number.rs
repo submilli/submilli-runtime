@@ -401,7 +401,22 @@ pub(crate) fn pow_js(base: f64, exponent: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_float_js, parse_int_js, string_to_number_js};
+    use super::{parse_float_js, parse_int_js, string_to_number_js, to_uint8};
+
+    #[test]
+    fn to_uint8_wraps_modulo_256() {
+        assert_eq!(to_uint8(7.0), 7);
+        assert_eq!(to_uint8(256.0), 0);
+        assert_eq!(to_uint8(257.9), 1);
+        assert_eq!(to_uint8(-1.0), 255);
+        assert_eq!(to_uint8(-1.5), 255);
+        assert_eq!(to_uint8(-256.0), 0);
+        assert_eq!(to_uint8(-0.5), 0);
+        assert_eq!(to_uint8(f64::NAN), 0);
+        assert_eq!(to_uint8(f64::INFINITY), 0);
+        assert_eq!(to_uint8(f64::NEG_INFINITY), 0);
+        assert_eq!(to_uint8(2f64.powi(60) + 512.0), 0);
+    }
 
     #[test]
     fn formatter_invariants_hold_at_float_boundaries() {

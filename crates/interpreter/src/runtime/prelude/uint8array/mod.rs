@@ -83,10 +83,6 @@ fn backing(
     }
 }
 
-fn to_byte(n: f64) -> u8 {
-    crate::runtime::number::to_uint8(n)
-}
-
 /// Box a byte into a `$boxed_number` for a callback argument or boxed return.
 fn box_byte(caller: &mut Caller<'_, StoreData>, b: u8) -> wasmtime::Result<Val> {
     let boxed = intrinsic_types(&mut *caller)?.boxed_number.clone();
@@ -111,7 +107,7 @@ fn unbox_byte(caller: &mut Caller<'_, StoreData>, v: &Val, name: &str) -> wasmti
         .as_struct(&mut *caller)?
         .ok_or_else(|| wasmtime::Error::msg(format!("{name} callback result is not a number")))?;
     match st.field(&mut *caller, 1)? {
-        Val::F64(bits) => Ok(to_byte(f64::from_bits(bits))),
+        Val::F64(bits) => Ok(crate::runtime::number::to_uint8(f64::from_bits(bits))),
         other => Err(wasmtime::Error::msg(format!(
             "{name} callback result field was {other:?}, not f64"
         ))),
@@ -213,7 +209,7 @@ fn slice(
 fn with(bytes: &[u8], index: f64, value: f64) -> Option<Vec<u8>> {
     let i = at_index(index, bytes.len() as i32)?;
     let mut out = bytes.to_vec();
-    out[i] = to_byte(value);
+    out[i] = crate::runtime::number::to_uint8(value);
     Some(out)
 }
 
@@ -303,7 +299,7 @@ fn fill(
     let end = norm_clamp(end, len) as u32;
     let count = end.saturating_sub(start);
     fuel::charge(&mut *caller, fuel::COPY, u64::from(count))?;
-    let chunk = [to_byte(value); 4096];
+    let chunk = [crate::runtime::number::to_uint8(value); 4096];
     let mut offset = start;
     while offset < end {
         let count = (end - offset).min(chunk.len() as u32);
@@ -741,21 +737,6 @@ mod tests {
 
     fn units(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()
-    }
-
-    #[test]
-    fn to_byte_is_js_to_uint8() {
-        assert_eq!(to_byte(7.0), 7);
-        assert_eq!(to_byte(256.0), 0);
-        assert_eq!(to_byte(257.9), 1);
-        assert_eq!(to_byte(-1.0), 255);
-        assert_eq!(to_byte(-1.5), 255);
-        assert_eq!(to_byte(-256.0), 0);
-        assert_eq!(to_byte(-0.5), 0);
-        assert_eq!(to_byte(f64::NAN), 0);
-        assert_eq!(to_byte(f64::INFINITY), 0);
-        assert_eq!(to_byte(f64::NEG_INFINITY), 0);
-        assert_eq!(to_byte(2f64.powi(60) + 512.0), 0);
     }
 
     #[test]
