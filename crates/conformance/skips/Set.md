@@ -28,7 +28,6 @@ set-algebra methods take `Set` arguments only — no set-like
 
 | Case | Gap |
 |:--|:--|
-| `cases/Set/prototype/has/returns-true-when-value-present-null.ts` | `null` elements trap at runtime (equals/hash vtable dispatch on a null ref); the standard stores and finds null. |
 | `cases/Set/prototype/intersection/result-order.ts` | When `this.size > other.size`, the intersection result is ordered as in the receiver; the standard orders it as in the argument (the smaller side drives iteration). |
 
 Elements compare by SameValueZero, as in the standard: `NaN` is one element,
@@ -43,9 +42,9 @@ test262 vectors only reach through set-like arguments.
 | `set-no-iterable.js`, `set.js` | `new Set()` size-0 behavior covered by the ported size case. |
 | `prototype/add/add.js`, `will-not-add-duplicate-entry-initial-iterable.js` | Descriptor-only / same dedupe pattern as the ported add cases. |
 | `prototype/delete/delete-entry.js`, `delete-entry-initial-iterable.js`, `returns-true-when-delete-operation-occurs.js`, `returns-false-when-delete-is-noop.js`, `delete.js` | Covered by the ported `delete-entry-normalizes-zero.ts`, `size/…-add-delete.ts`, and the Map delete ports. |
-| `prototype/has/returns-true|false-when-value-*-number|string|boolean.js`, `returns-false-when-value-not-present-null|undefined.js`, `has.js` | Trivial present/absent variants covered by the ported cases; the null/undefined-negative variants add nothing over the pinned gaps. |
+| `prototype/has/returns-true|false-when-value-*-number|string|boolean.js`, `returns-false-when-value-not-present-null|undefined.js`, `has.js` | Trivial present/absent variants covered by the ported cases; the null/undefined-negative variants add nothing over the ported cases. |
 | `prototype/clear/clears-an-empty-set.js`, `clears-all-contents-from-iterable.js`, `returns-undefined.js`, `clear.js` | Same pattern as the ported `clears-all-contents.ts`; `clear` returns void. |
-| `prototype/size/returns-count-of-present-values-by-insertion.js`, `by-iterable.js` | Elements are `0, undefined, false, NaN, null, '', Symbol()` — undefined/Symbol rejected by design; the null portion is the gap pinned by `has/returns-true-when-value-present-null.ts`. |
+| `prototype/size/returns-count-of-present-values-by-insertion.js`, `by-iterable.js` | Elements are `0, undefined, false, NaN, null, '', Symbol()` — undefined/Symbol rejected by design; the null portion is covered by the ported `has/returns-true-when-value-present-null.ts`. |
 | `prototype/forEach/iterates-values-added-after-foreach-begins.js`, `iterates-values-revisits-after-delete-re-add.js`, `iterates-values-not-deleted.js`, `iterates-in-iterable-entry-order.js`, `throws-when-callback-throws.js`, `returns-undefined.js`, `forEach.js` | Live iteration is covered by the ported `iterates-values-deleted-then-readded.ts`, `values/values-iteration-mutable.ts` and the Map-side `iterates-values-added-after-foreach-begins.ts`; the rest are order/throw variants of ported cases. |
 | `prototype/entries/**`, `prototype/keys/keys.js`, `prototype/values/returns-iterator-empty.js`, `values.js` | `keys` aliases `values` and `entries` yields `[v, v]` — parity is covered by the interpreter fixture `set_iteration_parity.subm` and the ported `values/returns-iterator.ts`. |
 | `union/combines-sets.js`, `combines-empty-sets.js`, `combines-same-sets.js`, `combines-itself.js`, `appends-new-values.js`; `intersection|difference|symmetricDifference/combines-empty-sets.js`, `combines-itself.js`, `combines-same-sets.js`; `isSubsetOf|isSupersetOf|isDisjointFrom/compares-empty-sets.js`, `compares-itself.js`, `compares-same-sets.js`; `*/union.js` etc. | Covered by the ported result-order/combines-sets cases plus the interpreter fixtures `set_algebra.subm` / `set_relations.subm` (empty/self/equal-set edges). |

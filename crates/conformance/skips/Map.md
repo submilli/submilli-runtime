@@ -21,12 +21,6 @@ SameValueZero reference identity. Counter-vector for the keying divergence:
 | `iterable-calls-set.js`, `map-iterable-empty-does-not-call-set.js`, `map-no-iterable-does-not-call-set.js`, `does-not-throw-when-set-is-not-callable.js`, `get-set-method-failure.js`, `map-iterable-throws-when-set-is-not-callable.js`, `iterator-*-failure.js`, `iterator-close-*.js`, `iterator-is-undefined-throws.js`, `iterator-item-*.js`, `iterator-items-*.js` | Construction observes dynamic dispatch on `this.set` and the `Symbol.iterator` close/abrupt protocol — no prototypes, no patchable methods. |
 | `prototype/*/does-not-have-mapdata-internal-slot*.js`, `prototype/*/context-is-*.js`, `prototype/*/this-not-object-throw.js` | Internal-slot/this-coercion checks; cross-type calls are compile errors here. |
 
-## Known gaps (`expect-fail`)
-
-| Case | Gap |
-|:--|:--|
-| `cases/Map/prototype/set/append-new-values.ts` | `null` keys trap at runtime (equals/hash vtable dispatch on a null ref); the standard appends a null-keyed entry. |
-
 Keys compare by SameValueZero, as in the standard: `NaN` is one key, and a
 `-0` key is stored as `+0`. The interpreter fixture
 `collection_keys_same_value_zero.ts` pins the `-0` normalization, which the
@@ -43,7 +37,7 @@ set-like arguments.
 | `prototype/has/return-true-different-key-types.js` | NaN-positive portion duplicates the ported `get/returns-value-different-key-types.ts`; the rest duplicates the ported has cases. |
 | `prototype/set/append-new-values-return-map.js`, `replaces-a-value-returns-map.js` | `set` returns the receiver — reference-identity asserts don't port; chainability is covered by the adapted `Set/prototype/add/returns-this.ts`. |
 | `prototype/set/append-new-values-normalizes-zero-key.js` | Same get-after-±0-set mechanism as the ported `get/returns-value-normalized-zero-key.ts`. |
-| `prototype/size/returns-count-of-present-values-by-insertion.js`, `by-iterable.js` | Keys are `0, undefined, false, NaN, null, '', Symbol()` — the undefined/Symbol keys are rejected by design and the null-key portion is the gap already pinned by `set/append-new-values.ts`. |
+| `prototype/size/returns-count-of-present-values-by-insertion.js`, `by-iterable.js` | Keys are `0, undefined, false, NaN, null, '', Symbol()` — the undefined/Symbol keys are rejected by design and the null-key portion is covered by the ported `set/append-new-values.ts`. |
 | `prototype/forEach/iterates-values-deleted-then-readded.js` | Same live-iteration mechanics as the ported `iterates-values-added-after-foreach-begins.ts`; the Set-side variant is ported as `cases/Set/prototype/forEach/iterates-values-deleted-then-readded.ts`. |
 | `prototype/forEach/callback-result-is-abrupt.js`, `first-argument-is-not-callable.js`, `return-undefined.js` | Throw-propagation is generic try/catch behavior; non-callable arguments are compile errors; `forEach` returns void. |
 | `prototype/keys/returns-iterator.js`, `values/returns-iterator.js`, `entries/returns-iterator-empty.js`, `keys|values/returns-iterator-empty.js` | Same cursor mechanics as the ported `entries/returns-iterator.ts` (and `Set/prototype/values/returns-iterator.ts`). |

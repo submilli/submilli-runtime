@@ -43,6 +43,11 @@ const FORWARD_SLOT: u32 = 0;
 /// The forwarding record's fields after its vtable.
 const RECORD_ENTRIES: usize = 1;
 const RECORD_ORDER: usize = 2;
+/// Fields of the struct [`LedgerCursor::to_val`] stores a cursor in.
+const CURSOR_BACKING: usize = 0;
+const CURSOR_ENTRIES: usize = 1;
+const CURSOR_ORDER: usize = 2;
+const CURSOR_POS: usize = 3;
 
 /// A cursor that has returned `done` stays done, as a JavaScript iterator does
 /// once its collection is exhausted.
@@ -157,7 +162,7 @@ impl LedgerCursor {
     /// Read a cursor stored by [`Self::to_val`].
     pub fn from_val(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<Self> {
         let st = as_struct(caller, val, "collection iterator cursor")?;
-        let backing = match st.field(&mut *caller, 0)? {
+        let backing = match st.field(&mut *caller, CURSOR_BACKING)? {
             Val::AnyRef(Some(any)) => any.as_struct(&mut *caller)?.ok_or_else(|| {
                 wasmtime::Error::msg("collection cursor: backing is not a struct")
             })?,
@@ -167,9 +172,9 @@ impl LedgerCursor {
                 )));
             }
         };
-        let entries = array_field(caller, &st, 1)?;
-        let order = array_field(caller, &st, 2)?;
-        let pos = i32_field(caller, &st, 3)?;
+        let entries = array_field(caller, &st, CURSOR_ENTRIES)?;
+        let order = array_field(caller, &st, CURSOR_ORDER)?;
+        let pos = i32_field(caller, &st, CURSOR_POS)?;
         Ok(Self {
             backing,
             entries,
@@ -182,9 +187,17 @@ impl LedgerCursor {
     /// [`Self::to_val`].
     pub fn store(&self, caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<()> {
         let st = as_struct(caller, val, "collection iterator cursor")?;
-        st.set_field(&mut *caller, 1, Val::AnyRef(Some(self.entries.to_anyref())))?;
-        st.set_field(&mut *caller, 2, Val::AnyRef(Some(self.order.to_anyref())))?;
-        st.set_field(&mut *caller, 3, Val::I32(self.pos))?;
+        st.set_field(
+            &mut *caller,
+            CURSOR_ENTRIES,
+            Val::AnyRef(Some(self.entries.to_anyref())),
+        )?;
+        st.set_field(
+            &mut *caller,
+            CURSOR_ORDER,
+            Val::AnyRef(Some(self.order.to_anyref())),
+        )?;
+        st.set_field(&mut *caller, CURSOR_POS, Val::I32(self.pos))?;
         Ok(())
     }
 }
