@@ -288,5 +288,6 @@ Ast {
     pattern_origins: {},
     tuple_pattern_sources: {},
     for_of_pattern_bindings: {},
+    for_pattern_init_bindings: {},
     exported_decls: [],
 }

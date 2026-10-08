@@ -748,15 +748,16 @@ impl<'a> Inferer<'a> {
         let Some(root) = self.discriminant_root(path, path_kind, path_span)? else {
             return Ok(none);
         };
-        let DiscriminantKey::Field(key) = &root.key else {
-            return Ok(none);
-        };
         let Type::Union(members) = root.ty.peel() else {
             return Ok(none);
         };
-        let Some(split) = self.discriminant_split(members, key, &Type::Null) else {
+        let Some(key_tys) = (match &root.key {
+            DiscriminantKey::Field(key) => self.discriminant_field_types(members, key),
+            DiscriminantKey::Position(position) => discriminant_element_types(members, *position),
+        }) else {
             return Ok(none);
         };
+        let split = self.split_by_key_types(members, key_tys, &Type::Null);
         self.root_discriminant_envs(
             crate::BinOp::Eq,
             root.path,
@@ -997,7 +998,7 @@ impl<'a> Inferer<'a> {
             (None, Some(_) | None) if lhs_rewritten => Ok(None),
             (None, Some(lit)) => self.narrow_to_other_literal(op, lhs_id, lit),
             (Some(lit), None) => self.narrow_to_other_literal(op, rhs_id, lit),
-            (None, None) => self.narrow_equal_to_union(op, lhs_id, rhs_id),
+            (None, None) => self.narrow_equal_to_value(op, lhs_id, rhs_id),
             (Some(lhs_lit), Some(_)) if lhs_rewritten => {
                 self.narrow_to_other_literal(op, rhs_id, lhs_lit)
             }
@@ -1056,11 +1057,11 @@ impl<'a> Inferer<'a> {
         self.narrow_equal_to_literal(op, path_id, other_lit)
     }
 
-    /// Narrows a path compared with a value whose type is a union, as
+    /// Narrows a path compared with a value whose type is not one literal, as
     /// TypeScript does: where they are equal, the path holds a value both
     /// types allow. Where they differ nothing is known, since the value may be
     /// any member.
-    fn narrow_equal_to_union(
+    fn narrow_equal_to_value(
         &mut self,
         op: crate::BinOp,
         lhs_id: ExprId,
@@ -1088,7 +1089,8 @@ impl<'a> Inferer<'a> {
         }))
     }
 
-    /// The narrowing where `path_id` equals `value_id`, whose type is a union.
+    /// The narrowing where `path_id` equals `value_id`, whose type is not one
+    /// literal.
     fn equal_to(
         &mut self,
         path_id: ExprId,
@@ -1132,9 +1134,10 @@ impl<'a> Inferer<'a> {
         Ok(equal)
     }
 
-    /// The narrowing where `path_id` equals `value_id`, whose type is a union
-    /// with a member other than a literal: the path keeps what it shares with
-    /// the value's type, so `number | "a"` equal to `1 | string` is `1 | "a"`.
+    /// The narrowing where `path_id` equals `value_id`, whose type is not a
+    /// literal or a union of literals: the path keeps what it shares with the
+    /// value's type, so `number | "a"` equal to `1 | string` is `1 | "a"`, and
+    /// `E | null` equal to an `E` is `E`.
     fn equal_to_value_of(
         &mut self,
         path_id: ExprId,
@@ -1146,7 +1149,15 @@ impl<'a> Inferer<'a> {
             .map_err(crate::typechecker::arena_failure)?
             .ty
             .clone();
-        if !matches!(value_ty.peel(), Type::Union(_)) {
+        // A comparison with `null` has a narrowing of its own.
+        if matches!(value_ty.peel(), Type::Null) {
+            return Ok(None);
+        }
+        // TypeScript compares `null` as comparable to a type parameter, so
+        // `x === y` with `x: T | null` and `y: T` leaves `x` as it was.
+        if !matches!(value_ty.peel(), Type::Union(_))
+            && narrowing::has_type_parameter_member(&value_ty)
+        {
             return Ok(None);
         }
         let path_expr = self
@@ -1194,9 +1205,12 @@ impl<'a> Inferer<'a> {
         Ok(Some(env))
     }
 
-    /// The values `path_ty` and `value_ty` both allow, member by member: the
-    /// narrower of two related members, so `number` and `1` share `1`, and
-    /// `"a"` and `string` share `"a"`. Unrelated members share nothing.
+    /// The values `path_ty` and `value_ty` both allow, member by member, as
+    /// TypeScript keeps them: a path member related to a value member stays,
+    /// except that it gives way to a narrower unit value member (a literal, an
+    /// enum, or `null`), so `number` and `1` share `1`, and `"a"` and `string`
+    /// share `"a"`. An `Animal` compared with a `Dog` stays an `Animal`.
+    /// Unrelated members share nothing.
     fn shared_values(&self, path_ty: &Type, value_ty: &Type) -> Type {
         let value_members = narrowing::union_members(value_ty);
         let mut shared = Vec::new();
@@ -1207,7 +1221,8 @@ impl<'a> Inferer<'a> {
                 {
                     shared.push(member.clone());
                 } else if super::assignable(value_member, member, self.resolver()) {
-                    shared.push((*value_member).clone());
+                    let value_is_unit = narrowing::has_unit_member(value_member);
+                    shared.push(if value_is_unit { *value_member } else { member }.clone());
                 }
             }
         }
@@ -1618,9 +1633,21 @@ impl<'a> Inferer<'a> {
         literal_ty: &Type,
     ) -> Option<(Vec<Type>, Vec<Type>)> {
         let field_tys = self.discriminant_field_types(members, key)?;
+        Some(self.split_by_key_types(members, field_tys, literal_ty))
+    }
+
+    /// The members whose discriminant field or element, typed `key_tys`
+    /// member by member, may equal `literal_ty`'s value, and those whose
+    /// discriminant may differ.
+    fn split_by_key_types(
+        &self,
+        members: &[Type],
+        key_tys: Vec<Option<Type>>,
+        literal_ty: &Type,
+    ) -> (Vec<Type>, Vec<Type>) {
         let mut equal = Vec::new();
         let mut unequal = Vec::new();
-        for (member, field_ty) in members.iter().zip(field_tys) {
+        for (member, field_ty) in members.iter().zip(key_tys) {
             let Some(field_ty) = field_ty else {
                 if matches!(literal_ty, Type::Null) {
                     equal.push(member.clone());
@@ -1640,7 +1667,7 @@ impl<'a> Inferer<'a> {
                 unequal.push(member.clone());
             }
         }
-        Some((equal, unequal))
+        (equal, unequal)
     }
 
     /// Whether a discriminant field typed `field_ty` can hold `literal_ty`'s
@@ -2529,7 +2556,7 @@ impl<'a> Inferer<'a> {
 
     /// The literals `path` is already known not to hold, which a further
     /// narrowing of it keeps: `s !== S.X` still holds inside `s !== null`.
-    fn known_exclusions(
+    pub(super) fn known_exclusions(
         &self,
         path: &narrowing::ReferencePath,
     ) -> std::collections::BTreeSet<narrowing::LiteralValue> {
@@ -2542,11 +2569,19 @@ impl<'a> Inferer<'a> {
     /// rules out every value (its view [`narrowing::RULED_OUT`]) reads as `never`, as in
     /// TypeScript, where [`Self::rules_out_to_never`] allows: no value
     /// reaches the read, and codegen emits a trap for it.
+    ///
+    /// Code that never runs by its syntax (after a `return`, a `throw` or an
+    /// endless loop) reads declared types, as in TypeScript, whose binder
+    /// gives it no flow. Code after an exhaustive `switch` still narrows: there
+    /// TypeScript's flow reaches it.
     pub(super) fn narrowed_read(
         &self,
         path: narrowing::ReferencePath,
     ) -> Option<(crate::TypedExprKind, Type)> {
         if self.declared_read.as_ref() == Some(&path) {
+            return None;
+        }
+        if !self.reachable && !self.unreachable_by_exhaustive_switch {
             return None;
         }
         let view = self.innermost_narrowing(&path)?;
@@ -2577,11 +2612,8 @@ impl<'a> Inferer<'a> {
     /// Whether a guard that ruled out every value of `path` makes it read as
     /// `never`. A type parameter or `unknown` hides values a guard can't see
     /// ruled out, so `typeof x === "object"` on a `T` is not a contradiction.
-    /// Code that never runs by its syntax reads the declared type, as in
-    /// TypeScript.
     fn reads_as_never(&self, path: &narrowing::ReferencePath) -> bool {
-        (self.reachable || self.unreachable_by_exhaustive_switch)
-            && self.rules_out_to_never(path)
+        self.rules_out_to_never(path)
             && self.declared_root_ty(path).is_some_and(|declared| {
                 !narrowing::has_erased_member(&declared)
                     && !matches!(declared.peel(), Type::Unknown)
@@ -2590,7 +2622,7 @@ impl<'a> Inferer<'a> {
 
     /// The view the innermost frame holding `path` gives it, unless a frame
     /// in between tombstones it.
-    fn innermost_narrowing(
+    pub(super) fn innermost_narrowing(
         &self,
         path: &narrowing::ReferencePath,
     ) -> Option<&narrowing::NarrowedView> {
@@ -2811,6 +2843,25 @@ fn add_missing_views(env: &mut narrowing::NarrowEnv, extra: narrowing::NarrowEnv
             env.insert(path, view);
         }
     }
+}
+
+/// Each tuple member's element type at `position`, when that position is a
+/// discriminant: the members type it differently, some with a unit type such
+/// as `null`, as [`Inferer::discriminant_field_types`] requires of a field.
+fn discriminant_element_types(members: &[Type], position: usize) -> Option<Vec<Option<Type>>> {
+    let element_tys: Vec<Type> = members
+        .iter()
+        .map(|member| match member.peel() {
+            Type::Tuple(elements) => elements.get(position).cloned(),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    if element_tys.iter().any(narrowing::has_type_parameter_member) {
+        return None;
+    }
+    let is_uniform = element_tys.iter().all(|ty| Some(ty) == element_tys.first());
+    (element_tys.iter().any(narrowing::has_unit_member) && !is_uniform)
+        .then(|| element_tys.into_iter().map(Some).collect())
 }
 
 /// What a discriminant read tests the object it reads from by.

@@ -95,6 +95,7 @@ impl Inferer<'_> {
                 update,
                 body,
             } => {
+                self.check_for_pattern_init_captures(stmt_id, span);
                 self.scopes.push();
                 let typed_init = init.map(|id| self.infer_stmt(id)).transpose()?.flatten();
                 // Init-scope bindings persist across iterations, so the body's
@@ -764,6 +765,9 @@ impl Inferer<'_> {
         )?;
         let frame = self.pop_pending_join_frame()?;
         self.merge_assigned_into_outer(outcome.assigned.clone(), span);
+        // The condition runs after any pass that reaches the back edge, not
+        // only one whose body falls off its end.
+        self.reachable = entry_reachable && outcome.reaches_back_edge;
         let (typed_cond, exit) = self.check_condition_at_loop_head(
             condition,
             &LoopHead::after_every_pass(&outcome),
@@ -3092,6 +3096,9 @@ impl Inferer<'_> {
         assigned.extend(continued_assignments);
         let mut back_edge = join_reachable_envs(body_end_reachable.then_some(body_post), continues);
         let mut typed_update = None;
+        // The update and the condition run on every back edge, `continue`s
+        // included, whether or not the body falls off its end.
+        self.reachable = back_edge.is_some();
         if let Some(update) = tail.update {
             let state = LoopHead {
                 env: back_edge.clone().unwrap_or_default(),
@@ -3250,6 +3257,9 @@ impl Inferer<'_> {
                 let head = LoopHead::before_every_pass(before_loop, &outcome, &check.writes);
                 // The head covers the first run, so its check replaces that one.
                 self.diagnostics.drain(check.diagnostic_range);
+                // The head runs before every pass, whether or not the body
+                // falls off its end.
+                self.reachable = entry_reachable;
                 let (typed, exit) =
                     self.check_condition_at_loop_head(check.condition, &head, body_span)?;
                 (Some(typed), exit)
@@ -3316,6 +3326,97 @@ impl Inferer<'_> {
             self.wrap_narrow_exprs(typed, &head_env, cond_span)?,
             natural,
         ))
+    }
+
+    /// Pattern lowering declares the `let` names of a destructuring `for`
+    /// initializer before the loop, so every iteration shares them. Only a
+    /// closure in the loop can tell them apart from the per-iteration copies
+    /// JavaScript makes, so a closure that names one is rejected rather than
+    /// miscompiled. Names are matched without regard to shadowing.
+    fn check_for_pattern_init_captures(&mut self, loop_id: StmtId, loop_span: Span) {
+        let Some(bindings) = self.ast.for_pattern_init_bindings.get(&loop_id) else {
+            return;
+        };
+        let closures = self.closure_spans_within(loop_span);
+        if closures.is_empty() {
+            return;
+        }
+        let mut reported = std::collections::BTreeSet::new();
+        let captures: Vec<(String, Span)> = self
+            .binding_uses()
+            .filter(|use_site| {
+                closures
+                    .iter()
+                    .any(|closure| closure.encloses(use_site.span))
+            })
+            .filter(|use_site| bindings.iter().any(|binding| binding.name == use_site.name))
+            .map(|use_site| (use_site.name.clone(), use_site.span))
+            .filter(|(name, _)| reported.insert(name.clone()))
+            .collect();
+        for (name, span) in captures {
+            self.error_with_help(
+                span,
+                format!(
+                    "a closure captures `{name}`, which this `for` loop's destructuring \
+                     initializer declares"
+                ),
+                vec![
+                    "Submilli doesn't give destructured `for` bindings a fresh copy per \
+                     iteration; destructure inside the loop body, or declare the bindings \
+                     before the loop"
+                        .to_string(),
+                ],
+            );
+        }
+    }
+
+    /// The spans of the arrows, function expressions and nested function
+    /// declarations inside `outer`.
+    fn closure_spans_within(&self, outer: Span) -> Vec<Span> {
+        let expressions = self
+            .ast
+            .source_expressions()
+            .iter()
+            .filter(|expr| {
+                matches!(
+                    expr.kind,
+                    ExprKind::Arrow { .. } | ExprKind::FunctionExpression { .. }
+                )
+            })
+            .map(|expr| expr.span);
+        let declarations = self
+            .ast
+            .source_statements()
+            .iter()
+            .filter(|stmt| matches!(stmt.kind, StmtKind::Function { .. }))
+            .map(|stmt| stmt.span);
+        expressions
+            .chain(declarations)
+            .filter(|span| outer.encloses(*span))
+            .collect()
+    }
+
+    /// Every identifier read and every assignment target in the source.
+    fn binding_uses(&self) -> impl Iterator<Item = &crate::Ident> {
+        let reads = self
+            .ast
+            .source_expressions()
+            .iter()
+            .filter_map(|expr| match &expr.kind {
+                ExprKind::Identifier(name) => Some(name),
+                _ => None,
+            });
+        let writes = self
+            .ast
+            .source_statements()
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {
+                    Some(target)
+                }
+                _ => None,
+            });
+        reads.chain(writes)
     }
 
     /// Capture the normal exit before the body's lexical frame is removed.

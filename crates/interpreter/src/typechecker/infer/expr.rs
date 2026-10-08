@@ -4766,7 +4766,8 @@ impl Inferer<'_> {
 
     /// Wrap an already-typed interpolation expression in a
     /// `MethodCall { name: "toString" }` unless its type is already
-    /// `Type::String`; a `never` value converts as `"" + value`. Uses the exact valid-types allowlist /
+    /// `Type::String`; a `never` value converts as `"" + value`, and a generic or
+    /// `unknown` one as `String(value)`, so null reads as "null". Uses the exact valid-types allowlist /
     /// diagnostic shape as the `String(x)` coercion call, so `String(x)` and
     /// `${x}` route through the same dispatch path at codegen time.
     ///
@@ -4793,13 +4794,19 @@ impl Inferer<'_> {
         if matches!(peeled, Type::Never) {
             return self.concatenated_onto_empty_string(expr_id, substitution_span);
         }
+        // A generic or `unknown` value may hold null, which `toString` can't be
+        // called on but converts to "null"; `String(x)` converts it as JS does.
+        if matches!(peeled, Type::GenericParam { .. } | Type::Unknown)
+            && let Some(converted) = self.string_constructor_call(expr_id, substitution_span)?
+        {
+            return Ok(converted);
+        }
         let method_name = crate::Ident {
             name: "toString".to_string(),
             span: expr_span,
         };
         // A union of arrays answers `toString` as an array, through its joined view.
-        let converts = (has_to_string(peeled) || peeled.is_array_like_union())
-            && !self.is_static_interface_value(peeled);
+        let converts = has_to_string(peeled) || peeled.is_array_like_union();
         if !converts {
             let nullable = matches!(peeled, Type::Null)
                 || matches!(
@@ -4891,6 +4898,41 @@ impl Inferer<'_> {
             .map_err(crate::typechecker::arena_failure)
     }
 
+    /// `String(value)`, through the prelude's `String` binding.
+    fn string_constructor_call(
+        &mut self,
+        value: ExprId,
+        span: Span,
+    ) -> Result<Option<ExprId>, crate::compiler_error::CompilerFailure> {
+        let Some(entry) = self.top_symbols.get("String") else {
+            return Ok(None);
+        };
+        let ValueKind::Const { ty, .. } = &entry.kind else {
+            return Ok(None);
+        };
+        let (mangled, ty) = (entry.mangled_name.clone(), ty.clone());
+        let Some((_, _, iface, _)) = self.find_method(&ty, "@call") else {
+            return Ok(None);
+        };
+        let name = crate::Ident {
+            name: "String".to_string(),
+            span,
+        };
+        let receiver =
+            self.push_synthetic_expr(TypedExprKind::GlobalRef { mangled, name }, ty, span)?;
+        let call = TypedExprKind::MethodCall {
+            receiver,
+            iface,
+            name: crate::Ident {
+                name: "@call".to_string(),
+                span,
+            },
+            args: vec![value],
+            type_predicate: None,
+        };
+        self.push_synthetic_expr(call, Type::String, span).map(Some)
+    }
+
     /// `"" + value`, the string `value` converts to.
     fn concatenated_onto_empty_string(
         &mut self,
@@ -4905,13 +4947,6 @@ impl Inferer<'_> {
             rhs: value,
         };
         self.push_synthetic_expr(kind, Type::String, span)
-    }
-
-    /// A static-dispatch interface's value is an inert null, so it has no
-    /// `toString` to call.
-    fn is_static_interface_value(&self, ty: &Type) -> bool {
-        matches!(ty, Type::InterfaceRef { mangled, name, .. }
-            if self.resolver().is_static_interface(mangled, name))
     }
 
     /// The value of an object literal's field when it is spelled as a literal.
