@@ -265,8 +265,9 @@ fn is_inert(ta: &TypedAst, expr: crate::ExprId) -> Result<bool, CompilerFailure>
         | TypedExprKind::BigInt(_)
         | TypedExprKind::String(_)
         | TypedExprKind::Boolean(_)
-        | TypedExprKind::Null
-        | TypedExprKind::FunctionRef { .. } => true,
+        | TypedExprKind::Null => true,
+        // Reading a static method reads its class binding.
+        TypedExprKind::FunctionRef { mangled, .. } => !is_class_static_method(ta, mangled),
         // An operator on an object can call its `toString` or `valueOf`.
         TypedExprKind::Unary { operand, .. } => is_primitive_literal(ta, *operand)?,
         TypedExprKind::Binary { lhs, rhs, .. } => {
@@ -284,6 +285,18 @@ fn is_inert(ta: &TypedAst, expr: crate::ExprId) -> Result<bool, CompilerFailure>
             all_inert(ta, values.into_iter())?
         }
         _ => false,
+    })
+}
+
+fn is_class_static_method(ta: &TypedAst, mangled: &MangledName) -> bool {
+    ta.types.iter().any(|decl| {
+        let crate::TypedTypeDecl::Class(class) = decl else {
+            return false;
+        };
+        class
+            .static_methods
+            .keys()
+            .any(|method| crate::mangle::static_member(&class.mangled_name, method) == *mangled)
     })
 }
 

@@ -1,11 +1,14 @@
 // A class used before its declaration has run throws a ReferenceError, as
 // JavaScript's temporal dead zone does: constructing it, calling a static
-// method or testing instanceof. Its own static fields can already use it.
+// method, reading one as a value or testing instanceof. Its own static fields can already use it.
 function make(): Box<number> {
   return new Box<number>(1);
 }
 function zeroX(): number {
   return Point.zero().x;
+}
+function zeroMaker(): () => Point {
+  return Point.zero;
 }
 function isPoint(value: unknown): boolean {
   return value instanceof Point;
@@ -24,6 +27,7 @@ const early: string[] = [
   attempt(() => { make(); }),
   attempt(() => { zeroX(); }),
   attempt(() => { isPoint({}); }),
+  attempt(() => { zeroMaker(); }),
 ];
 
 class Box<T> {
@@ -42,12 +46,14 @@ const late: string[] = [
   attempt(() => { make(); }),
   attempt(() => { zeroX(); }),
   attempt(() => { isPoint({}); }),
+  attempt(() => { zeroMaker(); }),
 ];
 
 function main(): void {
   assert(early[0] === "ReferenceError: Cannot access 'Box' before initialization", early[0]);
   assert(early[1] === "ReferenceError: Cannot access 'Point' before initialization", early[1]);
   assert(early[2] === "ReferenceError: Cannot access 'Point' before initialization", early[2]);
-  assert(late.join(",") === "ran,ran,ran", late.join(","));
+  assert(early[3] === "ReferenceError: Cannot access 'Point' before initialization", early[3]);
+  assert(late.join(",") === "ran,ran,ran,ran", late.join(","));
   assert(Point.unit.x === 1, "a static field constructs its own class");
 }

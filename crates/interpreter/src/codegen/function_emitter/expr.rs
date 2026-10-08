@@ -163,6 +163,7 @@ fn emit_expr_value(
             emit_global_ref(emitter, ctx, mangled, &expr.ty)?;
         }
         TypedExprKind::FunctionRef { mangled, .. } => {
+            crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
             emit_function_ref(emitter, ctx, mangled, &expr.ty)?;
         }
         TypedExprKind::Call { mangled, args, .. } => {
