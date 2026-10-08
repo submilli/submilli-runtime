@@ -4769,7 +4769,8 @@ impl Inferer<'_> {
 
     /// Wrap an already-typed interpolation expression in a
     /// `MethodCall { name: "toString" }` unless its type is already
-    /// `Type::String`; a `never` value converts as `"" + value`. Uses the exact valid-types allowlist /
+    /// `Type::String`; a `never` value converts as `"" + value`, and a generic or
+    /// `unknown` one as `String(value)`, so null reads as "null". Uses the exact valid-types allowlist /
     /// diagnostic shape as the `String(x)` coercion call, so `String(x)` and
     /// `${x}` route through the same dispatch path at codegen time.
     ///
@@ -4795,6 +4796,13 @@ impl Inferer<'_> {
         // an alias filled holds a value.
         if matches!(peeled, Type::Never) {
             return self.concatenated_onto_empty_string(expr_id, substitution_span);
+        }
+        // A generic or `unknown` value may hold null, which `toString` can't be
+        // called on but converts to "null"; `String(x)` converts it as JS does.
+        if matches!(peeled, Type::GenericParam { .. } | Type::Unknown)
+            && let Some(converted) = self.string_constructor_call(expr_id, substitution_span)?
+        {
+            return Ok(converted);
         }
         let method_name = crate::Ident {
             name: "toString".to_string(),
@@ -4892,6 +4900,41 @@ impl Inferer<'_> {
                 },
             })
             .map_err(crate::typechecker::arena_failure)
+    }
+
+    /// `String(value)`, through the prelude's `String` binding.
+    fn string_constructor_call(
+        &mut self,
+        value: ExprId,
+        span: Span,
+    ) -> Result<Option<ExprId>, crate::compiler_error::CompilerFailure> {
+        let Some(entry) = self.top_symbols.get("String") else {
+            return Ok(None);
+        };
+        let ValueKind::Const { ty, .. } = &entry.kind else {
+            return Ok(None);
+        };
+        let (mangled, ty) = (entry.mangled_name.clone(), ty.clone());
+        let Some((_, _, iface, _)) = self.find_method(&ty, "@call") else {
+            return Ok(None);
+        };
+        let name = crate::Ident {
+            name: "String".to_string(),
+            span,
+        };
+        let receiver =
+            self.push_synthetic_expr(TypedExprKind::GlobalRef { mangled, name }, ty, span)?;
+        let call = TypedExprKind::MethodCall {
+            receiver,
+            iface,
+            name: crate::Ident {
+                name: "@call".to_string(),
+                span,
+            },
+            args: vec![value],
+            type_predicate: None,
+        };
+        self.push_synthetic_expr(call, Type::String, span).map(Some)
     }
 
     /// `"" + value`, the string `value` converts to.
