@@ -3,7 +3,7 @@
 Source: `test/built-ins/String/**` (1223 files). The instance surface is
 broad (spec.md §1.7 + the regex-backed methods in docs/regex.md), so the
 port covers every implemented method and both statics with at least one
-behavioral case. 77 ported (74 passing, 3 `expect-fail`). Representative
+behavioral case. 79 ported (76 passing, 3 `expect-fail`). Representative
 rejected originals under `rejected/String/`.
 
 Blanket rules (SKIPS.md) cover `length.js`, `name.js`, `prop-desc.js`,
@@ -41,7 +41,7 @@ Porting adaptations used throughout (README rules):
 
 | Pattern | Reason |
 |:--|:--|
-| `prototype/at/returns-undefined-for-out-of-range-index.js`, `prototype/codePointAt/returns-undefined-on-position-*.js`, `prototype/charAt` out-of-range-undefined variants | No `undefined`: `at()`/`charAt()` return `""`, `charCodeAt()`/`codePointAt()` return `NaN` out of range (spec.md §1.7). The NaN behavior is ported (`charCodeAt/S15.5.4.5_A{2,3}`); both undefined originals copied. |
+| `prototype/at/returns-undefined-for-out-of-range-index.js`, `prototype/charAt` out-of-range-undefined variants | No `undefined`: `at()`/`charAt()` return `""`, `charCodeAt()` returns `NaN` out of range (spec.md §1.7). The NaN behavior is ported (`charCodeAt/S15.5.4.5_A{2,3}`); the `at` original is copied. `codePointAt()` returns `null` for JavaScript's `undefined`, so its out-of-range cases are ported. |
 | `prototype/match/S15.5.4.10_A2_T*.js` array-shape assertions (`m[0]`, `m.index` on the result array), `prototype/match/S15.5.4.10_A1_T*.js` | `RegExpExecArray`'s array-with-properties shape is replaced by the plain `RegExpMatch` interface (`.match`/`.index`/`.input`/`.groups`/`.namedGroups`) — documented divergence, docs/regex.md. Copied: `rejected/String/prototype/match/S15.5.4.10_A2_T10.js`. Basic match/search/matchAll behavior is exercised by the hand-written fixtures (`string_match_and_search.subm`, `string_match_all.subm`). |
 | `raw/**` | `String.raw` / tagged templates out of scope. Copied: `rejected/String/raw/raw.js`. |
 | `prototype/toLocaleLowerCase/**`, `prototype/toLocaleUpperCase/**`, `localeCompare` locale-dependent rows | No locale/ICU; `toLowerCase`/`toUpperCase` are already Unicode-correct. Copied: `rejected/String/prototype/toLocaleLowerCase/S15.5.4.17_A1_T1.js`. |

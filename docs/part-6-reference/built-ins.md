@@ -481,7 +481,7 @@ The UTF-16 string type.
 | `at(index: number): string \| null` | Returns the code unit at `index` as a single-character string. |
 | `charAt(index: number): string` | Returns the UTF-16 code unit at `index` as a single-character string. |
 | `charCodeAt(index: number): number` | Returns the UTF-16 code unit at `index` as an integer (0..65535), or `NaN` if out of range. |
-| `codePointAt(index: number): number` | Returns the Unicode code point starting at `index`, decoding surrogate pairs into values up to 0x10FFFF. |
+| `codePointAt(index: number): number \| null` | Returns the Unicode code point starting at `index`, decoding surrogate pairs into values up to 0x10FFFF. |
 | `concat(other: string): string` | Returns a new string with `other` appended. |
 | `endsWith(search: string, endPosition?: number): boolean` | Returns `true` if the substring ending at `endPosition` ends with `search`. |
 | `equals(other: string): boolean` | Returns `true` when both strings have identical code units. |

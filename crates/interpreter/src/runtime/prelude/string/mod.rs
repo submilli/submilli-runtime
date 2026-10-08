@@ -196,15 +196,6 @@ pub fn char_code_at(s: &Str, index: f64) -> f64 {
     unit_index(units.len(), index).map_or(f64::NAN, |i| units[i] as f64)
 }
 
-/// `codePointAt`: like `charCodeAt`, but decodes a surrogate pair into the full
-/// code point. `NaN` out of range.
-pub fn code_point_at(s: &Str, index: f64) -> f64 {
-    let units = s.units();
-    unit_index(units.len(), index).map_or(f64::NAN, |i| {
-        code_point(units[i], units.get(i + 1).copied())
-    })
-}
-
 /// `slice`: negatives count from the end; empty when `start >= end` after
 /// normalization.
 pub fn slice(s: &Str, start: f64, end: f64) -> Str {
