@@ -327,6 +327,7 @@ fn render_type_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Stri
         push_doc(&mut body, &prop.doc, "  ");
         let ro = if prop.readonly { "readonly " } else { "" };
         let opt = if prop.optional { "?" } else { "" };
+        let name = member_name(&name);
         let _ = writeln!(body, "  {ro}{name}{opt}: {};", prop.ty);
     } else {
         let name = resolve_ignore_case(methods.keys(), member)?;
@@ -370,6 +371,7 @@ fn render_class_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Str
         let field = &static_fields[&name];
         push_doc(&mut body, &field.doc, "  ");
         let ro = if field.readonly { "readonly " } else { "" };
+        let name = member_name(&name);
         let _ = writeln!(body, "  static {ro}{name}: {};", field.ty);
     } else if let Some(name) = resolve_ignore_case(statics.keys(), member)
         .filter(|n| static_visibility.get(n) != Some(&crate::Visibility::Private))
@@ -390,6 +392,7 @@ fn render_class_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Str
         push_doc(&mut body, &field.doc, "  ");
         let ro = if field.readonly { "readonly " } else { "" };
         let opt = if field.optional { "?" } else { "" };
+        let name = member_name(&name);
         let _ = writeln!(body, "  {ro}{name}{opt}: {};", field.ty);
     } else {
         let name = resolve_ignore_case(methods.keys(), member)
@@ -1413,6 +1416,7 @@ fn render_ts_type(
                 push_doc(out, &prop.doc, &inner);
                 let ro = if prop.readonly { "readonly " } else { "" };
                 let opt = if prop.optional { "?" } else { "" };
+                let pname = member_name(pname);
                 let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {};", ts_type(&prop.ty));
             }
             for (mname, m) in methods {
@@ -1499,6 +1503,7 @@ fn render_ts_type(
                 }
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}static {ro}{fname}: {};", ts_type(&field.ty));
             }
             for (mname, m) in statics {
@@ -1523,6 +1528,7 @@ fn render_ts_type(
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let opt = if field.optional { "?" } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}{ro}{fname}{opt}: {};", ts_type(&field.ty));
             }
             render_class_accessors(out, fields, accessors, &inner, ts_type);
@@ -1723,6 +1729,7 @@ fn ts_type(ty: &Type) -> String {
                 .map(|(name, field)| {
                     let opt = if field.optional { "?" } else { "" };
                     let ro = if field.readonly { "readonly " } else { "" };
+                    let name = member_name(name);
                     format!("{ro}{name}{opt}: {}", ts_type(&field.ty))
                 })
                 .collect();
@@ -1934,6 +1941,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 push_doc(out, &prop.doc, &inner);
                 let ro = if prop.readonly { "readonly " } else { "" };
                 let opt = if prop.optional { "?" } else { "" };
+                let pname = member_name(pname);
                 let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {};", prop.ty);
             }
             for (mname, m) in methods {
@@ -1958,7 +1966,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
         TypeKind::StringEnum { variants, .. } => {
             let _ = writeln!(out, "{indent}enum {name} {{");
             for (v, value) in variants {
-                let _ = writeln!(out, "{inner}{v} = \"{value}\",");
+                let _ = writeln!(out, "{inner}{v} = \"{}\",", escape_string_literal(value));
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
@@ -1993,6 +2001,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 }
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}static {ro}{fname}: {};", field.ty);
             }
             for (mname, m) in statics {
@@ -2017,6 +2026,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let opt = if field.optional { "?" } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}{ro}{fname}{opt}: {};", field.ty);
             }
             render_class_accessors(out, fields, accessors, &inner, ToString::to_string);
@@ -2269,9 +2279,34 @@ fn type_doc(kind: &TypeKind) -> &Option<DocComment> {
     }
 }
 
+/// A member name as declaration source: bare when it is an identifier, else
+/// quoted and escaped, as `"a b"` or `"\uD800"` must be.
+fn member_name(name: &str) -> std::borrow::Cow<'_, str> {
+    let mut chars = name.chars();
+    let is_identifier = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    if is_identifier {
+        return std::borrow::Cow::Borrowed(name);
+    }
+    std::borrow::Cow::Owned(format!("\"{}\"", escape_string_literal(name)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_names_are_quoted_unless_identifiers() {
+        let mut lone = String::new();
+        crate::literal_units::push_lone_surrogate(&mut lone, 0xD800);
+        assert_eq!(member_name("count"), "count");
+        assert_eq!(member_name("$el_2"), "$el_2");
+        assert_eq!(member_name("a b"), "\"a b\"");
+        assert_eq!(member_name("0"), "\"0\"");
+        assert_eq!(member_name(&lone), "\"\\uD800\"");
+    }
 
     #[test]
     fn destructured_display_names_are_valid_and_distinct() {

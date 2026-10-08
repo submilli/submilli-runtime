@@ -49,8 +49,8 @@ pub(crate) fn push_literal_text(out: &mut String, text: &str) {
     if chars.next() == Some(MARKER)
         && let Some(low) = chars.next().and_then(named_surrogate)
         && LOW_SURROGATES.contains(&u32::from(low))
-        && push_lone_surrogate(out, u32::from(low))
     {
+        push_lone_surrogate(out, u32::from(low));
         out.push_str(chars.as_str());
         return;
     }

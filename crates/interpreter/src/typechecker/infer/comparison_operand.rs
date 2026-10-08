@@ -170,14 +170,14 @@ pub(super) fn constant_template(
     };
     let mut text = String::new();
     for (index, part) in parts.iter().enumerate() {
-        text.push_str(part);
+        crate::literal_units::push_literal_text(&mut text, part);
         let Some(expr) = exprs.get(index) else {
             continue;
         };
         let Some(value) = constant_substitution(ast, *expr)? else {
             return Ok(None);
         };
-        text.push_str(&value);
+        crate::literal_units::push_literal_text(&mut text, &value);
     }
     Ok(Some(text))
 }
@@ -201,7 +201,10 @@ pub(super) fn constant_substitution(
                     constant_substitution(ast, *lhs)?,
                     constant_substitution(ast, *rhs)?,
                 ) {
-                    (Some(left), Some(right)) => Some(left + &right),
+                    (Some(mut left), Some(right)) => {
+                        crate::literal_units::push_literal_text(&mut left, &right);
+                        Some(left)
+                    }
                     _ => None,
                 }
             }

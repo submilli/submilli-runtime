@@ -15,6 +15,15 @@ function describe(s: string): string {
   }
 }
 
+function isFace(k: Face): number {
+  switch (k) {
+    case `\ud83d${"\ude00"}`:
+      return 1;
+    case "x":
+      return 2;
+  }
+}
+
 function main(): void {
   const high = "\ud800";
   assert(high.length === 1 && high.charCodeAt(0) === 0xd800, "a lone high surrogate is one unit");
@@ -29,6 +38,8 @@ function main(): void {
   assert(pair.codePointAt(0) === 0x1f600, "a template joins them too");
   const braced: Face = "\u{D83D}\u{DE00}";
   assert(braced === "\u{1F600}" && braced.length === 2, "halves in one literal are one character");
+  const summed: Face = `${"\ud83d" + "\ude00"}`;
+  assert(summed === `\ud83d${"\ude00"}` && isFace(summed) === 1, "constant folding joins halves");
 
   assert(describe(String.fromCharCode(0xdc00)) === "low", "a switch case matches a lone surrogate");
   const typed: High = "\ud800";
