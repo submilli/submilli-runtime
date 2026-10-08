@@ -21,6 +21,7 @@ async fn get(route: &str) -> (StatusCode, Value) {
         )),
         ..in_memory_config::config()
     })
+    .await
     .expect("AppState");
     let uri = &format!("/v1/blueprints/open{route}");
     let req = Request::builder()
@@ -343,7 +344,7 @@ mod blueprint_scoped {
             package_store_root: Some(store_root.to_path_buf()),
             ..in_memory_config::config()
         };
-        app(AppState::new(config).expect("build AppState"))
+        app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
     }
 
     async fn get_from(router: Router, uri: &str) -> (StatusCode, Value) {
@@ -477,6 +478,7 @@ mod blueprint_scoped {
                 )),
                 ..in_memory_config::config()
             })
+            .await
             .unwrap());
             for query in ["", "models", "submilli:llm", "nothingmatchesthis"] {
                 let (status, body) = get_from(
@@ -535,6 +537,7 @@ mod blueprint_scoped {
                 )),
                 ..ServerConfig::default()
             })
+            .await
             .unwrap());
             for query in ["", "embed", "submilli:embedding", "nothingmatchesthis"] {
                 let (status, body) = get_from(

@@ -221,6 +221,7 @@ mod tests {
             ]),
             ..crate::config::test_config()
         })
+        .await
         .unwrap();
         let shutdown = state.shutdown_signal();
         let server = tokio::spawn({

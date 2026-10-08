@@ -36,17 +36,15 @@ pub async fn serve(
     // boot finishes instead of terminating the process outright.
     let signals = ShutdownSignals::install()?;
 
-    let database = match (config.database.take(), config.database_path.as_deref()) {
-        (Some(database), _) => Some(database),
-        (None, Some(path)) => Some(Arc::new(crate::database::ServerDatabase::open(path).await?)),
-        (None, None) => None,
-    };
-    config.database = database.clone();
+    let database = config.resolve_database().await?;
+    config.database = Some(database.clone());
+    if database.is_ephemeral()
+        && (config.blueprint_dir.is_some() || config.session_store_dir.is_some())
+    {
+        anyhow::bail!("directory import requires a persistent SQLite database");
+    }
 
     let result = serve_opened(addr, config, shutdown_grace, signals).await;
-    let Some(database) = database else {
-        return result.map(|_| ());
-    };
     close_database(database, result, shutdown_grace).await
 }
 
@@ -117,7 +115,7 @@ async fn serve_opened(
     let settings_hash = crate::audit::settings_hash(&config, addr, shutdown_grace);
     let allow_unauthenticated = matches!(config.auth, crate::auth::AuthConfig::Disabled);
     config.blueprints = Some(prepare_blueprint_store(&config).await?);
-    let state = AppState::new(config)?;
+    let state = AppState::new(config).await?;
     let audit = state.audit().clone();
     // Rehydrate persisted sessions and sweep orphan directories before serving,
     // so an immediate reconnect resolves instead of 404-ing.
@@ -147,11 +145,12 @@ async fn serve_opened(
     state.set_bind_addr(bound);
     let shutdown = state.shutdown_signal();
     let requests = state.graceful_shutdown();
+    let idempotency = state.idempotency().clone();
     let router = app(state);
     crate::metrics::server_start();
     tracing::info!(addr = %bound, protocol = if tls.is_some() { "https" } else { "http" }, "submilli-server listening");
 
-    if let Some(tls) = tls {
+    let result = if let Some(tls) = tls {
         serve_listener(
             crate::tls::Listener::new(listener, tls),
             router,
@@ -171,7 +170,8 @@ async fn serve_opened(
             shutdown_grace,
         )
         .await
-    }
+    };
+    drain_idempotency(&idempotency, result, shutdown_grace).await
 }
 
 /// SIGTERM and SIGINT, registered for [`serve_embedded`]. An embedder installs them
@@ -223,7 +223,8 @@ pub async fn serve_embedded(
     state.set_bind_addr(listener.local_addr()?);
     let shutdown = state.shutdown_signal();
     let requests = state.graceful_shutdown();
-    serve_listener(
+    let idempotency = state.idempotency().clone();
+    let result = serve_listener(
         listener,
         app(state),
         signals,
@@ -231,8 +232,43 @@ pub async fn serve_embedded(
         requests,
         shutdown_grace,
     )
-    .await
-    .map(|_| ())
+    .await;
+    drain_idempotency(&idempotency, result, shutdown_grace)
+        .await
+        .map(|_| ())
+}
+
+async fn drain_idempotency(
+    coordinator: &crate::idempotency::Coordinator,
+    result: Result<DrainStatus>,
+    grace: Duration,
+) -> Result<DrainStatus> {
+    let status = result?;
+    let (deadline, signals) = match &status {
+        DrainStatus::Completed {
+            started_at,
+            signals,
+        } => (started_at.checked_add(grace), Some(signals.clone())),
+        DrainStatus::Forced => return Ok(status),
+        DrainStatus::NoDrain => (tokio::time::Instant::now().checked_add(grace), None),
+    };
+    tokio::select! {
+        biased;
+        () = coordinator.drain() => Ok(status),
+        () = wait_until(deadline) => {
+            tracing::warn!("idempotency finalization exceeded shutdown deadline; unfinished requests remain reserved for recovery");
+            Ok(DrainStatus::Forced)
+        }
+        () = async {
+            match signals {
+                Some(signals) => signals.lock().await.recv_signal().await,
+                None => std::future::pending().await,
+            }
+        } => {
+            tracing::warn!("second signal stopped idempotency drain wait");
+            Ok(DrainStatus::Forced)
+        }
+    }
 }
 
 /// Resolve the blueprint backend and finish migration before application startup.

@@ -10,6 +10,9 @@ struct GatedStore {
 
 #[async_trait::async_trait]
 impl BlueprintStore for GatedStore {
+    fn database(&self) -> Option<Arc<crate::database::ServerDatabase>> {
+        self.inner.database()
+    }
     async fn add_yaml(&self, value: StoredBlueprint) -> Result<(), StoreError> {
         self.admitted.notify_one();
         self.release.notified().await;
@@ -36,6 +39,22 @@ impl BlueprintStore for GatedStore {
     }
     async fn list_blueprints(&self) -> Result<Vec<Blueprint>, StoreError> {
         self.inner.list_blueprints().await
+    }
+}
+
+struct GatedUnits {
+    inner: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
+    admitted: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+#[async_trait::async_trait]
+impl crate::application::unit_of_work::UnitOfWorkFactory for GatedUnits {
+    async fn begin(
+        &self,
+    ) -> Result<Box<dyn crate::application::unit_of_work::UnitOfWork>, StoreError> {
+        self.admitted.notify_one();
+        self.release.notified().await;
+        self.inner.begin().await
     }
 }
 
@@ -71,7 +90,7 @@ async fn check_mutations(cancel: bool) {
         }
         let audit_path = directory.path().join("audit.log");
         let token = "test_admin_token_012345678901234567890";
-        let state = AppState::new(ServerConfig {
+        let mut state = AppState::new(ServerConfig {
             auth: crate::auth::AuthConfig::Tokens(vec![
                 crate::auth::ApiToken::new("operator", crate::auth::Role::Admin, token).unwrap(),
             ]),
@@ -83,6 +102,7 @@ async fn check_mutations(cancel: bool) {
             blueprints: Some(store),
             ..Default::default()
         })
+        .await
         .unwrap();
         if !creating {
             state
@@ -95,6 +115,14 @@ async fn check_mutations(cancel: bool) {
                 )
                 .await
                 .unwrap();
+        }
+        if deleting {
+            let inner = Arc::get_mut(&mut state.inner).unwrap();
+            inner.unit_of_work = Arc::new(GatedUnits {
+                inner: inner.unit_of_work.clone(),
+                admitted: admitted.clone(),
+                release: release.clone(),
+            });
         }
         let generation = state.inner.mcp_catalog_generation.load(Ordering::Acquire);
         let router = app(state.clone());
@@ -175,67 +203,18 @@ async fn check_mutations(cancel: bool) {
     }
 }
 
-/// Writes that fail once `failing` is set; reads always pass through.
-struct FailingWrites {
-    inner: InMemoryBlueprintStore,
-    failing: AtomicBool,
-}
-
-impl FailingWrites {
-    fn check(&self) -> Result<(), StoreError> {
-        if self.failing.load(Ordering::Acquire) {
-            return Err(StoreError::Io("disk full".into()));
-        }
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl BlueprintStore for FailingWrites {
-    async fn add_yaml(&self, value: StoredBlueprint) -> Result<(), StoreError> {
-        self.check()?;
-        self.inner.add_yaml(value).await
-    }
-    async fn upsert_yaml(&self, value: StoredBlueprint) -> Result<bool, StoreError> {
-        self.check()?;
-        self.inner.upsert_yaml(value).await
-    }
-    async fn remove(&self, name: &str) -> Result<bool, StoreError> {
-        self.check()?;
-        self.inner.remove(name).await
-    }
-    async fn get(&self, name: &str) -> Result<Option<Blueprint>, StoreError> {
-        self.inner.get(name).await
-    }
-    async fn get_yaml(&self, name: &str) -> Result<Option<String>, StoreError> {
-        self.inner.get_yaml(name).await
-    }
-    async fn list(&self) -> Result<Vec<String>, StoreError> {
-        self.inner.list().await
-    }
-    async fn list_blueprints(&self) -> Result<Vec<Blueprint>, StoreError> {
-        self.inner.list_blueprints().await
-    }
-}
-
-/// A replace or remove the store refuses leaves the blueprint's version tag: its
-/// runs still record the version that is still in force.
 #[tokio::test]
 async fn a_failed_http_write_keeps_the_version_tag() {
-    let store = Arc::new(FailingWrites {
-        inner: InMemoryBlueprintStore::default(),
-        failing: AtomicBool::new(false),
-    });
-    let state = AppState::new(ServerConfig {
-        blueprints: Some(Arc::clone(&store) as Arc<dyn BlueprintStore>),
-        ..Default::default()
-    })
-    .unwrap();
+    let state = AppState::new(ServerConfig::default()).await.unwrap();
     state
         .apply_local_blueprint("name: demo\n", "v1")
         .await
         .unwrap();
-    store.failing.store(true, Ordering::Release);
+    state.database().unwrap().transaction(|connection| Box::pin(async move {
+        sqlx::query("CREATE TRIGGER reject_update BEFORE UPDATE ON blueprints BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(&mut *connection).await?;
+        sqlx::query("CREATE TRIGGER reject_delete BEFORE DELETE ON blueprints BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?;
+        Ok(())
+    })).await.unwrap();
     let router = app(state.clone());
     for (method, body) in [
         (

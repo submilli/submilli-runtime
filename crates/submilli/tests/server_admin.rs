@@ -68,7 +68,7 @@ async fn spawn_authenticated_server() -> (String, std::sync::Arc<tokio::sync::No
 /// Bind an ephemeral port and serve with graceful shutdown wired, returning the
 /// base URL and the shutdown signal so the test can stop it.
 async fn spawn_server_with(config: ServerConfig) -> (String, std::sync::Arc<tokio::sync::Notify>) {
-    let state = AppState::new(config).expect("AppState");
+    let state = AppState::new(config).await.expect("AppState");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind ephemeral port");

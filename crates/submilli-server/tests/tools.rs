@@ -60,7 +60,7 @@ fn state_with(blueprints: &[&str], configure: impl FnOnce(&mut ServerConfig)) ->
         ..in_memory_config::config()
     };
     configure(&mut config);
-    AppState::new(config).expect("build AppState")
+    futures::executor::block_on(AppState::new(config)).expect("build AppState")
 }
 
 fn router() -> Router {
@@ -666,11 +666,13 @@ async fn session_discovery_adds_tools_to_the_blueprint_answers() {
 async fn a_session_keeps_its_tools_across_a_restart() {
     let store = tempfile::tempdir().unwrap();
     let durable = |config: &mut ServerConfig| {
-        config.session_store_dir = Some(store.path().to_path_buf());
+        config.database_path = Some(store.path().join("server.db"));
     };
     let session = {
-        let router = app(state_with(&[BLUEPRINT], durable));
-        open(&router, "orders").await
+        let state = state_with(&[BLUEPRINT], durable);
+        let session = open(&app(state.clone()), "orders").await;
+        state.database().expect("database").close().await.unwrap();
+        session
     };
     let router = app(state_with(&[BLUEPRINT], durable));
     let (_, suspended) = execute(&router, &session, COUNT_ORDERS).await;

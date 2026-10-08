@@ -216,6 +216,64 @@ impl UnitOfWork for SqliteUnitOfWork {
         .await
     }
 
+    async fn get_request(
+        &mut self,
+        session_id: &str,
+        key: &str,
+    ) -> Result<Option<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
+        let session_id = session_id.to_owned();
+        let key = key.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move {
+                crate::adapters::idempotency::get(connection, &session_id, &key).await
+            })
+        })
+        .await
+    }
+    async fn save_request(
+        &mut self,
+        request: crate::domain::idempotent_request::IdempotentRequest,
+    ) -> Result<(), StoreError> {
+        self.query(move |connection| {
+            Box::pin(crate::adapters::idempotency::save(connection, request))
+        })
+        .await
+    }
+    async fn remove_request(&mut self, session_id: &str, key: &str) -> Result<(), StoreError> {
+        let session_id = session_id.to_owned();
+        let key = key.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move {
+                sqlx::query("DELETE FROM idempotent_requests WHERE session_id=? AND request_key=?")
+                    .bind(session_id)
+                    .bind(key)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+    async fn remove_session_requests(&mut self, session_id: &str) -> Result<(), StoreError> {
+        let session_id = session_id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move {
+                sqlx::query("DELETE FROM idempotent_requests WHERE session_id=?")
+                    .bind(session_id)
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+    async fn unfinished_requests(
+        &mut self,
+    ) -> Result<Vec<crate::domain::idempotent_request::IdempotentRequest>, StoreError> {
+        self.query(|connection| Box::pin(crate::adapters::idempotency::unfinished(connection)))
+            .await
+    }
+
     async fn commit(mut self: Box<Self>) -> Result<(), StoreError> {
         match self.sender.try_send(Command::Commit) {
             Ok(()) => {}

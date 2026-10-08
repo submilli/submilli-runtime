@@ -32,7 +32,7 @@ fn router_with_store() -> Router {
         secret_store: Some(store),
         ..in_memory_config::config()
     };
-    app(AppState::new(config).expect("AppState"))
+    app(futures::executor::block_on(AppState::new(config)).expect("AppState"))
 }
 
 async fn send(router: &Router, method: &str, path: &str, body: Body) -> (StatusCode, Value) {
@@ -128,7 +128,9 @@ async fn secrets_cannot_be_read_back_over_the_api() {
 
 #[tokio::test]
 async fn disabled_store_returns_503() {
-    let router = app(AppState::new(in_memory_config::config()).expect("AppState"));
+    let router = app(AppState::new(in_memory_config::config())
+        .await
+        .expect("AppState"));
     let (status, body) = get(&router, "/v1/secrets").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], json!("no_secret_store"));

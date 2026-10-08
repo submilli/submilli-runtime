@@ -50,7 +50,7 @@ fn router(runtime: RuntimeConfig) -> Router {
         runtime,
         ..in_memory_config::config()
     };
-    app(AppState::new(config).expect("build AppState"))
+    app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
 }
 
 async fn execute(router: &Router, code: &str) -> Value {
@@ -113,7 +113,7 @@ fn deep_reentry_ends_the_run_on_the_servers_runtime() {
         ..in_memory_config::config()
     };
     let runtime = submilli_server::runtime(&server_config).expect("server runtime");
-    let response = runtime.block_on(execute(&router(runtime_config), REENTRY));
+    let response = runtime.block_on(async { execute(&router(runtime_config), REENTRY).await });
     let message = response["error"]["message"].as_str().unwrap_or_default();
     assert!(
         message.contains("call stack exhausted"),

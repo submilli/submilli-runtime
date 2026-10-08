@@ -8,16 +8,14 @@ use crate::application::unit_of_work::UnitOfWorkFactory;
 use crate::blueprint::{BlueprintStore, SqliteBlueprintStore, StoredBlueprint};
 use crate::config::ServerConfig;
 use crate::database::ServerDatabase;
-use crate::idempotency_store::{
-    IdempotencyStore, InMemoryIdempotencyStore, LedgerEntry, code_fingerprint,
-};
+use crate::request_records::{Record as LedgerEntry, RequestRecords, code_fingerprint};
 use crate::session_store::{DurableSessionStore, RootVfsType, SessionRecord, SqliteSessionStore};
 
 struct Fixture {
     state: AppState,
     database: Arc<ServerDatabase>,
     sessions: Arc<SqliteSessionStore>,
-    ledger: Arc<InMemoryIdempotencyStore>,
+    ledger: Arc<RequestRecords>,
     root: tempfile::TempDir,
 }
 
@@ -44,15 +42,14 @@ impl Fixture {
             None,
             workspaces.clone(),
         ));
-        let ledger = Arc::new(InMemoryIdempotencyStore::default());
+        let ledger = Arc::new(RequestRecords::with_database(database.clone()));
         let state = AppState::new(ServerConfig {
             database: Some(database.clone()),
             blueprints: Some(blueprints),
-            session_store: Some(sessions.clone()),
-            idempotency_store: Some(ledger.clone()),
             session_storage_root: Some(workspaces),
             ..Default::default()
         })
+        .await
         .unwrap();
         Self {
             state,
@@ -119,6 +116,17 @@ async fn failed_session_write_rolls_back_blueprint_and_cleanup_changes() {
     let fixture = Fixture::new().await;
     fixture.session("one").await;
     fixture.session("two").await;
+    for id in ["one", "two"] {
+        fixture
+            .ledger
+            .put(LedgerEntry::indeterminate(
+                id,
+                "key",
+                code_fingerprint("code"),
+            ))
+            .await
+            .unwrap();
+    }
     fixture.database.transaction(|connection| Box::pin(async move {
         sqlx::query("CREATE TRIGGER fail_close BEFORE UPDATE ON sessions WHEN NEW.session_id='two' BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
             .execute(connection).await?;
@@ -144,6 +152,9 @@ async fn failed_session_write_rolls_back_blueprint_and_cleanup_changes() {
             .all(|r| r.status == SessionStatus::Active)
     );
     assert!(fixture.sessions.pending_cleanup().await.unwrap().is_empty());
+    for id in ["one", "two"] {
+        assert!(fixture.ledger.load(id, "key").await.unwrap().is_some());
+    }
     assert!(fixture.root.path().join("workspaces/one").exists());
     fixture
         .database
@@ -250,51 +261,6 @@ async fn omitted_session_prevents_removal_and_rolls_back_earlier_writes() {
     );
     assert!(fixture.sessions.pending_cleanup().await.unwrap().is_empty());
     fixture.database.close().await.unwrap();
-}
-
-#[tokio::test]
-async fn removal_uses_configured_stores_even_when_a_database_is_present() {
-    use crate::blueprint::InMemoryBlueprintStore;
-    use crate::session_store::InMemoryDurableSessionStore;
-
-    for (override_blueprints, override_sessions) in [(true, true), (false, true), (true, false)] {
-        let fixture = Fixture::new().await;
-        fixture.session("one").await;
-        let blueprints: Arc<dyn BlueprintStore> = if override_blueprints {
-            let store = Arc::new(InMemoryBlueprintStore::default());
-            store
-                .add(submilli_blueprint::parse("name: test\ndefault: deny\n").unwrap())
-                .await
-                .unwrap();
-            store
-        } else {
-            Arc::new(SqliteBlueprintStore::new(fixture.database.clone(), None))
-        };
-        let sessions: Arc<dyn DurableSessionStore> = if override_sessions {
-            let store = Arc::new(InMemoryDurableSessionStore::default());
-            let mut record = fixture.sessions.load("one").await.unwrap().unwrap();
-            record.revision = 0;
-            store.put(record).await.unwrap();
-            store
-        } else {
-            fixture.sessions.clone()
-        };
-        let state = AppState::new(ServerConfig {
-            database: Some(fixture.database.clone()),
-            blueprints: Some(blueprints.clone()),
-            session_store: Some(sessions.clone()),
-            session_storage_root: Some(fixture.root.path().join("workspaces")),
-            ..Default::default()
-        })
-        .unwrap();
-        assert!(state.remove_blueprint("test").await.unwrap());
-        assert!(blueprints.get("test").await.unwrap().is_none());
-        assert_eq!(
-            sessions.load("one").await.unwrap().unwrap().status,
-            SessionStatus::Closed
-        );
-        fixture.database.close().await.unwrap();
-    }
 }
 
 #[tokio::test]
@@ -421,66 +387,6 @@ async fn dropping_a_unit_discards_writes_and_releases_the_database() {
 }
 
 #[tokio::test]
-async fn compatibility_reads_include_staged_changes_and_drop_discards_them() {
-    use crate::blueprint::InMemoryBlueprintStore;
-    use crate::session_store::InMemoryDurableSessionStore;
-    let fixture = Fixture::new().await;
-    fixture.session("one").await;
-    let blueprints = Arc::new(InMemoryBlueprintStore::default());
-    blueprints
-        .add(submilli_blueprint::parse("name: test\ndefault: deny\n").unwrap())
-        .await
-        .unwrap();
-    let sessions = Arc::new(InMemoryDurableSessionStore::default());
-    let mut record = fixture.sessions.load("one").await.unwrap().unwrap();
-    record.revision = 0;
-    sessions.put(record).await.unwrap();
-    let factory = crate::adapters::unit_of_work::StoreUnitOfWorkFactory {
-        blueprints: blueprints.clone(),
-        sessions: sessions.clone(),
-        session_root: fixture.root.path().join("workspaces"),
-        cipher: None,
-    };
-    let mut unit = factory.begin().await.unwrap();
-    let mut session = unit
-        .sessions_for_blueprint("test")
-        .await
-        .unwrap()
-        .pop()
-        .unwrap();
-    session.close(ClosedReason::Deleted);
-    unit.save_session(session).await.unwrap();
-    assert_eq!(
-        unit.sessions_for_blueprint("test").await.unwrap()[0].status(),
-        DomainStatus::Closed(ClosedReason::Deleted)
-    );
-    assert!(matches!(
-        unit.get_session("one")
-            .await
-            .unwrap()
-            .unwrap()
-            .require_available(SystemTime::now()),
-        Err(crate::domain::session::SessionRuleError::Closed)
-    ));
-    assert!(unit.remove_blueprint("test").await.unwrap());
-    assert!(!unit.blueprint_exists("test").await.unwrap());
-    assert!(blueprints.get("test").await.unwrap().is_some());
-    assert_eq!(
-        sessions.load("one").await.unwrap().unwrap().status,
-        SessionStatus::Active
-    );
-    drop(unit);
-    let mut unit = factory.begin().await.unwrap();
-    assert!(unit.blueprint_exists("test").await.unwrap());
-    assert_eq!(
-        unit.sessions_for_blueprint("test").await.unwrap()[0].status(),
-        DomainStatus::Active
-    );
-    drop(unit);
-    fixture.database.close().await.unwrap();
-}
-
-#[tokio::test]
 async fn blueprint_removal_cleanup_purges_only_its_sessions_ledgers() {
     let fixture = Fixture::new().await;
     let yaml = "name: other\ndefault: deny\n";
@@ -497,7 +403,11 @@ async fn blueprint_removal_cleanup_purges_only_its_sessions_ledgers() {
         fixture.session(id).await;
         fixture
             .ledger
-            .put(LedgerEntry::reserved(id, "key", code_fingerprint("main")))
+            .put(LedgerEntry::indeterminate(
+                id,
+                "key",
+                code_fingerprint("main"),
+            ))
             .await
             .unwrap();
     }
@@ -507,7 +417,7 @@ async fn blueprint_removal_cleanup_purges_only_its_sessions_ledgers() {
 
     assert!(fixture.state.remove_blueprint("test").await.unwrap());
     for id in ["one", "two"] {
-        assert!(fixture.ledger.load(id, "key").await.unwrap().is_some());
+        assert!(fixture.ledger.load(id, "key").await.unwrap().is_none());
     }
     fixture.state.session_manager().reap_now().await.unwrap();
     for id in ["one", "two"] {
@@ -594,24 +504,14 @@ async fn reaping_ignores_closed_history_and_its_unreadable_protocol_state() {
 
 #[tokio::test]
 async fn expiry_queries_observe_pending_activity_and_closure() {
-    use crate::adapters::unit_of_work::{SqliteUnitOfWorkFactory, StoreUnitOfWorkFactory};
-    use crate::blueprint::InMemoryBlueprintStore;
+    use crate::adapters::unit_of_work::SqliteUnitOfWorkFactory;
     use crate::domain::session::{RootVfs, Session, SessionBinding, SessionId, SessionLifetime};
-    use crate::session_store::InMemoryDurableSessionStore;
     let fixture = Fixture::new().await;
-    let factories: Vec<Box<dyn UnitOfWorkFactory>> = vec![
-        Box::new(SqliteUnitOfWorkFactory {
-            database: fixture.database.clone(),
-            session_root: fixture.root.path().join("workspaces"),
-            cipher: None,
-        }),
-        Box::new(StoreUnitOfWorkFactory {
-            blueprints: Arc::new(InMemoryBlueprintStore::default()),
-            sessions: Arc::new(InMemoryDurableSessionStore::default()),
-            session_root: fixture.root.path().join("workspaces"),
-            cipher: None,
-        }),
-    ];
+    let factories: Vec<Box<dyn UnitOfWorkFactory>> = vec![Box::new(SqliteUnitOfWorkFactory {
+        database: fixture.database.clone(),
+        session_root: fixture.root.path().join("workspaces"),
+        cipher: None,
+    })];
     let now = std::time::UNIX_EPOCH
         + Duration::from_millis(
             SystemTime::now()

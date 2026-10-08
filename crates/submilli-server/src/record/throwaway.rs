@@ -868,9 +868,8 @@ mod tests {
 
     use super::*;
     use crate::config::SizeLimit;
-    use crate::idempotency_store::InMemoryIdempotencyStore;
     use crate::session_manager::CapabilitySettings;
-    use crate::session_store::InMemoryDurableSessionStore;
+    use crate::session_store::SqliteSessionStore;
 
     fn key(text: &str) -> Vec<u16> {
         text.encode_utf16().collect()
@@ -963,6 +962,14 @@ mod tests {
     }
 
     fn manager(volumes: VolumeTable, root: &Path) -> SessionManager {
+        use crate::blueprint::BlueprintStore;
+        let database = Arc::new(
+            futures::executor::block_on(crate::database::ServerDatabase::open_ephemeral()).unwrap(),
+        );
+        futures::executor::block_on(
+            crate::blueprint::SqliteBlueprintStore::new(database.clone(), None).add(blueprint()),
+        )
+        .unwrap();
         SessionManager::new(
             root.to_path_buf(),
             None,
@@ -970,8 +977,7 @@ mod tests {
             Arc::new(|| -> Arc<dyn interpreter::stdlib::http::HttpClient> {
                 panic!("no HTTP in this test")
             }),
-            Arc::new(InMemoryDurableSessionStore::default()),
-            Arc::new(InMemoryIdempotencyStore::default()),
+            Arc::new(SqliteSessionStore::new(database, None, root.to_path_buf())),
             CapabilitySettings::default(),
         )
     }

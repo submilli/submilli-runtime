@@ -39,7 +39,7 @@ async fn spawn_server() -> String {
         blueprints: Some(blueprints),
         ..in_memory_config::config()
     };
-    let state = AppState::new(config).expect("AppState");
+    let state = AppState::new(config).await.expect("AppState");
     let router = app(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

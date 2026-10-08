@@ -385,6 +385,7 @@ async fn documented_package_and_blueprint_enforce_the_bound_customer() {
         session_storage_root: Some(root.path().join("sessions")),
         ..in_memory_config::config()
     })
+    .await
     .unwrap());
     let code = code_block(&blueprint_doc, "typescript");
     for (program, variables, expected) in [

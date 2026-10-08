@@ -475,7 +475,7 @@ async fn prepare_and_run(
         run_entry: _,
         client: _,
         tool_call_id: _,
-        idempotency_key: _,
+        idempotency_key,
         tools,
     } = inputs;
     if let Some(audit) = &execution_audit {
@@ -603,7 +603,8 @@ async fn prepare_and_run(
         },
     );
     let services = runner::HostServices {
-        session_manager: Some(manager.clone()),
+        // Keyed completion updates activity with its recorded outcome in one transaction.
+        session_manager: idempotency_key.is_none().then(|| manager.clone()),
         audit: execution_audit.clone(),
         git: submilli_shared::resolve_git(&blueprint, &variables)
             .map_err(|error| error.to_string()),

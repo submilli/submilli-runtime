@@ -55,6 +55,7 @@ async fn mcp_docs_work_locally_and_through_a_registered_blueprint() {
         )),
         ..in_memory_config::config()
     })
+    .await
     .unwrap()))
     .await;
     tokio::task::spawn_blocking(move || {

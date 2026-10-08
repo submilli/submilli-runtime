@@ -198,7 +198,7 @@ fn server_with(
             ApiToken::new("app", Role::User, APP_TOKEN).expect("token"),
         ]),
         session_storage_root: Some(dirs.path().join("sessions")),
-        session_store_dir: Some(dirs.path().join("store")),
+        database_path: Some(dirs.path().join("server.db")),
         package_store_root: Some(dirs.path().join("packages")),
         runtime,
         run_recorder: record.then(|| Arc::new(Factory(runs.clone())) as _),
@@ -206,7 +206,7 @@ fn server_with(
         ..in_memory_config::config()
     };
     Server {
-        state: AppState::new(config).expect("state"),
+        state: futures::executor::block_on(AppState::new(config)).expect("state"),
         runs,
         _dirs: dirs,
     }

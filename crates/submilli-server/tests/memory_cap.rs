@@ -57,7 +57,7 @@ fn router_with_cap(max_store_bytes: u64) -> Router {
         },
         ..in_memory_config::config()
     };
-    app(AppState::new(config).expect("build AppState"))
+    app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
 }
 
 async fn execute(router: &Router, code: &str) -> Value {
