@@ -1,6 +1,7 @@
 // A method both strings and arrays declare is called on their union as tsc
 // calls a union's method: each argument fits both signatures, and the value's
 // own method runs. The receiver and each argument are evaluated once.
+type Tag = "a" | "b";
 let calls = 0;
 function pick(n: number): string | number[] {
   calls++;
@@ -24,4 +25,8 @@ function main(): void {
   assert(words.toString() === "x,y", "toString on the array");
   const text: string | string[] = calls > 0 ? "qa" : ["q"];
   assert(text.indexOf("a") === 1 && text.lastIndexOf("q") === 0, "indexOf on the string");
+
+  // A literal argument keeps its type, which the array's elements need.
+  const tags: string | Tag[] = calls > 0 ? ["a", "b"] : "ab";
+  assert(tags.includes("b") && tags.indexOf("a") === 0, "a literal fits the element type");
 }
