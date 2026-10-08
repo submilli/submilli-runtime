@@ -341,6 +341,8 @@ impl Inferer<'_> {
             operand: &disc_operand,
         };
         let disc_exclusions = self.discriminant_exclusions(typed_disc)?;
+        let narrowed_before =
+            !disc_exclusions.is_empty() || self.discriminant_narrowed(typed_disc)?;
         let entry_reachable = self.reachable;
         self.push_pending_join_frame(narrowing::PendingJoinKind::Switch);
         let mut typed_cases: Vec<TypedSwitchCase> = Vec::new();
@@ -435,6 +437,7 @@ impl Inferer<'_> {
                 &default_residual,
                 &site,
                 covered.ruled_out(&site),
+                narrowed_before,
                 body_span,
             )?;
             self.push_narrow_frame(env.clone());
@@ -481,6 +484,7 @@ impl Inferer<'_> {
                 &self.unmatched_residual(&residual, &site, saw_null.is_some()),
                 &site,
                 covered.ruled_out(&site),
+                narrowed_before,
                 switch_span,
             )?);
             Some(natural)
@@ -946,6 +950,25 @@ impl Inferer<'_> {
     }
 
     /// The values the discriminant was already known not to hold.
+    /// Whether a check before the switch narrowed the discriminant or the
+    /// object it is read from.
+    fn discriminant_narrowed(&self, typed_disc: ExprId) -> Result<bool, CompilerFailure> {
+        let disc_expr = self
+            .typed_ast
+            .try_expr(typed_disc)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(path) = self.expr_to_reference_path(disc_expr)? else {
+            return Ok(false);
+        };
+        Ok((0..=path.chain.len()).any(|len| {
+            let prefix = narrowing::ReferencePath {
+                root: path.root.clone(),
+                chain: path.chain[..len].to_vec(),
+            };
+            self.innermost_narrowing(&prefix).is_some()
+        }))
+    }
+
     fn discriminant_exclusions(
         &self,
         typed_disc: ExprId,
@@ -1012,6 +1035,7 @@ impl Inferer<'_> {
             &narrowing::RULED_OUT,
             site,
             BTreeSet::new(),
+            true,
             switch_span,
         )?;
         if let Some(frame) = self.narrow_scopes.last_mut() {
@@ -1025,6 +1049,7 @@ impl Inferer<'_> {
         residual: &Type,
         site: &ResidualSite,
         excluded_literals: BTreeSet<narrowing::LiteralValue>,
+        narrowed_before: bool,
         body_span: Span,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         let mut env = narrowing::NarrowEnv::new();
@@ -1044,11 +1069,13 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?,
             None => return Ok(env),
         };
-        // No value is left: the view rules the path out, so a local reads as
-        // `never` and a path that can change behind the switch (a field, or a
-        // module variable a call may write) keeps its declared type rather
-        // than handing a stale value to code that trusts `never`.
-        let narrowed_ty = if matches!(residual, Type::Never) {
+        // No value is left. When the cases alone cover the declared type, the
+        // path reads `never`, as in TypeScript. When an earlier check helped,
+        // a call or alias may have changed the value since, so the view rules
+        // the path out instead: it reads `never` only where
+        // `rules_out_to_never` allows and elsewhere keeps its declared type,
+        // rather than handing that value to code that trusts `never`.
+        let narrowed_ty = if narrowed_before && matches!(residual, Type::Never) {
             narrowing::RULED_OUT
         } else {
             residual.clone()

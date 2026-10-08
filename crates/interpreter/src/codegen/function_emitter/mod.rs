@@ -1318,12 +1318,9 @@ pub(crate) fn emit_body_end(
         return Ok(());
     }
     if !matches!(return_type.peel(), Type::Unknown) {
-        if crate::codegen::throw::body_end_may_be_reached(ctx.ta) {
-            crate::codegen::throw::emit_type_error_throw(
-                emitter,
-                ctx,
-                crate::codegen::throw::MISSING_RETURN_VALUE_MESSAGE,
-            );
+        use crate::codegen::throw;
+        if throw::body_end_may_be_reached(ctx.ta) {
+            throw::emit_type_error_throw(emitter, ctx, throw::MISSING_RETURN_VALUE_MESSAGE);
         }
         emitter.instruction(Instruction::Unreachable);
         return Ok(());

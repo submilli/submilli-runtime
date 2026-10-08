@@ -1153,6 +1153,13 @@ impl<'a> Inferer<'a> {
         if matches!(value_ty.peel(), Type::Null) {
             return Ok(None);
         }
+        // TypeScript compares `null` as comparable to a type parameter, so
+        // `x === y` with `x: T | null` and `y: T` leaves `x` as it was.
+        if !matches!(value_ty.peel(), Type::Union(_))
+            && narrowing::has_type_parameter_member(&value_ty)
+        {
+            return Ok(None);
+        }
         let path_expr = self
             .typed_ast
             .try_expr(path_id)
@@ -1200,9 +1207,10 @@ impl<'a> Inferer<'a> {
 
     /// The values `path_ty` and `value_ty` both allow, member by member, as
     /// TypeScript keeps them: a path member related to a value member stays,
-    /// except that a primitive gives way to the value's literal, so `number`
-    /// and `1` share `1`, and `"a"` and `string` share `"a"`. An `Animal`
-    /// compared with a `Dog` stays an `Animal`. Unrelated members share nothing.
+    /// except that it gives way to a narrower unit value member (a literal, an
+    /// enum, or `null`), so `number` and `1` share `1`, and `"a"` and `string`
+    /// share `"a"`. An `Animal` compared with a `Dog` stays an `Animal`.
+    /// Unrelated members share nothing.
     fn shared_values(&self, path_ty: &Type, value_ty: &Type) -> Type {
         let value_members = narrowing::union_members(value_ty);
         let mut shared = Vec::new();
@@ -1213,8 +1221,8 @@ impl<'a> Inferer<'a> {
                 {
                     shared.push(member.clone());
                 } else if super::assignable(value_member, member, self.resolver()) {
-                    let literal = narrowing::has_unit_member(value_member);
-                    shared.push(if literal { *value_member } else { member }.clone());
+                    let value_is_unit = narrowing::has_unit_member(value_member);
+                    shared.push(if value_is_unit { *value_member } else { member }.clone());
                 }
             }
         }
@@ -1628,17 +1636,18 @@ impl<'a> Inferer<'a> {
         Some(self.split_by_key_types(members, field_tys, literal_ty))
     }
 
-    /// The members whose discriminant, typed `field_tys` member by member, may
-    /// equal `literal_ty`'s value, and those whose discriminant may differ.
+    /// The members whose discriminant field or element, typed `key_tys`
+    /// member by member, may equal `literal_ty`'s value, and those whose
+    /// discriminant may differ.
     fn split_by_key_types(
         &self,
         members: &[Type],
-        field_tys: Vec<Option<Type>>,
+        key_tys: Vec<Option<Type>>,
         literal_ty: &Type,
     ) -> (Vec<Type>, Vec<Type>) {
         let mut equal = Vec::new();
         let mut unequal = Vec::new();
-        for (member, field_ty) in members.iter().zip(field_tys) {
+        for (member, field_ty) in members.iter().zip(key_tys) {
             let Some(field_ty) = field_ty else {
                 if matches!(literal_ty, Type::Null) {
                     equal.push(member.clone());
@@ -2557,7 +2566,7 @@ impl<'a> Inferer<'a> {
 
     /// The view the innermost frame holding `path` gives it, unless a frame
     /// in between tombstones it.
-    fn innermost_narrowing(
+    pub(super) fn innermost_narrowing(
         &self,
         path: &narrowing::ReferencePath,
     ) -> Option<&narrowing::NarrowedView> {

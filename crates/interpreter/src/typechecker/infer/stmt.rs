@@ -3208,6 +3208,8 @@ impl Inferer<'_> {
                 let head = LoopHead::before_every_pass(before_loop, &outcome, &check.writes);
                 // The head covers the first run, so its check replaces that one.
                 self.diagnostics.drain(check.diagnostic_range);
+                // The head runs before every pass, whether or not the body
+                // falls off its end.
                 self.reachable = entry_reachable;
                 let (typed, exit) =
                     self.check_condition_at_loop_head(check.condition, &head, body_span)?;

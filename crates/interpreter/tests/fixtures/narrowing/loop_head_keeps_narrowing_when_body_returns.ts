@@ -23,6 +23,17 @@ function forUpdate(x: string | null): number {
   return total;
 }
 
+function forCondition(x: string | null): number {
+  if (x === null) return -1;
+  let i = 0;
+  for (; x.length > i; ) {
+    i++;
+    if (i < 3) continue;
+    return i;
+  }
+  return -2;
+}
+
 function doWhile(x: string | null): number {
   if (x === null) return -1;
   let i = 0;
@@ -37,6 +48,7 @@ function doWhile(x: string | null): number {
 function main(): void {
   assert(whileLoop("abcd") === 3);
   assert(forUpdate("a") === 2);
+  assert(forCondition("abcd") === 3);
   assert(doWhile("abcd") === 3);
   console.log("ok");
 }
