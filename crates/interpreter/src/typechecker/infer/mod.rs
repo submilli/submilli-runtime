@@ -130,6 +130,7 @@ pub fn infer_with_transitive_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        returns_into_void_context: false,
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
@@ -407,6 +408,7 @@ pub fn infer_package_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        returns_into_void_context: false,
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
@@ -738,6 +740,9 @@ pub(super) struct Inferer<'a> {
     /// `keeps_literal_types`, so it doesn't reach a conditional's branches,
     /// whose function types couldn't form one callable union.
     next_function_keeps_returned_literals: bool,
+    /// The unannotated function literal being inferred is in a `void`
+    /// context, so a bare `return` in it yields `null` (see `infer_return`).
+    returns_into_void_context: bool,
     /// An object literal argument of a generic call, and the type parameters
     /// the call infers that type only one of its fields: a function literal
     /// in that field keeps its returned literals (see

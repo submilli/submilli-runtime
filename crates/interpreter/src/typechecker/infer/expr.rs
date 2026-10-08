@@ -8509,6 +8509,10 @@ impl Inferer<'_> {
             (None, None) => None,
         };
 
+        // Read off `hint_owned` because `ret_hint` holds the annotation
+        // whenever there is one.
+        let contextual_ret_is_void = hint_owned.as_ref().is_some_and(|(_, hr)| hr.is_void());
+
         // Push scope, bind params.
         self.scopes.push();
         for (p, decl) in typed_params.iter().zip(params) {
@@ -8561,6 +8565,8 @@ impl Inferer<'_> {
         // Save / set return-type frames. Stack-based so nested arrows
         // restore correctly.
         let prev_return = std::mem::replace(&mut self.current_return, ret_hint.clone());
+        let prev_returns_into_void_context =
+            std::mem::replace(&mut self.returns_into_void_context, contextual_ret_is_void);
         let prev_keeps_returned_literals = std::mem::replace(
             &mut self.returns_keep_literals,
             keeps_returned_literals && annotated_ret.is_none(),
@@ -8605,6 +8611,21 @@ impl Inferer<'_> {
                     // No `return`, and the end of the body can't be reached: the
                     // closure only throws, so it never returns, as tsc infers.
                     Type::Never
+                } else if contextual_ret_is_void
+                    && (self.reachable || self.widest_return(&collected).is_none())
+                {
+                    // A `void` context discards whatever the closure returns,
+                    // so returns that share no type (`return;` beside `return
+                    // n;`), or a body that can also end without one, are
+                    // fine, as in tsc. The closure returns `unknown`, as an
+                    // `unknown` body may end or return nothing, so its values
+                    // still reach a caller that holds it as returning
+                    // `unknown`.
+                    if collected.iter().any(|(ty, _)| !ty.is_void()) {
+                        Type::Unknown
+                    } else {
+                        Type::Void
+                    }
                 } else {
                     self.unify_returns(&self.returned_types(collected))
                 };
@@ -8624,6 +8645,7 @@ impl Inferer<'_> {
         self.current_type_predicate = prev_predicate;
         self.inferred_returns = prev_collect;
         self.current_return = prev_return;
+        self.returns_into_void_context = prev_returns_into_void_context;
         self.returns_keep_literals = prev_keeps_returned_literals;
         self.scopes.pop();
 
@@ -8644,9 +8666,7 @@ impl Inferer<'_> {
         // at all. `never` is assignable to everything, so adopting the hint is
         // unobservable to the typechecker — and only a `void` hint is safe to
         // adopt, since a hint still holding a `TypeVar` has to bind against the
-        // body's own type. `contextual_ret` is read off `hint_owned` because
-        // `ret_hint` holds the annotation whenever there is one.
-        let contextual_ret_is_void = hint_owned.as_ref().is_some_and(|(_, hr)| hr.is_void());
+        // body's own type.
         let declared_ret = annotated_ret.unwrap_or_else(|| body_ret.clone());
         let effective_ret = if contextual_ret_is_void && matches!(declared_ret.peel(), Type::Never)
         {
@@ -8725,16 +8745,23 @@ impl Inferer<'_> {
         if collected.is_empty() {
             return Type::Void;
         }
-        let widest = collected.iter().find(|(candidate, _)| {
-            collected
-                .iter()
-                .all(|(other, _)| assignable(other, candidate, self.resolver()))
-        });
-        if let Some((widest, _)) = widest {
-            return widest.clone();
+        if let Some(widest) = self.widest_return(collected) {
+            return widest;
         }
         self.report_conflicting_return(collected);
         Type::Error
+    }
+
+    /// The return every other one is assignable to, if any.
+    fn widest_return(&self, collected: &[(Type, Span)]) -> Option<Type> {
+        collected
+            .iter()
+            .find(|(candidate, _)| {
+                collected
+                    .iter()
+                    .all(|(other, _)| assignable(other, candidate, self.resolver()))
+            })
+            .map(|(widest, _)| widest.clone())
     }
 
     /// Report the first return that fits neither way with the widest of the

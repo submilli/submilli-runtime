@@ -330,6 +330,14 @@ impl Inferer<'_> {
             Some(v) => {
                 let hint = self.current_return.clone();
                 let (id, value_ty) = self.infer_returned_value(v, hint.as_ref())?;
+                // A closure in a `void` context may return `unknown` (see
+                // `infer_arrow`), so a `void` value it returns is run and
+                // `undefined` returned in its place.
+                let id = if self.returns_into_void_context && value_ty.is_void() {
+                    self.push_void_value_as_null(id, span)?
+                } else {
+                    id
+                };
                 if let Some(collected) = self.inferred_returns.as_mut() {
                     collected.push((value_ty, span));
                 }
@@ -343,20 +351,30 @@ impl Inferer<'_> {
                 .as_ref()
                 .is_some_and(|ret| matches!(ret.peel(), Type::Unknown)) =>
             {
-                Some(self.null_return_value(span)?)
+                Some(self.record_null_return(span)?)
             }
             None => {
                 if let Some(ret) = &self.current_return
                     && !matches!(ret.peel(), Type::Void | Type::Error)
                 {
                     self.error(span, format!("expected `return` value of type `{ret}`"));
+                    None
                 } else if let Some(collected) = self.inferred_returns.as_mut() {
                     // A bare `return` is a `void` return: recording it lets
                     // a value `return` beside it be reported as a conflict.
                     // Under a declared value type it was reported just above.
                     collected.push((Type::Void, span));
+                    // A closure in a `void` context that also returns values
+                    // returns `unknown` (see `infer_arrow`), so this one
+                    // yields `null`; a closure typed `void` drops it.
+                    if self.returns_into_void_context {
+                        Some(self.push_null_expr(span)?)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
                 }
-                None
             }
         };
         self.reachable = false;
@@ -365,19 +383,40 @@ impl Inferer<'_> {
 
     /// The value of a bare `return` under `unknown`, which admits the
     /// `undefined` it yields: `null` stands in for it.
-    fn null_return_value(&mut self, span: Span) -> Result<ExprId, CompilerFailure> {
-        let null = self
-            .typed_ast
+    fn record_null_return(&mut self, span: Span) -> Result<ExprId, CompilerFailure> {
+        let null = self.push_null_expr(span)?;
+        if let Some(collected) = self.inferred_returns.as_mut() {
+            collected.push((Type::Null, span));
+        }
+        Ok(null)
+    }
+
+    /// A `null` standing for `undefined`.
+    fn push_null_expr(&mut self, span: Span) -> Result<ExprId, CompilerFailure> {
+        self.typed_ast
             .try_push_expr(TypedExpr {
                 kind: TypedExprKind::Null,
                 span,
                 ty: Type::Null,
             })
-            .map_err(crate::typechecker::arena_failure)?;
-        if let Some(collected) = self.inferred_returns.as_mut() {
-            collected.push((Type::Null, span));
-        }
-        Ok(null)
+            .map_err(crate::typechecker::arena_failure)
+    }
+
+    /// The `void` expression `effect` run, then `null` standing for the
+    /// `undefined` it yields.
+    fn push_void_value_as_null(
+        &mut self,
+        effect: ExprId,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        let result = self.push_null_expr(span)?;
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::EffectThen { effect, result },
+                span,
+                ty: Type::Null,
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// The type a variable declared `declared` holds. Arithmetic written back

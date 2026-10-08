@@ -3,9 +3,8 @@
 // expect-error: return type `number` conflicts with earlier return `void`; return a value on every path or on none
 // expect-error: return type `number` conflicts with earlier return `void`
 // expect-error: return type `number` conflicts with earlier return `void`
-// expect-error: return type `number` conflicts with earlier return `void`
 // expect-error: return type `null` conflicts with earlier return `void`
-// expect-error-count: 5
+// expect-error-count: 4
 function one(): number {
   return 1;
 }
@@ -30,13 +29,6 @@ function main(): void {
     }
     return x;
   });
-  // A contextual `void` signature does not make the value return fit.
-  const underVoid: () => void = () => {
-    if (key === "a") {
-      return;
-    }
-    return 1;
-  };
   const nullable = () => {
     if (key === "a") {
       return;
