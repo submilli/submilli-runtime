@@ -1723,8 +1723,12 @@ impl<'a> Inferer<'a> {
         } else {
             Type::union(matched)
         };
-        // Unequal, a path that can only be the literal holds no value.
-        let remaining_ty = if remaining.is_empty() {
+        // Unequal, a path that can only be the literal holds no value. A field
+        // or element reads as `never` then, but re-reads its live value: an
+        // alias may have written it.
+        let remaining_ty = if remaining.is_empty() && !self.rules_out_to_never(&path) {
+            Type::Never
+        } else if remaining.is_empty() {
             narrowing::RULED_OUT
         } else if remaining == members {
             path_ty.clone()
@@ -2483,7 +2487,7 @@ impl<'a> Inferer<'a> {
 
     /// The literals `path` is already known not to hold, which a further
     /// narrowing of it keeps: `s !== S.X` still holds inside `s !== null`.
-    fn known_exclusions(
+    pub(super) fn known_exclusions(
         &self,
         path: &narrowing::ReferencePath,
     ) -> std::collections::BTreeSet<narrowing::LiteralValue> {

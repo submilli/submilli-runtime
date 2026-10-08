@@ -340,6 +340,7 @@ impl Inferer<'_> {
             ty: &disc_ty,
             operand: &disc_operand,
         };
+        let disc_exclusions = self.discriminant_exclusions(typed_disc)?;
         let entry_reachable = self.reachable;
         self.push_pending_join_frame(narrowing::PendingJoinKind::Switch);
         let mut typed_cases: Vec<TypedSwitchCase> = Vec::new();
@@ -420,7 +421,7 @@ impl Inferer<'_> {
             });
         }
 
-        let covered = CaseCoverage::of(&typed_cases, saw_null.is_some());
+        let covered = CaseCoverage::of(&typed_cases, saw_null.is_some(), disc_exclusions);
         let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered)?;
 
         let typed_default = if let Some(d) = default {
@@ -430,7 +431,12 @@ impl Inferer<'_> {
                 .map_err(super::arena_failure)?
                 .span;
             let default_residual = self.unmatched_residual(&residual, &site, saw_null.is_some());
-            let env = self.build_default_narrow_env(&default_residual, &site, body_span)?;
+            let env = self.build_default_narrow_env(
+                &default_residual,
+                &site,
+                covered.ruled_out(&site),
+                body_span,
+            )?;
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
@@ -474,6 +480,7 @@ impl Inferer<'_> {
             natural.extend_env(self.build_default_narrow_env(
                 &self.unmatched_residual(&residual, &site, saw_null.is_some()),
                 &site,
+                covered.ruled_out(&site),
                 switch_span,
             )?);
             Some(natural)
@@ -830,7 +837,9 @@ impl Inferer<'_> {
     /// handles. An enum leaves only when the cases name every member, since it
     /// has no type for the members left.
     fn unmatched_values(&self, ty: &Type, covered: &CaseCoverage) -> Type {
-        narrowing::subtract_literals(&self.without_named_enums(ty, covered), &covered.literals)
+        let ruled_out: BTreeSet<narrowing::LiteralValue> =
+            covered.literals.union(&covered.excluded).cloned().collect();
+        narrowing::subtract_literals(&self.without_named_enums(ty, covered), &ruled_out)
     }
 
     /// The members of a union switched on its discriminant field that the
@@ -920,16 +929,34 @@ impl Inferer<'_> {
         )
     }
 
+    /// Whether the cases, with the values ruled out before the switch, leave
+    /// no member of the enum `ty`.
     fn names_every_member(&self, ty: &Type, covered: &CaseCoverage) -> bool {
         let (Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. }) = ty.peel()
         else {
             return false;
         };
         super::comparable::enum_literal_values(ty.peel(), self.resolver()).is_some_and(|values| {
-            values
-                .into_iter()
-                .all(|value| covered.named_members.contains(&(mangled.clone(), value)))
+            values.into_iter().all(|value| {
+                covered.excluded.contains(&value)
+                    || covered.named_members.contains(&(mangled.clone(), value))
+            })
         })
+    }
+
+    /// The values the discriminant was already known not to hold.
+    fn discriminant_exclusions(
+        &self,
+        typed_disc: ExprId,
+    ) -> Result<BTreeSet<narrowing::LiteralValue>, CompilerFailure> {
+        let disc_expr = self
+            .typed_ast
+            .try_expr(typed_disc)
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(self
+            .expr_to_reference_path(disc_expr)?
+            .map(|path| self.known_exclusions(&path))
+            .unwrap_or_default())
     }
 
     /// What the discriminant can be when no case matched: the residual, less
@@ -958,7 +985,12 @@ impl Inferer<'_> {
         if !self.rules_out_to_never(path) {
             return Ok(());
         }
-        let env = self.build_default_narrow_env(&narrowing::RULED_OUT, site, switch_span)?;
+        let env = self.build_default_narrow_env(
+            &narrowing::RULED_OUT,
+            site,
+            BTreeSet::new(),
+            switch_span,
+        )?;
         if let Some(frame) = self.narrow_scopes.last_mut() {
             frame.extend_env(env);
         }
@@ -969,6 +1001,7 @@ impl Inferer<'_> {
         &mut self,
         residual: &Type,
         site: &ResidualSite,
+        excluded_literals: BTreeSet<narrowing::LiteralValue>,
         body_span: Span,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         let mut env = narrowing::NarrowEnv::new();
@@ -994,7 +1027,7 @@ impl Inferer<'_> {
             narrowing::NarrowedView {
                 narrowed_ty: residual.clone(),
                 facts: narrowing::TypeFacts::EMPTY,
-                excluded_literals: BTreeSet::new(),
+                excluded_literals,
                 binding,
                 source,
             },
@@ -1183,14 +1216,22 @@ struct CaseCoverage {
     /// The enum members the cases name, by enum and value.
     named_members: BTreeSet<(crate::MangledName, narrowing::LiteralValue)>,
     null: bool,
+    /// The values the discriminant was known not to hold before the switch,
+    /// such as the enum members an earlier `if` returned on.
+    excluded: BTreeSet<narrowing::LiteralValue>,
 }
 
 impl CaseCoverage {
-    fn of(cases: &[TypedSwitchCase], null: bool) -> Self {
+    fn of(
+        cases: &[TypedSwitchCase],
+        null: bool,
+        excluded: BTreeSet<narrowing::LiteralValue>,
+    ) -> Self {
         let mut coverage = Self {
             literals: BTreeSet::new(),
             named_members: BTreeSet::new(),
             null,
+            excluded,
         };
         for value in cases.iter().flat_map(|case| &case.values) {
             let Some(literal) = switch_value_to_literal_value(value) else {
@@ -1206,6 +1247,21 @@ impl CaseCoverage {
             }
         }
         coverage
+    }
+
+    /// The values the discriminant can't hold where no case matched, which a
+    /// further check of it keeps ruled out. They belong to the discriminant,
+    /// so a view of the receiver it was read from gets none.
+    fn ruled_out(&self, site: &ResidualSite) -> BTreeSet<narrowing::LiteralValue> {
+        if !matches!(site, ResidualSite::Scrutinee { .. }) {
+            return BTreeSet::new();
+        }
+        self.excluded
+            .iter()
+            .chain(&self.literals)
+            .chain(self.named_members.iter().map(|(_, value)| value))
+            .cloned()
+            .collect()
     }
 }
 
