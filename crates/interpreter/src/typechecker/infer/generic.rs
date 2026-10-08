@@ -3046,14 +3046,14 @@ fn is_or_has_type_var(ty: &Type, name: &str) -> bool {
     }
 }
 
-/// Whether a slot of this type can hold JavaScript's `undefined`, which
-/// Submilli represents as `null`.
 /// Whether a property name is a canonical array index, such as `"0"` or `"12"`.
 fn is_array_index(name: &str) -> bool {
     name.parse::<u32>()
         .is_ok_and(|index| index != u32::MAX && index.to_string() == name)
 }
 
+/// Whether a slot of this type can hold JavaScript's `undefined`, which
+/// Submilli represents as `null`.
 fn admits_undefined(ty: &Type) -> bool {
     match ty.peel() {
         Type::Unknown | Type::Error | Type::Null => true,
