@@ -5207,8 +5207,8 @@ impl Inferer<'_> {
         let checks_unknown_fields = !self.is_inference_source(literal);
         // Still the union only when no member was picked above, so this check
         // and the single-shape one below never both run.
-        // The fields reported as unknown, which the literal's type leaves out
-        // so the slot it fills doesn't report it again.
+        // Fields reported as unknown that the literal's type leaves out, so
+        // the slot it fills doesn't report them again.
         let mut unknown_fields = BTreeSet::new();
         if checks_unknown_fields && let Some(Type::Union(union_members)) = peeled {
             unknown_fields = self.report_unknown_union_fields(union_members, &members)?;
@@ -5237,12 +5237,18 @@ impl Inferer<'_> {
             && !want.is_empty()
             && checks_unknown_fields
         {
+            // Against a type whose fields are all optional, an unknown field
+            // would also fail the weak-type check; elsewhere the mismatch
+            // names it as an extra field.
+            let weak_target = want.values().all(|field| field.optional);
             for member in &members {
                 if let crate::ObjectLiteralMember::Field(field) = member
                     && !want.contains_key(&field.name.name)
                 {
                     self.report_unknown_field(field, want);
-                    unknown_fields.insert(field.name.name.clone());
+                    if weak_target {
+                        unknown_fields.insert(field.name.name.clone());
+                    }
                 }
             }
         }
