@@ -837,9 +837,10 @@ impl Inferer<'_> {
     /// handles. An enum leaves only when the cases name every member, since it
     /// has no type for the members left.
     fn unmatched_values(&self, ty: &Type, covered: &CaseCoverage) -> Type {
-        let ruled_out: BTreeSet<narrowing::LiteralValue> =
-            covered.literals.union(&covered.excluded).cloned().collect();
-        narrowing::subtract_literals(&self.without_named_enums(ty, covered), &ruled_out)
+        narrowing::subtract_literals(
+            &self.without_named_enums(ty, covered),
+            &covered.literals_ruled_out(),
+        )
     }
 
     /// The members of a union switched on its discriminant field that the
@@ -938,7 +939,7 @@ impl Inferer<'_> {
         };
         super::comparable::enum_literal_values(ty.peel(), self.resolver()).is_some_and(|values| {
             values.into_iter().all(|value| {
-                covered.excluded.contains(&value)
+                covered.ruled_out_before.contains(&value)
                     || covered.named_members.contains(&(mangled.clone(), value))
             })
         })
@@ -953,10 +954,32 @@ impl Inferer<'_> {
             .typed_ast
             .try_expr(typed_disc)
             .map_err(crate::typechecker::arena_failure)?;
-        Ok(self
-            .expr_to_reference_path(disc_expr)?
-            .map(|path| self.known_exclusions(&path))
-            .unwrap_or_default())
+        let Some(path) = self.expr_to_reference_path(disc_expr)? else {
+            return Ok(BTreeSet::new());
+        };
+        let mut exclusions = self.known_exclusions(&path);
+        // An exclusion records a value, not the member it came from. When two
+        // members can hold that value, as `E.A` and `F.X` both holding `"a"`
+        // do, TypeScript rules out only the member that was checked, so the
+        // value can't count as ruled out for either.
+        let members = narrowing::union_members(&disc_expr.ty);
+        exclusions.retain(|value| {
+            members
+                .iter()
+                .filter(|member| self.member_holds_value(member, value))
+                .count()
+                <= 1
+        });
+        Ok(exclusions)
+    }
+
+    /// Whether `member` of a discriminant's union can hold `value`: an enum
+    /// with a member of that value, or that literal itself.
+    fn member_holds_value(&self, member: &Type, value: &narrowing::LiteralValue) -> bool {
+        super::comparable::enum_literal_values(member.peel(), self.resolver()).map_or_else(
+            || narrowing::unit_literal_value(member).as_ref() == Some(value),
+            |values| values.contains(value),
+        )
     }
 
     /// What the discriminant can be when no case matched: the residual, less
@@ -1021,11 +1044,20 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?,
             None => return Ok(env),
         };
+        // No value is left: the view rules the path out, so a local reads as
+        // `never` and a path that can change behind the switch (a field, or a
+        // module variable a call may write) keeps its declared type rather
+        // than handing a stale value to code that trusts `never`.
+        let narrowed_ty = if matches!(residual, Type::Never) {
+            narrowing::RULED_OUT
+        } else {
+            residual.clone()
+        };
         let binding = self.mint_narrow_binding(body_span)?;
         env.insert(
             path,
             narrowing::NarrowedView {
-                narrowed_ty: residual.clone(),
+                narrowed_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals,
                 binding,
@@ -1207,9 +1239,10 @@ fn without_null(ty: &Type) -> Type {
     )
 }
 
-/// The values a `switch`'s cases match. A case naming an enum member matches
-/// only that enum's member, and a bare literal case no member, as in
-/// TypeScript: `case 0` leaves `E.A` unmatched, and `case E.A` leaves `0`.
+/// The values a `switch`'s cases match, with those an earlier check ruled out.
+/// A case naming an enum member matches only that enum's member, and a bare
+/// literal case no member, as in TypeScript: `case 0` leaves `E.A` unmatched,
+/// and `case E.A` leaves `0`.
 struct CaseCoverage {
     /// The values of the bare literal cases.
     literals: BTreeSet<narrowing::LiteralValue>,
@@ -1218,20 +1251,20 @@ struct CaseCoverage {
     null: bool,
     /// The values the discriminant was known not to hold before the switch,
     /// such as the enum members an earlier `if` returned on.
-    excluded: BTreeSet<narrowing::LiteralValue>,
+    ruled_out_before: BTreeSet<narrowing::LiteralValue>,
 }
 
 impl CaseCoverage {
     fn of(
         cases: &[TypedSwitchCase],
         null: bool,
-        excluded: BTreeSet<narrowing::LiteralValue>,
+        ruled_out_before: BTreeSet<narrowing::LiteralValue>,
     ) -> Self {
         let mut coverage = Self {
             literals: BTreeSet::new(),
             named_members: BTreeSet::new(),
             null,
-            excluded,
+            ruled_out_before,
         };
         for value in cases.iter().flat_map(|case| &case.values) {
             let Some(literal) = switch_value_to_literal_value(value) else {
@@ -1249,6 +1282,16 @@ impl CaseCoverage {
         coverage
     }
 
+    /// The literal values no case leaves: the bare literal cases and the
+    /// values ruled out before. The members a case names are left to
+    /// `without_named_enums`, since `case E.A` matches no bare literal.
+    fn literals_ruled_out(&self) -> BTreeSet<narrowing::LiteralValue> {
+        self.literals
+            .union(&self.ruled_out_before)
+            .cloned()
+            .collect()
+    }
+
     /// The values the discriminant can't hold where no case matched, which a
     /// further check of it keeps ruled out. They belong to the discriminant,
     /// so a view of the receiver it was read from gets none.
@@ -1256,12 +1299,9 @@ impl CaseCoverage {
         if !matches!(site, ResidualSite::Scrutinee { .. }) {
             return BTreeSet::new();
         }
-        self.excluded
-            .iter()
-            .chain(&self.literals)
-            .chain(self.named_members.iter().map(|(_, value)| value))
-            .cloned()
-            .collect()
+        let mut ruled_out = self.literals_ruled_out();
+        ruled_out.extend(self.named_members.iter().map(|(_, value)| value.clone()));
+        ruled_out
     }
 }
 

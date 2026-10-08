@@ -48,6 +48,28 @@ function equalToVariable(e: E | null, other: E): E {
   return e;
 }
 
+// Equal to a subclass instance, a base-class value keeps its own type, as in
+// TypeScript: only a primitive gives way to the other side's literal.
+class Animal {
+  name: string = "animal";
+}
+
+class Dog extends Animal {
+  bark(): string {
+    return "woof";
+  }
+}
+
+class Cat extends Animal {}
+
+function equalToSubclass(a: Animal, d: Dog, c: Cat): string {
+  if (a === d) {
+    if (a === c) return "both";
+    return "dog";
+  }
+  return "neither";
+}
+
 function main(): void {
   assert(bySwitch({ kind: F.Y, b: "bee" }) === "bee");
   assert(bySwitch({ kind: E.A, a: 1 }) === "e");
@@ -56,5 +78,7 @@ function main(): void {
   assert(byNullElement([true, 2]) === "3");
   assert(equalToVariable(null, E.B) === E.B);
   assert(equalToVariable(E.A, E.A) === E.A);
+  const dog = new Dog();
+  assert(equalToSubclass(dog, dog, new Cat()) === "dog");
   console.log("ok");
 }

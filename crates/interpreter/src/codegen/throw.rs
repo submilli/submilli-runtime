@@ -34,6 +34,13 @@ pub const READ_ONLY_PROPERTY_MESSAGE: &str =
 pub const MISSING_RETURN_VALUE_MESSAGE: &str =
     "function ended without returning a value: no `case` of an exhaustive `switch` matched";
 
+/// Whether a value-returning body in `ta` can reach its end, and so throws
+/// [`MISSING_RETURN_VALUE_MESSAGE`] there. Emission and the analysis pass that
+/// interns the message both ask this, so they agree.
+pub(crate) fn body_end_may_be_reached(ta: &crate::TypedAst) -> bool {
+    !ta.exhaustive_switches.is_empty()
+}
+
 /// Raise a `TypeError` carrying `message`. Every message thrown this way must
 /// also be interned by the analysis pass, or the string pool has no entry to
 /// point at. Diverges, like [`emit_error_throw`].

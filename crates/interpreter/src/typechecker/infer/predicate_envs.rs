@@ -751,15 +751,13 @@ impl<'a> Inferer<'a> {
         let Type::Union(members) = root.ty.peel() else {
             return Ok(none);
         };
-        let key_tys = match &root.key {
+        let Some(key_tys) = (match &root.key {
             DiscriminantKey::Field(key) => self.discriminant_field_types(members, key),
             DiscriminantKey::Position(position) => discriminant_element_types(members, *position),
-        };
-        let Some(split) =
-            key_tys.map(|key_tys| self.split_by_key_types(members, key_tys, &Type::Null))
-        else {
+        }) else {
             return Ok(none);
         };
+        let split = self.split_by_key_types(members, key_tys, &Type::Null);
         self.root_discriminant_envs(
             crate::BinOp::Eq,
             root.path,
@@ -1200,9 +1198,11 @@ impl<'a> Inferer<'a> {
         Ok(Some(env))
     }
 
-    /// The values `path_ty` and `value_ty` both allow, member by member: the
-    /// narrower of two related members, so `number` and `1` share `1`, and
-    /// `"a"` and `string` share `"a"`. Unrelated members share nothing.
+    /// The values `path_ty` and `value_ty` both allow, member by member, as
+    /// TypeScript keeps them: a path member related to a value member stays,
+    /// except that a primitive gives way to the value's literal, so `number`
+    /// and `1` share `1`, and `"a"` and `string` share `"a"`. An `Animal`
+    /// compared with a `Dog` stays an `Animal`. Unrelated members share nothing.
     fn shared_values(&self, path_ty: &Type, value_ty: &Type) -> Type {
         let value_members = narrowing::union_members(value_ty);
         let mut shared = Vec::new();
@@ -1213,7 +1213,8 @@ impl<'a> Inferer<'a> {
                 {
                     shared.push(member.clone());
                 } else if super::assignable(value_member, member, self.resolver()) {
-                    shared.push((*value_member).clone());
+                    let literal = narrowing::has_unit_member(value_member);
+                    shared.push(if literal { *value_member } else { member }.clone());
                 }
             }
         }
@@ -1740,12 +1741,8 @@ impl<'a> Inferer<'a> {
         } else {
             Type::union(matched)
         };
-        // Unequal, a path that can only be the literal holds no value. A field
-        // or element reads as `never` then, but re-reads its live value: an
-        // alias may have written it.
-        let remaining_ty = if remaining.is_empty() && !self.rules_out_to_never(&path) {
-            Type::Never
-        } else if remaining.is_empty() {
+        // Unequal, a path that can only be the literal holds no value.
+        let remaining_ty = if remaining.is_empty() {
             narrowing::RULED_OUT
         } else if remaining == members {
             path_ty.clone()

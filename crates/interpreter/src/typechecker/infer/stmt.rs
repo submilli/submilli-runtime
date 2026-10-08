@@ -753,6 +753,9 @@ impl Inferer<'_> {
         )?;
         let frame = self.pop_pending_join_frame()?;
         self.merge_assigned_into_outer(outcome.assigned.clone(), span);
+        // The condition runs after any pass that reaches the back edge, not
+        // only one whose body falls off its end.
+        self.reachable = entry_reachable && outcome.reaches_back_edge;
         let (typed_cond, exit) = self.check_condition_at_loop_head(
             condition,
             &LoopHead::after_every_pass(&outcome),
@@ -3044,6 +3047,9 @@ impl Inferer<'_> {
         assigned.extend(continued_assignments);
         let mut back_edge = join_reachable_envs(body_end_reachable.then_some(body_post), continues);
         let mut typed_update = None;
+        // The update and the condition run on every back edge, `continue`s
+        // included, whether or not the body falls off its end.
+        self.reachable = back_edge.is_some();
         if let Some(update) = tail.update {
             let state = LoopHead {
                 env: back_edge.clone().unwrap_or_default(),
@@ -3202,6 +3208,7 @@ impl Inferer<'_> {
                 let head = LoopHead::before_every_pass(before_loop, &outcome, &check.writes);
                 // The head covers the first run, so its check replaces that one.
                 self.diagnostics.drain(check.diagnostic_range);
+                self.reachable = entry_reachable;
                 let (typed, exit) =
                     self.check_condition_at_loop_head(check.condition, &head, body_span)?;
                 (Some(typed), exit)

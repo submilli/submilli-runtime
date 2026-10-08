@@ -118,7 +118,7 @@ impl CodegenAnalysis {
                 ));
         }
 
-        if !ta.exhaustive_switches.is_empty() {
+        if throw::body_end_may_be_reached(ta) {
             analysis
                 .string_pool
                 .intern_text(throw::MISSING_RETURN_VALUE_MESSAGE);

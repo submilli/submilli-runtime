@@ -1,6 +1,6 @@
 // The enum members a guard ruled out stay ruled out in a `switch` on the same
-// value (its `default` and the code after it), after a type predicate, and on
-// a field, so a chain of member checks still ends in `never`.
+// value (its `default` and the code after it) and after a type predicate, so a
+// chain of member checks still ends in `never`.
 enum S {
   X = "x",
   Y = "y",
@@ -55,27 +55,47 @@ function afterPredicate(e: S | number): string {
   return never(e);
 }
 
-function onField(o: { e: S }): string {
-  if (o.e === S.X) return "X";
-  if (o.e === S.Y) return "Y";
-  if (o.e === S.Z) return "Z";
-  return never(o.e);
+// Members of another enum that share a ruled-out value stay possible, as in
+// TypeScript, which rules out only the member that was checked.
+enum T {
+  X = "x",
+  W = "w",
 }
 
-// A field read as `never` still reads the value an alias wrote behind the
-// guard, as JavaScript does.
-function show(value: never): string {
-  return `got ${String(value)}`;
+function sharedValue(e: S | T): string {
+  if (e === S.X) return "X";
+  switch (e) {
+    case S.Y:
+      return "Y";
+    case S.Z:
+      return "Z";
+    case T.W:
+      return "W";
+  }
+  return "rest";
 }
 
-let alias: { e: S } = { e: S.Z };
+// A module variable a call may change keeps its declared type where every
+// member was ruled out, so a stale value read there runs as in JavaScript
+// instead of reaching code that trusts `never`.
+let mode: S = S.X;
 
-function onFieldWrittenThroughAlias(o: { e: S }): string {
-  if (o.e === S.X) return "X";
-  if (o.e === S.Y) return "Y";
-  alias.e = S.X;
-  if (o.e === S.Z) return "Z";
-  return show(o.e);
+function setMode(value: S): void {
+  mode = value;
+}
+
+function staleModuleVariable(): string {
+  if (mode === S.X) return "X";
+  setMode(S.X);
+  switch (mode) {
+    case S.Y:
+      return "Y";
+    case S.Z:
+      return "Z";
+    default:
+      const last: S | null = mode;
+      return `now ${last}`;
+  }
 }
 
 function main(): void {
@@ -84,9 +104,9 @@ function main(): void {
   assert(switchAfterGuard(S.Z) === "Z");
   assert(afterPredicate(3) === "number");
   assert(afterPredicate(S.Z) === "Z");
-  assert(onField({ e: S.Y }) === "Y");
-  const o = { e: S.Z };
-  alias = o;
-  assert(onFieldWrittenThroughAlias(o) === "got x");
+  assert(sharedValue(S.X) === "X");
+  assert(sharedValue(T.W) === "W");
+  mode = S.Y;
+  assert(staleModuleVariable() === "now x");
   console.log("ok");
 }

@@ -1318,7 +1318,7 @@ pub(crate) fn emit_body_end(
         return Ok(());
     }
     if !matches!(return_type.peel(), Type::Unknown) {
-        if !ctx.ta.exhaustive_switches.is_empty() {
+        if crate::codegen::throw::body_end_may_be_reached(ctx.ta) {
             crate::codegen::throw::emit_type_error_throw(
                 emitter,
                 ctx,
