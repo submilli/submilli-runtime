@@ -366,7 +366,10 @@ async fn execute_core_with(
     // Only a recorded run can be cancelled from outside (the registry exists for a stop
     // control over recorded runs), so an unrecorded run pays for no registration. The
     // guard keeps the entry until this function returns, which is after the run has
-    // ended, so `cancel_run` finds the run for exactly as long as it is in flight.
+    // ended, so `cancel_run` finds the run for exactly as long as it is in flight. The id
+    // it is registered by is its audit's, the one its recorder and response carry: every
+    // entry point builds an audit whether or not the audit log is enabled, so every
+    // recorded run registers.
     let (_registered, cancel_requested) = match (&recording, &inputs.audit) {
         (Some(_), Some(audit)) => {
             let (registered, cancel_requested) = state.register_run(&audit.id);
