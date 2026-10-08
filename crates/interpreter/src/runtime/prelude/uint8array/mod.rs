@@ -83,10 +83,11 @@ fn backing(
     }
 }
 
-/// `ToUint8` as the Wasm bodies do it: `i32.trunc_sat_f64_u` then keep the low
-/// byte (saturates NaN/negatives to 0, not JS `% 256`, matching the prelude).
+/// JavaScript's `ToUint8`: truncate, then reduce modulo 256, so `-1` is 255.
+/// `NaN` and `±Infinity` give `NaN` here, which the cast maps to 0.
 fn to_byte(n: f64) -> u8 {
-    (n as u32 & 0xff) as u8
+    let truncated = n.trunc();
+    (truncated - 256.0 * (truncated / 256.0).floor()) as u8
 }
 
 /// Box a byte into a `$boxed_number` for a callback argument or boxed return.
@@ -736,14 +737,18 @@ mod tests {
     }
 
     #[test]
-    fn to_byte_saturates_like_trunc_sat_u() {
-        // Saturates NaN/negatives to 0 (not JS `% 256`), then keeps the low byte —
-        // matching the Wasm `i32.trunc_sat_f64_u` + `& 0xff` path.
+    fn to_byte_is_js_to_uint8() {
         assert_eq!(to_byte(7.0), 7);
         assert_eq!(to_byte(256.0), 0);
-        assert_eq!(to_byte(257.0), 1);
-        assert_eq!(to_byte(-1.0), 0);
+        assert_eq!(to_byte(257.9), 1);
+        assert_eq!(to_byte(-1.0), 255);
+        assert_eq!(to_byte(-1.5), 255);
+        assert_eq!(to_byte(-256.0), 0);
+        assert_eq!(to_byte(-0.5), 0);
         assert_eq!(to_byte(f64::NAN), 0);
+        assert_eq!(to_byte(f64::INFINITY), 0);
+        assert_eq!(to_byte(f64::NEG_INFINITY), 0);
+        assert_eq!(to_byte(2f64.powi(60) + 512.0), 0);
     }
 
     #[test]

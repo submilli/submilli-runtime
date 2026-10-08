@@ -1888,7 +1888,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::String,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Builds a string from UTF-16 code units — one unit per argument.\n * Values truncate to 16 bits (negatives saturate to 0, matching the `Uint8Array` constructor's divergence from JS's modulo wrap).\n * @param codes Zero or more UTF-16 code units (0–65535).\n */",
+                                "/**\n * Builds a string from UTF-16 code units — one unit per argument.\n * Each value is truncated and reduced modulo 65536, as JavaScript does, so `-1` is U+FFFF.\n * @param codes Zero or more UTF-16 code units (0–65535).\n */",
                             ),
                         },
                     ),

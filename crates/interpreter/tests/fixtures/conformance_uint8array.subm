@@ -1,5 +1,5 @@
 // ECMA-262 §23.2 conformance vectors for `Uint8Array`, plus pinned
-// divergences: saturating writes (vs JS modulo) and deep-copy `subarray`.
+// divergence: deep-copy `subarray`.
 
 function main(): void {
   const b = new Uint8Array([1, 2, 3, 4]);

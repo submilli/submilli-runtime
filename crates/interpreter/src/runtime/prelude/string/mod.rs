@@ -499,14 +499,18 @@ pub fn normalize(s: &Str, form: &Str) -> Result<Str> {
     Ok(encode(out))
 }
 
-/// `String.fromCharCode(...codes)`: one UTF-16 code unit per argument. Values
-/// trunc-sat to unsigned then mask to 16 bits, so negatives saturate to 0
-/// (matching the `Uint8Array` constructor's divergence from JS's modulo wrap).
+/// `String.fromCharCode(...codes)`: one UTF-16 code unit per argument, through
+/// JavaScript's `ToUint16` (truncate, then reduce modulo 2^16, so `-1` is
+/// U+FFFF). `NaN` and `±Infinity` give `NaN` here, which the cast maps to 0.
 pub fn from_char_code(codes: &[f64]) -> Str {
+    const UNITS: f64 = 65536.0;
     Str::from_units(
         codes
             .iter()
-            .map(|&x| ((x as u32) & 0xFFFF) as u16)
+            .map(|&x| {
+                let truncated = x.trunc();
+                (truncated - UNITS * (truncated / UNITS).floor()) as u16
+            })
             .collect(),
     )
 }
