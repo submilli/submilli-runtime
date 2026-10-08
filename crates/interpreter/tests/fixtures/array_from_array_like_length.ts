@@ -1,6 +1,8 @@
 // `Array.from({ length: n }, mapFn)` builds `n` elements, as in JavaScript: the
 // array-like has no elements to read, so `mapFn` sees `undefined` (`null`
 // here, typed `unknown`) and the index. `length` is read as `ToLength` does.
+type Sized = { length: number };
+
 function main(): void {
   assert(Array.from({ length: 3 }, (_, i) => i * 2).join(",") === "0,2,4", "computed elements");
 
@@ -16,6 +18,12 @@ function main(): void {
 
   const seen = Array.from({ length: 2 }, (v: unknown, i: number) => v ?? i);
   assert(seen.join(",") === "0,1", "the element is empty");
+
+  const nullable: (number | null)[] = Array.from({ length: 2 });
+  assert((nullable[1] ?? "empty") === "empty", "an element type admitting null holds the empties");
+
+  const sized: Sized = { length: 2 };
+  assert(Array.from(sized, (_, i) => i + 1).join(",") === "1,2", "an object type alias is an array-like");
 
   assert(Array.from("xy", (c, i) => c + String(i)).join("") === "x0y1", "a string is still iterated");
 }

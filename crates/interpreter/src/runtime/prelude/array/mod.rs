@@ -15,7 +15,7 @@
 mod install;
 pub(super) mod sort;
 
-pub(crate) use install::declare_types;
+pub(crate) use install::{array_like_type, declare_types};
 pub use install::{declare, install};
 pub(crate) use sort::merge_sort;
 
