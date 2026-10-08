@@ -19,4 +19,18 @@ function main(): void {
   const counts: Map<Key, number> = new Map([["a", 1], ["b", 2]]);
   styles.get(AppType.Relationship)?.push(AppStyle.Standard);
   console.log(styles.size, styles.get(AppType.Relationship)?.length, counts.get("b"));
+  laterArgument();
+}
+
+function keysThen<K>(entries: [K, number][], first: K): K[] {
+  const keys: K[] = [first];
+  for (const entry of entries) {
+    keys.push(entry[0]);
+  }
+  return keys;
+}
+
+function laterArgument(): void {
+  const keys: AppType[] = keysThen([[AppType.Standard, 1], [AppType.Relationship, 2]], AppType.Standard);
+  console.log(keys.length);
 }

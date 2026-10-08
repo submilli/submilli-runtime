@@ -487,7 +487,8 @@ impl TypeParamSubstitution {
         }
         // Unless the argument gives no one binding (`[["a", 1], ["b", 2]]` is
         // a union of tuples); then the binding it fits stands, as tsc falls
-        // back to the contextual type.
+        // back to the contextual type, and is final, since a later argument
+        // narrowing it would no longer fit this one.
         let before = fits_binding.then(|| self.clone());
         let unified = self.keeping_close_matches_on_success(|sub| {
             let mut unifier = Unifier::new(sub, Some(types), types.limits);
@@ -505,6 +506,7 @@ impl TypeParamSubstitution {
         }
         if let (Err(_), Some(before)) = (&unified, before) {
             *self = before;
+            self.keep_replaceable_bindings(param_ty);
             return Ok(());
         }
         unified
