@@ -286,7 +286,9 @@ fn emit_subtype_to_string_body(
         return Ok(f);
     }
 
-    // The typechecker guarantees `toString` field is non-optional `() => string`, so the slot is non-null.
+    // The typechecker guarantees a `toString` field is `() => string`. It may be
+    // optional, and an absent one falls back to `[object Object]`, as in
+    // JavaScript, where the property lookup reaches `Object.prototype`.
     let to_string_sig = crate::codegen::closures::ClosureSig {
         arity: 0,
         is_void: false,
@@ -324,7 +326,14 @@ fn emit_subtype_to_string_body(
     )));
     f.instruction(&Instruction::LocalSet(self_t));
 
-    // The field slot is `(ref null $Object)`; ref.as_non_null before the closure cast.
+    // The outer block yields the result string; the inner one is left for the
+    // `[object Object]` fallback below it when the field slot is null.
+    f.instruction(&Instruction::Block(BlockType::Result(ref_to(
+        intrinsics.string,
+    ))));
+    f.instruction(&Instruction::Block(BlockType::Empty));
+    // The field slot is `(ref null $Object)`; null when an optional `toString`
+    // is absent.
     let to_string_slot = field_index(&subtype.ty, "toString")?
         .ok_or_else(|| internal_failure("an object shape lost its toString field slot"))?;
     f.instruction(&Instruction::LocalGet(self_t));
@@ -334,7 +343,7 @@ fn emit_subtype_to_string_body(
     });
     f.instruction(&Instruction::I32Const(to_string_slot.cast_signed()));
     f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
-    f.instruction(&Instruction::RefAsNonNull);
+    f.instruction(&Instruction::BrOnNull(0));
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         closure_struct_idx,
     )));
@@ -357,6 +366,15 @@ fn emit_subtype_to_string_body(
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         intrinsics.string,
     )));
+    f.instruction(&Instruction::Br(1));
+    f.instruction(&Instruction::End);
+    crate::codegen::intrinsics::push_string_literal(
+        &mut f,
+        intrinsics,
+        string_vtable_global_idx,
+        "[object Object]",
+    )?;
+    f.instruction(&Instruction::End);
     f.instruction(&Instruction::End);
     Ok(f)
 }
@@ -741,14 +759,6 @@ fn emit_subtype_equals_body(
     object_vtable_global: u32,
 ) -> Result<Function, CompilerFailure> {
     let fields = subtype.fields()?;
-    // Peel before the Union check: an aliased union field must trigger null-aware locals,
-    // because emit_field_compare also peels — mismatched locals cause Wasm validation failure.
-    let any_dispatch = fields.values().any(|f| {
-        is_ref_dispatch_field(&f.ty) || matches!(f.ty.peel(), Type::Union(_)) || f.optional
-    });
-    let any_union = fields
-        .values()
-        .any(|f| matches!(f.ty.peel(), Type::Union(_)) || f.optional);
 
     let object_shape_ref = ref_to(intrinsics.object_shape);
     let object_ref = ref_to(intrinsics.object);
@@ -758,18 +768,16 @@ fn emit_subtype_equals_body(
     // Locals layout (after 2 params):
     //   2: $a_t            (ref $arity)
     //   3: $b_t            (ref $arity)
-    //   4: $field_lhs      (ref $Object)        — any dispatch
-    //   5: $eq_fn          (ref $equalsFn)      — any dispatch
-    //   6: $field_lhs_null (ref null $Object)   — any union field
-    //   7: $field_rhs_null (ref null $Object)   — any union field
-    let mut locals: Vec<(u32, ValType)> = vec![(2, object_shape_ref)];
-    if any_dispatch {
-        locals.push((1, object_ref));
-        locals.push((1, equals_fn_ref));
-    }
-    if any_union {
-        locals.push((2, object_null_ref));
-    }
+    //   4: $field_lhs      (ref $Object)
+    //   5: $eq_fn          (ref $equalsFn)
+    //   6: $field_lhs_null (ref null $Object)
+    //   7: $field_rhs_null (ref null $Object)
+    let locals: Vec<(u32, ValType)> = vec![
+        (2, object_shape_ref),
+        (1, object_ref),
+        (1, equals_fn_ref),
+        (2, object_null_ref),
+    ];
     let mut f = Function::new(locals);
     let (a, b) = (0u32, 1u32);
     let (a_t, b_t) = (2u32, 3u32);
@@ -852,7 +860,6 @@ fn emit_subtype_equals_body(
             intrinsics.object_shape,
             field_index,
             &field.ty,
-            field.optional,
             intrinsics,
             (a_t, b_t, field_lhs, eq_fn, field_lhs_null, field_rhs_null),
         )?;
@@ -915,190 +922,30 @@ fn emit_field_presence(
     body.instruction(&Instruction::I32Or);
 }
 
+/// Compares one field slot of `a_t` and `b_t`, pushing `1` when equal.
+///
+/// Every field goes through the null-aware vtable dispatch rather than the
+/// shape's field type: the shape's type is the object literal's own, and a
+/// binding with a wider type (`{ v: number | null }` holding `{ v: 1 }`) can
+/// later store `null` or another type in the slot. The dynamic `Object#equals`
+/// hook compares the same way, so a grown object agrees with this body.
 fn emit_field_compare(
     f: &mut Function,
     object_shape_idx: u32,
     field_index: u32,
     field_ty: &Type,
-    field_optional: bool,
     intrinsics: IntrinsicTypeIndices,
     locals: (u32, u32, u32, u32, u32, u32),
 ) -> Result<(), CompilerFailure> {
     let (a_t, b_t, field_lhs, eq_fn, field_lhs_null, field_rhs_null) = locals;
-    // Peel so aliased unions (`type Maybe = T | null`) route through null-aware dispatch, not optional.
-    if field_optional && !matches!(field_ty.peel(), Type::Union(_)) {
-        emit_nullable_field_compare(
-            f,
-            object_shape_idx,
-            field_index,
-            intrinsics,
-            (field_lhs, eq_fn, field_lhs_null, field_rhs_null, a_t, b_t),
-        );
-        return Ok(());
-    }
-    // The `self` side is provably this shape (dispatched off its own vtable), so
-    // its non-optional slots honor the typechecker's non-null invariant. `other`
-    // only shares this shape's field *names* — via `unknown`, a same-name shape
-    // can hold a different type or null in any slot, so `other`-side reads test
-    // before casting and treat a mismatch as unequal, never a trap.
-    let load_slot_nullable = |f: &mut Function, side: u32| {
-        f.instruction(&Instruction::LocalGet(side));
-        f.instruction(&Instruction::StructGet {
-            struct_type_index: object_shape_idx,
-            field_index: 2,
-        });
-        f.instruction(&Instruction::I32Const(field_index.cast_signed()));
-        f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
-    };
-    let load_slot_as_object = |f: &mut Function, side: u32| {
-        load_slot_nullable(f, side);
-        f.instruction(&Instruction::RefAsNonNull);
-    };
-    let boxed_compare = |f: &mut Function, box_idx: u32, eq: Instruction<'static>| {
-        load_slot_nullable(f, b_t);
-        f.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(box_idx)));
-        f.instruction(&Instruction::If(BlockType::Result(ValType::I32)));
-        load_slot_as_object(f, a_t);
-        f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(box_idx)));
-        f.instruction(&Instruction::StructGet {
-            struct_type_index: box_idx,
-            field_index: 1,
-        });
-        load_slot_as_object(f, b_t);
-        f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(box_idx)));
-        f.instruction(&Instruction::StructGet {
-            struct_type_index: box_idx,
-            field_index: 1,
-        });
-        f.instruction(&eq);
-        f.instruction(&Instruction::Else);
-        f.instruction(&Instruction::I32Const(0));
-        f.instruction(&Instruction::End);
-    };
-    let field_ty = field_ty.peel();
-    match field_ty {
-        Type::Number | Type::NumberLiteral(_) => {
-            boxed_compare(f, intrinsics.boxed_number, Instruction::F64Eq);
-        }
-        Type::Boolean | Type::BooleanLiteral(_) => {
-            boxed_compare(f, intrinsics.boxed_boolean, Instruction::I32Eq);
-        }
-        Type::String
-        | Type::StringLiteral(_)
-        | Type::BigInt
-        | Type::BigIntLiteral(_)
-        | Type::Object { .. }
-        | Type::Array(_)
-        | Type::Tuple(_)
-        | Type::Uint8Array
-        | Type::TypeVar(_)
-        | Type::GenericParam { .. }
-        | Type::Unknown
-        | Type::NumberEnum { .. }
-        | Type::StringEnum { .. }
-        | Type::Function { .. }
-        | Type::InterfaceRef { .. }
-        // A class instance is an `$Object` subtype carrying a vtable — same
-        // `vtable.equals` dispatch as `InterfaceRef`.
-        | Type::ClassRef { .. }
-        // A recursion back-edge's value is an `$Object` subtype with its
-        // own vtable — same `vtable.equals` dispatch as `InterfaceRef`.
-        | Type::AliasRef { .. } => {
-            // Tuples lower to $Array (element-wise equals); Unknown/TypeVar/generic fields also
-            // carry vtables, so vtable dispatch works for all of these. The callee's own
-            // type guard makes a mismatched `other` slot unequal, so only null needs
-            // rejecting here.
-            load_slot_nullable(f, b_t);
-            f.instruction(&Instruction::RefIsNull);
-            f.instruction(&Instruction::If(BlockType::Result(ValType::I32)));
-            f.instruction(&Instruction::I32Const(0));
-            f.instruction(&Instruction::Else);
-            load_slot_as_object(f, a_t);
-            f.instruction(&Instruction::LocalTee(field_lhs));
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: intrinsics.object,
-                field_index: 0,
-            });
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: intrinsics.vtable,
-                field_index: 2,
-            });
-            f.instruction(&Instruction::LocalSet(eq_fn));
-
-            f.instruction(&Instruction::LocalGet(field_lhs));
-            load_slot_as_object(f, b_t);
-            f.instruction(&Instruction::LocalGet(eq_fn));
-            f.instruction(&Instruction::CallRef(intrinsics.equals_fn));
-            f.instruction(&Instruction::End);
-        }
-        Type::Null => {
-            // Statically null on the `self` side — equal iff `other`'s slot is null too.
-            load_slot_nullable(f, b_t);
-            f.instruction(&Instruction::RefIsNull);
-        }
-        // A field whose value would be `never` belongs to an object no code
-        // path builds, so nothing compares or hashes it.
-        Type::Never => {
-            f.instruction(&Instruction::Unreachable);
-        }
-        Type::Void | Type::Error => {
-            return Err(unrepresentable_field(field_ty));
-        }
-        Type::Union(_) => {
-            // null-aware union equality: both-null → equal; one-null → unequal; both non-null → vtable.equals.
-            f.instruction(&Instruction::LocalGet(a_t));
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: object_shape_idx,
-                field_index: 2,
-            });
-            f.instruction(&Instruction::I32Const(field_index.cast_signed()));
-            f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
-            f.instruction(&Instruction::LocalSet(field_lhs_null));
-
-            f.instruction(&Instruction::LocalGet(b_t));
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: object_shape_idx,
-                field_index: 2,
-            });
-            f.instruction(&Instruction::I32Const(field_index.cast_signed()));
-            f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
-            f.instruction(&Instruction::LocalSet(field_rhs_null));
-
-            f.instruction(&Instruction::LocalGet(field_lhs_null));
-            f.instruction(&Instruction::RefIsNull);
-            f.instruction(&Instruction::If(BlockType::Result(ValType::I32)));
-            f.instruction(&Instruction::LocalGet(field_rhs_null));
-            f.instruction(&Instruction::RefIsNull);
-            f.instruction(&Instruction::Else);
-            f.instruction(&Instruction::LocalGet(field_rhs_null));
-            f.instruction(&Instruction::RefIsNull);
-            f.instruction(&Instruction::If(BlockType::Result(ValType::I32)));
-            f.instruction(&Instruction::I32Const(0));
-            f.instruction(&Instruction::Else);
-            f.instruction(&Instruction::LocalGet(field_lhs_null));
-            f.instruction(&Instruction::RefAsNonNull);
-            f.instruction(&Instruction::LocalTee(field_lhs));
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: intrinsics.object,
-                field_index: 0,
-            });
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: intrinsics.vtable,
-                field_index: 2,
-            });
-            f.instruction(&Instruction::LocalSet(eq_fn));
-            f.instruction(&Instruction::LocalGet(field_lhs));
-            f.instruction(&Instruction::LocalGet(field_rhs_null));
-            f.instruction(&Instruction::RefAsNonNull);
-            f.instruction(&Instruction::LocalGet(eq_fn));
-            f.instruction(&Instruction::CallRef(intrinsics.equals_fn));
-            f.instruction(&Instruction::End);
-            f.instruction(&Instruction::End);
-        }
-        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
-            return Err(unrepresentable_field(field_ty));
-        }
-    }
+    reject_unrepresentable_field(field_ty)?;
+    emit_nullable_field_compare(
+        f,
+        object_shape_idx,
+        field_index,
+        intrinsics,
+        (field_lhs, eq_fn, field_lhs_null, field_rhs_null, a_t, b_t),
+    );
     Ok(())
 }
 
@@ -1111,19 +958,6 @@ fn emit_subtype_hash_body(
 ) -> Result<Function, CompilerFailure> {
     let fields = subtype.fields()?;
 
-    // Peel before Union check — aliased unions must trigger null-aware dispatch prelude.
-    let any_dispatch = fields.values().any(|f| {
-        is_ref_dispatch_field(&f.ty)
-            || matches!(
-                f.ty.peel(),
-                Type::Number | Type::NumberLiteral(_) | Type::Union(_)
-            )
-            || f.optional
-    });
-    let any_union = fields
-        .values()
-        .any(|f| matches!(f.ty.peel(), Type::Union(_)) || f.optional);
-
     let object_shape_ref = ref_to(intrinsics.object_shape);
     let object_ref = ref_to(intrinsics.object);
     let object_null_ref = ref_null(intrinsics.object);
@@ -1132,24 +966,23 @@ fn emit_subtype_hash_body(
     // Locals (after 1 param self=0):
     //   1: self_t    (ref $arity)
     //   2: hash      (i32) — running accumulator
-    //   3: field_obj (ref $Object) — any dispatch
-    //   4: hash_fn   (ref $hashFn) — any dispatch
-    //   5: f_null    (ref null $Object) — any union/optional field
-    let mut locals: Vec<(u32, ValType)> = vec![(1, object_shape_ref), (1, ValType::I32)];
-    if any_dispatch {
-        locals.push((1, object_ref));
-        locals.push((1, hash_fn_ref));
-    }
-    if any_union {
-        locals.push((1, object_null_ref));
-    }
+    //   3: field_obj (ref $Object)
+    //   4: hash_fn   (ref $hashFn)
+    //   5: f_null    (ref null $Object)
+    let locals: Vec<(u32, ValType)> = vec![
+        (1, object_shape_ref),
+        (1, ValType::I32),
+        (1, object_ref),
+        (1, hash_fn_ref),
+        (1, object_null_ref),
+    ];
     let mut f = Function::new(locals);
     let self_param = 0u32;
     let self_t = 1u32;
     let hash = 2u32;
     let field_obj = 3u32;
     let hash_fn = 4u32;
-    let f_null = if any_dispatch { 5u32 } else { 3u32 };
+    let f_null = 5u32;
     f.instruction(&Instruction::LocalGet(self_param));
     f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
         intrinsics.object_shape,
@@ -1188,7 +1021,6 @@ fn emit_subtype_hash_body(
             intrinsics.object_shape,
             field_index,
             &field.ty,
-            field.optional,
             intrinsics,
             (self_t, field_obj, hash_fn, f_null),
         )?;
@@ -1211,129 +1043,39 @@ fn emit_subtype_hash_body(
     Ok(f)
 }
 
+/// Hashes one field slot of `self_t`, by the same dispatch as
+/// [`emit_field_compare`], so equal objects hash alike.
 fn emit_field_hash(
     f: &mut Function,
     object_shape_idx: u32,
     field_index: u32,
     field_ty: &Type,
-    field_optional: bool,
     intrinsics: IntrinsicTypeIndices,
     locals: (u32, u32, u32, u32),
 ) -> Result<(), CompilerFailure> {
-    let (self_t, field_obj, hash_fn, f_null) = locals;
-
-    let field_ty = field_ty.peel();
-
-    if field_optional && !matches!(field_ty, Type::Union(_)) {
-        emit_nullable_field_hash(
-            f,
-            object_shape_idx,
-            field_index,
-            intrinsics,
-            (self_t, field_obj, hash_fn, f_null),
-        );
-        return Ok(());
-    }
-
-    let load_slot_as_object = |f: &mut Function| {
-        f.instruction(&Instruction::LocalGet(self_t));
-        f.instruction(&Instruction::StructGet {
-            struct_type_index: object_shape_idx,
-            field_index: 2,
-        });
-        f.instruction(&Instruction::I32Const(field_index.cast_signed()));
-        f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
-        f.instruction(&Instruction::RefAsNonNull);
-    };
-
-    match field_ty {
-        Type::Boolean | Type::BooleanLiteral(_) => {
-            load_slot_as_object(f);
-            f.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(
-                intrinsics.boxed_boolean,
-            )));
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: intrinsics.boxed_boolean,
-                field_index: 1,
-            });
-        }
-        Type::Number
-        | Type::NumberLiteral(_)
-        | Type::String
-        | Type::StringLiteral(_)
-        | Type::BigInt
-        | Type::BigIntLiteral(_)
-        | Type::Object { .. }
-        | Type::Array(_)
-        | Type::Tuple(_)
-        | Type::Uint8Array
-        | Type::TypeVar(_)
-        | Type::GenericParam { .. }
-        | Type::Unknown
-        | Type::NumberEnum { .. }
-        | Type::StringEnum { .. }
-        | Type::Function { .. }
-        | Type::InterfaceRef { .. }
-        // A class instance is an `$Object` subtype with a `$hashFn` slot —
-        // same vtable dispatch as `InterfaceRef`.
-        | Type::ClassRef { .. }
-        // A recursion back-edge's value is an `$Object` subtype with its
-        // own `$hashFn` slot — same vtable dispatch as `InterfaceRef`.
-        | Type::AliasRef { .. } => {
-            // Vtable dispatch through slot 3 ($hashFn).
-            load_slot_as_object(f);
-            f.instruction(&Instruction::LocalTee(field_obj));
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: intrinsics.object,
-                field_index: 0,
-            });
-            f.instruction(&Instruction::StructGet {
-                struct_type_index: intrinsics.vtable,
-                field_index: 3,
-            });
-            f.instruction(&Instruction::LocalSet(hash_fn));
-            f.instruction(&Instruction::LocalGet(field_obj));
-            f.instruction(&Instruction::LocalGet(hash_fn));
-            f.instruction(&Instruction::CallRef(intrinsics.hash_fn));
-        }
-        Type::Null => {
-            f.instruction(&Instruction::I32Const(0));
-        }
-        // A field whose value would be `never` belongs to an object no code
-        // path builds, so nothing compares or hashes it.
-        Type::Never => {
-            f.instruction(&Instruction::Unreachable);
-        }
-        Type::Void | Type::Error => {
-            return Err(unrepresentable_field(field_ty));
-        }
-        Type::Union(_) => {
-            emit_nullable_field_hash(
-                f,
-                object_shape_idx,
-                field_index,
-                intrinsics,
-                (self_t, field_obj, hash_fn, f_null),
-            );
-        }
-        Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
-            return Err(unrepresentable_field(field_ty));
-        }
-    }
+    reject_unrepresentable_field(field_ty)?;
+    emit_nullable_field_hash(f, object_shape_idx, field_index, intrinsics, locals);
     Ok(())
 }
 
 /// Peeled, typechecked object fields never have these types; one reaching
 /// codegen means an earlier phase broke that invariant.
-fn unrepresentable_field(field_ty: &Type) -> CompilerFailure {
-    internal_failure(format!(
-        "an object field of type `{field_ty}` reached structural equality or hashing"
-    ))
+fn reject_unrepresentable_field(field_ty: &Type) -> Result<(), CompilerFailure> {
+    let field_ty = field_ty.peel();
+    match field_ty {
+        Type::Void
+        | Type::Error
+        | Type::Alias { .. }
+        | Type::Refined { .. }
+        | Type::Readonly(_) => Err(internal_failure(format!(
+            "an object field of type `{field_ty}` reached structural equality or hashing"
+        ))),
+        _ => Ok(()),
+    }
 }
 
-/// Null-aware vtable-hash dispatch shared by the Union arm and
-/// optional fields. Pushes a single `i32` — `0` if the slot is null,
-/// otherwise the value's `vtable.hash(value)`..
+/// Null-aware vtable-hash dispatch for one field. Pushes a single `i32`:
+/// `0` if the slot is null, otherwise the value's `vtable.hash(value)`.
 fn emit_nullable_field_hash(
     f: &mut Function,
     object_shape_idx: u32,
@@ -1374,7 +1116,7 @@ fn emit_nullable_field_hash(
     f.instruction(&Instruction::End);
 }
 
-/// Null-aware vtable-equals dispatch for Union and optional fields. Pushes i32: 1=equal, 0=unequal.
+/// Null-aware vtable-equals dispatch for one field. Pushes i32: 1=equal, 0=unequal.
 fn emit_nullable_field_compare(
     f: &mut Function,
     object_shape_idx: u32,
@@ -1431,34 +1173,6 @@ fn emit_nullable_field_compare(
     f.instruction(&Instruction::CallRef(intrinsics.equals_fn));
     f.instruction(&Instruction::End);
     f.instruction(&Instruction::End);
-}
-
-fn is_ref_dispatch_field(ty: &Type) -> bool {
-    // Must peel aliases and must mirror the vtable-dispatch arm of
-    // emit_field_compare/emit_field_hash exactly (incl. Unknown, BigInt,
-    // ClassRef, AliasRef): those arms use the dispatch locals. If a type is
-    // absent here, `any_dispatch` is false, the locals are never allocated,
-    // and the Wasm validator rejects with "unknown local 4".
-    matches!(
-        ty.peel(),
-        Type::String
-            | Type::StringLiteral(_)
-            | Type::BigInt
-            | Type::BigIntLiteral(_)
-            | Type::Object { .. }
-            | Type::Array(_)
-            | Type::Tuple(_)
-            | Type::Uint8Array
-            | Type::TypeVar(_)
-            | Type::GenericParam { .. }
-            | Type::Unknown
-            | Type::NumberEnum { .. }
-            | Type::StringEnum { .. }
-            | Type::Function { .. }
-            | Type::InterfaceRef { .. }
-            | Type::ClassRef { .. }
-            | Type::AliasRef { .. },
-    )
 }
 
 /// Returns all method function indices; must be declared in the element section for `ref.func` to be valid.

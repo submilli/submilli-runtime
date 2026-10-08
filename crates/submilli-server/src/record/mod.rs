@@ -16,15 +16,31 @@ use std::time::Duration;
 
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{DecisionLogConfig, DecisionLogOutput, RecordObserver};
-use submilli_blueprint::{Blueprint, VarBindings};
+use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings};
 
 use crate::error::ExecuteError;
 
 pub mod events;
 mod program;
+pub mod recheck;
+pub mod replay;
+mod test_run;
+mod throwaway;
 pub use events::{EVENT_SCHEMA, EventKind, SessionEvent};
 pub use program::{ProgramRun, run_program};
+pub use recheck::{RecheckReport, RecordedRun, VariableReport, recheck};
+pub use replay::{
+    Cassette, LiveReach, Miss, MissReason, RecordedEmbeddingProvider, RecordedHttpClient,
+    RecordedLlmProvider, RecordedMcpTransport, ReplayReport, Served,
+};
 pub use submilli_shared::mcp::McpCatalog;
+pub(crate) use test_run::TestWorld;
+pub use test_run::{
+    LiveCall, ServedCall, Stop, TestError, TestMode, TestOutcome, TestReport, TestRun, test_program,
+};
+pub use throwaway::{
+    ForkedSessionKv, LOCAL_STATE_CAP_BYTES, LocalState, Throwaway, ThrowawayError,
+};
 
 /// How a run reached the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +57,9 @@ pub enum RunEntry {
     McpFileTool { tool: String },
     /// [`run_program`], with the label its caller gave.
     Program,
+    /// A test of a recorded run under a newer blueprint; the run it tests is
+    /// [`RunStart::test_of`].
+    Test,
 }
 
 /// What a run is, captured as it starts.
@@ -52,6 +71,8 @@ pub struct RunStart {
     /// Never the token itself.
     pub label: String,
     pub entry: RunEntry,
+    /// The `execution_id` of the recorded run this run tests; `None` for any other run.
+    pub test_of: Option<String>,
     /// The MCP client's name from its `initialize`, such as `langchain-mcp-adapters`.
     pub client: Option<String>,
     /// The MCP client's id for the tool call that started the run, when it sent one.
@@ -63,7 +84,14 @@ pub struct RunStart {
     pub blueprint: Arc<Blueprint>,
     /// The audit's hash of that blueprint.
     pub blueprint_hash: Option<String>,
+    /// The version the run is decided under: the version tag the blueprint was
+    /// registered with, read in the same lookup as the blueprint, or
+    /// [`Self::blueprint_hash`] when it was registered without one.
+    pub blueprint_version: Option<String>,
     pub variables: Arc<VarBindings>,
+    /// The harness secrets the request supplied for this run, so a recorder can keep
+    /// their values out of what it stores. A recorder must never store or log them.
+    pub harness_secrets: Arc<HarnessSecretBindings>,
     /// The program's source; `None` for a file tool.
     pub code: Option<Arc<str>>,
 }
@@ -256,10 +284,22 @@ impl Recording {
         state: &crate::app::AppState,
         describe_run: impl FnOnce() -> RunStart,
     ) -> Option<Self> {
+        Self::start_tapped(state, describe_run, None)
+    }
+
+    /// [`start`](Self::start), with a test run's `tap` told how the run ended.
+    pub(crate) fn start_tapped(
+        state: &crate::app::AppState,
+        describe_run: impl FnOnce() -> RunStart,
+        tap: Option<&Arc<test_run::CallTap>>,
+    ) -> Option<Self> {
         let factory = state.run_recorder()?;
         let started = std::time::Instant::now();
         let run = describe_run();
-        let recorder = factory.start(run.clone())?;
+        let mut recorder = factory.start(run.clone())?;
+        if let Some(tap) = tap {
+            recorder = Arc::new(test_run::TapRecorder::new(recorder, Arc::clone(tap)));
+        }
         let events = state
             .event_hub()
             .map(|hub| events::RunEvents::start(hub, &run));
@@ -390,6 +430,7 @@ mod tests {
             execution_id: "run-1".into(),
             label: "test".into(),
             entry: RunEntry::Program,
+            test_of: None,
             client: None,
             tool_call_id: None,
             session_id: None,
@@ -397,7 +438,9 @@ mod tests {
             blueprint_name: "bp".into(),
             blueprint: Arc::new(Blueprint::default()),
             blueprint_hash: None,
+            blueprint_version: None,
             variables: Arc::new(VarBindings::default()),
+            harness_secrets: Arc::default(),
             code: None,
         }
     }

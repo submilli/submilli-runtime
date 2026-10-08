@@ -181,6 +181,17 @@ impl ChainPart {
         }
     }
 
+    /// This step with its `?.` dropped, for a receiver that can't be `null`.
+    pub fn as_plain_step(mut self) -> Self {
+        match &mut self {
+            ChainPart::Field { optional, .. }
+            | ChainPart::Index { optional, .. }
+            | ChainPart::Call { optional, .. } => *optional = false,
+            ChainPart::NonNull { .. } => {}
+        }
+        self
+    }
+
     pub fn span(&self) -> Span {
         match self {
             ChainPart::Field { span, .. }
@@ -830,6 +841,11 @@ pub struct Ast {
     /// populates this, so order is unobserved today. An ordered map keeps any future walk —
     /// or post-lowering snapshot — independent of the hash seed.
     pub pattern_origins: std::collections::BTreeMap<ExprId, PatternOrigin>,
+    /// Array literals that an array pattern destructures directly, as in
+    /// `let [a, b] = [1, "s"]`. TypeScript types such a literal as a tuple from
+    /// the pattern, so each name gets its element's type and a pattern longer
+    /// than the literal is a compile error (populated by `lower_patterns`).
+    pub tuple_pattern_sources: std::collections::BTreeSet<ExprId>,
     /// Source names in lowered for-of heads, whose TDZ includes the iterable.
     pub for_of_pattern_bindings: std::collections::BTreeMap<StmtId, Vec<Ident>>,
     /// Top-level declarations carrying a leading `export` (Form 1).

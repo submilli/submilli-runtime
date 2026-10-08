@@ -57,6 +57,9 @@ gix = { version = "0.87.1", default-features = false, features = ["sha1", "basic
 # The timestamp gix-index decodes an index with; already in the tree through gix.
 filetime = "0.2"
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 cap-primitives = { workspace = true }
 

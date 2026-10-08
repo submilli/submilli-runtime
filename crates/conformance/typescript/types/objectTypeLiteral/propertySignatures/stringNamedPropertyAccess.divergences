@@ -1,28 +1,4 @@
-types: 17 of 34 tsc entries compared, 6 differ
-
-line 16: a
-  tsc:  { "a b": number; }
-  ours: { a b: number }
-
-line 18: null as unknown as ({ "a b": number; })
-  tsc:  { "a b": number; }
-  ours: { a b: number }
-
-line 21: a
-  tsc:  { "a b": number; }
-  ours: { a b: number }
-
-line 23: b
-  tsc:  { "a b": number; }
-  ours: { a b: number }
-
-line 23: { "a b": 1 }
-  tsc:  { "a b": number; }
-  ours: { a b: number }
-
-line 26: b
-  tsc:  { "a b": number; }
-  ours: { a b: number }
+types: 17 of 34 tsc entries compared, 0 differ
 
 errors:
 line 3: ours: property `a b` has no initializer and is not assigned in the constructor (tsc accepts)

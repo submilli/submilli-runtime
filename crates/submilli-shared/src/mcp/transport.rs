@@ -24,7 +24,9 @@ use super::draining_transport::{DrainingTransport, PendingTransport};
 use crate::host::BlueprintSecretResolver;
 use http::{HeaderName, HeaderValue};
 use interpreter::runtime::{McpCallError, McpOutcome, McpResponse, McpTransport};
-use interpreter::stdlib::http::{NetworkPolicy, describe_error_chain};
+use interpreter::stdlib::http::{
+    HttpError, NetworkPolicy, describe_error_chain, is_policy_refusal,
+};
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientInfo, Content};
 use rmcp::service::{RoleClient, RunningService};
@@ -39,6 +41,55 @@ use crate::secret_store::SecretStore;
 
 pub(crate) type PolicyClientFactory =
     dyn Fn(&Arc<NetworkPolicy>) -> Result<reqwest::Client, reqwest::Error> + Send + Sync;
+
+/// The refusal of a call to a server the blueprint does not declare.
+fn undeclared_server(server_name: &str) -> McpCallError {
+    McpCallError::Local(format!("server '{server_name}' is not declared"))
+}
+
+/// The server a call goes to, or the refusal a call to it gets: undeclared, or over the
+/// `stdio` transport, which is deferred to a later release. A replay refuses alike.
+pub fn callable_server<'a>(
+    blueprint: &'a Blueprint,
+    server_name: &str,
+) -> Result<&'a McpServer, McpCallError> {
+    let server = blueprint
+        .mcp
+        .get(server_name)
+        .ok_or_else(|| undeclared_server(server_name))?;
+    // `streamable_http` (and its `sse` alias) only; `stdio` is deferred.
+    if server.transport == "stdio" {
+        return Err(McpCallError::Local(
+            "stdio transport is deferred to a later release".to_string(),
+        ));
+    }
+    Ok(server)
+}
+
+/// A failure of the connection: the network policy's refusal, which sits at the bottom of the
+/// chain, is local (nothing was sent); any other is transport. The script reads both alike.
+fn transport_failure(chain: String) -> McpCallError {
+    if is_policy_refusal(&chain) {
+        McpCallError::Local(chain)
+    } else {
+        McpCallError::Transport(chain)
+    }
+}
+
+/// The result of an OAuth retry. Its message reaches the script as before; but when the first
+/// attempt was refused locally, a wire failure of the retry stays recorded as local, since it
+/// may only be what the refusal led to and a replay must not serve it.
+fn retry_after_local(
+    first_was_local: bool,
+    retry: Result<CallToolResult, McpCallError>,
+) -> Result<CallToolResult, McpCallError> {
+    match retry {
+        Err(McpCallError::Transport(message)) if first_was_local => {
+            Err(McpCallError::Local(message))
+        }
+        other => other,
+    }
+}
 
 /// Bounds authentication, connection, and the tool response together.
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -181,11 +232,11 @@ impl StreamableHttpTransport {
         for (name, value) in &server.headers {
             let resolved = interpolate(value, &self.blueprint, &resolver)
                 .await
-                .map_err(|e| McpCallError::Transport(e.to_string()))?;
+                .map_err(|e| McpCallError::Local(e.to_string()))?;
             let header_name = HeaderName::from_bytes(name.as_bytes())
-                .map_err(|e| McpCallError::Transport(e.to_string()))?;
-            let header_value = HeaderValue::from_str(&resolved)
-                .map_err(|e| McpCallError::Transport(e.to_string()))?;
+                .map_err(|e| McpCallError::Local(e.to_string()))?;
+            let header_value =
+                HeaderValue::from_str(&resolved).map_err(|e| McpCallError::Local(e.to_string()))?;
             headers.insert(header_name, header_value);
         }
         Ok(headers)
@@ -221,7 +272,7 @@ impl StreamableHttpTransport {
         let result = tokio::select! {
             result = session.service.call_tool(param) => {
                 if let Some(error) = session.budget.error() { Err(error) }
-                else { result.map_err(|error| McpCallError::Transport(error.to_string())) }
+                else { result.map_err(|error| transport_failure(error.to_string())) }
             }
             error = session.budget.wait() => Err(error),
         };
@@ -245,7 +296,7 @@ impl StreamableHttpTransport {
         self.policy
             .check_url(server.url.as_str())
             .await
-            .map_err(McpCallError::Transport)?;
+            .map_err(McpCallError::Local)?;
         let mut config = StreamableHttpClientTransportConfig::with_uri(server.url.as_str());
         config.auth_header = auth_header;
         config.custom_headers = custom_headers;
@@ -264,7 +315,7 @@ impl StreamableHttpTransport {
         let service = tokio::select! {
             result = ClientInfo::default().serve(transport) => {
                 if let Some(error) = budget.error() { return Err(error); }
-                result.map_err(|error| McpCallError::Transport(describe_error_chain(&error)))?
+                result.map_err(|error| transport_failure(describe_error_chain(&error)))?
             }
             error = budget.wait() => return Err(error),
         };
@@ -285,7 +336,7 @@ impl StreamableHttpTransport {
         work: &mut CallWork,
     ) -> Result<CallToolResult, McpCallError> {
         let oauth = self.oauth.as_ref().ok_or_else(|| {
-            McpCallError::Transport(format!(
+            McpCallError::Local(format!(
                 "OAuth server '{server_name}' needs a secret store, none configured"
             ))
         })?;
@@ -322,6 +373,7 @@ impl StreamableHttpTransport {
         {
             return first;
         }
+        let first_was_local = matches!(first, Err(McpCallError::Local(_)));
 
         // First attempt failed: force a refresh and retry exactly once.
         let fresh = match oauth
@@ -332,18 +384,20 @@ impl StreamableHttpTransport {
             Err(McpTokenError::AuthExpired) => return Err(McpCallError::AuthExpired),
             Err(e) => return Err(map_token_err(e)),
         };
-        self.call_once(
-            server_name,
-            server,
-            SessionAuth {
-                bearer: Some(fresh),
-                ..SessionAuth::default()
-            },
-            tool,
-            arguments.clone(),
-            work,
-        )
-        .await
+        let retry = self
+            .call_once(
+                server_name,
+                server,
+                SessionAuth {
+                    bearer: Some(fresh),
+                    ..SessionAuth::default()
+                },
+                tool,
+                arguments.clone(),
+                work,
+            )
+            .await;
+        retry_after_local(first_was_local, retry)
     }
 
     async fn call_tool(
@@ -353,15 +407,7 @@ impl StreamableHttpTransport {
         args_json: &str,
         work: &mut CallWork,
     ) -> Result<McpResponse, McpCallError> {
-        let server = self.blueprint.mcp.get(server_name).ok_or_else(|| {
-            McpCallError::Transport(format!("server '{server_name}' is not declared"))
-        })?;
-        // `streamable_http` (and its `sse` alias) only; `stdio` is deferred.
-        if server.transport == "stdio" {
-            return Err(McpCallError::Transport(
-                "stdio transport is deferred to a later release".to_string(),
-            ));
-        }
+        let server = callable_server(&self.blueprint, server_name)?;
 
         // The args object is a JSON object; an empty/non-object arg → `{}`.
         let arguments = match serde_json::from_str::<Value>(args_json) {
@@ -486,6 +532,20 @@ fn map_token_err(err: McpTokenError) -> McpCallError {
     match err {
         McpTokenError::AuthExpired => McpCallError::AuthExpired,
         McpTokenError::Upstream { status, body } => McpCallError::Upstream { status, body },
+        // This host's own credential state or network policy, not the server or the token
+        // endpoint: a replay must not serve what a recording says of them. `Malformed` also
+        // covers a 2xx token-endpoint answer without a usable token; that is deliberately
+        // recorded as local too, a miss on replay (the safe direction).
+        local @ (McpTokenError::NotAuthenticated
+        | McpTokenError::Store(_)
+        | McpTokenError::Malformed(_)
+        | McpTokenError::Transport(
+            HttpError::EgressDenied(_)
+            | HttpError::Policy(_)
+            | HttpError::PermissionDenied(_)
+            | HttpError::Internal(_)
+            | HttpError::UnsupportedMethod(_),
+        )) => McpCallError::Local(local.to_string()),
         other => McpCallError::Transport(other.to_string()),
     }
 }
@@ -823,12 +883,81 @@ mod tests {
                 Arc::new(NetworkPolicy::deny_private()),
             );
             match t.call("local", "t", "{}").await.result {
-                Err(McpCallError::Transport(message)) => assert!(
+                Err(McpCallError::Local(message)) => assert!(
                     message.contains("blocked by network policy"),
                     "{url}: expected the policy reason, got: {message}"
                 ),
-                other => panic!("{url}: expected a transport error, got {other:?}"),
+                other => panic!("{url}: expected a local refusal, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn a_policy_refusal_at_connect_is_local_and_other_failures_are_transport() {
+        assert!(matches!(
+            transport_failure("error: blocked by network policy: x is private".into()),
+            McpCallError::Local(message) if message.contains("blocked by network policy")
+        ));
+        assert!(matches!(
+            transport_failure("connection refused".into()),
+            McpCallError::Transport(_)
+        ));
+    }
+
+    #[test]
+    fn a_retry_after_a_local_refusal_fails_as_local_with_its_own_message() {
+        let wire = || Err(McpCallError::Transport("reset".into()));
+        assert!(matches!(
+            retry_after_local(true, wire()),
+            Err(McpCallError::Local(message)) if message == "reset"
+        ));
+        assert!(matches!(
+            retry_after_local(false, wire()),
+            Err(McpCallError::Transport(_))
+        ));
+        assert!(matches!(
+            retry_after_local(true, Err(McpCallError::AuthExpired)),
+            Err(McpCallError::AuthExpired)
+        ));
+    }
+
+    #[test]
+    fn a_missing_or_unreadable_credential_is_a_local_refusal() {
+        assert!(matches!(
+            map_token_err(McpTokenError::NotAuthenticated),
+            McpCallError::Local(_)
+        ));
+        assert!(matches!(
+            map_token_err(McpTokenError::Store("disk".into())),
+            McpCallError::Local(_)
+        ));
+        assert!(matches!(
+            map_token_err(McpTokenError::Malformed("x".into())),
+            McpCallError::Local(_)
+        ));
+    }
+
+    #[test]
+    fn a_token_request_refused_by_network_policy_is_local_and_one_that_failed_on_the_wire_is_not() {
+        for refused in [
+            HttpError::EgressDenied("blocked".into()),
+            HttpError::Policy(interpreter::stdlib::http::TransportPolicyError::UnsupportedScheme),
+            HttpError::Internal("setup".into()),
+        ] {
+            assert!(matches!(
+                map_token_err(McpTokenError::Transport(refused)),
+                McpCallError::Local(_)
+            ));
+        }
+        for wire in [
+            HttpError::Network("reset".into()),
+            HttpError::Timeout,
+            HttpError::Other("eof".into()),
+        ] {
+            assert!(matches!(
+                map_token_err(McpTokenError::Transport(wire)),
+                McpCallError::Transport(_)
+            ));
         }
     }
 
@@ -845,7 +974,7 @@ mod tests {
         );
         assert!(matches!(
             t.call("linear", "t", "{}").await.result,
-            Err(McpCallError::Transport(_))
+            Err(McpCallError::Local(_))
         ));
     }
 
@@ -854,7 +983,7 @@ mod tests {
         let t = static_transport();
         assert!(matches!(
             t.call("ghost", "t", "{}").await.result,
-            Err(McpCallError::Transport(_))
+            Err(McpCallError::Local(_))
         ));
     }
 }

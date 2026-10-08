@@ -1,1 +1,0 @@
-line 4 type: bug SUB-1196 (array pattern) an array literal destructured by an array pattern is typed as an array, not a tuple

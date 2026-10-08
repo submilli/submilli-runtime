@@ -771,14 +771,6 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    /// `keyof T` as the union of `T`'s member names, resolved eagerly to string literal
-    /// types. Matches TypeScript: methods count as members alongside properties, and
-    /// `keyof` of a type with no members is `never` — which `Type::union` already
-    /// produces from an empty vector.
-    ///
-    /// Only concrete operands are supported. `keyof T` for a type parameter has no
-    /// eager answer and would need a deferred type node, so it is rejected by name
-    /// rather than resolved to something narrower than it should be.
     /// `typeof x` — the type of the value `x`, read from the value namespace.
     ///
     /// Locals shadow globals, as everywhere else. A dotted path walks object fields
@@ -790,8 +782,7 @@ impl<'a> Inferer<'a> {
         let name = root_span.name.clone();
 
         let Some(mut ty) = self.lookup_value_type(&name) else {
-            self.error(root_span.span, format!("unresolved identifier `{name}`"));
-            return Ok(Type::Error);
+            return Ok(self.typeof_type_name(root_span, rest));
         };
 
         for seg in rest {
@@ -803,6 +794,78 @@ impl<'a> Inferer<'a> {
             ty = next;
         }
         Ok(ty)
+    }
+
+    /// `typeof` whose root names no value. An enum member reads as its enum, as
+    /// `E.A` does in an expression; a class or a whole enum is a type, not a
+    /// value, so there is nothing for `typeof` to take.
+    fn typeof_type_name(&mut self, root: &crate::Ident, rest: &[crate::Ident]) -> Type {
+        let name = &root.name;
+        let Some(sym) = self.lookup_named_type(name) else {
+            self.error_with_help(
+                root.span,
+                format!("unresolved identifier `{name}`"),
+                vec![
+                    "`typeof` names a value declared before the annotation: a binding can't \
+                     name its own type, nor a parameter its own signature's"
+                        .to_string(),
+                ],
+            );
+            return Type::Error;
+        };
+        let mangled = sym.mangled_name.clone();
+        match (TypeofRoot::of(&sym.kind), rest) {
+            (TypeofRoot::Enum { numeric, variants }, [member])
+                if variants.contains(&member.name) =>
+            {
+                let package = self.type_package(name);
+                if numeric {
+                    Type::number_enum(package, name.clone(), mangled)
+                } else {
+                    Type::string_enum(package, name.clone(), mangled)
+                }
+            }
+            (TypeofRoot::Enum { .. }, [member]) => {
+                self.error(
+                    member.span,
+                    format!("no variant `{}` on enum `{name}`", member.name),
+                );
+                Type::Error
+            }
+            (TypeofRoot::Enum { .. }, [_, field, ..]) => {
+                self.error(
+                    field.span,
+                    "`typeof` of a path past an enum member is not supported".to_string(),
+                );
+                Type::Error
+            }
+            (root_kind, _) => {
+                self.reject_typeof_of_type(root, &root_kind);
+                Type::Error
+            }
+        }
+    }
+
+    /// `typeof` of a name that is only a type: a whole enum, a class, or another
+    /// named type.
+    fn reject_typeof_of_type(&mut self, root: &crate::Ident, kind: &TypeofRoot) {
+        let name = &root.name;
+        let (what, help) = match kind {
+            TypeofRoot::Enum { .. } => (
+                "an enum type",
+                format!("write `{name}` for one of its values, or `typeof {name}.<variant>`"),
+            ),
+            TypeofRoot::Class => (
+                "a class",
+                format!("write `{name}` for an instance; a class has no constructor type"),
+            ),
+            TypeofRoot::OtherType => ("a type", format!("write `{name}` itself")),
+        };
+        self.error_with_help(
+            root.span,
+            format!("`{name}` is {what}, not a value, so `typeof` has no type to take"),
+            vec![help],
+        );
     }
 
     /// The declared type of a value, locals shadowing globals.
@@ -853,16 +916,28 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    /// `keyof T` as the union of `T`'s member names, resolved eagerly to string literal
+    /// types. Matches TypeScript: methods count as members alongside properties, and
+    /// `keyof` of a type with no members is `never` — which `Type::union` already
+    /// produces from an empty vector. `unknown` has no members either.
+    ///
+    /// Only concrete operands are supported. `keyof T` for a type parameter has no
+    /// eager answer and would need a deferred type node, so it is rejected by name
+    /// rather than resolved to something narrower than it should be.
     fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_value_type(operand, ValuePosition::UnionMember)?;
+        if matches!(resolved.peel(), Type::Unknown) {
+            return Ok(Type::Never);
+        }
         if self.resolver().index_signature(&resolved).is_some() {
             return Ok(Type::String);
         }
         let Some(names) = self.member_names_of(&resolved) else {
             if !matches!(resolved.peel(), Type::Error) {
-                self.error(
+                self.error_with_help(
                     operand.span,
                     format!("`keyof` needs an object type or interface, got `{resolved}`"),
+                    keyof_help(&resolved),
                 );
             }
             return Ok(Type::Error);
@@ -931,6 +1006,45 @@ impl Inferer<'_> {
         };
         Some(enum_ty.with_enum_member(member, value.clone(), variants.len()))
     }
+}
+
+/// What a `typeof` root that names no value names instead.
+enum TypeofRoot {
+    Enum {
+        numeric: bool,
+        variants: Vec<String>,
+    },
+    Class,
+    OtherType,
+}
+
+impl TypeofRoot {
+    fn of(kind: &TypeKind) -> Self {
+        match kind {
+            TypeKind::NumberEnum { variants, .. } => TypeofRoot::Enum {
+                numeric: true,
+                variants: variants.iter().map(|(v, _)| v.clone()).collect(),
+            },
+            TypeKind::StringEnum { variants, .. } => TypeofRoot::Enum {
+                numeric: false,
+                variants: variants.iter().map(|(v, _)| v.clone()).collect(),
+            },
+            TypeKind::Class { .. } => TypeofRoot::Class,
+            _ => TypeofRoot::OtherType,
+        }
+    }
+}
+
+/// Why `keyof` of a type parameter has no answer: its key set is not known.
+fn keyof_help(operand: &Type) -> Vec<String> {
+    if !matches!(operand.peel(), Type::TypeVar(_) | Type::GenericParam { .. }) {
+        return Vec::new();
+    }
+    vec![
+        "`keyof` of a type parameter is not supported: generics are erased, so `keyof` \
+         needs a concrete object type"
+            .to_string(),
+    ]
 }
 
 #[cfg(test)]

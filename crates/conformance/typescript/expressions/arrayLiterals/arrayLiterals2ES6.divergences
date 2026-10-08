@@ -1,12 +1,4 @@
-types: 44 of 79 tsc entries compared, 7 differ
-
-line 34: [1, 2]
-  tsc:  [number, number]
-  ours: number[]
-
-line 35: [1, 2, true]
-  tsc:  [number, number, boolean]
-  ours: number[]
+types: 44 of 79 tsc entries compared, 5 differ
 
 line 46: d0
   tsc:  (string | number | boolean)[]
@@ -29,6 +21,5 @@ line 55: ["hello"]
   ours: number[][]
 
 errors:
-line 35: ours: expected `number` (matching first element), got `boolean` (tsc accepts)
 line 46: ours: expected `number` (matching first element), got `boolean` (tsc accepts)
 line 55: ours: expected `number[]`, got `string` (tsc accepts)

@@ -92,6 +92,11 @@ jobs:
       - name: Skill installation across platforms
         run: cargo test -p submilli --test skill --test upgrade
 
+      # The playground detaches, checks pids, and keeps owner-only files on Unix,
+      # and says it is not supported elsewhere; both halves must build and pass.
+      - name: Playground lifecycle
+        run: cargo test -p submilli --test playground_lifecycle
+
       # The server's MCP file tools resolve through the same handles but reach them
       # by a different route, so the interpreter suite passing says nothing about
       # them. `files_` is every test over those two tools, escapes included.

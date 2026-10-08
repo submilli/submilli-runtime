@@ -1,45 +1,5 @@
-types: 289 of 512 tsc entries compared, 11 differ
+types: 289 of 512 tsc entries compared, 1 differ
 
-line 52: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 53: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 55: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 59: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 60: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 61: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 63: obj
-  tsc:  { readonly x: string | number; }
-  ours: { x: number | string }
-
-line 145: outer
-  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
-  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
-
-line 146: outer
-  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
-  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
-
-line 148: outer
-  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
-  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
-
-line 151: outer
-  tsc:  { readonly obj: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }; }
-  ours: { obj: { bar: number; kind: "bar" } | { foo: string; kind: "foo" } }
+line 76: [42]
+  tsc:  [number]
+  ours: [number | string]

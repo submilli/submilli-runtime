@@ -649,6 +649,7 @@ fn compile_package_sources(
             })?;
     declaration.runtime_functions = generated.runtime_functions;
     declaration.runtime_globals = generated.runtime_globals;
+    declaration.closure_caches = generated.closure_caches;
     Ok(CompiledPackage {
         wasm: generated.wasm,
         type_info: generated.type_info,

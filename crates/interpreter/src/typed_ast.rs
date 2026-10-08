@@ -810,13 +810,11 @@ pub enum TypedSwitchValue {
     Null {
         span: Span,
     },
-    /// `value` is the lowered runtime representation; `ty` is the label's
-    /// type, the member type `E.A`.
+    /// `value` is the lowered runtime representation.
     Enum {
         enum_name: MangledName,
         member: Ident,
         value: EnumVariantPayload,
-        ty: Type,
         span: Span,
     },
 }

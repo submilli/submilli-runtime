@@ -596,6 +596,7 @@ fn emit_global_ref(
         }
         return Ok(());
     }
+    crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
     let idx = ctx.symbols.global_idx(mangled).ok_or_else(|| {
         crate::codegen::internal_failure("top-level let/const recorded during codegen")
     })?;
@@ -662,7 +663,13 @@ fn emit_function_ref(
     emitter.instruction(Instruction::GlobalSet(closure_global_idx));
     emitter.emit_end();
     emitter.instruction(Instruction::GlobalGet(closure_global_idx));
-    emitter.instruction(Instruction::RefAsNonNull);
+    if ctx.symbols.is_shared_closure_global(mangled) {
+        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+            closure_struct_idx,
+        )));
+    } else {
+        emitter.instruction(Instruction::RefAsNonNull);
+    }
 
     Ok(())
 }
@@ -1828,6 +1835,7 @@ fn emit_postfix_unary(
                 crate::codegen::internal_failure("Inferer guarantees the binding exists")
             })?;
             let old = emitter.add_anonymous_local(ctx.symbols.value_type(result_ty)?)?;
+            crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
             emitter.instruction(Instruction::GlobalGet(idx));
             // Reference globals start as null before module initialization.
             if let ValType::Ref(RefType {
@@ -3012,6 +3020,22 @@ fn emit_binary(
     rhs: ExprId,
     result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let admits_never_operand = matches!(
+        op,
+        BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Rem
+            | BinOp::Pow
+            | BinOp::Lt
+            | BinOp::Gt
+            | BinOp::Le
+            | BinOp::Ge
+    );
+    if admits_never_operand && try_emit_unreachable_for_never_operand(emitter, ctx, &[lhs, rhs])? {
+        return Ok(());
+    }
     let _: () = match op {
         // `+` dispatches on the result type the typechecker chose: numeric
         // operands → `f64.add`, string operands → `string_concat` from the
@@ -3440,6 +3464,35 @@ fn emit_logical(
     }
     emitter.emit_end();
     Ok(())
+}
+
+/// Evaluates `operands` in order and ends in `unreachable` when any of them is
+/// `never`, returning whether it did. The typechecker accepts arithmetic on a
+/// `never` operand because no value of it exists, but that operand's slot is a
+/// reference no numeric instruction takes, so the operator itself isn't emitted.
+fn try_emit_unreachable_for_never_operand(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    operands: &[ExprId],
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let mut has_never_operand = false;
+    for &operand in operands {
+        let ty = &ctx
+            .ta
+            .try_expr(operand)
+            .map_err(crate::codegen::arena_failure)?
+            .ty;
+        has_never_operand |= matches!(ty.peel(), Type::Never);
+    }
+    if !has_never_operand {
+        return Ok(false);
+    }
+    for &operand in operands {
+        emit_expr(emitter, ctx, operand)?;
+        emitter.instruction(Instruction::Drop);
+    }
+    emitter.instruction(Instruction::Unreachable);
+    Ok(true)
 }
 
 fn emit_primitive_operand(
@@ -4736,6 +4789,11 @@ fn emit_unary(
     operand: ExprId,
     result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if matches!(op, UnOp::Neg | UnOp::Pos)
+        && try_emit_unreachable_for_never_operand(emitter, ctx, &[operand])?
+    {
+        return Ok(());
+    }
     let _: () = match op {
         UnOp::BitNot => emit_bitwise_host(emitter, ctx, "bitnot", &[operand], result_ty)?,
         UnOp::Neg => {

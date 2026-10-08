@@ -295,6 +295,19 @@ pub(super) fn type_admits_null(ty: &Type, types: TypeResolver<'_>) -> bool {
     walk(ty, types, &mut BTreeSet::new())
 }
 
+/// Whether a value of `ty` may be `null`. Unlike `type_admits_null`, a type
+/// parameter counts, since a caller may instantiate it with `null`.
+fn may_hold_null(ty: &Type, types: TypeResolver<'_>) -> bool {
+    fn has_type_param(ty: &Type) -> bool {
+        match ty.peel() {
+            Type::TypeVar(_) | Type::GenericParam { .. } => true,
+            Type::Union(members) => members.iter().any(has_type_param),
+            _ => false,
+        }
+    }
+    type_admits_null(ty, types) || has_type_param(ty)
+}
+
 /// What to tell someone who wrote `?.` on a namespace when there is no fix to
 /// spell: an index step has none, since index signatures are out of scope and
 /// `Number[…]` would not compile either.
@@ -619,6 +632,11 @@ impl Inferer<'_> {
             }
             ExprKind::ObjectLiteral { members } => {
                 self.infer_object_literal(expr_id, members, expected, span)
+            }
+            ExprKind::ArrayLiteral { elements }
+                if expected.is_none() && self.ast.tuple_pattern_sources.contains(&expr_id) =>
+            {
+                self.infer_pattern_tuple_literal(elements, span)
             }
             ExprKind::ArrayLiteral { elements } => {
                 self.infer_array_literal(elements, expected, span)
@@ -1265,13 +1283,13 @@ impl Inferer<'_> {
                         Type::Error
                     }
                     _ => {
-                        if let Some(ty) = super::stmt::compound_arith_result(op, &lt, &rt) {
+                        if let Some(ty) = super::stmt::binary_arith_result(op, &lt, &rt) {
                             ty
                         } else {
                             let culprit = self.nullable_binary_culprit(
                                 (typed_lhs, &lt),
                                 (typed_rhs, &rt),
-                                |l, r| super::stmt::compound_arith_result(op, l, r).is_some(),
+                                |l, r| super::stmt::binary_arith_result(op, l, r).is_some(),
                             );
                             self.error_with_narrowing_hint(
                                 span,
@@ -6511,6 +6529,32 @@ impl Inferer<'_> {
         ))
     }
 
+    /// An unannotated array literal that an array pattern destructures: a tuple
+    /// of its elements' widened types, as TypeScript infers from the pattern.
+    fn infer_pattern_tuple_literal(
+        &mut self,
+        elements: Vec<crate::ArrayLiteralElement>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let mut typed_elements = Vec::with_capacity(elements.len());
+        let mut element_types = Vec::with_capacity(elements.len());
+        for element in &elements {
+            let crate::ArrayLiteralElement::Value(id) = element else {
+                return self.infer_array_literal(elements, None, span);
+            };
+            let (typed_id, ty) = self.infer_expr(*id, None)?;
+            element_types.push(self.widen_fresh_literals(typed_id, &ty)?);
+            typed_elements.push(typed_id);
+        }
+        Ok((
+            TypedExprKind::TupleLiteral {
+                elements: typed_elements,
+                element_types: element_types.clone(),
+            },
+            Type::Tuple(element_types),
+        ))
+    }
+
     /// array-literal expression interpreted as a tuple. Caller
     /// has already established that `expected` is `Type::Tuple`. Each
     /// source element is inferred against its position's expected type;
@@ -7551,13 +7595,15 @@ impl Inferer<'_> {
                 .insert(name.name.clone(), signature, true, name.span);
         }
         let previous_hint = self.object_this_hint.take();
+        // With neither a `this` annotation nor an object literal to bind it,
+        // `this` has no receiver to name, so a use is rejected as it is
+        // outside a class (tsc: implicitly `any`).
         let receiver = this_type
             .as_ref()
             .map(|ty| self.resolve_type(ty))
             .transpose()?
-            .or_else(|| previous_hint.clone())
-            .unwrap_or(Type::Unknown);
-        let previous_this = self.function_this.replace(receiver.clone());
+            .or_else(|| previous_hint.clone());
+        let previous_this = std::mem::replace(&mut self.function_this, receiver.clone());
         let previous_class = self.current_class.take();
         let previous_static = self.current_static.take();
         self.next_function_keeps_returned_literals = keeps_returned_literals;
@@ -7567,7 +7613,9 @@ impl Inferer<'_> {
         self.current_class = previous_class;
         self.current_static = previous_static;
         self.scopes.pop();
-        self.typed_ast.closure_this.insert(id, receiver);
+        self.typed_ast
+            .closure_this
+            .insert(id, receiver.unwrap_or(Type::Unknown));
         if let Some(name) = name {
             self.typed_ast.closure_names.insert(id, name);
         }
@@ -7986,6 +8034,10 @@ impl Inferer<'_> {
                     // annotated `unknown` body may. A body with no `return`
                     // stays `void`.
                     Type::Unknown
+                } else if collected.is_empty() && !self.reachable {
+                    // No `return`, and the end of the body can't be reached: the
+                    // closure only throws, so it never returns, as tsc infers.
+                    Type::Never
                 } else {
                     self.unify_returns(&self.returned_types(collected))
                 };
@@ -8967,6 +9019,13 @@ impl Inferer<'_> {
             })
             .collect();
         for (part, asserted) in parts.into_iter().zip(asserted) {
+            // A `?.` whose receiver can't be `null` never short-circuits, so it
+            // is the plain step and adds no `| null`, as in tsc.
+            let part = if part.is_optional() && !may_hold_null(&receiver_ty, self.resolver()) {
+                part.as_plain_step()
+            } else {
+                part
+            };
             if part.is_optional() && short_circuit_span.is_none() {
                 short_circuit_span = Some(part.span());
                 self.push_narrow_frame(super::narrowing::NarrowEnv::new());
@@ -9038,9 +9097,11 @@ impl Inferer<'_> {
 
         // A void-tailed chain has no value on either branch, so it stays
         // `void` rather than widening to `void | null` (void is a return
-        // type only — see `reject_void_binding`).
-        let final_ty = if matches!(receiver_ty.peel(), Type::Void) {
-            Type::Void
+        // type only — see `reject_void_binding`). A chain with no step left
+        // that can short-circuit has no `null` branch to add.
+        let can_short_circuit = short_circuit_span.is_some();
+        let final_ty = if matches!(receiver_ty.peel(), Type::Void) || !can_short_circuit {
+            receiver_ty
         } else {
             Type::union(vec![receiver_ty, Type::Null])
         };
@@ -9455,7 +9516,7 @@ impl Inferer<'_> {
         }
         // A poisoned receiver has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
-        if type_admits_null(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
+        if may_hold_null(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
             return;
         }
         self.diagnostics.push(crate::Diagnostic {
@@ -9938,7 +9999,11 @@ impl Inferer<'_> {
         let target_to_inner = assignable(&shape, &inner_ty, self.resolver());
         let target_to_widened =
             assignable(&shape, &widen_assertion_source(&inner_ty), self.resolver());
-        if !inner_to_target && !target_to_inner && !target_to_widened {
+        if !inner_to_target
+            && !target_to_inner
+            && !target_to_widened
+            && !self.union_members_overlap(&inner_ty, &shape)
+        {
             let blockers = optional_vs_required_blockers(&inner_ty, &shape, self.resolver());
             if let Some(first) = blockers.first() {
                 let (subj, verb) = if blockers.len() == 1 {
@@ -10012,6 +10077,36 @@ impl Inferer<'_> {
             },
             target_ty,
         ))
+    }
+
+    /// Whether some member of `source` and some member of `target` pass one of the
+    /// assertion directions [`infer_as`](Self::infer_as) asks of the whole types.
+    /// This is tsc's comparability for a union on either side, at the top level
+    /// only (a union inside a field or an element still needs a whole-type match):
+    /// `str as S[] | S` is accepted for `type S = "a" | "b"` because `string`
+    /// overlaps `S`, and `(number | boolean) as string | number` because `number`
+    /// overlaps `number`.
+    fn union_members_overlap(&self, source: &Type, target: &Type) -> bool {
+        if !matches!(source.peel(), Type::Union(_)) && !matches!(target.peel(), Type::Union(_)) {
+            return false;
+        }
+        // An already-reported error inside the source (an empty `[]` with no
+        // element type) relates to anything, so it can't show an overlap.
+        if has_error_component(source) {
+            return false;
+        }
+        let resolver = self.resolver();
+        let target_members = narrowing::union_members(target);
+        narrowing::union_members(source)
+            .into_iter()
+            .any(|source_member| {
+                let widened = widen_assertion_source(source_member);
+                target_members.iter().any(|target_member| {
+                    assignable(source_member, target_member, resolver)
+                        || assignable(target_member, source_member, resolver)
+                        || assignable(target_member, &widened, resolver)
+                })
+            })
     }
 
     /// `x instanceof Foo` — a runtime class test. `Foo` must name a class (interfaces aren't
@@ -11226,6 +11321,11 @@ pub(super) fn literal_comparison_type(
 /// the `+` arm and the narrowing hint it emits: a hint may only claim a guard is the
 /// fix when the guarded pair is one this accepts.
 pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
+    match never_operand_result(lt, rt, NeverPartners::NumericOrString) {
+        NeverOperand::Accepted(result) => return Some(result),
+        NeverOperand::Rejected => return None,
+        NeverOperand::Absent => {}
+    }
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
         // A literal operand behaves as its base and yields the base, never a
         // literal: `1 + 1` is `number`, not `2`. Same rule as `ordering_accepts`.
@@ -11247,6 +11347,11 @@ pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
 
 /// [`plus_result`] for `-`, `*`, `/`, `%`, `**` — same role, no string arm.
 pub(super) fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
+    match never_operand_result(lt, rt, NeverPartners::NumericOnly) {
+        NeverOperand::Accepted(result) => return Some(result),
+        NeverOperand::Rejected => return None,
+        NeverOperand::Absent => {}
+    }
     match (lt.primitive_behavior(), rt.primitive_behavior()) {
         (Type::Number | Type::NumberLiteral(_), Type::Number | Type::NumberLiteral(_)) => {
             Some(Type::Number)
@@ -11259,6 +11364,13 @@ pub(super) fn arithmetic_result(lt: &Type, rt: &Type) -> Option<Type> {
 /// [`plus_result`] for `<`, `>`, `<=`, `>=`, which always yield `boolean` — strings
 /// compare lexicographically, and literal types order as their widened base.
 fn ordering_accepts(lt: &Type, rt: &Type) -> bool {
+    // A `never` operand orders against numbers and bigints only: tsc rejects
+    // `never < string`, unlike `never + string`.
+    match never_operand_result(lt, rt, NeverPartners::NumericOnly) {
+        NeverOperand::Accepted(_) => return true,
+        NeverOperand::Rejected => return false,
+        NeverOperand::Absent => {}
+    }
     matches!(
         (lt.primitive_behavior(), rt.primitive_behavior()),
         (
@@ -11280,13 +11392,51 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
     }
     match ty.primitive_behavior() {
         Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
-        Type::Number | Type::NumberLiteral(_) | Type::Error => Some(Type::Number),
+        Type::Number | Type::NumberLiteral(_) | Type::Never | Type::Error => Some(Type::Number),
         // `+s` is JS's explicit string→number coercion and the one TS keeps; it
         // lowers to the same parse `Number(s)` does (`NaN` when the text isn't a
         // number). Unary `-` on a string stays rejected: it reads as arithmetic,
         // not a conversion.
         t if matches!(op, UnOp::Pos) && t.is_string_shaped() => Some(Type::Number),
         _ => None,
+    }
+}
+
+/// What a binary operator makes of a `never` operand.
+enum NeverOperand {
+    /// Neither operand is `never`; the operator's ordinary rules apply.
+    Absent,
+    Accepted(Type),
+    Rejected,
+}
+
+/// Which partners of a `never` operand an operator accepts besides numbers and
+/// bigints.
+#[derive(Clone, Copy)]
+enum NeverPartners {
+    NumericOnly,
+    /// `+`, which also concatenates.
+    NumericOrString,
+}
+
+/// A `never` value can't exist, so the operator is accepted whenever some operand type
+/// would be, and its result comes from the other operand as tsc's does: `never + string`
+/// is `string`, `never - bigint` is `bigint`, and `never` with `never` is `number`.
+fn never_operand_result(lt: &Type, rt: &Type, partners: NeverPartners) -> NeverOperand {
+    let other = match (lt.peel(), rt.peel()) {
+        (Type::Never, _) => rt,
+        (_, Type::Never) => lt,
+        _ => return NeverOperand::Absent,
+    };
+    match (other.primitive_behavior(), partners) {
+        (Type::Never | Type::Number | Type::NumberLiteral(_), _) => {
+            NeverOperand::Accepted(Type::Number)
+        }
+        (Type::BigInt, _) => NeverOperand::Accepted(Type::BigInt),
+        (Type::String | Type::StringLiteral(_), NeverPartners::NumericOrString) => {
+            NeverOperand::Accepted(Type::String)
+        }
+        _ => NeverOperand::Rejected,
     }
 }
 
@@ -13533,5 +13683,15 @@ mod invariant_tests {
                 Err(CompilerFailure::Internal { .. })
             ));
         });
+    }
+}
+
+/// Whether `ty` holds an error type anywhere a cast compares, as `<error>[]` does.
+fn has_error_component(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Error => true,
+        Type::Array(inner) => has_error_component(inner),
+        Type::Tuple(members) | Type::Union(members) => members.iter().any(has_error_component),
+        _ => false,
     }
 }

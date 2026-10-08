@@ -53,12 +53,22 @@ enum Cmd {
     /// Interact with a running submilli-server.
     #[command(subcommand)]
     Server(commands::server::ServerCmd),
+    /// Run a local playground that serves this project's blueprint and shows
+    /// every run (macOS and Linux).
+    Playground(commands::playground::Args),
 }
 
 fn main() -> anyhow::Result<ExitCode> {
-    let _guard = telemetry::init();
-
     let cli = Cli::parse();
+    // A process that serves the playground runs programs in it, and nothing they
+    // touch may reach telemetry, panics included.
+    let serves_playground = matches!(&cli.cmd, Cmd::Playground(args) if args.serves());
+    let _guard = if serves_playground {
+        None
+    } else {
+        telemetry::init()
+    };
+
     if !matches!(cli.cmd, Cmd::Skill(_)) {
         commands::skill::warn_if_outdated();
     }
@@ -90,6 +100,7 @@ fn execute(cmd: Cmd) -> anyhow::Result<ExitCode> {
         Cmd::Mcp(cmd) => commands::mcp::execute(cmd),
         Cmd::Github(cmd) => commands::github::execute(cmd),
         Cmd::Server(cmd) => commands::server::execute(cmd),
+        Cmd::Playground(args) => commands::playground::execute(args),
     }
 }
 
@@ -121,6 +132,7 @@ fn invocation_attrs(cmd: &Cmd) -> (&'static str, Vec<(&'static str, bool)>) {
         Cmd::Mcp(sub) => (mcp_label(sub), Vec::new()),
         Cmd::Github(sub) => (github_label(sub), Vec::new()),
         Cmd::Server(sub) => (server_label(sub), Vec::new()),
+        Cmd::Playground(args) => (args.label(), Vec::new()),
     }
 }
 

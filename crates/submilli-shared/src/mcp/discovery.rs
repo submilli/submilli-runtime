@@ -106,7 +106,7 @@ const MAX_DISCOVERY_CATALOG_BYTES: usize = MCP_MAX_RESPONSE_BYTES;
 
 /// One reachable server's virtual package. Unavailable servers (unauthenticated or
 /// unreachable) are omitted from the catalog entirely — see [`discover_all`].
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct McpPackage {
     pub server: String,
     pub defs: PackageDeclaration,
@@ -163,6 +163,26 @@ impl McpCatalog {
         Self {
             packages: Vec::new(),
             unavailable: Vec::new(),
+        }
+    }
+
+    /// The catalog of the servers `keep` accepts alone, as discovering only those would
+    /// have built it.
+    #[must_use]
+    pub fn restricted_to(&self, keep: impl Fn(&str) -> bool) -> Self {
+        Self {
+            packages: self
+                .packages
+                .iter()
+                .filter(|package| keep(&package.server))
+                .cloned()
+                .collect(),
+            unavailable: self
+                .unavailable
+                .iter()
+                .filter(|warning| keep(&warning.server))
+                .cloned()
+                .collect(),
         }
     }
 

@@ -87,7 +87,10 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
                     if !first {
                         out.push("; ")?;
                     }
-                    out.push(name)?;
+                    if field.readonly {
+                        out.push("readonly ")?;
+                    }
+                    write_field_name(out, name)?;
                     out.push(if field.optional { "?: " } else { ": " })?;
                     push(
                         &mut frames,
@@ -259,6 +262,21 @@ fn push<'a>(frames: &mut Vec<Frame<'a>>, frame: Frame<'a>) -> Result<(), RenderE
     frames.try_reserve(1).map_err(|_| RenderError::Allocation)?;
     frames.push(frame);
     Ok(())
+}
+
+/// A field name as TypeScript prints it: bare when it is an identifier (keywords
+/// included), otherwise a quoted string, as `"a b"` and `"1"` are.
+fn write_field_name(out: &mut Writer, name: &str) -> Result<(), RenderError> {
+    let mut chars = name.chars();
+    let is_identifier = chars
+        .next()
+        .is_some_and(|c| c == '_' || c == '$' || unicode_ident::is_xid_start(c))
+        && chars.all(|c| c == '_' || c == '$' || unicode_ident::is_xid_continue(c));
+    if is_identifier {
+        out.push(name)
+    } else {
+        write_string(out, name)
+    }
 }
 
 pub(crate) fn write_string(out: &mut Writer, value: &str) -> Result<(), RenderError> {

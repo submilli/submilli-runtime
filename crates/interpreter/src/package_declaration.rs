@@ -46,6 +46,11 @@ pub struct PackageDeclaration {
     pub shapes: Vec<crate::Shape>,
     /// Prelude-declared namespaces (`Math`, `Temporal`). User `namespace {}` is a parse error; always empty for user-source modules.
     pub namespaces: BTreeMap<String, NamespaceSymbol>,
+    /// Functions and static methods whose closure cache the package exports as
+    /// a global (see [`crate::mangle::closure_cache`]), so that a consumer reading
+    /// one as a value gets the same closure the package itself does.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub closure_caches: BTreeSet<crate::MangledName>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -195,6 +200,7 @@ impl PackageDeclaration {
             runtime_generics: _,
             shapes,
             namespaces,
+            closure_caches: _,
         } = self;
         for RuntimeFunction { params, ret } in runtime_functions.values() {
             params.iter().for_each(&mut *visit);

@@ -8,7 +8,7 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    intrinsic_string_type, read_string_arg, register_host_fn, write_submilli_string_struct,
+    intrinsic_string_type, register_host_fn, uri_error, write_submilli_string_struct,
     write_submilli_string_struct_units,
 };
 use crate::runtime::prelude::MODULE_NAME;
@@ -28,10 +28,13 @@ fn is_uri_reserved(c: char) -> bool {
     )
 }
 
-fn encode(input: &str, keep: fn(char) -> bool) -> String {
+/// Encodes on UTF-16 code units: a lone surrogate has no UTF-8 form, so it is
+/// malformed, as the standard's Encode says.
+fn encode(input: &[u16], keep: fn(char) -> bool) -> Result<String, String> {
     let mut out = String::with_capacity(input.len());
     let mut buf = [0u8; 4];
-    for c in input.chars() {
+    for c in char::decode_utf16(input.iter().copied()) {
+        let c = c.map_err(|_| "URI malformed".to_string())?;
         if keep(c) {
             out.push(c);
         } else {
@@ -41,14 +44,14 @@ fn encode(input: &str, keep: fn(char) -> bool) -> String {
             }
         }
     }
-    out
+    Ok(out)
 }
 
-pub fn encode_uri_component_js(input: &str) -> String {
+pub fn encode_uri_component_js(input: &[u16]) -> Result<String, String> {
     encode(input, is_component_unreserved)
 }
 
-pub fn encode_uri_js(input: &str) -> String {
+pub fn encode_uri_js(input: &[u16]) -> Result<String, String> {
     encode(input, |c| is_component_unreserved(c) || is_uri_reserved(c))
 }
 
@@ -124,7 +127,7 @@ pub fn decode_uri_js(input: &[u16]) -> Result<Vec<u16>, String> {
 }
 
 pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-    type EncodeOp = fn(&str) -> String;
+    type EncodeOp = fn(&[u16]) -> Result<String, String>;
     type DecodeOp = fn(&[u16]) -> Result<Vec<u16>, String>;
     let engine = linker.engine().clone();
     let string_struct = ValType::Ref(RefType::new(
@@ -144,9 +147,10 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             ty.clone(),
             /* deterministic = */ true,
             move |caller, params, results| -> wasmtime::Result<()> {
-                let s = read_string_arg(&mut *caller, abi_arg(params, 0)?, name)?;
-                fuel::charge(&mut *caller, fuel::SCAN, s.len() as u64)?;
-                let st = write_submilli_string_struct(caller, &op(&s))?;
+                let units = read_string_units(&mut *caller, abi_arg(params, 0)?, name)?;
+                fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
+                let encoded = op(&units).map_err(uri_error)?;
+                let st = write_submilli_string_struct(caller, &encoded)?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
             },
@@ -166,7 +170,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             move |caller, params, results| -> wasmtime::Result<()> {
                 let units = read_string_units(&mut *caller, abi_arg(params, 0)?, name)?;
                 fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
-                let decoded = op(&units).map_err(wasmtime::Error::msg)?;
+                let decoded = op(&units).map_err(uri_error)?;
                 let st = write_submilli_string_struct_units(caller, &decoded)?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));
                 Ok(())
@@ -200,18 +204,18 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
     };
     insert(
         "encodeURIComponent",
-        "/**\n * Percent-encodes everything except letters, digits, and `- _ . ! ~ * ' ( )`.\n * Use for query values and path segments.\n * @param uri The text to encode.\n */",
+        "/**\n * Percent-encodes everything except letters, digits, and `- _ . ! ~ * ' ( )`.\n * Use for query values and path segments. Throws a catchable `URIError` on a lone surrogate.\n * @param uri The text to encode.\n */",
     );
     insert(
         "encodeURI",
-        "/**\n * Percent-encodes like `encodeURIComponent` but preserves the URI structure characters `; / ? : @ & = + $ , #`.\n * Use on a complete URI.\n * @param uri The URI to encode.\n */",
+        "/**\n * Percent-encodes like `encodeURIComponent` but preserves the URI structure characters `; / ? : @ & = + $ , #`.\n * Use on a complete URI. Throws a catchable `URIError` on a lone surrogate.\n * @param uri The URI to encode.\n */",
     );
     insert(
         "decodeURIComponent",
-        "/**\n * Decodes every `%XX` escape. Throws a catchable `Error` (`\"URI malformed\"`) on an invalid escape sequence.\n * @param uri The text to decode.\n */",
+        "/**\n * Decodes every `%XX` escape. Throws a catchable `URIError` (`\"URI malformed\"`) on an invalid escape sequence.\n * @param uri The text to decode.\n */",
     );
     insert(
         "decodeURI",
-        "/**\n * Decodes `%XX` escapes but leaves the URI structure characters `; / ? : @ & = + $ , #` encoded.\n * Throws a catchable `Error` (`\"URI malformed\"`) on an invalid escape sequence.\n * @param uri The URI to decode.\n */",
+        "/**\n * Decodes `%XX` escapes but leaves the URI structure characters `; / ? : @ & = + $ , #` encoded.\n * Throws a catchable `URIError` (`\"URI malformed\"`) on an invalid escape sequence.\n * @param uri The URI to decode.\n */",
     );
 }
