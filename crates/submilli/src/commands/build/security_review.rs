@@ -5,6 +5,9 @@ mod authority;
 mod report;
 mod snapshot;
 
+#[cfg(test)]
+mod evaluation;
+
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;

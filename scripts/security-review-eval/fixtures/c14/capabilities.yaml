@@ -1,0 +1,14 @@
+namespace: acme
+provides:
+- name: acme.read
+  description: Read the cached record.
+  fields:
+    path:
+      type: string
+- name: acme.refresh
+  description: Refresh a record without disclosing it.
+  fields:
+    path:
+      type: string
+requires:
+- capability: fs.read

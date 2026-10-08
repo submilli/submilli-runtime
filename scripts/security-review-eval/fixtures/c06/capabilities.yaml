@@ -1,0 +1,9 @@
+namespace: acme
+provides:
+- name: acme.write
+  description: Save a record.
+  fields:
+    path:
+      type: string
+requires:
+- capability: fs.write

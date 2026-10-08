@@ -95,3 +95,31 @@ and state/egress. Measure missed defects, false alarms, evidence quality, token
 cost and elapsed time. Record model/configuration and repeat enough to expose
 variation. Integration tests with mock agents prove plumbing, not model quality.
 Only then select a narrow rule supported by the evidence and deliver it separately.
+
+## Gate for each future static warning
+
+Before introducing a warning or promoting it in CI, its own complete PR must
+include all of the following. SUB-1428 supplies evaluation evidence and this
+process gate; it does not introduce a warning or promote existing diagnostics.
+
+- A small explicit contract defining the claim, supported syntax/dispatch and
+  inputs, proof assumptions, and what the rule cannot establish.
+- Source-located evidence sufficient to justify that claim within the supported
+  subset. Compiler metadata/schema errors remain a separate diagnostic category
+  and must not be presented as authorization defects.
+- Explicit abstention for unsupported values, aliases, mutation, dispatch or
+  control flow. Unknown means neither a warning nor a safety conclusion.
+- Unsafe regressions and safe counterexamples, including independently
+  authorized cleanup/fallbacks and boundaries where the rule must abstain.
+- An audit of every finding across every maintained package, recording the
+  package inventory and source revision, rule configuration, each disposition,
+  and any required scoped remediation. An empty warning count is not an audit
+  of suppressed or unexamined findings.
+- No known false positives, package exemptions or bulk suppressions. A confirmed
+  in-scope false positive blocks the rule's release until fixed or the supported
+  subset is narrowed with a regression. Filing an issue alone does not clear it.
+- Independent clean-code, correctness and edge-case review, focused verification,
+  and the repository's final post-rebase PR checks before CI promotion.
+
+Use the measured outcomes from `scripts/security-review-eval/README.md` to select
+future experiments. SUB-1496's denial-path warning remains a separate cycle.

@@ -46,7 +46,14 @@ impl Snapshot {
 
 pub(super) fn collect(only_package: Option<&str>) -> anyhow::Result<(Snapshot, ProjectManifest)> {
     let cwd = std::env::current_dir()?;
-    let manifest_path = find_manifest_upwards(&cwd)
+    collect_from(&cwd, only_package)
+}
+
+pub(super) fn collect_from(
+    directory: &Path,
+    only_package: Option<&str>,
+) -> anyhow::Result<(Snapshot, ProjectManifest)> {
+    let manifest_path = find_manifest_upwards(directory)
         .context("no submilli.toml found; run security-review from a package project")?;
     let root = manifest_path
         .parent()
