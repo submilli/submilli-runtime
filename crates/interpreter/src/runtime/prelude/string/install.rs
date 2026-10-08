@@ -1824,7 +1824,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Array(Box::new(Type::String)),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Split this string into pieces by matches of `separator`. For an empty string `separator`, returns each code unit as a separate part. For a `RegExp` `separator`, captured groups are NOT inserted between parts (JS divergence; documented).\n * @param separator Substring or pattern to split on.\n * @param limit Optional cap on the number of returned parts (default: no limit).\n */",
+                                "/**\n * Split this string into pieces by matches of `separator`. For an empty string `separator`, returns each code unit as a separate part. For a `RegExp` `separator`, each match's captured groups are inserted after the part before it, as in JavaScript (`null` for a group that didn't participate).\n * @param separator Substring or pattern to split on.\n * @param limit Optional cap on the number of returned parts (default: no limit).\n */",
                             ),
                         },
                     ),

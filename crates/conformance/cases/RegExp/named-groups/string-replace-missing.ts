@@ -1,5 +1,4 @@
 // test262: test/built-ins/RegExp/named-groups/string-replace-missing.js
-// expect-fail: the $<name> replacement token is not substituted at all — it passes through literally, so a missing group name keeps "$<fth>" instead of the empty string
 
 function main(): void {
   const source = "(?<fst>.)(?<snd>.)|(?<thd>x)";

@@ -70,25 +70,6 @@ impl<T: Copy> Buffer<T> {
     }
 }
 
-impl Buffer<u16> {
-    pub(super) fn append_text(
-        &mut self,
-        caller: &mut Caller<'_, StoreData>,
-        text: &str,
-    ) -> wasmtime::Result<()> {
-        fuel::charge(
-            &mut *caller,
-            fuel::SCAN,
-            (text.len() as u64).saturating_mul(2),
-        )?;
-        fuel::charge(&mut *caller, fuel::COPY, text.len() as u64)?;
-        let units = text.encode_utf16().count();
-        self.reserve(caller, units)?;
-        self.values.extend(text.encode_utf16());
-        Ok(())
-    }
-}
-
 impl Buffer<Val> {
     pub(super) fn push(
         &mut self,
