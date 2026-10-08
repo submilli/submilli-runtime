@@ -2409,7 +2409,16 @@ impl<'a> Parser<'a> {
             };
             Some(init_id)
         };
+        let for_stmt = self.finish_c_for(kw, init);
+        if for_stmt.is_none()
+            && let Some(init) = init
+        {
+            self.discard_detached_pattern(init);
+        }
+        for_stmt
+    }
 
+    fn finish_c_for(&mut self, kw: Token, init: Option<StmtId>) -> Option<StmtId> {
         let condition = if matches!(self.peek().kind, TokenKind::Semicolon) {
             None
         } else {
@@ -2448,6 +2457,20 @@ impl<'a> Parser<'a> {
             }),
             &mut self.fatal,
         )
+    }
+
+    /// A destructuring `for` initializer is lowered with its loop, so one whose
+    /// loop failed to parse would otherwise reach inference unlowered.
+    fn discard_detached_pattern(&mut self, init: StmtId) {
+        let Some(stmt) = parse_arena_result(self.ast.try_stmt_mut(init), &mut self.fatal) else {
+            return;
+        };
+        if matches!(
+            stmt.kind,
+            StmtKind::LetPattern { .. } | StmtKind::ConstPattern { .. }
+        ) {
+            stmt.kind = StmtKind::Block(Vec::new());
+        }
     }
 
     fn parse_for_update_stmt(&mut self) -> Option<StmtId> {

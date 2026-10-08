@@ -15,7 +15,11 @@ pub(crate) fn validate(ast: &Ast, source: &str, file: FileId) -> Result<(), Sour
     for origin in ast.pattern_origins.values() {
         validator.span(origin.pattern_span)?;
     }
-    for bindings in ast.for_of_pattern_bindings.values() {
+    for bindings in ast
+        .for_of_pattern_bindings
+        .values()
+        .chain(ast.for_pattern_init_bindings.values())
+    {
         validator.idents(bindings)?;
     }
     for expr in ast.source_expressions() {
