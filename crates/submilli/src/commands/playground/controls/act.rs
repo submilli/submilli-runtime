@@ -1003,7 +1003,7 @@ impl Actions {
         }
     }
 
-    pub(crate) fn cancel(&self, request: &RunRequest) -> Answer {
+    pub(crate) async fn cancel(&self, request: &RunRequest) -> Answer {
         let run = request.run;
         let Some(execution_id) = self.recorder.in_flight(run) else {
             let stored = matches!(self.store.load_run(run), Ok(Some(_)));
@@ -1016,7 +1016,17 @@ impl Actions {
                 .next([Next::Runs])
                 .into();
         };
-        let cancelled = self.app.cancel_run(&execution_id);
+        // The playground numbers a run as it starts, a moment before the server can
+        // cancel it, so a cancel that lands in between waits for it.
+        let deadline = tokio::time::Instant::now() + CANCEL_REGISTRATION_WAIT;
+        let mut cancelled = self.app.cancel_run(&execution_id);
+        while !cancelled
+            && self.recorder.in_flight(run).is_some()
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            cancelled = self.app.cancel_run(&execution_id);
+        }
         let result = CancelResult {
             kind: "cancel",
             run,
@@ -1039,6 +1049,9 @@ impl Actions {
         })
     }
 }
+
+/// How long `cancel` waits for a run it found in flight to become cancellable.
+const CANCEL_REGISTRATION_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Whether `blueprint` declares `name` as a secret its harness supplies.
 fn harness_declared(blueprint: &Blueprint, name: &str) -> bool {

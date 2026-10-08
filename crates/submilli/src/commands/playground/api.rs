@@ -6,7 +6,7 @@
 //! answer with the read result itself, for the page; the CLI reads the store directly.
 //! The event feed serves a session's event log as server-sent events.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::sync::Arc;
 
@@ -367,7 +367,7 @@ async fn cancel(
     request: Result<Json<RunRequest>, JsonRejection>,
 ) -> Response {
     match body(request) {
-        Ok(request) => answered(state.actions().cancel(&request)),
+        Ok(request) => answered(state.actions().cancel(&request).await),
         Err(refused) => *refused,
     }
 }
@@ -516,6 +516,9 @@ struct Feed {
     resume_after: u64,
     /// Runs of the session that started and have not finished, by execution id.
     in_flight: HashSet<String>,
+    /// Runs that finished and whose `returned` event, appended just after, has not been
+    /// read yet, with when the finish was read.
+    returning: HashMap<String, std::time::Instant>,
     /// Ready to send.
     pending: VecDeque<Event>,
     /// The session ended; the stream ends once `pending` is sent.
@@ -526,11 +529,14 @@ struct Feed {
 
 /// How often a quiet feed looks at whether its session is still open.
 const SESSION_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
+/// How long a finished run's `returned` event is waited for before the session counts as
+/// idle without it: a caller that went away gets none.
+const RETURN_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// `GET /api/sessions/{session}/events`: the session's event log as server-sent events,
 /// `id:` its sequence number, resuming after `Last-Event-ID`. Woken by each append; a
-/// `run-idle` event follows a batch in which a run of the session finished and none is
-/// left in flight. Once the session has ended (or is gone) and its log is read to the
+/// `run-idle` event follows a batch in which a run of the session finished and returned
+/// (or did not return within a moment) and none is left in flight. Once the session has ended (or is gone) and its log is read to the
 /// end, a `session-ended` event closes the stream; it also ends when the playground
 /// stops.
 async fn events(
@@ -551,6 +557,7 @@ async fn events(
         cursor: 0,
         resume_after,
         in_flight: HashSet::new(),
+        returning: HashMap::new(),
         pending: VecDeque::new(),
         ended: false,
     };
@@ -583,8 +590,15 @@ async fn events(
                 feed.ended = true;
                 continue;
             }
+            // A run that finished is idle once its `returned` event is read or its grace
+            // runs out, so wake for the grace.
+            let wait = if feed.returning.is_empty() {
+                SESSION_CHECK
+            } else {
+                RETURN_GRACE
+            };
             tokio::select! {
-                () = tokio::time::sleep(SESSION_CHECK) => {}
+                () = tokio::time::sleep(wait) => {}
                 changed = feed.appended.changed() => {
                     if changed.is_err() {
                         return None;
@@ -638,7 +652,11 @@ impl Feed {
                     }
                     EventKind::RunFinished { .. } => {
                         self.in_flight.remove(run);
-                        finished = true;
+                        self.returning
+                            .insert(run.clone(), std::time::Instant::now());
+                    }
+                    EventKind::Returned { .. } => {
+                        finished |= self.returning.remove(run).is_some();
                     }
                     _ => {}
                 }
@@ -647,7 +665,10 @@ impl Feed {
                 self.pending.push_back(sse_event(&event));
             }
         }
-        if finished && self.in_flight.is_empty() {
+        let before = self.returning.len();
+        self.returning.retain(|_, at| at.elapsed() < RETURN_GRACE);
+        finished |= self.returning.len() < before;
+        if finished && self.in_flight.is_empty() && self.returning.is_empty() {
             self.pending.push_back(
                 Event::default()
                     .event("run-idle")
