@@ -5214,11 +5214,11 @@ impl Inferer<'_> {
             other => other,
         };
         let checks_unknown_fields = !self.is_inference_source(literal);
-        // Still the union only when no member was picked above, so this check
-        // and the single-shape one below never both run.
         // Fields reported as unknown that the literal's type leaves out, so
         // the slot it fills doesn't report them again.
         let mut unknown_fields = BTreeSet::new();
+        // Still the union only when no member was picked above, so this check
+        // and the single-shape one below never both run.
         if checks_unknown_fields && let Some(Type::Union(union_members)) = peeled {
             unknown_fields = self.report_unknown_union_fields(union_members, &members)?;
         }
@@ -5539,9 +5539,11 @@ impl Inferer<'_> {
 
         // A literal rejected here reads as an error, so the slot it fills
         // doesn't report it again.
-        let shares_no_field = !checks_unknown_fields
-            && spread_index_values.is_empty()
-            && self.report_no_field_in_common(expected, &merged, span);
+        let shares_no_field = if !checks_unknown_fields && spread_index_values.is_empty() {
+            self.report_no_field_in_common(expected, &merged, span)
+        } else {
+            false
+        };
 
         // If we had an expected shape, surface missing required fields.
         // Fresh object literal excess fields were reported above; values that

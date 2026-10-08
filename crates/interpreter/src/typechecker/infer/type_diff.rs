@@ -40,11 +40,7 @@ fn weak_type_note(expected: &Type, got: &Type) -> Result<Option<String>, RenderE
     else {
         return Ok(None);
     };
-    let is_weak = !expected_fields.is_empty() && expected_fields.values().all(|f| f.optional);
-    let shares_field = expected_fields
-        .keys()
-        .any(|name| got_fields.contains_key(name));
-    if !is_weak || got_fields.is_empty() || shares_field {
+    if !super::assignable::weak_type_rejects(got_fields, expected_fields) {
         return Ok(None);
     }
     for ty in [expected, got] {

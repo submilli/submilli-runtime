@@ -1316,7 +1316,7 @@ fn type_nesting_depth(ty: &Type) -> usize {
 /// a ref slot — invalid Wasm), or let `{ p: number }` stand for `{ q?: string }`
 /// while it holds a `q` of another type. Require at least one member in common.
 /// An empty actual form stays assignable, mirroring TS's `{}`-source exemption.
-fn weak_type_rejects(
+pub(super) fn weak_type_rejects(
     actual_form: &BTreeMap<String, ObjectField>,
     expected_form: &BTreeMap<String, ObjectField>,
 ) -> bool {
