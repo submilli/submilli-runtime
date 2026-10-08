@@ -14,6 +14,16 @@ pub(crate) fn to_int32(value: f64) -> i32 {
     to_uint32(value) as i32
 }
 
+/// ECMAScript ToUint16, as `String.fromCharCode` applies it.
+pub(crate) fn to_uint16(value: f64) -> u16 {
+    to_uint32(value) as u16
+}
+
+/// ECMAScript ToUint8, as a `Uint8Array` byte write applies it.
+pub(crate) fn to_uint8(value: f64) -> u8 {
+    to_uint32(value) as u8
+}
+
 /// ECMAScript ToString for f64 — spells NaN/Infinity/-Infinity and
 /// normalizes -0 to "0" (Rust's default prints "inf" and keeps the sign).
 pub fn format_number_js(n: f64) -> String {

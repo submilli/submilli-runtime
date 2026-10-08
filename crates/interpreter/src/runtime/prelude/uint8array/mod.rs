@@ -83,11 +83,8 @@ fn backing(
     }
 }
 
-/// JavaScript's `ToUint8`: truncate, then reduce modulo 256, so `-1` is 255.
-/// `NaN` and `±Infinity` give `NaN` here, which the cast maps to 0.
 fn to_byte(n: f64) -> u8 {
-    let truncated = n.trunc();
-    (truncated - 256.0 * (truncated / 256.0).floor()) as u8
+    crate::runtime::number::to_uint8(n)
 }
 
 /// Box a byte into a `$boxed_number` for a callback argument or boxed return.
@@ -220,9 +217,17 @@ fn with(bytes: &[u8], index: f64, value: f64) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// The byte equal to `target`, which a search compares as a number: a value
+/// that isn't an integer from 0 to 255 equals no byte.
+fn searched_byte(target: f64) -> Option<u8> {
+    (target.fract() == 0.0 && (0.0..=255.0).contains(&target)).then(|| target as u8)
+}
+
 fn index_of(bytes: &[u8], target: f64, from: f64) -> f64 {
     let len = bytes.len() as i32;
-    let target = to_byte(target);
+    let Some(target) = searched_byte(target) else {
+        return -1.0;
+    };
     let mut i = fwd_from(from, len);
     while i < len {
         if bytes[i as usize] == target {
@@ -235,7 +240,9 @@ fn index_of(bytes: &[u8], target: f64, from: f64) -> f64 {
 
 fn last_index_of(bytes: &[u8], target: f64, from: f64) -> f64 {
     let len = bytes.len() as i32;
-    let target = to_byte(target);
+    let Some(target) = searched_byte(target) else {
+        return -1.0;
+    };
     let Some(mut i) = last_from(from, len) else {
         return -1.0;
     };

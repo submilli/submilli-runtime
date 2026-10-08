@@ -27,4 +27,11 @@ function main(): void {
   assert(bytes(written) === "254,254,254,254", "fill wraps");
   assert(Uint8Array.of(-3, 511).join(",") === "253,255", "of wraps");
   assert(new Uint8Array([1, 2]).map((b: number) => b - 3).join(",") === "254,255", "map wraps");
+
+  // A search compares numbers, so only an integer from 0 to 255 finds a byte.
+  const searched = new Uint8Array([255, 1, 0]);
+  assert(!searched.includes(-1) && searched.indexOf(-1) === -1, "-1 is no byte");
+  assert(searched.lastIndexOf(257) === -1 && searched.indexOf(1.5) === -1, "nor 257 or 1.5");
+  assert(!searched.includes(NaN) && !searched.includes(Infinity), "nor NaN or Infinity");
+  assert(searched.indexOf(255) === 0 && searched.includes(-0), "255 and -0 are");
 }
