@@ -25,7 +25,7 @@ use crate::did_you_mean;
 use crate::type_size::{TypeBudget, TypeTooLarge, map_children};
 
 use super::type_aliases::alias_ref_body;
-use super::{Inferer, assignable, narrowing};
+use super::{Inferer, assignable, narrowing, object_normalization};
 
 /// Typed field initializers and whether their own diagnostics explain an error.
 pub(super) type InferredObjectFields = std::collections::BTreeMap<ExprId, (ExprId, Type, bool)>;
@@ -6153,7 +6153,9 @@ impl Inferer<'_> {
         let object_literals = elements
             .iter()
             .map(|element| match element {
-                crate::ArrayLiteralElement::Value(id) => is_object_literal(self.ast, *id),
+                crate::ArrayLiteralElement::Value(id) => {
+                    object_normalization::is_fresh_literal(self.ast, *id)
+                }
                 crate::ArrayLiteralElement::Spread { .. } => Ok(false),
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -6169,7 +6171,7 @@ impl Inferer<'_> {
         // elements join by type afterwards.
         let open_element_type = !hint_pins_element_ty;
         let normalization = if open_element_type {
-            object_literal_normalization(self.ast, &elements)?
+            object_normalization::array_normalization(self.ast, &elements)?
         } else {
             None
         };
@@ -6178,7 +6180,7 @@ impl Inferer<'_> {
         // fields, and the arrays then join by type.
         let arrays_of_object_literals = open_element_type
             && normalization.is_none()
-            && every_array_of_object_literals(self.ast, &elements)?;
+            && object_normalization::every_array_of_object_literals(self.ast, &elements)?;
         // Whether the running element type is still the first element's, which
         // mismatch messages name.
         let mut running_is_first = true;
@@ -6194,7 +6196,11 @@ impl Inferer<'_> {
                     // A literal that will normalize takes a hint only from a running
                     // type of its own shape, which one with other fields can't match.
                     let lacks_running_shape = normalization.is_some()
-                        && !has_running_shape(self.ast, elem_id, element_ty.as_ref())?;
+                        && !object_normalization::has_running_shape(
+                            self.ast,
+                            elem_id,
+                            element_ty.as_ref(),
+                        )?;
                     // Such a literal still takes the expected element type, which only
                     // reaches here when it holds an unbound type parameter: its empty
                     // arrays and callbacks need that context, as in tsc.
@@ -6241,7 +6247,7 @@ impl Inferer<'_> {
                     };
                     let join = ElementJoin {
                         widens: open_element_type && !already_errored,
-                        normalization: normalization.as_ref(),
+                        unions: normalization.is_some() || arrays_of_object_literals,
                     };
                     match self.joined_element_type(running, &elem_ty, join) {
                         Some(joined) => {
@@ -6339,13 +6345,17 @@ impl Inferer<'_> {
         // The seed widened every literal type to check the elements against;
         // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
         // `"hello"[]`.
-        let element_ty = if hint_pins_element_ty {
-            element_ty
-        } else if normalization.is_none() && self.error_count() == errors_before {
+        let element_ty = if hint_pins_element_ty || self.error_count() > errors_before {
+            self.kept_element_type(element_ty, &typed_elements)?
+        } else if let Some(fresh) = &normalization {
+            // tsc reduces the literals' types to those no other is a subtype
+            // of before normalizing them against one another.
+            let element_types = self.array_literal_element_types(&typed_elements)?;
+            let reduced = self.without_fresh_subtypes(element_types);
+            object_normalization::normalized(&reduced, fresh)
+        } else {
             let element_ty =
                 self.best_common_element_type(element_ty, &typed_elements, &object_literals)?;
-            self.kept_element_type(element_ty, &typed_elements)?
-        } else {
             self.kept_element_type(element_ty, &typed_elements)?
         };
 
@@ -6473,27 +6483,17 @@ impl Inferer<'_> {
         elem_ty: &Type,
         join: ElementJoin,
     ) -> Option<Type> {
-        let fits = assignable(elem_ty, running, self.resolver());
-        // Object literals of the same shape join by type like any other
-        // elements; only differing fields need normalizing.
-        let shapes_differ = join
-            .normalization
-            .is_some_and(|nested_fields| !same_shape(running, elem_ty, nested_fields));
-        if fits && !shapes_differ {
+        if assignable(elem_ty, running, self.resolver()) {
             return Some(running.clone());
         }
         // A later element every earlier one fits becomes the element type, as
         // tsc's best common type: `[(x) => x, (x, y) => x * y]` holds
         // two-parameter functions.
-        if join.widens && !shapes_differ && assignable(running, elem_ty, self.resolver()) {
+        if join.widens && assignable(running, elem_ty, self.resolver()) {
             return Some(elem_ty.widen_literal());
         }
-        // Object literals with differing fields, or the same fields neither of
-        // which fits the other, join as tsc's normalized union:
-        // `[{ a: 0 }, { a: 1, b: "x" }]` holds
-        // `{ a: number; b?: never } | { a: number; b: string }`.
-        let nested_fields = join.normalization?;
-        normalized_object_union(running, &elem_ty.widen_literal(), nested_fields)
+        join.unions
+            .then(|| Type::union(vec![running.clone(), elem_ty.widen_literal()]))
     }
 
     /// Whether an array element is typed on its own rather than against the
@@ -9206,9 +9206,22 @@ impl Inferer<'_> {
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
-        let result_ty = match empty_literal_join(self.ast, (then_, &then_ty), (else_, &else_ty))? {
-            Some(joined) => joined,
-            None => conditional_result_type(then_ty, else_ty, self.resolver()),
+        let normalization = match expected {
+            None => object_normalization::conditional_normalization(self.ast, then_, else_)?,
+            Some(_) => None,
+        };
+        let result_ty = match (
+            normalization,
+            empty_literal_join(self.ast, (then_, &then_ty), (else_, &else_ty))?,
+        ) {
+            // Fresh object literals join as an array literal's elements do:
+            // `c ? { k: 1 } : { k: 2, m: 3 }` reads `m` from either.
+            (Some(fresh), _) if !then_ty.carries_void() && !else_ty.carries_void() => {
+                let reduced = self.without_fresh_subtypes(vec![then_ty, else_ty]);
+                object_normalization::normalized(&reduced, &fresh)
+            }
+            (_, Some(joined)) => joined,
+            _ => conditional_result_type(then_ty, else_ty, self.resolver()),
         };
         Ok((
             TypedExprKind::Ternary {
@@ -11289,14 +11302,6 @@ fn holds_no_element(ty: &Type) -> bool {
     }
 }
 
-fn is_object_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    Ok(matches!(
-        &ast.try_expr(id).map_err(super::arena_failure)?.kind,
-        ExprKind::ObjectLiteral { .. }
-    ))
-}
-
 fn is_empty_object_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
     let id = peel_parens(ast, expr)?;
     Ok(matches!(
@@ -11342,12 +11347,12 @@ fn matched_elements(running_is_first: bool) -> &'static str {
 }
 
 #[derive(Clone, Copy)]
-struct ElementJoin<'a> {
+struct ElementJoin {
     /// Whether a later element may widen the element type to its own.
     widens: bool,
-    /// Present when every element is a fresh object literal: the fields that
-    /// normalize one level down. See `object_literal_normalization`.
-    normalization: Option<&'a BTreeSet<String>>,
+    /// Whether elements that don't fit one another join as a union, which
+    /// the literal reduces and normalizes once every element is typed.
+    unions: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -11365,319 +11370,6 @@ pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, 
             _ => return Ok(expr),
         }
     }
-}
-
-/// tsc normalizes only fresh object literals, whose types list every field
-/// they hold. When every element is one, the fields holding a fresh object
-/// literal in every element that has them, which normalize one level down.
-/// `None` otherwise: a value typed with fewer fields may hold the others, with
-/// any type.
-fn object_literal_normalization(
-    ast: &crate::Ast,
-    elements: &[crate::ArrayLiteralElement],
-) -> Result<Option<BTreeSet<String>>, CompilerFailure> {
-    let mut fresh = BTreeSet::new();
-    let mut stale = BTreeSet::new();
-    for element in elements {
-        let crate::ArrayLiteralElement::Value(id) = element else {
-            return Ok(None);
-        };
-        let Some(literals) = fresh_object_choices(ast, *id)? else {
-            return Ok(None);
-        };
-        for field in literals.into_iter().flatten() {
-            let names = if is_fresh_object(ast, field.value)? {
-                &mut fresh
-            } else {
-                &mut stale
-            };
-            names.insert(field.name.name.clone());
-        }
-    }
-    Ok(Some(fresh.difference(&stale).cloned().collect()))
-}
-
-/// The fields of a fresh object literal: one that only names its fields, with
-/// no spread or computed key that could bring in fields its type doesn't list.
-fn fresh_object_fields(
-    ast: &crate::Ast,
-    expr: ExprId,
-) -> Result<Option<Vec<&crate::ObjectLiteralField>>, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    let ExprKind::ObjectLiteral { members } = &ast.try_expr(id).map_err(super::arena_failure)?.kind
-    else {
-        return Ok(None);
-    };
-    Ok(members
-        .iter()
-        .map(|member| match member {
-            crate::ObjectLiteralMember::Field(field) => Some(field),
-            _ => None,
-        })
-        .collect())
-}
-
-/// Whether every element is a non-empty array literal whose elements are all
-/// fresh object literals, or conditionals choosing between them.
-fn every_array_of_object_literals(
-    ast: &crate::Ast,
-    elements: &[crate::ArrayLiteralElement],
-) -> Result<bool, CompilerFailure> {
-    for element in elements {
-        let crate::ArrayLiteralElement::Value(id) = element else {
-            return Ok(false);
-        };
-        let id = peel_parens(ast, *id)?;
-        let ExprKind::ArrayLiteral { elements: inner } =
-            &ast.try_expr(id).map_err(super::arena_failure)?.kind
-        else {
-            return Ok(false);
-        };
-        if inner.is_empty() || object_literal_normalization(ast, inner)?.is_none() {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// The fields of each fresh object literal `expr` may evaluate to: itself, or
-/// each branch of a conditional choosing between such literals. `None` when it
-/// may evaluate to anything else.
-fn fresh_object_choices(
-    ast: &crate::Ast,
-    expr: ExprId,
-) -> Result<Option<Vec<Vec<&crate::ObjectLiteralField>>>, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    if let ExprKind::Ternary { then_, else_, .. } =
-        &ast.try_expr(id).map_err(super::arena_failure)?.kind
-    {
-        let (Some(mut choices), Some(others)) = (
-            fresh_object_choices(ast, *then_)?,
-            fresh_object_choices(ast, *else_)?,
-        ) else {
-            return Ok(None);
-        };
-        choices.extend(others);
-        return Ok(Some(choices));
-    }
-    Ok(fresh_object_fields(ast, id)?.map(|fields| vec![fields]))
-}
-
-/// Whether the object literal `expr` names exactly the fields of `running`, a
-/// single object type, and so does each object literal it holds directly.
-fn has_running_shape(
-    ast: &crate::Ast,
-    expr: ExprId,
-    running: Option<&Type>,
-) -> Result<bool, CompilerFailure> {
-    let Some(Type::Object { fields, .. }) = running else {
-        return Ok(false);
-    };
-    let Some(literal_fields) = fresh_object_fields(ast, expr)? else {
-        return Ok(false);
-    };
-    let literal_names = literal_fields
-        .iter()
-        .map(|field| &field.name.name)
-        .collect::<BTreeSet<_>>();
-    if literal_names != fields.keys().collect() {
-        return Ok(false);
-    }
-    for field in literal_fields {
-        let running_field = fields.get(&field.name.name).map(|running| &running.ty);
-        if matches!(running_field, Some(Type::Object { .. }))
-            && fresh_object_fields(ast, field.value)?.is_some()
-            && !has_running_shape(ast, field.value, running_field)?
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// Whether `expr` evaluates to a fresh object literal: one, or a conditional
-/// choosing between two.
-fn is_fresh_object(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    if let ExprKind::Ternary { then_, else_, .. } =
-        &ast.try_expr(id).map_err(super::arena_failure)?.kind
-    {
-        return Ok(is_fresh_object(ast, *then_)? && is_fresh_object(ast, *else_)?);
-    }
-    Ok(fresh_object_fields(ast, id)?.is_some())
-}
-
-/// The object members of `ty`: itself, or each member of a union of objects.
-fn object_members(ty: &Type) -> Option<Vec<&Type>> {
-    match ty {
-        Type::Object { .. } => Some(vec![ty]),
-        Type::Union(members) => members
-            .iter()
-            .map(|member| matches!(member, Type::Object { .. }).then_some(member))
-            .collect(),
-        _ => None,
-    }
-}
-
-fn field_names(ty: &Type) -> BTreeSet<&String> {
-    member_field_maps(ty)
-        .flat_map(|fields| fields.keys())
-        .collect()
-}
-
-/// The field names across `types`.
-fn field_names_across<'a>(types: &[&'a Type]) -> BTreeSet<&'a String> {
-    types.iter().flat_map(|ty| field_names(ty)).collect()
-}
-
-/// Whether `left` and `right` name the same fields, and the same fields within
-/// each of `nested_fields`, the ones that normalize one level down.
-fn same_shape(left: &Type, right: &Type, nested_fields: &BTreeSet<String>) -> bool {
-    let nested_names =
-        |ty, name| field_names_across(&nested_field_types(member_field_maps(ty), name));
-    field_names(left) == field_names(right)
-        && nested_fields
-            .iter()
-            .all(|name| nested_names(left, name) == nested_names(right, name))
-}
-
-/// The field maps of `ty`'s object members, with or without an index.
-fn member_field_maps(ty: &Type) -> impl Iterator<Item = &ObjectFields> {
-    object_members(ty)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|member| match member {
-            Type::Object { fields, .. } => Some(fields),
-            _ => None,
-        })
-}
-
-/// The types field `name` holds across `members`, leaving out the fields an
-/// earlier join added, which say nothing about it.
-fn nested_field_types<'a>(
-    members: impl Iterator<Item = &'a ObjectFields>,
-    name: &str,
-) -> Vec<&'a Type> {
-    members
-        .filter_map(|fields| fields.get(name))
-        .filter(|field| !is_added_missing_field(field))
-        .map(|field| &field.ty)
-        .collect()
-}
-
-/// tsc's normalized union of object literal types: each member gains, as an
-/// optional `never` field (tsc's `?: undefined`), every field only other
-/// members declare, so any of them reads from the union. Each of
-/// `nested_fields` that holds objects in every member that has it is
-/// normalized the same way, one level down.
-/// `None` unless both sides are index-free objects.
-fn normalized_object_union(
-    left: &Type,
-    right: &Type,
-    nested_fields: &BTreeSet<String>,
-) -> Option<Type> {
-    let members = object_field_maps(left, right)?;
-    let all_names = members
-        .iter()
-        .flat_map(|fields| fields.keys())
-        .collect::<BTreeSet<_>>();
-    let nested_names_by_field = nested_object_field_names(&members, nested_fields);
-    let normalized = members
-        .into_iter()
-        .map(|fields| {
-            let mut fields = fields.clone();
-            for (name, nested_names) in &nested_names_by_field {
-                if let Some(field) = fields.get_mut(name) {
-                    field.ty = type_with_missing_fields(&field.ty, nested_names);
-                }
-            }
-            Type::Object {
-                fields: fields_with_missing(fields, all_names.iter().copied()),
-                index: None,
-            }
-        })
-        .collect();
-    Some(Type::union(normalized))
-}
-
-/// The field maps of the object members of `left` and `right`, or `None`
-/// unless every member is an index-free object.
-fn object_field_maps<'a>(left: &'a Type, right: &'a Type) -> Option<Vec<&'a ObjectFields>> {
-    let mut members = object_members(left)?;
-    members.extend(object_members(right)?);
-    members
-        .into_iter()
-        .map(|member| match member {
-            Type::Object {
-                fields,
-                index: None,
-            } => Some(fields),
-            _ => None,
-        })
-        .collect()
-}
-
-/// For each of `candidates` that holds objects in every member that has it,
-/// the field names across those objects.
-fn nested_object_field_names(
-    members: &[&ObjectFields],
-    candidates: &BTreeSet<String>,
-) -> BTreeMap<String, BTreeSet<String>> {
-    candidates
-        .iter()
-        .filter_map(|name| {
-            let field_types = nested_field_types(members.iter().copied(), name);
-            field_types
-                .iter()
-                .all(|ty| object_members(ty).is_some())
-                .then(|| {
-                    let nested_names = field_names_across(&field_types)
-                        .into_iter()
-                        .cloned()
-                        .collect();
-                    (name.clone(), nested_names)
-                })
-        })
-        .collect()
-}
-
-/// A field an earlier join added to normalize the running element type. It
-/// says nothing about the field's type, so it doesn't stop the field from
-/// holding objects.
-fn is_added_missing_field(field: &crate::ObjectField) -> bool {
-    field.optional && field.ty == Type::Never
-}
-
-/// Each object member of `ty` with the fields of `names` it lacks added as
-/// optional `never`, which reads as `null`.
-fn type_with_missing_fields(ty: &Type, names: &BTreeSet<String>) -> Type {
-    let Some(members) = object_members(ty) else {
-        return ty.clone();
-    };
-    Type::union(
-        members
-            .into_iter()
-            .map(|member| match member {
-                Type::Object { fields, index } => Type::Object {
-                    fields: fields_with_missing(fields.clone(), names.iter()),
-                    index: index.clone(),
-                },
-                other => other.clone(),
-            })
-            .collect(),
-    )
-}
-
-fn fields_with_missing<'a>(
-    mut fields: ObjectFields,
-    names: impl Iterator<Item = &'a String>,
-) -> ObjectFields {
-    for name in names {
-        fields
-            .entry(name.clone())
-            .or_insert_with(|| crate::ObjectField::optional(Type::Never));
-    }
-    fields
 }
 
 /// Whether `expr` is an empty `[]`, or holds one as a ternary branch or an

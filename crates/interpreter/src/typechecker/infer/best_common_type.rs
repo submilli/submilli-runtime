@@ -11,6 +11,7 @@ use crate::types::Type;
 
 use super::Inferer;
 use super::assignable::assignable;
+use super::object_normalization::has_excess_field;
 
 /// One distinct type an array literal's elements hold.
 struct Candidate {
@@ -57,6 +58,32 @@ impl Inferer<'_> {
             .iter()
             .all(|candidate| assignable(&candidate.ty, &union, self.resolver()));
         Ok(if fits { union } else { joined })
+    }
+
+    /// The union of `types`, each a fresh literal's, reduced to those no other
+    /// is a subtype of, as tsc reduces the object literals it then normalizes:
+    /// `{ a: { b: never[] } }` goes beside `{ a: { b: number[] } }`, while
+    /// `{ a: {} }` stays, having no field `b` to read.
+    pub(super) fn without_fresh_subtypes(&self, types: Vec<Type>) -> Type {
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for ty in types {
+            let ty = ty.widen_literal();
+            let members = match ty.peel() {
+                Type::Union(members) => members.clone(),
+                _ => vec![ty],
+            };
+            for member in members {
+                if !matches!(member.peel(), Type::Never)
+                    && !candidates.iter().any(|c| c.ty == member)
+                {
+                    candidates.push(Candidate {
+                        ty: member,
+                        fresh: true,
+                    });
+                }
+            }
+        }
+        Type::union(self.without_subtypes(&candidates))
     }
 
     /// The distinct types the elements hold, in source order, with a union's
@@ -130,6 +157,9 @@ impl Inferer<'_> {
     /// of the other, at any depth.
     fn is_subtype(&self, source: &Candidate, target: &Candidate) -> bool {
         if !assignable(&source.ty, &target.ty, self.resolver()) {
+            return false;
+        }
+        if source.fresh && has_excess_field(&source.ty, &target.ty) {
             return false;
         }
         source.fresh
