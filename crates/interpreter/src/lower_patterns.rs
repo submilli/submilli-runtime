@@ -8,8 +8,8 @@ use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::tree_height;
 
 use crate::{
-    ArrowBody, Ast, Binding, BindingKind, Expr, ExprId, ExprKind, Ident, ParamDecl, PatternOrigin,
-    Span, Stmt, StmtId, StmtKind,
+    ArrowBody, Ast, Binding, BindingKind, ClassMember, Expr, ExprId, ExprKind, Ident, ParamDecl,
+    PatternOrigin, Span, Stmt, StmtId, StmtKind,
 };
 
 pub fn lower(mut ast: Ast) -> Result<Ast, CompilerFailure> {
@@ -19,6 +19,7 @@ pub fn lower(mut ast: Ast) -> Result<Ast, CompilerFailure> {
     let mut ctx = LowerCtx { next_tmp: 0 };
     ctx.lower_arrows(&mut ast)?;
     ctx.lower_function_params(&mut ast)?;
+    ctx.lower_class_member_params(&mut ast)?;
     ctx.lower_for_of_patterns(&mut ast)?;
     ctx.lower_for_pattern_inits(&mut ast)?;
     ctx.lower_pattern_stmts(&mut ast)?;
@@ -217,6 +218,65 @@ impl LowerCtx {
         };
         // Span is unchanged, but reassert for the linter.
         let _ = stmt_span;
+
+        Ok(())
+    }
+
+    fn lower_class_member_params(&mut self, ast: &mut Ast) -> Result<(), CompilerFailure> {
+        for id in ast
+            .stmt_ids()
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+        {
+            let StmtKind::ClassDecl { members, .. } = &mut ast
+                .try_stmt_mut(id)
+                .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+                .kind
+            else {
+                continue;
+            };
+            let mut taken = std::mem::take(members);
+            let lowered = self.lower_member_params(ast, &mut taken);
+            // Restore the members before reporting a failure, so the class
+            // keeps its shape either way.
+            let StmtKind::ClassDecl { members, .. } = &mut ast
+                .try_stmt_mut(id)
+                .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+                .kind
+            else {
+                return Err(lowering_failure(
+                    "unexpected node kind during pattern lowering",
+                ));
+            };
+            *members = taken;
+            lowered?;
+        }
+
+        Ok(())
+    }
+
+    fn lower_member_params(
+        &mut self,
+        ast: &mut Ast,
+        members: &mut [ClassMember],
+    ) -> Result<(), CompilerFailure> {
+        for member in members {
+            let (params, body) = match member {
+                ClassMember::Method { params, body, .. }
+                | ClassMember::Constructor { params, body, .. } => (params.as_mut_slice(), *body),
+                ClassMember::Accessor {
+                    param: Some(param),
+                    body,
+                    ..
+                } => (std::slice::from_mut(param.as_mut()), *body),
+                ClassMember::Accessor { param: None, .. } | ClassMember::Field { .. } => continue,
+            };
+            if params.iter().all(|param| param.pattern.is_none()) {
+                continue;
+            }
+            let mut decompose = Vec::new();
+            self.materialise_pattern_params(ast, params, &mut decompose)?;
+            self.prepend_to_block(ast, body, decompose)?;
+        }
 
         Ok(())
     }
