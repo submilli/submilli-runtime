@@ -170,6 +170,7 @@ pub(crate) fn serve(options: HostOptions) -> Result<Served> {
         Some(Arc::new(Recorder::new(Arc::clone(&store), secrets))),
     );
     config.volumes = super::project::volumes(&options.project);
+    config.session_cipher = Some(Arc::new(state_dir.session_cipher()?));
     let freshness = Arc::new(Freshness::new(Arc::clone(&packages)));
     config.pre_execute = Some(Arc::clone(&freshness) as _);
     let runtime = submilli_server::runtime(&config).context("starting the async runtime")?;

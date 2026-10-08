@@ -4,7 +4,7 @@
 //!
 //! * `POST   /v1/sessions`            — create: bind blueprint + variables (returns id)
 //! * `POST   /v1/sessions/{id}/execute` — run code in that session (code only)
-//! * `POST   /v1/sessions/{id}/rebind` — replace memory-only harness secrets
+//! * `POST   /v1/sessions/{id}/rebind` — replace encrypted harness secrets
 //! * `DELETE /v1/sessions/{id}`       — terminate, wiping the VFS immediately
 
 use std::collections::BTreeMap;
@@ -38,7 +38,7 @@ pub struct CreateRequest {
     #[serde(default)]
     pub variables: Option<BTreeMap<String, String>>,
     /// Trusted harness credentials. Validated against `secrets:` declarations
-    /// and kept only in this process's session entry.
+    /// and encrypted in durable session storage.
     #[serde(default)]
     pub secrets: Option<HarnessSecretBindings>,
 }
@@ -139,11 +139,7 @@ pub async fn create(
             };
             (session_header(&session_id), Json(body)).into_response()
         }
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": err.to_string() })),
-        )
-            .into_response(),
+        Err(error) => session_state_response(error),
     }
 }
 
@@ -167,7 +163,10 @@ pub async fn execute(
             "execution_id": crate::audit::execution_id(), "error": "invalid_request", "message": error.body_text()
         }))).into_response(),
     };
-    let blueprint_name = state.session_manager().blueprint_name(&session_id);
+    let blueprint_name = match state.session_manager().blueprint_name(&session_id).await {
+        Ok(name) => name,
+        Err(error) => return session_state_response(error),
+    };
     let Some(blueprint_name) = blueprint_name else {
         return (
             StatusCode::NOT_FOUND,
@@ -200,11 +199,23 @@ pub async fn execute(
     };
 
     let blueprint = &found.blueprint;
-    let variables = state.session_manager().variables(&session_id);
+    let (binding, secrets) = match state
+        .session_manager()
+        .execution_bindings(&session_id)
+        .await
+    {
+        Ok(record) => record,
+        Err(error) => return session_state_response(error),
+    };
+    let variables = Arc::new(binding.variables().clone());
     if let Some(audit) = crate::audit::execution() {
         audit.annotate(&req.code, &blueprint_name, Some(blueprint), &variables);
     }
-    let harness_secrets = execution_secrets(&state, &session_id, blueprint);
+    let harness_secrets = secrets.or_else(|| {
+        required_harness_secrets(&blueprint.secrets)
+            .is_empty()
+            .then(Arc::default)
+    });
     let Some(harness_secrets) = harness_secrets else {
         return (
             StatusCode::CONFLICT,
@@ -263,7 +274,9 @@ pub async fn execute(
             // A replay is session activity: a client retrying must not have its
             // session reaped underneath it. `execute_core` normally does this,
             // and the replay path never reaches it.
-            state.session_manager().touch(&session_id).await;
+            if let Err(error) = state.session_manager().touch(&session_id).await {
+                return session_state_response(error);
+            }
             return recorded_response(&session_id, &outcome);
         }
         Reservation::Proceed(guard) => guard,
@@ -398,7 +411,10 @@ pub async fn rebind(
     Path(session_id): Path<String>,
     Json(req): Json<RebindRequest>,
 ) -> impl IntoResponse {
-    let blueprint_name = state.session_manager().blueprint_name(&session_id);
+    let blueprint_name = match state.session_manager().blueprint_name(&session_id).await {
+        Ok(name) => name,
+        Err(error) => return session_state_response(error),
+    };
     let Some(blueprint_name) = blueprint_name else {
         return (
             StatusCode::NOT_FOUND,
@@ -440,6 +456,7 @@ pub async fn rebind(
     match state
         .session_manager()
         .rebind_harness_secrets(&session_id, resolved)
+        .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(crate::session_manager::SessionError::UnknownSession) => (
@@ -451,20 +468,6 @@ pub async fn rebind(
     }
 }
 
-fn execution_secrets(
-    state: &AppState,
-    session_id: &str,
-    blueprint: &submilli_blueprint::Blueprint,
-) -> Option<Arc<HarnessSecretBindings>> {
-    match state.session_manager().harness_secrets(session_id) {
-        Some(secrets) => Some(secrets),
-        None if required_harness_secrets(&blueprint.secrets).is_empty() => {
-            Some(Arc::new(HarnessSecretBindings::new()))
-        }
-        None => None,
-    }
-}
-
 /// Terminate a session, wiping its `per_session` VFS immediately. The MCP
 /// transport's HTTP `DELETE` maps to the same `wipe_now` path.
 pub async fn disconnect(
@@ -472,22 +475,47 @@ pub async fn disconnect(
     Path(session_id): Path<String>,
 ) -> axum::response::Response {
     match state.session_manager().wipe_now(&session_id).await {
-        true => StatusCode::NO_CONTENT.into_response(),
-        false => StatusCode::NOT_FOUND.into_response(),
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => session_state_response(error),
     }
 }
 
-fn session_state_response(error: crate::session_manager::SessionError) -> axum::response::Response {
+pub(crate) fn session_state_response(
+    error: crate::session_manager::SessionError,
+) -> axum::response::Response {
+    use crate::session_manager::SessionError;
+    let (status, message) = match &error {
+        SessionError::CleanupPending => (
+            StatusCode::CONFLICT,
+            "session cleanup is pending".to_owned(),
+        ),
+        SessionError::UnknownSession => (
+            StatusCode::NOT_FOUND,
+            "unknown or expired session".to_owned(),
+        ),
+        SessionError::Secrets(message) => (StatusCode::CONFLICT, message.clone()),
+        SessionError::InvalidVfs(_)
+        | SessionError::UnknownVolume(_)
+        | SessionError::VolumeUnavailable(_)
+        | SessionError::MountFailed { .. } => {
+            (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+        }
+        SessionError::Storage(_) | SessionError::Io(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "session state unavailable".to_owned(),
+        ),
+    };
     tracing::error!(%error, "session state unavailable");
     if let Some(audit) = crate::audit::execution() {
         audit.error(crate::error::ErrorKind::RuntimeError);
     }
     (
-        StatusCode::INTERNAL_SERVER_ERROR,
+        status,
         Json(serde_json::json!({
             "execution_id": crate::audit::execution_id(),
-            "error": "internal_error",
-            "message": "session state unavailable"
+            "error": "session_state_unavailable",
+            "message": message
         })),
     )
         .into_response()

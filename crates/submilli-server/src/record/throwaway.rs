@@ -152,14 +152,26 @@ impl Throwaway {
             .map_err(|error| ThrowawayError::Unavailable(error.to_string()))?;
         let per_session = matches!(config, VfsConfig::PerSession { .. });
         let source_root = if per_session {
-            source_session.and_then(|session| manager.session_vfs_root(session))
+            match source_session {
+                Some(session) => manager
+                    .session_vfs_root(session)
+                    .await
+                    .map_err(|error| ThrowawayError::Unavailable(error.to_string()))?,
+                None => None,
+            }
         } else {
             None
         };
         let planned = plan_volumes(manager, &config)?;
-        let session_found = source_session.is_some_and(|session| manager.contains(session));
+        let session_found = match source_session {
+            Some(session) => manager
+                .contains(session)
+                .await
+                .map_err(|error| ThrowawayError::Unavailable(error.to_string()))?,
+            None => false,
+        };
         let kv_base = source_session
-            .filter(|session| manager.contains(session))
+            .filter(|_| session_found)
             .map(|session| manager.session_kv_for_execute(session));
         let dir = tempfile::tempdir().map_err(|error| ThrowawayError::Io(error.to_string()))?;
         let to_copy = planned
@@ -1003,7 +1015,11 @@ mod tests {
             )
             .await
             .unwrap();
-        let session_dir = manager.session_vfs_root(&session).expect("per_session dir");
+        let session_dir = manager
+            .session_vfs_root(&session)
+            .await
+            .unwrap()
+            .expect("per_session dir");
         std::fs::write(session_dir.join("notes.txt"), "written by the source run").unwrap();
         manager
             .session_kv_for_execute(&session)

@@ -269,10 +269,12 @@ impl SubmilliMcp {
                     .vfs_for_execute_with_variables(sid, blueprint, variables)
                     .await
             } else {
-                manager.session_vfs_with_variables(sid, blueprint, variables)
+                manager
+                    .session_vfs_with_variables(sid, blueprint, variables)
+                    .await
             }
             .map_err(vfs_session_error)?;
-            manager.touch(sid).await;
+            manager.touch(sid).await.map_err(vfs_session_error)?;
             Ok(pair)
         } else {
             let vfs = build_vfs(
@@ -349,12 +351,19 @@ impl SubmilliMcp {
         // Stateful transport: every connection has a session id (rmcp rejects a
         // non-initialize request without one before we get here).
         let session_id = session_header(&parts);
-        // Variables were bound and validated at `initialize`; read this session's
-        // resolved bindings (empty if none) for the policy filter.
-        let variables = self
+        let sid = session_id.as_deref().unwrap_or("");
+        self.state
+            .session_manager()
+            .start_execution(sid)
+            .await
+            .map_err(vfs_session_error)?;
+        let (binding, secrets) = self
             .state
             .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
+            .execution_bindings(sid)
+            .await
+            .map_err(vfs_session_error)?;
+        let variables = Arc::new(binding.variables().clone());
 
         audit.annotate(
             &args.code,
@@ -363,11 +372,7 @@ impl SubmilliMcp {
             &variables,
         );
         audit.begin();
-        let harness_secrets = match self
-            .state
-            .session_manager()
-            .harness_secrets(session_id.as_deref().unwrap_or(""))
-        {
+        let harness_secrets = match secrets {
             Some(secrets) => secrets,
             None if required_harness_secrets(&blueprint.secrets).is_empty() => {
                 Arc::new(HarnessSecretBindings::new())
@@ -614,7 +619,9 @@ impl SubmilliMcp {
         let variables = self
             .state
             .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
+            .variables(session_id.as_deref().unwrap_or(""))
+            .await
+            .map_err(vfs_session_error)?;
         if let Err(refused) = self.authorize_file_call(
             &parts,
             Arc::clone(&blueprint),
@@ -674,7 +681,9 @@ impl SubmilliMcp {
         let variables = self
             .state
             .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
+            .variables(session_id.as_deref().unwrap_or(""))
+            .await
+            .map_err(vfs_session_error)?;
         let dir = args.path.as_deref().unwrap_or(".");
         let recursive = args.recursive.unwrap_or(false);
         if let Err(refused) = self.authorize_file_call(
@@ -1181,7 +1190,9 @@ impl ServerHandler for SubmilliMcp {
         let variables = self
             .state
             .session_manager()
-            .variables(session_id.as_deref().unwrap_or(""));
+            .variables(session_id.as_deref().unwrap_or(""))
+            .await
+            .map_err(vfs_session_error)?;
         blueprint.vfs = blueprint
             .vfs
             .resolve(&variables)
@@ -1246,7 +1257,9 @@ impl SubmilliMcp {
             let variables = self
                 .state
                 .session_manager()
-                .variables(session.as_deref().unwrap_or(""));
+                .variables(session.as_deref().unwrap_or(""))
+                .await
+                .map_err(vfs_session_error)?;
             audit.annotate(code, &self.blueprint_name, None, &variables);
             if let Some(parts) = context.extensions.get_mut::<axum::http::request::Parts>() {
                 parts.extensions.insert(audit.clone());

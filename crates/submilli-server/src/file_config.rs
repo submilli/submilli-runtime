@@ -971,6 +971,9 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         .map(|(cert, key)| submilli_server::tls::load(&cert, &key))
         .transpose()?;
     let secret_store = resolve_secret_store(&cli, &file, &env)?;
+    let session_cipher = secret_key_source(&cli, &file, &env)
+        .map(|source| submilli_shared::secret_store::SecretCipher::new(&source).map(Arc::new))
+        .transpose()?;
     let mcp_allowed_hosts = resolve_mcp_allowed_hosts(&cli, &file, &env);
     let runtime = RuntimeConfig {
         max_store_bytes: max_execution_memory(&cli, &file, &env)?,
@@ -1058,6 +1061,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         package_fallback_root: Some(default_cli_package_store_dir()),
         network_policy,
         secret_store,
+        session_cipher,
         mcp_allowed_hosts,
         mcp_oauth_providers,
         max_session_state_memory,

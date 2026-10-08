@@ -614,7 +614,7 @@ async fn failed_sqlx_migration_rolls_back_schema_and_completion() {
             Box::pin(async move {
                 let mut migrations: Vec<_> = MIGRATOR.iter().cloned().collect();
                 migrations.push(sqlx::migrate::Migration::new(
-                    2,
+                    3,
                     "failing".into(),
                     sqlx::migrate::MigrationType::Simple,
                     "CREATE TABLE partial (value INTEGER); INSERT INTO missing VALUES (1);"
@@ -634,7 +634,7 @@ async fn failed_sqlx_migration_rolls_back_schema_and_completion() {
                         .await?;
                 assert_eq!(count, 0);
                 let count: i64 =
-                    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=2")
+                    sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE version=3")
                         .fetch_one(connection)
                         .await?;
                 assert_eq!(count, 0);
@@ -647,7 +647,7 @@ async fn failed_sqlx_migration_rolls_back_schema_and_completion() {
 }
 
 #[tokio::test]
-async fn one_builtin_migration_creates_only_blueprint_tables() {
+async fn builtin_migrations_create_blueprint_and_session_tables() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("db");
     for _ in 0..2 {
@@ -658,7 +658,17 @@ async fn one_builtin_migration_creates_only_blueprint_tables() {
         })).await.unwrap();
         assert_eq!(
             tables,
-            ["_sqlx_migrations", "blueprint_revisions", "blueprints"]
+            [
+                "_sqlx_migrations",
+                "blueprint_revisions",
+                "blueprints",
+                "session_cleanup",
+                "session_mcp",
+                "session_mcp_icon_sizes",
+                "session_mcp_icons",
+                "session_variables",
+                "sessions"
+            ]
         );
         let versions: Vec<i64> = database
             .read(|connection| {
@@ -672,7 +682,7 @@ async fn one_builtin_migration_creates_only_blueprint_tables() {
             })
             .await
             .unwrap();
-        assert_eq!(versions, [1]);
+        assert_eq!(versions, [1, 2]);
         database.close().await.unwrap();
     }
 }

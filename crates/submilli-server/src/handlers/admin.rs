@@ -31,7 +31,12 @@ pub async fn status(
         status: "running",
         bind_addr: state.bind_addr().map(|a| a.to_string()),
         pid: std::process::id(),
-        active_sessions: state.session_manager().active_count(),
+        active_sessions: state.session_manager().active_count().await.map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "session storage unavailable"})),
+            )
+        })?,
         blueprints: state
             .blueprints()
             .list()

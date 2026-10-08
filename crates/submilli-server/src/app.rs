@@ -108,6 +108,7 @@ struct AppStateInner {
     runtime: RuntimeConfig,
     sessions: Arc<dyn SessionStore>,
     blueprints: Arc<dyn BlueprintStore>,
+    unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
     secret_store: Option<Arc<dyn SecretStore>>,
     /// Mints/rotates `@mcp/<server>` OAuth access tokens. `Some` only when a
     /// secret store is configured (OAuth refresh tokens have nowhere to live
@@ -286,10 +287,17 @@ impl AppState {
             .unwrap_or_else(crate::config::default_session_storage_root);
         let session_store_dir = config.session_store_dir;
         let session_store: Arc<dyn DurableSessionStore> =
-            match (config.session_store, &session_store_dir) {
-                (Some(store), _) => store,
-                (None, Some(dir)) => Arc::new(FileDurableSessionStore::new(dir.clone())?),
-                (None, None) => Arc::new(InMemoryDurableSessionStore::default()),
+            match (config.session_store, &config.database, &session_store_dir) {
+                (Some(store), _, _) => store,
+                (None, Some(database), _) => {
+                    Arc::new(crate::session_store::SqliteSessionStore::new(
+                        database.clone(),
+                        session_store_dir.clone(),
+                        session_root.clone(),
+                    ))
+                }
+                (None, None, Some(dir)) => Arc::new(FileDurableSessionStore::new(dir.clone())?),
+                (None, None, None) => Arc::new(InMemoryDurableSessionStore::default()),
             };
         // The ledger rides the session store's directory rather than its own
         // knob. `is_record_file` skips subdirectories, so the two never
@@ -304,7 +312,7 @@ impl AppState {
             };
         let session_manager = Arc::new(
             SessionManager::new(
-                session_root,
+                session_root.clone(),
                 config.ephemeral_storage_root,
                 Arc::new(crate::volumes::VolumeRegistry::new(
                     config.volumes,
@@ -342,8 +350,28 @@ impl AppState {
                     ),
                 },
             )
+            .with_cipher(config.session_cipher.clone())
             .with_audit(audit.clone()),
         );
+
+        let unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory> =
+            match (blueprints.database(), session_store.database()) {
+                (Some(blueprint_database), Some(session_database))
+                    if Arc::ptr_eq(&blueprint_database, &session_database) =>
+                {
+                    Arc::new(crate::adapters::unit_of_work::SqliteUnitOfWorkFactory {
+                        database: blueprint_database,
+                        session_root: session_root.clone(),
+                        cipher: config.session_cipher.clone(),
+                    })
+                }
+                _ => Arc::new(crate::adapters::unit_of_work::StoreUnitOfWorkFactory {
+                    blueprints: blueprints.clone(),
+                    sessions: session_store.clone(),
+                    session_root: session_root.clone(),
+                    cipher: config.session_cipher.clone(),
+                }),
+            };
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
@@ -360,6 +388,7 @@ impl AppState {
                 runtime,
                 sessions,
                 blueprints,
+                unit_of_work,
                 secret_store,
                 oauth_tokens,
                 session_manager,
@@ -971,8 +1000,37 @@ impl AppState {
         cache.retain(|key, _| !cache_key_belongs_to_blueprint(key, name));
     }
 
-    pub(crate) async fn wipe_blueprint_sessions(&self, name: &str) {
-        self.inner.session_manager.wipe_blueprint(name).await;
+    pub(crate) async fn remove_blueprint(
+        &self,
+        name: &str,
+    ) -> Result<bool, crate::application::blueprints::remove::RemoveBlueprintError> {
+        crate::application::blueprints::remove::RemoveBlueprint::new(
+            self.inner.unit_of_work.as_ref(),
+            &crate::adapters::session::audit_log::SessionAuditLog(Some(self.audit())),
+            self,
+            self,
+            self,
+        )
+        .execute(name)
+        .await
+    }
+}
+
+impl crate::application::blueprints::ports::MCPServer for AppState {
+    fn evict(&self, name: &str) {
+        self.evict_mcp_service(name);
+    }
+}
+
+impl crate::application::blueprints::ports::MCPCatalog for AppState {
+    fn evict(&self, name: &str) {
+        self.evict_mcp_catalog(name);
+    }
+}
+
+impl crate::application::blueprints::ports::PreparedPackages for AppState {
+    fn evict(&self, name: &str) {
+        self.evict_prepared_packages(name);
     }
 }
 
@@ -1434,9 +1492,9 @@ mod tests {
 
         std::fs::create_dir(&root).expect("restore store");
         state.boot().await.expect("healthy boot");
-        assert_eq!(Arc::strong_count(&state.inner.session_manager), 2);
+        assert_eq!(Arc::weak_count(&state.inner.session_manager), 1);
         state.boot().await.expect("repeat boot");
-        assert_eq!(Arc::strong_count(&state.inner.session_manager), 2);
+        assert_eq!(Arc::weak_count(&state.inner.session_manager), 1);
     }
 
     #[tokio::test]
@@ -1458,7 +1516,7 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(Arc::strong_count(&state.inner.session_manager), 2);
+        assert_eq!(Arc::weak_count(&state.inner.session_manager), 1);
     }
 
     #[tokio::test]
@@ -1489,7 +1547,7 @@ mod tests {
         std::fs::create_dir(&root).expect("restore store");
         let response = router.oneshot(request()).await.expect("response");
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(Arc::strong_count(&state.inner.session_manager), 2);
+        assert_eq!(Arc::weak_count(&state.inner.session_manager), 1);
     }
 
     /// Compile `src`, run it through the server engine, and return the dispatch

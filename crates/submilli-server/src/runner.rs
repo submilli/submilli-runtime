@@ -83,6 +83,7 @@ pub(crate) fn parse(code: &str) -> Result<ParsedExecute, interpreter::source::So
 /// injection, the semantic-security policy, and the HTTP client. Grouped so the
 /// run signature stays readable as the set grows.
 pub struct HostServices {
+    pub(crate) session_manager: Option<Arc<crate::session_manager::SessionManager>>,
     pub(crate) audit: Option<Arc<crate::audit::ExecutionAudit>>,
     pub git: Result<Option<interpreter::stdlib::git::GitConfig>, String>,
     pub auth_proxy: Arc<dyn AuthProxy>,
@@ -166,12 +167,13 @@ pub(crate) async fn run(
     // request signals cancellation; the owner drains workers before exiting.
     let owner = tokio::spawn(async move {
         let mut services = services;
+        let session_manager = services.session_manager.take();
         let throwaway = services.throwaway.take();
         let audit = services.audit.clone();
         let budget = services.llm_budget.clone();
         let log = owner_recording.as_ref().map(crate::record::Recording::log);
         let embedding_budget = services.embedding_budget.clone();
-        let outcome = run_inner(
+        let mut outcome = run_inner(
             &owned_code,
             parsed,
             RunnerRuntime {
@@ -192,6 +194,17 @@ pub(crate) async fn run(
             log.clone(),
         )
         .await;
+        if let Some(manager) = session_manager {
+            match manager.touch(&session).await {
+                Ok(true) => {}
+                Ok(false) | Err(_) => {
+                    // Preserve the execution's value and usage: effects may already
+                    // have occurred. The response is a failure, never an invitation
+                    // to dispatch the same idempotency key again.
+                    outcome.error = internal_failure("session completion activity could not commit; execution may have performed effects").error;
+                }
+            }
+        }
         if let Some(audit) = audit {
             audit.result(
                 &outcome,
@@ -1016,6 +1029,7 @@ mod tests {
             finish: Mutex::new(cleanup),
         });
         let services = HostServices {
+            session_manager: None,
             git: Ok(Some(interpreter::stdlib::git::GitConfig {
                 name: "Agent".into(),
                 email: "agent@example.com".into(),

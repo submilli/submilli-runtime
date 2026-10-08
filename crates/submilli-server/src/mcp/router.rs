@@ -94,7 +94,10 @@ pub(crate) async fn mcp_handler(
 
     // `oneshot` consumes the service; the inner state is `Arc`-shared, so the
     // clone is cheap and shares sessions across requests.
-    let mut response = match service.transport.clone().oneshot(req).await {
+    let mut response = match super::session::EXPLICIT_DELETE
+        .scope(terminates_session, service.transport.clone().oneshot(req))
+        .await
+    {
         Ok(resp) => resp.map(Body::new),
         Err(infallible) => match infallible {},
     };
@@ -160,8 +163,7 @@ fn get_or_build(state: &AppState, name: &str, blueprint: &Blueprint) -> Arc<McpS
     let blueprint_owned = blueprint.clone();
     let session_manager = Arc::new(VfsSessionManager::new(state.clone(), name.to_string()));
     config.session_store = Some(Arc::new(RmcpSessionStore::new(
-        state.session_store().clone(),
-        state.session_manager().clone(),
+        state.clone(),
         blueprint_owned.clone(),
     )));
     let state_for_factory = state.clone();
