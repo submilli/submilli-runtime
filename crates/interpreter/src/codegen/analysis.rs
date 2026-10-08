@@ -41,11 +41,14 @@ impl CodegenAnalysis {
             adapter_seen: BTreeSet::new(),
         };
 
-        // Generated serializers also cover dependency shapes discovered later.
-        analysis.dependency_usage.note_member(crate::mangle::extend(
-            &crate::mangle::prelude("ObjectConstructor"),
-            "#toJson",
-        ));
+        // Generated serializers also cover dependency shapes discovered later,
+        // and a static-dispatch binding used as a value reads as a host object.
+        for helper in ["#toJson", "#staticValue"] {
+            analysis.dependency_usage.note_member(crate::mangle::extend(
+                &crate::mangle::prelude("ObjectConstructor"),
+                helper,
+            ));
+        }
 
         for (id, ty) in &ta.runtime_source_types {
             let span = ta

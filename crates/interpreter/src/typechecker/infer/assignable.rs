@@ -557,19 +557,6 @@ impl<'a> TypeResolver<'a> {
         names
     }
 
-    /// Whether `name` resolves to an interface whose values are inert
-    /// `Dispatch::Static` receivers (`console`, `Number`): typed nulls with no
-    /// vtable behind them.
-    pub(super) fn is_static_interface(&self, mangled: &MangledName, name: &str) -> bool {
-        matches!(
-            self.lookup(mangled, name).map(|symbol| &symbol.kind),
-            Some(TypeKind::Interface {
-                dispatch: crate::Dispatch::Static,
-                ..
-            })
-        )
-    }
-
     /// True when `name` resolves to an interface that declares methods — the
     /// nominal-only interfaces `interface_data_shape` refuses to expand.
     pub(super) fn interface_has_methods(&self, mangled: &MangledName, name: &str) -> bool {

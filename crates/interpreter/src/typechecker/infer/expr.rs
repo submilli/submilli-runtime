@@ -4809,8 +4809,7 @@ impl Inferer<'_> {
             span: expr_span,
         };
         // A union of arrays answers `toString` as an array, through its joined view.
-        let converts = (has_to_string(peeled) || peeled.is_array_like_union())
-            && !self.is_static_interface_value(peeled);
+        let converts = has_to_string(peeled) || peeled.is_array_like_union();
         if !converts {
             let nullable = matches!(peeled, Type::Null)
                 || matches!(
@@ -4951,13 +4950,6 @@ impl Inferer<'_> {
             rhs: value,
         };
         self.push_synthetic_expr(kind, Type::String, span)
-    }
-
-    /// A static-dispatch interface's value is an inert null, so it has no
-    /// `toString` to call.
-    fn is_static_interface_value(&self, ty: &Type) -> bool {
-        matches!(ty, Type::InterfaceRef { mangled, name, .. }
-            if self.resolver().is_static_interface(mangled, name))
     }
 
     /// The value of an object literal's field when it is spelled as a literal.
