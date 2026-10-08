@@ -423,21 +423,42 @@ impl VarianceWalk<'_, '_> {
     fn method(&mut self, params: &[crate::Param], ret: &Type, bindings: &BTreeMap<String, Type>) {
         for param in params {
             let ty = substitute_or_record(&param.ty, bindings, self.resolver.limits);
-            let compared = match ty.peel() {
-                Type::Array(element) if param.rest => element.as_ref(),
-                _ => &ty,
-            };
-            match callback_signature(compared) {
-                Some((callback_params, callback_ret)) => {
-                    for callback_param in callback_params {
-                        self.walk(callback_param, Polarity::Covariant);
-                    }
-                    self.both_ways(callback_ret);
-                }
-                None => self.both_ways(compared),
-            }
+            self.method_parameter(&ty, param.rest, Polarity::Covariant);
         }
         self.substituted(ret, bindings, Polarity::Covariant);
+    }
+
+    /// A method declared in an object type (`{ f(x: T): T }`), found at
+    /// `polarity`: its parameters are compared as an interface method's are.
+    fn object_type_method(
+        &mut self,
+        params: &[Type],
+        ret: &Type,
+        has_rest: bool,
+        polarity: Polarity,
+    ) {
+        for (index, param) in params.iter().enumerate() {
+            let rest = has_rest && index + 1 == params.len();
+            self.method_parameter(param, rest, polarity);
+        }
+        self.walk(ret, polarity);
+    }
+
+    /// One parameter of a method found at `polarity`; see [`Self::method`].
+    fn method_parameter(&mut self, ty: &Type, rest: bool, polarity: Polarity) {
+        let compared = match ty.peel() {
+            Type::Array(element) if rest => element.as_ref(),
+            _ => ty,
+        };
+        match callback_signature(compared) {
+            Some((callback_params, callback_ret)) => {
+                for callback_param in callback_params {
+                    self.walk(callback_param, polarity);
+                }
+                self.both_ways(callback_ret);
+            }
+            None => self.both_ways(compared),
+        }
     }
 
     /// `ty` compared both ways: a type parameter found in it in one direction
@@ -490,7 +511,17 @@ impl VarianceWalk<'_, '_> {
             }
             Type::Object { fields, index } => {
                 for field in fields.values() {
-                    self.walk(&field.ty, polarity);
+                    match field.ty.peel() {
+                        Type::Function {
+                            params,
+                            ret,
+                            has_rest,
+                            ..
+                        } if field.method => {
+                            self.object_type_method(params, ret, *has_rest, polarity);
+                        }
+                        _ => self.walk(&field.ty, polarity),
+                    }
                 }
                 if let Some(index) = index {
                     self.walk(&index.value, polarity);
