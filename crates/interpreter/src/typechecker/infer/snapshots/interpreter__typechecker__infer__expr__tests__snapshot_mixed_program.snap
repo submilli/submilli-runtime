@@ -461,6 +461,7 @@ TypedAst {
             0,
         ),
     ],
+    class_declaration_points: {},
     types: [],
     shapes: [],
     exports: [],

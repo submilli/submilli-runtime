@@ -166,6 +166,7 @@ fn emit_expr_value(
             emit_function_ref(emitter, ctx, mangled, &expr.ty)?;
         }
         TypedExprKind::Call { mangled, args, .. } => {
+            crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
             emit_symbol_call(emitter, ctx, mangled, args, &expr.ty)?;
         }
         TypedExprKind::SuperCtorCall { parent, args } => {
@@ -235,6 +236,7 @@ fn emit_expr_value(
             return_cast,
             type_predicate: _,
         } => {
+            crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
             emit_generic_call(
                 emitter,
                 ctx,
@@ -385,6 +387,7 @@ fn emit_expr_value(
                             crate::codegen::internal_failure("class vtable global recorded")
                         })?;
                 emit_expr(emitter, ctx, *value)?;
+                crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
                 cast::emit_nominal_instance_test(emitter, ctx, vtable_global)?;
             }
             // Not a class, so there is no vtable to walk. `$Uint8Array` is

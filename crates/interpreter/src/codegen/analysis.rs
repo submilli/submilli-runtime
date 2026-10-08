@@ -104,18 +104,24 @@ impl CodegenAnalysis {
         for g in &ta.globals {
             analysis.visit_type_at(&g.ty, g.span)?;
         }
-        let init_guards = super::init_guard::guarded_globals(ta)?;
-        if !init_guards.is_empty() {
+        let guarded_bindings = super::init_guard::guarded_globals(ta)?
+            .into_iter()
+            .map(|guard| guard.binding)
+            .chain(
+                super::init_guard::guarded_classes(ta)?
+                    .into_iter()
+                    .map(|class| class.name),
+            )
+            .collect::<Vec<_>>();
+        if !guarded_bindings.is_empty() {
             analysis
                 .dependency_usage
                 .note_type(crate::mangle::prelude("ReferenceError"));
         }
-        for guard in init_guards {
+        for binding in guarded_bindings {
             analysis
                 .string_pool
-                .intern_text(&super::init_guard::before_initialization_message(
-                    &guard.binding,
-                ));
+                .intern_text(&super::init_guard::before_initialization_message(&binding));
         }
 
         for f in &ta.functions {

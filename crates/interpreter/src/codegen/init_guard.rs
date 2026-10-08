@@ -13,9 +13,14 @@
 //! can't hold, and its default would be a wrong value or a null reference. The
 //! message names the class, as Node's does for a class not yet initialized.
 //!
-//! Only a global declared after some top-level code that could call a function
-//! is guarded. Before that point nothing can reach a function body, so the
-//! global is always initialized by the time any function reads it.
+//! A class is guarded the same way: constructing it, calling one of its
+//! static methods or testing `instanceof` against it before its declaration
+//! has run throws. Its flag is set where the declaration stands, before its
+//! static fields initialize, so they can use the class.
+//!
+//! Only a binding declared after some top-level code that could call a
+//! function is guarded. Before that point nothing can reach a function body,
+//! so the binding is always initialized by the time any function uses it.
 
 use std::collections::BTreeSet;
 
@@ -37,11 +42,25 @@ pub struct InitGuard {
     pub declared_by: StmtId,
 }
 
-/// A guarded global's flag, as codegen allocated it.
+/// A class that can be used before its declaration has run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClassGuard {
+    pub name: String,
+    /// What a use of the class goes through: the class itself (for
+    /// `instanceof`), its constructor and its static methods.
+    pub uses: Vec<MangledName>,
+    /// The index into the top-level statements before which the class is
+    /// declared.
+    pub declared_at: usize,
+}
+
+/// A guarded binding's flag, as codegen allocated it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InitFlag {
     pub flag_idx: u32,
-    pub declared_by: StmtId,
+    /// The statement that initializes a global; `None` for a class, which no
+    /// statement writes.
+    pub declared_by: Option<StmtId>,
     pub message: String,
 }
 
@@ -55,18 +74,11 @@ pub fn guarded_globals(ta: &TypedAst) -> Result<Vec<InitGuard>, CompilerFailure>
         let stmt = ta
             .try_stmt(stmt_id)
             .map_err(crate::codegen::arena_failure)?;
-        let TypedStmtKind::AssignGlobal {
-            ident,
-            mangled,
-            value,
-            ..
-        } = &stmt.kind
-        else {
-            code_may_have_run = true;
+        // The initializer runs before its own binding is initialized.
+        code_may_have_run |= may_run_code(ta, stmt_id)?;
+        let TypedStmtKind::AssignGlobal { ident, mangled, .. } = &stmt.kind else {
             continue;
         };
-        // The initializer runs before its own binding is initialized.
-        code_may_have_run |= !is_inert(ta, *value)?;
         // `seen` records every first declaration, guarded or not, so a later
         // write is never taken for one.
         let is_first_declaration = declared.contains(mangled) && seen.insert(mangled);
@@ -82,6 +94,56 @@ pub fn guarded_globals(ta: &TypedAst) -> Result<Vec<InitGuard>, CompilerFailure>
     Ok(guards)
 }
 
+/// The top-level classes that need an initialization flag.
+pub fn guarded_classes(ta: &TypedAst) -> Result<Vec<ClassGuard>, CompilerFailure> {
+    let mut code_may_have_run = Vec::with_capacity(ta.top_level_statements.len() + 1);
+    code_may_have_run.push(false);
+    for &stmt_id in &ta.top_level_statements {
+        let before = code_may_have_run.last().copied().unwrap_or(false);
+        code_may_have_run.push(before || may_run_code(ta, stmt_id)?);
+    }
+    let mut guards = Vec::new();
+    for decl in &ta.types {
+        let crate::TypedTypeDecl::Class(class) = decl else {
+            continue;
+        };
+        let Some(&declared_at) = ta.class_declaration_points.get(&class.mangled_name) else {
+            continue;
+        };
+        if !code_may_have_run.get(declared_at).copied().unwrap_or(false) {
+            continue;
+        }
+        let mangled = &class.mangled_name;
+        let mut uses = vec![
+            mangled.clone(),
+            crate::mangle::extend(mangled, "constructor"),
+        ];
+        uses.extend(
+            class
+                .static_methods
+                .keys()
+                .map(|method| crate::mangle::static_member(mangled, method)),
+        );
+        guards.push(ClassGuard {
+            name: class.name.name.clone(),
+            uses,
+            declared_at,
+        });
+    }
+    Ok(guards)
+}
+
+/// Whether running a top-level statement can call a function.
+fn may_run_code(ta: &TypedAst, stmt_id: StmtId) -> Result<bool, CompilerFailure> {
+    let stmt = ta
+        .try_stmt(stmt_id)
+        .map_err(crate::codegen::arena_failure)?;
+    match &stmt.kind {
+        TypedStmtKind::AssignGlobal { value, .. } => Ok(!is_inert(ta, *value)?),
+        _ => Ok(true),
+    }
+}
+
 /// Static fields are lowered to globals named `Class.field`; the binding a
 /// read of one needs is its class.
 fn reported_binding(global_name: &str) -> &str {
@@ -95,8 +157,8 @@ pub fn before_initialization_message(binding: &str) -> String {
     format!("Cannot access '{binding}' before initialization")
 }
 
-/// Allocates one flag per guarded global, starting unset. Returns how many
-/// globals were added.
+/// Allocates one flag per guarded global and class, starting unset. Returns
+/// how many globals were added.
 pub fn allocate_flags(
     ta: &TypedAst,
     globals: &mut GlobalSection,
@@ -105,25 +167,49 @@ pub fn allocate_flags(
 ) -> Result<u32, CompilerFailure> {
     let guards = guarded_globals(ta)?;
     for guard in &guards {
-        globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(0),
-        );
+        let flag_idx = allocate_flag(globals, next_global_idx)?;
         symbols.record_init_guard(
             guard.global.clone(),
             InitFlag {
-                flag_idx: *next_global_idx,
-                declared_by: guard.declared_by,
+                flag_idx,
+                declared_by: Some(guard.declared_by),
                 message: before_initialization_message(&guard.binding),
             },
         );
-        crate::codegen::next_index(next_global_idx)?;
     }
-    crate::codegen::wasm_u32(guards.len())
+    let classes = guarded_classes(ta)?;
+    for class in &classes {
+        let flag_idx = allocate_flag(globals, next_global_idx)?;
+        for used in &class.uses {
+            symbols.record_init_guard(
+                used.clone(),
+                InitFlag {
+                    flag_idx,
+                    declared_by: None,
+                    message: before_initialization_message(&class.name),
+                },
+            );
+        }
+        symbols.record_class_declaration_flag(class.declared_at, flag_idx);
+    }
+    crate::codegen::wasm_u32(guards.len() + classes.len())
+}
+
+fn allocate_flag(
+    globals: &mut GlobalSection,
+    next_global_idx: &mut u32,
+) -> Result<u32, CompilerFailure> {
+    globals.global(
+        GlobalType {
+            val_type: ValType::I32,
+            mutable: true,
+            shared: false,
+        },
+        &ConstExpr::i32_const(0),
+    );
+    let flag_idx = *next_global_idx;
+    crate::codegen::next_index(next_global_idx)?;
+    Ok(flag_idx)
 }
 
 /// Before an access to a guarded global, throw unless its binding is
@@ -144,7 +230,19 @@ pub(crate) fn emit_check(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, global
 pub(crate) fn is_declaration(ctx: &CodegenCtx, global: &MangledName, stmt: StmtId) -> bool {
     ctx.symbols
         .init_guard(global)
-        .is_some_and(|flag| flag.declared_by == stmt)
+        .is_some_and(|flag| flag.declared_by == Some(stmt))
+}
+
+/// Mark the classes declared before top-level statement `index` initialized.
+pub(crate) fn emit_mark_classes_declared(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    index: usize,
+) {
+    for &flag_idx in ctx.symbols.class_declaration_flags(index) {
+        emitter.instruction(Instruction::I32Const(1));
+        emitter.instruction(Instruction::GlobalSet(flag_idx));
+    }
 }
 
 pub(crate) fn emit_mark_initialized(

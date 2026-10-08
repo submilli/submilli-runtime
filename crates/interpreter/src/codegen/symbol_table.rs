@@ -51,6 +51,9 @@ pub struct SymbolTable {
     globals: BTreeMap<MangledName, u32>,
     global_types: BTreeMap<MangledName, Type>,
     init_guards: BTreeMap<MangledName, crate::codegen::init_guard::InitFlag>,
+    /// The flags of guarded classes, by the index of the top-level statement
+    /// their declaration precedes.
+    class_declaration_flags: BTreeMap<usize, Vec<u32>>,
     intrinsic_type_indices: Option<IntrinsicTypeIndices>,
     pub(crate) this_environment_type: Option<u32>,
     pub(crate) call_metadata_type: Option<u32>,
@@ -226,6 +229,12 @@ impl SymbolTable {
         global: &MangledName,
     ) -> Option<&crate::codegen::init_guard::InitFlag> {
         self.init_guards.get(global)
+    }
+
+    pub fn class_declaration_flags(&self, index: usize) -> &[u32] {
+        self.class_declaration_flags
+            .get(&index)
+            .map_or(&[], Vec::as_slice)
     }
 
     pub fn prelude_func_idx(&self, symbol: &str) -> Option<u32> {
@@ -819,6 +828,13 @@ impl SymbolTable {
         flag: crate::codegen::init_guard::InitFlag,
     ) {
         self.init_guards.insert(global, flag);
+    }
+
+    pub fn record_class_declaration_flag(&mut self, index: usize, flag_idx: u32) {
+        self.class_declaration_flags
+            .entry(index)
+            .or_default()
+            .push(flag_idx);
     }
 
     /// Language globals retain their declared type for checked narrowed reads.
