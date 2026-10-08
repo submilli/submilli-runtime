@@ -62,8 +62,8 @@ impl Inferer<'_> {
 
     /// The union of `types`, each a fresh literal's, reduced to those no other
     /// is a subtype of, as tsc reduces the object literals it then normalizes:
-    /// `{ a: { b: never[] } }` goes beside `{ a: { b: number[] } }`, while
-    /// `{ a: {} }` stays, having no field `b` to read.
+    /// `{ a: { b: never[] } }` is dropped as a subtype of
+    /// `{ a: { b: number[] } }`, while `{ a: {} }` stays, having no field `b`.
     pub(super) fn without_fresh_subtypes(&self, types: Vec<Type>) -> Type {
         let mut candidates: Vec<Candidate> = Vec::new();
         for ty in types {

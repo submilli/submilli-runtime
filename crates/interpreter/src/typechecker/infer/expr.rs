@@ -6258,7 +6258,7 @@ impl Inferer<'_> {
                     };
                     let join = ElementJoin {
                         widens: open_element_type && !already_errored,
-                        unions: normalization.is_some() || arrays_of_object_literals,
+                        joins_as_union: normalization.is_some() || arrays_of_object_literals,
                     };
                     match self.joined_element_type(running, &elem_ty, join) {
                         Some(joined) => {
@@ -6356,14 +6356,16 @@ impl Inferer<'_> {
         // The seed widened every literal type to check the elements against;
         // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
         // `"hello"[]`.
-        let element_ty = if hint_pins_element_ty || self.error_count() > errors_before {
-            self.kept_element_type(element_ty, &typed_elements)?
-        } else if let Some(fresh) = &normalization {
+        let element_ty = if let Some(normalizing) = &normalization {
             // tsc reduces the literals' types to those no other is a subtype
-            // of before normalizing them against one another.
+            // of before normalizing them against one another. An element that
+            // reported an error still normalizes, so reads of its siblings'
+            // fields don't report again.
             let element_types = self.array_literal_element_types(&typed_elements)?;
             let reduced = self.without_fresh_subtypes(element_types);
-            object_normalization::normalized(&reduced, fresh)
+            object_normalization::normalized(&reduced, normalizing)
+        } else if hint_pins_element_ty || self.error_count() > errors_before {
+            self.kept_element_type(element_ty, &typed_elements)?
         } else {
             let element_ty =
                 self.best_common_element_type(element_ty, &typed_elements, &object_literals)?;
@@ -6503,7 +6505,7 @@ impl Inferer<'_> {
         if join.widens && assignable(running, elem_ty, self.resolver()) {
             return Some(elem_ty.widen_literal());
         }
-        join.unions
+        join.joins_as_union
             .then(|| Type::union(vec![running.clone(), elem_ty.widen_literal()]))
     }
 
@@ -9348,23 +9350,7 @@ impl Inferer<'_> {
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
-        let normalization = match expected {
-            None => object_normalization::conditional_normalization(self.ast, then_, else_)?,
-            Some(_) => None,
-        };
-        let result_ty = match (
-            normalization,
-            empty_literal_join(self.ast, (then_, &then_ty), (else_, &else_ty))?,
-        ) {
-            // Fresh object literals join as an array literal's elements do:
-            // `c ? { k: 1 } : { k: 2, m: 3 }` reads `m` from either.
-            (Some(fresh), _) if !then_ty.carries_void() && !else_ty.carries_void() => {
-                let reduced = self.without_fresh_subtypes(vec![then_ty, else_ty]);
-                object_normalization::normalized(&reduced, &fresh)
-            }
-            (_, Some(joined)) => joined,
-            _ => conditional_result_type(then_ty, else_ty, self.resolver()),
-        };
+        let result_ty = self.ternary_result_type((then_, then_ty), (else_, else_ty), expected)?;
         Ok((
             TypedExprKind::Ternary {
                 cond: typed_cond,
@@ -9373,6 +9359,28 @@ impl Inferer<'_> {
             },
             result_ty,
         ))
+    }
+
+    /// The type of a conditional whose branches have the given types.
+    fn ternary_result_type(
+        &self,
+        (then_, then_ty): (ExprId, Type),
+        (else_, else_ty): (ExprId, Type),
+        expected: Option<&Type>,
+    ) -> Result<Type, CompilerFailure> {
+        // Fresh object literals join as an array literal's elements do:
+        // `c ? { k: 1 } : { k: 2, m: 3 }` reads `m` from either.
+        if expected.is_none()
+            && let Some(normalizing) =
+                object_normalization::conditional_normalization(self.ast, then_, else_)?
+        {
+            let reduced = self.without_fresh_subtypes(vec![then_ty, else_ty]);
+            return Ok(object_normalization::normalized(&reduced, &normalizing));
+        }
+        if let Some(joined) = empty_literal_join(self.ast, (then_, &then_ty), (else_, &else_ty))? {
+            return Ok(joined);
+        }
+        Ok(conditional_result_type(then_ty, else_ty, self.resolver()))
     }
 
     /// `a ?? b`. Result type is `union(strip_null(lhs), rhs)`.
@@ -11494,8 +11502,17 @@ struct ElementJoin {
     widens: bool,
     /// Whether elements that don't fit one another join as a union, which
     /// the literal reduces and normalizes once every element is typed.
-    unions: bool,
+    joins_as_union: bool,
 }
+
+/// A method `find_method` found: its signature, the receiver's type arguments,
+/// its interface and its dispatch.
+type FoundMethod = (
+    MethodSig,
+    BTreeMap<String, Type>,
+    crate::MangledName,
+    crate::Dispatch,
+);
 
 /// A method call's parts after its callee: what dispatch needs once the
 /// receiver is typed.

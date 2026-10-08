@@ -15,18 +15,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::compiler_error::CompilerFailure;
 use crate::types::Type;
-
-type ObjectFields = BTreeMap<String, crate::ObjectField>;
 use crate::{ExprId, ExprKind};
 
 use super::expr::peel_parens;
+
+type ObjectFields = BTreeMap<String, crate::ObjectField>;
 
 /// The fields of a set of sibling fresh object literals that hold fresh object
 /// literals themselves, and so normalize one level down, each with its own
 /// nested fields.
 #[derive(Debug, Default, PartialEq)]
-pub(super) struct FreshObjects {
-    nested: BTreeMap<String, FreshObjects>,
+pub(super) struct NormalizingFields {
+    nested: BTreeMap<String, NormalizingFields>,
 }
 
 /// When every element is a fresh object literal, or a conditional choosing
@@ -35,7 +35,7 @@ pub(super) struct FreshObjects {
 pub(super) fn array_normalization(
     ast: &crate::Ast,
     elements: &[crate::ArrayLiteralElement],
-) -> Result<Option<FreshObjects>, CompilerFailure> {
+) -> Result<Option<NormalizingFields>, CompilerFailure> {
     let mut choices = Vec::new();
     for element in elements {
         let crate::ArrayLiteralElement::Value(id) = element else {
@@ -46,104 +46,21 @@ pub(super) fn array_normalization(
         };
         choices.extend(literals);
     }
-    fresh_objects(ast, choices).map(Some)
+    normalizing_fields(ast, choices).map(Some)
 }
 
-/// When both branches of a conditional are fresh object literals, or
+/// When both branches of a conditional are fresh object literals, `null`, or
 /// conditionals choosing between them, the fields that normalize below the
 /// top level. `None` otherwise.
 pub(super) fn conditional_normalization(
     ast: &crate::Ast,
     then_: ExprId,
     else_: ExprId,
-) -> Result<Option<FreshObjects>, CompilerFailure> {
-    let (Some(mut choices), Some(others)) = (
-        fresh_object_choices(ast, then_)?,
-        fresh_object_choices(ast, else_)?,
-    ) else {
-        return Ok(None);
-    };
-    choices.extend(others);
-    fresh_objects(ast, choices).map(Some)
-}
-
-/// The nested fields of sibling literals: those that hold a fresh object
-/// literal in every literal that names them, apart from `null` and primitive
-/// literals, which tsc leaves out of a field's siblings.
-fn fresh_objects(
-    ast: &crate::Ast,
-    siblings: Vec<Vec<&crate::ObjectLiteralField>>,
-) -> Result<FreshObjects, CompilerFailure> {
-    let mut values: BTreeMap<&String, Vec<Vec<&crate::ObjectLiteralField>>> = BTreeMap::new();
-    let mut stale = BTreeSet::new();
-    for field in siblings.into_iter().flatten() {
-        let name = &field.name.name;
-        match fresh_object_choices(ast, field.value)? {
-            Some(choices) => values.entry(name).or_default().extend(choices),
-            None if is_primitive_literal(ast, field.value)? => {}
-            None => {
-                stale.insert(name);
-            }
-        }
+) -> Result<Option<NormalizingFields>, CompilerFailure> {
+    match branch_choices(ast, then_, else_)? {
+        Some(choices) => normalizing_fields(ast, choices).map(Some),
+        None => Ok(None),
     }
-    let mut nested = BTreeMap::new();
-    for (name, choices) in values {
-        if !stale.contains(name) {
-            nested.insert(name.clone(), fresh_objects(ast, choices)?);
-        }
-    }
-    Ok(FreshObjects { nested })
-}
-
-fn is_primitive_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    Ok(matches!(
-        &ast.try_expr(id).map_err(super::arena_failure)?.kind,
-        ExprKind::Null | ExprKind::Number(_) | ExprKind::String(_) | ExprKind::Boolean(_)
-    ))
-}
-
-/// The fields of a fresh object literal: one that only names its fields, with
-/// no spread or computed key that could bring in fields its type doesn't list.
-pub(super) fn fresh_object_fields(
-    ast: &crate::Ast,
-    expr: ExprId,
-) -> Result<Option<Vec<&crate::ObjectLiteralField>>, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    let ExprKind::ObjectLiteral { members } = &ast.try_expr(id).map_err(super::arena_failure)?.kind
-    else {
-        return Ok(None);
-    };
-    Ok(members
-        .iter()
-        .map(|member| match member {
-            crate::ObjectLiteralMember::Field(field) => Some(field),
-            _ => None,
-        })
-        .collect())
-}
-
-/// The fields of each fresh object literal `expr` may evaluate to: itself, or
-/// each branch of a conditional choosing between such literals. `None` when it
-/// may evaluate to anything else.
-fn fresh_object_choices(
-    ast: &crate::Ast,
-    expr: ExprId,
-) -> Result<Option<Vec<Vec<&crate::ObjectLiteralField>>>, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    if let ExprKind::Ternary { then_, else_, .. } =
-        &ast.try_expr(id).map_err(super::arena_failure)?.kind
-    {
-        let (Some(mut choices), Some(others)) = (
-            fresh_object_choices(ast, *then_)?,
-            fresh_object_choices(ast, *else_)?,
-        ) else {
-            return Ok(None);
-        };
-        choices.extend(others);
-        return Ok(Some(choices));
-    }
-    Ok(fresh_object_fields(ast, id)?.map(|fields| vec![fields]))
 }
 
 /// Whether every element is an array literal whose elements are all fresh
@@ -171,13 +88,20 @@ pub(super) fn every_array_of_object_literals(
 }
 
 /// Whether `expr`'s type lists every field it holds, at the top level and in
-/// the objects an array of it holds: an object literal, or an array literal
-/// of them. tsc checks such a type for excess fields when it reduces subtypes.
+/// the objects an array of it holds: an object literal, or an array literal of
+/// them. tsc checks such a type for excess fields when it reduces subtypes; a
+/// literal that only spreads takes its fields from values, which it doesn't
+/// check.
 pub(super) fn is_fresh_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
     let id = peel_parens(ast, expr)?;
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
-            ExprKind::ObjectLiteral { .. } => true,
+            ExprKind::ObjectLiteral { members } => {
+                members.is_empty()
+                    || members
+                        .iter()
+                        .any(|member| !matches!(member, crate::ObjectLiteralMember::Spread { .. }))
+            }
             ExprKind::ArrayLiteral { elements } => {
                 for element in elements {
                     let crate::ArrayLiteralElement::Value(id) = element else {
@@ -226,19 +150,152 @@ pub(super) fn has_running_shape(
     Ok(true)
 }
 
-/// `ty`, the join of sibling fresh object literals, with each object member
-/// normalized against the others, and the fields of `fresh` against the
-/// objects they hold in the others.
-pub(super) fn normalized(ty: &Type, fresh: &FreshObjects) -> Type {
-    with_sibling_fields(ty, &object_parts(ty), fresh)
+/// The fields of a fresh object literal: one that only names its fields, with
+/// no spread or computed key that could bring in fields its type doesn't list.
+pub(super) fn fresh_object_fields(
+    ast: &crate::Ast,
+    expr: ExprId,
+) -> Result<Option<Vec<&crate::ObjectLiteralField>>, CompilerFailure> {
+    let id = peel_parens(ast, expr)?;
+    let ExprKind::ObjectLiteral { members } = &ast.try_expr(id).map_err(super::arena_failure)?.kind
+    else {
+        return Ok(None);
+    };
+    Ok(members
+        .iter()
+        .map(|member| match member {
+            crate::ObjectLiteralMember::Field(field) => Some(field),
+            _ => None,
+        })
+        .collect())
 }
 
-fn with_sibling_fields(ty: &Type, siblings: &[&Type], fresh: &FreshObjects) -> Type {
+/// The nested fields of sibling literals: those that hold a fresh object
+/// literal in every literal that names them, apart from `null` and primitive
+/// literals, which tsc leaves out of a field's siblings.
+fn normalizing_fields(
+    ast: &crate::Ast,
+    siblings: Vec<Vec<&crate::ObjectLiteralField>>,
+) -> Result<NormalizingFields, CompilerFailure> {
+    let mut values: BTreeMap<&String, Vec<Vec<&crate::ObjectLiteralField>>> = BTreeMap::new();
+    let mut stale = BTreeSet::new();
+    for field in siblings.into_iter().flatten() {
+        let name = &field.name.name;
+        match fresh_object_choices(ast, field.value)? {
+            Some(choices) => values.entry(name).or_default().extend(choices),
+            None if is_primitive_literal(ast, field.value)? => {}
+            None => {
+                stale.insert(name);
+            }
+        }
+    }
+    let mut nested = BTreeMap::new();
+    for (name, choices) in values {
+        if !stale.contains(name) {
+            nested.insert(name.clone(), normalizing_fields(ast, choices)?);
+        }
+    }
+    Ok(NormalizingFields { nested })
+}
+
+/// Whether `expr` is `null` or a primitive literal, signed or negated.
+fn is_primitive_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
+    let id = peel_parens(ast, expr)?;
+    Ok(
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::Null
+            | ExprKind::Number(_)
+            | ExprKind::BigInt(_)
+            | ExprKind::String(_)
+            | ExprKind::Boolean(_) => true,
+            ExprKind::Unary { operand, .. } => is_primitive_literal(ast, *operand)?,
+            _ => false,
+        },
+    )
+}
+
+/// The fields of each fresh object literal `expr` may evaluate to: itself, or
+/// each branch of a conditional choosing between such literals or `null`,
+/// which tsc leaves out of the siblings. `None` when it may evaluate to
+/// anything else.
+fn fresh_object_choices(
+    ast: &crate::Ast,
+    expr: ExprId,
+) -> Result<Option<Vec<Vec<&crate::ObjectLiteralField>>>, CompilerFailure> {
+    let id = peel_parens(ast, expr)?;
+    let kind = &ast.try_expr(id).map_err(super::arena_failure)?.kind;
+    if matches!(kind, ExprKind::Null) {
+        return Ok(Some(Vec::new()));
+    }
+    if let ExprKind::Ternary { then_, else_, .. } = kind {
+        return branch_choices(ast, *then_, *else_);
+    }
+    Ok(fresh_object_fields(ast, id)?.map(|fields| vec![fields]))
+}
+
+/// The choices of both branches of a conditional, or `None` when either may
+/// evaluate to anything else.
+fn branch_choices(
+    ast: &crate::Ast,
+    then_: ExprId,
+    else_: ExprId,
+) -> Result<Option<Vec<Vec<&crate::ObjectLiteralField>>>, CompilerFailure> {
+    let (Some(mut choices), Some(others)) = (
+        fresh_object_choices(ast, then_)?,
+        fresh_object_choices(ast, else_)?,
+    ) else {
+        return Ok(None);
+    };
+    choices.extend(others);
+    Ok(Some(choices))
+}
+
+/// `ty`, the join of sibling fresh object literals, with each object member
+/// normalized against the others, and the `normalizing` fields against the
+/// objects they hold in the others.
+pub(super) fn normalized(ty: &Type, normalizing: &NormalizingFields) -> Type {
+    with_sibling_fields(ty, &object_parts(ty), normalizing)
+}
+
+/// Whether `source`, a fresh literal's type, has a field `target` lacks in an
+/// object both reach in the same place: tsc's excess field check, which keeps
+/// it from being `target`'s subtype.
+pub(super) fn has_excess_field(source: &Type, target: &Type) -> bool {
+    match (source.peel(), target.peel()) {
+        (
+            Type::Object {
+                fields: source_fields,
+                ..
+            },
+            Type::Object {
+                fields: target_fields,
+                index,
+            },
+        ) => source_fields
+            .iter()
+            .filter(|(_, field)| !is_added_missing_field(field))
+            .any(|(name, source_field)| match target_fields.get(name) {
+                None => index.is_none(),
+                Some(target_field) => has_excess_field(&source_field.ty, &target_field.ty),
+            }),
+        (Type::Array(source_element), Type::Array(target_element)) => {
+            has_excess_field(source_element, target_element)
+        }
+        _ => false,
+    }
+}
+
+/// A field normalization added. It says nothing about the field's type.
+pub(super) fn is_added_missing_field(field: &crate::ObjectField) -> bool {
+    field.optional && field.ty == Type::Never
+}
+
+fn with_sibling_fields(ty: &Type, siblings: &[&Type], normalizing: &NormalizingFields) -> Type {
     match ty {
         Type::Union(members) => Type::union(
             members
                 .iter()
-                .map(|member| with_sibling_fields(member, siblings, fresh))
+                .map(|member| with_sibling_fields(member, siblings, normalizing))
                 .collect(),
         ),
         Type::Object {
@@ -246,7 +303,7 @@ fn with_sibling_fields(ty: &Type, siblings: &[&Type], fresh: &FreshObjects) -> T
             index: None,
         } => {
             let mut fields = fields.clone();
-            for (name, nested) in &fresh.nested {
+            for (name, nested) in &normalizing.nested {
                 let Some(field) = fields.get_mut(name) else {
                     continue;
                 };
@@ -291,11 +348,6 @@ fn object_fields(ty: &Type) -> Option<&ObjectFields> {
     }
 }
 
-/// A field normalization added. It says nothing about the field's type.
-pub(super) fn is_added_missing_field(field: &crate::ObjectField) -> bool {
-    field.optional && field.ty == Type::Never
-}
-
 fn fields_with_missing<'a>(
     mut fields: ObjectFields,
     names: impl Iterator<Item = &'a String>,
@@ -306,32 +358,4 @@ fn fields_with_missing<'a>(
             .or_insert_with(|| crate::ObjectField::optional(Type::Never));
     }
     fields
-}
-
-/// Whether `source`, a fresh literal's type, has a field `target` lacks in an
-/// object both reach in the same place: tsc's excess field check, which keeps
-/// it from being `target`'s subtype.
-pub(super) fn has_excess_field(source: &Type, target: &Type) -> bool {
-    match (source.peel(), target.peel()) {
-        (
-            Type::Object {
-                fields: source_fields,
-                ..
-            },
-            Type::Object {
-                fields: target_fields,
-                index,
-            },
-        ) => source_fields
-            .iter()
-            .filter(|(_, field)| !is_added_missing_field(field))
-            .any(|(name, source_field)| match target_fields.get(name) {
-                None => index.is_none(),
-                Some(target_field) => has_excess_field(&source_field.ty, &target_field.ty),
-            }),
-        (Type::Array(source_element), Type::Array(target_element)) => {
-            has_excess_field(source_element, target_element)
-        }
-        _ => false,
-    }
 }

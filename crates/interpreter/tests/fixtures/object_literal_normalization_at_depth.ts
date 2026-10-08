@@ -17,6 +17,17 @@ function main(): void {
   }
   assert(sum === 8, "objects beside a primitive normalize");
 
+  const c = [1].length > 0;
+  const withNull = [c ? { x: 1 } : null, { y: 2 }, null];
+  let found = 0;
+  for (const w of withNull) {
+    if (w !== null) found += (w.x ?? 0) + (w.y ?? 0);
+  }
+  assert(found === 3, "null elements and branches stay beside normalized literals");
+  const negative = [{ a: { b: 1 } }, { a: -1 }, { a: { c: 2 } }];
+  const first = negative[0].a;
+  assert(typeof first !== "number" && first.b === 1 && first.c == null, "a signed literal is no sibling");
+
   const shapes = [{ a: { x: 1, y: 2 } }, { a: { x: 1 } }];
   assert(shapes[1].a.y == null, "a missing nested field reads as missing");
 }

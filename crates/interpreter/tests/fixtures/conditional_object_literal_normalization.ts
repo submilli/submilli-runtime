@@ -13,4 +13,6 @@ function main(): void {
   assert(w.a.x === 1 && w.a.y == null, "a nested object normalizes");
   const n = c ? { a: 1 } : null;
   assert(n !== null && n.a === 1, "a literal beside null keeps its type");
+  const m = c ? { a: 1 } : c ? { b: 1 } : null;
+  assert(m !== null && m.a === 1 && m.b == null, "literals beside a null branch normalize");
 }
