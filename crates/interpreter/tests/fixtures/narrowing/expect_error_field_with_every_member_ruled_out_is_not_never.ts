@@ -1,6 +1,6 @@
-// expect-error: expected `never`, got `E`
-// Every member of a field ruled out still leaves its declared type, since an
-// alias or a call may change a field behind the checks. TypeScript reads `never`.
+// expect-error: expected `never`, got `E.B`
+// A field whose every member is ruled out doesn't read `never`, since an alias
+// or a call may change a field behind the checks. TypeScript reads `never`.
 enum E { A, B }
 function never(x: never): number { return 0; }
 function f(o: { e: E }): number {

@@ -1,2 +1,2 @@
-line 11 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
+line 11 type: bug SUB-1492 an empty array literal under an expected type is `never[]` in tsc, where ours takes the expected type
 line 4 type: by-design spec §Excluded-Features there is no `any`, so an unannotated `let x = []` is `never[]`, where tsc makes it an evolving `any[]`

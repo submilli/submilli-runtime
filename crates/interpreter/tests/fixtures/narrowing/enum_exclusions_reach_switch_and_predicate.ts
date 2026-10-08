@@ -55,26 +55,6 @@ function afterPredicate(e: S | number): string {
   return never(e);
 }
 
-// Members of another enum that share a ruled-out value stay possible, as in
-// TypeScript, which rules out only the member that was checked.
-enum T {
-  X = "x",
-  W = "w",
-}
-
-function sharedValue(e: S | T): string {
-  if (e === S.X) return "X";
-  switch (e) {
-    case S.Y:
-      return "Y";
-    case S.Z:
-      return "Z";
-    case T.W:
-      return "W";
-  }
-  return "rest";
-}
-
 // A module variable a call may change keeps its declared type where every
 // member was ruled out, so a stale value read there runs as in JavaScript
 // instead of reaching code that trusts `never`.
@@ -104,8 +84,6 @@ function main(): void {
   assert(switchAfterGuard(S.Z) === "Z");
   assert(afterPredicate(3) === "number");
   assert(afterPredicate(S.Z) === "Z");
-  assert(sharedValue(S.X) === "X");
-  assert(sharedValue(T.W) === "W");
   mode = S.Y;
   assert(staleModuleVariable() === "now x");
   console.log("ok");

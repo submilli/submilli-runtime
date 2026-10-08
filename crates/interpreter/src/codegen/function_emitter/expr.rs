@@ -1080,36 +1080,12 @@ fn emit_object_literal(
         emit_computed_object(emitter, ctx, members)?;
         return Ok(());
     }
-    // Interface contextual typing keeps the result nominal; recover the
-    // structural shape from the literal's field metadata for allocation.
-    let structural_ty: Type = match result_ty {
-        Type::Object { .. } => result_ty.clone(),
-        Type::InterfaceRef { .. } => {
-            let field_map: std::collections::BTreeMap<String, crate::ObjectField> = fields
-                .iter()
-                .map(|f| {
-                    (
-                        f.name.name.clone(),
-                        crate::ObjectField {
-                            ty: f.ty.clone(),
-                            optional: f.optional,
-                            readonly: false,
-                            method: false,
-                        },
-                    )
-                })
-                .collect();
-            Type::Object {
-                index: None,
-                fields: field_map,
-            }
-        }
-        _ => {
-            return Err(crate::codegen::internal_failure(
-                "object literal requires an object representation",
-            ));
-        }
-    };
+    if !matches!(result_ty, Type::Object { .. } | Type::InterfaceRef { .. }) {
+        return Err(crate::codegen::internal_failure(
+            "object literal requires an object representation",
+        ));
+    }
+    let structural_ty = crate::typed_ast::object_literal_layout(result_ty, fields);
     if members
         .iter()
         .any(|member| matches!(member, TypedObjectMember::Spread { .. }))
@@ -2138,7 +2114,7 @@ fn emit_postfix_delta_checked(
         emitter.instruction(Instruction::Call(function));
         return Ok(());
     }
-    if matches!(ty.peel(), Type::BigInt) {
+    if ty.is_bigint() {
         emit_bigint_pm_one(emitter, ctx, op);
         return Ok(());
     }
@@ -3192,7 +3168,9 @@ fn emit_binary(
             })?;
             emit_bitwise_host(emitter, ctx, name, &[lhs, rhs], result_ty)?;
         }
-        BinOp::Add => match result_ty {
+        // A template of constants has a string literal type: concatenate it as
+        // a `string`.
+        BinOp::Add => match &result_ty.widen_literal() {
             Type::Number => {
                 emit_primitive_operand(emitter, ctx, lhs)?;
                 emit_primitive_operand(emitter, ctx, rhs)?;
@@ -3219,7 +3197,7 @@ fn emit_binary(
         },
         BinOp::Sub | BinOp::Mul | BinOp::Div => {
             // bigint operands route to inline host calls.
-            if matches!(result_ty, Type::BigInt) {
+            if result_ty.is_bigint() {
                 let name = match op {
                     BinOp::Sub => "sub",
                     BinOp::Mul => "mul",
@@ -3257,7 +3235,7 @@ fn emit_binary(
             // `submilli:bigint.pow` host call (which validates the
             // exponent is non-negative and fits in u32, else traps).
             // Number routes to the prelude-host `Math#pow` function.
-            if matches!(result_ty, Type::BigInt) {
+            if result_ty.is_bigint() {
                 emit_bigint_binop_inline(emitter, ctx, lhs, rhs, "pow")?;
                 return Ok(());
             }
@@ -3276,7 +3254,7 @@ fn emit_binary(
         }
         BinOp::Rem => {
             // `bigint % bigint` → inline host call.
-            if matches!(result_ty, Type::BigInt) {
+            if result_ty.is_bigint() {
                 emit_bigint_binop_inline(emitter, ctx, lhs, rhs, "mod")?;
                 return Ok(());
             }
@@ -3309,7 +3287,7 @@ fn emit_binary(
                 .ty
                 .primitive_behavior()
                 .clone();
-            if matches!(operand_ty, Type::BigInt) {
+            if operand_ty.is_bigint() {
                 emit_bigint_cmp_inline(emitter, ctx, lhs, rhs, op)?;
                 return Ok(());
             }
@@ -3453,7 +3431,7 @@ fn emit_equality(
     // bigint equality short-circuits to a direct
     // `submilli:bigint.cmp == 0` call — a faster path than the
     // generic `ValType::Ref(_)` arm's vtable `equals` dispatch.
-    if matches!(lhs_ty.peel(), Type::BigInt) {
+    if lhs_ty.is_bigint() {
         emit_bigint_cmp_eq_inline(emitter, ctx, lhs, rhs, op)?;
         return Ok(());
     }
@@ -4936,14 +4914,13 @@ fn emit_unary(
         UnOp::BitNot => emit_bitwise_host(emitter, ctx, "bitnot", &[operand], result_ty)?,
         UnOp::Neg => {
             // bigint negation routes to inline host call.
-            if matches!(
-                ctx.ta
-                    .try_expr(operand)
-                    .map_err(crate::codegen::arena_failure)?
-                    .ty
-                    .peel(),
-                Type::BigInt
-            ) {
+            if ctx
+                .ta
+                .try_expr(operand)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .is_bigint()
+            {
                 emit_primitive_operand(emitter, ctx, operand)?;
                 emit_bigint_extract_to_stack(emitter, ctx);
                 let host_idx = ctx

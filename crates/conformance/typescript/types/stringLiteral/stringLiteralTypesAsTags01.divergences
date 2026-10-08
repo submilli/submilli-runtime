@@ -1,5 +1,1 @@
-types: 22 of 41 tsc entries compared, 1 differ
-
-line 28: { kind: "A", a: 100, }
-  tsc:  { kind: "A"; a: number; }
-  ours: A
+types: 22 of 41 tsc entries compared, 0 differ

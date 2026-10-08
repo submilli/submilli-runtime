@@ -428,16 +428,16 @@ impl<'a> Inferer<'a> {
     /// `??`, or a ternary branch — under `env`. A write in it may have happened,
     /// so it still invalidates outer narrowings, but the narrowing the write
     /// installs does not outlive the operand: `c && (x = null)` leaves `x` at its
-    /// declared type, not `null`, and not the view it had before.
+    /// declared type, not `null`, and not the view it had before. The operand
+    /// keeps its literal type, as the expression it is part of does.
     pub(super) fn infer_conditional_operand(
         &mut self,
         operand: ExprId,
         env: &narrowing::NarrowEnv,
         expected: Option<&Type>,
-        keep_literals: bool,
     ) -> Result<(ExprId, Type), CompilerFailure> {
         self.push_narrow_frame(env.clone());
-        let inferred = self.infer_expr_keeping_literals(operand, expected, keep_literals)?;
+        let inferred = self.infer_expr_keeping_literals(operand, expected, true)?;
         let (_, assigned) = self.pop_narrow_frame_capture()?;
         let span = self
             .ast
@@ -632,7 +632,13 @@ impl<'a> Inferer<'a> {
     /// binding narrows to declared members, as TypeScript's assignment narrowing
     /// does (see [`Self::narrowed_part`]).
     pub(super) fn assignment_narrowed_ty(&self, declared: &Type, written: Type) -> Type {
-        if !self.declares_readonly(declared) && !has_function_part(&written) {
+        if written == *declared {
+            return written;
+        }
+        if !self.declares_readonly(declared)
+            && !has_function_part(&written)
+            && !has_mutable_container_part(&written)
+        {
             return written;
         }
         self.initializer_narrowed_ty(declared, written)
@@ -1497,7 +1503,9 @@ impl<'a> Inferer<'a> {
                 crate::TypedExprKind::String(key.clone()),
                 Type::StringLiteral(key.clone()),
             ),
-            narrowing::PathElem::Index(narrowing::LiteralValue::Boolean(_)) => return Ok(None),
+            narrowing::PathElem::Index(
+                narrowing::LiteralValue::Boolean(_) | narrowing::LiteralValue::BigInt(_),
+            ) => return Ok(None),
             narrowing::PathElem::Key(binding, _) => {
                 let key_path = narrowing::ReferencePath::root(binding.clone());
                 let (Some(kind), Some(key_ty)) = (
@@ -1767,6 +1775,18 @@ fn has_function_part(ty: &Type) -> bool {
     }
 }
 
+/// Whether a value is or holds a structural object or an array, whose own type
+/// can be narrower than what the binding may later store in it: `o = {}` must
+/// still read `o.a`, and `xs = [1]` with `xs: (string | number)[]` must still
+/// take a string.
+fn has_mutable_container_part(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Object { .. } | Type::Array(_) => true,
+        Type::Union(members) => members.iter().any(has_mutable_container_part),
+        _ => false,
+    }
+}
+
 /// A value whose own type is the narrowing a write gives its binding: a
 /// primitive carries nothing a declaration could restrict.
 fn narrows_to_itself(ty: &Type) -> bool {
@@ -1775,6 +1795,7 @@ fn narrows_to_itself(ty: &Type) -> bool {
         Type::Number
             | Type::NumberLiteral(_)
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::String
             | Type::StringLiteral(_)
             | Type::Boolean

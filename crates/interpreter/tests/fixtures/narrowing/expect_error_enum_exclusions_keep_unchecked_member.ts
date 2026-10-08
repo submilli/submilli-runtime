@@ -1,4 +1,4 @@
-// expect-error: expected `never`, got `S`
+// expect-error: expected `never`, got `S.Z`
 // `S.Z` was never ruled out, so the field is not `never` at the end.
 enum S {
   X = "x",

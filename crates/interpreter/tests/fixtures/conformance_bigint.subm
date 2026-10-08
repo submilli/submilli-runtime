@@ -2,7 +2,8 @@
 // f64's safe-integer range, explicit conversions only.
 
 function main(): void {
-  assert(9007199254740993n !== 9007199254740992n, "bigints keep precision past 2^53");
+  const aboveSafe: bigint = 9007199254740993n;
+  assert(aboveSafe !== 9007199254740992n, "bigints keep precision past 2^53");
   assert(2n ** 64n === 18446744073709551616n, "exponentiation is exact");
   assert(10n / 3n === 3n, "division truncates toward zero");
   assert(-10n / 3n === -3n, "negative division truncates");

@@ -825,6 +825,7 @@ impl<'a> AnnotationChildren<'a> {
             }
             TypeAnnotationKind::StringLiteral(_)
             | TypeAnnotationKind::NumberLiteral(_)
+            | TypeAnnotationKind::BigIntLiteral(_)
             | TypeAnnotationKind::BooleanLiteral(_)
             | TypeAnnotationKind::TypeOf { .. } => {}
             TypeAnnotationKind::Array(inner)

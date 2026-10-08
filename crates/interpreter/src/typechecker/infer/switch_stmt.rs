@@ -545,21 +545,27 @@ impl Inferer<'_> {
         Ok(Some((label, label_ty)))
     }
 
-    /// A label spelled as a literal: `"a"`, `1`, `null`, `E.A`, or a signed number,
-    /// which `tsc` also reads as a literal.
+    /// A label spelled as a literal: `"a"`, `1`, `null`, `E.A`, a template of
+    /// constants, or a signed number, which `tsc` also reads as a literal.
     fn literal_case_label(
         &self,
         value_expr: ExprId,
         typed_val: ExprId,
         value_span: Span,
     ) -> Result<Option<TypedSwitchValue>, CompilerFailure> {
-        let kind = &self
+        let typed = self
             .typed_ast
             .try_expr(typed_val)
-            .map_err(crate::typechecker::arena_failure)?
-            .kind;
-        if let Some(literal) = classify_switch_case_value(kind, value_span) {
+            .map_err(crate::typechecker::arena_failure)?;
+        if let Some(literal) = classify_switch_case_value(typed, value_span) {
             return Ok(Some(literal));
+        }
+        // A template of constants is the string it spells, as `tsc` has it.
+        if let Some(value) = super::comparison_operand::constant_template(self.ast, value_expr)? {
+            return Ok(Some(TypedSwitchValue::String {
+                value,
+                span: value_span,
+            }));
         }
         // Adding `0.0` makes `-0` the same label as `0`, which `===` can't tell
         // apart either.
@@ -647,14 +653,17 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?
                 .ty
                 .clone();
-            let Some(literals) = literal_members(&label_ty) else {
-                return Ok(narrowing::NarrowEnv::new());
-            };
-            literal_values.extend(
+            let Some(literals) = literal_members(&label_ty).and_then(|literals| {
                 literals
                     .into_iter()
-                    .map(|literal| (literal_switch_value(literal, *span), label_ty.clone())),
-            );
+                    .map(|literal| {
+                        literal_switch_value(literal, *span).map(|value| (value, label_ty.clone()))
+                    })
+                    .collect::<Option<Vec<_>>>()
+            }) else {
+                return Ok(narrowing::NarrowEnv::new());
+            };
+            literal_values.extend(literals);
         }
         let mut iter = literal_values.iter();
         let Some((first, first_ty)) = iter.next() else {
@@ -838,11 +847,10 @@ impl Inferer<'_> {
     }
 
     /// The values of `ty` no case matches, less `null`, which the caller
-    /// handles. An enum leaves only when the cases name every member, since it
-    /// has no type for the members left.
+    /// handles.
     fn unmatched_values(&self, ty: &Type, covered: &CaseCoverage) -> Type {
         narrowing::subtract_literals(
-            &self.without_named_enums(ty, covered),
+            &self.without_named_members(ty, covered),
             &covered.literals_ruled_out(),
         )
     }
@@ -923,15 +931,35 @@ impl Inferer<'_> {
         })
     }
 
-    /// `ty` without the enums whose members the cases all name.
-    fn without_named_enums(&self, ty: &Type, covered: &CaseCoverage) -> Type {
-        Type::union(
-            narrowing::union_members(ty)
-                .into_iter()
-                .filter(|member| !self.names_every_member(member, covered))
-                .cloned()
-                .collect(),
-        )
+    /// `ty` without the enum members the cases name or an earlier check ruled
+    /// out: an enum leaves the other members, as their member types.
+    fn without_named_members(&self, ty: &Type, covered: &CaseCoverage) -> Type {
+        let is_named = |member: &Type| match member.peel() {
+            Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. } => {
+                narrowing::LiteralValue::of_enum_member(member).is_some_and(|value| {
+                    covered.ruled_out_before.contains(&value)
+                        || covered.named_members.contains(&(mangled.clone(), value))
+                })
+            }
+            _ => false,
+        };
+        let mut left = Vec::new();
+        for member in narrowing::union_members(ty) {
+            let whole_enum = !member.peel().is_enum_member();
+            if whole_enum
+                && let Some(members) =
+                    super::comparable::enum_member_types(member.peel(), self.resolver())
+            {
+                if !self.names_every_member(member, covered) {
+                    left.extend(members.into_iter().filter(|m| !is_named(m)));
+                }
+                continue;
+            }
+            if !is_named(member) {
+                left.push(member.clone());
+            }
+        }
+        Type::union(left)
     }
 
     /// Whether the cases, with the values ruled out before the switch, leave
@@ -949,7 +977,6 @@ impl Inferer<'_> {
         })
     }
 
-    /// The values the discriminant was already known not to hold.
     /// Whether a check before the switch narrowed the discriminant or the
     /// object it is read from.
     fn discriminant_narrowed(&self, typed_disc: ExprId) -> Result<bool, CompilerFailure> {
@@ -969,6 +996,7 @@ impl Inferer<'_> {
         }))
     }
 
+    /// The values the discriminant was already known not to hold.
     fn discriminant_exclusions(
         &self,
         typed_disc: ExprId,
@@ -980,29 +1008,7 @@ impl Inferer<'_> {
         let Some(path) = self.expr_to_reference_path(disc_expr)? else {
             return Ok(BTreeSet::new());
         };
-        let mut exclusions = self.known_exclusions(&path);
-        // An exclusion records a value, not the member it came from. When two
-        // members can hold that value, as `E.A` and `F.X` both holding `"a"`
-        // do, TypeScript rules out only the member that was checked, so the
-        // value can't count as ruled out for either.
-        let members = narrowing::union_members(&disc_expr.ty);
-        exclusions.retain(|value| {
-            members
-                .iter()
-                .filter(|member| self.member_holds_value(member, value))
-                .count()
-                <= 1
-        });
-        Ok(exclusions)
-    }
-
-    /// Whether `member` of a discriminant's union can hold `value`: an enum
-    /// with a member of that value, or that literal itself.
-    fn member_holds_value(&self, member: &Type, value: &narrowing::LiteralValue) -> bool {
-        super::comparable::enum_literal_values(member.peel(), self.resolver()).map_or_else(
-            || narrowing::unit_literal_value(member).as_ref() == Some(value),
-            |values| values.contains(value),
-        )
+        Ok(self.known_exclusions(&path))
     }
 
     /// What the discriminant can be when no case matched: the residual, less
@@ -1164,8 +1170,8 @@ fn format_one_literal(ty: &Type) -> Option<String> {
     }
 }
 
-fn classify_switch_case_value(kind: &TypedExprKind, span: Span) -> Option<TypedSwitchValue> {
-    match kind {
+fn classify_switch_case_value(typed: &TypedExpr, span: Span) -> Option<TypedSwitchValue> {
+    match &typed.kind {
         TypedExprKind::String(s) => Some(TypedSwitchValue::String {
             value: s.clone(),
             span,
@@ -1226,15 +1232,18 @@ fn literal_members(ty: &Type) -> Option<Vec<narrowing::LiteralValue>> {
     }
 }
 
-fn literal_switch_value(literal: narrowing::LiteralValue, span: Span) -> TypedSwitchValue {
-    match literal {
+/// The literal `case` value a label of literal type compares as; a bigint has
+/// none, so its label narrows nothing.
+fn literal_switch_value(literal: narrowing::LiteralValue, span: Span) -> Option<TypedSwitchValue> {
+    Some(match literal {
         narrowing::LiteralValue::String(value) => TypedSwitchValue::String { value, span },
         narrowing::LiteralValue::Number(value) => TypedSwitchValue::Number {
             value: value.0,
             span,
         },
         narrowing::LiteralValue::Boolean(value) => TypedSwitchValue::Boolean { value, span },
-    }
+        narrowing::LiteralValue::BigInt(_) => return None,
+    })
 }
 
 /// The discriminant every `case` label of one `switch` is checked against.

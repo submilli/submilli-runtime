@@ -1,5 +1,4 @@
 use crate::compiler_error::CompilerFailure;
-
 use crate::{Package, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeSymbol};
 
 use super::Inferer;
@@ -547,6 +546,9 @@ impl<'a> Inferer<'a> {
                 if text == "Record" {
                     return self.resolve_record(args, annot.span);
                 }
+                if let Some(member_ty) = self.enum_member_type(text, args, annot.span) {
+                    return Ok(member_ty);
+                }
                 let help: Vec<String> = self
                     .closest_type_name(text)
                     .map(|s| vec![format!("did you mean `{}`?", s)])
@@ -633,6 +635,9 @@ impl<'a> Inferer<'a> {
                             return self.resolve_alias_reference(&text, &arg_annots, annot.span);
                         }
                     });
+                }
+                if let Some(member_ty) = self.enum_member_type(&text, args, annot.span) {
+                    return Ok(member_ty);
                 }
                 let Some((root_name, rest)) = path.split_first() else {
                     return Err(
@@ -759,6 +764,7 @@ impl<'a> Inferer<'a> {
             }
             TypeAnnotationKind::StringLiteral(s) => Type::StringLiteral(s.clone()),
             TypeAnnotationKind::NumberLiteral(v) => Type::NumberLiteral(*v),
+            TypeAnnotationKind::BigIntLiteral(digits) => crate::types::bigint_literal_type(digits),
             TypeAnnotationKind::BooleanLiteral(b) => Type::BooleanLiteral(*b),
             TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand)?,
             TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path)?,
@@ -962,6 +968,43 @@ impl<'a> Inferer<'a> {
             }
             _ => None,
         }
+    }
+}
+
+impl Inferer<'_> {
+    /// The member literal type a qualified type `E.A` names, when `E` is an
+    /// enum: `Some(Type::Error)` after reporting a member `E` doesn't have.
+    fn enum_member_type(
+        &mut self,
+        text: &str,
+        args: &[TypeAnnotation],
+        span: crate::Span,
+    ) -> Option<Type> {
+        let (enum_text, member) = text.rsplit_once('.')?;
+        let sym = self.lookup_named_type(enum_text)?;
+        let mangled = sym.mangled_name.clone();
+        let package = self.type_package(enum_text);
+        let enum_ty = match &sym.kind {
+            TypeKind::NumberEnum { .. } => Type::number_enum(package, enum_text, mangled),
+            TypeKind::StringEnum { .. } => Type::string_enum(package, enum_text, mangled),
+            _ => return None,
+        };
+        let variants = super::comparable::enum_variant_values(&sym.kind)?;
+        if !args.is_empty() {
+            self.error(span, format!("enum member `{text}` is not a generic type"));
+            return Some(Type::Error);
+        }
+        let Some((_, value)) = variants.iter().find(|(name, _)| name == member) else {
+            let help =
+                super::expr::enum_variant_help(enum_text, variants.iter().map(|(name, _)| name));
+            self.error_with_help(
+                span,
+                format!("no variant `{member}` on enum `{enum_text}`"),
+                help,
+            );
+            return Some(Type::Error);
+        };
+        Some(enum_ty.with_enum_member(member, value.clone(), variants.len()))
     }
 }
 

@@ -1,8 +1,4 @@
-types: 19 of 34 tsc entries compared, 2 differ
-
-line 9: ['I\'m', 'a', 't-rex']
-  tsc:  ["I'm", "a", "t-rex"]
-  ours: ["I'm", "a", RexOrRaptor]
+types: 19 of 34 tsc entries compared, 1 differ
 
 line 11: dinosaur
   tsc:  "t-rex"

@@ -887,7 +887,7 @@ impl<'a> Inferer<'a> {
         // A compound assignment's right-hand side is whatever the caller wrote,
         // and guessing it would hand back code computing the wrong thing.
         let operand = match op {
-            RwOp::Postfix(_) if matches!(non_null.peel(), Type::BigInt) => "1n",
+            RwOp::Postfix(_) if non_null.is_bigint() => "1n",
             RwOp::Postfix(_) => "1",
             RwOp::Compound(_) => "…",
         };
@@ -1646,13 +1646,13 @@ fn or_cast(primary: String, cast: Option<&str>) -> String {
     }
 }
 
-/// A discriminant's literal value, spelled as source. Only the three literal
-/// kinds a discriminant can take reach here.
+/// A discriminant's literal value, spelled as source.
 fn render_literal(literal: &narrowing::LiteralValue) -> String {
     match literal {
         narrowing::LiteralValue::String(s) => format!("{s:?}"),
         narrowing::LiteralValue::Number(n) => crate::runtime::number::format_number_js(n.0),
         narrowing::LiteralValue::Boolean(b) => b.to_string(),
+        narrowing::LiteralValue::BigInt(digits) => format!("{digits}n"),
     }
 }
 

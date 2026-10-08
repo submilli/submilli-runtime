@@ -1,17 +1,1 @@
-types: 12 of 21 tsc entries compared, 4 differ
-
-line 2: `abc${0}abc`
-  tsc:  "abc0abc"
-  ours: string
-
-line 3: `abc${0}abc`
-  tsc:  "abc0abc"
-  ours: string
-
-line 4: `abc${0}abc`
-  tsc:  "abc0abc"
-  ours: string
-
-line 5: `abc${0}abc`
-  tsc:  "abc0abc"
-  ours: string
+types: 12 of 21 tsc entries compared, 0 differ

@@ -1,5 +1,1 @@
-types: 289 of 512 tsc entries compared, 1 differ
-
-line 76: [42]
-  tsc:  [number]
-  ours: [number | string]
+types: 289 of 512 tsc entries compared, 0 differ

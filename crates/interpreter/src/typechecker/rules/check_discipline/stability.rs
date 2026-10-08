@@ -8,6 +8,7 @@ pub(super) fn is_primitive(ty: &Type) -> bool {
         Type::Number
         | Type::NumberLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
         | Type::Boolean

@@ -1,8 +1,4 @@
-types: 47 of 67 tsc entries compared, 3 differ
-
-line 6: {}
-  tsc:  {}
-  ours: { a?: string }
+types: 47 of 67 tsc entries compared, 2 differ
 
 line 17: obj[0] && obj[1]
   tsc:  string | 0 | null

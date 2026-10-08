@@ -195,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn enum_member_access_has_enum_type() {
+    fn enum_member_access_has_member_type() {
         let ta = run_clean(
             r#"
             enum Direction { Up, Down }
@@ -211,6 +211,11 @@ mod tests {
                 crate::Package::user(),
                 "Direction",
                 crate::mangle::package_symbol(crate::mangle::USER_PACKAGE, "Direction"),
+            )
+            .with_enum_member(
+                "Up",
+                crate::types::EnumValue::Number(crate::types::LiteralF64(0.0)),
+                2,
             )
         );
     }

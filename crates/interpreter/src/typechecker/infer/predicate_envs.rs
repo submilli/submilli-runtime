@@ -1659,7 +1659,11 @@ impl<'a> Inferer<'a> {
             if self.field_may_hold(&field_ty, literal_ty) {
                 equal.push(member.clone());
             }
-            if field_ty.peel() != literal_ty {
+            // An enum member type `E.A` is the literal of its value alone.
+            let is_only_literal = field_ty.peel() == literal_ty
+                || narrowing::unit_literal_value(&field_ty)
+                    .is_some_and(|value| narrowing::unit_literal_value(literal_ty) == Some(value));
+            if !is_only_literal {
                 unequal.push(member.clone());
             }
         }
@@ -1823,6 +1827,39 @@ impl<'a> Inferer<'a> {
         Ok(Some((true_env, false_env)))
     }
 
+    /// [`Self::split_by_literal`] for an enum, which is the union of its
+    /// members: equal, the value is the member holding `literal`, and unequal,
+    /// one of the members whose value hasn't been ruled out. None unless a
+    /// member of `member` holds `literal`.
+    fn split_enum_by_literal(
+        &self,
+        member: &Type,
+        literal: &narrowing::LiteralValue,
+        excluded: &std::collections::BTreeSet<narrowing::LiteralValue>,
+    ) -> Option<(Option<Type>, Option<Type>)> {
+        let members = super::comparable::enum_member_types(member.peel(), self.resolver())?;
+        let holding = |keep: &dyn Fn(&narrowing::LiteralValue) -> bool| -> Vec<Type> {
+            members
+                .iter()
+                .filter(|m| narrowing::LiteralValue::of_enum_member(m).is_some_and(|v| keep(&v)))
+                .cloned()
+                .collect()
+        };
+        let equal = holding(&|value| value == literal);
+        if equal.is_empty() {
+            return None;
+        }
+        let unequal = holding(&|value| !excluded.contains(value));
+        let unequal = if unequal.is_empty() {
+            None
+        } else if unequal.len() == members.len() {
+            Some(member.clone())
+        } else {
+            Some(Type::union(unequal))
+        };
+        Some((Some(Type::union(equal)), unequal))
+    }
+
     /// What `member` leaves when the value equals `literal`, and when it
     /// doesn't, given the literals already ruled out with it (`excluded`).
     fn split_by_literal(
@@ -1832,12 +1869,21 @@ impl<'a> Inferer<'a> {
         excluded: &std::collections::BTreeSet<narrowing::LiteralValue>,
     ) -> (Option<Type>, Option<Type>) {
         let literal_ty = literal_to_type(literal);
+        if let Some(value) = narrowing::LiteralValue::of_enum_member(member) {
+            return if value == *literal {
+                (Some(member.clone()), None)
+            } else {
+                (None, Some(member.clone()))
+            };
+        }
+        if let Some(split) = self.split_enum_by_literal(member, literal, excluded) {
+            return split;
+        }
         if let Some(values) = super::comparable::enum_literal_values(member.peel(), self.resolver())
             && values.contains(literal)
         {
-            // An enum has no type for one member: equal, the value keeps the
-            // enum's type, and unequal, it leaves once every member's value
-            // has been ruled out.
+            // An enum of one member is that member's type: equal, the value
+            // keeps it, and unequal, it leaves once that value is ruled out.
             let all_excluded = values.iter().all(|value| excluded.contains(value));
             return (
                 Some(member.clone()),
@@ -2773,6 +2819,7 @@ fn may_share_an_object(left: &Type, right: &Type) -> bool {
                 | Type::Boolean
                 | Type::BooleanLiteral(_)
                 | Type::BigInt
+                | Type::BigIntLiteral(_)
         )
     };
     let is_class = |ty: &Type| matches!(ty.peel(), Type::ClassRef { .. });
