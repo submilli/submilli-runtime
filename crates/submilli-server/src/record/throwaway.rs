@@ -182,7 +182,7 @@ impl Throwaway {
             .collect();
         // The blocking task owns the directory until the copy is done, so a caller that
         // gives up meanwhile cannot have it deleted from under the copy.
-        let (dir, copied, usage_offsets) = crate::blocking_task::run(move || {
+        let (dir, copied, usage_offsets) = tokio::task::spawn_blocking(move || {
             let copied = copy_all(dir.path(), source_root, to_copy, cap)?;
             let offsets = usage_offsets(&limited, &copied);
             Ok::<_, ThrowawayError>((dir, copied, offsets))
@@ -222,10 +222,12 @@ impl Drop for Throwaway {
         let Some(dir) = self.dir.take() else {
             return;
         };
-        // Rejected admission drops the captured directory inline. Successful
-        // admission keeps deletion on the pool even though no waiter remains.
-        if let Err(error) = crate::blocking_task::spawn(move || drop(dir)) {
-            tracing::debug!(%error, "throwaway directory cleanup fell back to the caller");
+        // Deleting a tree is blocking work, kept off an async worker.
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(move || drop(dir));
+            }
+            Err(_) => drop(dir),
         }
     }
 }
@@ -1181,50 +1183,6 @@ mod tests {
             .await
             .expect("copy");
         (root, data, copy)
-    }
-
-    #[tokio::test]
-    async fn rejected_copy_admission_returns_io_and_allows_retry() {
-        let root = tempfile::tempdir().unwrap();
-        let data = root.path().join("data");
-        let reference = root.path().join("reference");
-        std::fs::create_dir_all(&data).unwrap();
-        std::fs::create_dir_all(&reference).unwrap();
-        std::fs::write(data.join("log.txt"), "one\n").unwrap();
-        let manager = manager(volumes(&data, &reference), &root.path().join("sessions"));
-        let blueprint = blueprint();
-        let variables = VarBindings::new();
-        let result = crate::blocking_task::reject_next_admission(Throwaway::copy(
-            &manager, None, &blueprint, &variables,
-        ))
-        .await;
-        assert!(matches!(result, Err(ThrowawayError::Io(message))
-            if message.contains("blocking task admission failed")));
-        assert_eq!(
-            std::fs::read_to_string(data.join("log.txt")).unwrap(),
-            "one\n"
-        );
-        let copy = Throwaway::copy(&manager, None, &blueprint, &variables)
-            .await
-            .unwrap();
-        assert_eq!(copy.report.bytes_copied, 4);
-    }
-
-    #[test]
-    fn failed_cleanup_admission_deletes_the_directory_inline() {
-        let healthy = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        let (_root, _data, copy) = healthy.block_on(copied(&blueprint()));
-        let held = copy.dir.as_ref().unwrap().path().to_owned();
-        assert!(held.exists());
-        let unavailable = tokio::runtime::Builder::new_current_thread()
-            .thread_stack_size(usize::MAX)
-            .build()
-            .unwrap();
-        let _entered = unavailable.enter();
-        drop(copy);
-        assert!(!held.exists());
     }
 
     #[tokio::test]

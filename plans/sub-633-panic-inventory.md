@@ -32,8 +32,9 @@ by [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 Entries marked **fixed on main** were merged in PR #151, PR #152, PR #163 or PR #169. Entries marked **fixed
 on branch** have completed focused verification and review; other N entries
-remain open. Four N entries remain open, twelve are fixed on main, and N17 is
-fixed on this branch. Evidence means:
+remain open unless explicitly accepted as an operational limitation. Three N
+entries remain open, twelve are fixed on main, N17 is fixed on this branch, and
+N09 is an accepted operational limitation. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
   The entry says whether this was a public API, source input, or only a dependency
@@ -53,7 +54,7 @@ fixed on this branch. Evidence means:
 | N06 | **Fixed on main:** validate sibling dependencies at public build entry | Typed-error regression passes |
 | N07 | **Fixed on main:** make resolver error formatting safe for arbitrary UTF-8 | Public formatting regression passes |
 | N08 | **Fixed on main:** make watchdog thread creation fallible | Injected setup failure, recovery and timer lifecycle regressions |
-| N09 | **Implemented locally:** gate blocking-pool work until admission succeeds | Injected admission failures, caller recovery and cancellation regressions |
+| N09 | **Accepted operational limitation:** Tokio blocking-pool admission panic | Pinned dependency inspection; explicit maintainer decision, 2026-10-08 |
 | N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
 | N11 | **Fixed on main:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
 | N12 | **Fixed on main:** traverse validation children lazily with fallible ancestor frames | Wide-input and allocation-failure regressions |
@@ -72,7 +73,9 @@ fixed on this branch. Evidence means:
 
 Keep N/Q identifiers stable from this reset onward. Close an N entry only after
 its mechanism and directly affected siblings are fixed or a genuine scoped
-invariant is established, with focused evidence. Resolve a Q into an N finding
+invariant is established, with focused evidence. An explicit maintainer decision
+may instead accept a scoped operational limitation, as in N09; record it separately
+from fixed mechanisms and proven guarantees. Resolve a Q into an N finding
 or an accepted guarantee; lack of a reproducer is not a proof. Record revision,
 short disposition and verification in the entry, not repeated progress essays.
 
@@ -329,66 +332,39 @@ in the working handoff. Final workspace tests and 134 package/documentation
 checks passed before PR #169; HTTP/nightly-only coverage was excluded and 35
 network package files were skipped.
 
-### N09 — Tokio blocking-pool admission can panic before a join exists
+### N09 — Tokio blocking-pool admission panic: accepted operational limitation
 
-**Sites:** `crates/submilli-server/src/idempotency_store.rs` (`blocking`),
-`session_manager.rs` (`attach_size_limit`), `volumes.rs` (`quota`),
-`handlers/packages.rs` (`install`), and `record/throwaway.rs` (`copy_capped`
-and `Drop`); shared boundary in `blocking_task.rs`.
+**Disposition (2026-10-08):** explicitly accepted by the maintainer for now.
+Do not add a `catch_unwind` recovery wrapper around blocking-pool admission.
+This is a scoped exception for a real operational failure, not a proven invariant
+or a removed panic. The existing direct calls remain unchanged.
+
+**Sites:** server `idempotency_store.rs` (`blocking`), `session_manager.rs`
+(`attach_size_limit`), `volumes.rs` (`quota`), `handlers/packages.rs` (`install`),
+and `record/throwaway.rs` (`copy_capped` and `Drop`), all under
+`crates/submilli-server/src/`; CLI `current_closure` in
+`crates/submilli/src/commands/playground/host.rs` and `Freshness::run_check` in
+`crates/submilli/src/commands/playground/packages.rs`.
 Dependency: Tokio 1.52.3 `src/runtime/blocking/pool.rs:320–325`.
 
-These server preparation/storage paths previously called `tokio::task::spawn_blocking` directly.
-Tokio panics on `SpawnError::NoThreads`; handling the returned `JoinError` does
-not handle a panic during admission. A configured runtime and a pool ceiling do
-not guarantee OS thread availability. This finding concerns those concrete direct
-calls; implicit Tokio filesystem/DNS worker admission is a residual dependency
-coverage limitation, not a claim it was fully audited.
+Tokio can panic on `SpawnError::NoThreads` before returning a `JoinHandle`.
+Handling a returned `JoinError` does not handle that admission panic. A configured
+runtime and a pool ceiling do not guarantee OS thread availability. Merely
+reaching the pool's thread limit queues work; that is not this failure.
 
-**Initial evidence:** pinned dependency source and first-party callers inspected;
-the initial audit did not inject OS failures. `runtime::BlockingWork` demonstrates existing fallible native
-worker creation with bounded admission, but changes must respect caller ownership.
+Tokio queues the task before attempting native thread creation. Unwinding does
+not undo that shared queue, so retained work can run later if the runtime survives
+and a worker becomes available. Accepting this limitation does not establish
+recovery, cleanup, or absence of delayed effects after failed admission.
+An uncaught admission panic also does not guarantee process termination: with
+unwinding enabled, an enclosing Tokio task boundary can catch it. This exception
+does not introduce an abort policy.
 
-**Implemented locally (N09):** a shared private helper queues only a channel
-receiver, retaining the operation and its resources until admission succeeds.
-Tokio queues before attempting thread creation; rejected admission closes the
-channel without publishing work, so even a retained wrapper cannot perform a
-delayed write. A capacity-one channel publishes the operation without waiting
-for a worker or introducing an async cancellation point. Once admitted, work
-retains Tokio's existing cancellation and shutdown ownership.
-
-The synchronous admission boundary translates only the pinned dependency's
-formatted `OS can't spawn worker thread: …` string payload into a typed error.
-Other panic payloads resume unwinding; this does not declare their originating
-sites safe or resolved. Worker panics remain join errors, and returned operation
-errors keep their caller mappings. The panic hook still runs; Tokio upgrades
-must recheck this narrow contract. No interpreter worker or general cancellation
-redesign is included.
-
-Integration review found two more direct calls in replay workspace copying and
-cleanup, already present on `main` at `61183912`. Both now use the same gate.
-Synchronous admission lets detached cleanup keep Tokio ownership on success;
-rejection drops the captured temporary directory inline, including when no runtime
-is available. Quota usage offsets added on `main` remain applied after measurement.
-
-**Verification:** a current-thread Tokio runtime with an impossible blocking-worker
-stack size exercises the actual pinned OS-thread admission failure, verifies local
-resource release, and is followed by successful work on a healthy runtime.
-Additional deterministic injected failures cover rejection before queuing,
-a retained wrapper, and a started wrapper, with resource release and healthy
-follow-ups. Caller regressions cover durable reservation refusal/retry, workspace
-cleanup, uncached fail-closed volume quotas and install HTTP 500 without mutation.
-Helper tests cover returned operation errors, worker panics, unavailable runtime,
-shutdown rejection/draining and continued work/cleanup after waiter cancellation.
-Initial four-call-site verification passed 88 distinct affected unit tests and
-focused server integration checks;
-two session API checks needed host filesystem access for their default storage
-directory. Independent clean-code, correctness and edge-case review found no
-defects before integration. Post-rebase review identified the two replay sibling
-sites above; 57 focused helper, volume and replay tests pass with their fix,
-including copy-admission/recovery and actual cleanup-admission failure. A renewed
-three-role review found no remaining defects. OS thread exhaustion has not been
-induced. Full post-rebase PR verification belongs to the publication handoff;
-this entry does not claim publication or completion of SUB-633.
+**Evidence and scope:** pinned dependency source and the eight explicit production
+call sites were inspected. OS thread exhaustion has not been induced. Implicit
+Tokio filesystem/DNS worker admission remains a dependency coverage limitation;
+this is not a complete transitive-dependency audit. Revisit this exception if a
+fallible admission API or a different blocking-pool design becomes available.
 
 ### N10 — UUID generation panics if OS entropy fails
 
