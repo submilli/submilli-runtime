@@ -79,11 +79,13 @@ fn a_value_type_is_primitive() {
             mangled: mangled.clone(),
             package: package.clone(),
             name: name.clone(),
+            member: None,
         },
         Type::StringEnum {
             mangled,
             package,
             name,
+            member: None,
         },
         Type::union(vec![Type::String, Type::Null, Type::Number]),
     ] {

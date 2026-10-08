@@ -1,4 +1,4 @@
-types: 187 of 273 tsc entries compared, 41 differ
+types: 187 of 273 tsc entries compared, 37 differ
 
 line 30: x
   tsc:  {}
@@ -111,22 +111,6 @@ line 194: x
 line 195: x
   tsc:  T & object
   ours: T
-
-line 206: !!true
-  tsc:  true
-  ours: boolean
-
-line 206: !true
-  tsc:  false
-  ours: boolean
-
-line 210: !!true
-  tsc:  true
-  ours: boolean
-
-line 210: !true
-  tsc:  false
-  ours: boolean
 
 line 253: a
   tsc:  (T & object) | (T & null)

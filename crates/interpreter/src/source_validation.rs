@@ -573,6 +573,7 @@ impl<'a> Validator<'a> {
                 }
                 TypeAnnotationKind::StringLiteral(_)
                 | TypeAnnotationKind::NumberLiteral(_)
+                | TypeAnnotationKind::BigIntLiteral(_)
                 | TypeAnnotationKind::BooleanLiteral(_) => {}
             }
         }

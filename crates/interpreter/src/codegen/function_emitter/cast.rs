@@ -125,6 +125,7 @@ pub fn emit_box(
         Type::String
         | Type::StringLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::Object { .. }
         | Type::Array(_)
         | Type::Tuple(_)
@@ -609,7 +610,7 @@ pub fn emit_cast_to(
                 .ok_or_else(|| crate::codegen::internal_failure("string type registered"))?;
             emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(idx)));
         }
-        Type::BigInt => {
+        Type::BigInt | Type::BigIntLiteral(_) => {
             let idx = ctx
                 .symbols
                 .bigint_type_idx()

@@ -1,2 +1,3 @@
 line 18, 19, 20 extra: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object`
-line 14, 18, 19, 20, 24, 25, 26 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
+line 14, 24, 25, 26 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours types the rejected literal as its target)
+line 18, 19, 20 type: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object`

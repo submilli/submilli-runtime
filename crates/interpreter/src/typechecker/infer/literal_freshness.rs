@@ -195,13 +195,24 @@ impl Inferer<'_> {
         value: ExprId,
         ty: &Type,
     ) -> Result<Type, CompilerFailure> {
-        if !is_single_literal(ty) {
+        if !ty.peel().is_literal_type() {
             return Ok(ty.clone());
         }
         let mut fresh = self.known_fresh_literals(value)?;
         let regular = self.regular_literals(value)?;
         fresh.retain(|literal| !regular.contains(literal));
         Ok(widen_only(ty, &fresh))
+    }
+
+    /// Whether `literal`, the type of `value`, is known to be fresh and not
+    /// also regular: written as a literal, or read from a `const` bound to one.
+    pub(super) fn is_known_fresh_literal(
+        &self,
+        value: ExprId,
+        literal: &Type,
+    ) -> Result<bool, CompilerFailure> {
+        Ok(self.known_fresh_literals(value)?.contains(literal)
+            && !self.regular_literals(value)?.contains(literal))
     }
 
     /// Record that a generic call's result keeps the literal type of
@@ -561,7 +572,16 @@ impl Inferer<'_> {
                 continue;
             }
             match &expr.kind {
-                TypedExprKind::Number(_) | TypedExprKind::String(_) | TypedExprKind::Boolean(_) => {
+                // A `!` and a template of constants are literals as TypeScript
+                // evaluates them; only a template's concatenation has a literal type.
+                TypedExprKind::Number(_)
+                | TypedExprKind::String(_)
+                | TypedExprKind::Boolean(_)
+                | TypedExprKind::BigInt(_)
+                | TypedExprKind::NumberEnumMember { .. }
+                | TypedExprKind::StringEnumMember { .. }
+                | TypedExprKind::Unary { .. }
+                | TypedExprKind::Binary { op: BinOp::Add, .. } => {
                     fresh.extend(literal_members(&expr.ty));
                 }
                 TypedExprKind::LocalRef { ident, .. } => {
@@ -1170,14 +1190,6 @@ fn call_operands(
         .chain(args.iter().map(|argument| argument.expr))
 }
 
-/// Whether `ty` is one literal type, what tsc calls a unit type.
-fn is_single_literal(ty: &Type) -> bool {
-    matches!(
-        ty.peel(),
-        Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
-    )
-}
-
 /// Whether `ty` is made only of `string`, `number`, `boolean`, `null` and
 /// their literal types.
 pub(super) fn is_primitive_union(ty: &Type) -> bool {
@@ -1191,6 +1203,7 @@ pub(super) fn is_primitive_union(ty: &Type) -> bool {
                 | Type::StringLiteral(_)
                 | Type::NumberLiteral(_)
                 | Type::BooleanLiteral(_)
+                | Type::BigIntLiteral(_)
         )
     })
 }
@@ -1370,10 +1383,8 @@ fn flattened_union_members(ty: &Type) -> Vec<&Type> {
 /// The literal types `ty` is made of: itself, or its union members.
 fn literal_members(ty: &Type) -> BTreeSet<Type> {
     match ty.peel() {
-        literal @ (Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)) => {
-            BTreeSet::from([literal.clone()])
-        }
         Type::Union(members) => members.iter().flat_map(literal_members).collect(),
+        literal if literal.is_literal_type() => BTreeSet::from([literal.clone()]),
         _ => BTreeSet::new(),
     }
 }
@@ -1422,8 +1433,8 @@ fn deep_literals(ty: &Type) -> BTreeSet<Type> {
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         match ty {
-            Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_) => {
-                literals.insert(ty.clone());
+            literal if literal.is_literal_type() => {
+                literals.insert(literal.clone());
             }
             Type::Union(members) | Type::Tuple(members) => pending.extend(members),
             Type::Array(inner) | Type::Readonly(inner) => pending.push(inner),
@@ -1458,11 +1469,7 @@ fn deep_literals(ty: &Type) -> BTreeSet<Type> {
 /// declared.
 fn widen_only(ty: &Type, fresh: &BTreeSet<Type>) -> Type {
     match ty {
-        Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
-            if fresh.contains(ty) =>
-        {
-            ty.widen_literal()
-        }
+        literal if literal.is_literal_type() && fresh.contains(literal) => literal.widen_literal(),
         Type::Union(members) => without_absorbed_literals(
             members
                 .iter()
@@ -1486,11 +1493,7 @@ fn widen_only(ty: &Type, fresh: &BTreeSet<Type>) -> Type {
 /// [`Type::widen_literal`], keeping the literal members in `regular`.
 fn widen_unless_regular(ty: &Type, regular: &BTreeSet<Type>) -> Type {
     match ty {
-        Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
-            if regular.contains(ty) =>
-        {
-            ty.clone()
-        }
+        literal if literal.is_literal_type() && regular.contains(literal) => literal.clone(),
         Type::Union(members) => without_absorbed_literals(
             members
                 .iter()
@@ -1507,18 +1510,22 @@ fn widen_unless_regular(ty: &Type, regular: &BTreeSet<Type>) -> Type {
 fn without_absorbed_literals(members: Vec<Type>) -> Type {
     let bases: BTreeSet<Type> = members
         .iter()
-        .filter(|member| matches!(member, Type::String | Type::Number | Type::Boolean))
+        .filter(|member| {
+            matches!(
+                member,
+                Type::String
+                    | Type::Number
+                    | Type::Boolean
+                    | Type::NumberEnum { member: None, .. }
+                    | Type::StringEnum { member: None, .. }
+            )
+        })
         .cloned()
         .collect();
     Type::union(
         members
             .into_iter()
-            .filter(|member| {
-                !matches!(
-                    member,
-                    Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
-                ) || !bases.contains(&member.widen_literal())
-            })
+            .filter(|member| !member.is_literal_type() || !bases.contains(&member.widen_literal()))
             .collect(),
     )
 }

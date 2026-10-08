@@ -1,13 +1,9 @@
-types: 20 of 44 tsc entries compared, 3 differ
+types: 20 of 44 tsc entries compared, 2 differ
 
-line 8: x
-  tsc:  Pair<string, number>
-  ours: { first: string; second: number }
+line 14: y
+  tsc:  { first: string; second: number; }
+  ours: Pair<string, number>
 
-line 13: x
-  tsc:  Pair<string, number>
-  ours: { first: string; second: number }
-
-line 15: x
-  tsc:  Pair<string, number>
-  ours: { first: string; second: number }
+line 16: y
+  tsc:  { first: string; second: number; }
+  ours: Pair<string, number>

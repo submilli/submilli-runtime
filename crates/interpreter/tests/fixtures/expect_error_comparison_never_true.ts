@@ -37,6 +37,8 @@ function check(color: Color, mode: Mode, foo: "foo", flag: true, shade: Shade, m
   switch (`v${2}`) {
     case "v3":
       break;
+    default:
+      break;
   }
   switch (mode) {
     case Color.Red:

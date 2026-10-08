@@ -63,6 +63,9 @@ impl ReferencePath {
                         LiteralValue::Boolean(b) => {
                             let _ = write!(out, "[{b}]");
                         }
+                        LiteralValue::BigInt(digits) => {
+                            let _ = write!(out, "[{digits}n]");
+                        }
                     }
                 }
             }
@@ -131,6 +134,18 @@ pub enum LiteralValue {
     Number(LiteralF64),
     String(String),
     Boolean(bool),
+    /// A bigint's canonical decimal digits, as [`Type::BigIntLiteral`] holds them.
+    BigInt(String),
+}
+
+impl LiteralValue {
+    /// The value an enum member literal type `E.A` holds.
+    pub fn of_enum_member(ty: &Type) -> Option<Self> {
+        Some(match ty.enum_member_value()? {
+            crate::types::EnumValue::Number(value) => LiteralValue::Number(value),
+            crate::types::EnumValue::String(value) => LiteralValue::String(value),
+        })
+    }
 }
 
 /// Bitmask over narrowing predicates, modeled on TypeScript's `TypeFacts`.
@@ -432,6 +447,7 @@ pub fn literal_type(literal: &LiteralValue) -> Type {
         LiteralValue::String(s) => Type::StringLiteral(s.clone()),
         LiteralValue::Number(n) => Type::NumberLiteral(*n),
         LiteralValue::Boolean(b) => Type::BooleanLiteral(*b),
+        LiteralValue::BigInt(digits) => Type::BigIntLiteral(digits.clone()),
     }
 }
 
@@ -478,7 +494,8 @@ pub(super) fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
         Type::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
         Type::NumberLiteral(n) => Some(LiteralValue::Number(*n)),
         Type::BooleanLiteral(b) => Some(LiteralValue::Boolean(*b)),
-        _ => None,
+        Type::BigIntLiteral(digits) => Some(LiteralValue::BigInt(digits.clone())),
+        other => LiteralValue::of_enum_member(other),
     }
 }
 
@@ -733,6 +750,21 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
             }
         }
         Type::BigInt => BigIntLike,
+        Type::BigIntLiteral(digits) => {
+            if digits == "0" {
+                AlwaysFalsy
+            } else {
+                AlwaysTruthy
+            }
+        }
+        Type::NumberEnum {
+            member: Some(member),
+            ..
+        } => truthiness_class(&Type::NumberLiteral(member.value)),
+        Type::StringEnum {
+            member: Some(member),
+            ..
+        } => truthiness_class(&Type::StringLiteral(member.value.clone())),
         Type::NumberEnum { .. } => NumberLike,
         Type::StringEnum { .. } => StringLike,
         // `{}` admits every value but `null` and `undefined`, falsy primitives
@@ -765,6 +797,29 @@ pub fn has_known_truthiness(ty: &Type) -> bool {
     })
 }
 
+/// The type of `!value` for a `value` of type `ty`, as TypeScript has it:
+/// `false` when every value it holds is truthy, `true` when every one is
+/// falsy, and `boolean` otherwise.
+pub fn negation_type(ty: &Type) -> Type {
+    let classes: Vec<TruthinessClass> = union_members(ty)
+        .into_iter()
+        .map(truthiness_class)
+        .collect();
+    if classes
+        .iter()
+        .all(|class| *class == TruthinessClass::AlwaysTruthy)
+    {
+        return Type::BooleanLiteral(false);
+    }
+    if classes
+        .iter()
+        .all(|class| *class == TruthinessClass::AlwaysFalsy)
+    {
+        return Type::BooleanLiteral(true);
+    }
+    Type::Boolean
+}
+
 pub(super) fn union_members(ty: &Type) -> Vec<&Type> {
     match ty.peel() {
         Type::Union(members) => members.iter().collect(),
@@ -794,6 +849,13 @@ pub fn truthy_part(ty: &Type) -> Type {
         })
         .collect();
     Type::union(kept)
+}
+
+/// Whether no value of `ty` is falsy.
+pub fn is_never_falsy(ty: &Type) -> bool {
+    union_members(ty)
+        .into_iter()
+        .all(|m| truthiness_class(m) == TruthinessClass::AlwaysTruthy)
 }
 
 /// The type of `x` where `x` is known falsy: keep `null` and falsy literals,
@@ -915,6 +977,7 @@ fn is_typeof_object(ty: &Type) -> bool {
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::Function { .. } => false,
 
         // Not classifiable, for four different reasons: no value at all
@@ -1053,12 +1116,13 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
                 .collect();
             Type::union(remaining)
         }
-        single @ (Type::StringLiteral(_) | Type::NumberLiteral(_) | Type::BooleanLiteral(_)) => {
-            match unit_literal_value(single) {
-                Some(lit) if covered.contains(&lit) => Type::Never,
-                _ => ty.clone(),
-            }
-        }
+        single @ (Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::BigIntLiteral(_)) => match unit_literal_value(single) {
+            Some(lit) if covered.contains(&lit) => Type::Never,
+            _ => ty.clone(),
+        },
         _ => ty.clone(),
     }
 }

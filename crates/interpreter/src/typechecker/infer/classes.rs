@@ -1536,7 +1536,8 @@ impl<'a> Inferer<'a> {
             | Type::BooleanLiteral(_)
             | Type::String
             | Type::StringLiteral(_)
-            | Type::BigInt => true,
+            | Type::BigInt
+            | Type::BigIntLiteral(_) => true,
             _ => false,
         }
     }
@@ -2060,6 +2061,10 @@ impl<'a> Inferer<'a> {
         let (Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. }) = ty else {
             return None;
         };
+        // A member type `E.A` holds its own value alone.
+        if let Some(value) = ty.enum_member_value() {
+            return Some(value.literal_type());
+        }
         let symbol = self
             .type_registry
             .lookup(mangled)

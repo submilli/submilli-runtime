@@ -1683,6 +1683,7 @@ fn ts_type(ty: &Type) -> String {
         Type::Number => "number".to_string(),
         Type::NumberLiteral(n) => n.0.to_string(),
         Type::BigInt => "bigint".to_string(),
+        Type::BigIntLiteral(digits) => format!("{digits}n"),
         Type::String => "string".to_string(),
         Type::StringLiteral(s) => format!("\"{}\"", escape_string_literal(s)),
         Type::Uint8Array => "Uint8Array".to_string(),

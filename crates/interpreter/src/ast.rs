@@ -767,6 +767,8 @@ pub enum TypeAnnotationKind {
     StringLiteral(String),
     /// Parser canonicalizes `-0.0` to `0.0`.
     NumberLiteral(crate::types::LiteralF64),
+    /// Decimal digits with a leading `-` when negative, as in [`crate::Type::BigIntLiteral`].
+    BigIntLiteral(String),
     BooleanLiteral(bool),
     Array(Box<TypeAnnotation>),
     /// Element labels (`[x: number, y: number]`) are documentation only, so the

@@ -1,13 +1,5 @@
-types: 40 of 75 tsc entries compared, 3 differ
+types: 40 of 75 tsc entries compared, 1 differ
 
 line 28: s2
   tsc:  S2
   ours: T2
-
-line 34: a
-  tsc:  { foo: string; bar?: string; }
-  ours: { baz?: string; foo: string }
-
-line 36: s2
-  tsc:  S2
-  ours: { foo: string }

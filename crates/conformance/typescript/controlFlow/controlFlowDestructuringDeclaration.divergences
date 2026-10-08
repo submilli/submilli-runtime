@@ -1,17 +1,1 @@
-types: 16 of 26 tsc entries compared, 4 differ
-
-line 12: [1]
-  tsc:  [number]
-  ours: [number | string]
-
-line 13: x
-  tsc:  number
-  ours: number | string
-
-line 14: [""]
-  tsc:  [string]
-  ours: [string | null]
-
-line 15: y
-  tsc:  string
-  ours: string | null
+types: 16 of 26 tsc entries compared, 0 differ

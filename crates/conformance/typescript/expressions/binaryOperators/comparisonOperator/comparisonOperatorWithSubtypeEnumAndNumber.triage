@@ -1,1 +1,0 @@
-line 10, 11, 12, 13, 18, 19, 20, 21, 26, 27, 28, 29, 34, 35, 36, 37, 42, 43, 44, 45, 50, 51, 52, 53, 58, 59, 60, 61, 66, 67, 68, 69 type: bug SUB-1196 (enum member types) an enum member has its enum's type, where tsc gives it a member literal type

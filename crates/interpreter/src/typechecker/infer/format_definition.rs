@@ -41,7 +41,7 @@ pub(super) fn format_definition(
                 "Number",
                 &[],
             ),
-            Type::BigInt => write_interface(
+            Type::BigInt | Type::BigIntLiteral(_) => write_interface(
                 out,
                 types,
                 registry,

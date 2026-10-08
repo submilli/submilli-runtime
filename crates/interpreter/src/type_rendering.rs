@@ -128,6 +128,10 @@ fn write_node<'a>(
     match ty {
         Type::Number => out.push("number"),
         Type::BigInt => out.push("bigint"),
+        Type::BigIntLiteral(digits) => {
+            out.push(digits)?;
+            out.push("n")
+        }
         Type::NumberLiteral(value) => out.push(&crate::runtime::number::format_number_js(value.0)),
         Type::String => out.push("string"),
         Type::StringLiteral(value) => write_string(out, value),
@@ -139,10 +143,17 @@ fn write_node<'a>(
         Type::Unknown => out.push("unknown"),
         Type::Error => out.push("<error>"),
         Type::Never => out.push("never"),
-        Type::TypeVar(name)
-        | Type::GenericParam { name, .. }
-        | Type::NumberEnum { name, .. }
-        | Type::StringEnum { name, .. } => out.push(name),
+        Type::TypeVar(name) | Type::GenericParam { name, .. } => out.push(name),
+        Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => {
+            out.push(name)?;
+            match ty.enum_member_name() {
+                Some((_, member, _)) => {
+                    out.push(".")?;
+                    out.push(member)
+                }
+                None => Ok(()),
+            }
+        }
         Type::Function {
             params,
             ret,
@@ -467,11 +478,13 @@ fn copied_text_bytes(ty: &Type) -> Result<usize, RenderError> {
             mangled,
             package,
             name,
+            ..
         }
         | Type::StringEnum {
             mangled,
             package,
             name,
+            ..
         } => {
             add(mangled.as_str())?;
             add(package.as_str())?;
@@ -500,6 +513,7 @@ fn child_count(ty: &Type) -> usize {
         Type::Number
         | Type::NumberLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
         | Type::Uint8Array

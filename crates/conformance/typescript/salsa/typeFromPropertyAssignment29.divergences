@@ -1,4 +1,4 @@
-types: 62 of 188 tsc entries compared, 19 differ
+types: 62 of 188 tsc entries compared, 18 differ
 
 line 7: ExpandoDecl
   tsc:  typeof ExpandoDecl
@@ -39,10 +39,6 @@ line 17: ExpandoExpr
 line 18: ExpandoExpr
   tsc:  { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }
   ours: (arg0: number) => string
-
-line 21: ExpandoExpr.prop.x || 0
-  tsc:  0
-  ours: number
 
 line 21: ExpandoExpr
   tsc:  { (n: number): string; prop: { x: number; y?: undefined; } | { y: string; x?: undefined; }; m(n: number): number; }

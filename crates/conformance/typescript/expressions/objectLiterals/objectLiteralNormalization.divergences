@@ -1,4 +1,4 @@
-types: 101 of 220 tsc entries compared, 53 differ
+types: 101 of 220 tsc entries compared, 46 differ
 
 line 6: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
@@ -27,10 +27,6 @@ line 9: a1
 line 10: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
   ours: { a: number; b: string; c: boolean } | { a: number; b: string; c?: never } | { a: number; b?: never; c?: never }
-
-line 10: { a: 1 }
-  tsc:  { a: number; }
-  ours: { a: number; b?: never; c?: never }
 
 line 11: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
@@ -80,10 +76,6 @@ line 20: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
   ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
 
-line 20: {}
-  tsc:  {}
-  ours: { a?: never; b?: never }
-
 line 21: a2
   tsc:  { a: number; b: number; } | { a: string; b?: undefined; } | { a?: undefined; b?: undefined; }
   ours: { a: number; b: number } | { a: string; b?: never } | { a?: never; b?: never }
@@ -112,14 +104,6 @@ line 27: b2
   tsc:  { z: number; a: string; b: string; } | { z: number; b: string; c: string; }
   ours: { a?: string; b: string; c?: string; z: number }
 
-line 32: !true
-  tsc:  false
-  ours: boolean
-
-line 33: !true
-  tsc:  false
-  ours: boolean
-
 line 34: c3
   tsc:  { a: number; b: number; } | { a?: undefined; b?: undefined; }
   ours: { a: number; b: number } | { a?: never; b?: never }
@@ -128,10 +112,6 @@ line 34: !true ? { a: 0, b: 0 } : {}
   tsc:  { a: number; b: number; } | {}
   ours: { a: number; b: number } | { a?: never; b?: never }
 
-line 34: !true
-  tsc:  false
-  ours: boolean
-
 line 35: c4
   tsc:  { a?: undefined; b?: undefined; } | { a: number; b: number; }
   ours: { a: number; b: number } | { a?: never; b?: never }
@@ -139,10 +119,6 @@ line 35: c4
 line 35: !true ? {} : { a: 0, b: 0 }
   tsc:  {} | { a: number; b: number; }
   ours: { a: number; b: number } | { a?: never; b?: never }
-
-line 35: !true
-  tsc:  false
-  ours: boolean
 
 line 38: d1
   tsc:  { kind: string; pos: { x: number; y: number; a?: undefined; b?: undefined; }; } | { kind: string; pos: { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }; }
@@ -163,10 +139,6 @@ line 38: { kind: 'b', pos: !true ? { a: "x" } : { b: 0 } }
 line 38: !true ? { a: "x" } : { b: 0 }
   tsc:  { a: string; } | { b: number; }
   ours: { a: string; b?: never } | { a?: never; b: number }
-
-line 38: !true
-  tsc:  false
-  ours: boolean
 
 line 39: d1
   tsc:  { kind: string; pos: { x: number; y: number; a?: undefined; b?: undefined; }; } | { kind: string; pos: { a: string; x?: undefined; y?: undefined; b?: undefined; } | { b: number; x?: undefined; y?: undefined; a?: undefined; }; }

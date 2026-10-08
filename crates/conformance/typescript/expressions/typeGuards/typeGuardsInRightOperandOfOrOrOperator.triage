@@ -1,3 +1,1 @@
-line 10, 14 extra: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
-line 10, 14 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
 line 39, 40, 41 type: artifact the type comes from code tsc rejects (on line 45), and each side's recovery type differs (tsc types the failed read `any`, ours `<error>`)

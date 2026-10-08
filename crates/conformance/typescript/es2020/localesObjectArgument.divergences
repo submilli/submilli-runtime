@@ -1,16 +1,4 @@
-types: 17 of 218 tsc entries compared, 3 differ
-
-line 9: bigint
-  tsc:  123456789123456789n
-  ours: bigint
-
-line 24: bigint
-  tsc:  123456789123456789n
-  ours: bigint
-
-line 25: bigint
-  tsc:  123456789123456789n
-  ours: bigint
+types: 17 of 218 tsc entries compared, 0 differ
 
 errors:
 line 3: ours: unresolved identifier `Intl` (tsc accepts)
@@ -18,8 +6,8 @@ line 4: ours: unresolved identifier `Intl` (tsc accepts)
 line 5: ours: unresolved identifier `Intl` (tsc accepts)
 line 21: ours: field `toLocaleString` does not exist on `1000` (tsc accepts)
 line 22: ours: field `toLocaleString` does not exist on `1000` (tsc accepts)
-line 24: ours: field `toLocaleString` does not exist on `bigint` (tsc accepts)
-line 25: ours: field `toLocaleString` does not exist on `bigint` (tsc accepts)
+line 24: ours: field `toLocaleString` does not exist on `123456789123456789n` (tsc accepts)
+line 25: ours: field `toLocaleString` does not exist on `123456789123456789n` (tsc accepts)
 line 27: ours: field `toLocaleLowerCase` does not exist on `""` (tsc accepts)
 line 28: ours: field `toLocaleLowerCase` does not exist on `""` (tsc accepts)
 line 29: ours: field `toLocaleUpperCase` does not exist on `""` (tsc accepts)

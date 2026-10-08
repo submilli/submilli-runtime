@@ -188,7 +188,7 @@ fn walk(
             "`unknown` has no JSON Schema — an unconstrained schema would let the model return anything; name the shape you expect",
         )),
         Type::Function { .. } => Err(reject(path, "functions have no JSON form")),
-        Type::BigInt => Err(reject(
+        Type::BigInt | Type::BigIntLiteral(_) => Err(reject(
             path,
             "`bigint` has no JSON number form — use `number` or a `string` encoding",
         )),

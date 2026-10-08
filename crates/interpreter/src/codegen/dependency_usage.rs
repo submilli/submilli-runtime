@@ -449,7 +449,7 @@ impl DependencyUsage {
             Type::Alias { ty, .. } | Type::Refined { ty, .. } | Type::Readonly(ty) => {
                 self.collect_type(ty);
             }
-            Type::BigInt => {
+            Type::BigInt | Type::BigIntLiteral(_) => {
                 self.uses_bigint = true;
             }
             Type::Number
@@ -515,7 +515,7 @@ impl DependencyUsage {
     /// The bigint operator imports a `++`/`--` on a bigint target lowers to.
     /// The target's own type goes through the caller's type funnel.
     pub(crate) fn collect_postfix_bigint_ops(&mut self, ty: &Type) {
-        if matches!(ty.peel(), Type::BigInt) {
+        if ty.is_bigint() {
             self.collect_bigint_host_value("fromNumber");
             self.collect_bigint_host_value("add");
             self.collect_bigint_host_value("sub");

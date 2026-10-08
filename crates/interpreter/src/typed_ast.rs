@@ -420,6 +420,34 @@ pub struct TypedObjectFieldOrigin {
     pub ty: Type,
 }
 
+/// The structural type an object literal of type `ty` is built with. Its fields
+/// come from `fields`, which hold the null-filled optional fields and the
+/// declared field types a literal's own type can leave out or narrow. A type
+/// with an index signature (from a spread) is already the layout.
+pub fn object_literal_layout(ty: &Type, fields: &[TypedObjectFieldOrigin]) -> Type {
+    if let Type::Object { index: Some(_), .. } = ty {
+        return ty.clone();
+    }
+    let fields = fields
+        .iter()
+        .map(|field| {
+            (
+                field.name.name.clone(),
+                crate::ObjectField {
+                    ty: field.ty.clone(),
+                    optional: field.optional,
+                    readonly: false,
+                    method: false,
+                },
+            )
+        })
+        .collect();
+    Type::Object {
+        index: None,
+        fields,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypedObjectFieldSource {
     Literal(ExprId),
