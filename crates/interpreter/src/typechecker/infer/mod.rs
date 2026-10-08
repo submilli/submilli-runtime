@@ -134,6 +134,8 @@ pub fn infer_with_transitive_checked<'a>(
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
+        invoked_return_hint: None,
+        cast_operand: None,
         invoked_body_exit: None,
         captured_mutators: bindings.mutators,
         function_written_globals: bindings.function_written_globals,
@@ -412,6 +414,8 @@ pub fn infer_package_checked<'a>(
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
+        invoked_return_hint: None,
+        cast_operand: None,
         invoked_body_exit: None,
         captured_mutators: Default::default(),
         function_written_globals: Default::default(),
@@ -752,6 +756,14 @@ pub(super) struct Inferer<'a> {
     /// The span of the arrow an immediately-invoked call is about to infer;
     /// see [`iife::immediately_invoked_arrow`].
     immediately_invoked: Option<Span>,
+    /// The type the immediately-invoked call's result is expected to have,
+    /// which the arrow it runs takes as its return type's context, as in tsc.
+    invoked_return_hint: Option<Type>,
+    /// The span of the function literal an `as` cast is about to infer, and
+    /// the cast's target. The target only types the literal's unannotated
+    /// parameters and lets an `unknown` return take any value; the cast
+    /// itself relates the rest.
+    cast_operand: Option<(Span, Type)>,
     /// What the immediately-invoked body just inferred leaves for the code
     /// after its call.
     invoked_body_exit: Option<iife::InvokedBodyExit>,

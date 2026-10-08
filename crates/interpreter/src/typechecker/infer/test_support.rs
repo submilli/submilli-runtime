@@ -127,6 +127,8 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
+        invoked_return_hint: None,
+        cast_operand: None,
         invoked_body_exit: None,
         captured_mutators: bindings.mutators,
         function_written_globals: bindings.function_written_globals,
