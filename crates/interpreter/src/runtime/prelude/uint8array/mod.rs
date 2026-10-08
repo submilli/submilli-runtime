@@ -220,7 +220,7 @@ fn with(bytes: &[u8], index: f64, value: f64) -> Option<Vec<u8>> {
 /// The byte equal to `target`, which a search compares as a number: a value
 /// that isn't an integer from 0 to 255 equals no byte.
 fn searched_byte(target: f64) -> Option<u8> {
-    (target.fract() == 0.0 && (0.0..=255.0).contains(&target)).then(|| target as u8)
+    (target.fract() == 0.0 && (0.0..=255.0).contains(&target)).then_some(target as u8)
 }
 
 fn index_of(bytes: &[u8], target: f64, from: f64) -> f64 {

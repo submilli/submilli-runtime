@@ -1026,7 +1026,7 @@ fn emit_subtype_hash_body(
         )?;
         // Match the dynamic hook's order-independent name/value combination.
         let name_hash = crate::runtime::prelude::vtable::hash_utf16_units(
-            crate::literal_units::literal_units(name).into_iter(),
+            crate::literal_units::literal_units(name),
         );
         f.instruction(&Instruction::I32Const(13));
         f.instruction(&Instruction::I32Rotl);
