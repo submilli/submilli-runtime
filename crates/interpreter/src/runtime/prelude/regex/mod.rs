@@ -778,7 +778,14 @@ fn replace_regex_bounded(
         let prefix = input_units(caller, input, previous..hit.match_start)?;
         output.append(caller, &prefix)?;
         fuel::charge(&mut *caller, fuel::SCAN, replacement.len() as u64)?;
-        expand_replacement(caller, &mut output, input, replacement, &hit, has_named)?;
+        expand_replacement(
+            caller,
+            &mut output,
+            &ReplacedInput::Decoded(input),
+            replacement,
+            &hit,
+            has_named,
+        )?;
         previous = hit.match_end;
         if !all {
             break;
@@ -795,47 +802,98 @@ fn replace_regex_bounded(
 }
 
 /// What a `$` in a replacement pattern stands for (ECMA-262 GetSubstitution).
+/// Both arms of `replace` and `replaceAll` expand through it; a string search
+/// has no groups, so `$1` and `$<name>` stay literal there.
 enum Substitution {
-    /// A literal `$`, consuming this many units of the pattern.
-    Dollar(usize),
-    /// The input between two byte offsets, or nothing for a group that didn't
-    /// participate, consuming this many units of the pattern.
-    Input(Option<(usize, usize)>, usize),
+    /// A literal `$`.
+    Dollar { consumed: usize },
+    /// The input between two offsets, or nothing for a group that didn't
+    /// participate.
+    Input {
+        span: Option<(usize, usize)>,
+        consumed: usize,
+    },
 }
 
+const DOLLAR: u16 = b'$' as u16;
+const AMPERSAND: u16 = b'&' as u16;
+const BACKTICK: u16 = b'`' as u16;
+const APOSTROPHE: u16 = b'\'' as u16;
+const LESS_THAN: u16 = b'<' as u16;
+const GREATER_THAN: u16 = b'>' as u16;
+
+/// The input a replacement copies from: the regex arm's decoded input, whose
+/// offsets are bytes of its text, or the string arm's code units.
+enum ReplacedInput<'a> {
+    Decoded(&'a input::DecodedInput),
+    Units(&'a [u16]),
+}
+
+impl ReplacedInput<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Decoded(input) => input.len(),
+            Self::Units(units) => units.len(),
+        }
+    }
+
+    fn append_span(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        output: &mut output::Buffer<u16>,
+        start: usize,
+        end: usize,
+    ) -> wasmtime::Result<()> {
+        match self {
+            Self::Decoded(input) => {
+                let units = input_units(caller, input, start..end)?;
+                output.append(caller, &units)
+            }
+            Self::Units(units) => output.append(caller, checked_units(units, start, end)?),
+        }
+    }
+}
+
+/// Append `replacement` with each `$` pattern expanded against `hit`.
 fn expand_replacement(
     caller: &mut Caller<'_, StoreData>,
     output: &mut output::Buffer<u16>,
-    input: &input::DecodedInput,
+    input: &ReplacedInput<'_>,
     replacement: &[u16],
     hit: &ExecSnapshot,
     has_named: bool,
 ) -> wasmtime::Result<()> {
     let mut position = 0;
-    while let Some(offset) = replacement[position..].iter().position(|u| *u == DOLLAR) {
-        let dollar = position + offset;
-        output.append(caller, &replacement[position..dollar])?;
-        let consumed = match substitution(&replacement[dollar..], hit, input.len(), has_named) {
-            Substitution::Dollar(consumed) => {
+    while let Some(dollar) = next_dollar(replacement, position) {
+        output.append(caller, checked_units(replacement, position, dollar)?)?;
+        let pattern = checked_units(replacement, dollar, replacement.len())?;
+        let consumed = match substitution(pattern, hit, input.len(), has_named) {
+            Substitution::Dollar { consumed } => {
                 output.append(caller, &[DOLLAR])?;
                 consumed
             }
-            Substitution::Input(span, consumed) => {
+            Substitution::Input { span, consumed } => {
                 if let Some((start, end)) = span {
-                    let units = input_units(caller, input, start..end)?;
-                    output.append(caller, &units)?;
+                    input.append_span(caller, output, start, end)?;
                 }
                 consumed
             }
         };
         position = dollar + consumed;
     }
-    output.append(caller, &replacement[position..])
+    output.append(
+        caller,
+        checked_units(replacement, position, replacement.len())?,
+    )
 }
 
-const DOLLAR: u16 = b'$' as u16;
+fn next_dollar(replacement: &[u16], from: usize) -> Option<usize> {
+    let offset = replacement.get(from..)?.iter().position(|u| *u == DOLLAR)?;
+    Some(from + offset)
+}
 
-/// The substitution for the `$` that starts `pattern`.
+/// The substitution for the `$` that starts `pattern`, given the match's
+/// offsets in an input of `input_len`.
 fn substitution(
     pattern: &[u16],
     hit: &ExecSnapshot,
@@ -848,22 +906,27 @@ fn substitution(
             .and_then(|unit| char::from_u32(u32::from(*unit))?.to_digit(10))
             .map(|digit| digit as usize)
     };
-    let group = |number: usize| hit.numbered.get(number - 1).copied().flatten();
     let groups = hit.numbered.len();
+    let group = |number: usize, consumed: usize| Substitution::Input {
+        span: hit.numbered.get(number - 1).copied().flatten(),
+        consumed,
+    };
+    let input = |start: usize, end: usize| Substitution::Input {
+        span: Some((start, end)),
+        consumed: 2,
+    };
     match pattern.get(1).copied() {
-        Some(DOLLAR) => Substitution::Dollar(2),
-        Some(0x26) => Substitution::Input(Some((hit.match_start, hit.match_end)), 2),
-        Some(0x60) => Substitution::Input(Some((0, hit.match_start)), 2),
-        Some(0x27) => Substitution::Input(Some((hit.match_end, input_len)), 2),
-        Some(0x3C) if has_named => named_substitution(pattern, hit),
+        Some(DOLLAR) => Substitution::Dollar { consumed: 2 },
+        Some(AMPERSAND) => input(hit.match_start, hit.match_end),
+        Some(BACKTICK) => input(0, hit.match_start),
+        Some(APOSTROPHE) => input(hit.match_end, input_len),
+        Some(LESS_THAN) if has_named => named_substitution(pattern, hit),
         _ => match (digit(1), digit(2)) {
             (Some(tens), Some(ones)) if (1..=groups).contains(&(tens * 10 + ones)) => {
-                Substitution::Input(group(tens * 10 + ones), 3)
+                group(tens * 10 + ones, 3)
             }
-            (Some(number), _) if (1..=groups).contains(&number) => {
-                Substitution::Input(group(number), 2)
-            }
-            _ => Substitution::Dollar(1),
+            (Some(number), _) if (1..=groups).contains(&number) => group(number, 2),
+            _ => Substitution::Dollar { consumed: 1 },
         },
     }
 }
@@ -871,16 +934,19 @@ fn substitution(
 /// `$<name>`: the named group's text, or nothing when no group has that name.
 /// Without a closing `>` the `$` is literal.
 fn named_substitution(pattern: &[u16], hit: &ExecSnapshot) -> Substitution {
-    let Some(close) = pattern.iter().position(|unit| *unit == b'>' as u16) else {
-        return Substitution::Dollar(1);
+    let Some(close) = pattern.iter().position(|unit| *unit == GREATER_THAN) else {
+        return Substitution::Dollar { consumed: 1 };
     };
-    let name = String::from_utf16_lossy(&pattern[2..close]);
+    let name = String::from_utf16_lossy(pattern.get(2..close).unwrap_or_default());
     let span = hit
         .named
         .iter()
         .find(|(group, _)| *group == name)
         .and_then(|(_, span)| *span);
-    Substitution::Input(span, close + 1)
+    Substitution::Input {
+        span,
+        consumed: close + 1,
+    }
 }
 
 /// The regex arm of `split` (ECMA-262 `RegExp.prototype[@@split]`): an empty
@@ -1036,37 +1102,15 @@ fn expand_literal(
     start: usize,
     end: usize,
 ) -> wasmtime::Result<()> {
-    let mut position = 0;
-    while let Some(unit) = replacement.get(position) {
-        let token = if *unit == b'$' as u16 {
-            replacement.get(position + 1).copied()
-        } else {
-            None
-        };
-        let expanded = match token {
-            Some(0x24) => Some(&[0x24_u16][..]),
-            Some(0x26) => Some(checked_units(input, start, end)?),
-            Some(0x60) => Some(checked_units(input, 0, start)?),
-            Some(0x27) => Some(checked_units(input, end, input.len())?),
-            _ => None,
-        };
-        if let Some(expanded) = expanded {
-            output.append(caller, expanded)?;
-            position += 2;
-        } else {
-            // Copy a whole literal run, retaining per-fragment COPY rounding.
-            let literal_start = position;
-            position += 1;
-            while replacement
-                .get(position)
-                .is_some_and(|unit| *unit != b'$' as u16)
-            {
-                position += 1;
-            }
-            output.append(caller, checked_units(replacement, literal_start, position)?)?;
-        }
-    }
-    Ok(())
+    let hit = ExecSnapshot {
+        match_start: start,
+        match_end: end,
+        next_last_index: end,
+        numbered: Vec::new(),
+        named: Vec::new(),
+    };
+    let input = ReplacedInput::Units(input);
+    expand_replacement(caller, output, &input, replacement, &hit, false)
 }
 
 fn checked_units(input: &[u16], start: usize, end: usize) -> wasmtime::Result<&[u16]> {
