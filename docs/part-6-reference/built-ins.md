@@ -419,7 +419,7 @@ Compiled regular expression.
 | `readonly multiline: boolean` | `true` if the regex was constructed with the `m` flag (`^` / `$` match line boundaries). |
 | `readonly source: string` | The original JS-source pattern (without the leading/trailing `/`). |
 | `readonly sticky: boolean` | `true` if the regex was constructed with the `y` flag (sticky / anchored at `lastIndex`). |
-| `readonly unicode: boolean` | `true` if the regex was constructed with the `u` flag (Unicode classes for `\d` / `\w` / `\s`). |
+| `readonly unicode: boolean` | `true` if the regex was constructed with the `u` flag. |
 | `exec(s: string): RegExpMatch \| null` | Find the next match in `s`. |
 | `test(s: string): boolean` | Returns `true` if the pattern matches anywhere in `s`. |
 
