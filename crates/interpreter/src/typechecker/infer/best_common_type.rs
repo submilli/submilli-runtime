@@ -44,11 +44,13 @@ impl Inferer<'_> {
         if kept.len() < 2 {
             return Ok(kept.into_iter().next().unwrap_or(joined));
         }
-        // A union of function types can't be called (SUB-1454), so an array
-        // of functions keeps the one type they all fit.
+        // A union of function types Submilli can't call through one combined
+        // signature (members differing in whether they return a value) keeps
+        // the one type the functions all fit.
         if kept
             .iter()
             .any(|ty| matches!(ty.peel(), Type::Function { .. }))
+            && self.union_call_signature(&kept).is_none()
         {
             return Ok(joined);
         }

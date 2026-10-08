@@ -320,6 +320,10 @@ pub enum TypedChainPart {
         args: Vec<ExprId>,
         optional: bool,
         result_ty: Type,
+        /// The one signature a union of function types is called through,
+        /// which the receiver is cast up to; `None` when the receiver is a
+        /// function type.
+        union_signature: Option<Type>,
         span: Span,
     },
     MethodCall {

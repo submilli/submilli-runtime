@@ -505,9 +505,15 @@ pub(super) fn collect_from_expr(
                         collect_from_expr(ast, *idx, c)?;
                     }
                     crate::TypedChainPart::Call {
-                        args, result_ty, ..
+                        args,
+                        result_ty,
+                        union_signature,
+                        ..
                     } => {
                         c.collect(result_ty);
+                        if let Some(signature) = union_signature {
+                            c.collect(signature);
+                        }
                         for a in args {
                             collect_from_expr(ast, *a, c)?;
                         }

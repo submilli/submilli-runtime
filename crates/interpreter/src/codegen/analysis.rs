@@ -1201,10 +1201,17 @@ impl CodegenAnalysis {
                     // needs the same message in the pool.
                     self.note_index_check();
                 }
-                TypedChainPart::Call { result_ty, .. } => {
+                TypedChainPart::Call {
+                    result_ty,
+                    union_signature,
+                    ..
+                } => {
                     self.dependency_usage
                         .note_value(crate::mangle::prelude("__value_invoke_defaults"));
                     self.visit_type(result_ty)?;
+                    if let Some(signature) = union_signature {
+                        self.visit_type(signature)?;
+                    }
                 }
                 TypedChainPart::NonNull { result_ty, .. } => {
                     self.visit_type(result_ty)?;

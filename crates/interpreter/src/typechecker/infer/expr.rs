@@ -2325,6 +2325,7 @@ impl Inferer<'_> {
         }
 
         let (typed_callee, callee_ty) = self.infer_expr(callee, None)?;
+        let (typed_callee, callee_ty) = self.cast_up_to_union_signature(typed_callee, callee_ty)?;
         // call-signature dispatch — when the callee types
         // as an `InterfaceRef` declaring `@call`, route through the
         // same method-call pipeline as `find_method(_, "new")` for
@@ -10091,7 +10092,9 @@ impl Inferer<'_> {
                 }
 
                 // Closure-typed receiver: ordinary `Call` part.
-                let (ret_ty, typed_args) = match receiver_ty.peel() {
+                let union_signature = self.union_signature_of(receiver_ty);
+                let callee_ty = union_signature.as_ref().unwrap_or(receiver_ty);
+                let (ret_ty, typed_args) = match callee_ty.peel() {
                     Type::Function {
                         params,
                         ret,
@@ -10104,7 +10107,7 @@ impl Inferer<'_> {
                             &param_tys,
                             &ret_ty,
                             has_rest,
-                            CallLift::Anon { ty: receiver_ty },
+                            CallLift::Anon { ty: callee_ty },
                             &args,
                             span,
                         )?;
@@ -10134,6 +10137,7 @@ impl Inferer<'_> {
                         args: typed_args,
                         optional,
                         result_ty: ret_ty.clone(),
+                        union_signature,
                         span,
                     },
                     ret_ty,

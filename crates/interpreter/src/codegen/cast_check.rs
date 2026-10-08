@@ -783,6 +783,12 @@ pub(crate) fn emit_checked_cast_on_stack(
         Some(crate::FieldNarrowingTest::Shape(shape)) => {
             emit_structural_test(emitter, ctx, scratch, shape, target_ty)?;
         }
+        // A function that declares fewer parameters than the target, or
+        // trailing defaults, still fits when its adapter can stand for the
+        // target, which the cast then builds.
+        _ if matches!(target_ty.peel(), Type::Function { .. }) => {
+            emit_structural_test(emitter, ctx, scratch, target_ty, target_ty)?;
+        }
         _ => emit_representation_test(emitter, ctx, scratch, target_ty)?,
     }
     emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
