@@ -8913,10 +8913,11 @@ impl Inferer<'_> {
                     format!("expected `{}`, got `{}`", entry.ty, result_ty),
                 );
             }
-            // A rejected write leaves the declared type, as in TypeScript.
+            // A rejected write leaves the declared type, as in TypeScript, and
+            // so does a write to a `never` binding, which tsc keeps `never`.
             if !fits {
                 self.invalidate_for_reassignment(path, target.span);
-            } else if !matches!(entry.ty, Type::Error) {
+            } else if !matches!(entry.ty, Type::Error | Type::Never) {
                 // Re-install assignment narrowing: result reads see the
                 // post-increment type.
                 self.install_assignment_narrowing(

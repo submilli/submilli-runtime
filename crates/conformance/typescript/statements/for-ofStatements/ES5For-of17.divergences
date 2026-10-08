@@ -11,6 +11,3 @@ line 5: x
 line 5: v
   tsc:  any
   ours: never
-
-errors:
-line 6: ours: postfix `++` expects `number` or `bigint`, found `never` (tsc accepts)

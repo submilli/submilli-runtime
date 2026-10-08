@@ -1,4 +1,1 @@
 types: 8 of 10 tsc entries compared, 0 differ
-
-errors:
-line 7: ours: postfix `++` expects `number` or `bigint`, found `never` (tsc accepts)
