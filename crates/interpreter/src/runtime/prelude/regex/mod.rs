@@ -801,9 +801,14 @@ fn replace_regex_bounded(
     Ok(output)
 }
 
+const DOLLAR: u16 = b'$' as u16;
+const AMPERSAND: u16 = b'&' as u16;
+const BACKTICK: u16 = b'`' as u16;
+const APOSTROPHE: u16 = b'\'' as u16;
+const LESS_THAN: u16 = b'<' as u16;
+const GREATER_THAN: u16 = b'>' as u16;
+
 /// What a `$` in a replacement pattern stands for (ECMA-262 GetSubstitution).
-/// Both arms of `replace` and `replaceAll` expand through it; a string search
-/// has no groups, so `$1` and `$<name>` stay literal there.
 enum Substitution {
     /// A literal `$`.
     Dollar { consumed: usize },
@@ -814,13 +819,6 @@ enum Substitution {
         consumed: usize,
     },
 }
-
-const DOLLAR: u16 = b'$' as u16;
-const AMPERSAND: u16 = b'&' as u16;
-const BACKTICK: u16 = b'`' as u16;
-const APOSTROPHE: u16 = b'\'' as u16;
-const LESS_THAN: u16 = b'<' as u16;
-const GREATER_THAN: u16 = b'>' as u16;
 
 /// The input a replacement copies from: the regex arm's decoded input, whose
 /// offsets are bytes of its text, or the string arm's code units.
@@ -854,7 +852,9 @@ impl ReplacedInput<'_> {
     }
 }
 
-/// Append `replacement` with each `$` pattern expanded against `hit`.
+/// Append `replacement` with each `$` pattern expanded against `hit`. Both
+/// arms of `replace` and `replaceAll` expand through it; a string search has
+/// no groups, so `$1` and `$<name>` stay literal there.
 fn expand_replacement(
     caller: &mut Caller<'_, StoreData>,
     output: &mut output::Buffer<u16>,
@@ -911,15 +911,15 @@ fn substitution(
         span: hit.numbered.get(number - 1).copied().flatten(),
         consumed,
     };
-    let input = |start: usize, end: usize| Substitution::Input {
+    let between = |start: usize, end: usize| Substitution::Input {
         span: Some((start, end)),
         consumed: 2,
     };
     match pattern.get(1).copied() {
         Some(DOLLAR) => Substitution::Dollar { consumed: 2 },
-        Some(AMPERSAND) => input(hit.match_start, hit.match_end),
-        Some(BACKTICK) => input(0, hit.match_start),
-        Some(APOSTROPHE) => input(hit.match_end, input_len),
+        Some(AMPERSAND) => between(hit.match_start, hit.match_end),
+        Some(BACKTICK) => between(0, hit.match_start),
+        Some(APOSTROPHE) => between(hit.match_end, input_len),
         Some(LESS_THAN) if has_named => named_substitution(pattern, hit),
         _ => match (digit(1), digit(2)) {
             (Some(tens), Some(ones)) if (1..=groups).contains(&(tens * 10 + ones)) => {
