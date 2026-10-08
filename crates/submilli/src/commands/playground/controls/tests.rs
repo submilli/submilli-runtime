@@ -302,9 +302,20 @@ fn explain_on_a_denial_names_the_near_miss_its_line_the_comparison_and_both_valu
     );
     let text = render::explain_text(&explained);
     assert!(
-        text.contains("`charges-for-signed-in-customer` (main #0, line 9)"),
+        text.contains("`charges-for-signed-in-customer` (rule 1 of `main`, line 9)"),
         "{text}"
     );
+    assert!(
+        text.contains("both values in run-data under near miss 1, comparison 1"),
+        "{text}"
+    );
+    assert!(
+        text.contains("near miss 1, comparison 1, actual: \"cus_initech\""),
+        "{text}"
+    );
+    // No label in the text reads like a decision reference.
+    assert!(!text.contains("near-miss 1.1"), "{text}");
+    assert_eq!(explained.near_misses[0].rule.position, 1);
     assert!(
         text.contains("failed: customerId == ${vars.customerId}"),
         "{text}"
@@ -386,7 +397,7 @@ permissions:
         ("main", 0, None)
     );
     let text = render::explain_text(&explained);
-    assert!(text.contains("(main #0)"), "{text}");
+    assert!(text.contains("(rule 1 of `main`)"), "{text}");
 }
 
 #[test]
@@ -876,4 +887,160 @@ fn listing_stays_fast_with_a_few_hundred_runs() {
     assert_eq!(listed.more, 280);
     assert_eq!(sessions.more, 20);
     assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+}
+
+/// The starter blueprint with an unnamed second rule for charges and an unnamed rule for
+/// the package.
+const TWO_RULES: &str = "kind: blueprint
+name: billing
+variables:
+  customerId:
+    required: true
+default: deny
+permissions:
+  main:
+  - name: charges-for-signed-in-customer
+    capability: acme.com/charges.list
+    filter: customerId == ${vars.customerId}
+    action: allow
+  - capability: acme.com/charges.list
+    filter: customerId == \"cus_parent\"
+    action: allow
+  '@acme/billing':
+  - capability: fs.read
+    action: allow
+";
+
+#[test]
+fn unnamed_rules_are_cited_by_position_from_one_and_near_misses_are_listed_apart() {
+    use interpreter::runtime::{NearMissRecord, RuleCitation};
+    let mut fixture = Fixture::new();
+    let v1 = fixture.version(TWO_RULES, json!("initial"), "The first version.");
+    let mut denied = charges_denied(1, "cus_initech");
+    denied.near_misses.push(NearMissRecord {
+        rule: RuleCitation {
+            caller: "main".into(),
+            index: 1,
+            name: None,
+        },
+        filter: "customerId == \"cus_parent\"".into(),
+        failures: Vec::new(),
+    });
+    let id = fixture.run(
+        RunSpec::new(vec![
+            allowed_by(
+                0,
+                "@acme/billing",
+                "fs.read",
+                json!({ "path": "/billing/charges.json" }),
+                0,
+                None,
+            ),
+            denied,
+        ])
+        .version(v1),
+    );
+    let (reader, _dir) = fixture.reader();
+    let shown = read::show(&reader, id, false).unwrap();
+    assert_eq!(
+        shown.decisions[0].decided_by,
+        "by rule 1 of `@acme/billing`, line 17"
+    );
+    assert_eq!(
+        shown.decisions[1].decided_by,
+        "by the default; near misses: `charges-for-signed-in-customer` (rule 1 of `main`), \
+         rule 2 of `main`"
+    );
+    let misses = &shown.decisions[1].near_misses;
+    assert_eq!(misses.len(), 2);
+    assert_eq!((misses[1].index, misses[1].position), (1, 2));
+    assert_eq!(misses[1].line, Some(13));
+    let text = render::show_text(&shown);
+    assert!(!text.contains(" #0") && !text.contains(" #1"), "{text}");
+
+    let explained = read::explain(&reader, DecisionRef { run: id, n: 1 }).unwrap();
+    assert_eq!(
+        explained.decided_by.text(),
+        "rule 1 of `@acme/billing`, line 17"
+    );
+}
+
+#[test]
+fn a_cancelled_run_reads_cancelled_without_the_runtimes_error() {
+    let mut fixture = Fixture::new();
+    let mut cancelled = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]);
+    cancelled.error = Some(crate::commands::playground::store::run::StoredError {
+        kind: submilli_server::error::ErrorKind::Cancelled,
+        message: "internal: execution cancelled".into(),
+        diagnostics: Vec::new(),
+        caller: None,
+        capability: None,
+        source: None,
+    });
+    let id = fixture.run(cancelled);
+    let (reader, _dir) = fixture.reader();
+    let shown = read::show(&reader, id, false).unwrap();
+    assert_eq!(json_of(&shown)["outcome"], json!({ "kind": "cancelled" }));
+    assert!(shown.untrusted.error.is_none());
+    let text = render::show_text(&shown);
+    assert!(text.contains("outcome: cancelled\n"), "{text}");
+    assert!(!text.contains("internal"), "{text}");
+    let listed = read::runs(
+        &reader,
+        &RunsQuery {
+            limit: 5,
+            ..RunsQuery::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(json_of(&listed)["runs"][0]["outcome"]["kind"], "cancelled");
+}
+
+#[test]
+fn runs_in_flight_are_listed_first_with_cancel_only_while_the_playground_runs() {
+    let mut fixture = Fixture::new();
+    let stored = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
+    fixture
+        .store
+        .mark_running(stored + 1, "assistant", Some("s-9"), 1_700_000_000_000_000)
+        .unwrap();
+    // A note for a run already stored is not listed twice.
+    fixture
+        .store
+        .mark_running(stored, "stand-in", None, 1_700_000_000_000_000)
+        .unwrap();
+    let query = RunsQuery {
+        limit: 5,
+        ..RunsQuery::default()
+    };
+    let (reader, _dir) = fixture.reader_with(
+        Page {
+            base: Some("http://127.0.0.1:9/".into()),
+        },
+        Vec::new(),
+    );
+    let listed = read::runs(&reader, &query).unwrap();
+    let running: Vec<u64> = listed.running.iter().map(|row| row.run).collect();
+    assert_eq!(running, [stored + 1]);
+    assert_eq!(listed.running[0].session.as_deref(), Some("s-9"));
+    assert_eq!(
+        listed.next.first().map(String::as_str),
+        Some(format!("submilli playground cancel {}", stored + 1).as_str())
+    );
+    let text = render::runs_text(&listed);
+    assert!(
+        text.starts_with(&format!("run {} · assistant · running since", stored + 1)),
+        "{text}"
+    );
+
+    // With the playground stopped, the notes are not trusted.
+    let stopped = Reader::for_tests(
+        crate::commands::playground::store::Store::open_read_only(
+            reader.store.as_ref().unwrap().root(),
+        )
+        .unwrap(),
+        Page::default(),
+        Vec::new(),
+    );
+    assert!(read::runs(&stopped, &query).unwrap().running.is_empty());
 }

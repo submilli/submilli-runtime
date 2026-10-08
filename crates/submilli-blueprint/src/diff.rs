@@ -455,10 +455,32 @@ fn variable_list(variables: &[String]) -> String {
         .join(", ")
 }
 
+/// A rule by its name, or by its position alone when its capability is said beside it.
+fn rule_name_or_position(index: usize, rule: &PermissionRule) -> String {
+    match &rule.name {
+        Some(name) => format!("`{name}`"),
+        None => format!("rule {}", index.saturating_add(1)),
+    }
+}
+
 fn rule_label(index: usize, rule: &PermissionRule) -> String {
     match &rule.name {
         Some(name) => format!("`{name}`"),
         None => format!("rule {} (`{}`)", index.saturating_add(1), rule.capability),
+    }
+}
+
+/// A rule as the object of a sentence, with its action and capability once each:
+/// "an allow rule for `charges.list` (rule 2)", "a deny rule `no-refunds` for `refunds.create`".
+fn rule_phrase(index: usize, rule: &PermissionRule) -> String {
+    let article = action_article(rule.action);
+    match &rule.name {
+        Some(name) => format!("{article} rule `{name}` for `{}`", rule.capability),
+        None => format!(
+            "{article} rule for `{}` (rule {})",
+            rule.capability,
+            index.saturating_add(1)
+        ),
     }
 }
 
@@ -492,12 +514,7 @@ fn rule_added(caller: &str, index: usize, rule: &PermissionRule) -> Change {
         caller,
         index,
         rule,
-        format!(
-            "`{caller}` gained {} rule {} for `{}`",
-            action_article(rule.action),
-            rule_label(index, rule),
-            rule.capability
-        ),
+        format!("`{caller}` gained {}", rule_phrase(index, rule)),
     )
 }
 
@@ -512,12 +529,7 @@ fn rule_removed(caller: &str, index: usize, rule: &PermissionRule) -> Change {
         caller,
         index,
         rule,
-        format!(
-            "`{caller}` lost {} rule {} for `{}`",
-            action_article(rule.action),
-            rule_label(index, rule),
-            rule.capability
-        ),
+        format!("`{caller}` lost {}", rule_phrase(index, rule)),
     )
 }
 
@@ -530,12 +542,10 @@ fn moved_between_callers(from: &LooseRule, to: &LooseRule) -> Change {
     let (from_caller, to_caller) = (&from.caller, &to.caller);
     Change {
         summary: format!(
-            "{}: {} {} for `{}` moved from `{from_caller}` to `{to_caller}`, so \
-             `{from_caller}` lost it and `{to_caller}` gained it.",
+            "{}: {} moved from `{from_caller}` to `{to_caller}`, so `{from_caller}` lost it \
+             and `{to_caller}` gained it.",
             classification.word(),
-            action_article(rule.action),
-            rule_label(from.index, rule),
-            rule.capability
+            capitalized(&rule_phrase(from.index, rule)),
         ),
         classification,
         caller: Some(to_caller.clone()),
@@ -868,10 +878,8 @@ fn classify_move(
         to,
         rule,
         format!(
-            "{} {} for `{}` under `{caller}` moved {direction}, {consequence}",
-            capitalized(action_article(rule.action)),
-            rule_label(from, rule),
-            rule.capability
+            "{} under `{caller}` moved {direction}, {consequence}",
+            capitalized(&rule_phrase(from, rule)),
         ),
     )
 }
@@ -937,8 +945,10 @@ fn classify_edit(
         return change(
             Classification::Unknown,
             format!(
-                "{label} under `{caller}` now governs `{}` instead of `{}`",
-                after.capability, before.capability
+                "{} under `{caller}` now governs `{}` instead of `{}`",
+                rule_name_or_position(index, after),
+                after.capability,
+                before.capability
             ),
         );
     }
@@ -1239,6 +1249,30 @@ mod tests {
         assert!(only(&added).summary.contains("gained an allow rule"));
         let removed = diff(&with_main(&format!("{DENY}{ALLOW}")), &with_main(DENY));
         assert_eq!(removed.classification, Classification::Narrowing);
+    }
+
+    #[test]
+    fn an_added_or_removed_rule_is_named_once_with_its_capability_once() {
+        let added = diff(&with_main(DENY), &with_main(&format!("{DENY}{ALLOW}")));
+        assert_eq!(
+            only(&added).summary,
+            "Widened: `main` gained an allow rule for `http.get` (rule 2)."
+        );
+        let removed = diff(&with_main(&format!("{DENY}{ALLOW}")), &with_main(ALLOW));
+        assert_eq!(
+            only(&removed).summary,
+            "Widened: `main` lost a deny rule for `http.get` (rule 1)."
+        );
+        let named = "    - name: reads\n      capability: http.get\n      action: allow\n";
+        let added = diff(&with_main(DENY), &with_main(&format!("{DENY}{named}")));
+        assert_eq!(
+            only(&added).summary,
+            "Widened: `main` gained an allow rule `reads` for `http.get`."
+        );
+        for summary in [&added, &removed].map(|diff| &only(diff).summary) {
+            assert!(!summary.contains("rule rule"), "{summary}");
+            assert_eq!(summary.matches("`http.get`").count(), 1, "{summary}");
+        }
     }
 
     #[test]

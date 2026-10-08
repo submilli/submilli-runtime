@@ -12,6 +12,7 @@
 //!   retries.jsonl       idempotent retries answered without running
 //!   sessions.jsonl      sessions the playground started, and when each ended
 //!   links.jsonl         runs the playground ran again live, linked to their source
+//!   running/<id>.json   runs in flight, removed as each finishes
 //! ```
 //!
 //! The directory is 0700 and every file 0600. Each file carries the format version it
@@ -56,6 +57,7 @@ pub(crate) mod links;
 pub(crate) mod recorder;
 pub(crate) mod redact;
 pub(crate) mod run;
+pub(crate) mod running;
 pub(crate) mod sessions;
 
 #[cfg(test)]
@@ -207,6 +209,7 @@ impl Store {
         }
         let store = Self::unopened(root, true);
         store.remove_staged()?;
+        store.clear_running()?;
         store.repair_tails()?;
         let last_run = store.recover_last_run()?;
         store.lock().last_run = last_run;

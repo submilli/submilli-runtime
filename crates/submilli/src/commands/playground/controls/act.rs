@@ -680,6 +680,8 @@ impl Actions {
             .changes()
             .ok()
             .and_then(|changes| changes.current().map(|version| version.version.to_string()));
+        // The file as it is now, to cite the rules that decide now by their lines.
+        let current_text = std::fs::read_to_string(&self.blueprint_path).ok();
         let mut changes = Vec::new();
         let mut contexts = BTreeMap::new();
         let mut cant_tell = Vec::new();
@@ -709,10 +711,10 @@ impl Actions {
                 change,
                 caller: check.caller.clone(),
                 capability: check.capability.clone(),
-                now_by: check
-                    .now
-                    .as_ref()
-                    .map_or_else(|| "unknown".to_owned(), |now| cause_text(&now.cause)),
+                now_by: check.now.as_ref().map_or_else(
+                    || "unknown".to_owned(),
+                    |now| cause_text(&now.cause, current_text.as_deref()),
+                ),
             });
         }
         let mut suggestions: Vec<Next> = changes
@@ -1083,18 +1085,23 @@ fn exit_of(run: &StoredRun) -> u8 {
     }
 }
 
-fn cause_text(cause: &ResolutionCause) -> String {
+fn cause_text(cause: &ResolutionCause, text: Option<&str>) -> String {
     match cause {
-        ResolutionCause::Rule(rule) => match &rule.name {
-            Some(name) => format!(
-                "`{}` ({} #{})",
-                clean(name),
-                clean(&rule.caller),
-                rule.index
-            ),
-            None => format!("{} #{}", clean(&rule.caller), rule.index),
-        },
+        ResolutionCause::Rule(rule) => render::rule_label(
+            &rule.caller,
+            rule.index,
+            rule.name.as_deref(),
+            text.and_then(|text| line_of(text, &rule.caller, rule.index)),
+        ),
         ResolutionCause::Default { .. } => "the default".to_owned(),
+    }
+}
+
+/// The line rule `index` of `caller` starts on in `text`, when the text locates it.
+fn line_of(text: &str, caller: &str, index: usize) -> Option<usize> {
+    match submilli_blueprint::locate_rule(text, caller, index) {
+        submilli_blueprint::Citation::Line(location) => Some(location.line),
+        submilli_blueprint::Citation::Index { .. } => None,
     }
 }
 
@@ -1189,8 +1196,13 @@ pub(crate) struct DraftResult {
 #[derive(Debug, Serialize)]
 pub(crate) struct OverriddenRule {
     pub(crate) caller: String,
+    /// Zero-based, as the blueprint's rule list counts, before the draft goes in.
     pub(crate) index: usize,
+    /// One-based, as the text cites it, before the draft goes in.
+    pub(crate) position: usize,
     pub(crate) name: Option<String>,
+    /// Its line in the file before the draft goes in, when located.
+    pub(crate) line: Option<usize>,
 }
 
 /// The rule's text embeds values from the run's call, so all of it is the run's data.
@@ -1315,6 +1327,8 @@ pub(crate) fn draft_rule(
         file: blueprint_path.to_path_buf(),
         lines: [*draft.lines.start(), *draft.lines.end()],
         overrides: draft.overrides.map(|rule| OverriddenRule {
+            line: line_of(&text, &rule.caller, rule.index),
+            position: rule.index.saturating_add(1),
             caller: rule.caller,
             index: rule.index,
             name: rule.name,
@@ -1537,15 +1551,10 @@ fn draft_text(result: &DraftResult) -> String {
     );
     match &result.overrides {
         Some(rule) => {
-            let name = rule
-                .name
-                .as_deref()
-                .map_or_else(String::new, |name| format!("`{}` ", clean(name)));
             let _ = writeln!(
                 out,
-                "overrides: {name}({} #{}) for this call only; it goes directly above it",
-                clean(&rule.caller),
-                rule.index
+                "overrides: {} for this call only; it goes directly above it",
+                render::rule_label(&rule.caller, rule.index, rule.name.as_deref(), rule.line)
             );
         }
         None => {
@@ -1698,16 +1707,19 @@ pub(crate) fn execute_watch(session: Option<String>, output: Output) -> Result<E
     let path = format!("/api/sessions/{}/events", url_segment(&session));
     let stdout = std::io::stdout();
     let mut idle = false;
+    let mut decisions = std::collections::HashMap::new();
     let followed = running.follow(&path, None, |event| {
         let line = match event.name.as_str() {
             "run-idle" => {
                 idle = true;
                 json!({ "kind": "run-idle", "session": session })
             }
-            _ => json!({
-                "seq": event.id.as_deref().and_then(|id| id.parse::<u64>().ok()),
-                "untrusted": serde_json::from_str::<Value>(&event.data).unwrap_or(Value::Null),
-            }),
+            _ => watch_line(
+                event.id.as_deref().and_then(|id| id.parse::<u64>().ok()),
+                &serde_json::from_str::<Value>(&event.data).unwrap_or(Value::Null),
+                &session,
+                &mut decisions,
+            ),
         };
         let mut out = stdout.lock();
         let _ = writeln!(out, "{line}");
@@ -1722,6 +1734,89 @@ pub(crate) fn execute_watch(session: Option<String>, output: Output) -> Result<E
     }
     eprintln!("the playground stopped before the session's runs finished");
     Ok(ExitCode::from(EXIT_NOT_RUNNING))
+}
+
+/// Fields of a session event that only say where it sits; the line carries them in its
+/// own envelope.
+const ENVELOPE_FIELDS: [&str; 6] = [
+    "schema",
+    "seq",
+    "session_id",
+    "run_id",
+    "event_id",
+    "at_micros",
+];
+
+/// One stored event as `watch` prints it: trusted fields (sequence, kind, session, run,
+/// time, ids, caller and capability names, outcomes, sizes) at the top, and what came from
+/// inside the run (a decision's context, its near misses' values and reason, an MCP
+/// client's own name) under `untrusted`.
+///
+/// A decision gets its `<run>.<n>` reference by counting the run's decisions as they
+/// arrive, which `watch` sees from the session's first event. A decision recovered after
+/// its run lost events under load arrives out of order, so it gets none.
+fn watch_line(
+    seq: Option<u64>,
+    stored: &Value,
+    session: &str,
+    decisions: &mut std::collections::HashMap<u64, usize>,
+) -> Value {
+    let mut line = serde_json::Map::new();
+    let mut untrusted = serde_json::Map::new();
+    line.insert("seq".into(), json!(seq));
+    line.insert("session".into(), json!(session));
+    line.insert("event_id".into(), stored["event_id"].clone());
+    let run = stored["run"].as_u64();
+    if let Some(run) = run {
+        line.insert("run".into(), json!(run));
+    }
+    if let Some(gap) = stored["body"]["gap"].as_object() {
+        line.insert("kind".into(), json!("gap"));
+        if let Some(at) = stored["position"]["at_micros"].as_u64() {
+            line.insert("at".into(), json!(render::rfc3339(at)));
+        }
+        line.extend(gap.clone());
+        return Value::Object(line);
+    }
+    let Some(event) = stored["body"]["event"].as_object() else {
+        line.insert("kind".into(), json!("unknown"));
+        return Value::Object(line);
+    };
+    let kind = event.get("kind").cloned().unwrap_or(Value::Null);
+    line.insert("kind".into(), kind.clone());
+    if let Some(at) = event.get("at_micros").and_then(Value::as_u64) {
+        line.insert("at".into(), json!(render::rfc3339(at)));
+    }
+    let mut fields = event.clone();
+    fields.remove("kind");
+    for field in ENVELOPE_FIELDS {
+        fields.remove(field);
+    }
+    if let Some(client) = fields.remove("client") {
+        untrusted.insert("client".into(), client);
+    }
+    if kind == "decision"
+        && let Some(Value::Object(mut record)) = fields.remove("record")
+    {
+        for field in ["context", "reason", "near_misses"] {
+            if let Some(value) = record.remove(field) {
+                untrusted.insert(field.into(), value);
+            }
+        }
+        if let Some(run) = run
+            && stored["backfilled"].as_bool() != Some(true)
+        {
+            let n = decisions.entry(run).or_insert(0);
+            *n += 1;
+            line.insert("decision".into(), json!(format!("{run}.{n}")));
+        }
+        fields.extend(record);
+    }
+    line.extend(fields);
+    if !untrusted.is_empty() {
+        line.insert("untrusted".into(), Value::Object(untrusted));
+    }
+    Value::Object(line)
 }
 
 fn most_recent_session() -> Result<Option<String>, ActError> {

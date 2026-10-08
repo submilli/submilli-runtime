@@ -234,3 +234,57 @@ fn requests_name_only_their_own_fields() {
         serde_json::from_value(json!({ "run": 3, "mode": "reads-live" })).unwrap();
     assert_eq!(live.mode, Mode::ReadsLive);
 }
+
+#[test]
+fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
+    let decision = |backfilled: bool| {
+        json!({
+            "format": 1,
+            "session_seq": 4,
+            "event_id": "e-4",
+            "position": { "at_micros": 1, "rank": 1 },
+            "run": 7,
+            "backfilled": backfilled,
+            "body": { "event": {
+                "schema": 1, "seq": 40, "session_id": "s-1", "run_id": "x-7",
+                "event_id": "e-4", "at_micros": 1_791_468_192_000_000_u64,
+                "kind": "decision",
+                "record": {
+                    "caller": "main", "capability": "acme.com/charges.list",
+                    "allowed": false, "context": { "customerId": HOSTILE },
+                    "reason": HOSTILE, "near_misses": [], "call_index": 3,
+                },
+            } },
+        })
+    };
+    let mut counts = std::collections::HashMap::new();
+    let first = watch_line(Some(4), &decision(false), "s-1", &mut counts);
+    assert_eq!(first["kind"], "decision");
+    assert_eq!(first["seq"], 4);
+    assert_eq!(first["run"], 7);
+    assert_eq!(first["session"], "s-1");
+    assert_eq!(first["decision"], "7.1");
+    assert_eq!(first["at"], "2026-10-08T14:03:12Z");
+    assert_eq!(first["capability"], "acme.com/charges.list");
+    assert_eq!(first["untrusted"]["context"]["customerId"], HOSTILE);
+    let mut outside = first.clone();
+    outside.as_object_mut().unwrap().remove("untrusted");
+    assert!(!outside.to_string().contains(HOSTILE), "{first}");
+    let second = watch_line(Some(5), &decision(false), "s-1", &mut counts);
+    assert_eq!(second["decision"], "7.2");
+    let recovered = watch_line(Some(6), &decision(true), "s-1", &mut counts);
+    assert!(recovered.get("decision").is_none(), "{recovered}");
+
+    let started = json!({
+        "session_seq": 1, "event_id": "e-1", "run": 7,
+        "position": { "at_micros": 1, "rank": 0 },
+        "body": { "event": {
+            "kind": "run-started", "label": "assistant", "entry": "program",
+            "blueprint": "billing", "client": HOSTILE, "at_micros": 1,
+        } },
+    });
+    let line = watch_line(Some(1), &started, "s-1", &mut counts);
+    assert_eq!(line["kind"], "run-started");
+    assert_eq!(line["label"], "assistant");
+    assert_eq!(line["untrusted"]["client"], HOSTILE);
+}

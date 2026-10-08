@@ -916,6 +916,8 @@ function main(): string {{
                 .map(|change| change["decision"].as_str().unwrap())
                 .collect();
             assert_eq!(changed, [explained["decision"].as_str().unwrap()]);
+            let now_by = rechecked["changes"][0]["now_by"].as_str().unwrap();
+            assert!(now_by.starts_with("rule 3 of `main`, line "), "{now_by}");
             assert_eq!(playground.runs(), runs_before);
             assert_eq!(requests(&log), ["GET /a"]);
 
@@ -1355,14 +1357,22 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 .stderr(Stdio::piped())
                 .spawn()
                 .unwrap();
-            let run = first_run_of(&playground, &session);
+            let run = listed_running(&playground, &session);
             let cancelled = playground.expect(0, &["cancel", &run.to_string()]);
             assert_eq!(cancelled["cancelled"], true);
             let output = wait(running);
             assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
             let result: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(result["run"], run);
-            assert_eq!(result["outcome"]["error"], "cancelled");
+            assert_eq!(result["outcome"]["kind"], "cancelled");
+            assert!(result["untrusted"]["error"].is_null(), "{result}");
+            let text = playground.run(&["show", &run.to_string()]);
+            let text = String::from_utf8_lossy(&text.stdout).into_owned();
+            assert!(text.contains("outcome: cancelled\n"), "{text}");
+            assert!(!text.contains("execution cancelled"), "{text}");
+            let listed = playground.expect(0, &["runs"]);
+            assert_eq!(listed["runs"][0]["outcome"]["kind"], "cancelled");
+            assert!(listed.get("running").is_none(), "{listed}");
             let (again, code) = playground.json(&["cancel", &run.to_string()]);
             assert_eq!(code, 2, "{again}");
 
@@ -1383,7 +1393,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let output = wait(one_shot);
             let result: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(result["run"], run + 1);
-            assert_eq!(result["outcome"]["error"], "cancelled");
+            assert_eq!(result["outcome"]["kind"], "cancelled");
 
             let test = playground
                 .command(&["test", &run.to_string(), "--json"])
@@ -1396,7 +1406,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
             let result: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(result["source"], "test");
-            assert_eq!(result["outcome"]["error"], "cancelled", "{result}");
+            assert_eq!(result["outcome"]["kind"], "cancelled", "{result}");
         }
 
         /// Cancels run `run` as soon as it is in flight.
@@ -1414,21 +1424,29 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             }
         }
 
-        /// The playground run id of the first run that starts in `session`, from its event
-        /// log, once it starts.
-        fn first_run_of(playground: &Playground, session: &str) -> u64 {
-            let log = playground
-                .state()
-                .join("store/events")
-                .join(format!("{session}.jsonl"));
+        /// The run in flight in `session`, as `runs` lists it once it starts, with
+        /// `cancel` among its next commands.
+        fn listed_running(playground: &Playground, session: &str) -> u64 {
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {
-                if let Ok(text) = std::fs::read_to_string(&log)
-                    && let Some(run) = text
-                        .lines()
-                        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                        .find_map(|event| event["run"].as_u64())
-                {
+                let listed = playground.expect(0, &["runs", "--session", session]);
+                if let Some(row) = listed["running"].as_array().and_then(|rows| rows.first()) {
+                    let run = row["run"].as_u64().unwrap();
+                    assert_eq!(row["source"], "assistant");
+                    assert_eq!(row["session"], session);
+                    assert!(
+                        listed["next"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&json!(format!("submilli playground cancel {run}"))),
+                        "{listed}"
+                    );
+                    let text = playground.run(&["runs"]);
+                    let text = String::from_utf8_lossy(&text.stdout).into_owned();
+                    assert!(
+                        text.contains(&format!("run {run} · assistant · running since")),
+                        "{text}"
+                    );
                     return run;
                 }
                 assert!(Instant::now() < deadline, "no run started in {session}");
@@ -1551,6 +1569,26 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect();
             assert_eq!(lines.last().unwrap()["kind"], "run-idle");
+            // Trusted fields at the top; what came from inside the run under `untrusted`.
+            let started = lines
+                .iter()
+                .find(|line| line["kind"] == "run-started")
+                .unwrap();
+            assert_eq!(started["session"], session);
+            assert!(started["run"].as_u64().is_some(), "{started}");
+            assert!(started["untrusted"].is_null(), "{started}");
+            let decision = lines
+                .iter()
+                .find(|line| line["kind"] == "decision")
+                .unwrap();
+            let run = decision["run"].as_u64().unwrap();
+            assert_eq!(decision["decision"], format!("{run}.1"));
+            assert_eq!(decision["capability"], "acme.com/charges.list");
+            assert_eq!(
+                decision["untrusted"]["context"]["customerId"],
+                "cus_northwind"
+            );
+            assert!(decision.get("context").is_none(), "{decision}");
             assert_eq!(lines.len() as u64, logged + 1);
         }
     }

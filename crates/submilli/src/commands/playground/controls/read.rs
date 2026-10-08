@@ -47,9 +47,10 @@ pub(crate) enum Outcome {
         #[serde(skip_serializing_if = "Option::is_none")]
         decision: Option<String>,
     },
-    /// A test run stopped at a call the recording could not answer, or any run was
-    /// cancelled.
+    /// A test run stopped at a call the recording could not answer.
     Stopped,
+    /// Someone cancelled it while it ran.
+    Cancelled,
     Failed {
         error: String,
     },
@@ -68,6 +69,7 @@ impl Outcome {
             },
             Some(ErrorKind::PermissionDenied) => Self::Denied { decision: denial },
             Some(ErrorKind::Cancelled) if test => Self::Stopped,
+            Some(ErrorKind::Cancelled) => Self::Cancelled,
             Some(kind) => Self::Failed {
                 error: kind_name(kind),
             },
@@ -80,6 +82,7 @@ impl Outcome {
             Self::Denied { decision: Some(d) } => format!("ended by an uncaught denial ({d})"),
             Self::Denied { decision: None } => "ended by an uncaught denial".to_owned(),
             Self::Stopped => "stopped".to_owned(),
+            Self::Cancelled => "cancelled".to_owned(),
             Self::Failed { error } => format!("failed: {error}"),
             Self::NotDispatched { error } => format!(
                 "did not start{}",
@@ -103,32 +106,35 @@ fn kind_name(kind: ErrorKind) -> String {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct RuleOut {
     pub(crate) caller: String,
+    /// Zero-based, as the blueprint's rule list counts.
     pub(crate) index: usize,
+    /// One-based, as the text cites it: ``rule 2 of `main` ``.
+    pub(crate) position: usize,
     pub(crate) name: Option<String>,
     /// 1-based; `None` when the text did not locate it (anchors, flow style, or no text
-    /// for the version), and the caller block and index name it instead.
+    /// for the version), and the caller block and position name it instead.
     pub(crate) line: Option<usize>,
     pub(crate) column: Option<usize>,
     pub(crate) end_line: Option<usize>,
 }
 
 impl RuleOut {
+    /// In full: ``​`name` (rule 1 of `main`, line 17)``, or ``rule 2 of `main`, line 20``.
     pub(crate) fn text(&self) -> String {
-        let name = self.name.as_deref().map_or_else(String::new, |name| {
-            format!("`{}` ", super::render::clean(name))
-        });
-        let place = match self.line {
-            Some(line) => format!("{} #{}, line {line}", self.caller, self.index),
-            None => format!("{} #{}", self.caller, self.index),
-        };
-        format!("{name}({})", super::render::clean(&place))
+        super::render::rule_label(&self.caller, self.index, self.name.as_deref(), self.line)
     }
 
+    /// Its name, or where it is.
     fn short(&self) -> String {
         match &self.name {
             Some(name) => format!("`{}`", super::render::clean(name)),
-            None => format!("{} #{}", super::render::clean(&self.caller), self.index),
+            None => super::render::rule_place(&self.caller, self.index, self.line),
         }
+    }
+
+    /// Its name and place, without the line: for lists of rules.
+    fn listed(&self) -> String {
+        super::render::rule_label(&self.caller, self.index, self.name.as_deref(), None)
     }
 }
 
@@ -176,6 +182,7 @@ impl<'a> DecidedUnder<'a> {
         RuleOut {
             caller: caller.to_owned(),
             index,
+            position: index.saturating_add(1),
             name,
             line,
             column,
@@ -221,7 +228,26 @@ fn is_denial(record: &DecisionRecord) -> bool {
     !record.allowed
 }
 
-/// A short phrase for what decided: "by `reads`", "by the default".
+/// The rules that nearly allowed a refused call: those that named its capability but
+/// whose filters rejected it.
+fn near_miss_rules(record: &DecisionRecord, under: &DecidedUnder<'_>) -> Vec<RuleOut> {
+    if !is_denial(record) {
+        return Vec::new();
+    }
+    record
+        .near_misses
+        .iter()
+        .map(|miss| {
+            under.rule(
+                &miss.rule.caller,
+                miss.rule.index,
+                miss.rule.name.as_deref(),
+            )
+        })
+        .collect()
+}
+
+/// A short phrase for what decided: "by `reads`", "by the default (near misses: ...)".
 fn decided_by_phrase(record: &DecisionRecord, under: &DecidedUnder<'_>) -> String {
     let mut phrase = match &record.cause {
         DecisionCause::Rule(rule) => format!(
@@ -234,21 +260,14 @@ fn decided_by_phrase(record: &DecisionRecord, under: &DecidedUnder<'_>) -> Strin
         DecisionCause::RuntimeInvariant { .. } => "by the runtime, ahead of the policy".to_owned(),
         DecisionCause::Unexplained => "by the policy (unexplained)".to_owned(),
     };
-    if is_denial(record) && !record.near_misses.is_empty() {
-        let misses: Vec<String> = record
-            .near_misses
-            .iter()
-            .map(|miss| {
-                under
-                    .rule(
-                        &miss.rule.caller,
-                        miss.rule.index,
-                        miss.rule.name.as_deref(),
-                    )
-                    .short()
-            })
-            .collect();
-        phrase.push_str(&format!(" (near miss: {})", misses.join(", ")));
+    let misses: Vec<String> = near_miss_rules(record, under)
+        .iter()
+        .map(RuleOut::listed)
+        .collect();
+    match misses.as_slice() {
+        [] => {}
+        [only] => phrase.push_str(&format!("; near miss: {only}")),
+        _ => phrase.push_str(&format!("; near misses: {}", misses.join(", "))),
     }
     if record.filtered {
         phrase.push_str(" · filtered from a listing");
@@ -391,6 +410,9 @@ impl std::str::FromStr for Since {
 #[derive(Debug, Serialize)]
 pub(crate) struct RunsResult {
     pub(crate) kind: &'static str,
+    /// Runs still in flight, newest first: listed only while the playground runs.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) running: Vec<RunningRow>,
     pub(crate) runs: Vec<RunRow>,
     /// Matching runs left out by the limit.
     pub(crate) more: usize,
@@ -399,6 +421,17 @@ pub(crate) struct RunsResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) empty_message: Option<&'static str>,
     pub(crate) next: Vec<String>,
+}
+
+/// A run in flight.
+#[derive(Debug, Serialize)]
+pub(crate) struct RunningRow {
+    pub(crate) run: u64,
+    pub(crate) page: Option<String>,
+    pub(crate) source: String,
+    pub(crate) started_at_micros: u64,
+    pub(crate) started_at: String,
+    pub(crate) session: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -477,7 +510,8 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
             rerun_of: reruns.get(&summary.id).copied(),
         });
     }
-    let mut suggestions = Vec::new();
+    let running = running_rows(reader, query, &summaries)?;
+    let mut suggestions: Vec<Next> = running.iter().map(|row| Next::Cancel(row.run)).collect();
     for row in &rows {
         if let Some(denial) = row.header.decision_refs.first()
             && let Ok(decision) = denial.parse()
@@ -486,7 +520,7 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
         }
     }
     if let Some(row) = rows.first() {
-        suggestions.insert(0, Next::Show(row.header.run));
+        suggestions.insert(running.len().min(2), Next::Show(row.header.run));
     }
     if rows.len() > 1 && query.session.is_none() {
         suggestions.push(Next::Sessions);
@@ -497,15 +531,60 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
         note: (query.source.as_deref() == Some("app")
             || rows.iter().any(|row| row.header.source == "app"))
         .then_some(APP_NOTE),
-        empty_message: rows.is_empty().then_some(if store_empty {
+        empty_message: (rows.is_empty() && running.is_empty()).then_some(if store_empty {
             EMPTY_STORE
         } else {
             "No runs match."
         }),
+        running,
         runs: rows,
         more,
         next: next(suggestions),
     })
+}
+
+/// The runs in flight that `query` matches, newest first: only while the playground that
+/// noted them runs, and never one already stored.
+fn running_rows(
+    reader: &Reader,
+    query: &RunsQuery,
+    stored: &[RunSummary],
+) -> Result<Vec<RunningRow>, ReadError> {
+    let Some(store) = reader.store.as_ref().filter(|_| reader.page.base.is_some()) else {
+        return Ok(Vec::new());
+    };
+    let mut rows: Vec<RunningRow> = store
+        .running()?
+        .into_iter()
+        .filter(|run| {
+            stored.iter().all(|summary| summary.id != run.id)
+                && query
+                    .source
+                    .as_ref()
+                    .is_none_or(|source| &run.label == source)
+                && query
+                    .session
+                    .as_ref()
+                    .is_none_or(|session| run.session_id.as_ref() == Some(session))
+                && match query.since {
+                    None => true,
+                    Some(Since::Run(after)) => run.id > after,
+                    Some(Since::Micros(window)) => {
+                        run.started_at_micros >= query.now_micros.saturating_sub(window)
+                    }
+                }
+        })
+        .map(|run| RunningRow {
+            run: run.id,
+            page: reader.page.run(run.id),
+            source: run.label,
+            started_at: super::render::rfc3339(run.started_at_micros),
+            started_at_micros: run.started_at_micros,
+            session: run.session_id,
+        })
+        .collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.run));
+    Ok(rows)
 }
 
 // ---- show ----------------------------------------------------------------------------------
@@ -549,6 +628,9 @@ pub(crate) struct DecisionLine {
     pub(crate) caller: String,
     pub(crate) capability: String,
     pub(crate) decided_by: String,
+    /// For a refusal, the rules that nearly allowed it, as `decided_by` lists them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) near_misses: Vec<RuleOut>,
     pub(crate) filtered: bool,
 }
 
@@ -725,6 +807,7 @@ pub(crate) fn show(
             caller: record.caller.clone(),
             capability: record.capability.clone(),
             decided_by: decided_by_phrase(record, &under),
+            near_misses: near_miss_rules(record, &under),
             filtered: record.filtered,
         });
     }
@@ -755,7 +838,20 @@ pub(crate) fn show(
         }
     }
 
-    if let Some(error) = &run.error {
+    let is_test = run.entry == "test" || run.test_of.is_some();
+    // A test run whose stored report names no stop was cancelled, not stopped.
+    let stopped_by_test = is_test
+        && run
+            .test_report
+            .as_ref()
+            .is_none_or(|report| report.stopped.is_some());
+    // A cancelled run's error is the runtime's own note that it was cancelled, which the
+    // outcome already says; a test run's stop keeps its message, which says where.
+    if let Some(error) = run
+        .error
+        .as_ref()
+        .filter(|error| error.kind != ErrorKind::Cancelled || stopped_by_test)
+    {
         untrusted.error = Some(cap_text(&error.message, include_payloads));
         untrusted.diagnostics.clone_from(&error.diagnostics);
     }
@@ -765,13 +861,6 @@ pub(crate) fn show(
         .map(|result| cap_text(result, include_payloads));
     untrusted.console = cap_text(&run.console, include_payloads);
 
-    let is_test = run.entry == "test" || run.test_of.is_some();
-    // A test run whose stored report names no stop was cancelled, not stopped.
-    let stopped_by_test = is_test
-        && run
-            .test_report
-            .as_ref()
-            .is_none_or(|report| report.stopped.is_some());
     let outcome = Outcome::of(
         run.error.as_ref().map(|error| error.kind),
         run.dispatched,
@@ -1014,7 +1103,7 @@ impl DecidedBy {
 
     pub(crate) fn text(&self) -> String {
         match (self.kind, &self.rule) {
-            ("rule", Some(rule)) => format!("rule {}", rule.text()),
+            ("rule", Some(rule)) => rule.text(),
             ("default", _) => {
                 let default = self
                     .default_action
@@ -1230,6 +1319,9 @@ pub(crate) struct Flip {
     pub(crate) decided_by: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) rule: Option<RuleOut>,
+    /// For a refusal in the later run, the rules that nearly allowed it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) near_misses: Vec<RuleOut>,
     /// What decided in the earlier run, for a different-rule change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) was: Option<String>,
@@ -1312,6 +1404,7 @@ pub(crate) fn compare(reader: &Reader, a: u64, b: u64) -> Result<CompareResult, 
                 caller: now.caller.clone(),
                 capability: now.capability.clone(),
                 decided_by: decided_by_phrase(now, &after_under),
+                near_misses: near_miss_rules(now, &after_under),
                 rule,
                 was: (kind == FlipKind::DifferentRule)
                     .then(|| decided_by_phrase(was, &before_under)),

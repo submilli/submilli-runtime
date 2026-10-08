@@ -75,6 +75,8 @@ pub(crate) enum Next {
     Test(u64),
     /// Follows a session's events.
     Watch(String),
+    /// Stops a run in flight.
+    Cancel(u64),
 }
 
 impl Next {
@@ -100,6 +102,7 @@ impl Next {
             Self::Recheck(run) => format!("{COMMAND} recheck {run}"),
             Self::Test(run) => format!("{COMMAND} test {run}"),
             Self::Watch(session) => format!("{COMMAND} watch {}", shell_word(session)),
+            Self::Cancel(run) => format!("{COMMAND} cancel {run}"),
         }
     }
 }
@@ -184,6 +187,30 @@ impl RunRef {
 
     fn page_line(&self) -> String {
         format!("page: {}", self.page.as_deref().unwrap_or(NO_PAGE))
+    }
+}
+
+/// Where an unnamed rule is, as people count: ``rule 2 of `main` `` for the rule at
+/// zero-based `index` in the caller's block, with `, line N` when its line is known.
+pub(crate) fn rule_place(caller: &str, index: usize, line: Option<usize>) -> String {
+    let mut place = format!("rule {} of `{}`", index.saturating_add(1), clean(caller));
+    if let Some(line) = line {
+        let _ = write!(place, ", line {line}");
+    }
+    place
+}
+
+/// A rule as cited in full: its name with its place, or its place alone.
+pub(crate) fn rule_label(
+    caller: &str,
+    index: usize,
+    name: Option<&str>,
+    line: Option<usize>,
+) -> String {
+    let place = rule_place(caller, index, line);
+    match name {
+        Some(name) => format!("`{}` ({place})", clean(name)),
+        None => place,
     }
 }
 
@@ -336,6 +363,25 @@ fn civil_from_days(days: u64) -> (u64, u64, u64) {
 
 pub(crate) fn runs_text(result: &RunsResult) -> String {
     let mut out = String::new();
+    for row in &result.running {
+        let mut line = format!(
+            "run {} · {} · running since {}",
+            row.run,
+            clean(&row.source),
+            utc(row.started_at_micros)
+        );
+        if let Some(session) = &row.session {
+            let _ = write!(line, " · session {}", clean(session));
+        }
+        if let Some(page) = &row.page {
+            let _ = write!(line, "  {page}");
+        }
+        let _ = writeln!(out, "{line}");
+    }
+    if result.runs.is_empty() && !result.running.is_empty() {
+        next_lines(&mut out, &result.next);
+        return out;
+    }
     if result.runs.is_empty() {
         let _ = writeln!(out, "{}", result.empty_message.unwrap_or("No runs."));
         next_lines(&mut out, &result.next);
@@ -587,7 +633,7 @@ pub(crate) fn explain_text(result: &ExplainResult) -> String {
         for (failure_index, failure) in miss.failures.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "    failed: {} ({}); both values in run-data as near-miss {}.{}",
+                "    failed: {} ({}); both values in run-data under near miss {}, comparison {}",
                 clean(&failure.comparison),
                 failure.reason,
                 index + 1,
@@ -603,11 +649,19 @@ pub(crate) fn explain_text(result: &ExplainResult) -> String {
     for (index, miss) in untrusted.near_misses.iter().enumerate() {
         for (failure_index, failure) in miss.iter().enumerate() {
             fence.value(
-                &format!("near-miss {}.{} actual", index + 1, failure_index + 1),
+                &format!(
+                    "near miss {}, comparison {}, actual",
+                    index + 1,
+                    failure_index + 1
+                ),
                 &failure.actual,
             );
             fence.value(
-                &format!("near-miss {}.{} expected", index + 1, failure_index + 1),
+                &format!(
+                    "near miss {}, comparison {}, expected",
+                    index + 1,
+                    failure_index + 1
+                ),
                 &failure.expected,
             );
         }
@@ -873,6 +927,7 @@ mod tests {
             Next::Test(3),
             Next::Watch("s-1".into()),
             Next::Watch("--live".into()),
+            Next::Cancel(3),
         ];
         for command in next(every) {
             for word in command.split_whitespace() {

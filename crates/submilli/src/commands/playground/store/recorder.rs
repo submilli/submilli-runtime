@@ -180,6 +180,13 @@ impl RunRecorderFactory for Recorder {
             },
         );
         drop(tracks);
+        if let Err(error) =
+            shared
+                .store
+                .mark_running(id, &run.label, run.session_id.as_deref(), started_at_micros)
+        {
+            warn(&format!("run {id} not listed as running: {error}"));
+        }
         Some(Arc::new(RunRecording {
             shared: Arc::clone(shared),
             start: run,
@@ -527,6 +534,9 @@ impl RunRecorder for RunRecording {
         if let Err(error) = self.shared.store.write_run(&stored) {
             warn(&format!("run {} not stored: {error}", self.id));
         }
+        if let Err(error) = self.shared.store.unmark_running(self.id) {
+            warn(&format!("run {} still listed as running: {error}", self.id));
+        }
         let backfill = Backfill {
             decisions: stored.recording.decisions.clone(),
             calls: stored
@@ -545,6 +555,15 @@ impl RunRecorder for RunRecording {
             truncated: stored.recording.log_truncated,
         };
         self.shared.finished(&self.start.execution_id, backfill);
+    }
+}
+
+impl Drop for RunRecording {
+    /// However the run ended, finished or dropped, it is no longer in flight.
+    fn drop(&mut self) {
+        if let Err(error) = self.shared.store.unmark_running(self.id) {
+            warn(&format!("run {} still listed as running: {error}", self.id));
+        }
     }
 }
 
