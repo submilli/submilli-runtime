@@ -1,2 +1,2 @@
-line 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59 type: bug SUB-1196 (string-keyed records) a string-keyed record read is `V | null`
-line 33 type: bug SUB-1196 (spreading a falsy or nullable value) spreading `c && {…}` or a nullable value is rejected
+line 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59 type: by-design spec §1.2 a string-keyed record read is `V | null`
+line 33 type: bug SUB-1501 an object literal of conditional spreads under an expected type takes that type, where tsc keeps its own

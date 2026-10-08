@@ -1,2 +1,2 @@
-line 38, 39, 42, 46, 49, 51, 53, 56, 58, 64, 69, 72, 74 extra: bug SUB-1196 (function properties) assigning properties onto a function is rejected, where tsc makes the function an expando object
-line 38, 39, 42, 44, 46, 49, 51, 53, 56, 58, 61, 64, 66, 69, 72, 74 type: bug SUB-1196 (function properties) assigning properties onto a function is rejected, where tsc makes the function an expando object
+line 38, 39, 42, 46, 49, 51, 53, 56, 58, 64, 69, 72, 74 extra: by-design spec §Excluded-Features assigning properties onto a function is rejected, where tsc makes the function an expando object
+line 38, 39, 42, 44, 46, 49, 51, 53, 56, 58, 61, 64, 66, 69, 72, 74 type: by-design spec §Excluded-Features assigning properties onto a function is rejected, where tsc makes the function an expando object

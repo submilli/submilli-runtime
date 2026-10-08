@@ -1,1 +1,1 @@
-line 2 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 2 type: bug SUB-1500 a literal inside an array literal passed to `new Map(...)` widens where tsc keeps it

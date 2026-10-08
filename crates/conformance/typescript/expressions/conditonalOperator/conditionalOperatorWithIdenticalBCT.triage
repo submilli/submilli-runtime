@@ -1,1 +1,1 @@
-line 19, 34 type: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object`
+line 19, 34 type: bug SUB-1437 a primitive isn't assignable to `{}` or `Object`

@@ -1,3 +1,3 @@
 line 8, 45 extra: by-design spec §1.6 an `unknown` must be narrowed before it is used as a condition
 line 11 type: by-design spec §1.6 an `unknown` must be narrowed before it is used as a condition
-line 20, 29, 38, 54, 64, 65 type: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object` (removing `null` from `unknown` leaves `unknown`, where tsc gives `{}`)
+line 20, 29, 38, 54, 64, 65 type: bug SUB-1437 a primitive isn't assignable to `{}` or `Object` (removing `null` from `unknown` leaves `unknown`, where tsc gives `{}`)

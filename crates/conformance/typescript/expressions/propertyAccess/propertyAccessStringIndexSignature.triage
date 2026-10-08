@@ -1,1 +1,1 @@
-line 5, 6, 7, 8 type: bug SUB-1196 (string-keyed records) a string-keyed record read is `V | null`
+line 5, 6, 7, 8 type: by-design spec §1.2 a string-keyed record read is `V | null`

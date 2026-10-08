@@ -1,1 +1,1 @@
-line 18 type: bug SUB-1196 (guard on a getter read) a guard doesn't narrow a later read of a getter, since each read may return a different value
+line 18 type: by-design spec §1.6 a guard doesn't narrow a later read of a getter, since each read may return a different value
