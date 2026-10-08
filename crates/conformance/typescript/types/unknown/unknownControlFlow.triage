@@ -8,3 +8,4 @@ line 183 type: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to 
 line 191 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`; also by-design spec §1.6 `&&` keeps a type parameter in its falsy part, since a `T` can be falsy
 line 194 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`
 line 206, 210 type: bug SUB-1196 (literals from constant expressions) `!` on an operand of known truthiness isn't a literal type
+line 366, 375 type: by-design spec §1.6 `==` is an alias for `===`, so `x == y` narrows `x` to the values it shares with `y`, where tsc keeps members `==` could coerce
