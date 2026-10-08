@@ -1,2 +1,2 @@
-line 27, 36 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
+line 27, 36 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (tsc keeps the last argument's literal `1`, ours widens it)
 line 35 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (tsc takes `U` from the callback, ours from the last argument)

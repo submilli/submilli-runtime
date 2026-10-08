@@ -1,9 +1,1 @@
-types: 13 of 24 tsc entries compared, 2 differ
-
-line 21: v
-  tsc:  E1.b
-  ours: E1
-
-line 24: v
-  tsc:  E1.a
-  ours: E1
+types: 13 of 24 tsc entries compared, 0 differ

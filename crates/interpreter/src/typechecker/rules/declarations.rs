@@ -226,6 +226,7 @@ impl<'a> TypeDeclarations<'a> {
             Type::Number
             | Type::NumberLiteral(_)
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::String
             | Type::StringLiteral(_)
             | Type::Uint8Array

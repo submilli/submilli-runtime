@@ -1,17 +1,1 @@
-types: 5 of 9 tsc entries compared, 4 differ
-
-line 2: `abc${ " " }def` ? `abc${ " " }def` : `abc${ " " }def`
-  tsc:  "abc def"
-  ours: string
-
-line 2: `abc${ " " }def`
-  tsc:  "abc def"
-  ours: string
-
-line 2: `abc${ " " }def`
-  tsc:  "abc def"
-  ours: string
-
-line 2: `abc${ " " }def`
-  tsc:  "abc def"
-  ours: string
+types: 5 of 9 tsc entries compared, 0 differ

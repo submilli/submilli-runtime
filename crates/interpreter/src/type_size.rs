@@ -303,6 +303,7 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
         Type::Number
         | Type::NumberLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
         | Type::Uint8Array
@@ -439,6 +440,7 @@ pub fn map_children<E>(
         Type::Number
         | Type::NumberLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
         | Type::Uint8Array
@@ -501,6 +503,7 @@ impl<'a> TypeChildren<'a> {
             Type::Number
             | Type::NumberLiteral(_)
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::String
             | Type::StringLiteral(_)
             | Type::Uint8Array

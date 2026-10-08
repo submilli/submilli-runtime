@@ -478,14 +478,18 @@ impl TypeParamSubstitution {
         }
         let bound_before: std::collections::BTreeSet<String> = self.bound_names().collect();
         let resolved = self.apply_or_record(param_ty, types.limits);
+        let fits_binding = !super::infer::expr::type_contains_type_var(&resolved)
+            && assignable(arg_ty, &resolved, types);
         // An argument that fits the expected result's binding still replaces
         // it, so the arguments, not the expected type, decide the inference.
-        if !super::infer::expr::type_contains_type_var(&resolved)
-            && !self.mentions_replaceable_binding(param_ty)
-            && assignable(arg_ty, &resolved, types)
-        {
+        if fits_binding && !self.mentions_replaceable_binding(param_ty) {
             return Ok(());
         }
+        // Unless the argument gives no one binding (`[["a", 1], ["b", 2]]` is
+        // a union of tuples); then the binding it fits stands, as tsc falls
+        // back to the contextual type, and is final, since a later argument
+        // narrowing it would no longer fit this one.
+        let before = fits_binding.then(|| self.clone());
         let unified = self.keeping_close_matches_on_success(|sub| {
             let mut unifier = Unifier::new(sub, Some(types), types.limits);
             unifier.subtype_widening = true;
@@ -499,6 +503,11 @@ impl TypeParamSubstitution {
                 .filter(|name| !bound_before.contains(name))
                 .collect();
             self.literal_candidates.extend(newly_bound);
+        }
+        if let (Err(_), Some(before)) = (&unified, before) {
+            *self = before;
+            self.keep_replaceable_bindings(param_ty);
+            return Ok(());
         }
         unified
     }
@@ -839,6 +848,12 @@ impl<'a> Unifier<'a> {
             // siblings leave (see `unify_union_into_lone_type_var`); otherwise
             // two passes pair matching members first, then unify leftovers in order.
             (Type::Union(pa), Type::Union(pb)) => {
+                // Every member fits a concrete sibling of type parameters
+                // already bound, so the argument changes nothing: `2 | 3` for
+                // `T | number` once `T` is bound, as tsc matches it.
+                if self.fits_concrete_members(pa, pb) {
+                    return Ok(());
+                }
                 if let Some(unified) = self.unify_union_into_lone_type_var(pa, pb) {
                     return unified;
                 }
@@ -1251,6 +1266,27 @@ impl<'a> Unifier<'a> {
         }
         self.offer_whole_union_fallback(type_var, Type::union(args.to_vec()));
         Some(Ok(()))
+    }
+
+    /// Whether every member of the argument union `args` is assignable to a
+    /// member of `params` that names no type parameter, while each member
+    /// that names one is bound already.
+    fn fits_concrete_members(&mut self, params: &[Type], args: &[Type]) -> bool {
+        let Some(types) = self.types else {
+            return false;
+        };
+        let (generic, concrete): (Vec<&Type>, Vec<&Type>) = params
+            .iter()
+            .partition(|member| super::infer::expr::type_contains_type_var(member));
+        let generic_bound = generic.iter().all(|member| {
+            let resolved = self.sub.apply_or_record(member, self.limits);
+            !super::infer::expr::type_contains_type_var(&resolved)
+        });
+        !generic.is_empty()
+            && generic_bound
+            && args
+                .iter()
+                .all(|arg| concrete.iter().any(|member| assignable(arg, member, types)))
     }
 
     /// A union argument against a union whose only type parameter is bound to
@@ -1755,7 +1791,10 @@ impl TypeParamSubstitution {
 fn is_primitive_literal(ty: &Type) -> bool {
     matches!(
         ty,
-        Type::NumberLiteral(_) | Type::StringLiteral(_) | Type::BooleanLiteral(_)
+        Type::NumberLiteral(_)
+            | Type::StringLiteral(_)
+            | Type::BooleanLiteral(_)
+            | Type::BigIntLiteral(_)
     )
 }
 

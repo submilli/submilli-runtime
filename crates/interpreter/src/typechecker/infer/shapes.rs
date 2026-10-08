@@ -138,6 +138,7 @@ impl<'a> ShapeCollector<'a> {
             | Type::Readonly(inner) => self.collect(inner),
             Type::Number
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::NumberLiteral(_)
             | Type::String
             | Type::StringLiteral(_)
@@ -412,32 +413,13 @@ pub(super) fn collect_from_expr(
             }
         }
         TypedExprKind::ObjectLiteral { members, fields } => {
-            // when expr.ty is InterfaceRef, codegen still needs the structural shape registered
-            if matches!(
-                &ast.try_expr(expr_id)
-                    .map_err(crate::typechecker::arena_failure)?
-                    .ty,
-                Type::InterfaceRef { .. }
-            ) {
-                let field_map: std::collections::BTreeMap<String, crate::ObjectField> = fields
-                    .iter()
-                    .map(|f| {
-                        (
-                            f.name.name.clone(),
-                            crate::ObjectField {
-                                ty: f.ty.clone(),
-                                optional: f.optional,
-                                readonly: false,
-                                method: false,
-                            },
-                        )
-                    })
-                    .collect();
-                c.collect(&Type::Object {
-                    index: None,
-                    fields: field_map,
-                });
-            }
+            // The literal is built with its layout, which its type (an interface,
+            // or its own narrower shape) need not be.
+            let ty = &ast
+                .try_expr(expr_id)
+                .map_err(crate::typechecker::arena_failure)?
+                .ty;
+            c.collect(&crate::typed_ast::object_literal_layout(ty, fields));
             for member in members {
                 for expression in member.expressions() {
                     collect_from_expr(ast, expression, c)?;

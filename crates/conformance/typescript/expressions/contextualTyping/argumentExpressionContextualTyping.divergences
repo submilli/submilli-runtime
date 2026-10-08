@@ -1,4 +1,4 @@
-types: 26 of 66 tsc entries compared, 10 differ
+types: 26 of 66 tsc entries compared, 8 differ
 
 line 7: o
   tsc:  { x: (string | number)[]; y: { c: boolean; d: string; e: number; }; }
@@ -19,14 +19,6 @@ line 12: array
 line 12: ["string", 1, true]
   tsc:  (string | number | boolean)[]
   ours: string[]
-
-line 13: ["string", 1, true]
-  tsc:  [string, number, true]
-  ours: [string, number, boolean]
-
-line 15: ["string", 1, true]
-  tsc:  [string, number, true]
-  ours: [string, number, boolean]
 
 line 17: array
   tsc:  (string | number | boolean)[]

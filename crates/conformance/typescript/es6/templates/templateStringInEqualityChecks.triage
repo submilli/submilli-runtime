@@ -1,1 +1,0 @@
-line 2, 3, 4, 5 type: bug SUB-1196 (literals from constant expressions) a template of constants isn't a string literal type

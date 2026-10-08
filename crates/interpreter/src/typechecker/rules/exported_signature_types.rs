@@ -309,6 +309,7 @@ fn collect_signature_named_types(
         Type::Number
         | Type::NumberLiteral(_)
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
         | Type::Uint8Array

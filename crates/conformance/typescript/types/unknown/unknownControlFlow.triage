@@ -7,4 +7,3 @@ line 69, 75, 80, 81, 87, 93, 382, 402 type: bug SUB-1196 (primitive to `{}`) a p
 line 183 type: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object`
 line 191 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`; also by-design spec §1.6 `&&` keeps a type parameter in its falsy part, since a `T` can be falsy
 line 194 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`
-line 206, 210 type: bug SUB-1196 (literals from constant expressions) `!` on an operand of known truthiness isn't a literal type

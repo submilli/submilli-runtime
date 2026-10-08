@@ -1,9 +1,1 @@
-types: 9 of 11 tsc entries compared, 2 differ
-
-line 6: `${ // a a }a`
-  tsc:  "1a"
-  ours: string
-
-line 12: `${ // a a }`
-  tsc:  "1"
-  ours: string
+types: 9 of 11 tsc entries compared, 0 differ

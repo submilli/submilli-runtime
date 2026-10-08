@@ -1,1 +1,2 @@
-line 21, 36, 37 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
+line 21 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours types the rejected literal as its target)
+line 36, 37 type: bug SUB-1492 an empty array literal under an expected type is `never[]` in tsc, where ours takes the expected type

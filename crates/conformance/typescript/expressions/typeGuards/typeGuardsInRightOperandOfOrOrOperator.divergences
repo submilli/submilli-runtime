@@ -1,28 +1,4 @@
-types: 90 of 141 tsc entries compared, 11 differ
-
-line 10: typeof x !== "string" || ((x = 10) || x)
-  tsc:  true | 10
-  ours: number | true
-
-line 10: ((x = 10) || x)
-  tsc:  10
-  ours: number
-
-line 10: (x = 10) || x
-  tsc:  10
-  ours: number
-
-line 14: typeof x !== "string" || ((x = "hello") || x)
-  tsc:  true | "hello"
-  ours: string | true
-
-line 14: ((x = "hello") || x)
-  tsc:  "hello"
-  ours: string
-
-line 14: (x = "hello") || x
-  tsc:  "hello"
-  ours: string
+types: 90 of 141 tsc entries compared, 5 differ
 
 line 39: typeof x === "string" || ((z = x) // number | boolean || (typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // number | boolean | string // do not change value : ((y = x) && x.toString())))
   tsc:  string | number | boolean
@@ -43,7 +19,3 @@ line 41: (typeof x === "number" // change value of x ? ((x = 10) && x.toString()
 line 41: typeof x === "number" // change value of x ? ((x = 10) && x.toString()) // number | boolean | string // do not change value : ((y = x) && x.toString())
   tsc:  string | false
   ours: <error>
-
-errors:
-line 10: ours: expected `10 | true`, got `number` (tsc accepts)
-line 14: ours: expected `"hello" | true`, got `string` (tsc accepts)

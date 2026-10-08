@@ -1,5 +1,1 @@
-types: 46 of 140 tsc entries compared, 1 differ
-
-line 50: { value: 10 }
-  tsc:  { value: number; }
-  ours: { error?: null; value: number }
+types: 46 of 140 tsc entries compared, 0 differ

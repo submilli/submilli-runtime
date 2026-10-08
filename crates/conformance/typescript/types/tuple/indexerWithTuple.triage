@@ -1,2 +1,1 @@
 line 13, 14, 15, 16, 24, 25, 26, 27, 32, 33, 34, 35 extra: by-design spec §1.2 a tuple index must be a numeric literal
-line 4, 5 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own

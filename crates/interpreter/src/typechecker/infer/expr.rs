@@ -23,6 +23,7 @@ use super::stmt::StaticWrite;
 use super::void_value::{ValueOperand, ValuePosition};
 use crate::did_you_mean;
 use crate::type_size::{TypeBudget, TypeTooLarge, map_children};
+use crate::types::{EnumValue, LiteralF64};
 
 use super::type_aliases::alias_ref_body;
 use super::{Inferer, assignable, narrowing};
@@ -167,6 +168,8 @@ fn is_primitive(ty: &Type) -> bool {
             | Type::StringLiteral(_)
             | Type::NumberLiteral(_)
             | Type::BooleanLiteral(_)
+            | Type::BigInt
+            | Type::BigIntLiteral(_)
     )
 }
 
@@ -175,14 +178,15 @@ fn is_primitive(ty: &Type) -> bool {
 /// of them: `"a" | "b"` is a tag, `string | null` isn't.
 fn is_tag_type(ty: &Type) -> bool {
     fn is_unit(ty: &Type) -> bool {
+        let ty = ty.peel();
         matches!(
-            ty.peel(),
+            ty,
             Type::StringLiteral(_)
                 | Type::NumberLiteral(_)
                 | Type::BooleanLiteral(_)
                 | Type::Boolean
                 | Type::Null
-        )
+        ) || ty.is_enum_member()
     }
     match ty.peel() {
         Type::Union(members) => members.iter().all(is_unit),
@@ -203,6 +207,9 @@ fn tag_fits(ty: &Type, value: &TagValue) -> bool {
         (Type::StringLiteral(s), TagValue::Literal(LiteralValue::String(v))) => s == v,
         (Type::NumberLiteral(n), TagValue::Literal(LiteralValue::Number(v))) => n == v,
         (Type::BooleanLiteral(b), TagValue::Literal(LiteralValue::Boolean(v))) => b == v,
+        (member, _) if member.is_enum_member() => {
+            matches!(value, TagValue::Literal(v) if LiteralValue::of_enum_member(member).as_ref() == Some(v))
+        }
         (other, _) => !is_primitive(other),
     }
 }
@@ -365,7 +372,7 @@ fn chain_step_phrasing(part: &ChainPart) -> Result<ChainStepPhrasing, CompilerFa
 }
 
 fn postfix_result_ty(operand_ty: &Type) -> Type {
-    if matches!(operand_ty.peel(), Type::BigInt) {
+    if operand_ty.is_bigint() {
         Type::BigInt
     } else {
         Type::Number
@@ -565,14 +572,26 @@ impl Inferer<'_> {
             ExprKind::Number(v) => {
                 let canonical = if v == 0.0 { 0.0 } else { v };
                 let literal = Type::NumberLiteral(crate::types::LiteralF64(canonical));
+                // A numeric enum member type takes a number literal of its value.
                 let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
-                    matches!(t, Type::NumberLiteral(_))
+                    matches!(
+                        t,
+                        Type::NumberLiteral(_)
+                            | Type::NumberEnum {
+                                member: Some(_),
+                                ..
+                            }
+                    )
                 });
                 Ok((TypedExprKind::Number(v), ty))
             }
-            // bigint literal — always widens to `Type::BigInt`
-            // (no `Type::BigIntLiteral` narrowing variant in v1).
-            ExprKind::BigInt(digits) => Ok((TypedExprKind::BigInt(digits), Type::BigInt)),
+            ExprKind::BigInt(digits) => {
+                let literal = crate::types::bigint_literal_type(&digits);
+                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::BigIntLiteral(_))
+                });
+                Ok((TypedExprKind::BigInt(digits), ty))
+            }
             ExprKind::String(s) => {
                 let literal = Type::StringLiteral(s.clone());
                 let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
@@ -598,10 +617,10 @@ impl Inferer<'_> {
                 }
                 self.resolve_ident(ident, span)
             }
-            ExprKind::Binary { op, lhs, rhs } => {
-                self.infer_binary(op, lhs, rhs, expected, keeps_literal, span)
+            ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
+            ExprKind::Unary { op, operand } => {
+                self.infer_unary_keeping_literals(op, operand, expected, keeps_literal)
             }
-            ExprKind::Unary { op, operand } => self.infer_unary(op, operand),
             ExprKind::Call {
                 callee,
                 type_args,
@@ -693,7 +712,7 @@ impl Inferer<'_> {
                 substitution_spans,
             } => self.lower_template_literal(parts, exprs, substitution_spans, expected, span),
             ExprKind::Ternary { cond, then_, else_ } => {
-                self.infer_ternary(cond, then_, else_, expected, keeps_literal, span)
+                self.infer_ternary(cond, then_, else_, expected, span)
             }
             ExprKind::OptionalChain { base, parts } => {
                 self.infer_optional_chain(base, parts, expected, span)
@@ -1119,7 +1138,6 @@ impl Inferer<'_> {
         lhs: ExprId,
         rhs: ExprId,
         expected: Option<&Type>,
-        keeps_literal: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // human-readable operator symbol for diagnostics.
@@ -1175,7 +1193,7 @@ impl Inferer<'_> {
         // its own typed-AST node so codegen and the type-result rule
         // (`union(strip_null(lhs), rhs)`) can be specialised cleanly.
         if matches!(op, BinOp::NullishCoalesce) {
-            return self.infer_nullish_coalesce(lhs, rhs, keeps_literal, span);
+            return self.infer_nullish_coalesce(lhs, rhs, span);
         }
         match op {
             BinOp::Add => {
@@ -1255,7 +1273,7 @@ impl Inferer<'_> {
                 let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
                 let rhs_hint = match lt.peel() {
                     Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
-                    Type::BigInt => Some(Type::BigInt),
+                    Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
                     _ => None,
                 };
                 let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
@@ -1310,7 +1328,7 @@ impl Inferer<'_> {
                 let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
                 let rhs_hint = match lt.peel() {
                     Type::Number | Type::NumberLiteral(_) => Some(Type::Number),
-                    Type::BigInt => Some(Type::BigInt),
+                    Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
                     _ => None,
                 };
                 let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint.as_ref())?;
@@ -1418,8 +1436,7 @@ impl Inferer<'_> {
                 // type is TS-style: the branch that keeps the LHS
                 // contributes only the values that can short-circuit
                 // there (`falsy_part` for `&&`, `truthy_part` for `||`).
-                let (typed_lhs, lhs_ty) =
-                    self.infer_expr_keeping_literals(lhs, None, keeps_literal)?;
+                let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
                 let mut condition_error = false;
                 if matches!(lhs_ty.peel(), Type::Unknown) {
                     // `&&`/`||` on un-narrowed `unknown`
@@ -1448,8 +1465,18 @@ impl Inferer<'_> {
                     BinOp::Or => false_env,
                     _ => return Err(super::inference_failure("matched And | Or above")),
                 };
+                // `a || b` is `a` when `a` is never falsy, so only `a` meets what
+                // is expected of it. `b` still takes it as context unless it is a
+                // read, which the context can't change: `[]`, a tuple, a callback
+                // or an object literal for an interface all type by it.
+                let lhs_decides = op == BinOp::Or && super::narrowing::is_never_falsy(&lhs_ty);
+                let rhs_expected = if lhs_decides && self.is_read(rhs)? {
+                    None
+                } else {
+                    expected
+                };
                 let (typed_rhs, rhs_ty) =
-                    self.infer_conditional_operand(rhs, &rhs_env, expected, keeps_literal)?;
+                    self.infer_conditional_operand(rhs, &rhs_env, rhs_expected)?;
                 if matches!(rhs_ty.peel(), Type::Void | Type::Never)
                     && !self.is_condition_value(typed_rhs, &rhs_ty)?
                 {
@@ -1466,6 +1493,11 @@ impl Inferer<'_> {
                 };
                 let result_ty = if condition_error {
                     Type::Error
+                } else if let Some(decided) = lhs_decides
+                    .then(|| self.deciding_left_type(&lhs_kept, &rhs_ty))
+                    .flatten()
+                {
+                    decided
                 } else if let Some(joined) =
                     empty_literal_join(self.ast, (lhs, &lhs_kept), (rhs, &rhs_ty))?
                 {
@@ -1538,6 +1570,43 @@ impl Inferer<'_> {
         ))
     }
 
+    /// [`infer_unary`](Self::infer_unary), giving a negated literal its literal
+    /// type where the literal itself would keep one: `const n = -1` is `-1`, as
+    /// TypeScript has it. Only a literal written right after the `-` counts.
+    fn infer_unary_keeping_literals(
+        &mut self,
+        op: UnOp,
+        operand: ExprId,
+        expected: Option<&Type>,
+        keeps_literal: bool,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (kind, ty) = self.infer_unary(op, operand)?;
+        if !matches!(op, UnOp::Neg) {
+            return Ok((kind, ty));
+        }
+        let ty = match &self
+            .ast
+            .try_expr(operand)
+            .map_err(super::arena_failure)?
+            .kind
+        {
+            ExprKind::BigInt(digits) => {
+                let literal = Type::BigIntLiteral(crate::types::negate_bigint_digits(digits));
+                self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::BigIntLiteral(_))
+                })
+            }
+            ExprKind::Number(value) => {
+                let literal = number_literal_type(-value);
+                self.literal_or_base(keeps_literal, expected, literal, |t| {
+                    matches!(t, Type::NumberLiteral(_))
+                })
+            }
+            _ => ty,
+        };
+        Ok((kind, ty))
+    }
+
     fn infer_unary(
         &mut self,
         op: UnOp,
@@ -1545,7 +1614,9 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (operand_id, result_ty) = match op {
             UnOp::Not => {
-                let (id, operand_ty) = self.infer_expr(operand, None)?;
+                // The operand keeps a literal type, which can decide the result:
+                // `!true` is `false`.
+                let (id, operand_ty) = self.infer_expr_keeping_literals(operand, None, true)?;
                 if matches!(operand_ty.peel(), Type::Unknown) {
                     // `!x` on un-narrowed `unknown` rejected
                     // with a "narrow first" hint.
@@ -1571,8 +1642,9 @@ impl Inferer<'_> {
                         .map_err(super::arena_failure)?
                         .span;
                     self.error_non_condition_type(operand_span, &operand_ty);
+                    return Ok((TypedExprKind::Unary { op, operand: id }, Type::Boolean));
                 }
-                (id, Type::Boolean)
+                (id, narrowing::negation_type(&operand_ty))
             }
             UnOp::Neg | UnOp::Pos | UnOp::BitNot => {
                 // No forced hint — the operand picks its own widened type and
@@ -4539,14 +4611,18 @@ impl Inferer<'_> {
         // whole template's type degrades cleanly without poisoning the
         // surrounding inference.
         let mut had_error = false;
+        // The text of each substitution TypeScript can evaluate, in order. The
+        // template is the string literal they spell when every one has one.
+        let mut constant_texts: Vec<Option<String>> = Vec::with_capacity(exprs.len());
         let typed_interps: Vec<ExprId> = exprs
             .into_iter()
             .zip(substitution_spans)
             .map(|(expr_id, substitution_span)| {
-                let (typed_id, ty) = self.infer_expr(expr_id, None)?;
+                let (typed_id, ty) = self.infer_expr_keeping_literals(expr_id, None, true)?;
                 if matches!(ty, Type::Error) {
                     had_error = true;
                 }
+                constant_texts.push(self.substitution_constant_text(expr_id, typed_id, &ty)?);
                 let interp_span = self
                     .typed_ast
                     .try_expr(typed_id)
@@ -4576,7 +4652,25 @@ impl Inferer<'_> {
             }
         }
 
-        let result_ty = if had_error { Type::Error } else { Type::String };
+        let result_ty = if had_error {
+            Type::Error
+        } else {
+            spelled_template(&parts, constant_texts).map_or(Type::String, Type::StringLiteral)
+        };
+
+        // A constant template stays a concatenation even of one operand, so its
+        // literal type reads as fresh, as a written literal's does.
+        if operands.len() == 1 && matches!(result_ty, Type::StringLiteral(_)) {
+            let empty = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::String(String::new()),
+                    span,
+                    ty: Type::String,
+                })
+                .map_err(crate::typechecker::arena_failure)?;
+            operands.insert(0, empty);
+        }
 
         // Single-operand case (e.g. `` `${x}` ``): the lone
         // interpolation *is* the result. Return its kind so the outer
@@ -4593,7 +4687,11 @@ impl Inferer<'_> {
             // unless a string literal type is expected of it.
             let keeps_literal = matches!(single.ty, Type::StringLiteral(_))
                 && expects_literal(expected, |ty| matches!(ty, Type::StringLiteral(_)));
-            let ty = if keeps_literal { single.ty } else { result_ty };
+            let ty = if keeps_literal && !matches!(result_ty, Type::StringLiteral(_)) {
+                single.ty
+            } else {
+                result_ty
+            };
             return Ok((single.kind, ty));
         }
 
@@ -4635,6 +4733,38 @@ impl Inferer<'_> {
             },
             result_ty,
         ))
+    }
+
+    /// The text TypeScript evaluates a template substitution to, when it does:
+    /// a string or number literal, an arithmetic of them, an enum member, or a
+    /// `const` bound to a literal. `None` for anything else, a boolean included.
+    fn substitution_constant_text(
+        &self,
+        source: ExprId,
+        typed: ExprId,
+        ty: &Type,
+    ) -> Result<Option<String>, CompilerFailure> {
+        if let Some(text) = super::comparison_operand::constant_substitution(self.ast, source)? {
+            return Ok(Some(text));
+        }
+        let kind = &self
+            .typed_ast
+            .try_expr(typed)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind;
+        match kind {
+            TypedExprKind::NumberEnumMember { value, .. } => {
+                return Ok(Some(crate::runtime::number::format_number_js(*value)));
+            }
+            TypedExprKind::StringEnumMember { value, .. } => return Ok(Some(value.clone())),
+            _ => {}
+        }
+        let text = match ty {
+            Type::StringLiteral(text) => text.clone(),
+            Type::NumberLiteral(value) => crate::runtime::number::format_number_js(value.0),
+            _ => return Ok(None),
+        };
+        Ok(self.is_known_fresh_literal(typed, ty)?.then_some(text))
     }
 
     /// Wrap an already-typed interpolation expression in a
@@ -5130,6 +5260,7 @@ impl Inferer<'_> {
         {
             return self.infer_computed_object(members, expected, span);
         }
+        let errors_before = self.error_count();
         // Pull `expected` apart at the *Object* shape if it has one,
         // so each field gets a hint matching its declared type.
         // peel the hint so a `type Point = { x: number }`
@@ -5549,6 +5680,20 @@ impl Inferer<'_> {
             }
         }
 
+        // Taken before the expected shape's optional fields and an interface's
+        // field types are spliced into the literal's layout below.
+        let own_ty = (self.error_count() == errors_before)
+            .then(|| {
+                self.own_object_literal_type(
+                    &merged,
+                    expected,
+                    expected_fields.as_ref(),
+                    interface_target.is_some(),
+                    has_spread,
+                )
+            })
+            .flatten();
+
         // when an expected shape declares optional fields,
         // splice them into the literal's resulting type. The runtime
         // arity and payload slot indices follow
@@ -5639,6 +5784,16 @@ impl Inferer<'_> {
             resolved.insert(name, field);
         }
 
+        if let Some(own) = own_ty {
+            return Ok((
+                TypedExprKind::ObjectLiteral {
+                    members: object_members,
+                    fields: field_origins,
+                },
+                own,
+            ));
+        }
+
         // when the expected type was an `InterfaceRef`, the
         // literal's inferred type is the interface — assignability at
         // the surrounding slot is trivial, and the per-field checks
@@ -5671,6 +5826,44 @@ impl Inferer<'_> {
                 fields: resolved,
             },
         ))
+    }
+
+    /// The type an object literal checked against `expected` keeps as its own,
+    /// as in tsc: `{ value: 10 }` against `{ value: number; error?: string }` is
+    /// `{ value: number }`. Codegen builds it from its field origins instead.
+    /// `None` keeps the expected type: against an interface with methods, whose
+    /// methods a value reaches through the interface's own dispatch; with a
+    /// spread, whose fields take their optionality from the expected shape; and
+    /// against an unbound type parameter, which a call site infers from the
+    /// expected shape.
+    fn own_object_literal_type(
+        &self,
+        merged: &std::collections::BTreeMap<
+            String,
+            (crate::ObjectField, crate::TypedObjectFieldSource),
+        >,
+        expected: Option<&Type>,
+        expected_fields: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
+        against_interface: bool,
+        has_spread: bool,
+    ) -> Option<Type> {
+        let expected = expected?;
+        let expected_fields = expected_fields?;
+        let dispatches_methods = against_interface
+            && expected_fields
+                .values()
+                .any(|field| field.method || matches!(field.ty.peel(), Type::Function { .. }));
+        if dispatches_methods || has_spread || type_contains_type_var(expected) {
+            return None;
+        }
+        let own = Type::Object {
+            index: None,
+            fields: merged
+                .iter()
+                .map(|(name, (field, _))| (name.clone(), field.clone()))
+                .collect(),
+        };
+        assignable(&own, expected, self.resolver()).then_some(own)
     }
 
     /// The hint an object literal takes against a union with a member that has
@@ -6147,6 +6340,9 @@ impl Inferer<'_> {
         // Whether the running element type is still the first element's, which
         // mismatch messages name.
         let mut running_is_first = true;
+        // Under a pinning hint the literal still has a type of its own, as in tsc:
+        // `["a"]` checked against `(string | number)[]` is `string[]`.
+        let mut own_element_types = Vec::new();
         for el in elements {
             match el {
                 crate::ArrayLiteralElement::Value(elem_id) => {
@@ -6190,6 +6386,9 @@ impl Inferer<'_> {
                         saw_never = true;
                         typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                         continue;
+                    }
+                    if hint_pins_element_ty {
+                        own_element_types.push(elem_ty.clone());
                     }
                     let Some(running) = &element_ty else {
                         // First resolved value seeds the running
@@ -6245,6 +6444,9 @@ impl Inferer<'_> {
                     // shapes (primitive, object, unknown, other unions, function)
                     // with a typed diagnostic. Aliases peel first.
                     let peeled_source = source_ty.peel().clone();
+                    if hint_pins_element_ty {
+                        own_element_types.extend(spread_element_type(&peeled_source));
+                    }
                     match spread_element_type(&peeled_source) {
                         // A `Type::Error` source was already reported by inner inference.
                         None if matches!(peeled_source, Type::Error) => {}
@@ -6305,7 +6507,11 @@ impl Inferer<'_> {
         // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
         // `"hello"[]`.
         let element_ty = if hint_pins_element_ty {
-            element_ty
+            if self.error_count() == errors_before && !own_element_types.is_empty() {
+                Type::union(own_element_types)
+            } else {
+                element_ty
+            }
         } else if normalization.is_none() && self.error_count() == errors_before {
             let element_ty =
                 self.best_common_element_type(element_ty, &typed_elements, &object_literals)?;
@@ -6459,6 +6665,15 @@ impl Inferer<'_> {
         // `{ a: number; b?: never } | { a: number; b: string }`.
         let nested_fields = join.normalization?;
         normalized_object_union(running, &elem_ty.widen_literal(), nested_fields)
+    }
+
+    /// Whether an expression reads a variable, a field or `this`.
+    fn is_read(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        let id = peel_parens(self.ast, expr)?;
+        Ok(matches!(
+            self.ast.try_expr(id).map_err(super::arena_failure)?.kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::This
+        ))
     }
 
     /// Whether an array element is typed on its own rather than against the
@@ -6888,10 +7103,12 @@ impl Inferer<'_> {
             // the element's own type too: `{ v: "x" }` for `{ v: T }`
             // must reach the call as `{ v: string }` to bind `T`.
             elem_ty
+        } else if assignable(&elem_ty, expected_ty, self.resolver()) {
+            // The literal keeps its own element type, as in tsc; the slot it
+            // lands in has already accepted it.
+            elem_ty
         } else {
-            if self.error_count() == errors_before
-                && !assignable(&elem_ty, expected_ty, self.resolver())
-            {
+            if self.error_count() == errors_before {
                 self.error(
                     elem_span,
                     format!("expected `{expected_ty}`, got `{elem_ty}`"),
@@ -6994,10 +7211,15 @@ impl Inferer<'_> {
                             return Ok((
                                 TypedExprKind::NumberEnumMember {
                                     enum_mangled: enum_mangled.clone(),
-                                    variant: name,
+                                    variant: name.clone(),
                                     value: *value,
                                 },
-                                Type::number_enum(enum_package, recv_name, enum_mangled),
+                                Type::number_enum(enum_package, recv_name, enum_mangled)
+                                    .with_enum_member(
+                                        &name.name,
+                                        EnumValue::Number(LiteralF64(*value)),
+                                        variants.len(),
+                                    ),
                             ));
                         }
                         let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
@@ -7025,10 +7247,15 @@ impl Inferer<'_> {
                             return Ok((
                                 TypedExprKind::StringEnumMember {
                                     enum_mangled: enum_mangled.clone(),
-                                    variant: name,
+                                    variant: name.clone(),
                                     value: value.clone(),
                                 },
-                                Type::string_enum(enum_package, recv_name, enum_mangled),
+                                Type::string_enum(enum_package, recv_name, enum_mangled)
+                                    .with_enum_member(
+                                        &name.name,
+                                        EnumValue::String(value.clone()),
+                                        variants.len(),
+                                    ),
                             ));
                         }
                         let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
@@ -9158,7 +9385,6 @@ impl Inferer<'_> {
         then_: ExprId,
         else_: ExprId,
         expected: Option<&Type>,
-        keeps_literal: bool,
         _span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
@@ -9167,13 +9393,11 @@ impl Inferer<'_> {
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
-        let (typed_then, then_ty) =
-            self.infer_conditional_operand(then_, &true_env, expected, keeps_literal)?;
+        let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected)?;
         let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span)?;
 
-        let (typed_else, else_ty) =
-            self.infer_conditional_operand(else_, &false_env, expected, keeps_literal)?;
+        let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected)?;
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
@@ -9191,6 +9415,13 @@ impl Inferer<'_> {
         ))
     }
 
+    /// The type of `a || b` or `a ?? b` when `a` decides the result: `a`'s own,
+    /// as in TypeScript, if `b` fits `a`'s base type. `b` is compiled though it
+    /// never runs, so it must fit `a`'s representation.
+    fn deciding_left_type(&self, lhs_ty: &Type, rhs_ty: &Type) -> Option<Type> {
+        assignable(rhs_ty, &lhs_ty.widen_literal(), self.resolver()).then(|| lhs_ty.clone())
+    }
+
     /// `a ?? b`. Result type is `union(strip_null(lhs), rhs)`.
     /// Emits a `Severity::Warning` when `lhs` is statically
     /// non-nullable (the `??` clause is unreachable).
@@ -9198,14 +9429,12 @@ impl Inferer<'_> {
         &mut self,
         lhs: ExprId,
         rhs: ExprId,
-        keeps_literal: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, keeps_literal)?;
+        let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
         // The right side runs only where the left is `null`.
         let rhs_env = self.null_operand_env(typed_lhs)?;
-        let (typed_rhs, rhs_ty) =
-            self.infer_conditional_operand(rhs, &rhs_env, None, keeps_literal)?;
+        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, None)?;
         let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
         let typed_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
 
@@ -9230,7 +9459,9 @@ impl Inferer<'_> {
 
         // A poisoned operand has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
-        if !type_admits_null(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error) {
+        let lhs_decides =
+            !type_admits_null(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error);
+        if lhs_decides {
             self.diagnostics.push(crate::Diagnostic {
                 severity: Severity::Warning,
                 span,
@@ -9248,6 +9479,11 @@ impl Inferer<'_> {
         // which reaches codegen and panics in `value_type`.
         let result_ty = if matches!(lhs_ty.peel(), Type::Null) {
             rhs_ty
+        } else if let Some(decided) = lhs_decides
+            .then(|| self.deciding_left_type(&lhs_ty, &rhs_ty))
+            .flatten()
+        {
+            decided
         } else {
             let present = super::narrowing::strip_null(&lhs_ty);
             match empty_literal_join(self.ast, (lhs, &present), (rhs, &rhs_ty))? {
@@ -11079,6 +11315,10 @@ fn unsupported_cast_target_reason(
         | Type::Uint8Array
         | Type::Function { .. }
         | Type::Unknown => None,
+        Type::BigIntLiteral(_) => Some(
+            "bigint literal types aren't supported as `as` targets — cast to `bigint` \
+             and compare the value",
+        ),
         Type::Object { fields, index } => fields
             .values()
             .map(|f| &f.ty)
@@ -11137,7 +11377,7 @@ fn unsupported_cast_target_reason(
 /// diagnostic. Returns an empty help block when the enum has no
 /// variants (which only happens on a malformed decl that already
 /// emitted its own diagnostic).
-fn enum_variant_help<'a>(
+pub(super) fn enum_variant_help<'a>(
     enum_name: &str,
     variant_names: impl Iterator<Item = &'a String>,
 ) -> Vec<String> {
@@ -11693,6 +11933,19 @@ pub(super) fn number_literal_type(value: f64) -> Type {
     Type::NumberLiteral(crate::types::LiteralF64(canonical))
 }
 
+/// The string a template spells, when every substitution has a constant text.
+fn spelled_template(parts: &[String], substitutions: Vec<Option<String>>) -> Option<String> {
+    let mut substitutions = substitutions.into_iter();
+    let mut text = String::new();
+    for part in parts {
+        text.push_str(part);
+        if let Some(substitution) = substitutions.next() {
+            text.push_str(&substitution?);
+        }
+    }
+    Some(text)
+}
+
 pub(super) fn literal_comparison_type(
     ast: &crate::TypedAst,
     expr: &TypedExpr,
@@ -11701,20 +11954,25 @@ pub(super) fn literal_comparison_type(
         TypedExprKind::String(value) => Type::StringLiteral(value.clone()),
         TypedExprKind::Number(value) => Type::NumberLiteral(crate::types::LiteralF64(*value)),
         TypedExprKind::Boolean(value) => Type::BooleanLiteral(*value),
+        TypedExprKind::BigInt(digits) => crate::types::bigint_literal_type(digits),
         TypedExprKind::Unary {
-            op: UnOp::Neg | UnOp::Pos,
+            op: op @ (UnOp::Neg | UnOp::Pos),
             operand,
         } => {
-            let TypedExprKind::Number(value) = ast
+            let negative = matches!(op, UnOp::Neg);
+            match &ast
                 .try_expr(*operand)
                 .map_err(crate::typechecker::arena_failure)?
                 .kind
-            else {
-                return Ok(expr.ty.clone());
-            };
-            let negative = matches!(expr.kind, TypedExprKind::Unary { op: UnOp::Neg, .. });
-            let signed = if negative { -value } else { value };
-            number_literal_type(signed)
+            {
+                TypedExprKind::Number(value) => {
+                    number_literal_type(if negative { -value } else { *value })
+                }
+                TypedExprKind::BigInt(digits) if negative => {
+                    Type::BigIntLiteral(crate::types::negate_bigint_digits(digits))
+                }
+                _ => expr.ty.clone(),
+            }
         }
         _ => expr.ty.clone(),
     })
@@ -11794,7 +12052,7 @@ fn unary_arith_result(op: UnOp, ty: &Type) -> Option<Type> {
         return bitnot_result(ty);
     }
     match ty.primitive_behavior() {
-        Type::BigInt => Some(Type::BigInt),
+        Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
         Type::Number | Type::NumberLiteral(_) | Type::Never | Type::Error => Some(Type::Number),
         // `+s` is JS's explicit string→number coercion and the one TS keeps; it
         // lowers to the same parse `Number(s)` does (`NaN` when the text isn't a
@@ -11846,7 +12104,7 @@ fn never_operand_result(lt: &Type, rt: &Type, partners: NeverPartners) -> NeverO
 fn bitnot_result(ty: &Type) -> Option<Type> {
     match ty.peel() {
         Type::Unknown | Type::Null | Type::Void => None,
-        Type::BigInt => Some(Type::BigInt),
+        Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
         Type::Never => Some(Type::Number),
         Type::Union(members) => {
             let results: Option<Vec<_>> = members.iter().map(bitnot_result).collect();
@@ -11876,6 +12134,7 @@ fn has_to_string(ty: &Type) -> bool {
             | Type::Number
             | Type::NumberLiteral(_)
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Array(_)
@@ -12530,22 +12789,31 @@ mod tests {
 
     #[test]
     fn unary_not_correct() {
+        // As in TypeScript, `!` of a value whose truthiness its type decides
+        // is a literal type.
         let ta = run_clean("let x: boolean = !true;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::BooleanLiteral(false));
+        let ta = run_clean("let b: boolean = 1 > 2; let x: boolean = !b;");
+        assert_eq!(nth_decl_value_ty(&ta, 1), Type::Boolean);
     }
 
     #[test]
     fn unary_not_truthiness_operands() {
         let ta = run_clean("let x: boolean = !1;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Boolean);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::BooleanLiteral(false));
         let ta = run_clean("let xs: number[] = [1]; let x: boolean = !xs;");
+        assert_eq!(nth_decl_value_ty(&ta, 1), Type::BooleanLiteral(false));
+        let ta = run_clean("let n: number = 1; let x: boolean = !n;");
         assert_eq!(nth_decl_value_ty(&ta, 1), Type::Boolean);
     }
 
     #[test]
-    fn unary_neg_correct() {
+    fn unary_neg_of_a_literal_is_its_literal_type() {
         let ta = run_clean("let x: number = -1;");
-        assert_eq!(nth_decl_value_ty(&ta, 0), Type::Number);
+        assert_eq!(
+            nth_decl_value_ty(&ta, 0),
+            Type::NumberLiteral(crate::types::LiteralF64(-1.0))
+        );
     }
 
     #[test]

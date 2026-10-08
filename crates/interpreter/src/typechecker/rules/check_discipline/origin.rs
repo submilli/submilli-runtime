@@ -143,6 +143,7 @@ impl ReadKey {
             ReadKey::Element(LiteralValue::Number(index)) => write!(out, "[{}]", index.0),
             ReadKey::Element(LiteralValue::String(key)) => write!(out, "[{key:?}]"),
             ReadKey::Element(LiteralValue::Boolean(key)) => write!(out, "[{key}]"),
+            ReadKey::Element(LiteralValue::BigInt(digits)) => write!(out, "[{digits}n]"),
             ReadKey::AnyProperty | ReadKey::AnyElement => write!(out, "[...]"),
             ReadKey::Iteration => Ok(()),
         };

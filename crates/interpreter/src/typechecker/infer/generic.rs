@@ -215,6 +215,7 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
         Type::TypeVar(_)
         | Type::Number
         | Type::BigInt
+        | Type::BigIntLiteral(_)
         | Type::NumberLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
@@ -2892,6 +2893,7 @@ impl ShapeKind {
             Type::Number
             | Type::NumberLiteral(_)
             | Type::BigInt
+            | Type::BigIntLiteral(_)
             | Type::String
             | Type::StringLiteral(_)
             | Type::Uint8Array

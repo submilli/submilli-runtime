@@ -1,8 +1,4 @@
-types: 121 of 200 tsc entries compared, 6 differ
-
-line 13: { none: '' }
-  tsc:  { none: string; }
-  ours: None
+types: 121 of 200 tsc entries compared, 4 differ
 
 line 27: result
   tsc:  Optional<r>
@@ -19,7 +15,3 @@ line 38: x.slice
 line 50: x.slice
   tsc:  (start?: number, end?: number) => string
   ours: <error>
-
-line 83: !x
-  tsc:  true
-  ours: boolean

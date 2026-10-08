@@ -1,20 +1,4 @@
-types: 117 of 147 tsc entries compared, 4 differ
-
-line 52: !(maybeBool ?? true)
-  tsc:  true
-  ours: boolean
-
-line 52: maybeBool ?? true
-  tsc:  false
-  ours: boolean
-
-line 56: maybeBool ?? true
-  tsc:  false
-  ours: boolean
-
-line 63: false ?? true
-  tsc:  false
-  ours: boolean
+types: 117 of 147 tsc entries compared, 0 differ
 
 errors:
 line 63: tsc TS2869: Right operand of ?? is unreachable because the left operand is never nullish. (we accept)

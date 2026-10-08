@@ -166,7 +166,7 @@ fn one_rhs_and_binary_ty(
     ctx: &mut DesugarCtx,
     target_ty: &Type,
 ) -> Result<(crate::ExprId, Type), crate::compiler_error::CompilerFailure> {
-    Ok(if matches!(target_ty.peel(), Type::BigInt) {
+    Ok(if target_ty.is_bigint() {
         (ctx.bigint_lit("1")?, Type::BigInt)
     } else {
         (ctx.number_lit(1.0)?, Type::Number)

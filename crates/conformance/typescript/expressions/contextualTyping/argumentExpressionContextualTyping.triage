@@ -1,5 +1,4 @@
 line 7, 12 extra: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
 line 7, 12 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
-line 13, 15 type: bug SUB-1204 a literal widens to its base type where tsc keeps the literal type
 line 17 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type (the array on line 12)
-line 18 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own; also bug SUB-1204 a literal widens to its base type where tsc keeps the literal type; also by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
+line 18 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours types the rejected literal as its target); also by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type

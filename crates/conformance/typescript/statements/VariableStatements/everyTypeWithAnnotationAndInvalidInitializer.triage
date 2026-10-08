@@ -1,1 +1,1 @@
-line 44 type: bug SUB-1196 (literal under an expected type) a literal checked against an expected type takes that type, where tsc keeps its own
+line 44 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours types the rejected literal as its target)

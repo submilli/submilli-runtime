@@ -1,2 +1,1 @@
 line 28, 29, 30, 31 extra: by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand
-line 19, 20, 24, 25 type: bug SUB-1196 (enum member types) an enum member has its enum's type, where tsc gives it a member literal type
