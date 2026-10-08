@@ -9,6 +9,7 @@
 use crate::runtime::host::{abi_arg, abi_result};
 mod dynamic;
 mod index;
+mod static_value;
 
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef,
@@ -644,6 +645,23 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             })
         },
     )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        ctor_key("#staticValue"),
+        ft(
+            vec![ValType::Ref(RefType::new(
+                false,
+                HeapType::ConcreteStruct(intr.string.clone()),
+            ))],
+            vec![obj.clone()],
+        ),
+        true,
+        |caller, params, results| {
+            *abi_result(results, 0)? = static_value::static_value(caller, abi_arg(params, 0)?)?;
+            Ok(())
+        },
+    )?;
     register_host_fn_async(
         linker,
         MODULE_NAME,
@@ -669,6 +687,14 @@ pub fn declare(defs: &mut PackageDeclaration) {
         ctor_key("#toJson"),
         vec![Param::new("object", Type::Unknown)],
         Type::String,
+    );
+    // Compiler-only helper: the value a static-dispatch binding reads as.
+    declare_method(
+        defs,
+        "#staticValue",
+        ctor_key("#staticValue"),
+        vec![Param::new("tag", Type::String)],
+        Type::Unknown,
     );
     declare_method(
         defs,

@@ -1,1 +1,4 @@
 types: 9 of 38 tsc entries compared, 0 differ
+
+errors:
+line 14: ours: a `class` must be declared at the top level of the module (tsc accepts)

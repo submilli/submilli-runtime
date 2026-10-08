@@ -775,7 +775,7 @@ fn each_escape_is_named_by_what_is_done() {
             "payload: unknown",
             "\"text\" in payload",
             "post(\"a\", `b${payload}`);",
-            "`payload` has `toString` called on it",
+            "`payload` is passed to `String`",
         ),
         (
             "input: Input",
