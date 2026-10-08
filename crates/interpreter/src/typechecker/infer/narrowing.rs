@@ -1230,12 +1230,15 @@ pub fn has_erased_member(ty: &Type) -> bool {
 }
 
 /// Every type is condition-compatible under JS truthiness except `unknown`
-/// (requires explicit narrowing first, spec §2.11) and the value-less
-/// `void`/`never`. `Error` is accepted to silence cascades.
+/// (requires explicit narrowing first, spec §2.11) and the value-less `void`.
+/// `never` counts, as in TypeScript: either no value reaches the test (a call
+/// that throws, a local after an exhausted `else if` chain), or the value is
+/// one a `never[]` an alias filled holds, which tests as it would anywhere.
+/// `Error` is accepted to silence cascades.
 pub fn condition_compatible(ty: &Type) -> bool {
     // `carries_void` rather than a bare `Void` match: a union with a `void`
     // member has no more of a runtime value than bare `void` does.
-    !ty.carries_void() && !matches!(ty.peel(), Type::Unknown | Type::Never)
+    !ty.carries_void() && !matches!(ty.peel(), Type::Unknown)
 }
 
 pub fn facts_for_target_type(target: &Type) -> TypeFacts {
@@ -1540,8 +1543,8 @@ mod tests {
         ] {
             assert!(condition_compatible(&ty), "{ty:?}");
         }
+        assert!(condition_compatible(&Type::Never));
         assert!(!condition_compatible(&Type::Void));
-        assert!(!condition_compatible(&Type::Never));
     }
 
     #[test]

@@ -570,7 +570,7 @@ impl Inferer<'_> {
             .try_expr(condition)
             .map_err(super::arena_failure)?
             .span;
-        self.check_condition_ty(typed_cond, &cond_ty, cond_span)?;
+        self.check_condition_ty(&cond_ty, cond_span);
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
         let entry_reachable = self.reachable;
         let then_possible = self.condition_can_be(typed_cond, true)?;
@@ -3239,7 +3239,7 @@ impl Inferer<'_> {
             .try_expr(condition)
             .map_err(super::arena_failure)?
             .span;
-        self.check_condition_ty(typed, &ty, cond_span)?;
+        self.check_condition_ty(&ty, cond_span);
         let writes = self
             .clause_write_scopes
             .pop()
@@ -3268,7 +3268,7 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         let (typed, ty) = self.infer_expr(condition, None)?;
-        self.check_condition_ty(typed, &ty, cond_span)?;
+        self.check_condition_ty(&ty, cond_span);
         let (_, false_env) = self.predicate_envs(typed)?;
         let mut exit = self.snapshot_active_narrowings(0).0;
         exit.extend_env(false_env);

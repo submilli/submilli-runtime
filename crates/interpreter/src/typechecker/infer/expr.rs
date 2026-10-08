@@ -364,6 +364,15 @@ fn chain_step_phrasing(part: &ChainPart) -> Result<ChainStepPhrasing, CompilerFa
     })
 }
 
+/// Whether `++`/`--` takes an operand of `ty`: a number or a bigint, or
+/// `never`, which tsc accepts as it does in arithmetic.
+fn takes_postfix(ty: &Type) -> bool {
+    matches!(
+        ty.primitive_behavior(),
+        Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Never | Type::Error
+    )
+}
+
 fn postfix_result_ty(operand_ty: &Type) -> Type {
     if matches!(operand_ty.peel(), Type::BigInt) {
         Type::BigInt
@@ -1437,7 +1446,7 @@ impl Inferer<'_> {
                                 .to_string(),
                         ],
                     );
-                } else if !self.is_condition_value(typed_lhs, &lhs_ty)? {
+                } else if !super::narrowing::condition_compatible(&lhs_ty) {
                     condition_error = true;
                     let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(lhs_span, &lhs_ty);
@@ -1450,9 +1459,7 @@ impl Inferer<'_> {
                 };
                 let (typed_rhs, rhs_ty) =
                     self.infer_conditional_operand(rhs, &rhs_env, expected, keeps_literal)?;
-                if matches!(rhs_ty.peel(), Type::Void | Type::Never)
-                    && !self.is_condition_value(typed_rhs, &rhs_ty)?
-                {
+                if matches!(rhs_ty.peel(), Type::Void) {
                     condition_error = true;
                     let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(rhs_span, &rhs_ty);
@@ -1564,7 +1571,7 @@ impl Inferer<'_> {
                                 .to_string(),
                         ],
                     );
-                } else if !self.is_condition_value(id, &operand_ty)? {
+                } else if !super::narrowing::condition_compatible(&operand_ty) {
                     let operand_span = self
                         .ast
                         .try_expr(operand)
@@ -8701,6 +8708,13 @@ impl Inferer<'_> {
         }
     }
 
+    /// Whether `++`/`--` may write its result back to a slot of `target`. A
+    /// `never` slot takes it, as in tsc: it holds no value unless an alias
+    /// filled a `never[]`, and then the result is the number it would be.
+    fn postfix_write_fits(&self, result: &Type, target: &Type) -> bool {
+        matches!(target.peel(), Type::Never) || assignable(result, target, self.resolver())
+    }
+
     fn infer_postfix_ident(
         &mut self,
         op: crate::PostfixOp,
@@ -8720,10 +8734,7 @@ impl Inferer<'_> {
             let operand_ty = self
                 .lookup_narrowed_view(&path)
                 .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
-            if !matches!(
-                operand_ty.primitive_behavior(),
-                Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
-            ) {
+            if !takes_postfix(&operand_ty) {
                 self.error(
                     target.span,
                     format!(
@@ -8739,7 +8750,7 @@ impl Inferer<'_> {
             let result_ty = postfix_result_ty(&operand_ty);
             // For non-error declared types that aren't assignable from
             // the result, mirror `infer_assign`'s rejection.
-            let fits = assignable(&result_ty, &entry.ty, self.resolver());
+            let fits = self.postfix_write_fits(&result_ty, &entry.ty);
             if !matches!(entry.ty, Type::Error) && !fits {
                 self.error(
                     span,
@@ -8953,18 +8964,14 @@ impl Inferer<'_> {
             );
             Type::Error
         };
-        if !matches!(
-            target_ty.primitive_behavior(),
-            Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
-        ) {
+        if !takes_postfix(&target_ty) {
             self.error(
                 name.span,
                 format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{target_ty}`",),
             );
         }
         let result_ty = postfix_result_ty(&target_ty);
-        if !matches!(target_ty, Type::Error) && !assignable(&result_ty, &target_ty, self.resolver())
-        {
+        if !matches!(target_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &target_ty) {
             self.error(
                 name.span,
                 format!("expected `{target_ty}`, got `{result_ty}`"),
@@ -9011,10 +9018,7 @@ impl Inferer<'_> {
         let operand_ty = self
             .lookup_narrowed_view(&path)
             .map_or_else(|| ty.clone(), |view| view.narrowed_ty.clone());
-        if !matches!(
-            operand_ty.primitive_behavior(),
-            Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
-        ) {
+        if !takes_postfix(&operand_ty) {
             self.error(
                     name.span,
                     format!(
@@ -9023,7 +9027,7 @@ impl Inferer<'_> {
                 );
         }
         let result_ty = postfix_result_ty(&operand_ty);
-        if !matches!(ty, Type::Error) && !assignable(&result_ty, &ty, self.resolver()) {
+        if !matches!(ty, Type::Error) && !self.postfix_write_fits(&result_ty, &ty) {
             self.error(span, format!("expected `{ty}`, got `{result_ty}`"));
         }
         self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone())?;
@@ -9118,17 +9122,14 @@ impl Inferer<'_> {
             elem_ty.clone()
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
-        if !matches!(
-            read_ty.primitive_behavior(),
-            Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
-        ) {
+        if !takes_postfix(&read_ty) {
             self.error(
                 span,
                 format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{read_ty}`",),
             );
         }
         let result_ty = postfix_result_ty(&read_ty);
-        if !matches!(elem_ty, Type::Error) && !assignable(&result_ty, &elem_ty, self.resolver()) {
+        if !matches!(elem_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &elem_ty) {
             self.error(span, format!("expected `{elem_ty}`, got `{result_ty}`"));
         }
         self.invalidate_index_write(typed_receiver, typed_index, span)?;
@@ -9163,7 +9164,7 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
         let cond_span = self.ast.try_expr(cond).map_err(super::arena_failure)?.span;
-        self.check_condition_ty(typed_cond, &cond_ty, cond_span)?;
+        self.check_condition_ty(&cond_ty, cond_span);
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
