@@ -386,11 +386,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                     (
-                        // lazy cursor over `T`. Each call
-                        // returns a fresh `Iterator<T>` that snapshots
-                        // the backing's bucket array at construction
-                        // time and walks lazily; intervening `s.add(...)`
-                        // doesn't affect the cursor. Makes `Set<T>`
+                        // A live cursor over `T`; makes `Set<T>`
                         // structurally satisfy `Iterable<T>`.
                         "iterator".to_string(),
                         MethodSig {
@@ -399,7 +395,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("T".to_string())]),
                             predicate: None,
                             doc: doc(
-                                "/** Returns a fresh `Iterator<T>` over the elements. Each call snapshots the bucket-array reference at iterator-creation time and walks lazily. */",
+                                "/** Returns a fresh `Iterator<T>` over the elements in insertion order. It walks the set live: elements added later are visited, elements deleted first are skipped. */",
                             ),
                         },
                     ),
@@ -463,7 +459,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Void,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Calls `callback(value, value, set)` once for each element in insertion order.\n * @param callback Function called once per element, which JS passes as both value and key.\n */",
+                                "/**\n * Calls `callback(value, value, set)` once for each element in insertion order, including elements the callback adds.\n * @param callback Function called once per element, which JS passes as both value and key.\n */",
                             ),
                         },
                     ),
@@ -618,7 +614,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 )]),
                 dispatch: Dispatch::Direct,
                 doc: doc(
-                    "/** A hash-backed unique-value collection. Elements are compared by structural equality through each element's `equals` method; lookup buckets via `hash`. Insertion-order iteration is not guaranteed in v1. */",
+                    "/** A hash-backed unique-value collection. Elements are compared by structural equality through each element's `equals` method; lookup buckets via `hash`. Iteration follows insertion order. */",
                 ),
             },
         },

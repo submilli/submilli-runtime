@@ -336,7 +336,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("K".to_string())]),
                             predicate: None,
                             doc: doc(
-                                "/** Returns a lazy `Iterator<K>` over the keys in insertion order (snapshots the buckets at creation). */",
+                                "/** Returns a lazy `Iterator<K>` over the keys in insertion order. It walks the map live: keys added later are visited, keys deleted first are skipped. */",
                             ),
                         },
                     ),
@@ -348,7 +348,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("V".to_string())]),
                             predicate: None,
                             doc: doc(
-                                "/** Returns a lazy `Iterator<V>` over the values in insertion order (snapshots the buckets at creation). */",
+                                "/** Returns a lazy `Iterator<V>` over the values in insertion order. It walks the map live: entries added later are visited, entries deleted first are skipped. */",
                             ),
                         },
                     ),
@@ -393,20 +393,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Void,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Calls `callback(value, key, map)` once for each entry in insertion order.\n * @param callback Function called once per entry — value first, key second, matching JS.\n */",
+                                "/**\n * Calls `callback(value, key, map)` once for each entry in insertion order, including entries the callback adds.\n * @param callback Function called once per entry — value first, key second, matching JS.\n */",
                             ),
                         },
                     ),
                     (
-                        // lazy cursor over `[K, V]` pairs.
-                        // Each call returns a fresh `Iterator<[K, V]>`
-                        // that snapshots the backing's bucket-array
-                        // references at construction time and walks
-                        // them lazily; subsequent `m.set(...)` doesn't
-                        // affect the cursor (snapshot semantics).
-                        // This is what makes `Map<K, V>` structurally
-                        // satisfy `Iterable<[K, V]>` (follows
-                        // up to remove the phase-6 stopgap).
+                        // A live cursor over `[K, V]` pairs; this is what
+                        // makes `Map<K, V>` structurally satisfy
+                        // `Iterable<[K, V]>`.
                         "iterator".to_string(),
                         MethodSig {
                             generics: Vec::new(),
@@ -417,7 +411,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 ])]),
                             predicate: None,
                             doc: doc(
-                                "/** Returns a fresh `Iterator<[K, V]>` over the entries. Each call snapshots the bucket-array references at iterator-creation time and walks them lazily; intervening `m.set(...)` doesn't affect the cursor. */",
+                                "/** Returns a fresh `Iterator<[K, V]>` over the entries in insertion order. It walks the map live: entries added later are visited, entries deleted first are skipped. */",
                             ),
                         },
                     ),
@@ -444,7 +438,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 )]),
                 dispatch: Dispatch::Direct,
                 doc: doc(
-                    "/** A hash-backed key-value collection. Keys are compared by structural equality through each key's `equals` method; lookup buckets via `hash`. Insertion-order iteration is not guaranteed in v1. */",
+                    "/** A hash-backed key-value collection. Keys are compared by structural equality through each key's `equals` method; lookup buckets via `hash`. Iteration follows insertion order. */",
                 ),
             },
         },

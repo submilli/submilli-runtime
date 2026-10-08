@@ -251,11 +251,17 @@ function collections(): void {
   }
   let clearedSum = 0;
   cleared.forEach((value: Box) => {
-    cleared.clear();
-    churn();
     clearedSum += value.v;
+    if (value.v === 1) {
+      cleared.clear();
+      churn();
+      for (let i = 0; i < 8; i++) {
+        cleared.set(i, new Box(10 + i));
+      }
+    }
+    churn();
   });
-  assert(clearedSum === 36, "Map forEach keeps the entries its callback cleared");
+  assert(clearedSum === 109, "Map forEach follows a clear its callback makes");
 
   const emptied = new Set<Box>();
   for (let i = 0; i < 8; i++) {
@@ -263,11 +269,17 @@ function collections(): void {
   }
   let emptiedSum = 0;
   emptied.forEach((value: Box) => {
-    emptied.clear();
-    churn();
     emptiedSum += value.v;
+    if (value.v === 1) {
+      emptied.clear();
+      churn();
+      for (let i = 0; i < 8; i++) {
+        emptied.add(new Box(10 + i));
+      }
+    }
+    churn();
   });
-  assert(emptiedSum === 36, "Set forEach keeps the elements its callback cleared");
+  assert(emptiedSum === 109, "Set forEach follows a clear its callback makes");
 }
 
 function getters(): void {

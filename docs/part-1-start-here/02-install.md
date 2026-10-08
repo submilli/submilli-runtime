@@ -57,7 +57,7 @@ submilli builtins Map
 
 ```text
 /**
- * A hash-backed key-value collection. Keys are compared by structural equality through each key's `equals` method; lookup buckets via `hash`. Insertion-order iteration is not guaranteed in v1.
+ * A hash-backed key-value collection. Keys are compared by structural equality through each key's `equals` method; lookup buckets via `hash`. Iteration follows insertion order.
  */
 interface Map<K, V> {
   /**

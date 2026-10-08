@@ -42,10 +42,12 @@ use crate::runtime::prelude::collection::{
 };
 use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
 use crate::runtime::prelude::iterator::{
-    IterKind, IteratorSource, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
-    shared_next,
+    IterKind, IteratorSource, build_iterator, iter_done, iter_yield, next_closure_type, shared_next,
 };
-use crate::runtime::prelude::keep::{KeptValue, keep_all};
+use crate::runtime::prelude::keep::KeptValue;
+use crate::runtime::prelude::ledger::{
+    LedgerCursor, LedgerFields, forward_cleared, forward_rehashed,
+};
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
 
 /// The map's initial bucket capacity (must stay a power of two for the
@@ -444,6 +446,9 @@ pub(super) fn size(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::
 
 pub(super) fn clear(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<()> {
     let b = backing(caller, recv)?;
+    let old_keys = field_array(caller, &b, F_KEYS)?;
+    let old_order = field_array(caller, &b, F_ORDER)?;
+    let old_order_len = field_i32(caller, &b, F_ORDER_LEN)?;
     let keys = new_raw_array(caller, INITIAL_CAPACITY)?;
     let values = new_raw_array(caller, INITIAL_CAPACITY)?;
     let order = new_index_array(caller, INITIAL_CAPACITY)?;
@@ -468,7 +473,7 @@ pub(super) fn clear(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime:
         F_ORDER_POSITIONS,
         Val::AnyRef(Some(positions.to_anyref())),
     )?;
-    Ok(())
+    forward_cleared(caller, &old_keys, &old_order, old_order_len, &keys, &order)
 }
 
 /// Rehash live entries into fresh arrays at the requested capacity, rebuilding the
@@ -556,70 +561,66 @@ fn rehash(
         F_ORDER_POSITIONS,
         Val::AnyRef(Some(new_positions.to_anyref())),
     )?;
-    Ok(())
+    forward_rehashed(caller, &old_keys, &new_keys, &new_order)
 }
 
 // ---------------------------------------------------------------------------
 // forEach + iteration
 // ---------------------------------------------------------------------------
 
-/// `Map#forEach(self, callback)` — walks the insertion-order ledger (skipping
-/// `-1` holes) and calls `callback(value, key)` for each live entry. The backing
-/// arrays are captured once, matching the Wasm body's local-capture semantics if
-/// the callback mutates the map mid-iteration.
+/// Where the ledger walk finds a map's keys, ledger and ledger length.
+const LEDGER: LedgerFields = LedgerFields {
+    entries: F_KEYS,
+    order: F_ORDER,
+    order_len: F_ORDER_LEN,
+};
+
+/// `Map#forEach(self, callback)` — calls `callback(value, key, map)` for each
+/// entry in insertion order. Like an iterator it walks the map live, so it
+/// visits entries the callback adds and skips ones it deletes.
 pub(super) async fn for_each(
     caller: &mut Caller<'_, StoreData>,
     recv: &Val,
     f: &Closure,
 ) -> wasmtime::Result<()> {
     let b = backing(caller, recv)?;
-    let keys = field_array(caller, &b, F_KEYS)?;
-    let values = field_array(caller, &b, F_VALUES)?;
-    let order = field_array(caller, &b, F_ORDER)?;
-    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
-    // A callback that clears or grows the map swaps these arrays out of it.
-    keep_all(
-        caller,
-        &[keys, values, order].map(|array| Val::AnyRef(Some(array.to_anyref()))),
-    )?;
-    for o in 0..order_len {
-        let Val::I32(idx) = order.get(&mut *caller, o as u32)? else {
-            continue;
+    // Kept in a host-allocated struct: a callback that grows or clears the map
+    // leaves the cursor's arrays reachable from nothing else.
+    let stored = LedgerCursor::start(caller, b, LEDGER)?.to_val(caller)?;
+    loop {
+        let mut cursor = LedgerCursor::from_val(caller, &stored)?;
+        let Some(bucket) = cursor.next_bucket(caller, LEDGER)? else {
+            return Ok(());
         };
-        if idx == -1 {
-            continue;
-        }
-        let value = values.get(&mut *caller, idx as u32)?;
-        let key = keys.get(&mut *caller, idx as u32)?;
-        let key = decode_key(caller, key)?;
+        cursor.store(caller, &stored)?;
+        let (key, value) = map_entry(caller, &cursor, bucket)?;
         f.call_dynamic(caller, &[value, key, *recv]).await?;
     }
-    Ok(())
 }
 
-/// Build a `keys`/`values`/`entries` iterator. Matching the Wasm cursor (and JS
-/// `Map` iterator semantics), it captures the backing's `keys`/`values`/`order`
-/// array *references* plus the `order_len` at construction time, then reads them
-/// **live** each step: a `delete` of an unvisited entry is observed (its ledger
-/// slot is `-1`, so the step skips it), while entries appended afterward — or a
-/// resize that swaps in fresh arrays — are invisible (the captured `order_len`
-/// bounds the walk and the captured refs outlive the swap). Pinned by
-/// `iterator_snapshot.subm` (adds invisible) and the conformance
-/// `Map/prototype/delete/does-not-break-iterators` case (deletes observed).
-///
-/// The shared `make_index_iterator` adapter can't express "skip a hole", so map
-/// iteration carries its own cursor and `next` step.
+/// The key and value in `bucket` of the map's current arrays.
+fn map_entry(
+    caller: &mut Caller<'_, StoreData>,
+    cursor: &LedgerCursor,
+    bucket: u32,
+) -> wasmtime::Result<(Val, Val)> {
+    let keys = cursor.current_array(caller, F_KEYS)?;
+    let values = cursor.current_array(caller, F_VALUES)?;
+    let key = keys.get(&mut *caller, bucket)?;
+    let key = decode_key(caller, key)?;
+    let value = values.get(&mut *caller, bucket)?;
+    Ok((key, value))
+}
+
+/// Build a `keys`/`values`/`entries` iterator over the map's ledger. It walks
+/// the map live, as a JavaScript `Map` iterator does: see [`LedgerCursor`].
 fn make_map_iterator(
     caller: &mut Caller<'_, StoreData>,
     recv: &Val,
     kind: IterKind,
 ) -> wasmtime::Result<Val> {
     let b = backing(caller, recv)?;
-    let keys = field_array(caller, &b, F_KEYS)?;
-    let values = field_array(caller, &b, F_VALUES)?;
-    let order = field_array(caller, &b, F_ORDER)?;
-    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
-    let cursor = make_map_cursor(caller, &keys, &values, &order, order_len)?;
+    let cursor = LedgerCursor::start(caller, b, LEDGER)?.to_val(caller)?;
 
     let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
@@ -633,117 +634,33 @@ fn make_map_iterator(
     build_iterator(caller, next_struct, next, cursor)
 }
 
-/// `(struct (mut i32 pos) (ref null any) (ref null any) (ref null any) (i32 order_len))`
-/// — the host-private map cursor: position, captured keys/values/order arrays,
-/// and the captured ledger length. Host-only, so its shape matches no codegen type.
-fn make_map_cursor(
-    caller: &mut Caller<'_, StoreData>,
-    keys: &Rooted<ArrayRef>,
-    values: &Rooted<ArrayRef>,
-    order: &Rooted<ArrayRef>,
-    order_len: i32,
-) -> wasmtime::Result<Val> {
-    let imm = Mutability::Const;
-    let cursor_ty = singleton_struct(
-        caller.engine(),
-        Finality::Final,
-        None,
-        vec![
-            FieldType::new(Mutability::Var, StorageType::ValType(ValType::I32)),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(true, HeapType::Any))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(true, HeapType::Any))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(true, HeapType::Any))),
-            ),
-            FieldType::new(imm, StorageType::ValType(ValType::I32)),
-        ],
-    )?;
-    let pre = StructRefPre::new(&mut *caller, cursor_ty);
-    let st = StructRef::new(
-        &mut *caller,
-        &pre,
-        &[
-            Val::I32(0),
-            Val::AnyRef(Some(keys.to_anyref())),
-            Val::AnyRef(Some(values.to_anyref())),
-            Val::AnyRef(Some(order.to_anyref())),
-            Val::I32(order_len),
-        ],
-    )?;
-    Ok(Val::AnyRef(Some(st.to_anyref())))
-}
-
-/// One `next()` step: walk the captured ledger from the cursor position, skip
-/// `-1` (deleted) slots, and yield the projected entry at the first live slot —
-/// or `{ done: true }` past `order_len`.
+/// One `next()` step: yield the projected entry at the cursor's next live
+/// ledger slot, or `{ done: true }`.
 fn map_next_step(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
     kind: IterKind,
 ) -> wasmtime::Result<()> {
-    let cursor = as_struct(caller, abi_arg(params, 0)?, "map iterator env")?;
-    let Val::I32(mut pos) = cursor.field(&mut *caller, 0)? else {
-        return Err(wasmtime::Error::msg("map iterator: position is not an i32"));
+    let stored = abi_arg(params, 0)?;
+    let mut cursor = LedgerCursor::from_val(caller, stored)?;
+    let bucket = cursor.next_bucket(caller, LEDGER)?;
+    cursor.store(caller, stored)?;
+    let Some(bucket) = bucket else {
+        *abi_result(results, 0)? = iter_done(caller)?;
+        return Ok(());
     };
-    let keys = cursor_array(caller, &cursor, 1)?;
-    let values = cursor_array(caller, &cursor, 2)?;
-    let order = cursor_array(caller, &cursor, 3)?;
-    let Val::I32(order_len) = cursor.field(&mut *caller, 4)? else {
-        return Err(wasmtime::Error::msg(
-            "map iterator: order_len is not an i32",
-        ));
+    let (key, value) = map_entry(caller, &cursor, bucket)?;
+    let yielded = match kind {
+        IterKind::Keys => key,
+        IterKind::Values => value,
+        IterKind::Entries => {
+            let pair = write_submilli_array_struct(caller, &[key, value])?;
+            Val::AnyRef(Some(pair.to_anyref()))
+        }
     };
-    loop {
-        if pos >= order_len {
-            cursor.set_field(&mut *caller, 0, Val::I32(pos))?;
-            *abi_result(results, 0)? = iter_done(caller)?;
-            return Ok(());
-        }
-        let Val::I32(probe) = order.get(&mut *caller, pos as u32)? else {
-            return Err(wasmtime::Error::msg(
-                "map iterator: ledger slot is not an i32",
-            ));
-        };
-        pos += 1;
-        if probe != -1 {
-            let key = keys.get(&mut *caller, probe as u32)?;
-            let key = decode_key(caller, key)?;
-            let value = values.get(&mut *caller, probe as u32)?;
-            let yielded = match kind {
-                IterKind::Keys => key,
-                IterKind::Values => value,
-                IterKind::Entries => {
-                    let pair = write_submilli_array_struct(caller, &[key, value])?;
-                    Val::AnyRef(Some(pair.to_anyref()))
-                }
-            };
-            cursor.set_field(&mut *caller, 0, Val::I32(pos))?;
-            *abi_result(results, 0)? = iter_yield(caller, yielded)?;
-            return Ok(());
-        }
-    }
-}
-
-/// Read a captured `(ref any)` cursor field back as its array.
-fn cursor_array(
-    caller: &mut Caller<'_, StoreData>,
-    cursor: &Rooted<StructRef>,
-    idx: usize,
-) -> wasmtime::Result<Rooted<ArrayRef>> {
-    match cursor.field(&mut *caller, idx)? {
-        Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller),
-        other => Err(wasmtime::Error::msg(format!(
-            "map iterator: cursor field {idx} is not an array {other:?}"
-        ))),
-    }
+    *abi_result(results, 0)? = iter_yield(caller, yielded)?;
+    Ok(())
 }
 
 pub(super) fn keys(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<Val> {

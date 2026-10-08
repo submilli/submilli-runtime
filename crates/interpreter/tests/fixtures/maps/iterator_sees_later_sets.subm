@@ -1,5 +1,5 @@
-// Map#iterator captures a snapshot: a resize after iterator() does not affect the
-// cursor — it still walks the pre-resize entries only.
+// Map#iterator walks the map live, as in JavaScript: an entry set after
+// iterator() is visited, even when the set resizes the map.
 
 function main(): void {
   const m = new Map<string, number>();
@@ -20,6 +20,6 @@ function main(): void {
     if (r.done) { break; }
     visits = visits + 1;
   }
-  assert(visits === 6, "cursor walks the snapshot, not post-resize entries");
+  assert(visits === 7, "cursor visits the entry set after iterator()");
   assert(m.size === 7, "map sees all inserts including post-iterator()");
 }

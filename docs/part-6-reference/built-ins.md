@@ -292,13 +292,13 @@ A hash-backed key-value collection.
 | `clear(): void` | Removes every entry. |
 | `delete(key: K): boolean` | Removes `key` from the map. |
 | `entries(): Iterator<[K, V]>` | Returns a lazy `Iterator<[K, V]>` over the entries — the same cursor `for-of` uses. |
-| `forEach(callback: (arg0: V, arg1: K, arg2: Map<K, V>) => void): void` | Calls `callback(value, key, map)` once for each entry in insertion order. |
+| `forEach(callback: (arg0: V, arg1: K, arg2: Map<K, V>) => void): void` | Calls `callback(value, key, map)` once for each entry in insertion order, including entries the callback adds. |
 | `get(key: K): V \| null` | Returns the value associated with `key`, or `null` if the key is not present. |
 | `has(key: K): boolean` | Returns `true` when `key` is present. |
 | `iterator(): Iterator<[K, V]>` | Returns a fresh `Iterator<[K, V]>` over the entries. |
-| `keys(): Iterator<K>` | Returns a lazy `Iterator<K>` over the keys in insertion order (snapshots the buckets at creation). |
+| `keys(): Iterator<K>` | Returns a lazy `Iterator<K>` over the keys in insertion order. It walks the map live: keys added later are visited, keys deleted first are skipped. |
 | `set(key: K, value: V): Map<K, V>` | Associates `value` with `key`, overwriting any prior value. |
-| `values(): Iterator<V>` | Returns a lazy `Iterator<V>` over the values in insertion order (snapshots the buckets at creation). |
+| `values(): Iterator<V>` | Returns a lazy `Iterator<V>` over the values in insertion order. It walks the map live: entries added later are visited, entries deleted first are skipped. |
 
 | Constant | Description |
 | --- | --- |
@@ -447,7 +447,7 @@ A hash-backed unique-value collection.
 | `delete(value: T): boolean` | Removes `value` from the set. |
 | `difference(other: Set<T>): Set<T>` | Returns a new set with this set's elements that are not in `other`. |
 | `entries(): Iterator<[T, T]>` | Returns a lazy `Iterator<[T, T]>` of `[value, value]` pairs (the element repeats, mirroring `Map#entries`). |
-| `forEach(callback: (arg0: T, arg1: T, arg2: Set<T>) => void): void` | Calls `callback(value, value, set)` once for each element in insertion order. |
+| `forEach(callback: (arg0: T, arg1: T, arg2: Set<T>) => void): void` | Calls `callback(value, value, set)` once for each element in insertion order, including elements the callback adds. |
 | `has(value: T): boolean` | Returns `true` when `value` is present. |
 | `intersection(other: Set<T>): Set<T>` | Returns a new set with the elements present in both this set and `other`. |
 | `isDisjointFrom(other: Set<T>): boolean` | Returns `true` when this set and `other` share no elements. |
