@@ -3,6 +3,7 @@
 mod auth_proxy;
 mod diag;
 pub mod diff;
+mod edit;
 mod embedding;
 mod endpoint;
 mod filter;
@@ -29,6 +30,7 @@ pub use auth_proxy::{
     resolve_injections, secret_refs, verify_secrets,
 };
 pub use diag::{Fault, PathSeg, YamlPath};
+pub use edit::{Draft, DraftCall, DraftError, draft_allow};
 pub use embedding::{
     EmbeddingConfig, EmbeddingModelDecl, EmbeddingProviderDecl, EmbeddingProviderType,
     limits as embedding_limits,
