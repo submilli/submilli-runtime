@@ -1,4 +1,4 @@
-types: 101 of 220 tsc entries compared, 47 differ
+types: 101 of 220 tsc entries compared, 53 differ
 
 line 6: a1
   tsc:  { a: number; b?: undefined; c?: undefined; } | { a: number; b: string; c?: undefined; } | { a: number; b: string; c: boolean; }
@@ -120,9 +120,25 @@ line 33: !true
   tsc:  false
   ours: boolean
 
+line 34: c3
+  tsc:  { a: number; b: number; } | { a?: undefined; b?: undefined; }
+  ours: { a: number; b: number } | { a?: never; b?: never }
+
+line 34: !true ? { a: 0, b: 0 } : {}
+  tsc:  { a: number; b: number; } | {}
+  ours: { a: number; b: number } | { a?: never; b?: never }
+
 line 34: !true
   tsc:  false
   ours: boolean
+
+line 35: c4
+  tsc:  { a?: undefined; b?: undefined; } | { a: number; b: number; }
+  ours: { a: number; b: number } | { a?: never; b?: never }
+
+line 35: !true ? {} : { a: 0, b: 0 }
+  tsc:  {} | { a: number; b: number; }
+  ours: { a: number; b: number } | { a?: never; b?: never }
 
 line 35: !true
   tsc:  false
@@ -139,6 +155,14 @@ line 38: [{ kind: 'a', pos: { x: 0, y: 0 } }, { kind: 'b', pos: !true ? { a: "x"
 line 38: [{ kind: 'a', pos: { x: 0, y: 0 } }, { kind: 'b', pos: !true ? { a: "x" } : { b: 0 } }]
   tsc:  ({ kind: string; pos: { x: number; y: number; }; } | { kind: string; pos: { a: string; } | { b: number; }; })[]
   ours: ({ kind: string; pos: { a?: never; b?: never; x: number; y: number } } | { kind: string; pos: { a: string; b?: never; x?: never; y?: never } | { a?: never; b: number; x?: never; y?: never } })[]
+
+line 38: { kind: 'b', pos: !true ? { a: "x" } : { b: 0 } }
+  tsc:  { kind: string; pos: { a: string; } | { b: number; }; }
+  ours: { kind: string; pos: { a: string; b?: never } | { a?: never; b: number } }
+
+line 38: !true ? { a: "x" } : { b: 0 }
+  tsc:  { a: string; } | { b: number; }
+  ours: { a: string; b?: never } | { a?: never; b: number }
 
 line 38: !true
   tsc:  false

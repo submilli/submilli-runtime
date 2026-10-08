@@ -1,4 +1,4 @@
-types: 16 of 26 tsc entries compared, 8 differ
+types: 16 of 26 tsc entries compared, 4 differ
 
 line 12: [1]
   tsc:  [number]
@@ -13,21 +13,5 @@ line 14: [""]
   ours: [string | null]
 
 line 15: y
-  tsc:  string
-  ours: string | null
-
-line 21: [1]
-  tsc:  number[]
-  ours: (number | string)[]
-
-line 22: x
-  tsc:  number
-  ours: number | string
-
-line 23: [""]
-  tsc:  string[]
-  ours: (string | null)[]
-
-line 24: y
   tsc:  string
   ours: string | null
