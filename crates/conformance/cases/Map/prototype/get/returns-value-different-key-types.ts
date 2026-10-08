@@ -1,5 +1,4 @@
 // test262: test/built-ins/Map/prototype/get/returns-value-different-key-types.js
-// expect-fail: NaN keys are unfindable — key equality runs through the equals vtable, which uses IEEE === for numbers, not SameValueZero; get(NaN) returns null (and the trailing null key would trap)
 // Adapted: Symbol and undefined keys dropped by design; the single map carries
 // a union key type.
 

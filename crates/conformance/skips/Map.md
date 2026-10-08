@@ -25,14 +25,13 @@ SameValueZero reference identity. Counter-vector for the keying divergence:
 
 | Case | Gap |
 |:--|:--|
-| `cases/Map/prototype/get/returns-value-different-key-types.ts` | NaN keys are unfindable: key equality runs through the `equals` vtable, which uses IEEE `===` for numbers, not SameValueZero — `get(NaN)` misses, and repeated `set(NaN, …)` appends duplicate entries. |
 | `cases/Map/prototype/set/append-new-values.ts` | `null` keys trap at runtime (equals/hash vtable dispatch on a null ref); the standard appends a null-keyed entry. |
 
-Found while porting, but not pinned by any portable vector: a `-0` key is
-stored with its sign (JS normalizes to `+0` on insert). `+0`/`-0` *equality*
-works — has/get/set/delete treat them as one key — so only iteration over
-`keys()` plus `Object.is` can observe it, and the test262 vectors that do
-(`Set/prototype/*/converts-negative-zero.js`) all require set-like arguments.
+Keys compare by SameValueZero, as in the standard: `NaN` is one key, and a
+`-0` key is stored as `+0`. The interpreter fixture
+`collection_keys_same_value_zero.ts` pins the `-0` normalization, which the
+test262 vectors (`Set/prototype/*/converts-negative-zero.js`) only reach through
+set-like arguments.
 
 ## Not ported (portable in principle, below the curation bar)
 
@@ -41,7 +40,7 @@ works — has/get/set/delete treat them as one key — so only iteration over
 | `map-no-iterable.js`, `map.js` | `new Map()` size-0 behavior covered by the ported size cases. |
 | `groupBy/**` | `Map.groupBy` deferred (docs/ecma-262-gaps.md §24). |
 | `prototype/get/getOrInsert/**`, `getOrInsertComputed/**` | Methods don't exist yet (upstream proposal); not in spec.md §2.7. |
-| `prototype/has/return-true-different-key-types.js` | NaN-positive portion duplicates the `get/returns-value-different-key-types.ts` gap; the rest duplicates the ported has cases. |
+| `prototype/has/return-true-different-key-types.js` | NaN-positive portion duplicates the ported `get/returns-value-different-key-types.ts`; the rest duplicates the ported has cases. |
 | `prototype/set/append-new-values-return-map.js`, `replaces-a-value-returns-map.js` | `set` returns the receiver — reference-identity asserts don't port; chainability is covered by the adapted `Set/prototype/add/returns-this.ts`. |
 | `prototype/set/append-new-values-normalizes-zero-key.js` | Same get-after-±0-set mechanism as the ported `get/returns-value-normalized-zero-key.ts`. |
 | `prototype/size/returns-count-of-present-values-by-insertion.js`, `by-iterable.js` | Keys are `0, undefined, false, NaN, null, '', Symbol()` — the undefined/Symbol keys are rejected by design and the null-key portion is the gap already pinned by `set/append-new-values.ts`. |

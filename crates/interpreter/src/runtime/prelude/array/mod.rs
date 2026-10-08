@@ -26,6 +26,7 @@ use crate::runtime::array_storage::ArrayStorage;
 use crate::runtime::host::{host_boxed_number_vtable, write_submilli_array_struct};
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::closure::Closure;
+use crate::runtime::prelude::collection::both_nan;
 use crate::runtime::prelude::iterator::{IterKind, make_index_iterator};
 use crate::runtime::prelude::keep::{KeptValue, KeptValues, keep_all};
 use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
@@ -291,7 +292,8 @@ async fn includes(
     let mut i = fwd_from(from, len);
     while i < len {
         let e = elements[i as usize];
-        if element_matches(caller, e, target).await? {
+        // SameValueZero, unlike `indexOf`'s `===`: `NaN` finds `NaN`.
+        if element_matches(caller, e, target).await? || both_nan(caller, &e, &target)? {
             return Ok(true);
         }
         i += 1;

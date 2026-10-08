@@ -1590,8 +1590,15 @@ fn boxed_boolean_equals(
 
 /// Mix exponent and mantissa into the low bits used by power-of-two tables.
 fn boxed_number_hash(n: f64) -> u32 {
-    // Equality treats signed zeros alike, so their hashes must agree.
-    let bits = if n == 0.0 { 0 } else { n.to_bits() };
+    // Signed zeros are equal, and collections treat every NaN as one key, so
+    // each group must hash alike.
+    let bits = if n == 0.0 {
+        0
+    } else if n.is_nan() {
+        f64::NAN.to_bits()
+    } else {
+        n.to_bits()
+    };
     mix_hash_bits(bits)
 }
 

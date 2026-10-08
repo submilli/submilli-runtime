@@ -28,15 +28,13 @@ set-algebra methods take `Set` arguments only — no set-like
 
 | Case | Gap |
 |:--|:--|
-| `cases/Set/prototype/has/returns-true-when-value-present-nan.ts` | NaN elements are unfindable: equality runs through the `equals` vtable, which uses IEEE `===` for numbers, not SameValueZero — `has(NaN)` is false after `add(NaN)`, and repeated adds duplicate the element. |
 | `cases/Set/prototype/has/returns-true-when-value-present-null.ts` | `null` elements trap at runtime (equals/hash vtable dispatch on a null ref); the standard stores and finds null. |
 | `cases/Set/prototype/intersection/result-order.ts` | When `this.size > other.size`, the intersection result is ordered as in the receiver; the standard orders it as in the argument (the smaller side drives iteration). |
 
-Found while porting, but not pinned by any portable vector: `add(-0)` stores
-the element with its sign (JS normalizes to `+0`). `+0`/`-0` *equality* works
-(dedupe and delete behave per SameValueZero), so only iteration plus
-`Object.is` observes it — and the test262 vectors that do require set-like
-arguments.
+Elements compare by SameValueZero, as in the standard: `NaN` is one element,
+and `add(-0)` stores `+0`. The interpreter fixture
+`collection_keys_same_value_zero.ts` pins the `-0` normalization, which the
+test262 vectors only reach through set-like arguments.
 
 ## Not ported (portable in principle, below the curation bar)
 

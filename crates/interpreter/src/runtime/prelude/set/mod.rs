@@ -33,7 +33,7 @@ use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submill
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
 use crate::runtime::prelude::closure::{self, Closure};
 use crate::runtime::prelude::collection::{
-    decode_key, encode_key, is_null_key, probe_capacity, rehash_capacity,
+    both_nan, decode_key, encode_key, is_null_key, probe_capacity, rehash_capacity,
 };
 use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
 use crate::runtime::prelude::iterator::{
@@ -185,6 +185,9 @@ async fn equals(
     let right_null = is_null_key(caller, slot)?;
     if left_null || right_null {
         return Ok(left_null && right_null);
+    }
+    if both_nan(caller, elem, slot)? {
+        return Ok(true);
     }
     match dispatch_vtable_slot(caller, elem, 2, &[*slot]).await? {
         Val::I32(b) => Ok(b != 0),
