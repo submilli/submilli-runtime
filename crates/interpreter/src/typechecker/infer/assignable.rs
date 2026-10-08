@@ -985,6 +985,9 @@ fn assignable_rec(
                     return false;
                 }
             }
+            if e_index.is_none() && weak_type_rejects(a_fields, e_fields) {
+                return false;
+            }
             // `{a: T|null}` into `{a?: T}` is still rejected — `assignable(T|null, T)` fails.
             e_fields.iter().all(|(k, e_field)| match a_fields.get(k) {
                 Some(a_field) => {
@@ -1307,11 +1310,12 @@ fn type_nesting_depth(ty: &Type) -> usize {
     }
 }
 
-/// TS weak-type rule: an all-optional target is vacuously satisfied by the
-/// member loops below, which would let `number` satisfy `{ years?: number }`
+/// TS weak-type rule: an all-optional target is vacuously satisfied by
+/// member-by-member checks, which would let `number` satisfy `{ years?: number }`
 /// through its `Number` interface form (and codegen would then put an f64 in
-/// a ref slot — invalid Wasm). Require at least one member in common. An
-/// empty actual form stays assignable, mirroring TS's `{}`-source exemption.
+/// a ref slot — invalid Wasm), or let `{ p: number }` stand for `{ q?: string }`
+/// while it holds a `q` of another type. Require at least one member in common.
+/// An empty actual form stays assignable, mirroring TS's `{}`-source exemption.
 fn weak_type_rejects(
     actual_form: &BTreeMap<String, ObjectField>,
     expected_form: &BTreeMap<String, ObjectField>,

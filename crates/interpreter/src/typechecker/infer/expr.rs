@@ -4829,9 +4829,10 @@ impl Inferer<'_> {
         &mut self,
         union_members: &[Type],
         literal: &[crate::ObjectLiteralMember],
-    ) -> Result<(), CompilerFailure> {
+    ) -> Result<BTreeSet<String>, CompilerFailure> {
+        let mut unknown = BTreeSet::new();
         let Some(shapes) = self.union_object_shapes(union_members) else {
-            return Ok(());
+            return Ok(unknown);
         };
         let has_spread = literal
             .iter()
@@ -4848,7 +4849,7 @@ impl Inferer<'_> {
             shapes.iter().collect()
         } else {
             let Some(candidates) = self.rule_out_by_tags(&shapes, &literal_fields)? else {
-                return Ok(());
+                return Ok(unknown);
             };
             candidates
         };
@@ -4862,15 +4863,18 @@ impl Inferer<'_> {
         for field in literal_fields {
             if !known.contains_key(&field.name.name) {
                 self.report_unknown_field(field, &known);
+                unknown.insert(field.name.name.clone());
             }
         }
-        Ok(())
+        Ok(unknown)
     }
 
     /// Rejects a literal that tsc's unknown-field check skips but its weak-type
     /// check doesn't (TS2559): one whose fields, spreads included, are all
     /// absent from a target member whose fields are all optional, when no other
-    /// member of the target accepts it. Width subtyping alone would accept it.
+    /// member of the target accepts it. Returns whether it reported one. The
+    /// literal may take the target's type as a hint, which `assignable`'s own
+    /// weak-type rule would then never see.
     fn report_no_field_in_common(
         &mut self,
         expected: Option<&Type>,
@@ -4879,12 +4883,12 @@ impl Inferer<'_> {
             (crate::ObjectField, crate::TypedObjectFieldSource),
         >,
         span: Span,
-    ) {
+    ) -> bool {
         let Some(expected) = expected else {
-            return;
+            return false;
         };
         if literal_fields.is_empty() {
-            return;
+            return false;
         }
         let literal_ty = Type::Object {
             index: None,
@@ -4905,15 +4909,17 @@ impl Inferer<'_> {
             if is_disjoint_weak {
                 disjoint_weak.get_or_insert(target);
             } else if assignable(&literal_ty, target, self.resolver()) {
-                return;
+                return false;
             }
         }
-        if let Some(weak) = disjoint_weak {
-            self.error(
-                span,
-                format!("object literal has no fields in common with `{weak}`, whose fields are all optional"),
-            );
-        }
+        let Some(weak) = disjoint_weak else {
+            return false;
+        };
+        self.error(
+            span,
+            format!("object literal has no fields in common with `{weak}`, whose fields are all optional"),
+        );
+        true
     }
 
     /// The fields of an object type whose fields are all optional, if `ty` is one.
@@ -5201,8 +5207,11 @@ impl Inferer<'_> {
         let checks_unknown_fields = !self.is_inference_source(literal);
         // Still the union only when no member was picked above, so this check
         // and the single-shape one below never both run.
+        // The fields reported as unknown, which the literal's type leaves out
+        // so the slot it fills doesn't report it again.
+        let mut unknown_fields = BTreeSet::new();
         if checks_unknown_fields && let Some(Type::Union(union_members)) = peeled {
-            self.report_unknown_union_fields(union_members, &members)?;
+            unknown_fields = self.report_unknown_union_fields(union_members, &members)?;
         }
         let interface_target: Option<(crate::Package, String, crate::MangledName, Vec<Type>)> =
             match peeled {
@@ -5233,6 +5242,7 @@ impl Inferer<'_> {
                     && !want.contains_key(&field.name.name)
                 {
                     self.report_unknown_field(field, want);
+                    unknown_fields.insert(field.name.name.clone());
                 }
             }
         }
@@ -5512,9 +5522,11 @@ impl Inferer<'_> {
             }
         }
 
-        if !checks_unknown_fields && spread_index_values.is_empty() {
-            self.report_no_field_in_common(expected, &merged, span);
-        }
+        // A literal rejected here reads as an error, so the slot it fills
+        // doesn't report it again.
+        let shares_no_field = !checks_unknown_fields
+            && spread_index_values.is_empty()
+            && self.report_no_field_in_common(expected, &merged, span);
 
         // If we had an expected shape, surface missing required fields.
         // Fresh object literal excess fields were reported above; values that
@@ -5650,7 +5662,9 @@ impl Inferer<'_> {
                 optional: field.optional,
                 ty: field.ty.clone(),
             });
-            resolved.insert(name, field);
+            if !unknown_fields.contains(&name) {
+                resolved.insert(name, field);
+            }
         }
 
         // when the expected type was an `InterfaceRef`, the
@@ -5658,20 +5672,21 @@ impl Inferer<'_> {
         // the surrounding slot is trivial, and the per-field checks
         // already fired above. Codegen and the shape collector derive
         // the structural Object shape from the typed origin list.
+        let kind = TypedExprKind::ObjectLiteral {
+            members: object_members,
+            fields: field_origins,
+        };
+        if shares_no_field {
+            return Ok((kind, Type::Error));
+        }
         if let Some((iface_package, iface_name, iface_mangled, iface_args)) = interface_target {
             return Ok((
-                TypedExprKind::ObjectLiteral {
-                    members: object_members,
-                    fields: field_origins,
-                },
+                kind,
                 Type::interface_ref(iface_package, iface_name, iface_mangled, iface_args),
             ));
         }
         Ok((
-            TypedExprKind::ObjectLiteral {
-                members: object_members,
-                fields: field_origins,
-            },
+            kind,
             Type::Object {
                 index: if spread_index_values.is_empty() {
                     None
