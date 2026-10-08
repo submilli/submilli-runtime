@@ -4,7 +4,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use interpreter::runtime::limits::ExecutionUsage;
@@ -21,8 +21,8 @@ use submilli_server::record::{
 };
 
 use super::changes::{NewVersion, WindowStart};
-use super::events::{EventBody, StoredEvent};
-use super::recorder::PLAYGROUND_LOG_CONFIG;
+use super::events::{EventBody, LogPosition, StoredEvent};
+use super::recorder::{FINISHED_RUN_MEMORY, PLAYGROUND_LOG_CONFIG};
 use super::run::{DecisionRef, StoredRun};
 use super::{FORMAT, KnownSecrets, Recorder, Store, StoreError};
 
@@ -517,6 +517,10 @@ fn files_are_owner_only_and_directories_0700() {
         })
         .unwrap();
     world.store.clear().unwrap();
+    // A late event of the run starts its session's log again.
+    world
+        .recorder
+        .event(event(2, "sess-1", "exec-1", call_started(0)));
     // A temporary file is 0600 before it is renamed into place.
     let staged = super::stage(&world.store.run_path(99), b"{}").unwrap();
     let mode = std::fs::metadata(staged.path())
@@ -602,6 +606,62 @@ fn clear_removes_runs_resets_the_audit_window_and_ids_keep_counting() {
 }
 
 #[test]
+fn clear_removes_the_event_logs_and_their_numbering_carries_on() {
+    let world = World::new();
+    world.start(run_start("exec-1", Some("sess")));
+    world
+        .store
+        .append_session(super::sessions::SessionEntry::Ended {
+            session_id: "sess".into(),
+        })
+        .unwrap();
+    let send = |seq, kind| world.recorder.event(event(seq, "sess", "exec-1", kind));
+    send(1, run_started());
+    send(2, call_started(0));
+    send(3, call_started(1));
+    let (events, position) = world
+        .store
+        .read_events_from(Some("sess"), LogPosition::default())
+        .unwrap();
+    assert_eq!(events.len(), 3);
+
+    world.store.clear().unwrap();
+    assert!(!world.store.events_path(Some("sess")).exists());
+    assert!(
+        world
+            .store
+            .read_events(Some("sess"))
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    assert_eq!(world.store.session_log().unwrap().len(), 1, "sessions stay");
+
+    // A reader that followed the old log reads the new one from its start.
+    send(4, call_started(2));
+    send(5, call_started(3));
+    send(6, call_started(4));
+    let (events, _) = world
+        .store
+        .read_events_from(Some("sess"), position)
+        .unwrap();
+    let seqs: Vec<u64> = events.iter().map(|event| event.session_seq).collect();
+    assert_eq!(seqs, [4, 5, 6]);
+    // So does a new process, which numbers on from what is left.
+    let reopened = Arc::new(world.reopen());
+    let recorder = Recorder::new(Arc::clone(&reopened), KnownSecrets::default());
+    recorder.start(run_start("exec-2", Some("sess")));
+    recorder.event(event(1, "sess", "exec-2", run_started()));
+    let last = reopened
+        .read_events(Some("sess"))
+        .unwrap()
+        .events
+        .last()
+        .cloned();
+    assert_eq!(last.map(|event| event.session_seq), Some(7));
+}
+
+#[test]
 fn a_run_dropped_without_finishing_is_no_longer_in_flight() {
     let world = World::new();
     let dropped = world.start(run_start("exec-1", None));
@@ -611,6 +671,86 @@ fn a_run_dropped_without_finishing_is_no_longer_in_flight() {
     let finished_run = world.start(run_start("exec-2", None));
     finished_run.finish(finished(Vec::new(), Vec::new()));
     assert_eq!(world.recorder.in_flight(2), None);
+}
+
+#[test]
+fn a_run_finished_or_dropped_long_ago_is_no_longer_followed() {
+    let world = World::new();
+    let dropped = world.start(run_start("exec-1", None));
+    let finished_run = world.start(run_start("exec-2", None));
+    assert!(world.recorder.follows("exec-1"));
+    drop(dropped);
+    finished_run.finish(finished(Vec::new(), Vec::new()));
+    // Their late events may still come for a while, with no other run started since.
+    let later = Instant::now() + FINISHED_RUN_MEMORY;
+    for run in ["exec-1", "exec-2"] {
+        assert!(world.recorder.follows(run), "{run}");
+        assert!(!world.recorder.follows_at(run, later), "{run}");
+    }
+    assert!(!world.recorder.follows("exec-never-started"));
+}
+
+#[test]
+fn a_run_the_store_could_not_take_is_followed_until_its_end_arrives() {
+    let world = World::new();
+    // The run counter cannot be written, so the run goes unrecorded.
+    let counter = world.root().join("sequence.json");
+    let _ = std::fs::remove_file(&counter);
+    std::fs::create_dir(&counter).unwrap();
+    assert!(
+        world
+            .recorder
+            .start(run_start("exec-1", Some("sess")))
+            .is_none()
+    );
+    world
+        .recorder
+        .event(event(1, "sess", "exec-1", run_started()));
+    let later = Instant::now() + FINISHED_RUN_MEMORY;
+    assert!(world.recorder.follows("exec-1"));
+    assert!(world.recorder.follows_at("exec-1", later), "still running");
+    world
+        .recorder
+        .event(event(2, "sess", "exec-1", run_finished(0)));
+    assert!(world.recorder.follows("exec-1"));
+    let later = Instant::now() + FINISHED_RUN_MEMORY;
+    assert!(!world.recorder.follows_at("exec-1", later));
+}
+
+#[test]
+fn a_drop_while_runs_overlap_leaves_every_open_runs_later_decisions_unnumbered() {
+    // The server's sequence says that an event was dropped, not whose: each run whose
+    // end has not arrived may have lost it, so none of them numbers its decisions
+    // from the count any more.
+    let world = World::new();
+    let first = world.start(run_start("exec-1", Some("sess")));
+    let second = world.start(run_start("exec-2", Some("sess")));
+    let send = |seq, run, kind| world.recorder.event(event(seq, "sess", run, kind));
+    let decided = |n: u64| EventKind::Decision {
+        record: Box::new(decision(n, "http.get", json!({ "n": n }), true)),
+    };
+    send(1, "exec-1", run_started());
+    send(2, "exec-2", run_started());
+    send(3, "exec-2", decided(0));
+    // Event 4, one of the first run's, was dropped.
+    send(5, "exec-2", decided(1));
+    send(6, "exec-2", run_finished(0));
+    second.finish(finished(Vec::new(), Vec::new()));
+    send(7, "exec-1", run_finished(1));
+    first.finish(finished(Vec::new(), Vec::new()));
+    let log = world.store.read_events(Some("sess")).unwrap();
+    let second_run: Vec<Option<u64>> = log
+        .events
+        .iter()
+        .filter(|event| event.run == Some(2))
+        .filter_map(|event| match &event.body {
+            EventBody::Event(e) => {
+                matches!(e.kind, EventKind::Decision { .. }).then_some(event.decision)
+            }
+            EventBody::Gap(_) => None,
+        })
+        .collect();
+    assert_eq!(second_run, [Some(1), None]);
 }
 
 #[test]
@@ -805,12 +945,12 @@ fn events_of_two_concurrent_runs_in_a_session_are_numbered_without_gaps_and_tail
         let store = Arc::clone(&world.store);
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
-            let mut offset = 0;
+            let mut position = LogPosition::default();
             let mut seen = Vec::new();
             loop {
                 let done = stop.load(std::sync::atomic::Ordering::Acquire);
-                let (events, next) = store.read_events_from(Some("sess"), offset).unwrap();
-                offset = next;
+                let (events, next) = store.read_events_from(Some("sess"), position).unwrap();
+                position = next;
                 seen.extend(events.into_iter().map(|event| event.event_id));
                 if done {
                     return seen;
@@ -898,14 +1038,20 @@ fn a_partly_written_last_line_is_left_for_the_next_read() {
     assert_eq!(log.events.len(), 1);
 
     // A follower reads up to the partial line and picks up from there.
-    let (events, offset) = world.store.read_events_from(Some("sess"), 0).unwrap();
+    let (events, position) = world
+        .store
+        .read_events_from(Some("sess"), LogPosition::default())
+        .unwrap();
     assert_eq!(events.len(), 1);
     let whole = std::fs::metadata(&path).unwrap().len();
-    assert!(offset < whole);
+    assert!(position.offset < whole);
     std::io::Write::write_all(&mut file, b"\n").unwrap();
-    let (events, next) = world.store.read_events_from(Some("sess"), offset).unwrap();
+    let (events, next) = world
+        .store
+        .read_events_from(Some("sess"), position)
+        .unwrap();
     assert!(events.is_empty(), "a line that does not parse is skipped");
-    assert_eq!(next, whole + 1);
+    assert_eq!(next.offset, whole + 1);
 }
 
 #[test]

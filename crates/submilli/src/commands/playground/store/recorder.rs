@@ -49,7 +49,7 @@ const END_EVENT_GRACE: Duration = Duration::from_secs(2);
 
 /// How long a finished run's ids stay known, for its late events (what its caller
 /// received arrives after its end).
-const FINISHED_RUN_MEMORY: Duration = Duration::from_secs(60);
+pub(super) const FINISHED_RUN_MEMORY: Duration = Duration::from_secs(60);
 
 /// The playground's [`RunRecorderFactory`].
 #[derive(Clone)]
@@ -62,6 +62,9 @@ struct Shared {
     secrets: KnownSecrets,
     /// Runs in progress or recently finished, by the server's execution id.
     tracks: Mutex<HashMap<String, Track>>,
+    /// Runs the store could not take, by the server's execution id, with when their end
+    /// event arrived: they run unrecorded, and their events are logged without a run id.
+    untracked: Mutex<HashMap<String, Option<Instant>>>,
     /// The server-wide sequence number of the last event delivered; a jump past the next
     /// one means the server dropped events in between.
     last_seq: AtomicU64,
@@ -82,7 +85,10 @@ struct Track {
     /// none was dropped before it.
     decisions_delivered: u64,
     /// The server dropped an event while the run's events were still coming, so a
-    /// decision's number can no longer be told from the count.
+    /// decision's number can no longer be told from the count. The server's sequence
+    /// shows that an event was dropped, not whose, so a drop marks every run whose end
+    /// has not arrived, including runs that lost nothing: their later decisions go
+    /// unnumbered. Numbers are never wrong, only missing.
     numbering_lost: bool,
     /// The run's record, once it finished; what a backfill reads.
     record: Option<Backfill>,
@@ -136,6 +142,7 @@ impl Recorder {
                 store,
                 secrets,
                 tracks: Mutex::new(HashMap::new()),
+                untracked: Mutex::new(HashMap::new()),
                 last_seq: AtomicU64::new(0),
             }),
         }
@@ -156,10 +163,24 @@ impl Recorder {
             .map(|track| track.execution_id.clone())
     }
 
-    /// Whether this recorder started the run with server execution id `execution_id`
-    /// and still follows it: in flight, or finished a short while ago.
-    pub(crate) fn knows(&self, execution_id: &str) -> bool {
-        self.shared.tracks().contains_key(execution_id)
+    /// Whether the run with server execution id `execution_id` started under this
+    /// recorder (recorded, or left unrecorded when the store could not take it) and is
+    /// still followed: in flight, or finished less than [`FINISHED_RUN_MEMORY`] ago. A
+    /// run a previous playground started is never followed.
+    pub(crate) fn follows(&self, execution_id: &str) -> bool {
+        self.follows_at(execution_id, Instant::now())
+    }
+
+    /// [`Self::follows`], as of `now`.
+    pub(super) fn follows_at(&self, execution_id: &str, now: Instant) -> bool {
+        let finished_at = match self.shared.tracks().get(execution_id) {
+            Some(track) => track.finished_at,
+            None => match self.shared.untracked().get(execution_id) {
+                Some(finished_at) => *finished_at,
+                None => return false,
+            },
+        };
+        still_followed(finished_at, now)
     }
 }
 
@@ -171,6 +192,9 @@ impl RunRecorderFactory for Recorder {
             Ok(id) => id,
             Err(error) => {
                 warn(&format!("run not recorded: {error}"));
+                let mut untracked = shared.untracked();
+                untracked.retain(|_, finished_at| still_followed(*finished_at, Instant::now()));
+                untracked.insert(run.execution_id.clone(), None);
                 return None;
             }
         };
@@ -246,6 +270,13 @@ impl Shared {
         self.tracks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Taken alone, or after [`Self::tracks`], never before it.
+    fn untracked(&self) -> MutexGuard<'_, HashMap<String, Option<Instant>>> {
+        self.untracked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// The store's id for a server execution id: a run in memory, or one stored earlier.
     fn run_id_of(&self, execution_id: &str) -> Option<u64> {
         if let Some(track) = self.tracks().get(execution_id) {
@@ -271,13 +302,23 @@ impl Shared {
             .as_ref()
             .and_then(|run_id| tracks.get_mut(run_id));
         let Some(track) = track else {
-            let position = Position {
-                at_micros: event.at_micros,
+            if let (Some(run_id), EventKind::RunFinished { .. }) = (&event.run_id, &event.kind)
+                && let Some(finished_at) = self.untracked().get_mut(run_id)
+            {
+                finished_at.get_or_insert_with(Instant::now);
+            }
+            let placement = Placement {
+                position: Position {
+                    at_micros: event.at_micros,
+                    run: None,
+                    call_index: None,
+                    rank: 0,
+                },
                 run: None,
-                call_index: None,
-                rank: 0,
+                decision: None,
+                backfilled: false,
             };
-            self.append(event.session_id.clone(), position, None, false, None, event);
+            self.append(event.session_id.clone(), placement, event);
             return;
         };
         let key = EventKey::of(&event.kind);
@@ -307,7 +348,13 @@ impl Shared {
             // The backfill already wrote this run's end from its record.
             return;
         }
-        self.append(session, position, run, false, decision, event);
+        let placement = Placement {
+            position,
+            run,
+            decision,
+            backfilled: false,
+        };
+        self.append(session, placement, event);
         if let Some(dropped) = end {
             track.end_event = Some(dropped);
             if dropped > 0 && track.record.is_some() {
@@ -435,34 +482,25 @@ impl Shared {
                 tool_call_id: track.tool_call_id.clone(),
                 kind,
             };
-            self.append(
-                track.session.clone(),
+            let placement = Placement {
                 position,
-                Some(track.id),
-                true,
+                run: Some(track.id),
                 decision,
-                event,
-            );
+                backfilled: true,
+            };
+            self.append(track.session.clone(), placement, event);
         }
     }
 
-    fn append(
-        &self,
-        session: Option<String>,
-        position: Position,
-        run: Option<u64>,
-        backfilled: bool,
-        decision: Option<u64>,
-        event: SessionEvent,
-    ) {
+    fn append(&self, session: Option<String>, placement: Placement, event: SessionEvent) {
         let stored = StoredEvent {
             format: FORMAT,
             session_seq: 0,
             event_id: event.event_id.clone(),
-            position,
-            run,
-            backfilled,
-            decision,
+            position: placement.position,
+            run: placement.run,
+            backfilled: placement.backfilled,
+            decision: placement.decision,
             body: EventBody::Event(Box::new(event)),
         };
         self.append_stored(session, stored);
@@ -490,13 +528,27 @@ impl Shared {
     }
 }
 
+/// Where a server event goes in its session's log, and what the log says of it.
+struct Placement {
+    position: Position,
+    /// The store's id of its run, when the recorder follows the run.
+    run: Option<u64>,
+    /// Its number among its run's decisions, when it is a decision whose number is known.
+    decision: Option<u64>,
+    /// Recovered from the run's record rather than delivered.
+    backfilled: bool,
+}
+
 /// Forgets runs that finished long enough ago that no more of their events can come.
 fn prune(tracks: &mut HashMap<String, Track>) {
-    tracks.retain(|_, track| {
-        track
-            .finished_at
-            .is_none_or(|finished| finished.elapsed() < FINISHED_RUN_MEMORY)
-    });
+    let now = Instant::now();
+    tracks.retain(|_, track| still_followed(track.finished_at, now));
+}
+
+/// Whether a run that finished at `finished_at`, if it did, may still deliver events at
+/// `now`.
+fn still_followed(finished_at: Option<Instant>, now: Instant) -> bool {
+    finished_at.is_none_or(|finished| now.saturating_duration_since(finished) < FINISHED_RUN_MEMORY)
 }
 
 /// Where an event of `track`'s run happened. Call events are placed by the run's own

@@ -1932,6 +1932,85 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             assert_eq!(lines.last().unwrap()["kind"], "session-ended", "{lines:?}");
         }
 
+        /// Waits up to 20 seconds for `child` to exit; `None` when it is still running,
+        /// after killing it.
+        fn exited_within(child: &mut Child) -> Option<std::process::ExitStatus> {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    return Some(status);
+                }
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+
+        #[test]
+        fn watch_following_a_session_says_not_running_when_the_playground_dies() {
+            let playground = Playground::starter();
+            playground.start();
+            let started = playground.expect(
+                0,
+                &["session", "start", "--var", "customerId=cus_northwind"],
+            );
+            let session = started["session"].as_str().unwrap().to_owned();
+            playground.expect(0, &["exec", "--example", "--session", &session]);
+            let mut following = playground
+                .command(&["watch", &session, "--follow"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut first = String::new();
+            BufReader::new(following.stdout.as_mut().unwrap())
+                .read_line(&mut first)
+                .unwrap();
+            assert!(!first.is_empty(), "watch printed nothing");
+            let (status, _) = playground.json(&["status"]);
+            let pid = status["pid"].as_u64().unwrap().to_string();
+            let killed = Command::new("kill").args(["-KILL", &pid]).status().unwrap();
+            assert!(killed.success());
+            let exited = exited_within(&mut following);
+            let output = wait(following);
+            let status = exited.expect("watch still following a dead playground");
+            assert_eq!(status.code(), Some(6), "{}", stderr(&output));
+        }
+
+        #[test]
+        fn watch_stops_following_when_its_output_is_closed() {
+            let playground = Playground::starter();
+            playground.start();
+            let started = playground.expect(
+                0,
+                &["session", "start", "--var", "customerId=cus_northwind"],
+            );
+            let session = started["session"].as_str().unwrap().to_owned();
+            playground.expect(0, &["exec", "--example", "--session", &session]);
+            let mut following = playground
+                .command(&["watch", &session, "--follow"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut first = String::new();
+            BufReader::new(following.stdout.take().unwrap())
+                .read_line(&mut first)
+                .unwrap();
+            assert!(!first.is_empty(), "watch printed nothing");
+            // The reader is gone; the next run's events have nowhere to go.
+            playground.expect(0, &["exec", "--example", "--session", &session]);
+            let exited = exited_within(&mut following);
+            let output = wait(following);
+            assert!(
+                exited.is_some(),
+                "watch kept following with its output closed: {}",
+                stderr(&output)
+            );
+        }
+
         #[test]
         fn watch_on_a_session_never_seen_is_a_usage_error() {
             let playground = Playground::starter();
@@ -2028,6 +2107,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                     "session_id": "s-gone",
                     "variables": {},
                     "label": "assistant",
+                    "idle_timeout_ms": 60_000,
                 })
                 .to_string(),
             );
@@ -2081,6 +2161,30 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         }
 
         #[test]
+        fn a_variable_the_blueprint_does_not_declare_is_refused_by_name_in_a_session() {
+            let playground = Playground::starter();
+            playground.start();
+            let started = playground.expect(
+                0,
+                &["session", "start", "--var", "customerId=cus_northwind"],
+            );
+            let session = started["session"].as_str().unwrap().to_owned();
+            let (refused, code) = playground.json(&[
+                "exec",
+                "--example",
+                "--session",
+                &session,
+                "--var",
+                "TYPO=1",
+            ]);
+            assert_eq!(code, 2, "{refused}");
+            assert_eq!(
+                refused["error"]["kind"], "undeclared-variables",
+                "{refused}"
+            );
+        }
+
+        #[test]
         fn a_program_too_large_for_the_api_is_a_usage_error() {
             let playground = Playground::starter();
             playground.start();
@@ -2092,6 +2196,38 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let (refused, code) = playground.json(&["exec", &program]);
             assert_eq!(code, 2, "{refused}");
             assert_eq!(refused["error"]["kind"], "too-large", "{refused}");
+        }
+
+        #[test]
+        fn the_playground_takes_a_body_up_to_its_limit_and_refuses_one_byte_more() {
+            const MAX_BODY_BYTES: usize = 2 << 20;
+            let playground = Playground::starter();
+            let page = playground.start();
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .build()
+                .into();
+            // What the playground says of a body `size` bytes long.
+            let answer = |size: usize| {
+                let overhead = json!({ "decision": "1.1", "pad": "" }).to_string().len();
+                let body =
+                    json!({ "decision": "1.1", "pad": "x".repeat(size - overhead) }).to_string();
+                assert_eq!(body.len(), size);
+                let mut response = agent
+                    .post(&format!("{page}/api/draft-rule"))
+                    .header(
+                        "authorization",
+                        &format!("Bearer {}", playground.token("admin")),
+                    )
+                    .header("content-type", "application/json")
+                    .send(body)
+                    .unwrap();
+                response.body_mut().read_to_string().unwrap()
+            };
+            let at_limit = answer(MAX_BODY_BYTES);
+            assert!(!at_limit.contains("length limit"), "{at_limit}");
+            let over = answer(MAX_BODY_BYTES + 1);
+            assert!(over.contains("length limit"), "{over}");
         }
 
         #[test]

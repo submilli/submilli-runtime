@@ -89,6 +89,9 @@ pub enum DraftError {
     UnsupportedContext,
     /// The requested rule name is empty.
     EmptyName,
+    /// The requested rule name holds a newline or control character, which a rule
+    /// cannot carry safely.
+    UnsafeName { character: char },
     /// Another rule in the caller's block already has the requested name.
     /// `position` is that rule's 1-based place in the block.
     DuplicateName {
@@ -132,25 +135,19 @@ impl fmt::Display for DraftError {
                 "the blueprint no longer decides this call the way the refusal reported; \
                  it changed since",
             ),
-            DraftError::UnsafeValue { field, character } => {
-                let kind = if is_line_break(*character) {
-                    "a newline"
-                } else {
-                    "a control character"
-                };
-                write!(
-                    f,
-                    "`{field}` holds {kind} ({}), which a rule cannot match safely",
-                    character.escape_unicode()
-                )
-            }
+            DraftError::UnsafeValue { field, character } => write!(
+                f,
+                "`{field}` holds {} ({}), which a rule cannot match safely",
+                character_kind(*character),
+                character.escape_unicode()
+            ),
             DraftError::UnquotableValue { field } => write!(
                 f,
                 "`{field}` holds `${{vars.`, which a filter string always reads as a variable"
             ),
             DraftError::InexactNumber { field } => write!(
                 f,
-                "`{field}` is an integer too large for a filter to compare exactly; a rule \
+                "`{field}` is a number too large for a filter to compare exactly; a rule \
                  comparing it would also allow its neighbours"
             ),
             DraftError::UnaddressableField { field } => {
@@ -160,6 +157,12 @@ impl fmt::Display for DraftError {
                 f.write_str("the call's context is neither an object nor null")
             }
             DraftError::EmptyName => f.write_str("a rule name cannot be empty"),
+            DraftError::UnsafeName { character } => write!(
+                f,
+                "the rule name holds {} ({}), which a rule cannot carry safely",
+                character_kind(*character),
+                character.escape_unicode()
+            ),
             DraftError::DuplicateName {
                 caller,
                 name,
@@ -374,16 +377,24 @@ fn operand(
 /// The largest integer an f64 holds with no other integer rounding to it.
 const MAX_EXACT_INTEGER: u64 = (1 << 53) - 1;
 
-/// Refuses an integer that a filter, comparing numbers as f64, would find
-/// equal to its neighbours. A number held as f64 compares exactly.
+/// [`MAX_EXACT_INTEGER`] as an f64, which holds it exactly.
+const MAX_EXACT_FLOAT: f64 = 9_007_199_254_740_991.0;
+
+/// Refuses a number that a filter, comparing numbers as f64, would find equal
+/// to its integer neighbours: any integer, or float, past 2^53 - 1 in
+/// magnitude. A smaller float compares exactly, as no other integer rounds to
+/// it and a float only equals itself.
 fn require_exact_number(field: &str, n: &serde_json::Number) -> Result<(), DraftError> {
-    let magnitude = n.as_u64().or_else(|| n.as_i64().map(i64::unsigned_abs));
-    match magnitude {
-        Some(magnitude) if magnitude > MAX_EXACT_INTEGER => Err(DraftError::InexactNumber {
+    let inexact = match n.as_u64().or_else(|| n.as_i64().map(i64::unsigned_abs)) {
+        Some(magnitude) => magnitude > MAX_EXACT_INTEGER,
+        None => n.as_f64().is_some_and(|x| x.abs() > MAX_EXACT_FLOAT),
+    };
+    if inexact {
+        return Err(DraftError::InexactNumber {
             field: field.to_string(),
-        }),
-        _ => Ok(()),
+        });
     }
+    Ok(())
 }
 
 /// The first (by name) declared variable the session bound to `value`. Only
@@ -410,7 +421,9 @@ fn require_new_name(current: &Blueprint, caller: &str, name: &str) -> Result<(),
     if name.is_empty() {
         return Err(DraftError::EmptyName);
     }
-    require_printable("name", name)?;
+    if let Some(character) = name.chars().find(|&c| is_unsafe_char(c)) {
+        return Err(DraftError::UnsafeName { character });
+    }
     let taken = current
         .permissions
         .get(caller)
@@ -442,6 +455,15 @@ fn require_printable(field: &str, value: &str) -> Result<(), DraftError> {
 /// noncharacters YAML refuses in a stream.
 fn is_unsafe_char(c: char) -> bool {
     c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{FFFE}' | '\u{FFFF}')
+}
+
+/// What an unsafe character is, in words.
+fn character_kind(c: char) -> &'static str {
+    if is_line_break(c) {
+        "a newline"
+    } else {
+        "a control character"
+    }
 }
 
 fn is_line_break(c: char) -> bool {
@@ -525,13 +547,13 @@ fn split_lines(text: &str) -> Result<Vec<Line<'_>>, DraftError> {
             }
             None => (rest, "", ""),
         };
-        // YAML reads a lone carriage return as a line break; this scan would
-        // not, so it would misjudge the structure.
-        if line.contains('\r') {
+        // YAML also breaks lines at a lone carriage return, NEL, LS, and PS;
+        // this scan would not, so it would misjudge the structure.
+        if line.contains(is_line_break) {
             return Err(DraftError::UnsupportedLayout {
                 line: lines.len() + 1,
                 caller: None,
-                reason: "a carriage return without a line feed ends a line",
+                reason: "a line ends with a break other than a line feed",
             });
         }
         lines.push(Line { content: line, eol });
@@ -1639,7 +1661,7 @@ permissions:
         assert!(matches!(refused(""), DraftError::EmptyName));
         assert!(matches!(
             refused("a\nb"),
-            DraftError::UnsafeValue { field, .. } if field == "name"
+            DraftError::UnsafeName { character: '\n' }
         ));
         // The same name under another caller is unambiguous.
         let draft = draft_named(
@@ -1729,6 +1751,54 @@ permissions:
             assert_eq!(
                 rule_lines(&draft)[1],
                 format!("             filter: id == {written}")
+            );
+        }
+    }
+
+    #[test]
+    fn a_float_too_large_to_tell_from_neighbouring_integers_is_refused() {
+        for id in [json!(1e16), json!(9_007_199_254_740_992.0), json!(-1e300)] {
+            let err = draft(
+                ODD_LAYOUT,
+                "main",
+                "x",
+                json!({ "id": id }),
+                &VarBindings::new(),
+            )
+            .expect_err("refused");
+            assert!(
+                matches!(&err, DraftError::InexactNumber { field } if field == "id"),
+                "{err:?}"
+            );
+        }
+        let draft = draft(
+            ODD_LAYOUT,
+            "main",
+            "x",
+            json!({ "id": 9_007_199_254_740_991.0 }),
+            &VarBindings::new(),
+        )
+        .expect("drafts");
+        assert_eq!(
+            rule_lines(&draft)[1],
+            "             filter: id == 9007199254740991.0"
+        );
+    }
+
+    #[test]
+    fn a_line_break_yaml_reads_but_this_scan_does_not_is_refused() {
+        for brk in ["\r", "\u{85}", "\u{2028}", "\u{2029}"] {
+            let text = format!(
+                "name: a\npermissions:\n  main:\n    # note{brk}    - capability: hidden\n      \
+                 action: allow\n    - capability: b\n      action: deny\n"
+            );
+            let err =
+                draft(&text, "main", "c", json!({}), &VarBindings::new()).expect_err("refused");
+            assert_eq!(
+                err.to_string(),
+                "line 4: a line ends with a break other than a line feed; add the rule by hand \
+                 or rewrite the block in plain block style",
+                "{brk:?}"
             );
         }
     }

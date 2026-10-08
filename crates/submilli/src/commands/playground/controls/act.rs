@@ -42,7 +42,7 @@ use super::super::api::{MAX_BODY_BYTES, feed};
 use super::super::client::{self, Probe, Running};
 use super::super::labels;
 use super::super::project;
-use super::super::state::{self, RememberedBinding, StateDir};
+use super::super::state::{self, InstanceRecord, RememberedBinding, StateDir};
 use super::super::store::redact::REDACTED;
 use super::super::store::run::{DecisionRef, StoredRun, StoredTestReport};
 use super::super::store::sessions::SessionEntry;
@@ -576,14 +576,23 @@ impl Actions {
                 )));
             }
         };
-        let differ: Vec<String> = asked
+        let differ: Vec<&String> = asked
             .iter()
             .filter(|(name, value)| fixed.get(*name) != Some(*value))
-            .map(|(name, _)| clean(name))
+            .map(|(name, _)| name)
             .collect();
         if differ.is_empty() {
             return Ok(());
         }
+        // A name the blueprint does not declare is a mistake in the name, not a value.
+        // The blueprint in force says which names it declares; when it cannot be read,
+        // the refusal keeps the words below, which are true either way.
+        if let Ok(blueprint) = self.blueprint(&self.blueprint_name).await
+            && let Some(refused) = undeclared_variables(&blueprint, differ.iter().copied())
+        {
+            return Err(refused);
+        }
+        let differ: Vec<String> = differ.into_iter().map(|name| clean(name)).collect();
         Err(ActError::usage(
             "session-values-fixed",
             format!(
@@ -622,13 +631,9 @@ impl Actions {
     /// its outcome calls for.
     fn show_run(&self, id: u64, kind: &'static str) -> Result<Answer, ActError> {
         let reader = self.reader()?;
-        let mut result: ShowResult = read::show(&reader, id, false)?;
+        let stored = self.load(id)?;
+        let mut result: ShowResult = read::show_stored(&reader, &stored, false)?;
         result.kind = kind;
-        let stored = self
-            .store
-            .load_run(id)
-            .map_err(|error| ActError::store(&error))?
-            .ok_or(ReadError::UnknownRun(id))?;
         let exit = exit_of(&stored);
         let mut answer = Answer::of(exit, &result, render::show_text);
         if let Some(error) = &stored.error {
@@ -810,6 +815,9 @@ impl Actions {
                     session_id: session.clone(),
                     variables: variables.clone(),
                     label: labels::ASSISTANT.to_owned(),
+                    // The server fixes the session's idle timeout from the blueprint it
+                    // starts under, which is this one.
+                    idle_timeout_ms: u64::try_from(blueprint.idle_timeout.as_millis()).ok(),
                 })
                 .map(|()| variables)
                 .map_err(|error| ActError::store(&error))
@@ -908,6 +916,9 @@ impl Actions {
         let blueprint = self.blueprint(&stored.recording.blueprint_name).await?;
         let binding = self.binding();
         let report = recheck(&blueprint, &binding.variables, &stored.recording);
+        // The version number only labels the blueprint the recheck ran against, which
+        // the server already holds; a change log that cannot be read leaves it unlabelled
+        // rather than failing a recheck that did not need it.
         let in_force = self
             .store
             .changes()
@@ -943,6 +954,8 @@ impl Actions {
                 change,
                 caller: check.caller.clone(),
                 capability: check.capability.clone(),
+                // A flip is a decision resolved again, which always carries how it is
+                // decided now; "unknown" stands in only should a report lack it.
                 now_by: check.now.as_ref().map_or_else(
                     || "unknown".to_owned(),
                     |now| cause_text(&now.cause, current_text.as_deref()),
@@ -1129,22 +1142,21 @@ impl Actions {
                 .next([Next::Runs])
                 .into();
         };
-        let already = self.cancel_requested(run);
-        let mut cancelled = !already && self.app.cancel_run(&execution_id);
         // The playground numbers a run as it starts, a moment before the server can
         // cancel it, so a cancel that lands in between waits for it.
-        let deadline = tokio::time::Instant::now() + CANCEL_REGISTRATION_WAIT;
-        while !already
-            && !cancelled
-            && self.recorder.in_flight(run).is_some()
-            && tokio::time::Instant::now() < deadline
-        {
+        let now = tokio::time::Instant::now();
+        let deadline = now.checked_add(CANCEL_REGISTRATION_WAIT).unwrap_or(now);
+        let (cancelled, already) = loop {
+            match self.send_cancel(run, &execution_id) {
+                CancelSent::Now => break (true, false),
+                CancelSent::Earlier => break (false, true),
+                CancelSent::NotTaken => {}
+            }
+            if self.recorder.in_flight(run).is_none() || tokio::time::Instant::now() >= deadline {
+                break (false, false);
+            }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            cancelled = self.app.cancel_run(&execution_id);
-        }
-        if cancelled {
-            self.cancelling().insert(run);
-        }
+        };
         let outcome = cancel_outcome(cancelled, already, self.recorder.in_flight(run).is_some());
         Answer::of(
             outcome.exit(),
@@ -1153,11 +1165,20 @@ impl Actions {
         )
     }
 
-    /// Whether a cancel of `run` was already sent, forgetting runs no longer in flight.
-    fn cancel_requested(&self, run: u64) -> bool {
+    /// Sends a cancel to `run` unless one already was, and marks it as cancelling, in one
+    /// step under the lock, so of two cancels at once exactly one sends it and the other
+    /// sees it sent. Runs no longer in flight are forgotten first.
+    fn send_cancel(&self, run: u64, execution_id: &str) -> CancelSent {
         let mut cancelling = self.cancelling();
         cancelling.retain(|id| self.recorder.in_flight(*id).is_some());
-        cancelling.contains(&run)
+        if cancelling.contains(&run) {
+            return CancelSent::Earlier;
+        }
+        if !self.app.cancel_run(execution_id) {
+            return CancelSent::NotTaken;
+        }
+        cancelling.insert(run);
+        CancelSent::Now
     }
 
     fn cancelling(&self) -> std::sync::MutexGuard<'_, BTreeSet<u64>> {
@@ -1167,6 +1188,16 @@ impl Actions {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// What one attempt to send a cancel to a run in flight did.
+enum CancelSent {
+    /// This attempt sent it.
+    Now,
+    /// An earlier cancel had sent it.
+    Earlier,
+    /// The server has no canceller for the run (yet, or any more).
+    NotTaken,
 }
 
 /// How long `cancel` waits for a run it found in flight to become cancellable.
@@ -1221,10 +1252,10 @@ fn undeclared_variables<'a>(
     blueprint: &Blueprint,
     names: impl Iterator<Item = &'a String>,
 ) -> Option<ActError> {
-    let undeclared: Vec<String> = names
+    let undeclared_names: Vec<&String> = names
         .filter(|name| !blueprint.variables.contains_key(*name))
-        .map(|name| clean(name))
         .collect();
+    let undeclared: Vec<String> = undeclared_names.iter().map(|name| clean(name)).collect();
     if undeclared.is_empty() {
         return None;
     }
@@ -1234,10 +1265,22 @@ fn undeclared_variables<'a>(
     } else {
         format!("it declares {}", declared.join(", "))
     };
+    let secrets: String = undeclared_names
+        .iter()
+        .filter(|name| harness_declared(blueprint, name))
+        .map(|name| {
+            let name = clean(name);
+            format!(
+                ". {name} is a secret the harness supplies; give it a development value with \
+                 `submilli playground bind --secret {}`",
+                shell_word(&name)
+            )
+        })
+        .collect();
     Some(ActError::usage(
         "undeclared-variables",
         format!(
-            "variable{} {} {} not declared by the blueprint; {declares}",
+            "variable{} {} {} not declared by the blueprint; {declares}{secrets}",
             if undeclared.len() == 1 { "" } else { "s" },
             undeclared.join(", "),
             if undeclared.len() == 1 { "is" } else { "are" },
@@ -1703,7 +1746,8 @@ pub(crate) fn draft_rule(
 }
 
 /// Decision `decision` of `run`, when it is a refusal a rule can be drafted from: one the
-/// policy made, with its whole context recorded and no secret cut out of it.
+/// policy made, with its whole context recorded and no field the rule would compare
+/// holding the redaction marker.
 fn refused_by_policy(run: &StoredRun, decision: DecisionRef) -> Result<&DecisionRecord, ActError> {
     let record = run.decision(decision.n).ok_or(ReadError::UnknownDecision {
         decision,
@@ -1739,31 +1783,34 @@ fn refused_by_policy(run: &StoredRun, decision: DecisionRef) -> Result<&Decision
             ),
         );
     }
-    if holds_redacted(&record.context) {
+    if compares_redacted(&record.context) {
         return refusal(
             EXIT_FAILURE,
             "redacted-value",
             format!(
-                "decision {decision}'s recorded context holds a secret the store redacted, so \
-                 a rule drafted from it would compare against the redaction marker and never \
-                 match the live call; add the rule by hand, naming the secret through a \
-                 variable"
+                "a field decision {decision}'s rule would compare holds `{REDACTED}`, the text \
+                 the store writes in place of a secret (whether a secret was cut there or the \
+                 program sent that text cannot be told apart), so a rule drafted from it could \
+                 compare against the marker and never match the live call; add the rule by \
+                 hand, naming a secret through a variable"
             ),
         );
     }
     Ok(record)
 }
 
-/// Whether a string in `value`, at any depth, holds what the store writes for a secret.
-fn holds_redacted(value: &Value) -> bool {
-    match value {
-        Value::String(text) => text.contains(REDACTED),
-        Value::Array(items) => items.iter().any(holds_redacted),
-        Value::Object(fields) => fields
-            .iter()
-            .any(|(key, item)| key.contains(REDACTED) || holds_redacted(item)),
-        Value::Null | Value::Bool(_) | Value::Number(_) => false,
-    }
+/// Whether a field a drafted rule compares (a top-level scalar of `context`) holds what
+/// the store writes in place of a secret, in its name or its value. Arrays and objects
+/// are not compared, so what they hold cannot reach the rule.
+fn compares_redacted(context: &Value) -> bool {
+    let Value::Object(fields) = context else {
+        return false;
+    };
+    fields.iter().any(|(key, value)| match value {
+        Value::String(text) => key.contains(REDACTED) || text.contains(REDACTED),
+        Value::Null | Value::Bool(_) | Value::Number(_) => key.contains(REDACTED),
+        Value::Array(_) | Value::Object(_) => false,
+    })
 }
 
 /// The blueprint `run` was decided under: its version's text from the change log, or, for
@@ -1795,11 +1842,10 @@ fn blueprint_decided_under(
 }
 
 fn draft_error(error: &DraftError, decision: DecisionRef) -> ActError {
-    let name_refused = match error {
-        DraftError::EmptyName | DraftError::DuplicateName { .. } => true,
-        DraftError::UnsafeValue { field, .. } => field == "name",
-        _ => false,
-    };
+    let name_refused = matches!(
+        error,
+        DraftError::EmptyName | DraftError::UnsafeName { .. } | DraftError::DuplicateName { .. }
+    );
     if name_refused {
         return ActError::usage(
             "invalid-name",
@@ -1867,7 +1913,7 @@ fn refusal_from_the_call(error: &DraftError) -> Option<(String, &'static str, St
             name,
         ),
         DraftError::InexactNumber { field: name } => field(
-            "a field of the call (named in run-data) is an integer too large for a filter to \
+            "a field of the call (named in run-data) is a number too large for a filter to \
              compare exactly; a rule comparing it would also allow its neighbours",
             name,
         ),
@@ -1991,40 +2037,57 @@ pub(crate) fn execute_action(request: &ActionRequest, output: Output) -> Result<
     let (method, path, body) = request.route();
     // Refused here rather than by the playground, which may close the connection before
     // it has read a body it will not take.
-    let size = body.as_ref().map_or(0, |body| body.to_string().len());
-    if size > MAX_BODY_BYTES {
-        return Ok(Answer::from(ActError::usage(
-            "too-large",
-            format!(
-                "the request is {size} bytes, more than the {MAX_BODY_BYTES} the playground \
-                 takes; run a smaller program"
-            ),
-        ))
-        .print(output));
+    if let Some(refused) = too_large(body.as_ref()) {
+        return Ok(Answer::from(refused).print(output));
     }
     let answer: Answer = match running.send(method, path, body.as_ref()) {
         Ok(answer) => answer,
-        Err(error) => unanswered(&error)?,
+        Err(error) => unanswered(&error, &running.record),
     };
     Ok(answer.print(output))
 }
 
-/// What a control request that got no usable answer says: the playground refused it, or
-/// it stopped (or was never reached), or something else failed.
-fn unanswered(error: &anyhow::Error) -> Result<Answer> {
+/// The refusal for a request `body` larger than the playground takes, as sent.
+fn too_large(body: Option<&Value>) -> Option<ActError> {
+    let size = body.map_or(0, |body| body.to_string().len());
+    (size > MAX_BODY_BYTES).then(|| {
+        ActError::usage(
+            "too-large",
+            format!(
+                "the request is {size} bytes, more than the {MAX_BODY_BYTES} the playground \
+                 takes; send less"
+            ),
+        )
+    })
+}
+
+/// What a control request to the playground `asked` that got no usable answer says: the
+/// playground refused it, or it stopped (or was never reached) or restarted, or something
+/// else failed.
+fn unanswered(error: &anyhow::Error, asked: &InstanceRecord) -> Answer {
     if let Some(refused) = error.downcast_ref::<client::Refused>() {
         // What the request asked for was refused as asked: a body or path the route
         // does not take, or one too large.
         let usage = matches!(refused.status, 400 | 404 | 405 | 413 | 415 | 422);
         let exit = if usage { EXIT_USAGE } else { EXIT_FAILURE };
-        return Ok(ActError::new(exit, "refused", clean(&refused.to_string())).into());
+        return ActError::new(exit, "refused", clean(&refused.to_string())).into();
     }
-    if error.downcast_ref::<client::Unanswered>().is_some()
-        && let Err(not_running) = connect()?
-    {
-        return Ok(not_running);
+    let failed = || ActError::failure(format!("{error:#}")).into();
+    if error.downcast_ref::<client::Unanswered>().is_none() {
+        return failed();
     }
-    Ok(ActError::failure(format!("{error:#}")).into())
+    // A probe that fails says nothing about where the request went; the request's own
+    // error does.
+    match connect() {
+        Ok(Err(not_running)) => not_running,
+        Ok(Ok(running)) if running.record != *asked => ActError::failure(
+            "the playground restarted while the request was in flight, so it may not have \
+             run; list what ran with `submilli playground runs`",
+        )
+        .next([Next::Runs])
+        .into(),
+        Ok(Ok(_)) | Err(_) => failed(),
+    }
 }
 
 /// `draft-rule`, against the store and the blueprint file directly: it works with the
@@ -2100,7 +2163,7 @@ pub(crate) fn execute_watch(
                 let message = serde_json::from_str::<Value>(&event.data)
                     .ok()
                     .and_then(|data| data["message"].as_str().map(str::to_owned))
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| "the playground gave no reason".to_owned());
                 end = WatchEnd::FeedFailed(message);
                 return false;
             }
@@ -2111,10 +2174,12 @@ pub(crate) fn execute_watch(
             ),
         };
         let mut out = stdout.lock();
-        let _ = writeln!(out, "{line}");
-        let _ = out.flush();
+        if let Err(error) = writeln!(out, "{line}").and_then(|()| out.flush()) {
+            end = WatchEnd::OutputFailed(error);
+            return false;
+        }
         match end {
-            WatchEnd::SessionEnded => false,
+            WatchEnd::SessionEnded | WatchEnd::OutputFailed(_) => false,
             WatchEnd::Idle => follow,
             WatchEnd::FeedClosed | WatchEnd::FeedFailed(_) => true,
         }
@@ -2125,10 +2190,18 @@ pub(crate) fn execute_watch(
         {
             return Ok(Answer::from(unknown_session(&session)).print(output));
         }
-        return Ok(unanswered(&error)?.print(output));
+        return Ok(unanswered(&error, &running.record).print(output));
     }
     let exit = match end {
         WatchEnd::SessionEnded => EXIT_SUCCESS,
+        // Whoever read the lines stopped reading; nothing is left to tell them.
+        WatchEnd::OutputFailed(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+            EXIT_SUCCESS
+        }
+        WatchEnd::OutputFailed(error) => {
+            eprintln!("writing the session's events failed: {error}");
+            EXIT_FAILURE
+        }
         WatchEnd::FeedFailed(message) => {
             eprintln!("the session's feed failed: {}", clean(&message));
             EXIT_FAILURE
@@ -2145,7 +2218,7 @@ pub(crate) fn execute_watch(
         }
         WatchEnd::Idle | WatchEnd::FeedClosed if follow => {
             eprintln!("the playground stopped; the session's feed ended with it");
-            EXIT_SUCCESS
+            EXIT_NOT_RUNNING
         }
         WatchEnd::Idle | WatchEnd::FeedClosed => {
             eprintln!("the playground stopped before the session's runs finished");
@@ -2164,6 +2237,8 @@ enum WatchEnd {
     SessionEnded,
     /// The playground could not read the session's log; its message.
     FeedFailed(String),
+    /// Printing an event failed, as it does once the reader closes the output.
+    OutputFailed(std::io::Error),
 }
 
 /// Fields of a session event that only say where it sits; the line carries them in its

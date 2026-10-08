@@ -682,6 +682,7 @@ fn sessions_list_newest_first_with_variables_run_counts_and_the_denial() {
             session_id: "s-c".into(),
             variables: vars("cus_acme"),
             label: "assistant".into(),
+            idle_timeout_ms: None,
         })
         .unwrap();
     let (reader, _dir) = fixture.reader();
@@ -1217,16 +1218,21 @@ fn compare_prints_a_capability_named_by_the_run_on_one_clean_line() {
 }
 
 #[test]
-fn a_started_session_idle_past_its_timeout_lists_as_expired() {
+fn a_started_session_idle_past_its_own_timeout_lists_as_expired() {
     let fixture = Fixture::new();
     fixture.version(BLUEPRINT, initial(), "first");
-    for session in ["s-idle", "s-ended"] {
+    for (session, idle_timeout_ms) in [
+        ("s-idle", Some(60_000)),
+        ("s-ended", Some(60_000)),
+        ("s-unknown", None),
+    ] {
         fixture
             .store
             .append_session(SessionEntry::Started {
                 session_id: session.into(),
                 variables: BTreeMap::new(),
                 label: "assistant".into(),
+                idle_timeout_ms,
             })
             .unwrap();
     }
@@ -1236,36 +1242,61 @@ fn a_started_session_idle_past_its_timeout_lists_as_expired() {
             session_id: "s-ended".into(),
         })
         .unwrap();
+    // The blueprint's timeout changed since: each session keeps the one it started with.
+    fixture.version(
+        &format!("{BLUEPRINT}idle_timeout: 1h\n"),
+        initial(),
+        "longer idle timeout",
+    );
     let (reader, _dir) = fixture.reader();
     let now = super::super::now_micros();
+    let row = |result: &read::SessionsResult, id: &str| {
+        let row = result
+            .sessions
+            .iter()
+            .find(|row| row.session == id)
+            .unwrap();
+        (row.open, row.expired)
+    };
     let fresh = read::sessions(&reader, 20, now).unwrap();
-    let idle = fresh
-        .sessions
-        .iter()
-        .find(|row| row.session == "s-idle")
-        .unwrap();
-    assert_eq!((idle.open, idle.expired), (Some(true), false));
+    assert_eq!(row(&fresh, "s-idle"), (Some(true), false));
 
-    // Two days on, past the default idle timeout of a day.
-    let later = read::sessions(&reader, 20, now + 2 * 86_400_000_000).unwrap();
-    let idle = later
-        .sessions
-        .iter()
-        .find(|row| row.session == "s-idle")
-        .unwrap();
-    assert_eq!((idle.open, idle.expired), (Some(false), true));
-    let ended = later
-        .sessions
-        .iter()
-        .find(|row| row.session == "s-ended")
-        .unwrap();
-    assert_eq!((ended.open, ended.expired), (Some(false), false));
+    // Two minutes on, past the session's own minute.
+    let later = read::sessions(&reader, 20, now + 120_000_000).unwrap();
+    assert_eq!(row(&later, "s-idle"), (Some(false), true));
+    assert_eq!(row(&later, "s-ended"), (Some(false), false));
+    // A session whose timeout was not recorded is never guessed expired.
+    let much_later = read::sessions(&reader, 20, now + 30 * 86_400_000_000).unwrap();
+    assert_eq!(row(&much_later, "s-unknown"), (Some(true), false));
     let text = render::sessions_text(&later);
     let line = text
         .lines()
         .find(|line| line.starts_with("s-idle"))
         .unwrap();
     assert!(line.ends_with("  expired"), "{text}");
+}
+
+#[test]
+fn sessions_list_with_a_change_log_that_cannot_be_read() {
+    let fixture = Fixture::new();
+    fixture.version(BLUEPRINT, initial(), "first");
+    fixture
+        .store
+        .append_session(SessionEntry::Started {
+            session_id: "s-1".into(),
+            variables: BTreeMap::new(),
+            label: "assistant".into(),
+            idle_timeout_ms: Some(60_000),
+        })
+        .unwrap();
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(fixture.store.root().join("changes.jsonl"))
+        .unwrap();
+    std::io::Write::write_all(&mut log, b"{\"format\":999}\n").unwrap();
+    let (reader, _dir) = fixture.reader();
+    let listed = read::sessions(&reader, 20, super::super::now_micros()).unwrap();
+    assert_eq!(listed.sessions.len(), 1);
 }
 
 #[test]

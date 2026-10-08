@@ -5456,6 +5456,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
+ "unicode-properties",
  "ureq",
  "url",
 ]

@@ -445,10 +445,11 @@ impl Store {
         Ok(ids)
     }
 
-    /// Removes every run file and the index, and appends a clear marker naming the last
-    /// id handed out, which also starts a new audit window. Ids keep counting from there,
-    /// and a run already in progress is stored when it finishes. Returns how many runs
-    /// were removed.
+    /// Removes every run file, the index, and every session's event log, and appends a
+    /// clear marker naming the last id handed out, which also starts a new audit window.
+    /// Ids and each session's event numbers keep counting from there, a run already in
+    /// progress is stored when it finishes, and the started-session log stays, so open
+    /// sessions are still listed. Returns how many runs were removed.
     pub(crate) fn clear(&self) -> Result<usize> {
         self.writer()?;
         let inner = self.lock();
@@ -465,6 +466,7 @@ impl Store {
         self.append_change(ChangeEntry::Clear {
             high_water: inner.last_run,
         })?;
+        self.events.remove_logs()?;
         Ok(ids.len())
     }
 

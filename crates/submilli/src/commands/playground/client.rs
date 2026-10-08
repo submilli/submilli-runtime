@@ -267,10 +267,11 @@ impl Running {
         let request = builder
             .body(body.map_or_else(String::new, Value::to_string))
             .context("building a control request")?;
-        let mut response = long_agent()
-            .run(request)
-            .map_err(|source| Unanswered { url, source })?;
-        decode(method, path, &mut response)
+        let mut response = long_agent().run(request).map_err(|source| Unanswered {
+            url: url.clone(),
+            source,
+        })?;
+        decode(method, path, url, &mut response)
     }
 
     /// Follows a server-sent event feed, handing each event to `each` until it returns
@@ -293,11 +294,12 @@ impl Running {
             builder = builder.header("last-event-id", id);
         }
         let request = builder.body(()).context("building a control request")?;
-        let mut response = long_agent()
-            .run(request)
-            .map_err(|source| Unanswered { url, source })?;
+        let mut response = long_agent().run(request).map_err(|source| Unanswered {
+            url: url.clone(),
+            source,
+        })?;
         if !response.status().is_success() {
-            return decode::<Value>("GET", path, &mut response).map(drop);
+            return decode::<Value>("GET", path, url, &mut response).map(drop);
         }
         let reader =
             std::io::BufReader::new(response.body_mut().with_config().limit(u64::MAX).reader());
@@ -356,7 +358,7 @@ impl Running {
             .agent
             .run(request)
             .with_context(|| format!("calling the playground at {url}"))?;
-        decode(method, path, &mut response)
+        decode(method, path, url, &mut response)
     }
 }
 
@@ -365,6 +367,7 @@ impl Running {
 fn decode<T: DeserializeOwned>(
     method: &str,
     path: &str,
+    url: String,
     response: &mut ureq::http::Response<ureq::Body>,
 ) -> Result<T> {
     let status = response.status();
@@ -385,8 +388,17 @@ fn decode<T: DeserializeOwned>(
         }
         .into());
     }
-    let body =
-        body.with_context(|| format!("the playground's answer to {method} {path} is not JSON"))?;
+    let body = match body {
+        Ok(body) => body,
+        Err(ureq::Error::Json(error)) if error.is_syntax() || error.is_data() => {
+            return Err(anyhow::Error::new(error).context(format!(
+                "the playground's answer to {method} {path} is not JSON"
+            )));
+        }
+        // The answer stopped short: the connection broke, as it does when the playground
+        // stops while answering.
+        Err(source) => return Err(Unanswered { url, source }.into()),
+    };
     serde_json::from_value(body)
         .with_context(|| format!("the playground's answer to {method} {path} is malformed"))
 }
@@ -412,4 +424,57 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .timeout_global(Some(timeout))
         .build()
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read as _, Write as _};
+
+    use super::*;
+
+    /// A playground stand-in on loopback that answers one request with `response`, then
+    /// closes the connection.
+    fn answering(response: &'static str) -> Running {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap_or(0) == 1 {
+                head.push(byte[0]);
+            }
+            let _ = stream.write_all(response.as_bytes());
+        });
+        Running {
+            record: InstanceRecord {
+                pid: 0,
+                control_port: port,
+                server_port: 0,
+                nonce: String::new(),
+            },
+            agent: long_agent(),
+            admin: "token".into(),
+        }
+    }
+
+    #[test]
+    fn an_answer_cut_off_mid_body_is_a_lost_connection() {
+        let running =
+            answering("HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n{\"kind\": \"show\"");
+        let error = running
+            .send::<Value>("POST", "/api/exec", None)
+            .unwrap_err();
+        assert!(error.downcast_ref::<Unanswered>().is_some(), "{error:#}");
+    }
+
+    #[test]
+    fn a_whole_answer_that_is_not_json_says_so() {
+        let running = answering("HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\nhello");
+        let error = running
+            .send::<Value>("POST", "/api/exec", None)
+            .unwrap_err();
+        assert!(error.downcast_ref::<Unanswered>().is_none(), "{error:#}");
+        assert!(format!("{error:#}").contains("is not JSON"), "{error:#}");
+    }
 }

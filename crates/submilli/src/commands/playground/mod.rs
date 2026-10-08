@@ -122,7 +122,8 @@ pub enum PlaygroundCmd {
     /// Draft a rule that allows exactly one refused call; `--write` puts it in the
     /// blueprint file. Works with the playground stopped.
     DraftRule(DraftRuleArgs),
-    /// Remove every stored run and start a new audit window. Run ids keep counting.
+    /// Remove every stored run and its sessions' events, and start a new audit window.
+    /// Run ids keep counting, and started sessions stay listed.
     Clear(OutputArgs),
     /// Cancel a run in flight.
     Cancel(RunArg),

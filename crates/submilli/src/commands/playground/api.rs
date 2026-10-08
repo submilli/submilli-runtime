@@ -29,7 +29,7 @@ use super::controls::read::{self, AuditQuery, RunsQuery, Since};
 use super::controls::render::EXIT_FAILURE;
 use super::controls::{ReadError, Reader};
 use super::host::{self, ControlState};
-use super::store::events::{EventBody, StoredEvent};
+use super::store::events::{EventBody, LogPosition, StoredEvent};
 use super::store::run::DecisionRef;
 
 /// Who may call a route.
@@ -613,8 +613,8 @@ pub(crate) mod feed {
 struct Feed {
     state: ControlState,
     session: String,
-    /// Where the next read of the log starts, in bytes.
-    offset: u64,
+    /// Where the next read of the log starts.
+    position: LogPosition,
     /// The last sequence number read; events after it are next.
     cursor: u64,
     /// Events read before `resume_after` were sent on an earlier connection.
@@ -676,7 +676,7 @@ async fn events(
         stopping: state.stopping(),
         state,
         session,
-        offset: 0,
+        position: LogPosition::default(),
         cursor: 0,
         resume_after,
         in_flight: HashMap::new(),
@@ -694,7 +694,8 @@ async fn events(
 }
 
 /// Whether the playground knows `session`: open on the server, started here, or with
-/// events in the store.
+/// events in the store. A lookup that fails counts as known, so a passing failure
+/// serves the stream rather than answering 404 for a real session.
 async fn session_known(state: &ControlState, session: &str) -> bool {
     if matches!(
         submilli_server::record::session_variables(&state.actions().app, session).await,
@@ -733,16 +734,12 @@ impl Feed {
             }
             if self.in_flight.is_empty() && self.returning.is_empty() && !self.session_open().await
             {
-                // Whatever the session's last run appended before it ended goes first.
+                // Whatever the session's last run appended before it ended goes first; a
+                // run that read shows still going or returning is followed to its end.
                 self.read().await;
-                if !self.ended {
-                    self.pending
-                        .push_back(
-                            Event::default().event(feed::SESSION_ENDED).data(
-                                json!({ "kind": feed::SESSION_ENDED, "session": self.session })
-                                    .to_string(),
-                            ),
-                        );
+                if !self.ended && self.in_flight.is_empty() && self.returning.is_empty() {
+                    let ended = self.feed_event(feed::SESSION_ENDED, None);
+                    self.pending.push_back(ended);
                     self.ended = true;
                 }
                 continue;
@@ -786,13 +783,13 @@ impl Feed {
     async fn read(&mut self) {
         let store = Arc::clone(&self.state.actions().store);
         let session = self.session.clone();
-        let offset = self.offset;
+        let position = self.position;
         let read =
-            tokio::task::spawn_blocking(move || store.read_events_from(Some(&session), offset))
+            tokio::task::spawn_blocking(move || store.read_events_from(Some(&session), position))
                 .await;
         let events = match read {
-            Ok(Ok((events, offset))) => {
-                self.offset = offset;
+            Ok(Ok((events, position))) => {
+                self.position = position;
                 events
             }
             Ok(Err(error)) => return self.fail(&error.to_string()),
@@ -811,11 +808,8 @@ impl Feed {
         }
         finished |= self.settle();
         if finished && self.in_flight.is_empty() && self.returning.is_empty() {
-            self.pending.push_back(
-                Event::default()
-                    .event(feed::RUN_IDLE)
-                    .data(json!({ "kind": feed::RUN_IDLE, "session": self.session }).to_string()),
-            );
+            let idle = self.feed_event(feed::RUN_IDLE, None);
+            self.pending.push_back(idle);
         }
     }
 
@@ -847,9 +841,10 @@ impl Feed {
     }
 
     /// Lets go of the runs that will not finish as the log tells it: a finished run whose
-    /// `returned` event its grace has waited for, and a run this playground's recorder
-    /// never started, which a playground that crashed left unfinished. Whether one of
-    /// them finished after the resume point.
+    /// `returned` event its grace has waited for, and a run the recorder no longer
+    /// follows: one a playground that crashed left unfinished, or one that ended long
+    /// enough ago without its end reaching the log. Whether one of them finished after
+    /// the resume point.
     fn settle(&mut self) -> bool {
         let resume_after = self.resume_after;
         let mut finished = false;
@@ -860,21 +855,27 @@ impl Feed {
         });
         let recorder = &self.state.actions().recorder;
         self.in_flight.retain(|run, seq| {
-            let running = recorder.knows(run);
-            finished |= !running && *seq > resume_after;
-            running
+            let followed = recorder.follows(run);
+            finished |= !followed && *seq > resume_after;
+            followed
         });
         finished
     }
 
     fn fail(&mut self, message: &str) {
-        self.pending.push_back(
-            Event::default().event(feed::FEED_ERROR).data(
-                json!({ "kind": feed::FEED_ERROR, "session": self.session, "message": message })
-                    .to_string(),
-            ),
-        );
+        let failed = self.feed_event(feed::FEED_ERROR, Some(message));
+        self.pending.push_back(failed);
         self.ended = true;
+    }
+
+    /// One of the feed's own events, `kind`, naming the session, with `message` when it
+    /// has one.
+    fn feed_event(&self, kind: &'static str, message: Option<&str>) -> Event {
+        let mut data = json!({ "kind": kind, "session": self.session });
+        if let Some(message) = message {
+            data["message"] = json!(message);
+        }
+        Event::default().event(kind).data(data.to_string())
     }
 }
 

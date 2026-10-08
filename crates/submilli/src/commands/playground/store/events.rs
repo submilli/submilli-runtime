@@ -13,8 +13,10 @@
 //! backfilled.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
@@ -145,6 +147,14 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
     sha2::Sha256::digest(bytes).into()
 }
 
+/// Where a reader following a session's log is: past `offset` bytes of the log as it was
+/// after the store's `clears`-th clear.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LogPosition {
+    pub(crate) clears: u64,
+    pub(crate) offset: u64,
+}
+
 /// Appends events, numbering each session's from 1.
 pub(crate) struct Appender {
     dir: PathBuf,
@@ -156,6 +166,9 @@ pub(crate) struct Appender {
     /// Counts the lines appended to any log, so a reader following one wakes when it may
     /// have grown instead of polling it.
     appended: tokio::sync::watch::Sender<u64>,
+    /// How many times the logs were removed in this process; a reader's offset into a
+    /// log from before the last removal means nothing in the log after it.
+    clears: AtomicU64,
 }
 
 impl Appender {
@@ -165,6 +178,7 @@ impl Appender {
             writable,
             last: Mutex::new(HashMap::new()),
             appended: tokio::sync::watch::Sender::new(0),
+            clears: AtomicU64::new(0),
         }
     }
 
@@ -210,12 +224,57 @@ impl Appender {
         Ok(Some(event.session_seq))
     }
 
-    /// Forgets the numbering, after the logs were removed.
-    pub(crate) fn reset(&self) {
-        self.last
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+    /// Removes every session's log. Numbering carries on past what each log held, so a
+    /// sequence number never names two events, and a reader following a log starts the
+    /// new one from its beginning.
+    pub(super) fn remove_logs(&self) -> Result<()> {
+        if !self.writable {
+            return Err(StoreError::ReadOnly {
+                path: self.dir.clone(),
+            });
+        }
+        // Held throughout, so no append lands between a log's removal and the count.
+        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        let removed = self.remove_each_log(&mut last);
+        // Counted even when a removal failed part way, as some logs may be gone.
+        self.clears.fetch_add(1, Ordering::SeqCst);
+        drop(last);
+        self.appended
+            .send_modify(|count| *count = count.wrapping_add(1));
+        removed
+    }
+
+    /// Removes each log in the directory, first noting in `last` the number its
+    /// numbering carries on from.
+    fn remove_each_log(&self, last: &mut HashMap<String, u64>) -> Result<()> {
+        let entries = match std::fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(io_error(&self.dir)(error)),
+        };
+        for entry in entries {
+            let entry = entry.map_err(io_error(&self.dir))?;
+            let path = entry.path();
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if !name.ends_with(".jsonl") {
+                continue;
+            }
+            if let Entry::Vacant(numbered) = last.entry(name) {
+                numbered.insert(last_seq(&path)?);
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(io_error(&path)(error)),
+            }
+        }
+        Ok(())
+    }
+
+    fn clears(&self) -> u64 {
+        self.clears.load(Ordering::SeqCst)
     }
 }
 
@@ -245,16 +304,34 @@ impl Store {
         })
     }
 
-    /// The events in the complete lines of a session's log from byte `offset` on, and
-    /// the offset just past the last of them: a reader following the log passes it back
+    /// The events in the complete lines of a session's log from position `from` on, and
+    /// the position just past the last of them: a reader following the log passes it back
     /// to read each line once, and a line still being written waits for its newline. A
-    /// line that does not parse is skipped; one in a newer format is refused. An offset
-    /// past the end, after the logs were cleared, reads from the start.
+    /// line that does not parse is skipped; one in a newer format is refused. A position
+    /// from before the logs were cleared, or past the end of the log, reads from the
+    /// start.
     pub(crate) fn read_events_from(
         &self,
         session: Option<&str>,
-        offset: u64,
-    ) -> Result<(Vec<StoredEvent>, u64)> {
+        from: LogPosition,
+    ) -> Result<(Vec<StoredEvent>, LogPosition)> {
+        // A clear during the read may have removed the log read, so it is read again.
+        loop {
+            let clears = self.events.clears();
+            let offset = if from.clears == clears {
+                from.offset
+            } else {
+                0
+            };
+            let (events, offset) = self.read_log_from(session, offset)?;
+            if self.events.clears() == clears {
+                return Ok((events, LogPosition { clears, offset }));
+            }
+        }
+    }
+
+    /// [`Self::read_events_from`] from byte `offset` of the log as it is now.
+    fn read_log_from(&self, session: Option<&str>, offset: u64) -> Result<(Vec<StoredEvent>, u64)> {
         use std::io::{Read as _, Seek as _};
         let path = self.events_path(session);
         let mut file = match std::fs::File::open(&path) {

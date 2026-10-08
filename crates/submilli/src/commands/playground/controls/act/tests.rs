@@ -571,6 +571,22 @@ fn a_refusal_naming_a_field_of_the_call_keeps_the_name_in_run_data() {
 }
 
 #[test]
+fn a_call_field_called_name_is_not_mistaken_for_the_rule_name() {
+    let refused = draft_error(
+        &DraftError::UnsafeValue {
+            field: "name".into(),
+            character: '\n',
+        },
+        DecisionRef { run: 4, n: 2 },
+    );
+    assert_eq!(refused.kind, "draft-refused", "{}", refused.message);
+    assert_eq!(refused.exit, EXIT_FAILURE);
+    assert!(!refused.message.contains("--name"), "{}", refused.message);
+    let answer: Answer = refused.into();
+    assert_eq!(answer.result["untrusted"]["field"], "name");
+}
+
+#[test]
 fn every_note_prints_on_lines_without_control_characters() {
     let answer = Answer {
         exit: EXIT_FAILURE,
@@ -623,8 +639,46 @@ fn a_context_holding_a_redacted_secret_is_not_drafted_from() {
     )
     .unwrap_err();
     assert_eq!(refused.kind, "redacted-value", "{}", refused.message);
-    assert!(refused.message.contains("redacted"), "{}", refused.message);
+    assert!(
+        refused
+            .message
+            .contains("holds `[redacted]`, the text the store writes in place of a secret"),
+        "{}",
+        refused.message
+    );
     assert_eq!(std::fs::read_to_string(&file).unwrap(), BLUEPRINT);
+}
+
+#[test]
+fn a_redaction_marker_in_a_field_the_draft_does_not_compare_is_drafted_from() {
+    let mut fixture = Fixture::new();
+    fixture.version(BLUEPRINT, json!("initial"), "The first version.");
+    let mut denied = charges_denied(0, "cus_initech");
+    denied.context = json!({
+        "customerId": "cus_initech",
+        "meta": { "token": "[redacted]", "[redacted]": 1 },
+        "tags": ["[redacted]"],
+    });
+    let run = fixture.run(RunSpec::new(vec![denied]).version(1));
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("billing.yaml");
+    std::fs::write(&file, BLUEPRINT).unwrap();
+    let drafted = draft_rule(
+        &fixture.store,
+        &file,
+        root(&file),
+        DecisionRef { run, n: 1 },
+        false,
+        None,
+        &Page::default(),
+    )
+    .unwrap();
+    let rule = &drafted.untrusted.rule;
+    assert!(
+        rule.contains("customerId == ") && rule.contains("cus_initech"),
+        "{rule}"
+    );
+    assert!(!rule.contains("redacted"), "{rule}");
 }
 
 #[test]
@@ -726,4 +780,37 @@ fn a_variable_the_blueprint_does_not_declare_is_named_as_undeclared() {
     );
     assert!(!refused.message.contains("bind"), "{}", refused.message);
     assert!(undeclared_variables(&blueprint, ["customerId".to_owned()].iter()).is_none());
+}
+
+#[test]
+fn a_secret_named_as_a_variable_is_pointed_at_the_secret_binding() {
+    let blueprint = submilli_blueprint::parse(&format!(
+        "{BLUEPRINT}secrets:\n  API_KEY:\n    harness:\n      required: true\n"
+    ))
+    .unwrap();
+    let refused = undeclared_variables(&blueprint, ["API_KEY".to_owned()].iter()).unwrap();
+    assert!(
+        refused.message.contains("API_KEY is a secret")
+            && refused.message.contains("bind --secret API_KEY"),
+        "{}",
+        refused.message
+    );
+    assert_next_is_safe(&refused.next);
+}
+
+#[test]
+fn a_request_is_refused_only_past_the_playgrounds_body_limit() {
+    let padded = |size: usize| {
+        let body = json!({ "code": "" });
+        let overhead = body.to_string().len();
+        json!({ "code": "x".repeat(size - overhead) })
+    };
+    let at_limit = padded(MAX_BODY_BYTES);
+    assert_eq!(at_limit.to_string().len(), MAX_BODY_BYTES);
+    assert!(too_large(Some(&at_limit)).is_none());
+    let refused = too_large(Some(&padded(MAX_BODY_BYTES + 1))).unwrap();
+    assert_eq!(refused.kind, "too-large");
+    assert_eq!(refused.exit, EXIT_USAGE);
+    assert!(!refused.message.contains("program"), "{}", refused.message);
+    assert!(too_large(None).is_none());
 }

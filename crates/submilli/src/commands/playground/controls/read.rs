@@ -852,12 +852,20 @@ pub(crate) fn show(
     id: u64,
     include_payloads: bool,
 ) -> Result<ShowResult, ReadError> {
-    let run = reader.load(id)?;
+    show_stored(reader, &reader.load(id)?, include_payloads)
+}
+
+/// [`show`] of a run already loaded.
+pub(crate) fn show_stored(
+    reader: &Reader,
+    run: &StoredRun,
+    include_payloads: bool,
+) -> Result<ShowResult, ReadError> {
     let changes = reader.changes()?;
     let under = DecidedUnder::find(&changes, run.recording.blueprint_version.as_deref());
     let mut untrusted = ShowUntrusted::default();
-    let lines = decision_lines(&run, &under, &mut untrusted);
-    let calls = call_summary(&run, include_payloads, &mut untrusted);
+    let lines = decision_lines(run, &under, &mut untrusted);
+    let calls = call_summary(run, include_payloads, &mut untrusted);
 
     let is_test = run.entry == "test" || run.test_of.is_some();
     // A test run whose stored report names no stop was cancelled, not stopped.
@@ -882,7 +890,7 @@ pub(crate) fn show(
         .map(|result| cap_text(result, include_payloads));
     untrusted.console = cap_text(&run.console, include_payloads);
 
-    let denied = denied_refs(&run);
+    let denied = denied_refs(run);
     let outcome = Outcome::of(
         run.error.as_ref().map(|error| error.kind),
         run.dispatched,
@@ -890,20 +898,20 @@ pub(crate) fn show(
         denied.last().copied(),
     );
     let test = if is_test {
-        let (info, test_untrusted) = test_info(reader, &run, &outcome);
+        let (info, test_untrusted) = test_info(reader, run, &outcome);
         untrusted.test = test_untrusted;
         Some(info)
     } else {
         None
     };
     let rerun_of = reader.reruns()?.get(&run.id).copied();
-    let next = show_next(&run, &lines, test.as_ref(), rerun_of);
+    let next = show_next(run, &denied, &lines, test.as_ref(), rerun_of);
     let refs = (1..=run.recording.decisions.len())
         .map(|n| DecisionRef { run: run.id, n })
         .collect();
     Ok(ShowResult {
         kind: "run",
-        header: reader.header(&run, refs),
+        header: reader.header(run, refs),
         blueprint: run.recording.blueprint_name.clone(),
         entry: run.entry.clone(),
         started_at_micros: run.started_at_micros,
@@ -1010,25 +1018,20 @@ fn call_summary(
     calls
 }
 
-/// What `show` suggests next: explaining and drafting from its first denials, comparing
-/// a test or rerun with its source, and the other runs of its session.
+/// What `show` suggests next: explaining and drafting from the first of the denials it
+/// lists (`denied`), comparing a test or rerun with its source, and the other runs of its
+/// session.
 fn show_next(
     run: &StoredRun,
+    denied: &[DecisionRef],
     lines: &[DecisionLine],
     test: Option<&TestInfo>,
     rerun_of: Option<u64>,
 ) -> Vec<String> {
     let mut suggestions = Vec::new();
-    let denials = run
-        .recording
-        .decisions
-        .iter()
-        .enumerate()
-        .filter(|(_, record)| is_denial(record))
-        .map(|(position, _)| reference(run.id, position));
-    for denial in denials.take(2) {
-        suggestions.push(Next::Explain(denial));
-        suggestions.push(Next::DraftRule(denial));
+    for denial in denied.iter().take(2) {
+        suggestions.push(Next::Explain(*denial));
+        suggestions.push(Next::DraftRule(*denial));
     }
     if let Some(source) = test.and_then(|test| test.source_run) {
         suggestions.push(Next::Compare(source, run.id));
@@ -1873,17 +1876,6 @@ pub(crate) fn changes(reader: &Reader, only: Option<u64>) -> Result<ChangesResul
 
 // ---- sessions ------------------------------------------------------------------------------
 
-/// How long the blueprint in force lets a session sit idle before the server expires it:
-/// the change log's latest version, or the default before any is logged.
-fn idle_timeout(reader: &Reader) -> Result<std::time::Duration, ReadError> {
-    let changes = reader.changes()?;
-    Ok(changes
-        .current()
-        .and_then(|version| submilli_blueprint::parse(&version.bytes).ok())
-        .unwrap_or_default()
-        .idle_timeout)
-}
-
 #[derive(Debug, Serialize)]
 pub(crate) struct SessionsResult {
     pub(crate) kind: &'static str,
@@ -1906,16 +1898,57 @@ pub(crate) struct SessionRow {
     pub(crate) denied: bool,
     /// For a session started through the playground: whether it is still open.
     pub(crate) open: Option<bool>,
-    /// A started session not ended here but idle longer than the blueprint's idle
-    /// timeout, which the server has let expire.
+    /// A started session not ended here but idle longer than the idle timeout it
+    /// started with, which the server has let expire.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) expired: bool,
     /// When it last did something: its start, or its last run's end.
     #[serde(skip)]
     last_active_micros: u64,
+    /// The idle timeout its start recorded, in milliseconds.
+    #[serde(skip)]
+    idle_timeout_ms: Option<u64>,
 }
 
-/// The sessions, newest first; a started session idle past the idle timeout at
+/// `id`'s row, added with no runs, first seen at `at`, when there is none yet.
+fn session_row<'r>(
+    rows: &'r mut BTreeMap<String, SessionRow>,
+    id: &str,
+    at: u64,
+) -> &'r mut SessionRow {
+    rows.entry(id.to_owned()).or_insert_with(|| SessionRow {
+        session: id.to_owned(),
+        started_at_micros: at,
+        started_at: String::new(),
+        sources: Vec::new(),
+        variables: BTreeMap::new(),
+        run_count: 0,
+        runs: Vec::new(),
+        denied: false,
+        open: None,
+        expired: false,
+        last_active_micros: at,
+        idle_timeout_ms: None,
+    })
+}
+
+/// Marks as expired, and no longer open, each open session idle at `now_micros` longer
+/// than the idle timeout it started with, as the server judges it. A session whose start
+/// recorded none is left as it is.
+fn mark_expired(rows: &mut BTreeMap<String, SessionRow>, now_micros: u64) {
+    for session in rows.values_mut() {
+        let Some(timeout_ms) = session.idle_timeout_ms else {
+            continue;
+        };
+        let idle = now_micros.saturating_sub(session.last_active_micros);
+        if session.open == Some(true) && idle > timeout_ms.saturating_mul(1000) {
+            session.open = Some(false);
+            session.expired = true;
+        }
+    }
+}
+
+/// The sessions, newest first; a started session idle past its idle timeout at
 /// `now_micros` lists as expired.
 pub(crate) fn sessions(
     reader: &Reader,
@@ -1923,30 +1956,15 @@ pub(crate) fn sessions(
     now_micros: u64,
 ) -> Result<SessionsResult, ReadError> {
     let mut rows: BTreeMap<String, SessionRow> = BTreeMap::new();
-    let row = |rows: &mut BTreeMap<String, SessionRow>, id: &str, at: u64| {
-        rows.entry(id.to_owned()).or_insert_with(|| SessionRow {
-            session: id.to_owned(),
-            started_at_micros: at,
-            started_at: String::new(),
-            sources: Vec::new(),
-            variables: BTreeMap::new(),
-            run_count: 0,
-            runs: Vec::new(),
-            denied: false,
-            open: None,
-            expired: false,
-            last_active_micros: at,
-        });
-    };
     if let Some(store) = &reader.store {
         for line in store.session_log()? {
-            row(&mut rows, line.entry.session_id(), line.at_micros);
-            let Some(session) = rows.get_mut(line.entry.session_id()) else {
-                continue;
-            };
+            let session = session_row(&mut rows, line.entry.session_id(), line.at_micros);
             match line.entry {
                 SessionEntry::Started {
-                    variables, label, ..
+                    variables,
+                    label,
+                    idle_timeout_ms,
+                    ..
                 } => {
                     session.started_at_micros = session.started_at_micros.min(line.at_micros);
                     session.last_active_micros = session.last_active_micros.max(line.at_micros);
@@ -1955,6 +1973,7 @@ pub(crate) fn sessions(
                         session.sources.push(label);
                     }
                     session.open = Some(true);
+                    session.idle_timeout_ms = idle_timeout_ms;
                 }
                 SessionEntry::Ended { .. } => session.open = Some(false),
             }
@@ -1964,10 +1983,7 @@ pub(crate) fn sessions(
         let Some(id) = &summary.session_id else {
             continue;
         };
-        row(&mut rows, id, summary.started_at_micros);
-        let Some(session) = rows.get_mut(id) else {
-            continue;
-        };
+        let session = session_row(&mut rows, id, summary.started_at_micros);
         session.started_at_micros = session.started_at_micros.min(summary.started_at_micros);
         if session.variables.is_empty() {
             session.variables = summary.variables.clone();
@@ -1983,14 +1999,7 @@ pub(crate) fn sessions(
             .saturating_add(summary.wall_ms.saturating_mul(1000));
         session.last_active_micros = session.last_active_micros.max(ended);
     }
-    let idle_timeout = idle_timeout(reader)?;
-    for session in rows.values_mut() {
-        let idle = now_micros.saturating_sub(session.last_active_micros);
-        if session.open == Some(true) && u128::from(idle) > idle_timeout.as_micros() {
-            session.open = Some(false);
-            session.expired = true;
-        }
-    }
+    mark_expired(&mut rows, now_micros);
     let mut sessions: Vec<SessionRow> = rows.into_values().collect();
     sessions.sort_by(|a, b| {
         b.started_at_micros

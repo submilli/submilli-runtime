@@ -48,6 +48,8 @@ aho-corasick = "1"
 # filesystem events, which is all it needs, since it re-reads the file each time.
 notify-debouncer-mini = "0.7"
 futures = { workspace = true }
+# General categories, so control output escapes every format character by category.
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 
 [dev-dependencies]
 rcgen.workspace = true

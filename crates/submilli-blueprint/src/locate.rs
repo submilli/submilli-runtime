@@ -510,8 +510,9 @@ default: deny
         }
     }
 
-    /// The blueprint parser also breaks lines at NEL, LS, and PS, and a lone
-    /// carriage return; this parser does not, so its rule count can differ.
+    /// NEL, LS, and PS break lines for the blueprint parser but not for this
+    /// one, and a lone carriage return breaks lines for this parser but not
+    /// for `str::lines`, so the rules or lines it reports can differ.
     #[test]
     fn line_breaks_the_blueprint_parser_reads_differently_fall_back_to_the_index() {
         for brk in ["\u{85}", "\u{2028}", "\u{2029}", "\r"] {

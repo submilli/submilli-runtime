@@ -31,6 +31,11 @@ pub(crate) enum SessionEntry {
         /// Who started it: the playground's label for the runs it holds (`assistant`,
         /// `example`, ...).
         label: String,
+        /// How long, in milliseconds, the server lets it sit idle before expiring it:
+        /// the blueprint's idle timeout when it started, fixed for its life. Absent from
+        /// lines written before it was recorded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        idle_timeout_ms: Option<u64>,
     },
     /// The session was closed.
     Ended { session_id: String },
@@ -83,6 +88,7 @@ mod tests {
                 session_id: "s-1".into(),
                 variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
                 label: "assistant".into(),
+                idle_timeout_ms: None,
             })
             .unwrap();
         // A write cut short by a crash.
