@@ -5038,7 +5038,14 @@ impl Inferer<'_> {
             .iter()
             .any(|m| matches!(m, crate::ObjectLiteralMember::Spread { .. }));
 
-        if let Some((key, table)) = self.union_discriminant_with_nominals(members) {
+        // A `null` member has no tag, so the tag is looked for among the
+        // others: `{ k: "a", … }` picks `A` from `A | B | null`.
+        let tagged: Vec<&Type> = members
+            .iter()
+            .filter(|member| !matches!(member.peel(), Type::Null))
+            .collect();
+        let tagged_types: Vec<Type> = tagged.iter().map(|member| (*member).clone()).collect();
+        if let Some((key, table)) = self.union_discriminant_with_nominals(&tagged_types) {
             let tag_value = literal
                 .iter()
                 .rev()
@@ -5058,7 +5065,7 @@ impl Inferer<'_> {
             if let Some(value) = tag_value
                 && let Some(idx) = table.get(&value)
             {
-                return Ok(members.get(idx.0 as usize));
+                return Ok(tagged.get(idx.0 as usize).copied());
             }
         }
         // A member with an index signature takes any names, so the names alone
