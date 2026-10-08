@@ -1349,7 +1349,9 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let session = started["session"].as_str().unwrap().to_owned();
             let program = playground.write(
                 "loop.ts",
-                "import { listCharges } from \"@acme/billing\";\nfunction main(): number {\n  let total = 0;\n  for (let i = 0; i < 10000000; i++) { total += listCharges(\"cus_northwind\").length; }\n  return total;\n}\n",
+                // Pure computation, with no calls a test run could stop at, so each run
+                // is still going when it is cancelled.
+                "function main(): number {\n  let total = 0;\n  for (let i = 0; i < 100000000000; i++) { total += i % 3; }\n  return total;\n}\n",
             );
             let running = playground
                 .command(&["exec", &program, "--session", &session, "--json"])
