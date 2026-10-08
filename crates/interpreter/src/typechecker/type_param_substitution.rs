@@ -329,6 +329,59 @@ impl TypeParamSubstitution {
         self.replaceable.retain(|name| !mentioned(name));
     }
 
+    /// Take each type parameter `should_restore` accepts back to what
+    /// `before` held for it: its binding and how it may still change. Close
+    /// matches stay, as their callers forget or check them on their own.
+    pub fn restore_bindings(
+        &mut self,
+        before: &TypeParamSubstitution,
+        should_restore: impl Fn(&str) -> bool,
+    ) {
+        let TypeParamSubstitution {
+            bindings,
+            replaceable,
+            widenable,
+            narrowable,
+            literal_candidates,
+            several_literal_candidates,
+            whole_union_fallbacks,
+            close_matches: _,
+        } = before;
+        let names: std::collections::BTreeSet<String> = self
+            .bindings
+            .keys()
+            .chain(bindings.keys())
+            .chain(self.whole_union_fallbacks.keys())
+            .chain(whole_union_fallbacks.keys())
+            .filter(|name| should_restore(name))
+            .cloned()
+            .collect();
+        for name in names {
+            restore_entry(&mut self.bindings, bindings, &name);
+            restore_entry(
+                &mut self.whole_union_fallbacks,
+                whole_union_fallbacks,
+                &name,
+            );
+            for (set, was) in [
+                (&mut self.replaceable, replaceable),
+                (&mut self.widenable, widenable),
+                (&mut self.narrowable, narrowable),
+                (&mut self.literal_candidates, literal_candidates),
+                (
+                    &mut self.several_literal_candidates,
+                    several_literal_candidates,
+                ),
+            ] {
+                if was.contains(&name) {
+                    set.insert(name.clone());
+                } else {
+                    set.remove(&name);
+                }
+            }
+        }
+    }
+
     pub fn insert(&mut self, name: String, ty: Type) {
         self.bindings.insert(name, ty);
     }
@@ -1948,6 +2001,14 @@ fn holds_class_instance(ty: &Type) -> bool {
         Type::Alias { ty: inner, .. } => holds_class_instance(inner),
         _ => false,
     }
+}
+
+/// Set `map`'s entry for `name` to what `before` held for it.
+fn restore_entry(map: &mut BTreeMap<String, Type>, before: &BTreeMap<String, Type>, name: &str) {
+    match before.get(name) {
+        Some(ty) => map.insert(name.to_string(), ty.clone()),
+        None => map.remove(name),
+    };
 }
 
 #[cfg(test)]

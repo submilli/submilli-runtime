@@ -1233,7 +1233,7 @@ impl Inferer<'_> {
     /// widens what they return to `() => number`. An empty list when `arg`
     /// spreads another object; every one of `inferred` when `arg` is not an
     /// object literal or `param_ty` has no object shape.
-    fn type_params_of_one_field(
+    pub(super) fn type_params_of_one_field(
         &self,
         arg: ExprId,
         param_ty: &Type,
@@ -1330,7 +1330,7 @@ impl Inferer<'_> {
 
     /// The object shapes of `ty`: an object type, an interface with the
     /// members it extends, or those among a union's members.
-    fn object_shapes(&self, ty: &Type) -> Vec<BTreeMap<String, crate::ObjectField>> {
+    pub(super) fn object_shapes(&self, ty: &Type) -> Vec<BTreeMap<String, crate::ObjectField>> {
         match ty.peel() {
             Type::Object { fields, .. } => vec![fields.clone()],
             interface @ Type::InterfaceRef { .. } => {
@@ -1605,7 +1605,7 @@ impl Inferer<'_> {
         Ok(ahead)
     }
 
-    fn function_literal_params(
+    pub(super) fn function_literal_params(
         &self,
         expr: ExprId,
     ) -> Result<Option<Vec<crate::ParamDecl>>, CompilerFailure> {
@@ -1711,6 +1711,8 @@ impl Inferer<'_> {
                 }
                 if deferred {
                     fix_callback_parameters(sub, &param_ty, inferred_generics);
+                } else {
+                    self.prebind_from_literal_argument(i, &args_with_param_types, &arguments, sub)?;
                 }
                 let errors_before = self.error_count();
                 let diagnostics_before = self.diagnostics.len();
@@ -1804,7 +1806,7 @@ impl Inferer<'_> {
     /// Infer one argument of a generic call against `param_ty`, with what
     /// `sub` has bound so far as its hint, and return the type to unify with
     /// `param_ty`: a fresh literal widened where tsc would widen it.
-    fn infer_generic_argument(
+    pub(super) fn infer_generic_argument(
         &mut self,
         arg_id: ExprId,
         param_ty: &Type,
@@ -2028,7 +2030,7 @@ impl Inferer<'_> {
 
     /// Whether `expr` is an object or array literal, in parentheses or as both
     /// of a conditional's branches.
-    fn builds_literal(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+    pub(super) fn builds_literal(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         Ok(
             match &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
                 ExprKind::ObjectLiteral { .. } | ExprKind::ArrayLiteral { .. } => true,
@@ -2512,9 +2514,9 @@ struct ArgumentCheck {
 }
 
 /// What every argument of one generic call is inferred with.
-struct GenericArguments<'a> {
+pub(super) struct GenericArguments<'a> {
     /// The type parameters the call infers rather than takes as written.
-    inferred_generics: &'a [String],
+    pub(super) inferred_generics: &'a [String],
     /// Those that only object and array literals are candidates for
     /// ([`super::inference_sources`]).
     sourced_by_literals: Vec<String>,

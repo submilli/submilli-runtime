@@ -1982,6 +1982,13 @@ impl<'a> Inferer<'a> {
     }
 
     pub(super) fn record_runtime_type_test(&mut self, ty: &Type) -> Result<(), CompilerFailure> {
+        // A type holding an error type belongs to an expression whose error
+        // stops compilation, or to one inferred only to bind type
+        // parameters early (see `literal_prebinding`), which codegen never
+        // reaches; neither needs a runtime test.
+        if super::literal_prebinding::holds_error_type(ty) {
+            return Ok(());
+        }
         self.record_runtime_type_test_inner(ty, RuntimeTestMode::General, &mut BTreeSet::new())?;
         Ok(())
     }

@@ -12061,7 +12061,10 @@ fn fields_with_missing<'a>(
 
 /// The function literal `expr` is through parentheses: the arrow itself, or
 /// the function of an anonymous function expression.
-fn function_literal(ast: &crate::Ast, expr: ExprId) -> Result<Option<ExprId>, CompilerFailure> {
+pub(super) fn function_literal(
+    ast: &crate::Ast,
+    expr: ExprId,
+) -> Result<Option<ExprId>, CompilerFailure> {
     let id = peel_parens(ast, expr)?;
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {

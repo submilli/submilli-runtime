@@ -24,6 +24,7 @@ mod import_graph;
 mod imports;
 mod inference_sources;
 mod literal_freshness;
+mod literal_prebinding;
 mod lookup;
 pub(in crate::typechecker) mod module_symbols;
 mod namespace_symbol;
@@ -130,6 +131,7 @@ pub fn infer_with_transitive_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        prebinding: false,
         returns_into_void_context: false,
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
@@ -411,6 +413,7 @@ pub fn infer_package_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        prebinding: false,
         returns_into_void_context: false,
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
@@ -746,6 +749,10 @@ pub(super) struct Inferer<'a> {
     /// `keeps_literal_types`, so it doesn't reach a conditional's branches,
     /// whose function types couldn't form one callable union.
     next_function_keeps_returned_literals: bool,
+    /// A generic call's literal argument is being prebound
+    /// ([`Inferer::prebind_from_literal_argument`]), so the calls inferred
+    /// within it don't prebind their own.
+    prebinding: bool,
     /// The unannotated function literal being inferred is in a `void`
     /// context, so a bare `return` in it yields `null` (see `infer_return`).
     returns_into_void_context: bool,
