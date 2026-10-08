@@ -12,9 +12,12 @@ const MARKER: char = '\u{10FFFE}';
 /// The code point after [`MARKER`] that names U+D800; U+DFFF is 0x7FF above.
 const SURROGATE_BASE: u32 = 0x10_0000;
 const SURROGATES: std::ops::RangeInclusive<u32> = 0xD800..=0xDFFF;
+const HIGH_SURROGATES: std::ops::RangeInclusive<u32> = 0xD800..=0xDBFF;
+const LOW_SURROGATES: std::ops::RangeInclusive<u32> = 0xDC00..=0xDFFF;
 
 /// Append the code unit `unit` to literal text if it is a surrogate, returning
-/// whether it was.
+/// whether it was. A low surrogate right after a lone high one joins it into
+/// one character, so `"\u{D83D}\u{DE00}"` is the same text as `"😀"`.
 pub(crate) fn push_lone_surrogate(out: &mut String, unit: u32) -> bool {
     let Some(named) = SURROGATES
         .contains(&unit)
@@ -23,34 +26,48 @@ pub(crate) fn push_lone_surrogate(out: &mut String, unit: u32) -> bool {
     else {
         return false;
     };
-    if (0xDC00..=0xDFFF).contains(&unit)
-        && let Some(high) = take_trailing_high_surrogate(out)
+    if LOW_SURROGATES.contains(&unit)
+        && let Some(high) = trailing_high_surrogate(out)
+        && let Some(Ok(pair)) = char::decode_utf16([high, unit as u16]).next()
     {
-        let code = 0x10000 + ((u32::from(high) - 0xD800) << 10) + (unit - 0xDC00);
-        if let Some(c) = char::from_u32(code) {
-            push_literal_char(out, c);
-            return true;
-        }
+        // Drop the marker and the name the high half was written as.
+        out.pop();
+        out.pop();
+        push_literal_char(out, pair);
+        return true;
     }
     out.push(MARKER);
     out.push(named);
     true
 }
 
-/// Remove a lone high surrogate that ends `out`, so a low surrogate written
-/// after it forms one character, as `"\u{D83D}\u{DE00}"` must equal `"😀"`.
-fn take_trailing_high_surrogate(out: &mut String) -> Option<u16> {
+/// Append literal text to literal text, joining a lone high surrogate at the
+/// end of `out` with a lone low surrogate at the start of `text`, as
+/// concatenating the strings they stand for does.
+pub(crate) fn push_literal_text(out: &mut String, text: &str) {
+    let mut chars = text.chars();
+    if chars.next() == Some(MARKER)
+        && let Some(low) = chars.next().and_then(named_surrogate)
+        && LOW_SURROGATES.contains(&u32::from(low))
+        && push_lone_surrogate(out, u32::from(low))
+    {
+        out.push_str(chars.as_str());
+        return;
+    }
+    out.push_str(text);
+}
+
+/// The lone high surrogate that ends `out`, if one does.
+fn trailing_high_surrogate(out: &str) -> Option<u16> {
     let mut tail = out.chars().rev();
     let high = tail.next().and_then(named_surrogate)?;
+    if !HIGH_SURROGATES.contains(&u32::from(high)) {
+        return None;
+    }
     // The name counts only after an odd run of markers; an even run is
     // escaped markers followed by a genuine character.
     let markers = tail.take_while(|c| *c == MARKER).count();
-    if !(0xD800..=0xDBFF).contains(&high) || markers % 2 == 0 {
-        return None;
-    }
-    out.pop();
-    out.pop();
-    Some(high)
+    (markers % 2 == 1).then_some(high)
 }
 
 /// Append a character to literal text, escaping [`MARKER`].
@@ -128,6 +145,16 @@ mod tests {
             text_of(&[0xDE00, 0xD83D]),
             text_of(&[0xDE00]) + &text_of(&[0xD83D])
         );
+    }
+
+    #[test]
+    fn appended_text_joins_halves_across_the_seam() {
+        let mut text = text_of(&[0x61, 0xD83D]);
+        push_literal_text(&mut text, &text_of(&[0xDE00, 0x62]));
+        assert_eq!(text, "a😀b");
+        let mut doubled = text_of(&[0x10FFFE]);
+        push_literal_text(&mut doubled, &text_of(&[0x10FFFE]));
+        assert_eq!(doubled, text_of(&[0x10FFFE, 0x10FFFE]));
     }
 
     #[test]
