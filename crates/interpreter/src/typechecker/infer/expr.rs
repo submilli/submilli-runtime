@@ -8608,43 +8608,12 @@ impl Inferer<'_> {
                 })?;
                 let id = self.wrap_narrow_regions(id, &narrow_seed, span)?;
                 let collected = self.inferred_returns.take().unwrap_or_default();
-                let returns_into_unknown = ret_hint
-                    .as_ref()
-                    .is_some_and(|hint| matches!(hint.peel(), Type::Unknown));
-                let t = if let Some(t) = &annotated_ret {
-                    t.clone()
-                } else if returns_into_unknown && !collected.is_empty() {
-                    // Any return fits an `unknown` context, so the returns need
-                    // not agree and the body may fall off the end, as an
-                    // annotated `unknown` body may. A body with no `return`
-                    // stays `void`.
-                    Type::Unknown
-                } else if collected.is_empty() && !self.reachable {
-                    // No `return`, and the end of the body can't be reached: the
-                    // closure only throws, so it never returns, as tsc infers.
-                    Type::Never
-                } else if contextual_ret_is_void
-                    && (self.reachable || self.widest_return(&collected).is_none())
-                {
-                    // A `void` context discards whatever the closure returns,
-                    // so returns that share no type (`return;` beside `return
-                    // n;`), or a body that can also end without one, are
-                    // fine, as in tsc. The closure returns `unknown`, as an
-                    // `unknown` body may end or return nothing, so its values
-                    // still reach a caller that holds it as returning
-                    // `unknown`.
-                    if collected.iter().any(|(ty, _)| !ty.is_void()) {
-                        Type::Unknown
-                    } else {
-                        Type::Void
-                    }
-                } else {
-                    let collected = self.returned_types(collected);
-                    match self.returns_joined_by_context(&collected, ret_hint.as_ref()) {
-                        Some(joined) => joined,
-                        None => self.unify_returns(&collected),
-                    }
-                };
+                let t = self.block_body_return_type(
+                    annotated_ret.as_ref(),
+                    collected,
+                    ret_hint.as_ref(),
+                    contextual_ret_is_void,
+                );
                 (ClosureBody::Block(id), t)
             }
         };
@@ -8727,6 +8696,65 @@ impl Inferer<'_> {
             arrow_ty,
             hint_owned.is_some() && self.error_count() > errors_before,
         ))
+    }
+
+    /// The return type of a block-bodied function literal whose body has
+    /// just been inferred, from its `annotated_ret`, the returns `collected`
+    /// from it and the context's return type `ret_hint`. The rules apply in
+    /// order: the annotation; an `unknown` context; a body that only throws;
+    /// diverging returns beside a reachable end; a `void` context; the
+    /// context joining the returns; and last the returns unified.
+    fn block_body_return_type(
+        &mut self,
+        annotated_ret: Option<&Type>,
+        collected: Vec<(Type, Span)>,
+        ret_hint: Option<&Type>,
+        contextual_ret_is_void: bool,
+    ) -> Type {
+        let returns_into_unknown =
+            ret_hint.is_some_and(|hint| matches!(hint.peel(), Type::Unknown));
+        if let Some(t) = annotated_ret {
+            t.clone()
+        } else if returns_into_unknown && !collected.is_empty() {
+            // Any return fits an `unknown` context, so the returns need
+            // not agree and the body may fall off the end, as an
+            // annotated `unknown` body may. A body with no `return`
+            // stays `void`.
+            Type::Unknown
+        } else if collected.is_empty() && !self.reachable {
+            // No `return`, and the end of the body can't be reached: the
+            // closure only throws, so it never returns, as tsc infers.
+            Type::Never
+        } else if self.reachable
+            && collected
+                .iter()
+                .all(|(ty, _)| matches!(ty.peel(), Type::Never))
+        {
+            // Every `return` diverges, but the body can also end, which
+            // returns nothing: tsc infers `void`, not `never`.
+            Type::Void
+        } else if contextual_ret_is_void
+            && (self.reachable || self.widest_return(&collected).is_none())
+        {
+            // A `void` context discards whatever the closure returns,
+            // so returns that share no type (`return;` beside `return
+            // n;`), or a body that can also end without one, are
+            // fine, as in tsc. The closure returns `unknown`, as an
+            // `unknown` body may end or return nothing, so its values
+            // still reach a caller that holds it as returning
+            // `unknown`.
+            if collected.iter().any(|(ty, _)| !ty.is_void()) {
+                Type::Unknown
+            } else {
+                Type::Void
+            }
+        } else {
+            let collected = self.returned_types(collected);
+            match self.returns_joined_by_context(&collected, ret_hint) {
+                Some(joined) => joined,
+                None => self.unify_returns(&collected),
+            }
+        }
     }
 
     /// The context a function literal at `span` takes besides `expected`:
