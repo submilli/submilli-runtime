@@ -105,7 +105,8 @@ pub enum PlaygroundCmd {
     /// example, labeled `example`), under the binding or in a started session.
     Exec(ExecArgs),
     /// Set the variables and harness-secret development values new runs use, or print
-    /// them. Held in the running playground's memory only.
+    /// them. Variables are kept for the next start; secret values only in the running
+    /// playground's memory.
     Bind(BindArgs),
     /// Start a session with its variables fixed, or end one.
     Session(SessionArgs),
@@ -125,8 +126,8 @@ pub enum PlaygroundCmd {
     Clear(OutputArgs),
     /// Cancel a run in flight.
     Cancel(RunArg),
-    /// Follow a session's events as JSON lines until its last run finishes. Without a
-    /// session, follows the most recent one.
+    /// Follow a session's events as JSON lines until its last run finishes (`--follow`:
+    /// until the session ends). Without a session, follows the most recent one.
     Watch(WatchArgs),
 }
 
@@ -239,6 +240,10 @@ pub struct DraftRuleArgs {
     /// Write the rule into the blueprint file.
     #[arg(long)]
     write: bool,
+    /// Name the rule, so decisions cite it by name; written as its first key. It must
+    /// be new to its caller's block.
+    #[arg(long, value_name = "NAME")]
+    name: Option<String>,
     /// Print JSON.
     #[arg(long)]
     json: bool,
@@ -249,6 +254,10 @@ pub struct WatchArgs {
     /// The session to follow.
     #[arg(value_name = "SESSION")]
     session: Option<String>,
+    /// Keep following after the session goes idle, until it ends or the playground
+    /// stops.
+    #[arg(long)]
+    follow: bool,
     /// Accepted for symmetry; `watch` always prints JSON lines.
     #[arg(long)]
     json: bool,
@@ -317,7 +326,7 @@ pub struct CompareArgs {
 
 #[derive(ClapArgs)]
 pub struct AuditArgs {
-    /// Only calls allowed by the default, which no rule names.
+    /// Only calls allowed by the default, which no rule matched.
     #[arg(long)]
     default_only: bool,
     /// Only calls made by packages.
@@ -583,12 +592,17 @@ fn action_command(cmd: PlaygroundCmd) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::DraftRule(args) => {
             let output = Output::from_json(args.json);
             return match args.decision.parse() {
-                Ok(decision) => Ok(execute_draft(decision, args.write, output)),
+                Ok(decision) => Ok(execute_draft(
+                    decision,
+                    args.write,
+                    args.name.as_deref(),
+                    output,
+                )),
                 Err(message) => usage(message),
             };
         }
         PlaygroundCmd::Watch(args) => {
-            return execute_watch(args.session, Output::from_json(args.json));
+            return execute_watch(args.session, args.follow, Output::from_json(args.json));
         }
         PlaygroundCmd::Start(_)
         | PlaygroundCmd::Status(_)
@@ -1168,10 +1182,10 @@ mod unix {
                 }
                 eprintln!(
                     "Start the playground with `submilli playground`; it builds {} and serves \
-                     blueprint `{}`. The example {} runs with customerId cus_northwind.",
+                     blueprint `{}`. Then run the example: `submilli playground bind \
+                     customerId=cus_northwind`, then `submilli playground exec --example`.",
                     scaffold::PACKAGE_NAME,
                     scaffold::BLUEPRINT_NAME,
-                    scaffold::EXAMPLE
                 );
             }
         }
@@ -1404,9 +1418,33 @@ mod unix {
                 if let Some(refused) = &blueprint.refused {
                     println!("  refused:    {}", describe_refusal(refused));
                 }
+                println!("  binding:    {}", binding_line(&status.binding));
             }
         }
         Ok(ExitCode::SUCCESS)
+    }
+
+    /// The binding on one line: the variables, and only the names of the secrets.
+    fn binding_line(binding: &host::BindingView) -> String {
+        use super::controls::render::clean;
+        let mut parts: Vec<String> = binding
+            .variables
+            .iter()
+            .map(|(name, value)| format!("{}={}", clean(name), clean(value)))
+            .collect();
+        if parts.is_empty() {
+            parts.push("no variables".to_owned());
+        }
+        if !binding.secrets.is_empty() {
+            parts.push(format!("secrets {}", clean(&binding.secrets.join(", "))));
+        }
+        if !binding.to_bind_again.is_empty() {
+            parts.push(format!(
+                "secrets to bind again after the restart: {}",
+                clean(&binding.to_bind_again.join(", "))
+            ));
+        }
+        parts.join("; ")
     }
 
     pub(super) fn open(output: Output) -> Result<ExitCode> {

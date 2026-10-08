@@ -450,7 +450,7 @@ fn log_lines(outcome: &Outcome, in_force: Option<u64>, was_refused: bool) -> Vec
                 .collect();
             lines.push(LogLine::Note(format!(
                 "blueprint: version {version} applied ({})\n{}",
-                diff.classification,
+                diff.classification.in_words(),
                 indent(&diff.summary())
             )));
             lines

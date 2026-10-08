@@ -518,14 +518,21 @@ struct Feed {
     in_flight: HashSet<String>,
     /// Ready to send.
     pending: VecDeque<Event>,
+    /// The session ended; the stream ends once `pending` is sent.
+    ended: bool,
     appended: tokio::sync::watch::Receiver<u64>,
     stopping: tokio::sync::watch::Receiver<bool>,
 }
 
+/// How often a quiet feed looks at whether its session is still open.
+const SESSION_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// `GET /api/sessions/{session}/events`: the session's event log as server-sent events,
 /// `id:` its sequence number, resuming after `Last-Event-ID`. Woken by each append; a
 /// `run-idle` event follows a batch in which a run of the session finished and none is
-/// left in flight. The stream ends when the playground stops.
+/// left in flight. Once the session has ended (or is gone) and its log is read to the
+/// end, a `session-ended` event closes the stream; it also ends when the playground
+/// stops.
 async fn events(
     State(state): State<ControlState>,
     Path(session): Path<String>,
@@ -545,13 +552,14 @@ async fn events(
         resume_after,
         in_flight: HashSet::new(),
         pending: VecDeque::new(),
+        ended: false,
     };
     let stream = futures::stream::unfold(feed, |mut feed| async move {
         loop {
             if let Some(event) = feed.pending.pop_front() {
                 return Some((Ok::<Event, Infallible>(event), feed));
             }
-            if *feed.stopping.borrow_and_update() {
+            if feed.ended || *feed.stopping.borrow_and_update() {
                 return None;
             }
             // Marked seen before the read, so an append during it wakes the wait below.
@@ -562,7 +570,21 @@ async fn events(
             if !feed.pending.is_empty() {
                 continue;
             }
+            if !feed.session_open().await {
+                // Whatever the session's last run appended before it ended goes first.
+                if !feed.read().await {
+                    return None;
+                }
+                feed.pending.push_back(
+                    Event::default().event("session-ended").data(
+                        json!({ "kind": "session-ended", "session": feed.session }).to_string(),
+                    ),
+                );
+                feed.ended = true;
+                continue;
+            }
             tokio::select! {
+                () = tokio::time::sleep(SESSION_CHECK) => {}
                 changed = feed.appended.changed() => {
                     if changed.is_err() {
                         return None;
@@ -582,6 +604,16 @@ async fn events(
 }
 
 impl Feed {
+    /// Whether the session is still open. A read that fails says nothing either way, so
+    /// the feed keeps following.
+    async fn session_open(&self) -> bool {
+        !matches!(
+            submilli_server::record::session_variables(&self.state.actions().app, &self.session)
+                .await,
+            Ok(None)
+        )
+    }
+
     /// Reads the events appended since the cursor and queues what this client has not
     /// had. `false` when the log cannot be read.
     async fn read(&mut self) -> bool {

@@ -27,6 +27,11 @@ fn denied_run(customer: &str) -> (Fixture, tempfile::TempDir, PathBuf, u64) {
     (fixture, dir, file, run)
 }
 
+/// The project root the tests' blueprint files sit in.
+fn root(file: &Path) -> &Path {
+    file.parent().unwrap()
+}
+
 fn assert_next_is_safe(next: &[String]) {
     for command in next {
         for word in command.split_whitespace() {
@@ -39,7 +44,16 @@ fn assert_next_is_safe(next: &[String]) {
 fn a_draft_prints_the_rule_as_run_data_and_leaves_the_file_alone() {
     let (fixture, _dir, file, run) = denied_run("cus_initech");
     let decision = DecisionRef { run, n: 2 };
-    let drafted = draft_rule(&fixture.store, &file, decision, false, &Page::default()).unwrap();
+    let drafted = draft_rule(
+        &fixture.store,
+        &file,
+        root(&file),
+        decision,
+        false,
+        None,
+        &Page::default(),
+    )
+    .unwrap();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), BLUEPRINT);
     assert!(!drafted.written);
     assert!(
@@ -72,7 +86,16 @@ fn a_draft_prints_the_rule_as_run_data_and_leaves_the_file_alone() {
 fn writing_a_draft_inserts_it_keeps_every_line_and_the_files_mode() {
     let (fixture, _dir, file, run) = denied_run("cus_initech");
     let decision = DecisionRef { run, n: 2 };
-    let written = draft_rule(&fixture.store, &file, decision, true, &Page::default()).unwrap();
+    let written = draft_rule(
+        &fixture.store,
+        &file,
+        root(&file),
+        decision,
+        true,
+        None,
+        &Page::default(),
+    )
+    .unwrap();
     assert!(written.written);
     assert_next_is_safe(&written.next);
     assert!(
@@ -90,10 +113,115 @@ fn writing_a_draft_inserts_it_keeps_every_line_and_the_files_mode() {
     assert_eq!(mode, 0o640);
 
     // The file now allows the call, so drafting again is refused, pointing at a re-check.
-    let again = draft_rule(&fixture.store, &file, decision, false, &Page::default()).unwrap_err();
+    let again = draft_rule(
+        &fixture.store,
+        &file,
+        root(&file),
+        decision,
+        false,
+        None,
+        &Page::default(),
+    )
+    .unwrap_err();
     assert_eq!(again.kind, "already-allowed");
     assert_eq!(again.exit, EXIT_FAILURE);
     assert_next_is_safe(&again.next);
+}
+
+#[test]
+fn a_draft_names_its_file_from_the_project_and_offers_a_name_in_prose() {
+    let (fixture, dir, _file, run) = denied_run("cus_initech");
+    let blueprints = dir.path().join("submilli/blueprints");
+    std::fs::create_dir_all(&blueprints).unwrap();
+    let file = blueprints.join("billing.yaml");
+    std::fs::write(&file, BLUEPRINT).unwrap();
+    let decision = DecisionRef { run, n: 2 };
+    let page = Page::default();
+
+    let drafted = draft_rule(
+        &fixture.store,
+        &file,
+        dir.path(),
+        decision,
+        false,
+        None,
+        &page,
+    )
+    .unwrap();
+    assert_eq!(drafted.file, file);
+    assert_eq!(
+        drafted.file_in_project,
+        Path::new("submilli/blueprints/billing.yaml")
+    );
+    let text = draft_text(&drafted);
+    assert!(
+        text.contains("goes in: submilli/blueprints/billing.yaml, lines "),
+        "{text}"
+    );
+    let (before, rest) = text.split_once(render::FENCE_OPEN).unwrap();
+    let (fenced, after) = rest.split_once("\n~~~\n").unwrap();
+    let prose = after.split("\nnext: ").next().unwrap();
+    assert!(prose.contains("--name <name>"), "{text}");
+    assert!(
+        !before.contains("--name") && !fenced.contains("--name"),
+        "{text}"
+    );
+    assert!(
+        drafted
+            .next
+            .iter()
+            .all(|command| !command.contains("--write"))
+    );
+
+    // Named: the name is the rule's first key, and the prose offer is gone.
+    let named = draft_rule(
+        &fixture.store,
+        &file,
+        dir.path(),
+        decision,
+        true,
+        Some("initech-charges"),
+        &page,
+    )
+    .unwrap();
+    assert!(
+        named
+            .untrusted
+            .rule
+            .starts_with("  - name: initech-charges\n"),
+        "{}",
+        named.untrusted.rule
+    );
+    assert!(!draft_text(&named).contains("--name"));
+    let written = submilli_blueprint::parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(
+        written.permissions["main"][1].name.as_deref(),
+        Some("initech-charges")
+    );
+}
+
+#[test]
+fn a_name_already_in_the_callers_block_is_refused_and_the_file_left_alone() {
+    let (fixture, _dir, file, run) = denied_run("cus_initech");
+    let refused = draft_rule(
+        &fixture.store,
+        &file,
+        root(&file),
+        DecisionRef { run, n: 2 },
+        true,
+        Some("charges-for-signed-in-customer"),
+        &Page::default(),
+    )
+    .unwrap_err();
+    assert_eq!(refused.kind, "invalid-name");
+    assert_eq!(refused.exit, EXIT_USAGE);
+    assert!(
+        refused.message.contains("already named"),
+        "{}",
+        refused.message
+    );
+    assert_next_is_safe(&refused.next);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), BLUEPRINT);
 }
 
 #[test]
@@ -116,8 +244,10 @@ fn only_a_policy_refusal_with_a_whole_context_is_drafted_from() {
     let allowed = draft_rule(
         &fixture.store,
         &file,
+        root(&file),
         DecisionRef { run, n: 1 },
         false,
+        None,
         &page,
     )
     .unwrap_err();
@@ -126,8 +256,10 @@ fn only_a_policy_refusal_with_a_whole_context_is_drafted_from() {
     let missing = draft_rule(
         &fixture.store,
         &file,
+        root(&file),
         DecisionRef { run, n: 9 },
         false,
+        None,
         &page,
     )
     .unwrap_err();
@@ -135,8 +267,10 @@ fn only_a_policy_refusal_with_a_whole_context_is_drafted_from() {
     let unknown = draft_rule(
         &fixture.store,
         &file,
+        root(&file),
         DecisionRef { run: 99, n: 1 },
         false,
+        None,
         &page,
     )
     .unwrap_err();
@@ -150,8 +284,10 @@ fn a_hostile_value_in_a_drafted_rule_stays_in_run_data() {
     let drafted = draft_rule(
         &fixture.store,
         &file,
+        root(&file),
         DecisionRef { run, n: 2 },
         false,
+        None,
         &Page::default(),
     )
     .unwrap();
@@ -250,6 +386,7 @@ fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
                 "event_id": "e-4", "at_micros": 1_791_468_192_000_000_u64,
                 "kind": "decision",
                 "record": {
+                    "seq": 1, "at_micros": 5,
                     "caller": "main", "capability": "acme.com/charges.list",
                     "allowed": false, "context": { "customerId": HOSTILE },
                     "reason": HOSTILE, "near_misses": [], "call_index": 3,
@@ -260,7 +397,9 @@ fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
     let mut counts = std::collections::HashMap::new();
     let first = watch_line(Some(4), &decision(false), "s-1", &mut counts);
     assert_eq!(first["kind"], "decision");
+    // The envelope's session sequence, not the decision's own place in its run.
     assert_eq!(first["seq"], 4);
+    assert_eq!(first["decision_seq"], 1);
     assert_eq!(first["run"], 7);
     assert_eq!(first["session"], "s-1");
     assert_eq!(first["decision"], "7.1");
@@ -287,4 +426,84 @@ fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
     assert_eq!(line["kind"], "run-started");
     assert_eq!(line["label"], "assistant");
     assert_eq!(line["untrusted"]["client"], HOSTILE);
+}
+
+#[test]
+fn a_missing_variable_refusal_names_it_with_its_last_value_when_there_is_one() {
+    let message = "required variable 'customerId' was not supplied";
+    let names = vec!["customerId".to_owned()];
+    let fresh = missing_variables(message, &names, &BTreeMap::new());
+    assert_eq!(fresh.kind, "missing-variables");
+    assert_eq!(fresh.exit, EXIT_USAGE);
+    assert!(
+        fresh
+            .message
+            .ends_with("`submilli playground bind customerId=VALUE`"),
+        "{}",
+        fresh.message
+    );
+    let last = BTreeMap::from([("customerId".to_owned(), "cus_northwind".to_owned())]);
+    let known = missing_variables(message, &names, &last);
+    assert!(
+        known
+            .message
+            .ends_with("`submilli playground bind customerId=cus_northwind`"),
+        "{}",
+        known.message
+    );
+    let quoted = BTreeMap::from([("customerId".to_owned(), "two words".to_owned())]);
+    let spaced = missing_variables(message, &names, &quoted);
+    assert!(
+        spaced.message.contains("bind customerId='two words'`"),
+        "{}",
+        spaced.message
+    );
+    // Without a blueprint, the name comes from the message.
+    assert_eq!(
+        missing_variable_named(message).as_deref(),
+        Some("customerId")
+    );
+    assert!(missing_variable_named("variable 'x' is not declared").is_none());
+}
+
+#[test]
+fn the_saved_binding_keeps_variables_and_secret_names_but_never_a_secret_value() {
+    let mut binding = Binding::default();
+    binding.apply(BindRequest {
+        variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+        secrets: BTreeMap::from([("API_KEY".into(), "dev_secret_value".into())]),
+        ..BindRequest::default()
+    });
+    let saved = binding.to_remember();
+    assert_eq!(saved.variables["customerId"], "cus_northwind");
+    assert!(saved.secret_names.contains("API_KEY"));
+    assert!(
+        !serde_json::to_string(&saved)
+            .unwrap()
+            .contains("dev_secret_value")
+    );
+
+    // After a restart the secret is to be bound again; unsetting the variable keeps its
+    // last value for the refusal to suggest.
+    let mut restarted = Binding::remembered(saved);
+    assert!(restarted.secrets.is_empty());
+    assert!(restarted.forgotten_secrets.contains("API_KEY"));
+    assert_eq!(
+        missing_secrets(&["API_KEY".to_owned()], &restarted.forgotten_secrets).message,
+        "the blueprint requires harness secret API_KEY with no development value (it was \
+         bound before the playground restarted; secret values are not kept across restarts, \
+         so bind it again); set it from your environment or the local secret store with \
+         `submilli playground bind --secret API_KEY`"
+    );
+    restarted.apply(BindRequest {
+        unset: vec!["customerId".into()],
+        ..BindRequest::default()
+    });
+    assert!(restarted.variables.is_empty());
+    assert_eq!(restarted.last["customerId"], "cus_northwind");
+    restarted.apply(BindRequest {
+        clear: true,
+        ..BindRequest::default()
+    });
+    assert!(restarted.to_remember().secret_names.is_empty());
 }

@@ -1591,5 +1591,376 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             assert!(decision.get("context").is_none(), "{decision}");
             assert_eq!(lines.len() as u64, logged + 1);
         }
+
+        /// The text a command printed on standard output and standard error.
+        fn texts(output: &Output) -> (String, String) {
+            (
+                String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr(output),
+            )
+        }
+
+        #[test]
+        fn a_first_run_is_told_the_exact_commands_and_status_shows_the_binding() {
+            let playground = Playground::empty();
+            let init = playground.run(&["init"]);
+            assert!(init.status.success(), "{}", stderr(&init));
+            let said = stderr(&init);
+            assert!(
+                said.contains("`submilli playground bind customerId=cus_northwind`, then `submilli playground exec --example`"),
+                "{said}"
+            );
+            playground.start();
+
+            // Nothing bound: the refusal names the variable in the command it suggests.
+            let refused = playground.run(&["exec", "--example"]);
+            assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+            assert!(
+                stderr(&refused).contains("`submilli playground bind customerId=VALUE`"),
+                "{}",
+                stderr(&refused)
+            );
+            let (status, code) = playground.json(&["status"]);
+            assert_eq!(code, 0, "{status}");
+            assert_eq!(status["binding"]["variables"], json!({}));
+
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let (status, _) = playground.json(&["status"]);
+            assert_eq!(
+                status["binding"]["variables"],
+                json!({ "customerId": "cus_northwind" })
+            );
+            assert_eq!(status["binding"]["secrets"], json!([]));
+            let (text, _) = texts(&playground.run(&["status"]));
+            assert!(
+                text.contains("  binding:    customerId=cus_northwind\n"),
+                "{text}"
+            );
+            playground.expect(0, &["exec", "--example"]);
+
+            // Unset, the refusal suggests the value it had.
+            playground.expect(0, &["bind", "--unset", "customerId"]);
+            let refused = playground.run(&["exec", "--example"]);
+            assert_eq!(refused.status.code(), Some(2));
+            assert!(
+                stderr(&refused).contains("`submilli playground bind customerId=cus_northwind`"),
+                "{}",
+                stderr(&refused)
+            );
+        }
+
+        /// Lists charges for another customer and catches the denial.
+        const CAUGHT: &str = "import { listCharges } from \"@acme/billing\";\nfunction main(): string {\n  const own = listCharges(\"cus_northwind\").length;\n  try { listCharges(\"cus_initech\"); return \"listed\"; }\n  catch (e: PermissionDeniedError) { return `denied after ${own}`; }\n}\n";
+
+        #[test]
+        fn a_caught_denial_reads_in_the_outcome_and_every_run_result_lists_it() {
+            let playground = Playground::starter();
+            playground.start();
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let program = playground.write("caught.ts", CAUGHT);
+
+            let ran = playground.expect(0, &["exec", &program]);
+            assert_eq!(ran["outcome"]["kind"], "completed");
+            let run = ran["run"].as_u64().unwrap();
+            let denied = ran["denied"].as_array().unwrap().clone();
+            assert_eq!(denied.len(), 1, "{ran}");
+            let denial = denied[0].as_str().unwrap().to_owned();
+            assert!(denial.starts_with(&format!("{run}.")), "{denial}");
+
+            let (text, _) = texts(&playground.run(&["show", &run.to_string()]));
+            assert!(
+                text.contains(&format!("outcome: completed, 1 denial caught ({denial})\n")),
+                "{text}"
+            );
+            for args in [
+                vec!["show".to_owned(), run.to_string()],
+                vec!["test".to_owned(), run.to_string()],
+                vec!["rerun".to_owned(), run.to_string()],
+            ] {
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                let value = playground.expect(0, &args);
+                assert_eq!(
+                    value["denied"].as_array().unwrap().len(),
+                    1,
+                    "{args:?}: {value}"
+                );
+            }
+            let listed = playground.expect(0, &["runs"]);
+            let row = listed["runs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["run"] == run)
+                .unwrap()
+                .clone();
+            assert_eq!(row["denied"], json!([denial]));
+
+            // The draft cites the file from the project root and offers a name in prose.
+            let (text, _) = texts(&playground.run(&["draft-rule", &denial]));
+            assert!(
+                text.contains("goes in: submilli/blueprints/billing.yaml, lines "),
+                "{text}"
+            );
+            assert!(text.contains("--name <name>"), "{text}");
+            let drafted = playground.expect(0, &["draft-rule", &denial]);
+            for command in drafted["next"].as_array().unwrap() {
+                assert!(!command.as_str().unwrap().contains("--write"), "{drafted}");
+            }
+
+            // A name already in the block is refused; a new one is written first.
+            let (taken, code) = playground.json(&[
+                "draft-rule",
+                &denial,
+                "--name",
+                "charges-for-signed-in-customer",
+                "--write",
+            ]);
+            assert_eq!(code, 2, "{taken}");
+            assert_eq!(taken["error"]["kind"], "invalid-name");
+            let written = playground.expect(
+                0,
+                &[
+                    "draft-rule",
+                    &denial,
+                    "--name",
+                    "initech-charges",
+                    "--write",
+                ],
+            );
+            assert_eq!(written["name"], "initech-charges");
+            let file =
+                std::fs::read_to_string(playground.root.join("submilli/blueprints/billing.yaml"))
+                    .unwrap();
+            assert!(file.contains("- name: initech-charges\n"), "{file}");
+            wait_for_version(&playground, 2);
+            let tested = playground.expect(0, &["test", &run.to_string()]);
+            let by: Vec<&str> = tested["decisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|line| line["decided_by"].as_str().unwrap())
+                .collect();
+            assert!(by.contains(&"by `initech-charges`"), "{tested}");
+            assert_eq!(tested["denied"], json!([]));
+        }
+
+        #[test]
+        fn a_compile_failure_reads_in_words() {
+            let playground = Playground::starter();
+            playground.start();
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let broken = playground.write("broken.ts", "function main(): string { return 42; }\n");
+            let failed = playground.run(&["exec", &broken]);
+            assert_eq!(failed.status.code(), Some(1));
+            let (text, _) = texts(&failed);
+            assert!(text.contains("outcome: failed to compile\n"), "{text}");
+            let (text, _) = texts(&playground.run(&["runs"]));
+            assert!(text.contains("failed to compile"), "{text}");
+            assert!(!text.contains("compile_error"), "{text}");
+        }
+
+        /// The session's event log, one line per event, as the store holds it.
+        fn logged_events(playground: &Playground, session: &str) -> u64 {
+            std::fs::read_to_string(
+                playground
+                    .state()
+                    .join("store/events")
+                    .join(format!("{session}.jsonl")),
+            )
+            .unwrap()
+            .lines()
+            .count() as u64
+        }
+
+        /// The JSON lines `watch` printed.
+        fn watched_lines(output: &Output) -> Vec<Value> {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
+        }
+
+        #[test]
+        fn watch_numbers_decisions_by_the_sessions_sequence_and_resumes_after_one() {
+            let playground = Playground::starter();
+            let page = playground.start();
+            let admin = playground.token("admin");
+            let started = playground.expect(
+                0,
+                &["session", "start", "--var", "customerId=cus_northwind"],
+            );
+            let session = started["session"].as_str().unwrap().to_owned();
+            let program = playground.write(
+                "three.ts",
+                "import { listCharges } from \"@acme/billing\";\nfunction main(): number {\n  let n = 0;\n  for (let i = 0; i < 3; i++) { n += listCharges(\"cus_northwind\").length; }\n  return n;\n}\n",
+            );
+            playground.expect(0, &["exec", &program, "--session", &session]);
+
+            let watched = playground.run(&["watch", &session]);
+            assert!(watched.status.success(), "{}", stderr(&watched));
+            let lines = watched_lines(&watched);
+            let logged = logged_events(&playground, &session);
+            let seqs: Vec<u64> = lines
+                .iter()
+                .filter_map(|line| line["seq"].as_u64())
+                .collect();
+            assert_eq!(seqs, (1..=logged).collect::<Vec<_>>(), "{lines:?}");
+            let decisions: Vec<&Value> = lines
+                .iter()
+                .filter(|line| line["kind"] == "decision")
+                .collect();
+            assert!(decisions.len() >= 3, "{lines:?}");
+            let decision_seqs: Vec<u64> = decisions
+                .iter()
+                .map(|line| line["seq"].as_u64().unwrap())
+                .collect();
+            assert!(
+                decision_seqs.windows(2).all(|pair| pair[0] < pair[1]),
+                "{decision_seqs:?}"
+            );
+
+            // The feed's `id:` is the same number, and resuming after a decision's seq
+            // sends exactly what came after it.
+            let (all, idle) = read_feed(&page, &admin, &session, None, usize::MAX);
+            assert!(idle);
+            let ids: Vec<u64> = all.iter().map(|(id, _)| *id).collect();
+            assert_eq!(ids, seqs);
+            let cursor = decision_seqs[1];
+            let (rest, idle) = read_feed(&page, &admin, &session, Some(cursor), usize::MAX);
+            assert!(idle);
+            let resumed: Vec<u64> = rest.iter().map(|(id, _)| *id).collect();
+            assert_eq!(resumed, ((cursor + 1)..=logged).collect::<Vec<_>>());
+        }
+
+        #[test]
+        fn watch_stops_when_idle_unless_asked_to_follow_the_session_to_its_end() {
+            let playground = Playground::starter();
+            playground.start();
+            let started = playground.expect(
+                0,
+                &["session", "start", "--var", "customerId=cus_northwind"],
+            );
+            let session = started["session"].as_str().unwrap().to_owned();
+            let following = playground
+                .command(&["watch", &session, "--follow"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let first = playground.expect(0, &["exec", "--example", "--session", &session]);
+
+            // Without --follow, watch stops at the idle session and says how to go on.
+            let stopped = playground.run(&["watch", &session]);
+            assert!(stopped.status.success(), "{}", stderr(&stopped));
+            assert_eq!(watched_lines(&stopped).last().unwrap()["kind"], "run-idle");
+            assert!(
+                stderr(&stopped).contains(&format!("submilli playground watch {session} --follow")),
+                "{}",
+                stderr(&stopped)
+            );
+
+            // A pause, then the session's second run, then its end.
+            std::thread::sleep(Duration::from_millis(1500));
+            let second = playground.expect(0, &["exec", "--example", "--session", &session]);
+            playground.expect(0, &["session", "end", &session]);
+            let followed = wait(following);
+            assert!(followed.status.success(), "{}", stderr(&followed));
+            let lines = watched_lines(&followed);
+            let finished: Vec<u64> = lines
+                .iter()
+                .filter(|line| line["kind"] == "run-finished")
+                .map(|line| line["run"].as_u64().unwrap())
+                .collect();
+            assert_eq!(
+                finished,
+                [
+                    first["run"].as_u64().unwrap(),
+                    second["run"].as_u64().unwrap()
+                ],
+                "{lines:?}"
+            );
+            assert!(lines.iter().any(|line| line["kind"] == "run-idle"));
+            assert_eq!(lines.last().unwrap()["kind"], "session-ended", "{lines:?}");
+        }
+
+        #[test]
+        fn variables_are_remembered_across_a_restart_and_rerun_needs_no_new_binding() {
+            let playground = Playground::starter();
+            playground.start();
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let ran = playground.expect(0, &["exec", "--example"]);
+            let saved = playground.state().join("binding.json");
+            assert_eq!(
+                std::os::unix::fs::PermissionsExt::mode(
+                    &std::fs::metadata(&saved).unwrap().permissions()
+                ) & 0o777,
+                0o600
+            );
+
+            playground.stop();
+            playground.start();
+            let bound = playground.expect(0, &["bind"]);
+            assert_eq!(bound["variables"], json!({ "customerId": "cus_northwind" }));
+            let rerun = playground.expect(0, &["rerun", &ran["run"].to_string()]);
+            assert_eq!(rerun["variables"]["customerId"], "cus_northwind");
+
+            // Unsetting and clearing reach the file too.
+            playground.expect(0, &["bind", "--unset", "customerId"]);
+            let text = std::fs::read_to_string(&saved).unwrap();
+            let file: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(file["variables"], json!({}), "{text}");
+            playground.expect(0, &["bind", "customerId=cus_initech"]);
+            playground.expect(0, &["bind", "--clear"]);
+            let file: Value =
+                serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+            assert_eq!(file["variables"], json!({}));
+            playground.stop();
+            playground.start();
+            assert_eq!(playground.expect(0, &["bind"])["variables"], json!({}));
+        }
+
+        #[test]
+        fn after_a_restart_a_secret_must_be_bound_again_and_no_file_holds_its_value() {
+            let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
+            playground.start();
+            let program = playground.write("ok.ts", "function main(): string { return \"ok\"; }\n");
+            let bind_secret = |args: &[&str]| {
+                let output = playground
+                    .command(args)
+                    .env("API_KEY", SECRET)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{}", stderr(&output));
+            };
+            bind_secret(&["bind", "customerId=cus_northwind", "--secret", "API_KEY"]);
+            let ran = playground.expect(0, &["exec", &program]);
+
+            playground.stop();
+            playground.start();
+            let bound = playground.expect(0, &["bind"]);
+            assert_eq!(bound["variables"]["customerId"], "cus_northwind");
+            assert_eq!(bound["secrets"], json!([]));
+            assert_eq!(bound["to_bind_again"], json!(["API_KEY"]));
+            let refused = playground.run(&["rerun", &ran["run"].to_string()]);
+            assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+            let said = stderr(&refused);
+            assert!(said.contains("not kept across restarts"), "{said}");
+            assert!(said.contains("bind --secret API_KEY"), "{said}");
+            let (status, _) = playground.json(&["status"]);
+            assert_eq!(status["binding"]["to_bind_again"], json!(["API_KEY"]));
+
+            bind_secret(&["bind", "--secret", "API_KEY"]);
+            playground.expect(0, &["rerun", &ran["run"].to_string()]);
+
+            playground.stop();
+            walk(&playground.state(), &mut |path| {
+                let bytes = std::fs::read(path).unwrap();
+                assert!(
+                    !String::from_utf8_lossy(&bytes).contains(SECRET),
+                    "{} holds the secret",
+                    path.display()
+                );
+            });
+        }
     }
 }

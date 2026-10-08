@@ -256,6 +256,32 @@ async fn invalid_yaml_is_reported_against_its_line_and_the_last_good_version_sta
 }
 
 #[test]
+fn the_log_says_in_words_when_a_change_cannot_be_classified() {
+    let before =
+        submilli_blueprint::parse(&PINNED.replace("amount < 500", "amount < 100")).unwrap();
+    let after = submilli_blueprint::parse(PINNED).unwrap();
+    let diff = submilli_blueprint::diff::diff(&before, &after);
+    assert_eq!(diff.classification.to_string(), "unknown");
+    let lines = log_lines(
+        &Outcome::Applied {
+            version: 2,
+            diff: Some(Box::new(diff)),
+        },
+        Some(2),
+        false,
+    );
+    let Some(LogLine::Note(note)) = lines.last() else {
+        panic!("{lines:?}");
+    };
+    assert!(
+        note.starts_with(
+            "blueprint: version 2 applied (can't tell whether this widens or narrows access)"
+        ),
+        "{note}"
+    );
+}
+
+#[test]
 fn the_log_says_when_a_refused_edit_is_fixed_by_going_back_to_the_version_in_force() {
     let fixed = vec![LogLine::Note(
         "blueprint: the refused edit is fixed; version 3 stays in force".to_owned(),

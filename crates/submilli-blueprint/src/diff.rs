@@ -65,6 +65,19 @@ impl Classification {
     }
 }
 
+impl Classification {
+    /// The classification as a person reads it in a log or a listing. The
+    /// machine value (`Display`, and the serialized form) stays one word.
+    pub fn in_words(self) -> &'static str {
+        match self {
+            Classification::Widening => "widening",
+            Classification::Narrowing => "narrowing",
+            Classification::Mixed => "mixed",
+            Classification::Unknown => "can't tell whether this widens or narrows access",
+        }
+    }
+}
+
 impl fmt::Display for Classification {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -1407,6 +1420,20 @@ mod tests {
             diff(&after, &before).classification,
             Classification::Narrowing
         );
+    }
+
+    #[test]
+    fn an_unknown_change_reads_in_words_but_keeps_its_machine_value() {
+        assert_eq!(Classification::Unknown.to_string(), "unknown");
+        assert_eq!(
+            Classification::Unknown.in_words(),
+            "can't tell whether this widens or narrows access"
+        );
+        assert_eq!(
+            serde_json::to_value(Classification::Unknown).unwrap(),
+            "unknown"
+        );
+        assert_eq!(Classification::Widening.in_words(), "widening");
     }
 
     #[test]

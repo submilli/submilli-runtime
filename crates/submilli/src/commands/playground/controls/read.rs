@@ -83,15 +83,57 @@ impl Outcome {
             Self::Denied { decision: None } => "ended by an uncaught denial".to_owned(),
             Self::Stopped => "stopped".to_owned(),
             Self::Cancelled => "cancelled".to_owned(),
-            Self::Failed { error } => format!("failed: {error}"),
+            Self::Failed { error } => failed_text(error),
             Self::NotDispatched { error } => format!(
                 "did not start{}",
                 error
                     .as_ref()
-                    .map_or_else(String::new, |error| format!(": {error}"))
+                    .map_or_else(String::new, |error| format!(": {}", error_words(error)))
             ),
         }
     }
+
+    /// [`Self::text`], with the denials a completed run's program caught, by ref:
+    /// `completed, 1 denial caught (2.3)`.
+    pub(crate) fn text_with_denials(&self, denied: &[String]) -> String {
+        match (self, denied) {
+            (Self::Completed, [_, ..]) => format!(
+                "completed, {} denial{} caught ({})",
+                denied.len(),
+                if denied.len() == 1 { "" } else { "s" },
+                denied.join(", ")
+            ),
+            _ => self.text(),
+        }
+    }
+}
+
+/// A failed run's outcome in words, from the error kind its JSON keeps.
+fn failed_text(kind: &str) -> String {
+    match kind {
+        "compile_error" => "failed to compile".to_owned(),
+        "runtime_error" => "failed with a runtime error".to_owned(),
+        other => format!("failed: {}", error_words(other)),
+    }
+}
+
+/// An error kind (`submilli_server::error::ErrorKind`, as serialized) in words.
+fn error_words(kind: &str) -> String {
+    match kind {
+        "compile_error" => "it did not compile",
+        "timeout" => "it ran out of time",
+        "fuel_exhausted" => "it ran out of fuel (its CPU budget)",
+        "memory_exhausted" => "it ran out of memory",
+        "stack_exhausted" => "it ran out of stack (recursion too deep)",
+        "cancelled" => "it was cancelled",
+        "permission_denied" => "a call was denied",
+        "runtime_error" => "a runtime error",
+        "blueprint_not_found" => "its blueprint was not found",
+        "package_resolution" => "a package it imports could not be built or found",
+        "invalid_request" => "its variables or secrets do not fit the blueprint",
+        other => return super::render::clean(&other.replace('_', " ")),
+    }
+    .to_owned()
 }
 
 fn kind_name(kind: ErrorKind) -> String {
@@ -226,6 +268,18 @@ fn outcome_word(record: &DecisionRecord) -> &'static str {
 
 fn is_denial(record: &DecisionRecord) -> bool {
     !record.allowed
+}
+
+/// The run's denials as `<run>.<n>`, leaving out those a host function swallowed to
+/// filter a listing: the denials the program saw, whether it caught them or not.
+fn denied_refs(run: &StoredRun) -> Vec<String> {
+    run.recording
+        .decisions
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| is_denial(record) && !record.filtered)
+        .map(|(position, _)| reference(run.id, position))
+        .collect()
 }
 
 /// The rules that nearly allowed a refused call: those that named its capability but
@@ -443,7 +497,8 @@ pub(crate) struct RunRow {
     pub(crate) started_at: String,
     pub(crate) outcome: Outcome,
     pub(crate) decisions: usize,
-    pub(crate) denied: usize,
+    /// The run's denials, by ref, as every run-bearing result lists them.
+    pub(crate) denied: Vec<String>,
     pub(crate) session: Option<String>,
     pub(crate) test_of: Option<u64>,
     /// For a rerun, the run whose program it ran again.
@@ -479,22 +534,14 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
     for summary in &summaries {
         // Only a run with denials is read in full, for its denials' refs.
         let (denials, last_denial) = if summary.denied > 0 {
-            let run = reader.load(summary.id)?;
-            let refs: Vec<String> = run
-                .recording
-                .decisions
-                .iter()
-                .enumerate()
-                .filter(|(_, record)| is_denial(record) && !record.filtered)
-                .map(|(position, _)| reference(run.id, position))
-                .collect();
+            let refs = denied_refs(&reader.load(summary.id)?);
             let last = refs.last().cloned();
             (refs, last)
         } else {
             (Vec::new(), None)
         };
         rows.push(RunRow {
-            header: reader.summary_header(summary, denials),
+            header: reader.summary_header(summary, denials.clone()),
             started_at_micros: summary.started_at_micros,
             started_at: super::render::rfc3339(summary.started_at_micros),
             outcome: Outcome::of(
@@ -504,7 +551,7 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
                 last_denial,
             ),
             decisions: summary.decisions,
-            denied: summary.denied,
+            denied: denials,
             session: summary.session_id.clone(),
             test_of: summary.test_of.as_ref().and_then(|link| link.run),
             rerun_of: reruns.get(&summary.id).copied(),
@@ -600,6 +647,9 @@ pub(crate) struct ShowResult {
     pub(crate) started_at: String,
     pub(crate) wall_ms: u64,
     pub(crate) outcome: Outcome,
+    /// The denials the program saw, by ref: with a `completed` outcome, the ones it
+    /// caught; with a denied one, the last is the one that ended it.
+    pub(crate) denied: Vec<String>,
     pub(crate) session: Option<String>,
     pub(crate) variables: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -920,6 +970,7 @@ pub(crate) fn show(
         started_at: super::render::rfc3339(run.started_at_micros),
         wall_ms: run.wall_ms,
         outcome,
+        denied: denied_refs(&run),
         session: run.recording.session_id.clone(),
         variables: run.recording.variables.clone(),
         note: (run.label == "app").then_some(APP_NOTE),
@@ -1511,7 +1562,7 @@ pub(crate) fn audit(reader: &Reader, query: AuditQuery) -> Result<AuditResult, R
     };
     let mut filters = Vec::new();
     if query.default_only {
-        filters.push("calls allowed only by the default (no rule names them)");
+        filters.push("calls allowed only by the default (no rule matched them)");
     }
     if query.packages_only {
         filters.push("calls made by packages");
@@ -1535,7 +1586,7 @@ pub(crate) fn audit(reader: &Reader, query: AuditQuery) -> Result<AuditResult, R
             }
             let decision_ref = reference(run.id, position);
             let decided_by = if record.allowed && by_default {
-                "allowed by the default (no rule names it)".to_owned()
+                allowed_by_default_phrase(record, &under)
             } else {
                 let verb = match outcome_word(record) {
                     "allow" => "allowed",
@@ -1610,6 +1661,31 @@ pub(crate) fn audit(reader: &Reader, query: AuditQuery) -> Result<AuditResult, R
         next: next(suggestions),
         untrusted,
     })
+}
+
+/// What the audit says of a call the default allowed: that no rule matched it, and the
+/// rules that named its capability but whose filters rejected it, when there are some.
+fn allowed_by_default_phrase(record: &DecisionRecord, under: &DecidedUnder<'_>) -> String {
+    let misses: Vec<String> = record
+        .near_misses
+        .iter()
+        .map(|miss| {
+            under
+                .rule(
+                    &miss.rule.caller,
+                    miss.rule.index,
+                    miss.rule.name.as_deref(),
+                )
+                .listed()
+        })
+        .collect();
+    let mut phrase = "allowed by the default (no rule matched it)".to_owned();
+    match misses.as_slice() {
+        [] => {}
+        [only] => phrase.push_str(&format!("; near miss: {only}")),
+        _ => phrase.push_str(&format!("; near misses: {}", misses.join(", "))),
+    }
+    phrase
 }
 
 /// How `package` came to be in the closure, in words.

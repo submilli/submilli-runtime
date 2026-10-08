@@ -127,7 +127,7 @@ pub(crate) fn next(items: impl IntoIterator<Item = Next>) -> Vec<String> {
 }
 
 /// A session id quoted for a shell when it holds anything but plain id characters.
-fn shell_word(text: &str) -> String {
+pub(crate) fn shell_word(text: &str) -> String {
     if !text.is_empty()
         && text
             .bytes()
@@ -434,7 +434,11 @@ pub(crate) fn show_text(result: &ShowResult) -> String {
         result.wall_ms
     );
     let _ = writeln!(out, "{}", result.header.page_line());
-    let _ = writeln!(out, "outcome: {}", result.outcome.text());
+    let _ = writeln!(
+        out,
+        "outcome: {}",
+        result.outcome.text_with_denials(&result.denied)
+    );
     if let Some(error) = &result.untrusted.error {
         fence.text("error", error, 6);
     }
@@ -781,7 +785,7 @@ pub(crate) fn changes_text(result: &ChangesResult) -> String {
             "v{}  {}  {}{}",
             version.version,
             utc_minute(version.at_micros),
-            version.classification,
+            classification_text(&version.classification),
             if version.current { "  (in force)" } else { "" }
         );
         for removal in &version.pin_removals {
@@ -807,6 +811,17 @@ pub(crate) fn changes_text(result: &ChangesResult) -> String {
     }
     next_lines(&mut out, &result.next);
     out
+}
+
+/// A logged classification as a person reads it; the JSON keeps the machine value.
+fn classification_text(classification: &str) -> String {
+    if classification == "unknown" {
+        submilli_blueprint::diff::Classification::Unknown
+            .in_words()
+            .to_owned()
+    } else {
+        clean(classification)
+    }
 }
 
 pub(crate) fn sessions_text(result: &SessionsResult) -> String {

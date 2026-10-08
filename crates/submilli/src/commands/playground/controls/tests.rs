@@ -490,7 +490,7 @@ fn audit_default_only_lists_exactly_the_calls_the_default_allowed_and_their_orig
     );
     let text = render::audit_text(&audited);
     assert!(
-        text.contains("@acme/core http.post allowed by the default (no rule names it) ×2"),
+        text.contains("@acme/core http.post allowed by the default (no rule matched it) ×2"),
         "{text}"
     );
     assert!(
@@ -1043,4 +1043,152 @@ fn runs_in_flight_are_listed_first_with_cancel_only_while_the_playground_runs() 
         Vec::new(),
     );
     assert!(read::runs(&stopped, &query).unwrap().running.is_empty());
+}
+
+#[test]
+fn a_run_whose_program_caught_a_denial_says_so_in_its_outcome_and_lists_it() {
+    let mut fixture = Fixture::new();
+    let caught = fixture.run(RunSpec::new(vec![
+        charges_allowed(0, "cus_northwind"),
+        charges_denied(1, "cus_initech"),
+    ]));
+    let clean = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
+    let (reader, _dir) = fixture.reader();
+
+    let shown = read::show(&reader, caught, false).unwrap();
+    let text = render::show_text(&shown);
+    assert!(
+        text.contains(&format!(
+            "outcome: completed, 1 denial caught ({caught}.2)\n"
+        )),
+        "{text}"
+    );
+    let value = json_of(&shown);
+    assert_eq!(value["outcome"]["kind"], "completed");
+    assert_eq!(value["denied"], json!([format!("{caught}.2")]));
+
+    let shown = read::show(&reader, clean, false).unwrap();
+    assert!(render::show_text(&shown).contains("outcome: completed\n"));
+    assert_eq!(json_of(&shown)["denied"], json!([]));
+
+    // `runs` lists the same refs under the same name.
+    let listed = read::runs(
+        &reader,
+        &RunsQuery {
+            limit: 10,
+            ..RunsQuery::default()
+        },
+    )
+    .unwrap();
+    let rows = json_of(&listed);
+    let row = rows["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["run"] == caught)
+        .unwrap();
+    assert_eq!(row["denied"], json!([format!("{caught}.2")]));
+}
+
+#[test]
+fn a_failed_run_reads_in_plain_words_and_its_json_keeps_the_kind() {
+    use crate::commands::playground::store::run::StoredError;
+    use submilli_server::error::ErrorKind;
+
+    let mut fixture = Fixture::new();
+    let failed = |kind| {
+        let mut spec = RunSpec::new(Vec::new());
+        spec.error = Some(StoredError {
+            kind,
+            message: "it broke".into(),
+            diagnostics: Vec::new(),
+            caller: None,
+            capability: None,
+            source: None,
+        });
+        spec
+    };
+    let compile = fixture.run(failed(ErrorKind::CompileError));
+    let fuel = fixture.run(failed(ErrorKind::FuelExhausted));
+    let (reader, _dir) = fixture.reader();
+
+    let shown = read::show(&reader, compile, false).unwrap();
+    assert!(render::show_text(&shown).contains("outcome: failed to compile\n"));
+    assert_eq!(json_of(&shown)["outcome"]["error"], "compile_error");
+    let shown = read::show(&reader, fuel, false).unwrap();
+    assert!(
+        render::show_text(&shown).contains("outcome: failed: it ran out of fuel"),
+        "{}",
+        render::show_text(&shown)
+    );
+    let listed = read::runs(
+        &reader,
+        &RunsQuery {
+            limit: 10,
+            ..RunsQuery::default()
+        },
+    )
+    .unwrap();
+    let text = render::runs_text(&listed);
+    assert!(text.contains("failed to compile"), "{text}");
+    assert!(!text.contains("compile_error"), "{text}");
+}
+
+#[test]
+fn audit_default_only_says_no_rule_matched_and_names_the_near_misses() {
+    let mut fixture = Fixture::new();
+    let permissive = BLUEPRINT.replace("default: deny", "default: allow");
+    let v1 = fixture.version(&permissive, initial(), "first");
+    // The default allowed it, though the starter rule names the capability.
+    let mut missed = charges_denied(0, "cus_initech");
+    missed.allowed = true;
+    missed.action = interpreter::runtime::DecisionAction::Allow;
+    fixture.run(RunSpec::new(vec![missed]).version(v1));
+    let (reader, _dir) = fixture.reader();
+    let audited = read::audit(
+        &reader,
+        AuditQuery {
+            default_only: true,
+            packages_only: false,
+        },
+    )
+    .unwrap();
+    let text = render::audit_text(&audited);
+    assert!(
+        text.contains(
+            "main acme.com/charges.list allowed by the default (no rule matched it); near miss: \
+             `charges-for-signed-in-customer` (rule 1 of `main`) ×1"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("only: calls allowed only by the default (no rule matched them)"),
+        "{text}"
+    );
+    assert!(!text.contains("no rule names"), "{text}");
+}
+
+#[test]
+fn changes_say_in_words_when_a_change_cannot_be_classified() {
+    let fixture = Fixture::new();
+    fixture.version(BLUEPRINT, initial(), "first");
+    fixture.version(
+        &BLUEPRINT.replace("customerId ==", "customerId !="),
+        json!({ "classification": "unknown", "changes": [] }),
+        "Changed: `charges-for-signed-in-customer` under `main` changed its filter.",
+    );
+    let (reader, _dir) = fixture.reader();
+    let changes = read::changes(&reader, None).unwrap();
+    let text = render::changes_text(&changes);
+    assert!(
+        text.lines()
+            .next()
+            .unwrap()
+            .ends_with("can't tell whether this widens or narrows access  (in force)"),
+        "{text}"
+    );
+    assert_eq!(
+        json_of(&changes)["versions"][0]["classification"],
+        "unknown"
+    );
 }

@@ -13,7 +13,7 @@
 //! so the recorder stores it like any other run, and its result is what `show` says of
 //! the stored run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -40,7 +40,7 @@ use super::super::Output;
 use super::super::client::{self, Probe, Running};
 use super::super::labels;
 use super::super::project;
-use super::super::state::StateDir;
+use super::super::state::{self, RememberedBinding, StateDir};
 use super::super::store::run::{DecisionRef, StoredRun, StoredTestReport};
 use super::super::store::sessions::SessionEntry;
 use super::super::store::{KnownSecrets, Recorder, Store, StoreError};
@@ -150,6 +150,9 @@ pub(crate) struct DraftRequest {
     pub(crate) decision: String,
     #[serde(default)]
     pub(crate) write: bool,
+    /// The name the drafted rule carries, written as its first key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) name: Option<String>,
 }
 
 // ---- answers -------------------------------------------------------------------------------
@@ -277,12 +280,68 @@ fn answer(result: Result<Answer, ActError>) -> Answer {
 /// Names and their values: variables, or harness secrets.
 type Values = BTreeMap<String, String>;
 
-/// The variables and harness-secret development values new runs get: held in the
+/// The variables and harness-secret development values new runs get. The variables are
+/// saved for the next start (see [`RememberedBinding`]); secret values are held in the
 /// running playground's memory only, never written to any file.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Binding {
     pub(crate) variables: BTreeMap<String, String>,
     pub(crate) secrets: BTreeMap<String, String>,
+    /// The last value each variable had, kept after it is unset or cleared: what a
+    /// refusal for a missing variable suggests binding again.
+    pub(crate) last: BTreeMap<String, String>,
+    /// Secrets bound before the playground started and not bound since: their values
+    /// were not kept across the restart.
+    pub(crate) forgotten_secrets: BTreeSet<String>,
+}
+
+impl Binding {
+    /// The binding a start begins with: the saved variables, and the saved secret names
+    /// as secrets to bind again.
+    pub(crate) fn remembered(saved: RememberedBinding) -> Self {
+        Self {
+            variables: saved.variables,
+            secrets: BTreeMap::new(),
+            last: saved.last,
+            forgotten_secrets: saved.secret_names,
+        }
+    }
+
+    /// What the next start begins with: never a secret's value.
+    fn to_remember(&self) -> RememberedBinding {
+        RememberedBinding {
+            variables: self.variables.clone(),
+            last: self.last.clone(),
+            secret_names: self
+                .secrets
+                .keys()
+                .chain(&self.forgotten_secrets)
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Applies `request`: clear first, then unset, then set.
+    fn apply(&mut self, request: BindRequest) {
+        if request.clear {
+            self.variables.clear();
+            self.secrets.clear();
+            self.forgotten_secrets.clear();
+        }
+        for name in &request.unset {
+            self.variables.remove(name);
+            self.secrets.remove(name);
+            self.forgotten_secrets.remove(name);
+        }
+        for (name, value) in request.variables {
+            self.last.insert(name.clone(), value.clone());
+            self.variables.insert(name, value);
+        }
+        for (name, value) in request.secrets {
+            self.forgotten_secrets.remove(&name);
+            self.secrets.insert(name, value);
+        }
+    }
 }
 
 /// What `bind` answers: the variables, and only the names of the secrets.
@@ -291,6 +350,9 @@ pub(crate) struct BindingResult {
     pub(crate) kind: &'static str,
     pub(crate) variables: BTreeMap<String, String>,
     pub(crate) secrets: Vec<String>,
+    /// Secrets bound before the playground started, whose values were not kept.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) to_bind_again: Vec<String>,
     pub(crate) warnings: Vec<String>,
     pub(crate) next: Vec<String>,
 }
@@ -305,6 +367,8 @@ pub(crate) struct Actions {
     /// Secret values the recorder cuts out of what it stores; `bind` adds to it.
     pub(crate) secrets: KnownSecrets,
     pub(crate) binding: Mutex<Binding>,
+    /// Where `bind` saves the binding's variables for the next start.
+    pub(crate) binding_file: PathBuf,
     pub(crate) blueprints: Arc<dyn submilli_server::blueprint::BlueprintStore>,
     pub(crate) blueprint_name: String,
     pub(crate) blueprint_path: PathBuf,
@@ -361,7 +425,7 @@ impl Actions {
             .collect();
         variables.extend(overrides.clone());
         if let Err(error) = resolve_variables(&blueprint.variables, &variables) {
-            return Err(missing_variables(&error.to_string()));
+            return Err(self.missing_variables(&error.to_string(), Some(blueprint), &variables));
         }
         let secrets: BTreeMap<String, String> = binding
             .secrets
@@ -373,9 +437,36 @@ impl Actions {
             .filter(|name| !secrets.contains_key(name))
             .collect();
         if !missing.is_empty() {
-            return Err(missing_secrets(&missing));
+            return Err(missing_secrets(&missing, &binding.forgotten_secrets));
         }
         Ok((variables, secrets))
+    }
+
+    /// A refusal for missing required variables that names them in the `bind` command
+    /// it suggests, with the last value each had when there is one. The names come from
+    /// `blueprint` when given, else from the server's `message`.
+    fn missing_variables(
+        &self,
+        message: &str,
+        blueprint: Option<&Blueprint>,
+        supplied: &Values,
+    ) -> ActError {
+        let mut names: Vec<String> = blueprint
+            .map(|blueprint| {
+                blueprint
+                    .variables
+                    .iter()
+                    .filter(|(name, decl)| {
+                        decl.required && supplied.get(*name).is_none_or(String::is_empty)
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if names.is_empty() {
+            names.extend(missing_variable_named(message));
+        }
+        missing_variables(message, &names, &self.binding().last)
     }
 
     // ---- exec ----
@@ -466,7 +557,7 @@ impl Actions {
     ) -> Result<Answer, ActError> {
         let id = match self.store.run_id_of(&response.execution_id) {
             Ok(Some(id)) => id,
-            Ok(None) => return Err(not_recorded(response)),
+            Ok(None) => return Err(self.not_recorded(response)),
             Err(error) => return Err(ActError::store(&error)),
         };
         if let Some(source) = rerun_of
@@ -516,33 +607,34 @@ impl Actions {
     /// The binding, after applying `request` when one is given.
     pub(crate) async fn bind(&self, request: Option<BindRequest>) -> Answer {
         let changed = request.is_some();
-        let binding = {
+        let (binding, saved) = {
             let mut binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut saved = Ok(());
             if let Some(request) = request {
-                if request.clear {
-                    *binding = Binding::default();
+                for value in request.secrets.values() {
+                    self.secrets.add(value);
                 }
-                for name in &request.unset {
-                    binding.variables.remove(name);
-                    binding.secrets.remove(name);
-                }
-                binding.variables.extend(request.variables);
-                for (name, value) in request.secrets {
-                    self.secrets.add(&value);
-                    binding.secrets.insert(name, value);
-                }
+                binding.apply(request);
+                // Saved under the lock, so two binds write in the order they applied.
+                saved = state::write_binding_at(&self.binding_file, &binding.to_remember());
             }
-            binding.clone()
+            (binding.clone(), saved)
         };
-        let warnings = if changed {
+        let mut warnings = if changed {
             self.open_sessions_that_differ(&binding).await
         } else {
             Vec::new()
         };
+        if let Err(error) = saved {
+            warnings.push(format!(
+                "the binding is in force, but saving it for the next start failed: {error:#}"
+            ));
+        }
         let result = BindingResult {
             kind: "binding",
             variables: binding.variables,
             secrets: binding.secrets.into_keys().collect(),
+            to_bind_again: binding.forgotten_secrets.into_iter().collect(),
             warnings: warnings.clone(),
             next: Vec::new(),
         };
@@ -590,6 +682,16 @@ impl Actions {
         warnings
     }
 
+    /// The binding as `status` shows it: never a secret's value.
+    pub(crate) fn binding_view(&self) -> super::super::host::BindingView {
+        let binding = self.binding();
+        super::super::host::BindingView {
+            variables: binding.variables,
+            secrets: binding.secrets.into_keys().collect(),
+            to_bind_again: binding.forgotten_secrets.into_iter().collect(),
+        }
+    }
+
     /// The binding with secret values, for the bridge.
     pub(crate) fn bridge_binding(&self) -> Value {
         let binding = self.binding();
@@ -614,7 +716,12 @@ impl Actions {
             },
         )
         .await
-        .map_err(|error| session_start_error(&error))?;
+        .map_err(|error| match &error {
+            SessionStartError::InvalidVariables(message) => {
+                self.missing_variables(message, Some(&blueprint), &variables)
+            }
+            _ => session_start_error(&error),
+        })?;
         let variables = match session_variables(&self.app, &session).await {
             Ok(Some(fixed)) => fixed,
             _ => variables,
@@ -780,6 +887,10 @@ impl Actions {
             .into_iter()
             .filter(|(name, _)| harness_declared(&blueprint, name))
             .collect();
+        // What the test run will have: the recorded run's variables, then the binding's.
+        let mut supplied = binding.variables.clone();
+        supplied.extend(stored.recording.variables.clone());
+        let forgotten = binding.forgotten_secrets;
         let outcome = test_program(
             &self.app,
             TestRun {
@@ -791,10 +902,15 @@ impl Actions {
             },
         )
         .await
-        .map_err(|error| test_error(&error, source))?;
+        .map_err(|error| match &error {
+            TestError::InvalidVariables(message) => {
+                self.missing_variables(message, Some(&blueprint), &supplied)
+            }
+            _ => test_error(&error, source, &forgotten),
+        })?;
         let id = match self.store.run_id_of(&outcome.response.execution_id) {
             Ok(Some(id)) => id,
-            Ok(None) => return Err(not_recorded(&outcome.response)),
+            Ok(None) => return Err(self.not_recorded(&outcome.response)),
             Err(error) => return Err(ActError::store(&error)),
         };
         self.keep_report(id, &outcome.report)?;
@@ -856,8 +972,10 @@ impl Actions {
             draft_rule(
                 &self.store,
                 &self.blueprint_path,
+                &self.project_root,
                 decision,
                 request.write,
+                request.name.as_deref(),
                 &self.page,
             )
             .map(|result| Answer::of(EXIT_SUCCESS, &result, draft_text)),
@@ -930,20 +1048,61 @@ fn harness_declared(blueprint: &Blueprint, name: &str) -> bool {
     )
 }
 
-fn missing_variables(message: &str) -> ActError {
+/// The refusal for missing required variables `names`, suggesting the `bind` command
+/// that sets them: each with its value in `last` when it had one, else `VALUE`.
+fn missing_variables(message: &str, names: &[String], last: &Values) -> ActError {
+    let pairs: Vec<String> = names
+        .iter()
+        .map(|name| {
+            let value = last
+                .get(name)
+                .filter(|value| !value.is_empty())
+                .map_or_else(|| "VALUE".to_owned(), |value| shell_word(value));
+            format!("{}={value}", shell_word(name))
+        })
+        .collect();
+    let (values, pairs) = match pairs.as_slice() {
+        [] => ("the value", "NAME=VALUE".to_owned()),
+        [_] => ("the value", pairs.join(" ")),
+        _ => ("the values", pairs.join(" ")),
+    };
     ActError::usage(
         "missing-variables",
-        format!("{message}; set the value new runs use with `submilli playground bind NAME=VALUE`"),
+        format!("{message}; set {values} new runs use with `submilli playground bind {pairs}`"),
     )
 }
 
-fn missing_secrets(names: &[String]) -> ActError {
+/// The variable a resolver message names: `required variable 'NAME' was not supplied`.
+fn missing_variable_named(message: &str) -> Option<String> {
+    let rest = message.split("required variable '").nth(1)?;
+    let (name, _) = rest.split_once("' was not supplied")?;
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// `text` as one shell word on one line of text.
+fn shell_word(text: &str) -> String {
+    clean(&render::shell_word(text))
+}
+
+/// What a missing-secret refusal adds when one of `names` was bound before the
+/// playground restarted.
+fn restart_note(names: &[String], forgotten: &BTreeSet<String>) -> &'static str {
+    if names.iter().any(|name| forgotten.contains(name)) {
+        " (it was bound before the playground restarted; secret values are not kept across \
+         restarts, so bind it again)"
+    } else {
+        ""
+    }
+}
+
+fn missing_secrets(names: &[String], forgotten: &BTreeSet<String>) -> ActError {
+    let note = restart_note(names, forgotten);
     let names: Vec<String> = names.iter().map(|name| clean(name)).collect();
     ActError::usage(
         "missing-secrets",
         format!(
-            "the blueprint requires harness secret{} {} with no development value; set it from \
-             your environment or the local secret store with `submilli playground bind \
+            "the blueprint requires harness secret{} {} with no development value{note}; set it \
+             from your environment or the local secret store with `submilli playground bind \
              --secret {}`",
             if names.len() == 1 { "" } else { "s" },
             names.join(", "),
@@ -973,8 +1132,9 @@ fn session_run_error(error: &SessionRunError, session: &str) -> ActError {
         SessionRunError::SecretsRequired { required, .. } => ActError::usage(
             "missing-secrets",
             format!(
-                "session {} no longer holds harness secret{} {}; set {} with `submilli \
-                 playground bind --secret NAME` and start a new session",
+                "session {} no longer holds harness secret{} {} (secret values are not kept \
+                 across restarts); set {} with `submilli playground bind --secret NAME` and \
+                 start a new session",
                 clean(session),
                 if required.len() == 1 { "" } else { "s" },
                 clean(&required.join(", ")),
@@ -989,7 +1149,9 @@ fn session_run_error(error: &SessionRunError, session: &str) -> ActError {
 
 fn session_start_error(error: &SessionStartError) -> ActError {
     match error {
-        SessionStartError::InvalidVariables(message) => missing_variables(message),
+        SessionStartError::InvalidVariables(message) => {
+            missing_variables(message, &[], &BTreeMap::new())
+        }
         SessionStartError::InvalidSecrets(message) => ActError::usage(
             "missing-secrets",
             format!(
@@ -1005,7 +1167,7 @@ fn session_start_error(error: &SessionStartError) -> ActError {
     }
 }
 
-fn test_error(error: &TestError, source: u64) -> ActError {
+fn test_error(error: &TestError, source: u64, forgotten: &BTreeSet<String>) -> ActError {
     match error {
         TestError::NoProgram { .. } => ActError::usage(
             "no-program",
@@ -1017,13 +1179,22 @@ fn test_error(error: &TestError, source: u64) -> ActError {
         )
         .next([Next::Show(source), Next::Runs]),
         TestError::BlueprintNotFound(_) => ActError::usage("blueprint-gone", error.to_string()),
-        TestError::InvalidVariables(message) => missing_variables(message),
-        TestError::InvalidSecrets(message) => ActError::usage(
-            "missing-secrets",
-            format!(
-                "{message}; set development values with `submilli playground bind --secret NAME`"
-            ),
-        ),
+        TestError::InvalidVariables(message) => missing_variables(message, &[], &BTreeMap::new()),
+        TestError::InvalidSecrets(message) => {
+            let note = if forgotten.is_empty() {
+                ""
+            } else {
+                " (secret values are not kept across restarts, so a secret bound before the \
+                 playground restarted has to be bound again)"
+            };
+            ActError::usage(
+                "missing-secrets",
+                format!(
+                    "{message}{note}; set development values with `submilli playground bind \
+                     --secret NAME`"
+                ),
+            )
+        }
         TestError::Store(_) | TestError::NoRecorder | TestError::LocalState(_) => {
             ActError::failure(error.to_string())
         }
@@ -1047,6 +1218,18 @@ fn no_program(run: &StoredRun, action: &str) -> ActError {
     .next([Next::Show(run.id), Next::Runs])
 }
 
+impl Actions {
+    /// A run that returned without being stored: why it did not run, when it says.
+    fn not_recorded(&self, response: &ExecuteResponse) -> ActError {
+        match response.error.as_ref() {
+            Some(error) if error.kind == ErrorKind::InvalidRequest => {
+                self.missing_variables(&clean(&error.message), None, &BTreeMap::new())
+            }
+            _ => not_recorded(response),
+        }
+    }
+}
+
 /// A run that returned without being stored: why it did not run, when it says.
 fn not_recorded(response: &ExecuteResponse) -> ActError {
     let Some(error) = &response.error else {
@@ -1056,7 +1239,7 @@ fn not_recorded(response: &ExecuteResponse) -> ActError {
     };
     let message = clean(&error.message);
     match error.kind {
-        ErrorKind::InvalidRequest => missing_variables(&message),
+        ErrorKind::InvalidRequest => missing_variables(&message, &[], &BTreeMap::new()),
         ErrorKind::PackageResolution => {
             ActError::new(EXIT_PACKAGE_RESOLUTION, "package-resolution", message)
         }
@@ -1183,6 +1366,10 @@ pub(crate) struct DraftResult {
     pub(crate) capability: String,
     /// The blueprint file the rule goes in.
     pub(crate) file: PathBuf,
+    /// The same file, relative to the project root when it is inside it.
+    pub(crate) file_in_project: PathBuf,
+    /// The rule's name, when it was drafted with one.
+    pub(crate) name: Option<String>,
     /// The rule's first and last line in the file once inserted, from 1.
     pub(crate) lines: [usize; 2],
     /// The deny rule the draft goes above and overrides for this call; `None` when the
@@ -1213,15 +1400,17 @@ pub(crate) struct DraftUntrusted {
 
 // ---- draft-rule ----------------------------------------------------------------------------
 
-/// Drafts a rule allowing exactly decision `decision`'s call into the blueprint file, and
-/// with `write`, writes it there: only when the file is still what the draft was made
-/// from, in one rename that keeps the file's mode. The watcher then applies it as any
-/// save.
+/// Drafts a rule allowing exactly decision `decision`'s call into the blueprint file,
+/// named `name` when one is given, and with `write`, writes it there: only when the file
+/// is still what the draft was made from, in one rename that keeps the file's mode. The
+/// watcher then applies it as any save.
 pub(crate) fn draft_rule(
     store: &Store,
     blueprint_path: &Path,
+    project_root: &Path,
     decision: DecisionRef,
     write: bool,
+    name: Option<&str>,
     page: &Page,
 ) -> Result<DraftResult, ActError> {
     let run = match store.load_run(decision.run) {
@@ -1301,6 +1490,7 @@ pub(crate) fn draft_rule(
             capability: &record.capability,
             context: &record.context,
             vars: variables,
+            name,
             decided_by: &decided_by,
         },
     )
@@ -1325,6 +1515,11 @@ pub(crate) fn draft_rule(
         caller: record.caller.clone(),
         capability: record.capability.clone(),
         file: blueprint_path.to_path_buf(),
+        file_in_project: blueprint_path
+            .strip_prefix(project_root)
+            .unwrap_or(blueprint_path)
+            .to_path_buf(),
+        name: name.map(str::to_owned),
         lines: [*draft.lines.start(), *draft.lines.end()],
         overrides: draft.overrides.map(|rule| OverriddenRule {
             line: line_of(&text, &rule.caller, rule.index),
@@ -1340,6 +1535,18 @@ pub(crate) fn draft_rule(
 }
 
 fn draft_error(error: &DraftError, decision: DecisionRef) -> ActError {
+    let name_refused = match error {
+        DraftError::EmptyName | DraftError::DuplicateName { .. } => true,
+        DraftError::UnsafeValue { field, .. } => field == "name",
+        _ => false,
+    };
+    if name_refused {
+        return ActError::usage(
+            "invalid-name",
+            format!("no rule drafted for {decision}: {error}; pick another `--name`"),
+        )
+        .next([Next::Explain(decision)]);
+    }
     let error_kind = match error {
         DraftError::AlreadyAllowed => "already-allowed",
         DraftError::DecisionChanged { .. } => "decision-changed",
@@ -1416,6 +1623,14 @@ fn binding_text(result: &BindingResult) -> String {
             out,
             "  secrets: {} (values held in the playground's memory only)",
             clean(&result.secrets.join(", "))
+        );
+    }
+    if !result.to_bind_again.is_empty() {
+        let _ = writeln!(
+            out,
+            "  to bind again: {} (secret values are not kept across restarts; `submilli \
+             playground bind --secret NAME`)",
+            clean(&result.to_bind_again.join(", "))
         );
     }
     out
@@ -1544,7 +1759,7 @@ fn draft_text(result: &DraftResult) -> String {
     let _ = writeln!(
         out,
         "goes in: {}, lines {}-{}, in the `{}` block",
-        result.file.display(),
+        result.file_in_project.display(),
         result.lines[0],
         result.lines[1],
         clean(&result.caller)
@@ -1563,6 +1778,13 @@ fn draft_text(result: &DraftResult) -> String {
     }
     fence.text("rule", &result.untrusted.rule, 12);
     fence.render(&mut out);
+    if result.name.is_none() {
+        let _ = writeln!(
+            out,
+            "unnamed: decisions will cite this rule by its place in the block; draft it with \
+             `--name <name>` to give it a name they cite instead"
+        );
+    }
     if result.written {
         let _ = writeln!(
             out,
@@ -1659,7 +1881,12 @@ pub(crate) fn execute_action(request: &ActionRequest, output: Output) -> Result<
 
 /// `draft-rule`, against the store and the blueprint file directly: it works with the
 /// playground stopped. A running playground applies a written rule as any save.
-pub(crate) fn execute_draft(decision: DecisionRef, write: bool, output: Output) -> ExitCode {
+pub(crate) fn execute_draft(
+    decision: DecisionRef,
+    write: bool,
+    name: Option<&str>,
+    output: Output,
+) -> ExitCode {
     let drafted = (|| {
         let cwd = std::env::current_dir().map_err(|_| ActError::from(ReadError::NoProject))?;
         let project = project::discover(&cwd, None)
@@ -1673,15 +1900,27 @@ pub(crate) fn execute_draft(decision: DecisionRef, write: bool, output: Output) 
             Err(error) => return Err(ActError::store(&error)),
         };
         let page = super::running_page(&state);
-        draft_rule(&store, &project.blueprint, decision, write, &page)
+        draft_rule(
+            &store,
+            &project.blueprint,
+            &project.root,
+            decision,
+            write,
+            name,
+            &page,
+        )
     })();
     answer(drafted.map(|result| Answer::of(EXIT_SUCCESS, &result, draft_text))).print(output)
 }
 
 /// `watch`: follows a session's event feed and prints each event as one JSON line, until
-/// the session's last run finishes or the playground stops. Without a session, follows
-/// the most recent one.
-pub(crate) fn execute_watch(session: Option<String>, output: Output) -> Result<ExitCode> {
+/// the session's last run finishes (with `follow`, until the session ends), the session
+/// ends, or the playground stops. Without a session, follows the most recent one.
+pub(crate) fn execute_watch(
+    session: Option<String>,
+    follow: bool,
+    output: Output,
+) -> Result<ExitCode> {
     let running = match connect()? {
         Ok(running) => running,
         Err(answer) => return Ok(answer.print(output)),
@@ -1707,12 +1946,17 @@ pub(crate) fn execute_watch(session: Option<String>, output: Output) -> Result<E
     let path = format!("/api/sessions/{}/events", url_segment(&session));
     let stdout = std::io::stdout();
     let mut idle = false;
+    let mut ended = false;
     let mut decisions = std::collections::HashMap::new();
     let followed = running.follow(&path, None, |event| {
         let line = match event.name.as_str() {
             "run-idle" => {
                 idle = true;
                 json!({ "kind": "run-idle", "session": session })
+            }
+            "session-ended" => {
+                ended = true;
+                json!({ "kind": "session-ended", "session": session })
             }
             _ => watch_line(
                 event.id.as_deref().and_then(|id| id.parse::<u64>().ok()),
@@ -1724,12 +1968,26 @@ pub(crate) fn execute_watch(session: Option<String>, output: Output) -> Result<E
         let mut out = stdout.lock();
         let _ = writeln!(out, "{line}");
         let _ = out.flush();
-        !idle
+        !ended && (follow || !idle)
     });
     if let Err(error) = followed {
         return Ok(Answer::from(ActError::failure(format!("{error:#}"))).print(output));
     }
+    if ended {
+        return Ok(ExitCode::from(EXIT_SUCCESS));
+    }
+    if follow {
+        eprintln!("the playground stopped; the session's feed ended with it");
+        return Ok(ExitCode::from(EXIT_SUCCESS));
+    }
     if idle {
+        if matches!(output, Output::Text) {
+            eprintln!(
+                "the session is idle, so watch stopped; `submilli playground watch {} --follow` \
+                 keeps following its later runs until it ends",
+                render::shell_word(&session)
+            );
+        }
         return Ok(ExitCode::from(EXIT_SUCCESS));
     }
     eprintln!("the playground stopped before the session's runs finished");
@@ -1803,6 +2061,12 @@ fn watch_line(
                 untrusted.insert(field.into(), value);
             }
         }
+        // The decision's own place in its run, kept apart from the envelope's `seq`,
+        // which is the session's sequence and the feed's resume cursor.
+        if let Some(seq) = record.remove("seq") {
+            record.insert("decision_seq".into(), seq);
+        }
+        record.remove("at_micros");
         if let Some(run) = run
             && stored["backfilled"].as_bool() != Some(true)
         {
@@ -1812,7 +2076,11 @@ fn watch_line(
         }
         fields.extend(record);
     }
-    line.extend(fields);
+    // The envelope (sequence, session, run, kind, time) stays as set above: a field of
+    // the stored event never replaces it.
+    for (field, value) in fields {
+        line.entry(field).or_insert(value);
+    }
     if !untrusted.is_empty() {
         line.insert("untrusted".into(), Value::Object(untrusted));
     }

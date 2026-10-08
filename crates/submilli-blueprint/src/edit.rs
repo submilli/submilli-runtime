@@ -37,6 +37,9 @@ pub struct DraftCall<'a> {
     pub context: &'a Value,
     /// The session's variable bindings.
     pub vars: &'a VarBindings,
+    /// The name the drafted rule carries, written as its first key; `None`
+    /// drafts an unnamed rule. It must be unique within the caller's block.
+    pub name: Option<&'a str>,
     /// What decided the refusal, from [`Blueprint::explain_permission`]. The
     /// draft is refused when the current text no longer decides the same way.
     pub decided_by: &'a ResolutionCause,
@@ -77,6 +80,15 @@ pub enum DraftError {
     UnaddressableField { field: String },
     /// The context is neither an object nor null.
     UnsupportedContext,
+    /// The requested rule name is empty.
+    EmptyName,
+    /// Another rule in the caller's block already has the requested name.
+    /// `position` is that rule's 1-based place in the block.
+    DuplicateName {
+        caller: String,
+        name: String,
+        position: usize,
+    },
     /// The blueprint has rules for the caller, but no block for it was found
     /// in the text.
     CallerBlockNotFound { caller: String },
@@ -94,6 +106,8 @@ pub enum DraftError {
     DoesNotAllow,
     /// The drafted rule matches a call whose `field` differs.
     TooBroad { field: String },
+    /// The drafted rule does not read back with the requested name.
+    NameNotKept,
 }
 
 impl fmt::Display for DraftError {
@@ -127,6 +141,16 @@ impl fmt::Display for DraftError {
             DraftError::UnsupportedContext => {
                 f.write_str("the call's context is neither an object nor null")
             }
+            DraftError::EmptyName => f.write_str("a rule name cannot be empty"),
+            DraftError::DuplicateName {
+                caller,
+                name,
+                position,
+            } => write!(
+                f,
+                "rule {position} of `{caller}` is already named `{name}`; rule names must be \
+                 unique within a caller block"
+            ),
             DraftError::CallerBlockNotFound { caller } => {
                 write!(f, "no `{caller}` block was found under `permissions:`")
             }
@@ -152,6 +176,9 @@ impl fmt::Display for DraftError {
                 f,
                 "the drafted rule would also allow a call with a different `{field}`"
             ),
+            DraftError::NameNotKept => {
+                f.write_str("the drafted rule does not read back with the name it was given")
+            }
         }
     }
 }
@@ -171,6 +198,9 @@ pub fn draft_allow(text: &str, call: &DraftCall<'_>) -> Result<Draft, DraftError
     require_printable("caller", call.caller)?;
     require_printable("capability", call.capability)?;
     let current = crate::parse(text).map_err(DraftError::CurrentInvalid)?;
+    if let Some(name) = call.name {
+        require_new_name(&current, call.caller, name)?;
+    }
     let resolution =
         current.explain_permission(call.caller, call.capability, call.context, call.vars);
     if resolution.action == Action::Allow {
@@ -190,6 +220,7 @@ pub fn draft_allow(text: &str, call: &DraftCall<'_>) -> Result<Draft, DraftError
 
     let lines = split_lines(text)?;
     let rule = RuleText {
+        name: call.name.map(yaml_scalar),
         capability: yaml_scalar(call.capability),
         filter: filter.text.as_deref().map(yaml_scalar),
     };
@@ -293,6 +324,30 @@ fn bound_variable<'a>(
                 && filter::is_valid_var_name(name)
         })
         .map(|(name, _)| name.as_str())
+}
+
+/// A name the drafted rule can carry: what the parser and `blueprint lint` accept
+/// (non-empty, unique within the caller's block), and printable, as every value
+/// the splice writes must be.
+fn require_new_name(current: &Blueprint, caller: &str, name: &str) -> Result<(), DraftError> {
+    if name.is_empty() {
+        return Err(DraftError::EmptyName);
+    }
+    require_printable("name", name)?;
+    let taken = current
+        .permissions
+        .get(caller)
+        .into_iter()
+        .flatten()
+        .position(|rule| rule.name.as_deref() == Some(name));
+    match taken {
+        Some(index) => Err(DraftError::DuplicateName {
+            caller: caller.to_string(),
+            name: name.to_string(),
+            position: index.saturating_add(1),
+        }),
+        None => Ok(()),
+    }
 }
 
 fn require_printable(field: &str, value: &str) -> Result<(), DraftError> {
@@ -664,6 +719,8 @@ fn value_text(rest: &str) -> &str {
 // Placing the rule.
 
 struct RuleText {
+    /// Written first, when the rule is named.
+    name: Option<String>,
     capability: String,
     filter: Option<String>,
 }
@@ -673,7 +730,14 @@ impl RuleText {
         let pad = " ".repeat(dash.indent);
         let gap = " ".repeat(dash.gap);
         let inner = " ".repeat(dash.indent + 1 + dash.gap);
-        let mut lines = vec![format!("{pad}-{gap}capability: {}", self.capability)];
+        let capability = format!("capability: {}", self.capability);
+        let mut lines = match &self.name {
+            Some(name) => vec![
+                format!("{pad}-{gap}name: {name}"),
+                format!("{inner}{capability}"),
+            ],
+            None => vec![format!("{pad}-{gap}{capability}")],
+        };
         if let Some(filter) = &self.filter {
             lines.push(format!("{inner}filter: {filter}"));
         }
@@ -970,6 +1034,9 @@ fn require_exact(
     else {
         return Err(DraftError::DoesNotAllow);
     };
+    if rule.name.as_deref() != call.name {
+        return Err(DraftError::NameNotKept);
+    }
     for field in compared {
         let mut altered = call.context.clone();
         if let Some(value) = altered.get_mut(field.as_str()) {
@@ -1025,6 +1092,18 @@ mod tests {
         context: Value,
         bindings: &VarBindings,
     ) -> Result<Draft, DraftError> {
+        draft_named(text, caller, capability, context, bindings, None)
+    }
+
+    /// [`draft`], with the drafted rule named `name`.
+    fn draft_named(
+        text: &str,
+        caller: &str,
+        capability: &str,
+        context: Value,
+        bindings: &VarBindings,
+        name: Option<&str>,
+    ) -> Result<Draft, DraftError> {
         let blueprint = crate::parse(text).expect("fixture parses");
         let cause = blueprint
             .explain_permission(caller, capability, &context, bindings)
@@ -1036,6 +1115,7 @@ mod tests {
                 capability,
                 context: &context,
                 vars: bindings,
+                name,
                 decided_by: &cause,
             },
         )
@@ -1364,6 +1444,97 @@ permissions:
     }
 
     #[test]
+    fn a_named_draft_writes_the_name_first_and_reads_back_with_it() {
+        let context = json!({ "amount": 1250 });
+        let draft = draft_named(
+            ODD_LAYOUT,
+            "main",
+            "acme.com/refunds.create",
+            context,
+            &VarBindings::new(),
+            Some("small-refunds"),
+        )
+        .expect("drafts");
+        assert_eq!(
+            rule_lines(&draft),
+            [
+                "         -   name: small-refunds",
+                "             capability: acme.com/refunds.create",
+                "             filter: amount == 1250",
+                "             action: allow",
+            ]
+        );
+        assert_only_inserted(ODD_LAYOUT, &draft, 0);
+        let parsed = crate::parse(&draft.text).expect("parses");
+        let rule = &parsed.permissions["main"][1];
+        assert_eq!(rule.name.as_deref(), Some("small-refunds"));
+
+        // A name YAML would read as another type is quoted, and reads back as text.
+        let draft = draft_named(
+            ODD_LAYOUT,
+            "billing",
+            "fs.read",
+            json!({ "path": "/a" }),
+            &VarBindings::new(),
+            Some("true"),
+        )
+        .expect("drafts");
+        assert_eq!(rule_lines(&draft)[0], "         -   name: 'true'");
+        let parsed = crate::parse(&draft.text).expect("parses");
+        assert_eq!(
+            parsed.permissions["billing"][1].name.as_deref(),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn a_rule_name_must_be_new_to_its_block_non_empty_and_printable() {
+        let named = "name: a\npermissions:\n  main:\n  - name: reads\n    capability: a\n    action: allow\n  other:\n  - name: writes\n    capability: b\n    action: allow\n";
+        let refused = |name: &str| {
+            draft_named(
+                named,
+                "main",
+                "b",
+                json!({}),
+                &VarBindings::new(),
+                Some(name),
+            )
+            .expect_err("refused")
+        };
+        let taken = refused("reads");
+        assert!(
+            matches!(&taken, DraftError::DuplicateName { caller, name, position: 1 }
+                if caller == "main" && name == "reads"),
+            "{taken:?}"
+        );
+        assert!(
+            taken
+                .to_string()
+                .contains("rule 1 of `main` is already named `reads`")
+        );
+        assert!(matches!(refused(""), DraftError::EmptyName));
+        assert!(matches!(
+            refused("a\nb"),
+            DraftError::UnsafeValue { field, .. } if field == "name"
+        ));
+        // The same name under another caller is unambiguous.
+        let draft = draft_named(
+            named,
+            "main",
+            "b",
+            json!({}),
+            &VarBindings::new(),
+            Some("writes"),
+        )
+        .expect("drafts");
+        assert!(
+            draft.rule.starts_with("  - name: writes\n"),
+            "{}",
+            draft.rule
+        );
+    }
+
+    #[test]
     fn a_placeholder_in_a_value_is_refused() {
         let err = draft(
             ODD_LAYOUT,
@@ -1429,6 +1600,7 @@ permissions:
                 capability: "acme.com/refunds.create",
                 context: &context,
                 vars: &VarBindings::new(),
+                name: None,
                 decided_by: &stale,
             },
         )
@@ -1454,6 +1626,7 @@ permissions:
             capability: "b",
             context: &context,
             vars: &VarBindings::new(),
+            name: None,
             decided_by: &ResolutionCause::Default { caller_block: true },
         };
         apply_checked(&current, &lines, splice, &call, 3, &[])
@@ -1461,6 +1634,7 @@ permissions:
 
     fn rule(dash: usize) -> Vec<String> {
         RuleText {
+            name: None,
             capability: "b".into(),
             filter: None,
         }

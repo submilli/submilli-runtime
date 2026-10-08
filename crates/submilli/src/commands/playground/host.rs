@@ -108,6 +108,19 @@ pub(crate) struct Status {
     /// Whether the server listener answers, which `status` adds after asking.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) health: Option<String>,
+    /// The binding new runs get: variable values, and secret names only.
+    pub(crate) binding: BindingView,
+}
+
+/// The binding as `status` shows it: the variables, and only the names of the secrets.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct BindingView {
+    pub(crate) variables: std::collections::BTreeMap<String, String>,
+    pub(crate) secrets: Vec<String>,
+    /// Secrets bound before the playground started, whose values were not kept.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) to_bind_again: Vec<String>,
 }
 
 /// Test-only, hidden: how long a serving process waits after taking the instance
@@ -314,12 +327,23 @@ async fn run(
         serving.closure,
     );
     let auth = Arc::new(ControlAuth::new(tokens));
+    // The variables the last `bind` saved; secret values were never saved.
+    let binding = match state_dir.read_binding() {
+        Ok(saved) => Binding::remembered(saved.unwrap_or_default()),
+        Err(error) => {
+            warn(&format!(
+                "the saved binding was not read, so the playground starts with none: {error:#}"
+            ));
+            Binding::default()
+        }
+    };
     let actions = Arc::new(Actions {
         app: state.clone(),
         store: Arc::clone(&serving.store),
         recorder: serving.recorder,
         secrets: serving.secrets,
-        binding: std::sync::Mutex::new(Binding::default()),
+        binding: std::sync::Mutex::new(binding),
+        binding_file: state_dir.binding_path(),
         blueprints: Arc::clone(&blueprints),
         blueprint_name: serving.name.clone(),
         blueprint_path: options.project.blueprint.clone(),
@@ -797,6 +821,7 @@ pub(crate) async fn status(State(state): State<ControlState>) -> Response {
         blueprint_status,
         packages_error,
         health: None,
+        binding: state.actions().binding_view(),
     })
     .into_response()
 }
