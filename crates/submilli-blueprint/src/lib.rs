@@ -8,6 +8,7 @@ mod endpoint;
 mod filter;
 mod git;
 mod llm;
+mod locate;
 mod maps;
 mod mcp;
 mod permissions;
@@ -37,6 +38,7 @@ pub use filter::{
 };
 pub use git::{GitConfig, GitIdentity};
 pub use llm::{LlmConfig, LlmModelDecl, LlmProviderDecl};
+pub use locate::{Citation, RuleLocation, locate_key, locate_rule};
 pub use mcp::{McpAuth, McpServer};
 pub use permissions::{
     Action, DefaultAction, NearMiss, PermissionRule, Resolution, ResolutionCause, RuleRef,
@@ -1260,7 +1262,7 @@ pub fn parse(yaml: &str) -> Result<Blueprint, BlueprintError> {
     }
     let blueprint: Blueprint =
         serde_path_to_error::deserialize(serde_yml::Deserializer::from_str(yaml))
-            .map_err(parse_fault)?;
+            .map_err(|err| parse_fault(yaml, err))?;
     validate_kind(blueprint.kind.as_deref())?;
     validate_name(&blueprint.name)?;
     validate_packages(&blueprint.packages)?;
@@ -1278,7 +1280,7 @@ pub fn parse(yaml: &str) -> Result<Blueprint, BlueprintError> {
 /// Convert a deserialization failure into a `Parse` fault carrying the YAML
 /// path serde got to (covers errors raised inside custom `Deserialize` impls —
 /// filters, vfs, secret sources) and the parser's line/column when it has one.
-fn parse_fault(err: serde_path_to_error::Error<serde_yml::Error>) -> BlueprintError {
+fn parse_fault(yaml: &str, err: serde_path_to_error::Error<serde_yml::Error>) -> BlueprintError {
     let path: YamlPath = err
         .path()
         .iter()
@@ -1290,13 +1292,44 @@ fn parse_fault(err: serde_path_to_error::Error<serde_yml::Error>) -> BlueprintEr
         })
         .collect();
     let inner = err.into_inner();
-    let location = inner.location().map(|l| (l.line(), l.column()));
-    let message = readable_yaml_error_path(inner.to_string(), &path);
+    let mut location = inner.location().map(|l| (l.line(), l.column()));
+    let mut message = readable_yaml_error_path(inner.to_string(), &path);
+    if let Some(repeat) = repeated_key_position(yaml, &path, &message) {
+        // serde_yml writes the position it reported into the message too.
+        if let Some((line, column)) = location {
+            let reported = format!(" at line {line} column {column}");
+            if let Some(body) = message.strip_suffix(&reported) {
+                message = format!("{body} at line {} column {}", repeat.0, repeat.1);
+            }
+        }
+        location = Some(repeat);
+    }
     BlueprintError::Parse(Fault {
         message,
         path: (!path.is_empty()).then_some(path),
         location,
     })
+}
+
+/// Where the repeated key of a duplicate-key failure is written. serde's
+/// derived structs report a repeated field at the start of the enclosing
+/// mapping — `1:1` for a top-level key — and the blueprint's own map checks
+/// report it at the repeat's value; both mean the second `key:`.
+fn repeated_key_position(yaml: &str, path: &[PathSeg], message: &str) -> Option<(usize, usize)> {
+    if let Some((_, rest)) = message.split_once("duplicate field `") {
+        // The derived visitor's path ends at the mapping holding the field.
+        let field = rest.split('`').next()?;
+        return locate::repeated_key(yaml, path, field);
+    }
+    if message.contains("duplicate key `") {
+        // `duplicate_key` and `maps::deserialize` fail inside the repeat's
+        // value, so the path ends at the repeated key itself.
+        let (PathSeg::Key(key), map_path) = path.split_last()? else {
+            return None;
+        };
+        return locate::repeated_key(yaml, map_path, key);
+    }
+    None
 }
 
 /// serde_yml escapes sequence brackets in its textual path and inserts a dot
@@ -1870,6 +1903,53 @@ permissions:
                 fault.path.as_ref().is_some_and(|path| !path.is_empty()),
                 "{block}: missing field path"
             );
+        }
+    }
+
+    /// A repeated key is refused at the repeat, not at the top of the file:
+    /// the playground prints this position to the person editing it.
+    #[test]
+    fn duplicate_keys_are_reported_at_the_repeat() {
+        for (yaml, key, line, column) in [
+            ("name: x\ndefault: deny\n# again\nname: y\n", "name", 4, 1),
+            (
+                "name: x\npermissions:\n  main: []\ndefault: deny\npermissions:\n  other: []\n",
+                "permissions",
+                5,
+                1,
+            ),
+            (
+                "name: x\npermissions:\n  main:\n    - capability: a\n      action: allow\n  \
+                 # repeated\n  main: []\n",
+                "main",
+                7,
+                3,
+            ),
+            (
+                "name: x\nvfs:\n  mode: ephemeral\n  mode: named\n  volume: w\n",
+                "mode",
+                4,
+                3,
+            ),
+            (
+                "name: x\npermissions:\n  main:\n    - capability: a\n      capability: b\n      \
+                 action: allow\n",
+                "capability",
+                5,
+                7,
+            ),
+        ] {
+            let err = parse(yaml).expect_err(yaml);
+            let fault = err.fault().expect("fault");
+            assert!(
+                fault.message.contains(&format!("`{key}`")),
+                "{yaml}: {fault:?}"
+            );
+            assert_eq!(fault.location, Some((line, column)), "{yaml}: {fault:?}");
+            // A position serde_yml wrote into the message is the corrected one.
+            if let Some((_, written)) = fault.message.rsplit_once(" at line ") {
+                assert_eq!(written, format!("{line} column {column}"), "{fault:?}");
+            }
         }
     }
 
