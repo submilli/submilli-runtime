@@ -2061,7 +2061,21 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 .stderr(Stdio::piped())
                 .spawn()
                 .unwrap();
-            listed_running(&playground, &session);
+            let run = listed_running(&playground, &session);
+            // The run's first event reaches the session's log after its record starts;
+            // killed before that, the log would hold no run for watch to let go of.
+            let log = playground
+                .state()
+                .join("store/events")
+                .join(format!("{session}.jsonl"));
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .contains(&format!("\"run\":{run}"))
+            {
+                assert!(Instant::now() < deadline, "run {run} never reached {log:?}");
+                std::thread::sleep(Duration::from_millis(50));
+            }
             let (status, _) = playground.json(&["status"]);
             let pid = status["pid"].as_u64().unwrap().to_string();
             let killed = Command::new("kill").args(["-KILL", &pid]).status().unwrap();
