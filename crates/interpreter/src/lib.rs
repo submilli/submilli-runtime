@@ -17,6 +17,7 @@ pub mod diagnostics;
 pub mod did_you_mean;
 pub mod doc_comment;
 pub mod lexer;
+pub(crate) mod literal_units;
 pub mod lower_patterns;
 pub mod mangle;
 pub mod package_declaration;

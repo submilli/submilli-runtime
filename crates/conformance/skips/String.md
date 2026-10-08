@@ -19,9 +19,10 @@ string receivers instead). Representatives copied:
 
 Porting adaptations used throughout (README rules):
 
-- Lone-surrogate string literals (`'\uD800'`) are built with
-  `String.fromCharCode(...)` — the lexer rejects unpaired surrogate escapes.
-  Affects at/codePointAt/padStart/padEnd/isWellFormed/toWellFormed ports.
+- Lone-surrogate string literals (`'\uD800'`) in earlier ports are built with
+  `String.fromCharCode(...)`, from when the lexer rejected unpaired surrogate
+  escapes; it accepts them now. Affects at/codePointAt/padStart/padEnd/
+  isWellFormed/toWellFormed ports.
 - `\xHH` escapes are spelled `\u00HH` (no `\xHH` escape form).
 - `new String(...)` / `new Object(...)` wrapper receivers become plain
   strings; coerced arguments collapse to their coercion results where the

@@ -1,4 +1,5 @@
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
+use crate::literal_units::{push_literal_char, push_lone_surrogate};
 use num_bigint::BigUint;
 use num_traits::Num;
 use unicode_ident::{is_xid_continue, is_xid_start};
@@ -698,7 +699,7 @@ impl<'a> Lexer<'a> {
                     let Some(c) = self.peek_char() else {
                         return self.fail("lexer cursor is not at a source character");
                     };
-                    value.push(c);
+                    push_literal_char(&mut value, c);
                     self.pos += c.len_utf8() as u32;
                 }
             }
@@ -850,7 +851,7 @@ impl<'a> Lexer<'a> {
                     format!("unknown escape sequence `\\{c}`"),
                     vec![VALID_ESCAPES.to_string()],
                 );
-                out.push(c);
+                push_literal_char(out, c);
                 self.pos = end;
             }
         }
@@ -898,15 +899,11 @@ impl<'a> Lexer<'a> {
                 );
                 return;
             }
-            if (0xD800..=0xDFFF).contains(&value) {
-                self.error(
-                    self.span(esc_start, self.pos),
-                    "invalid code point in `\\u{…}`: surrogate",
-                );
+            if push_lone_surrogate(out, value) {
                 return;
             }
             if let Some(c) = char::from_u32(value) {
-                out.push(c);
+                push_literal_char(out, c);
             }
         } else {
             let Some(value) = self.read_four_hex(esc_start) else {
@@ -925,16 +922,16 @@ impl<'a> Lexer<'a> {
                     {
                         let code = 0x10000 + ((value - 0xD800) << 10) + (low - 0xDC00);
                         if let Some(c) = char::from_u32(code) {
-                            out.push(c);
+                            push_literal_char(out, c);
                         }
                         return;
                     }
                     self.pos = save;
                 }
-                self.error(self.span(esc_start, self.pos), "lone high surrogate");
-            } else if (0xDC00..=0xDFFF).contains(&value) {
-                self.error(self.span(esc_start, self.pos), "lone low surrogate");
-            } else if let Some(c) = char::from_u32(value) {
+            }
+            if !push_lone_surrogate(out, value)
+                && let Some(c) = char::from_u32(value)
+            {
                 out.push(c);
             }
         }
@@ -1288,7 +1285,7 @@ impl<'a> Lexer<'a> {
                     let Some(c) = self.peek_char() else {
                         return self.fail("lexer cursor is not at a source character");
                     };
-                    value.push(c);
+                    push_literal_char(&mut value, c);
                     self.pos += c.len_utf8() as u32;
                 }
             }
@@ -2207,17 +2204,32 @@ mod tests {
     }
 
     #[test]
-    fn string_lone_high_surrogate_diagnosed() {
-        let (_, _, diags) = tokenize_one("\"\\uD83D\"");
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].message, "lone high surrogate");
+    fn string_lone_surrogates_are_kept() {
+        for (source, unit) in [
+            ("\"\\uD83D\"", 0xD83D),
+            ("\"\\uDE00\"", 0xDE00),
+            ("\"\\u{D800}\"", 0xD800),
+        ] {
+            let (tok, _, diags) = tokenize_one(source);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
+            let TokenKind::StringLiteral(text) = tok.kind else {
+                panic!("{source}: expected a string literal");
+            };
+            assert_eq!(crate::literal_units::literal_units(&text), vec![unit]);
+        }
     }
 
     #[test]
-    fn string_lone_low_surrogate_diagnosed() {
-        let (_, _, diags) = tokenize_one("\"\\uDE00\"");
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].message, "lone low surrogate");
+    fn string_marker_code_point_is_kept() {
+        let (tok, _, diags) = tokenize_one("\"\\u{10FFFE}\u{10FFFE}\"");
+        assert!(diags.is_empty());
+        let TokenKind::StringLiteral(text) = tok.kind else {
+            panic!("expected a string literal");
+        };
+        assert_eq!(
+            crate::literal_units::literal_units(&text),
+            "\u{10FFFE}\u{10FFFE}".encode_utf16().collect::<Vec<_>>()
+        );
     }
 
     #[test]
