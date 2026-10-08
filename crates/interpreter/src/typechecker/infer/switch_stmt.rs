@@ -236,7 +236,7 @@ impl Inferer<'_> {
         for &stmt in stmts {
             if let StmtKind::Let { name, .. }
             | StmtKind::Const { name, .. }
-            | StmtKind::ConstRest { name, .. } =
+            | StmtKind::ObjectRest { name, .. } =
                 &self.ast.try_stmt(stmt).map_err(super::arena_failure)?.kind
             {
                 locals.entry(name.name.clone()).or_insert(name.span);

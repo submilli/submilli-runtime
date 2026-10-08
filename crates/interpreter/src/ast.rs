@@ -354,8 +354,9 @@ pub enum StmtKind {
         value: ExprId,
         doc: Option<DocComment>,
     },
-    /// Rest binding from `const { a, ...rest } = obj`. `name` gets a narrowed type with `exclude` fields removed; codegen treats it like `Const`.
-    ConstRest {
+    /// Rest binding from `const { a, ...rest } = obj` or its `let` form. `name` gets a narrowed type with `exclude` fields removed; codegen treats it like `Const` or `Let`.
+    ObjectRest {
+        is_const: bool,
         name: Ident,
         source: ExprId,
         exclude: Vec<Ident>,

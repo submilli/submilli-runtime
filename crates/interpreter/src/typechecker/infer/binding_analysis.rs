@@ -112,9 +112,10 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) -> Result<(), CompilerF
             out.initialize(name);
             out.write(name);
         }
-        StmtKind::ConstRest { name, source, .. } => {
+        StmtKind::ObjectRest { name, source, .. } => {
             visit_expr(ast, *source, out)?;
             out.initialize(name);
+            out.write(name);
         }
         StmtKind::Function {
             name, params, body, ..
@@ -515,7 +516,7 @@ impl Analysis {
             match &ast.try_stmt(id).map_err(super::arena_failure)?.kind {
                 crate::StmtKind::Let { name, .. }
                 | crate::StmtKind::Const { name, .. }
-                | crate::StmtKind::ConstRest { name, .. } => {
+                | crate::StmtKind::ObjectRest { name, .. } => {
                     self.declare_block_local(name);
                 }
                 crate::StmtKind::Function { name, .. } => self.declare(name, true),

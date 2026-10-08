@@ -601,7 +601,7 @@ impl SyntaxChildren {
             | StmtKind::Const { ty, value, .. }
             | StmtKind::LetPattern { ty, value, .. }
             | StmtKind::ConstPattern { ty, value, .. }
-            | StmtKind::ConstRest {
+            | StmtKind::ObjectRest {
                 ty, source: value, ..
             } => {
                 self.annotations(ty);

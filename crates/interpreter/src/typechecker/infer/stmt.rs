@@ -267,7 +267,8 @@ impl Inferer<'_> {
                     "destructuring patterns must be lowered before inference",
                 ));
             }
-            StmtKind::ConstRest {
+            StmtKind::ObjectRest {
+                is_const,
                 name,
                 source,
                 exclude,
@@ -284,12 +285,22 @@ impl Inferer<'_> {
                     (typed_source, Type::Error)
                 };
                 self.scopes
-                    .insert(name.name.clone(), narrowed.clone(), true, name.span);
-                Ok(TypedStmtKind::Const {
-                    name,
-                    ty: narrowed,
-                    value: typed_value,
-                    doc,
+                    .insert(name.name.clone(), narrowed.clone(), is_const, name.span);
+                Ok(if is_const {
+                    TypedStmtKind::Const {
+                        name,
+                        ty: narrowed,
+                        value: typed_value,
+                        doc,
+                    }
+                } else {
+                    TypedStmtKind::Let {
+                        name,
+                        ty: narrowed,
+                        value: typed_value,
+                        boxed: false,
+                        doc,
+                    }
                 })
             }
         })?;

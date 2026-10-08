@@ -1,6 +1,6 @@
 //! Pre-infer pass eliminating destructuring patterns from [`Ast`].
 //! Runs between [`crate::parse`] and [`crate::infer`]; downstream sees only plain
-//! `Let`/`Const`/`ConstRest`/`ForOf` and `ParamDecl` with `pattern: None`.
+//! `Let`/`Const`/`ObjectRest`/`ForOf` and `ParamDecl` with `pattern: None`.
 //! Synthesised array-pattern `IndexAccess` nodes are tagged in [`Ast::pattern_origins`]
 //! so the typechecker can rephrase index errors as destructure-specific diagnostics.
 
@@ -284,7 +284,7 @@ impl LowerCtx {
             {
                 StmtKind::Let { name, .. }
                 | StmtKind::Const { name, .. }
-                | StmtKind::ConstRest { name, .. } => source_bindings.push(name.clone()),
+                | StmtKind::ObjectRest { name, .. } => source_bindings.push(name.clone()),
                 _ => {}
             }
         }
@@ -512,7 +512,8 @@ impl LowerCtx {
                         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
                     let decl = ast
                         .try_push_stmt(Stmt {
-                            kind: StmtKind::ConstRest {
+                            kind: StmtKind::ObjectRest {
+                                is_const,
                                 name: rest_ident.clone(),
                                 source: src_expr,
                                 exclude: bound_names,
@@ -919,17 +920,23 @@ mod tests {
     }
 
     #[test]
-    fn lowers_object_rest_to_const_rest() {
+    fn lowers_object_rest_to_object_rest() {
         let ast = pipeline("const { a, ...rest } = obj;");
         no_patterns_left(&ast);
         assert_eq!(ast.top_level.len(), 3);
         match &ast.try_stmt(ast.top_level[2]).unwrap().kind {
-            StmtKind::ConstRest { name, exclude, .. } => {
+            StmtKind::ObjectRest {
+                is_const,
+                name,
+                exclude,
+                ..
+            } => {
+                assert!(*is_const);
                 assert_eq!(name.name, "rest");
                 assert_eq!(exclude.len(), 1);
                 assert_eq!(exclude[0].name, "a");
             }
-            other => panic!("expected ConstRest, got {other:?}"),
+            other => panic!("expected ObjectRest, got {other:?}"),
         }
     }
 

@@ -115,7 +115,7 @@ impl Inferer<'_> {
         let declared = match &self.ast.try_stmt(stmt).map_err(super::arena_failure)?.kind {
             StmtKind::Let { name, .. }
             | StmtKind::Const { name, .. }
-            | StmtKind::ConstRest { name, .. } => name.span,
+            | StmtKind::ObjectRest { name, .. } => name.span,
             _ => return Ok(Vec::new()),
         };
         let ready: Vec<usize> = self
