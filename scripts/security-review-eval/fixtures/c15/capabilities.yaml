@@ -1,0 +1,12 @@
+namespace: acme
+provides:
+- name: acme.deliver
+  description: Deliver a record to an outbox.
+  fields:
+    destination:
+      type: string
+    source:
+      type: string
+requires:
+- capability: fs.read
+- capability: fs.write
