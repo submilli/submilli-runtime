@@ -250,7 +250,7 @@ impl Harness {
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(tweak(config)).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(tweak(config))).expect("AppState"),
             _vfs_root: vfs_root,
         }
     }

@@ -25,7 +25,7 @@ const USER: &str = "user-token-0123456789abcdef01234567890";
 fn router() -> (Router, tempfile::TempDir) {
     let packages = tempfile::tempdir().expect("temp package store");
     let token = |name, role, token| ApiToken::new(name, role, token).expect("valid token");
-    let router = app(AppState::new(ServerConfig {
+    let router = app(futures::executor::block_on(AppState::new(ServerConfig {
         auth: AuthConfig::Tokens(vec![
             token("ops", Role::Admin, ADMIN),
             token("ops-next", Role::Admin, ADMIN_NEXT),
@@ -33,7 +33,7 @@ fn router() -> (Router, tempfile::TempDir) {
         ]),
         package_store_root: Some(packages.path().to_path_buf()),
         ..in_memory_config::config()
-    })
+    }))
     .expect("build AppState"));
     (router, packages)
 }
@@ -243,7 +243,9 @@ async fn a_forbidden_response_names_the_role_needed() {
 
 #[tokio::test]
 async fn a_server_without_tokens_admits_every_caller() {
-    let router = app(AppState::new(in_memory_config::config()).expect("build AppState"));
+    let router = app(AppState::new(in_memory_config::config())
+        .await
+        .expect("build AppState"));
     assert_eq!(
         status(&router, Method::GET, "/v1/status", None).await,
         StatusCode::OK

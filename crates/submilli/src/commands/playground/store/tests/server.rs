@@ -101,7 +101,7 @@ struct Playground {
 }
 
 impl Playground {
-    fn start(dir: &std::path::Path, yaml: &str) -> Self {
+    async fn start(dir: &std::path::Path, yaml: &str) -> Self {
         let store = Arc::new(Store::open(&dir.join("store")).unwrap());
         let recordings = Arc::new(Mutex::new(HashMap::new()));
         let tee = Tee {
@@ -117,7 +117,7 @@ impl Playground {
             ..ServerConfig::default()
         };
         Self {
-            state: AppState::new(config).unwrap(),
+            state: AppState::new(config).await.unwrap(),
             store,
             recordings,
         }
@@ -192,7 +192,7 @@ function main(): string {{
 async fn a_stored_run_loaded_after_a_restart_tests_as_the_in_memory_recording_does() {
     let port = origin(|_| (String::new(), b"alpha".to_vec()));
     let dir = tempfile::tempdir().unwrap();
-    let first = Playground::start(dir.path(), BLUEPRINT);
+    let first = Playground::start(dir.path(), BLUEPRINT).await;
     let execution_id = first
         .run(&fetch_both(port), HarnessSecretBindings::new())
         .await;
@@ -200,7 +200,7 @@ async fn a_stored_run_loaded_after_a_restart_tests_as_the_in_memory_recording_do
     let before = first.test(in_memory).await;
     drop(first);
 
-    let second = Playground::start(dir.path(), BLUEPRINT);
+    let second = Playground::start(dir.path(), BLUEPRINT).await;
     let id = second
         .store
         .run_id_of(&execution_id)
@@ -248,7 +248,7 @@ function main(): string {{
 }}"#
     );
     let dir = tempfile::tempdir().unwrap();
-    let playground = Playground::start(dir.path(), BLUEPRINT);
+    let playground = Playground::start(dir.path(), BLUEPRINT).await;
     playground.run(&code, HarnessSecretBindings::new()).await;
     let run = playground.store.load_run(1).unwrap().unwrap();
     assert_eq!(run.result.as_deref(), Some((cap + 10).to_string().as_str()));
@@ -321,7 +321,7 @@ function main(): string {{
 }}"#
     );
     let dir = tempfile::tempdir().unwrap();
-    let playground = Playground::start(dir.path(), &yaml);
+    let playground = Playground::start(dir.path(), &yaml).await;
     let secrets: HarnessSecretBindings = [("API_KEY".to_owned(), SECRET.to_owned())].into();
     let execution_id = playground.run(&code, secrets).await;
     // The program really saw it: the in-memory recording holds it.

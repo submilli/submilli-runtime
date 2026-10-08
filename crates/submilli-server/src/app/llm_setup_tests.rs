@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::*;
-use crate::idempotency_store::EntryState;
+use crate::domain::idempotent_request::RequestState as EntryState;
+use crate::request_records::RequestRecords;
 
 const CODE: &str = "function main(): number { console.log(\"executed\"); return 42; }";
 
@@ -16,11 +17,11 @@ struct Harness {
     fail: Arc<AtomicBool>,
     attempts: Arc<AtomicUsize>,
     root: tempfile::TempDir,
-    ledger: Arc<InMemoryIdempotencyStore>,
+    ledger: Arc<RequestRecords>,
 }
 
 impl Harness {
-    fn new(installed: Option<Arc<dyn ModelDispatch>>) -> Self {
+    async fn new(installed: Option<Arc<dyn ModelDispatch>>) -> Self {
         let root = tempfile::tempdir().unwrap();
         let fail = Arc::new(AtomicBool::new(true));
         let attempts = Arc::new(AtomicUsize::new(0));
@@ -47,18 +48,19 @@ impl Harness {
             }])
             .unwrap(),
         );
-        let ledger = Arc::new(InMemoryIdempotencyStore::default());
+        let ledger = Arc::new(RequestRecords::ephemeral());
         let state = AppState::with_llm_dispatch_factory(
             ServerConfig {
                 blueprints: Some(blueprints),
                 session_storage_root: Some(root.path().join("sessions")),
                 ephemeral_storage_root: Some(root.path().join("ephemeral")),
                 llm_dispatch: installed,
-                idempotency_store: Some(ledger.clone()),
+                database: Some(ledger.database.clone()),
                 ..crate::config::test_config()
             },
             factory,
         )
+        .await
         .unwrap();
         Self {
             state,
@@ -114,7 +116,7 @@ impl Harness {
 
 #[tokio::test]
 async fn rest_setup_failure_is_undispatched_and_same_key_can_execute_after_recovery() {
-    let harness = Harness::new(None);
+    let harness = Harness::new(None).await;
     let (status, _, body) = harness
         .post("/v1/sessions", json!({"blueprint": "test"}), &[])
         .await;
@@ -182,7 +184,7 @@ async fn rest_setup_failure_is_undispatched_and_same_key_can_execute_after_recov
 
 #[tokio::test]
 async fn one_shot_setup_failure_has_no_last_run_or_vfs_and_recovers() {
-    let harness = Harness::new(None);
+    let harness = Harness::new(None).await;
     let (status, headers, body) = harness
         .post(
             "/v1/execute",
@@ -220,7 +222,7 @@ async fn one_shot_setup_failure_has_no_last_run_or_vfs_and_recovers() {
 
 #[tokio::test]
 async fn mcp_setup_failure_is_internal_before_vfs_and_allows_follow_up() {
-    let harness = Harness::new(None);
+    let harness = Harness::new(None).await;
     let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
         "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "setup-test", "version": "0"}
     }});
@@ -285,7 +287,7 @@ async fn installed_dispatch_skips_failing_factory() {
         )
         .unwrap(),
     );
-    let harness = Harness::new(Some(dispatch));
+    let harness = Harness::new(Some(dispatch)).await;
     let (_, _, body) = harness
         .post(
             "/v1/execute",

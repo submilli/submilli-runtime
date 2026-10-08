@@ -211,7 +211,7 @@ fn server_built(log: DecisionLogConfig, usage: ProviderUsage, events: bool) -> S
         ..in_memory_config::config()
     };
     Server {
-        state: AppState::new(config).expect("state"),
+        state: futures::executor::block_on(AppState::new(config)).expect("state"),
         collected,
         _dirs: dirs,
     }
@@ -658,7 +658,7 @@ function main(): number {{
             session_storage_root: Some(dirs.path().join("sessions")),
             ..in_memory_config::config()
         };
-        (AppState::new(config).unwrap(), dirs)
+        (AppState::new(config).await.unwrap(), dirs)
     };
     let recorded = server();
     let without_events = server_built(

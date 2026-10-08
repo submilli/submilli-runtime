@@ -558,7 +558,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_initialization_keeps_generation_until_worker_cleanup() {
-        let state = AppState::new(crate::config::test_config()).unwrap();
+        let state = AppState::new(crate::config::test_config()).await.unwrap();
         let manager = VfsSessionManager::new(state.clone(), "missing".into());
         let (id, _transport) = manager.create_session().await.unwrap();
         let record = crate::session_store::SessionRecord {
@@ -568,7 +568,25 @@ mod tests {
             last_activity: std::time::SystemTime::now(),
             ..Default::default()
         };
+        state
+            .blueprints()
+            .add(submilli_blueprint::parse("name: missing\n").unwrap())
+            .await
+            .unwrap();
         state.session_store().put(record).await.unwrap();
+        state
+            .database()
+            .unwrap()
+            .transaction(|connection| {
+                Box::pin(async move {
+                    sqlx::query("DELETE FROM blueprints WHERE name='missing'")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
         let message = serde_json::from_value(serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "ping"
         }))
@@ -599,7 +617,14 @@ mod tests {
 
     #[tokio::test]
     async fn session_lookup_requires_authoritative_handshake_even_with_live_worker() {
-        let state = AppState::new(crate::config::test_config()).expect("state");
+        let state = AppState::new(crate::config::test_config())
+            .await
+            .expect("state");
+        state
+            .blueprints()
+            .upsert(submilli_blueprint::parse("name: test\n").unwrap())
+            .await
+            .unwrap();
         let manager = VfsSessionManager::new(state.clone(), "test".into());
         let (id, _transport) = manager.inner.create_session().await.expect("session");
         let record = crate::session_store::SessionRecord {

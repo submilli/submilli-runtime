@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use submilli_server::ServerConfig;
 use submilli_server::blueprint::{
-    BlueprintStore, InMemoryBlueprintStore, StoreError, StoredBlueprint,
+    BlueprintStore, SqliteBlueprintStore, StoreError, StoredBlueprint,
 };
 
 use super::*;
@@ -24,7 +24,7 @@ permissions:
 /// An in-memory store whose writes can be made to fail, for an apply that fails
 /// after its version was logged, or held, for an apply still in flight.
 struct Flaky {
-    inner: InMemoryBlueprintStore,
+    inner: SqliteBlueprintStore,
     fail: AtomicBool,
     /// The next write announces itself on `entered` and waits for a `release` permit.
     hold_next: AtomicBool,
@@ -32,10 +32,10 @@ struct Flaky {
     release: tokio::sync::Semaphore,
 }
 
-impl Default for Flaky {
-    fn default() -> Self {
+impl Flaky {
+    fn new(database: Arc<submilli_server::database::ServerDatabase>) -> Self {
         Self {
-            inner: InMemoryBlueprintStore::default(),
+            inner: SqliteBlueprintStore::new(database, None),
             fail: AtomicBool::new(false),
             hold_next: AtomicBool::new(false),
             entered: tokio::sync::Notify::new(),
@@ -46,6 +46,9 @@ impl Default for Flaky {
 
 #[async_trait::async_trait]
 impl BlueprintStore for Flaky {
+    fn database(&self) -> Option<Arc<submilli_server::database::ServerDatabase>> {
+        self.inner.database()
+    }
     async fn add_yaml(&self, stored: StoredBlueprint) -> Result<(), StoreError> {
         self.inner.add_yaml(stored).await
     }
@@ -90,7 +93,7 @@ impl Fixture {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("demo.yaml"), yaml).unwrap();
         let store = Arc::new(Store::open(&dir.path().join("store")).unwrap());
-        let (blueprints, applier) = Self::serve(dir.path(), &store);
+        let (blueprints, applier) = Self::serve(dir.path(), &store).await;
         applier.start().await.expect("the first version applies");
         Self {
             dir,
@@ -101,8 +104,13 @@ impl Fixture {
     }
 
     /// A fresh server over the same project, as after a restart.
-    fn serve(dir: &Path, store: &Arc<Store>) -> (Arc<Flaky>, Applier) {
-        let blueprints = Arc::new(Flaky::default());
+    async fn serve(dir: &Path, store: &Arc<Store>) -> (Arc<Flaky>, Applier) {
+        let database = Arc::new(
+            submilli_server::database::ServerDatabase::open_ephemeral()
+                .await
+                .unwrap(),
+        );
+        let blueprints = Arc::new(Flaky::new(database));
         let state = AppState::new(ServerConfig {
             blueprints: Some(blueprints.clone()),
             session_storage_root: Some(dir.join("sessions")),
@@ -110,6 +118,7 @@ impl Fixture {
             package_store_root: Some(dir.join("packages")),
             ..ServerConfig::default()
         })
+        .await
         .unwrap();
         let applier = Applier::new(
             state,
@@ -341,7 +350,7 @@ async fn a_restart_with_the_file_unchanged_logs_no_new_version() {
     let fixture = Fixture::new(PINNED).await;
     let edited = PINNED.replace("amount < 500", "amount < 100");
     fixture.save(&edited).await;
-    let (blueprints, applier) = Fixture::serve(fixture.dir.path(), &fixture.store);
+    let (blueprints, applier) = Fixture::serve(fixture.dir.path(), &fixture.store).await;
     applier.start().await.unwrap();
     assert_eq!(fixture.versions(), [1, 2]);
     assert_eq!(applier.status().lock().unwrap().version, Some(2));
@@ -354,7 +363,7 @@ async fn a_restart_with_the_file_unchanged_logs_no_new_version() {
 #[tokio::test]
 async fn a_restart_whose_registration_fails_fails_the_start_and_keeps_the_version() {
     let fixture = Fixture::new(PINNED).await;
-    let (blueprints, applier) = Fixture::serve(fixture.dir.path(), &fixture.store);
+    let (blueprints, applier) = Fixture::serve(fixture.dir.path(), &fixture.store).await;
     blueprints.fail.store(true, Ordering::SeqCst);
     let Outcome::RegisterFailed { version, reason } = applier.apply_file_at(Moment::Start).await
     else {
@@ -378,7 +387,7 @@ async fn a_start_on_a_refused_file_fails_with_its_line() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("demo.yaml"), "name: demo\nbad: [\n").unwrap();
     let store = Arc::new(Store::open(&dir.path().join("store")).unwrap());
-    let (_, applier) = Fixture::serve(dir.path(), &store);
+    let (_, applier) = Fixture::serve(dir.path(), &store).await;
     let error = applier.start().await.unwrap_err().to_string();
     assert!(error.contains("line "), "{error}");
     assert!(store.changes().unwrap().versions.is_empty());
@@ -541,7 +550,7 @@ async fn a_save_during_a_slow_package_check_is_applied_after_it() {
     crate::commands::playground::scaffold::init(dir.path()).unwrap();
     std::fs::write(dir.path().join("demo.yaml"), WITH_PACKAGE).unwrap();
     let store = Arc::new(Store::open(&dir.path().join("store")).unwrap());
-    let (blueprints, applier) = Fixture::serve(dir.path(), &store);
+    let (blueprints, applier) = Fixture::serve(dir.path(), &store).await;
     let packages = Arc::new(super::super::packages::ProjectPackages::new(
         &dir.path().join("submilli"),
         dir.path().join("packages"),

@@ -77,7 +77,7 @@ impl Harness {
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(config).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
             session_root: session_root_path,
             _owned_session_root: Some(session_root),
             _package_store_root: None,
@@ -99,7 +99,7 @@ impl Harness {
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(config).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
             session_root: session_root_path,
             _owned_session_root: Some(session_root),
             _package_store_root: None,
@@ -119,7 +119,7 @@ impl Harness {
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(config).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
             session_root: session_root_path,
             _owned_session_root: Some(session_root),
             _package_store_root: None,
@@ -135,11 +135,11 @@ impl Harness {
         let config = ServerConfig {
             blueprints: Some(blueprints),
             session_storage_root: Some(session_root.clone()),
-            session_store_dir: Some(session_store_dir),
+            database_path: Some(session_store_dir.join("server.db")),
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(config).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
             session_root,
             _owned_session_root: None,
             _package_store_root: None,
@@ -160,7 +160,7 @@ impl Harness {
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(config).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
             session_root: session_root_path,
             _owned_session_root: Some(session_root),
             _package_store_root: Some(package_store_root),
@@ -220,7 +220,7 @@ impl Harness {
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(config).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
             session_root: session_root_path,
             _owned_session_root: Some(session_root),
             _package_store_root: None,
@@ -905,6 +905,7 @@ async fn mcp_session_restores_after_server_restart() {
     let session = first.handshake(SESS).await;
     let (_, _, w) = first.post(SESS, tools_call(2, WRITE), Some(&session)).await;
     assert!(output(&w)["error"].is_null(), "write failed: {w}");
+    first.state.database().unwrap().close().await.unwrap();
     drop(first);
 
     let restarted = Harness::from_blueprints_with_session_paths(
@@ -1683,6 +1684,7 @@ async fn delete_persisted_mcp_session_before_restore() {
     let session = first.handshake(SESS).await;
     let (_, _, result) = first.post(SESS, tools_call(2, WRITE), Some(&session)).await;
     assert!(output(&result)["error"].is_null(), "write failed: {result}");
+    first.state.database().unwrap().close().await.unwrap();
     drop(first);
     let restarted = Harness::from_blueprints_with_session_paths(
         blueprints(),

@@ -35,7 +35,7 @@ fn router() -> Router {
         blueprints: Some(blueprints),
         ..in_memory_config::config()
     };
-    app(AppState::new(config).expect("build AppState"))
+    app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
 }
 
 fn router_with_package_store(package_store_root: PathBuf) -> Router {
@@ -65,7 +65,7 @@ fn router_with_packages_and_runtime(
         runtime,
         ..in_memory_config::config()
     };
-    app(AppState::new(config).expect("build AppState"))
+    app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
 }
 
 fn router_with_oauth_mcp() -> Router {
@@ -94,7 +94,7 @@ fn router_with_oauth_mcp() -> Router {
         blueprints: Some(blueprints),
         ..in_memory_config::config()
     };
-    app(AppState::new(config).expect("build AppState"))
+    app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
 }
 
 async fn execute(code: &str) -> (StatusCode, Value) {
@@ -336,6 +336,7 @@ async fn blueprint_package_resolves_from_the_fallback_store() {
         package_fallback_root: Some(fallback),
         ..in_memory_config::config()
     })
+    .await
     .expect("build AppState"));
     let code = r#"
         import { answer, plusOne } from "@acme/util";
@@ -993,6 +994,7 @@ async fn configured_execution_timeout_interrupts_loop_without_expiring_early() {
         },
         ..Default::default()
     })
+    .await
     .unwrap());
     let started = Instant::now();
     let (_, body) = tokio::time::timeout(

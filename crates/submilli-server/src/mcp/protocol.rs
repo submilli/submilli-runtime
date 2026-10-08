@@ -59,7 +59,11 @@ mod tests {
 
     #[tokio::test]
     async fn protocol_state_does_not_require_decrypting_credentials() {
-        let app = AppState::new(crate::config::test_config()).unwrap();
+        let app = AppState::new(crate::config::test_config()).await.unwrap();
+        app.blueprints()
+            .upsert(submilli_blueprint::parse("name: test\n").unwrap())
+            .await
+            .unwrap();
         app.session_store()
             .put(SessionRecord {
                 session_id: "protocol-only".into(),
@@ -111,7 +115,11 @@ mod tests {
 
     #[tokio::test]
     async fn expired_session_cannot_restore_or_replace_protocol_state() {
-        let app = AppState::new(crate::config::test_config()).unwrap();
+        let app = AppState::new(crate::config::test_config()).await.unwrap();
+        app.blueprints()
+            .upsert(submilli_blueprint::parse("name: test\n").unwrap())
+            .await
+            .unwrap();
         app.session_store()
             .put(SessionRecord {
                 session_id: "expired-protocol".into(),

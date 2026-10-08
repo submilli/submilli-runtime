@@ -397,6 +397,7 @@ async fn a_reinstall_whose_caller_stops_waiting_still_evicts_the_cached_package(
         package_store_root: Some(fixture.store.clone()),
         ..ServerConfig::default()
     })
+    .await
     .unwrap();
     let release = || async {
         let response = run_program(

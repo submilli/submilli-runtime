@@ -264,9 +264,12 @@ async fn run(
     let signals = submilli_server::EmbeddedSignals::install()?;
     // The server drains on the same signals; this notes that it has begun.
     let _signal_watch = tokio::spawn(note_signals(Arc::clone(&held))?);
+    config.database = Some(Arc::new(
+        submilli_server::database::ServerDatabase::open(&state_dir.database_path()).await?,
+    ));
     let blueprints = submilli_server::prepare_blueprint_store(&config).await?;
     config.blueprints = Some(Arc::clone(&blueprints));
-    let state = AppState::new(config)?;
+    let state = AppState::new(config).await?;
     state.boot().await?;
     let _store_watch = packages::watch_store(state.clone(), serving.packages.store_root())?;
     // Every save, then the file as it is now, through the trusted local path. The

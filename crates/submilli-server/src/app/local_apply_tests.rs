@@ -8,6 +8,7 @@ async fn a_local_apply_evicts_the_blueprints_mcp_catalogs_only() {
         blueprints: Some(Arc::new(InMemoryBlueprintStore::default())),
         ..Default::default()
     })
+    .await
     .unwrap();
     state
         .apply_local_blueprint("name: demo\n", "v1")
@@ -40,6 +41,7 @@ async fn a_refused_local_apply_evicts_nothing() {
         blueprints: Some(Arc::new(InMemoryBlueprintStore::default())),
         ..Default::default()
     })
+    .await
     .unwrap();
     state
         .apply_local_blueprint("name: demo\n", "v1")

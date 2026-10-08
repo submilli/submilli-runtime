@@ -28,7 +28,7 @@ async fn send(volumes: VolumeTable, method: &str) -> (StatusCode, Value, String)
         volumes,
         ..in_memory_config::config()
     };
-    let state = AppState::new(config).expect("AppState");
+    let state = AppState::new(config).await.expect("AppState");
     let req = Request::builder()
         .method(method)
         .uri("/v1/volumes")

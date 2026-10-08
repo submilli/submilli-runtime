@@ -10,7 +10,9 @@ use std::process::{Command, Output};
 use submilli_server::{AppState, app};
 
 async fn spawn_server() -> String {
-    let state = AppState::new(in_memory_config::config()).expect("AppState");
+    let state = AppState::new(in_memory_config::config())
+        .await
+        .expect("AppState");
     let router = app(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

@@ -42,7 +42,6 @@ mod resources;
 use crate::adapters::session::audit_log::SessionAuditLog;
 use crate::adapters::session::cleanup_queue::StoredSessionCleanupQueue;
 use crate::adapters::session::credentials::{CredentialCodec, CredentialError};
-use crate::adapters::session::idempotency_records::StoredIdempotencyRecords;
 use crate::adapters::session::workspaces::LocalSessionWorkspaces;
 use crate::application::sessions::ports::SessionWorkspaces;
 
@@ -50,7 +49,7 @@ use crate::adapters::session::repository::{LoadedSession, SessionPersistence};
 use crate::blueprint::StoreError;
 use crate::config::VolumeTable;
 use crate::domain::session::{RootVfs, Session, SessionBinding, SessionId};
-use crate::idempotency_store::IdempotencyStore;
+
 use crate::session_store::{ClosedReason, DurableSessionStore, SessionStatus};
 use crate::volumes::VolumeRegistry;
 use submilli_shared::secret_store::SecretCipher;
@@ -118,11 +117,8 @@ pub struct SessionManager {
     /// same table and shares the same size limits.
     volumes: Arc<VolumeRegistry>,
     store: Arc<dyn DurableSessionStore>,
+    database: Arc<crate::database::ServerDatabase>,
     repository: SessionPersistence,
-    /// Idempotency entries are session-scoped, so they end when the session
-    /// does. Held here because every record-driven removal path funnels through
-    /// [`SessionManager::cleanup`].
-    idempotency: Arc<dyn IdempotencyStore>,
     session_kv: SessionKvSettings,
     llm: LlmSettings,
     embedding: EmbeddingSettings,
@@ -264,10 +260,10 @@ impl SessionManager {
         ephemeral_root: Option<PathBuf>,
         volumes: Arc<VolumeRegistry>,
         http_client_factory: HttpClientFactory,
-        store: Arc<dyn DurableSessionStore>,
-        idempotency: Arc<dyn IdempotencyStore>,
+        store: Arc<crate::session_store::SqliteSessionStore>,
         capabilities: CapabilitySettings,
     ) -> Self {
+        let database = store.database_owner();
         let CapabilitySettings {
             session_kv,
             llm,
@@ -275,9 +271,9 @@ impl SessionManager {
         } = capabilities;
         Self {
             audit: None,
-            credentials: CredentialCodec::default(),
+            credentials: CredentialCodec::new(database.ephemeral_cipher()),
             unit_of_work: crate::adapters::unit_of_work::for_sessions(
-                store.clone(),
+                database.clone(),
                 session_root.clone(),
                 None,
             ),
@@ -288,7 +284,7 @@ impl SessionManager {
             ephemeral_root,
             volumes,
             store,
-            idempotency,
+            database,
             session_kv,
             llm,
             embedding,
@@ -386,8 +382,9 @@ impl SessionManager {
     }
 
     pub fn with_cipher(mut self, cipher: Option<Arc<SecretCipher>>) -> Self {
+        let cipher = cipher.or_else(|| self.database.ephemeral_cipher());
         self.unit_of_work = crate::adapters::unit_of_work::for_sessions(
-            self.store.clone(),
+            self.database.clone(),
             self.session_root.clone(),
             cipher.clone(),
         );
@@ -671,7 +668,6 @@ impl SessionManager {
         let Some(task) = self.store.cleanup_task(id).await? else {
             return Ok(());
         };
-        self.idempotency.purge_session(id).await?;
         if let Some(folder) = task.folder {
             validate_session_id(id)?;
             let root = self.session_root.join(id);
@@ -726,7 +722,6 @@ impl SessionManager {
             self.unit_of_work.as_ref(),
             &SessionAuditLog(self.audit.as_ref()),
             &self.workspaces(),
-            &StoredIdempotencyRecords(self.idempotency.as_ref()),
             &StoredSessionCleanupQueue(self.store.as_ref()),
         )
         .execute()
@@ -740,10 +735,6 @@ impl SessionManager {
     pub(crate) async fn validate_stores(&self) -> Result<(), BootError> {
         self.store.initialize().await.map_err(BootError::Sessions)?;
         self.store.load_all().await.map_err(BootError::Sessions)?;
-        self.idempotency
-            .session_ids()
-            .await
-            .map_err(BootError::Idempotency)?;
         Ok(())
     }
 
@@ -1056,12 +1047,8 @@ mod tests {
     use super::*;
     use std::time::UNIX_EPOCH;
 
-    use crate::idempotency_store::{
-        FileIdempotencyStore, InMemoryIdempotencyStore, LedgerEntry, code_fingerprint,
-    };
-    use crate::session_store::{
-        FileDurableSessionStore, InMemoryDurableSessionStore, RootVfsType, SessionRecord,
-    };
+    use crate::request_records::{Record as LedgerEntry, RequestRecords, code_fingerprint};
+    use crate::session_store::{RootVfsType, SessionRecord};
 
     const TINY: Duration = Duration::from_millis(1);
     const HOUR: Duration = Duration::from_secs(3600);
@@ -1388,24 +1375,51 @@ mod tests {
         Arc::new(|| unreachable!("session_manager tests never request an http client"))
     }
 
-    fn mem_store() -> Arc<dyn DurableSessionStore> {
-        Arc::new(InMemoryDurableSessionStore::default())
+    fn seed_blueprints(database: &Arc<crate::database::ServerDatabase>) {
+        use crate::blueprint::BlueprintStore;
+        let blueprints = crate::blueprint::SqliteBlueprintStore::new(database.clone(), None);
+        futures::executor::block_on(async {
+            for name in ["p", "n", "e", "x", "bp"] {
+                blueprints
+                    .upsert(Blueprint {
+                        name: name.into(),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+        });
     }
 
-    fn file_store(dir: &std::path::Path) -> Arc<dyn DurableSessionStore> {
-        Arc::new(FileDurableSessionStore::new(dir.to_path_buf()).expect("file store"))
+    fn mem_store() -> Arc<crate::session_store::SqliteSessionStore> {
+        let database = Arc::new(
+            futures::executor::block_on(crate::database::ServerDatabase::open_ephemeral()).unwrap(),
+        );
+        seed_blueprints(&database);
+        Arc::new(crate::session_store::SqliteSessionStore::new(
+            database,
+            None,
+            std::path::PathBuf::new(),
+        ))
     }
 
-    fn mem_ledger() -> Arc<dyn IdempotencyStore> {
-        Arc::new(InMemoryIdempotencyStore::default())
-    }
-
-    fn file_ledger(dir: &std::path::Path) -> Arc<dyn IdempotencyStore> {
-        Arc::new(FileIdempotencyStore::new(dir.to_path_buf()).expect("file ledger"))
+    fn file_store(dir: &std::path::Path) -> Arc<crate::session_store::SqliteSessionStore> {
+        let database = Arc::new(
+            futures::executor::block_on(crate::database::ServerDatabase::open(
+                &dir.join("server.db"),
+            ))
+            .unwrap(),
+        );
+        seed_blueprints(&database);
+        Arc::new(crate::session_store::SqliteSessionStore::new(
+            database,
+            None,
+            dir.to_path_buf(),
+        ))
     }
 
     fn reserved(session_id: &str, key: &str) -> LedgerEntry {
-        LedgerEntry::reserved(session_id, key, code_fingerprint("main"))
+        LedgerEntry::indeterminate(session_id, key, code_fingerprint("main"))
     }
 
     fn manager() -> (SessionManager, tempfile::TempDir) {
@@ -1417,7 +1431,6 @@ mod tests {
                 Arc::default(),
                 no_http(),
                 mem_store(),
-                mem_ledger(),
                 CapabilitySettings::default(),
             ),
             dir,
@@ -1425,17 +1438,17 @@ mod tests {
     }
 
     /// A manager plus a handle on the ledger it purges, for the cleanup tests.
-    fn manager_with_ledger() -> (SessionManager, tempfile::TempDir, Arc<dyn IdempotencyStore>) {
+    fn manager_with_ledger() -> (SessionManager, tempfile::TempDir, Arc<RequestRecords>) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let ledger = mem_ledger();
+        let store = mem_store();
+        let ledger = Arc::new(RequestRecords::with_database(store.database_owner()));
         (
             SessionManager::new(
                 dir.path().to_path_buf(),
                 None,
                 Arc::default(),
                 no_http(),
-                mem_store(),
-                Arc::clone(&ledger),
+                store,
                 CapabilitySettings::default(),
             ),
             dir,
@@ -1560,7 +1573,6 @@ mod tests {
             Arc::default(),
             no_http(),
             mem_store(),
-            mem_ledger(),
             CapabilitySettings::default(),
         );
         let bp = Blueprint {
@@ -1592,7 +1604,6 @@ mod tests {
             Arc::default(),
             no_http(),
             mem_store(),
-            mem_ledger(),
             CapabilitySettings::default(),
         );
         mgr.ensure("sid", &bp).await.unwrap();
@@ -1607,7 +1618,6 @@ mod tests {
             Arc::default(),
             no_http(),
             mem_store(),
-            mem_ledger(),
             CapabilitySettings::default(),
         );
         restarted.ensure("sid", &bp).await.unwrap();
@@ -1628,7 +1638,6 @@ mod tests {
             Arc::default(),
             no_http(),
             store.clone(),
-            mem_ledger(),
             CapabilitySettings::default(),
         );
         mgr.ensure("sid", &bp).await.unwrap();
@@ -1640,7 +1649,6 @@ mod tests {
             Arc::default(),
             no_http(),
             store,
-            mem_ledger(),
             CapabilitySettings::default(),
         );
         assert!(
@@ -1684,7 +1692,6 @@ mod tests {
             Arc::default(),
             no_http(),
             store,
-            mem_ledger(),
             CapabilitySettings::default(),
         );
         mgr.boot().await.expect("boot");
@@ -1715,7 +1722,6 @@ mod tests {
                 Arc::default(),
                 no_http(),
                 file_store(store_dir.path()),
-                mem_ledger(),
                 CapabilitySettings::default(),
             )
             .with_cipher(Some(cipher.clone()));
@@ -1740,6 +1746,7 @@ mod tests {
                     .as_deref(),
                 Some("session-only")
             );
+            mgr.database.close().await.unwrap();
         }
 
         // A fresh manager over the same store + root: boot rehydrates the entry,
@@ -1750,7 +1757,6 @@ mod tests {
             Arc::default(),
             no_http(),
             file_store(store_dir.path()),
-            mem_ledger(),
             CapabilitySettings::default(),
         )
         .with_cipher(Some(cipher));
@@ -1789,7 +1795,6 @@ mod tests {
             Arc::default(),
             no_http(),
             file_store(store_dir.path()),
-            mem_ledger(),
             CapabilitySettings::default(),
         );
         mgr.boot().await.expect("boot");
@@ -1825,7 +1830,6 @@ mod tests {
             Arc::default(),
             no_http(),
             store.clone(),
-            mem_ledger(),
             CapabilitySettings::default(),
         );
         mgr.boot().await.expect("boot");
@@ -1906,7 +1910,7 @@ mod tests {
         let store_dir = tempfile::tempdir().expect("store dir");
         let root = tempfile::tempdir().expect("session root");
         let store = file_store(store_dir.path());
-        let ledger = mem_ledger();
+        let ledger = Arc::new(RequestRecords::with_database(store.database_owner()));
         store
             .put(SessionRecord {
                 session_id: "vanished".into(),
@@ -1928,7 +1932,6 @@ mod tests {
             Arc::default(),
             no_http(),
             store,
-            Arc::clone(&ledger),
             CapabilitySettings::default(),
         );
         mgr.boot().await.expect("boot");
@@ -1936,44 +1939,12 @@ mod tests {
         assert!(ledger.load("vanished", "k").await.unwrap().is_some());
     }
 
-    /// The escape path `forget` cannot cover: a file-backed ledger paired with
-    /// the default in-memory session store. Nothing survives the restart to
-    /// drive removal, so boot's own sweep is the only thing that reclaims it.
-    #[tokio::test]
-    async fn boot_purges_a_ledger_whose_session_never_came_back() {
-        let ledger_dir = tempfile::tempdir().expect("ledger dir");
-        let root = tempfile::tempdir().expect("session root");
-        let ledger = file_ledger(ledger_dir.path());
-        ledger.put(reserved("gone", "k")).await.unwrap();
-
-        // Fresh manager, empty session store — "gone" has no record to rehydrate.
-        let mgr = SessionManager::new(
-            root.path().to_path_buf(),
-            None,
-            Arc::default(),
-            no_http(),
-            mem_store(),
-            Arc::clone(&ledger),
-            CapabilitySettings::default(),
-        );
-        mgr.boot().await.expect("boot");
-
-        assert_eq!(ledger.load("gone", "k").await.unwrap(), None);
-        assert!(
-            ledger
-                .session_ids()
-                .await
-                .expect("list ledger sessions")
-                .is_empty()
-        );
-    }
-
     #[tokio::test]
     async fn boot_keeps_the_ledger_of_a_session_that_resumed() {
         let store_dir = tempfile::tempdir().expect("store dir");
         let root = tempfile::tempdir().expect("session root");
         let store = file_store(store_dir.path());
-        let ledger = mem_ledger();
+        let ledger = Arc::new(RequestRecords::with_database(store.database_owner()));
         let bp = per_session(HOUR);
 
         let mgr = SessionManager::new(
@@ -1982,7 +1953,6 @@ mod tests {
             Arc::default(),
             no_http(),
             Arc::clone(&store),
-            Arc::clone(&ledger),
             CapabilitySettings::default(),
         );
         mgr.ensure("sid", &bp).await.unwrap();
@@ -1994,7 +1964,6 @@ mod tests {
             Arc::default(),
             no_http(),
             store,
-            Arc::clone(&ledger),
             CapabilitySettings::default(),
         );
         restarted.boot().await.expect("boot");
@@ -2067,7 +2036,6 @@ mod tests {
             Arc::new(registry),
             no_http(),
             mem_store(),
-            mem_ledger(),
             CapabilitySettings::default(),
         );
         let bp = submilli_blueprint::parse(
@@ -2188,7 +2156,6 @@ mod tests {
                 )),
                 no_http(),
                 file_store(records.path()),
-                Arc::new(crate::idempotency_store::InMemoryIdempotencyStore::default()),
                 CapabilitySettings::default(),
             )
         };
@@ -2213,6 +2180,7 @@ mod tests {
             resolved.root_vfs_path,
             Some(volume.path().join("users/ada"))
         );
+        manager.database.close().await.unwrap();
         drop(manager);
         let restarted = make_manager(other_volume.path());
         assert!(restarted.session_vfs("legacy", &blueprint).await.is_err());
@@ -2458,7 +2426,6 @@ mod tests {
                 Arc::default(),
                 no_http(),
                 store.clone(),
-                mem_ledger(),
                 CapabilitySettings {
                     session_kv: settings.clone(),
                     ..CapabilitySettings::default()
@@ -2495,7 +2462,6 @@ mod tests {
             Arc::default(),
             no_http(),
             mem_store(),
-            mem_ledger(),
             CapabilitySettings {
                 session_kv: settings,
                 ..CapabilitySettings::default()
@@ -2537,103 +2503,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ledger_enumeration_failure_prevents_boot_mutation() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let session_root = dir.path().join("sessions");
-        let orphan = session_root.join("orphan");
-        std::fs::create_dir_all(&orphan).expect("orphan directory");
-        let store: Arc<dyn DurableSessionStore> = Arc::new(InMemoryDurableSessionStore::default());
-        store
-            .put(SessionRecord {
-                session_id: "live".into(),
-                blueprint_name: "bp".into(),
-                idle_timeout: HOUR,
-                last_activity: SystemTime::now(),
-                root_vfs_type: crate::session_store::RootVfsType::None,
-                mcp_state: None,
-                variables: Default::default(),
-                ..SessionRecord::default()
-            })
-            .await
-            .expect("persist session");
-        let ledger_root = dir.path().join("ledger");
-        let ledger = Arc::new(FileIdempotencyStore::new(ledger_root.clone()).expect("ledger"));
-        ledger.put(reserved("live", "key")).await.expect("entry");
-        let manager = SessionManager::new(
-            session_root,
-            None,
-            Arc::default(),
-            no_http(),
-            store,
-            ledger.clone(),
-            CapabilitySettings::default(),
-        );
-
-        let saved_ledger = dir.path().join("saved-ledger");
-        std::fs::rename(&ledger_root, &saved_ledger).expect("hide ledger");
-        std::fs::write(&ledger_root, b"unavailable").expect("block ledger path");
-        assert!(matches!(
-            manager.boot().await,
-            Err(BootError::Idempotency(_))
-        ));
-        assert!(manager.contains("live").await.unwrap());
+    async fn database_failure_prevents_boot_folder_cleanup() {
+        let (manager, root) = manager();
+        let orphan = root.path().join("orphan");
+        std::fs::create_dir_all(&orphan).unwrap();
+        manager.database.close().await.unwrap();
+        assert!(manager.boot().await.is_err());
         assert!(orphan.exists());
-        std::fs::remove_file(&ledger_root).expect("unblock ledger path");
-        std::fs::rename(saved_ledger, ledger_root).expect("restore ledger");
-
-        manager.boot().await.expect("boot after store recovers");
-        assert!(manager.contains("live").await.unwrap());
-        assert!(!orphan.exists());
-        assert!(
-            ledger
-                .load("live", "key")
-                .await
-                .expect("read entry")
-                .is_some()
-        );
-    }
-
-    #[tokio::test]
-    async fn session_enumeration_failure_prevents_boot_mutation() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let session_root = dir.path().join("sessions");
-        let orphan = session_root.join("orphan");
-        std::fs::create_dir_all(&orphan).expect("orphan directory");
-        let store_root = dir.path().join("store");
-        let store: Arc<dyn DurableSessionStore> =
-            Arc::new(FileDurableSessionStore::new(store_root.clone()).expect("session store"));
-        let ledger = Arc::new(InMemoryIdempotencyStore::default());
-        ledger.put(reserved("orphan", "key")).await.expect("entry");
-        let manager = SessionManager::new(
-            session_root,
-            None,
-            Arc::default(),
-            no_http(),
-            store,
-            ledger.clone(),
-            CapabilitySettings::default(),
-        );
-
-        std::fs::remove_dir(&store_root).expect("make session store unavailable");
-        assert!(matches!(manager.boot().await, Err(BootError::Sessions(_))));
-        assert!(orphan.exists());
-        assert!(
-            ledger
-                .load("orphan", "key")
-                .await
-                .expect("read entry")
-                .is_some()
-        );
-
-        std::fs::create_dir(&store_root).expect("restore session store");
-        manager.boot().await.expect("boot after store recovers");
-        assert!(!orphan.exists());
-        assert!(
-            ledger
-                .load("orphan", "key")
-                .await
-                .expect("read entry")
-                .is_none()
-        );
     }
 }

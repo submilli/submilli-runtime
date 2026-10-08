@@ -45,6 +45,7 @@ async fn execute(config: RuntimeConfig, code: &str) -> Value {
         runtime: config,
         ..Default::default()
     })
+    .await
     .unwrap();
     let request = Request::builder()
         .method("POST")

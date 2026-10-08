@@ -201,7 +201,7 @@ impl Harness {
             ..ServerConfig::default()
         };
         Self {
-            state: AppState::new(tweak(config)).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(tweak(config))).expect("AppState"),
             _vfs_root: vfs_root,
         }
     }
@@ -412,6 +412,7 @@ async fn the_default_provider_is_installed_when_no_dispatch_is_overridden() {
         session_storage_root: Some(vfs_root.path().to_path_buf()),
         ..ServerConfig::default()
     })
+    .await
     .expect("AppState");
     let h = Harness {
         state,

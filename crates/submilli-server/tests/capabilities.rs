@@ -20,7 +20,9 @@ use submilli_server::{AppState, ServerConfig, app};
 use tower::ServiceExt;
 
 async fn get(uri: &str) -> (StatusCode, Value) {
-    let state = AppState::new(in_memory_config::config()).expect("AppState");
+    let state = AppState::new(in_memory_config::config())
+        .await
+        .expect("AppState");
     get_with_state(state, uri).await
 }
 
@@ -172,6 +174,7 @@ async fn package_groups_carry_provides_and_requires() {
         package_store_root: Some(root.path().to_path_buf()),
         ..in_memory_config::config()
     })
+    .await
     .expect("AppState");
 
     let (status, body) = get_with_state(state, "/v1/capabilities").await;
@@ -204,6 +207,7 @@ async fn requires_only_package_is_listed() {
         package_store_root: Some(root.path().to_path_buf()),
         ..in_memory_config::config()
     })
+    .await
     .expect("AppState");
 
     let (_, body) = get_with_state(state, "/v1/capabilities").await;
@@ -223,6 +227,7 @@ async fn installed_packages_are_listed() {
         package_store_root: Some(root.path().to_path_buf()),
         ..in_memory_config::config()
     })
+    .await
     .expect("AppState");
 
     let (status, body) = get_with_state(state, "/v1/packages").await;
@@ -250,6 +255,7 @@ async fn fallback_packages_are_listed_as_unmanaged() {
         package_fallback_root: Some(fallback.path().to_path_buf()),
         ..in_memory_config::config()
     })
+    .await
     .expect("AppState");
 
     let (status, body) = get_with_state(state, "/v1/packages").await;
@@ -279,6 +285,7 @@ async fn uninstall_refuses_a_package_that_only_the_fallback_holds() {
         package_fallback_root: Some(fallback.path().to_path_buf()),
         ..in_memory_config::config()
     })
+    .await
     .expect("AppState");
     let router = app(state.clone());
 
@@ -309,6 +316,7 @@ async fn uninstall_removes_a_package() {
         package_store_root: Some(root.path().to_path_buf()),
         ..in_memory_config::config()
     })
+    .await
     .expect("AppState");
     let router = app(state.clone());
 

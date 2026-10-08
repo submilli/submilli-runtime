@@ -5,6 +5,8 @@
 #[path = "common/in_memory_config.rs"]
 mod in_memory_config;
 
+#[path = "support/request_records.rs"]
+mod request_records;
 use std::sync::Arc;
 
 use axum::Router;
@@ -38,7 +40,7 @@ fn router_with_config(config: ServerConfig) -> Router {
         blueprints: Some(blueprints),
         ..config
     };
-    app(AppState::new(config).expect("build AppState"))
+    app(futures::executor::block_on(AppState::new(config)).expect("build AppState"))
 }
 
 async fn send(router: &Router, req: Request<Body>) -> (StatusCode, Value) {
@@ -262,6 +264,7 @@ async fn recording_failure_still_tears_down_one_shot_session() {
         session_storage_root: Some(root.path().into()),
         ..Default::default()
     })
+    .await
     .unwrap());
     let (_, response) = execute(&router, "function main(): number { return 7; }").await;
     assert_eq!(response["result"], "7");
@@ -270,18 +273,19 @@ async fn recording_failure_still_tears_down_one_shot_session() {
 
 #[tokio::test]
 async fn recording_failure_settles_idempotency_without_reexecuting() {
+    use request_records::RequestRecords;
     use std::sync::atomic::Ordering;
-    use submilli_server::idempotency_store::{IdempotencyStore, InMemoryIdempotencyStore};
     let store = Arc::new(last_run_store::FaultStore::default());
     store.fail_writes.store(true, Ordering::SeqCst);
-    let ledger = Arc::new(InMemoryIdempotencyStore::default());
+    let ledger = Arc::new(RequestRecords::ephemeral());
     let blueprint = submilli_blueprint::parse("name: test\ndefault: allow\n").unwrap();
     let router = app(AppState::new(ServerConfig {
         sessions: Some(store.clone()),
-        idempotency_store: Some(ledger.clone()),
+        database: Some(ledger.database.clone()),
         blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
         ..Default::default()
     })
+    .await
     .unwrap());
     let (_, created) = send(
         &router,

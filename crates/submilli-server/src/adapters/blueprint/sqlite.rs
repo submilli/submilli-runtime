@@ -22,6 +22,11 @@ impl SqliteBlueprintStore {
 
     /// Import file-backed blueprints and archive the source before exposing this store.
     pub async fn migrate(&self) -> Result<(), StoreError> {
+        if self.database.is_ephemeral() && self.source.is_some() {
+            return Err(StoreError::Io(
+                "blueprint directory import requires a persistent database".into(),
+            ));
+        }
         let source = self.source.clone();
         let source = self
             .database

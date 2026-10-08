@@ -20,7 +20,7 @@ use submilli_blueprint::{
     Action, Blueprint, LlmConfig, LlmModelDecl, LlmProviderDecl, McpServer, PermissionRule,
     VarBindings, VfsConfig,
 };
-use submilli_server::blueprint::{BlueprintStore, InMemoryBlueprintStore};
+use submilli_server::blueprint::{BlueprintStore, SqliteBlueprintStore};
 use submilli_server::config::{VolumeSpec, VolumeTable};
 use submilli_server::error::ErrorKind;
 use submilli_server::handlers::execute::ExecuteResponse;
@@ -95,7 +95,7 @@ impl RunRecorder for Recorder {
 
 struct World {
     state: AppState,
-    blueprints: Arc<InMemoryBlueprintStore>,
+    blueprints: Arc<SqliteBlueprintStore>,
     recordings: Arc<Recordings>,
     dirs: tempfile::TempDir,
 }
@@ -106,7 +106,18 @@ impl World {
     }
 
     fn with(blueprints: Vec<Blueprint>, tweak: impl FnOnce(ServerConfig) -> ServerConfig) -> Self {
-        let store = Arc::new(InMemoryBlueprintStore::seed(blueprints).expect("seed"));
+        let store = futures::executor::block_on(async {
+            let database = Arc::new(
+                submilli_server::database::ServerDatabase::open_ephemeral()
+                    .await
+                    .expect("database"),
+            );
+            let store = Arc::new(SqliteBlueprintStore::new(database, None));
+            for blueprint in blueprints {
+                store.add(blueprint).await.expect("seed");
+            }
+            store
+        });
         let dirs = tempfile::tempdir().expect("dirs");
         let recordings = Arc::new(Recordings::default());
         let config = ServerConfig {
@@ -116,7 +127,7 @@ impl World {
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(tweak(config)).expect("state"),
+            state: futures::executor::block_on(AppState::new(tweak(config))).expect("state"),
             blueprints: store,
             recordings,
             dirs,
@@ -1028,10 +1039,21 @@ async fn a_server_the_blueprint_no_longer_declares_cannot_be_imported_from_the_r
     assert_eq!(source.response.result.as_deref(), Some("created x"));
     let mut without = mcp_blueprint(&url);
     without.mcp.clear();
+    without.permissions.clear();
     world.blueprints.upsert(without).await.unwrap();
 
-    let live = world.run("up-bp", ISSUE, &[]).await;
-    let live_error = live.response.error.as_ref().expect("a normal run fails");
+    let live = run_program(
+        &world.state,
+        ProgramRun {
+            label: "source".into(),
+            blueprint: "up-bp".into(),
+            code: ISSUE.into(),
+            variables: Default::default(),
+            secrets: Default::default(),
+        },
+    )
+    .await;
+    let live_error = live.error.as_ref().expect("a normal run fails");
     let outcome = world.test(&source.recorded, TestMode::Recorded).await;
     let error = outcome.response.error.as_ref().expect("the test run fails");
     assert_eq!(error.kind, live_error.kind);

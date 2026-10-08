@@ -277,7 +277,7 @@ async fn private_server_install_uses_the_server_token() {
             github_token_file: with_token.then(|| token_file.clone()),
             ..in_memory_config::config()
         };
-        let state = submilli_server::AppState::new(config).unwrap();
+        let state = submilli_server::AppState::new(config).await.unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(axum::serve(listener, submilli_server::app(state)).into_future());
