@@ -2048,8 +2048,8 @@ impl Inferer<'_> {
     /// rather than an array, iterator or iterable. Only an object type is an
     /// array-like: TypeScript's `ArrayLike` has a number index signature,
     /// which an object type has implicitly and an interface or class doesn't.
-    /// A source with a string index signature is rejected too, since its keyed
-    /// entries would be its elements.
+    /// A source with a string index signature or an index-named field is
+    /// rejected too, since those entries would be its elements.
     fn array_like_source(
         &mut self,
         typed_args: &[ExprId],
@@ -2077,7 +2077,7 @@ impl Inferer<'_> {
         {
             return Ok(None);
         }
-        if self.resolver().index_signature(&source_ty).is_some() {
+        if self.has_keyed_entries(&source_ty) {
             self.error_with_help(
                 source_span,
                 format!(
@@ -2104,6 +2104,19 @@ impl Inferer<'_> {
             return Ok(None);
         }
         Ok(Some(source_ty))
+    }
+
+    /// Whether an array-like source may hold entries JavaScript reads as its
+    /// elements: a string index signature, or a field named by an array index.
+    fn has_keyed_entries(&self, source: &Type) -> bool {
+        if self.resolver().index_signature(source).is_some() {
+            return true;
+        }
+        match source.peel() {
+            Type::Object { fields, .. } => fields.keys().any(|name| is_array_index(name)),
+            Type::Union(members) => members.iter().any(|member| self.has_keyed_entries(member)),
+            _ => false,
+        }
     }
 
     /// `Array.from` of an array-like with no callback makes an array of
@@ -3035,6 +3048,12 @@ fn is_or_has_type_var(ty: &Type, name: &str) -> bool {
 
 /// Whether a slot of this type can hold JavaScript's `undefined`, which
 /// Submilli represents as `null`.
+/// Whether a property name is a canonical array index, such as `"0"` or `"12"`.
+fn is_array_index(name: &str) -> bool {
+    name.parse::<u32>()
+        .is_ok_and(|index| index != u32::MAX && index.to_string() == name)
+}
+
 fn admits_undefined(ty: &Type) -> bool {
     match ty.peel() {
         Type::Unknown | Type::Error | Type::Null => true,
