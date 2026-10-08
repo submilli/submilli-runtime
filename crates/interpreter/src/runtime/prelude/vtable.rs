@@ -653,7 +653,7 @@ async fn object_override(
     for (key, value) in read_object_entries(caller, recv, name)? {
         if key == wanted && is_function(caller, &value)? {
             let closure = super::closure::read(caller, &value, name)?;
-            let result = closure.call(caller, &[]).await?;
+            let result = closure.call_with_arguments(caller, *recv, &[]).await?;
             // A `Record` field can hold a conversion of any return type, and
             // every reader of the result takes its payload as code units.
             if !super::collection::is_a(caller, &result, &intr.string)? {

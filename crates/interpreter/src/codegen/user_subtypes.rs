@@ -598,8 +598,19 @@ fn emit_conversion_override_body(
 
     // Locals (after 1 param: self=0):
     //   1: closure (ref $Closure_string)
-    let mut f = Function::new([(1, ref_to(closure_struct_idx))]);
+    //   2: env     (ref any)
+    let mut f = Function::new([
+        (1, ref_to(closure_struct_idx)),
+        (
+            1,
+            ValType::Ref(RefType {
+                nullable: false,
+                heap_type: HeapType::ANY,
+            }),
+        ),
+    ]);
     let closure = 1u32;
+    let env = 2u32;
 
     // The outer block yields the result string; the inner one is left, with
     // the field value, for the host fallback below it.
@@ -639,6 +650,12 @@ fn emit_conversion_override_body(
         struct_type_index: closure_struct_idx,
         field_index: 2,
     });
+    // A function expression's `this` is the object, as for `x.toString()`.
+    if let Some(wrapper) = symbols.this_environment_type {
+        for instruction in super::this_binding::binding_instructions(wrapper, env, 0) {
+            f.instruction(&instruction);
+        }
+    }
     f.instruction(&Instruction::LocalGet(closure));
     f.instruction(&Instruction::StructGet {
         struct_type_index: closure_struct_idx,
