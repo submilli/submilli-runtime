@@ -909,30 +909,10 @@ impl<'a> Lexer<'a> {
             let Some(value) = self.read_four_hex(esc_start) else {
                 return;
             };
-            if (0xD800..=0xDBFF).contains(&value) {
-                // High surrogate — try to read a following \uYYYY low-surrogate.
-                let save = self.pos;
-                if self.peek() == Some(b'\\')
-                    && self.peek_at(1) == Some(b'u')
-                    && self.peek_at(2) != Some(b'{')
-                {
-                    self.pos += 2; // consume `\u`
-                    if let Some(low) = self.read_four_hex(save)
-                        && (0xDC00..=0xDFFF).contains(&low)
-                    {
-                        let code = 0x10000 + ((value - 0xD800) << 10) + (low - 0xDC00);
-                        if let Some(c) = char::from_u32(code) {
-                            push_literal_char(out, c);
-                        }
-                        return;
-                    }
-                    self.pos = save;
-                }
-            }
             if !push_lone_surrogate(out, value)
                 && let Some(c) = char::from_u32(value)
             {
-                out.push(c);
+                push_literal_char(out, c);
             }
         }
     }

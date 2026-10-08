@@ -2,6 +2,7 @@
 // unit, as in JavaScript: `"\ud800"` has length 1, and two halves written
 // separately join into a surrogate pair.
 type High = "\ud800";
+type Face = "\u{1F600}" | "x";
 
 function describe(s: string): string {
   switch (s) {
@@ -26,6 +27,8 @@ function main(): void {
   assert(joined === "\u{1F600}" && joined.length === 2, "two halves join into a pair");
   const pair = `\ud83d${"\ude00"}`;
   assert(pair.codePointAt(0) === 0x1f600, "a template joins them too");
+  const braced: Face = "\u{D83D}\u{DE00}";
+  assert(braced === "\u{1F600}" && braced.length === 2, "halves in one literal are one character");
 
   assert(describe(String.fromCharCode(0xdc00)) === "low", "a switch case matches a lone surrogate");
   const typed: High = "\ud800";

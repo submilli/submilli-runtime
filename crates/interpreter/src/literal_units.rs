@@ -23,9 +23,34 @@ pub(crate) fn push_lone_surrogate(out: &mut String, unit: u32) -> bool {
     else {
         return false;
     };
+    if (0xDC00..=0xDFFF).contains(&unit)
+        && let Some(high) = take_trailing_high_surrogate(out)
+    {
+        let code = 0x10000 + ((u32::from(high) - 0xD800) << 10) + (unit - 0xDC00);
+        if let Some(c) = char::from_u32(code) {
+            push_literal_char(out, c);
+            return true;
+        }
+    }
     out.push(MARKER);
     out.push(named);
     true
+}
+
+/// Remove a lone high surrogate that ends `out`, so a low surrogate written
+/// after it forms one character, as `"\u{D83D}\u{DE00}"` must equal `"😀"`.
+fn take_trailing_high_surrogate(out: &mut String) -> Option<u16> {
+    let mut tail = out.chars().rev();
+    let high = tail.next().and_then(named_surrogate)?;
+    // The name counts only after an odd run of markers; an even run is
+    // escaped markers followed by a genuine character.
+    let markers = tail.take_while(|c| *c == MARKER).count();
+    if !(0xD800..=0xDBFF).contains(&high) || markers % 2 == 0 {
+        return None;
+    }
+    out.pop();
+    out.pop();
+    Some(high)
 }
 
 /// Append a character to literal text, escaping [`MARKER`].
@@ -41,20 +66,30 @@ pub(crate) fn literal_units(text: &str) -> Vec<u16> {
     let mut units = Vec::with_capacity(text.len());
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
-        let c = if c == MARKER {
-            match chars.next() {
-                Some(MARKER) | None => MARKER,
-                Some(named) => {
-                    units.push((u32::from(named) - SURROGATE_BASE + 0xD800) as u16);
-                    continue;
-                }
-            }
-        } else {
-            c
-        };
-        units.extend_from_slice(c.encode_utf16(&mut [0; 2]));
+        if c != MARKER {
+            units.extend_from_slice(c.encode_utf16(&mut [0; 2]));
+            continue;
+        }
+        let next = chars.next();
+        if let Some(unit) = next.and_then(named_surrogate) {
+            units.push(unit);
+            continue;
+        }
+        // Doubled, or not followed by a named surrogate, the marker stands for
+        // itself.
+        units.extend_from_slice(MARKER.encode_utf16(&mut [0; 2]));
+        if let Some(c) = next.filter(|c| *c != MARKER) {
+            units.extend_from_slice(c.encode_utf16(&mut [0; 2]));
+        }
     }
     units
+}
+
+/// The surrogate a code point after [`MARKER`] names, if it names one.
+fn named_surrogate(named: char) -> Option<u16> {
+    let offset = u32::from(named).checked_sub(SURROGATE_BASE)?;
+    let unit = 0xD800 + offset;
+    SURROGATES.contains(&unit).then_some(unit as u16)
 }
 
 #[cfg(test)]
@@ -87,6 +122,25 @@ mod tests {
     }
 
     #[test]
+    fn halves_written_separately_join_into_one_character() {
+        assert_eq!(text_of(&[0xD83D, 0xDE00]), "😀");
+        assert_eq!(
+            text_of(&[0xDE00, 0xD83D]),
+            text_of(&[0xDE00]) + &text_of(&[0xD83D])
+        );
+    }
+
+    #[test]
+    fn an_escaped_marker_before_a_named_character_does_not_join() {
+        let text = text_of(&[0x10FFFE, 0x10_0000 + 0x3D, 0xDE00]);
+        let expected: Vec<u16> = "\u{10FFFE}\u{10003D}"
+            .encode_utf16()
+            .chain([0xDE00])
+            .collect();
+        assert_eq!(literal_units(&text), expected);
+    }
+
+    #[test]
     fn the_marker_itself_round_trips() {
         let text = text_of(&[0x10FFFE, 0xD800, 0x10FFFE, 0x10FFFF]);
         let expected: Vec<u16> = "\u{10FFFE}"
@@ -95,6 +149,12 @@ mod tests {
             .chain("\u{10FFFE}\u{10FFFF}".encode_utf16())
             .collect();
         assert_eq!(literal_units(&text), expected);
+    }
+
+    #[test]
+    fn a_stray_marker_stands_for_itself() {
+        let text = "\u{10FFFE}a\u{10FFFE}";
+        assert_eq!(literal_units(text), text.encode_utf16().collect::<Vec<_>>());
     }
 
     #[test]
