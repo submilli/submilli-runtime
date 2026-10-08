@@ -2517,11 +2517,19 @@ impl<'a> Inferer<'a> {
     /// rules out every value (its view [`narrowing::RULED_OUT`]) reads as `never`, as in
     /// TypeScript, where [`Self::rules_out_to_never`] allows: no value
     /// reaches the read, and codegen emits a trap for it.
+    ///
+    /// Code that never runs by its syntax (after a `return`, a `throw` or an
+    /// endless loop) reads declared types, as in TypeScript, whose binder
+    /// gives it no flow. Code after an exhaustive `switch` still narrows: there
+    /// TypeScript's flow reaches it.
     pub(super) fn narrowed_read(
         &self,
         path: narrowing::ReferencePath,
     ) -> Option<(crate::TypedExprKind, Type)> {
         if self.declared_read.as_ref() == Some(&path) {
+            return None;
+        }
+        if !self.reachable && !self.unreachable_by_exhaustive_switch {
             return None;
         }
         let view = self.innermost_narrowing(&path)?;
@@ -2542,11 +2550,8 @@ impl<'a> Inferer<'a> {
     /// Whether a guard that ruled out every value of `path` makes it read as
     /// `never`. A type parameter or `unknown` hides values a guard can't see
     /// ruled out, so `typeof x === "object"` on a `T` is not a contradiction.
-    /// Code that never runs by its syntax reads the declared type, as in
-    /// TypeScript.
     fn reads_as_never(&self, path: &narrowing::ReferencePath) -> bool {
-        (self.reachable || self.unreachable_by_exhaustive_switch)
-            && self.rules_out_to_never(path)
+        self.rules_out_to_never(path)
             && self.declared_root_ty(path).is_some_and(|declared| {
                 !narrowing::has_erased_member(&declared)
                     && !matches!(declared.peel(), Type::Unknown)
