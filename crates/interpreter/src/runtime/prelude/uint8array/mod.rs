@@ -27,7 +27,7 @@ use crate::runtime::host::{
     read_uint8_array_range, uint8_array_backing, write_submilli_uint8array_struct,
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
-use crate::runtime::number::format_number_js;
+use crate::runtime::number::{format_number_js, to_uint8};
 use crate::runtime::prelude::array::{ElementCallback, merge_sort};
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::as_struct;
@@ -107,7 +107,7 @@ fn unbox_byte(caller: &mut Caller<'_, StoreData>, v: &Val, name: &str) -> wasmti
         .as_struct(&mut *caller)?
         .ok_or_else(|| wasmtime::Error::msg(format!("{name} callback result is not a number")))?;
     match st.field(&mut *caller, 1)? {
-        Val::F64(bits) => Ok(crate::runtime::number::to_uint8(f64::from_bits(bits))),
+        Val::F64(bits) => Ok(to_uint8(f64::from_bits(bits))),
         other => Err(wasmtime::Error::msg(format!(
             "{name} callback result field was {other:?}, not f64"
         ))),
@@ -209,7 +209,7 @@ fn slice(
 fn with(bytes: &[u8], index: f64, value: f64) -> Option<Vec<u8>> {
     let i = at_index(index, bytes.len() as i32)?;
     let mut out = bytes.to_vec();
-    out[i] = crate::runtime::number::to_uint8(value);
+    out[i] = to_uint8(value);
     Some(out)
 }
 
@@ -299,7 +299,7 @@ fn fill(
     let end = norm_clamp(end, len) as u32;
     let count = end.saturating_sub(start);
     fuel::charge(&mut *caller, fuel::COPY, u64::from(count))?;
-    let chunk = [crate::runtime::number::to_uint8(value); 4096];
+    let chunk = [to_uint8(value); 4096];
     let mut offset = start;
     while offset < end {
         let count = (end - offset).min(chunk.len() as u32);
