@@ -1198,31 +1198,83 @@ impl Inferer<'_> {
 
     /// The fields of `param_ty` an object literal argument with `members` is
     /// inferred against one at a time, when one of them is a function literal
-    /// with an unannotated parameter.
+    /// with an unannotated parameter, or a `new` that takes its type
+    /// arguments from its field's type: tsc types each against what the
+    /// fields before it bound, so `{ k: "a", m: new Map() }` for `{ k: K; m:
+    /// Map<K, number> }` creates a `Map<string, number>`.
     fn object_argument_fields(
         &self,
         members: &[crate::ObjectLiteralMember],
         param_ty: &Type,
     ) -> Result<Option<BTreeMap<String, crate::ObjectField>>, CompilerFailure> {
-        let mut has_context_sensitive_field = false;
-        for member in members {
-            if let crate::ObjectLiteralMember::Field(field) = member {
-                has_context_sensitive_field |= self.is_context_sensitive_function(field.value)?;
-            }
-        }
-        if !has_context_sensitive_field {
-            return Ok(None);
-        }
-        Ok(match param_ty.peel() {
-            Type::Object { fields, .. } => Some(fields.clone()),
+        let fields = match param_ty.peel() {
+            Type::Object { fields, .. } => fields.clone(),
             interface @ Type::InterfaceRef { .. } => {
                 match super::assignable::expand_interface_data_shape(interface, self.resolver()) {
-                    Some(Type::Object { fields, .. }) => Some(fields),
-                    _ => None,
+                    Some(Type::Object { fields, .. }) => fields,
+                    _ => return Ok(None),
                 }
             }
-            _ => None,
-        })
+            _ => return Ok(None),
+        };
+        for member in members {
+            let crate::ObjectLiteralMember::Field(field) = member else {
+                continue;
+            };
+            if self.is_context_sensitive_function(field.value)? {
+                return Ok(Some(fields));
+            }
+            let field_builds_from_type_parameters = fields
+                .get(&field.name.name)
+                .is_some_and(|declared| builds_from_type_parameters(&declared.ty));
+            if field_builds_from_type_parameters
+                && self.may_infer_type_arguments_from_context(field.value)?
+            {
+                return Ok(Some(fields));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Whether `expr` is a `new` of a generic class with neither type
+    /// arguments nor arguments, which takes its type arguments from the type
+    /// it is expected to have. tsc gives a bare `new Map()` `any` type
+    /// arguments, which fit whatever the fields before it bound. Not such an
+    /// expression:
+    /// - a `new` with arguments, which infer the type arguments;
+    /// - a class with no type parameters, which has none to take;
+    /// - a generic call, whose type arguments are inferred, an unbound
+    ///   context leaving them `unknown`.
+    fn may_infer_type_arguments_from_context(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        let expr = super::expr::peel_parens(self.ast, expr)?;
+        let ExprKind::New {
+            callee,
+            type_args: None,
+            args,
+        } = &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind
+        else {
+            return Ok(false);
+        };
+        if !args.is_empty() {
+            return Ok(false);
+        }
+        let ExprKind::Identifier(ident) = &self
+            .ast
+            .try_expr(*callee)
+            .map_err(super::arena_failure)?
+            .kind
+        else {
+            return Ok(false);
+        };
+        match self
+            .lookup_named_type(&ident.name)
+            .map(|symbol| &symbol.kind)
+        {
+            Some(crate::TypeKind::Class { generics, .. }) => Ok(!generics.is_empty()),
+            // The built-in collections, such as `Map`, are declared as
+            // generic interfaces with a constructor.
+            _ => Ok(true),
+        }
     }
 
     /// The type parameters in `inferred` that keep the literals a function
@@ -2965,6 +3017,14 @@ fn is_or_has_type_var(ty: &Type, name: &str) -> bool {
         Type::Union(members) => members.iter().any(is_var),
         _ => is_var(ty),
     }
+}
+
+/// Whether a `new` in a field declared `ty` takes type arguments from the
+/// type parameters `ty` mentions: `Map<K, number>` does; a bare `T` gives it
+/// nothing to take, and a type with no type parameter is the same whatever
+/// the fields before it bound.
+fn builds_from_type_parameters(ty: &Type) -> bool {
+    !matches!(ty.peel(), Type::TypeVar(_)) && super::expr::type_contains_type_var(ty)
 }
 
 #[cfg(test)]

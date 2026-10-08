@@ -1188,6 +1188,11 @@ impl<'a> Unifier<'a> {
             (Some(only), None) | (None, Some(only)) => only,
             (Some(bound), Some(arg)) if assignable(&arg, &bound, types) => bound,
             (Some(bound), Some(arg)) if assignable(&bound, &arg, types) => arg,
+            (Some(bound), Some(arg))
+                if bound.literal_base().is_some() && bound.literal_base() == arg.literal_base() =>
+            {
+                Type::union(vec![bound, arg])
+            }
             _ => return None,
         };
         Some(Type::union(vec![supertype, Type::Null]))
