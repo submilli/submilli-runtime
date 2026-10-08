@@ -255,6 +255,26 @@ async fn invalid_yaml_is_reported_against_its_line_and_the_last_good_version_sta
     assert_eq!(fixture.status().refused, None);
 }
 
+#[test]
+fn the_log_says_when_a_refused_edit_is_fixed_by_going_back_to_the_version_in_force() {
+    let fixed = vec![LogLine::Note(
+        "blueprint: the refused edit is fixed; version 3 stays in force".to_owned(),
+    )];
+    assert_eq!(log_lines(&Outcome::Unchanged, Some(3), true), fixed);
+    assert_eq!(
+        log_lines(&Outcome::BytesUpdated { version: 3 }, Some(3), true),
+        fixed
+    );
+    // Nothing was refused, so there is nothing to say for the same text.
+    assert_eq!(log_lines(&Outcome::Unchanged, Some(3), false), []);
+    assert_eq!(
+        log_lines(&Outcome::BytesUpdated { version: 3 }, Some(3), false),
+        [LogLine::Note(
+            "blueprint: comments or whitespace changed; still version 3".to_owned()
+        )]
+    );
+}
+
 #[tokio::test]
 async fn changing_the_name_is_refused_and_the_last_good_version_stays() {
     let fixture = Fixture::new(PINNED).await;

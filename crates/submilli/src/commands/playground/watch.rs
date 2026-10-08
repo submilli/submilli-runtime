@@ -22,7 +22,7 @@
 //! file watch would follow.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -184,8 +184,12 @@ impl Applier {
         Arc::clone(&self.status)
     }
 
+    fn lock_status(&self) -> MutexGuard<'_, BlueprintStatus> {
+        self.status.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn set_status(&self, update: impl FnOnce(&mut BlueprintStatus)) {
-        update(&mut self.status.lock().unwrap_or_else(PoisonError::into_inner));
+        update(&mut self.lock_status());
     }
 
     /// At start: apply the file as it is now, as a new version when it differs from
@@ -212,8 +216,9 @@ impl Applier {
 
     async fn apply_file_at(&self, moment: Moment) -> Outcome {
         let _turn = self.turn.lock().await;
+        let was_refused = self.lock_status().refused.is_some();
         let outcome = self.check_and_apply(moment).await;
-        self.report(&outcome);
+        self.report(&outcome, was_refused);
         outcome
     }
 
@@ -386,59 +391,80 @@ impl Applier {
     }
 
     /// The playground's log is its stderr.
-    fn report(&self, outcome: &Outcome) {
-        let in_force = self
-            .status
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .version;
-        let stays = in_force.map_or_else(String::new, |v| format!("; version {v} stays in force"));
-        match outcome {
-            Outcome::Unchanged => {}
-            Outcome::BytesUpdated { version } => {
-                note(&format!(
-                    "blueprint: comments or whitespace changed; still version {version}"
-                ));
-            }
-            Outcome::Applied {
-                version,
-                diff: None,
-            } => {
-                note(&format!("blueprint: version {version} applied"));
-            }
-            Outcome::Applied {
-                version,
-                diff: Some(diff),
-            } => {
-                for change in diff.pin_removals() {
-                    warn(&format!(
-                        "PIN REMOVED in version {version}: {}",
-                        change.summary
-                    ));
-                }
-                note(&format!(
-                    "blueprint: version {version} applied ({})\n{}",
-                    diff.classification,
-                    indent(&diff.summary())
-                ));
-            }
-            Outcome::Refused(refusal) => {
-                warn(&format!(
-                    "blueprint edit refused: {}{stays}",
-                    describe_refusal(refusal)
-                ));
-            }
-            Outcome::ApplyFailed { version, reason } => {
-                warn(&format!(
-                    "blueprint version {version} could not be applied and is void: {reason}{stays}"
-                ));
-            }
-            Outcome::RegisterFailed { version, reason } => {
-                warn(&format!(
-                    "blueprint version {version} could not be registered again: {reason}"
-                ));
+    fn report(&self, outcome: &Outcome, was_refused: bool) {
+        let in_force = self.lock_status().version;
+        for line in log_lines(outcome, in_force, was_refused) {
+            match line {
+                LogLine::Note(message) => note(&message),
+                LogLine::Warning(message) => warn(&message),
             }
         }
+    }
+}
+
+/// A line of the playground's log.
+#[derive(Debug, PartialEq, Eq)]
+enum LogLine {
+    Note(String),
+    Warning(String),
+}
+
+/// What the log says about `outcome`, with `in_force` the version in force after it
+/// and `was_refused` whether the save before it had been refused.
+fn log_lines(outcome: &Outcome, in_force: Option<u64>, was_refused: bool) -> Vec<LogLine> {
+    let stays = in_force.map_or_else(String::new, |v| format!("; version {v} stays in force"));
+    // A save that puts the file back to the version in force applies nothing new, so
+    // without this line the log would still end on the refusal.
+    let fixed = |version: u64| {
+        LogLine::Note(format!(
+            "blueprint: the refused edit is fixed; version {version} stays in force"
+        ))
+    };
+    match outcome {
+        Outcome::Unchanged => match in_force {
+            Some(version) if was_refused => vec![fixed(version)],
+            _ => Vec::new(),
+        },
+        Outcome::BytesUpdated { version } if was_refused => vec![fixed(*version)],
+        Outcome::BytesUpdated { version } => vec![LogLine::Note(format!(
+            "blueprint: comments or whitespace changed; still version {version}"
+        ))],
+        Outcome::Applied {
+            version,
+            diff: None,
+        } => vec![LogLine::Note(format!(
+            "blueprint: version {version} applied"
+        ))],
+        Outcome::Applied {
+            version,
+            diff: Some(diff),
+        } => {
+            let mut lines: Vec<LogLine> = diff
+                .pin_removals()
+                .map(|change| {
+                    LogLine::Warning(format!(
+                        "PIN REMOVED in version {version}: {}",
+                        change.summary
+                    ))
+                })
+                .collect();
+            lines.push(LogLine::Note(format!(
+                "blueprint: version {version} applied ({})\n{}",
+                diff.classification,
+                indent(&diff.summary())
+            )));
+            lines
+        }
+        Outcome::Refused(refusal) => vec![LogLine::Warning(format!(
+            "blueprint edit refused: {}{stays}",
+            describe_refusal(refusal)
+        ))],
+        Outcome::ApplyFailed { version, reason } => vec![LogLine::Warning(format!(
+            "blueprint version {version} could not be applied and is void: {reason}{stays}"
+        ))],
+        Outcome::RegisterFailed { version, reason } => vec![LogLine::Warning(format!(
+            "blueprint version {version} could not be registered again: {reason}"
+        ))],
     }
 }
 
