@@ -175,6 +175,7 @@ pub fn infer_with_transitive_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
+        literal_hint_interfaces: BTreeMap::new(),
         values_widening_candidates: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
@@ -455,6 +456,7 @@ pub fn infer_package_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
+        literal_hint_interfaces: BTreeMap::new(),
         values_widening_candidates: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
@@ -910,6 +912,10 @@ pub(super) struct Inferer<'a> {
     /// their inference without being a requirement:
     /// an argument that doesn't fit it decides the type parameter instead.
     pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
+    /// Object literal arguments hinted by a generic interface expanded to its
+    /// fields, with that interface's name, so a missing field can still name
+    /// it.
+    pub(super) literal_hint_interfaces: BTreeMap<crate::ExprId, String>,
     /// Values of literal argument slots typed as a type parameter an earlier
     /// value bound to a candidate: one the candidate fits widens it rather
     /// than mismatching it (`{ v: new Dog(), w: new Animal() }`).

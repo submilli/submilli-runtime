@@ -1,4 +1,4 @@
-types: 51 of 99 tsc entries compared, 2 differ
+types: 52 of 99 tsc entries compared, 3 differ
 
 line 8: objStr || objNum
   tsc:  { prop: string; }
@@ -8,7 +8,12 @@ line 9: objStr || objNum
   tsc:  { prop: string; }
   ours: { prop: number } | { prop: string }
 
+line 59: { // Like i1 and i2 both commonMethodDifferentReturnType: (a, b) => strOrNumber, }
+  tsc:  { commonMethodDifferentReturnType: (a: string, b: number) => string | number; }
+  ours: { commonMethodDifferentReturnType: (arg0: <error>, arg1: <error>) => number | string }
+
 errors:
+line 23: tsc TS2322: Type '{ prop: string | number; anotherP: string; }' is not assignable to type '{ prop: string; anotherP: string; } | { prop: number; }'.   Type '{ prop: string | number; anotherP: string; }' is not assignable to type '{ prop: string; anotherP: string; }'.     Types of property 'prop' are incompatible.       Type 'string | number' is not assignable to type 'string'.         Type 'number' is not assignable to type 'string'. (we accept)
+line 27: tsc TS2322: Type '{ prop: string | number; anotherP: string; }' is not assignable to type '{ prop: string; anotherP: string; } | { prop: number; anotherP1: number; }'.   Type '{ prop: string | number; anotherP: string; }' is not assignable to type '{ prop: string; anotherP: string; }'.     Types of property 'prop' are incompatible.       Type 'string | number' is not assignable to type 'string'.         Type 'number' is not assignable to type 'string'. (we accept)
 line 24: ours: expected `string`, got `number | string` (tsc accepts)
 line 28: ours: expected `string`, got `number | string` (tsc accepts)
-line 59: ours: expected `I11 | I21`, got `{ commonMethodDifferentReturnType: (arg0: <error>, arg1: <error>) => number | string }` (tsc accepts)

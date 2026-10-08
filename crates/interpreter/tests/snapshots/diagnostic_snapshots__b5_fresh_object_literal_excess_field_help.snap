@@ -23,14 +23,3 @@ error: object literal is missing required field `firstName`
   |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 3 | }
 ---
-error: expected `{ age: number; firstName: string }`, got `{ age: number; firstNmae: string }`
- --> test.subm:2:49
-  |
-1 | function main(): void {
-2 |   const p: { firstName: string; age: number } = { firstNmae: "Ada", age: 37 };
-  |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-3 | }
-  |
-help: missing field(s): `firstName`
-extra field(s): `firstNmae`
----

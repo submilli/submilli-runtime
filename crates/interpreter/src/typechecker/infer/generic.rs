@@ -1857,6 +1857,12 @@ impl Inferer<'_> {
         sub: &mut TypeParamSubstitution,
     ) -> Result<(ExprId, Type), CompilerFailure> {
         let hint = self.method_interface_literal_hint(arg_id, hint, param_ty, sub)?;
+        if let Type::InterfaceRef { name, .. } = hint.peel()
+            && self.builds_literal(arg_id)?
+        {
+            let literal = super::expr::peel_parens(self.ast, arg_id)?;
+            self.literal_hint_interfaces.insert(literal, name.clone());
+        }
         let hint = self.literal_argument_hint(arg_id, hint, arguments.inferred_generics)?;
         let hinted_by_replaceable_binding = sub.mentions_replaceable_binding(param_ty);
         if hinted_by_replaceable_binding {

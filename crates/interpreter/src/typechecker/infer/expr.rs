@@ -558,9 +558,9 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .clone();
         let span = expr.span;
-        // An arrow whose own errors explain its mismatch with `expected` isn't
-        // reported again as a whole.
-        let mut arrow_reported = false;
+        // An arrow or object literal whose own errors explain its mismatch
+        // with `expected` isn't reported again as a whole.
+        let mut reported_in_parts = false;
         // Propagate once after dispatch: per-arm `?` creates large temporary
         // results that inflate every recursive frame in debug builds.
         let (kind, ty) = (match expr.kind {
@@ -631,7 +631,10 @@ impl Inferer<'_> {
                 return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
             }
             ExprKind::ObjectLiteral { members } => {
-                self.infer_object_literal_expr(expr_id, members, expected, span)
+                let errors_before = self.error_count();
+                let inferred = self.infer_object_literal_expr(expr_id, members, expected, span);
+                reported_in_parts = expected.is_some() && self.error_count() > errors_before;
+                inferred
             }
             ExprKind::ArrayLiteral { elements }
                 if expected.is_none() && self.ast.tuple_pattern_sources.contains(&expr_id) =>
@@ -667,7 +670,7 @@ impl Inferer<'_> {
                     keeps_returned_literals,
                     span,
                 )?;
-                arrow_reported = reported;
+                reported_in_parts = reported;
                 Ok((kind, ty))
             }
             ExprKind::Delete { operand } => {
@@ -790,7 +793,7 @@ impl Inferer<'_> {
         // is strict, so `let n: number = x` (where x is GP) does
         // reject as expected.
         if let Some(want) = expected
-            && !arrow_reported
+            && !reported_in_parts
             && !self.arguments_with_replaceable_hints.contains(&expr_id)
             && !assignable(&ty, want, self.resolver())
             && !self.widens_candidate(expr_id, want, &ty)
@@ -5656,26 +5659,30 @@ impl Inferer<'_> {
                 } else {
                     "fields"
                 };
-                match &interface_target {
-                    Some((package, name, mangled, args)) => {
-                        let ty = Type::interface_ref(
-                            package.clone(),
-                            name.clone(),
-                            mangled.clone(),
-                            args.clone(),
-                        );
-                        self.error_with_help(
-                            span,
-                            format!(
-                                "object literal is missing required {noun} {list} of type `{name}`"
-                            ),
-                            vec![self.format_definition(&ty)],
-                        );
-                    }
-                    None => self.error(
+                if let Some((package, name, mangled, args)) = &interface_target {
+                    let ty = Type::interface_ref(
+                        package.clone(),
+                        name.clone(),
+                        mangled.clone(),
+                        args.clone(),
+                    );
+                    self.error_with_help(
                         span,
-                        format!("object literal is missing required {noun} {list}"),
-                    ),
+                        format!(
+                            "object literal is missing required {noun} {list} of type `{name}`"
+                        ),
+                        vec![self.format_definition(&ty)],
+                    );
+                } else {
+                    let of_type = self
+                        .literal_hint_interfaces
+                        .get(&literal)
+                        .map(|name| format!(" of type `{name}`"))
+                        .unwrap_or_default();
+                    self.error(
+                        span,
+                        format!("object literal is missing required {noun} {list}{of_type}"),
+                    );
                 }
             }
         }
