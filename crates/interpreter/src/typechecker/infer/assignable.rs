@@ -1065,7 +1065,7 @@ fn assignable_rec(
             predicate_ok
                 && params_ok
                 && (re.is_void()
-                    || (ra.is_void() && matches!(re.peel(), Type::TypeVar(_)))
+                    || (ra.is_void() && matches!(re.peel(), Type::TypeVar(_) | Type::Unknown))
                     || assignable_rec(ra, re, types, seen))
         }
         // `readonly` is shallow (TS-faithful): it gates direct writes, not

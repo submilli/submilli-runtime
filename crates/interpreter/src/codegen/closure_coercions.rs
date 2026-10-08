@@ -491,6 +491,14 @@ impl DefaultsFitTarget {
             ends_in_rest,
         }
     }
+
+    /// This shape, returning by either convention.
+    pub(super) fn either_convention(self) -> Self {
+        Self {
+            is_void: None,
+            ..self
+        }
+    }
 }
 
 /// Pushes whether `__value_defaults_fit` lets the function in `function` stand

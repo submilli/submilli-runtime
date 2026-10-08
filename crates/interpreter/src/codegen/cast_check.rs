@@ -666,6 +666,15 @@ fn emit_function_structural_test(
             crate::codegen::internal_failure("closure signature registered during analysis")
         })?;
     let target = super::closure_coercions::DefaultsFitTarget::exact(signature, has_rest);
+    // A `void` function fits a function type returning `unknown`, as in
+    // TypeScript; the cast adapts its convention.
+    let returns_unknown =
+        matches!(ty.peel(), Type::Function { ret, .. } if matches!(ret.peel(), Type::Unknown));
+    let target = if returns_unknown {
+        target.either_convention()
+    } else {
+        target
+    };
     let fit = |emitter: &mut FunctionEmitter| {
         super::closure_coercions::emit_defaults_fit(emitter, ctx, value_local, target)
     };

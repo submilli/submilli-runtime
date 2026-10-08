@@ -1357,7 +1357,11 @@ impl<'a> Inferer<'a> {
             );
             return Ok(());
         }
-        if !super::assignable(&child_fn, &parent_fn, self.resolver()) {
+        // The slot's return convention is fixed as well: callers of the
+        // inherited method read a value a `void` override doesn't leave.
+        let drops_inherited_value =
+            child_sig.ret.is_void() && !matches!(parent_sig.ret.peel(), Type::Void | Type::Error);
+        if drops_inherited_value || !super::assignable(&child_fn, &parent_fn, self.resolver()) {
             self.error_with_help(
                 member.span,
                 format!(
