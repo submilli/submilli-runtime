@@ -281,8 +281,15 @@ fn write_field_name(out: &mut Writer, name: &str) -> Result<(), RenderError> {
 
 pub(crate) fn write_string(out: &mut Writer, value: &str) -> Result<(), RenderError> {
     out.push("\"")?;
-    let mut chars = value.chars().peekable();
+    let mut chars = crate::literal_units::literal_chars(value).peekable();
     while let Some(ch) = chars.next() {
+        let ch = match ch {
+            Ok(ch) => ch,
+            Err(lone) => {
+                out.format(format_args!("\\u{lone:04X}"))?;
+                continue;
+            }
+        };
         match ch {
             '"' => out.push("\\\"")?,
             '\\' => out.push("\\\\")?,
@@ -292,7 +299,12 @@ pub(crate) fn write_string(out: &mut Writer, value: &str) -> Result<(), RenderEr
             '\u{8}' => out.push("\\b")?,
             '\u{b}' => out.push("\\v")?,
             '\u{c}' => out.push("\\f")?,
-            '\0' if chars.peek().is_some_and(char::is_ascii_digit) => out.push("\\x00")?,
+            '\0' if chars
+                .peek()
+                .is_some_and(|next| next.is_ok_and(|d| d.is_ascii_digit())) =>
+            {
+                out.push("\\x00")?;
+            }
             '\0' => out.push("\\0")?,
             '\u{0}'..='\u{1f}' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
                 out.format(format_args!("\\u{:04X}", u32::from(ch)))?;

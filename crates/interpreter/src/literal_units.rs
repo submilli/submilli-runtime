@@ -102,6 +102,12 @@ pub(crate) fn literal_units(text: &str) -> Vec<u16> {
     units
 }
 
+/// The characters literal text stands for, with each lone surrogate as `Err`
+/// of its code unit, for printing the text back as source.
+pub(crate) fn literal_chars(text: &str) -> impl Iterator<Item = Result<char, u16>> {
+    char::decode_utf16(literal_units(text)).map(|c| c.map_err(|lone| lone.unpaired_surrogate()))
+}
+
 /// The surrogate a code point after [`MARKER`] names, if it names one.
 fn named_surrogate(named: char) -> Option<u16> {
     let offset = u32::from(named).checked_sub(SURROGATE_BASE)?;
@@ -155,6 +161,13 @@ mod tests {
         let mut doubled = text_of(&[0x10FFFE]);
         push_literal_text(&mut doubled, &text_of(&[0x10FFFE]));
         assert_eq!(doubled, text_of(&[0x10FFFE, 0x10FFFE]));
+    }
+
+    #[test]
+    fn literal_chars_report_lone_surrogates() {
+        let text = text_of(&[0x61, 0xD800, 0x10FFFE]);
+        let chars: Vec<_> = literal_chars(&text).collect();
+        assert_eq!(chars, vec![Ok('a'), Err(0xD800), Ok('\u{10FFFE}')]);
     }
 
     #[test]
