@@ -65,10 +65,34 @@ impl Inferer<'_> {
         if matches!(asserted_type, Type::Error) {
             return Ok(None);
         }
+        self.check_predicate_fits_parameter(pred, &asserted_type, &params[idx].ty);
         Ok(Some(crate::TypePredicate {
             parameter_index: idx as u32,
             asserted_type,
         }))
+    }
+
+    /// A predicate's type must be assignable to its parameter's type, as tsc
+    /// requires: `x is boolean` for `x: string | number` can never hold, and
+    /// an array `filter` with it would narrow to elements it never keeps. A
+    /// type parameter on either side is left to the call that binds it.
+    fn check_predicate_fits_parameter(
+        &mut self,
+        pred: &crate::TypePredicateAnnotation,
+        asserted: &Type,
+        param: &Type,
+    ) {
+        if matches!(param.peel(), Type::Error)
+            || super::expr::type_contains_type_var(param)
+            || super::expr::type_contains_type_var(asserted)
+            || super::assignable(asserted, param, self.resolver())
+        {
+            return;
+        }
+        self.error(
+            pred.asserted.span,
+            format!("a type predicate's type must be assignable to its parameter's type: `{asserted}` is not a `{param}`"),
+        );
     }
 
     pub(super) fn predicate_envs_user_guard(

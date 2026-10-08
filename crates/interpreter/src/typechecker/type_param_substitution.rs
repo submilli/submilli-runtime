@@ -4,9 +4,11 @@ use std::collections::BTreeMap;
 
 use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
 use crate::typechecker::infer::assignable::{
-    TypeResolver, assignable, expand_alias_ref, expand_interface_data_shape, rest_function_accepts,
+    TypeResolver, assignable, drops_readonly, expand_alias_ref, expand_interface_data_shape,
+    rest_function_accepts,
 };
 use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
+use crate::typechecker::infer::variance::Variance;
 use crate::{Span, Type};
 
 /// BTreeMap for deterministic ordering (stable snapshots and error messages).
@@ -17,6 +19,19 @@ pub struct TypeParamSubstitution {
     /// an argument may still replace: as in tsc, what the arguments say comes
     /// first. One stays replaceable until an argument agrees with it.
     replaceable: std::collections::BTreeSet<String>,
+    /// Bindings taken from an argument at a covariant position, which a later
+    /// argument of a wider type may widen: tsc infers the common supertype of
+    /// such candidates (`pick(dog, animal)` is an `Animal`). One used at a
+    /// contravariant position, as a callback's parameter, stays as it is.
+    widenable: std::collections::BTreeSet<String>,
+    /// The reverse, for bindings taken only at contravariant positions: tsc
+    /// infers the common subtype of those candidates, so a later callback
+    /// taking a narrower parameter narrows the binding.
+    narrowable: std::collections::BTreeSet<String>,
+    /// Candidate bindings taken only from object and array literals. tsc
+    /// combines those candidates into their union, which another literal may
+    /// join; a non-literal candidate wins over them.
+    literal_candidates: std::collections::BTreeSet<String>,
     /// For a type parameter in a union parameter whose other members took
     /// every member of a union argument, that whole argument: tsc infers it at
     /// the lowest priority, so it binds the type parameter only when nothing
@@ -37,7 +52,9 @@ pub struct CloseMatch {
     pub param: Type,
     pub matched_member: Type,
     pub arg: Type,
-    /// The call argument it came from, once the call has located it.
+    /// The fields of the argument, outermost first, it was found in.
+    pub field_path: Vec<String>,
+    /// Where in the call it came from, once the call has located it.
     pub argument_span: Option<Span>,
 }
 
@@ -69,6 +86,9 @@ impl TypeParamSubstitution {
                 .map(|(name, ty)| (name.clone(), ty.clone()))
                 .collect(),
             replaceable: Default::default(),
+            widenable: Default::default(),
+            narrowable: Default::default(),
+            literal_candidates: Default::default(),
             whole_union_fallbacks: Default::default(),
             close_matches: Vec::new(),
         }
@@ -82,6 +102,9 @@ impl TypeParamSubstitution {
         Self {
             bindings,
             replaceable: Default::default(),
+            widenable: Default::default(),
+            narrowable: Default::default(),
+            literal_candidates: Default::default(),
             whole_union_fallbacks: Default::default(),
             close_matches: Vec::new(),
         }
@@ -110,12 +133,38 @@ impl TypeParamSubstitution {
         distinct
     }
 
-    /// Locate the close matches recorded after the first `count` in the
-    /// call argument at `argument_span`.
-    pub fn locate_close_matches_after(&mut self, count: usize, argument_span: Span) {
+    /// Locate the close matches recorded after the first `count` in a call
+    /// argument, at the span `locate` gives for each one's field path.
+    pub fn locate_close_matches_after(
+        &mut self,
+        count: usize,
+        mut locate: impl FnMut(&[String]) -> Span,
+    ) {
         for close_match in self.close_matches.iter_mut().skip(count) {
-            close_match.argument_span = Some(argument_span);
+            close_match.argument_span = Some(locate(&close_match.field_path));
         }
+    }
+
+    /// Record that the close matches after the first `count` were found in
+    /// field `name` of the argument.
+    pub fn nest_close_matches_after(&mut self, count: usize, name: &str) {
+        for close_match in self.close_matches.iter_mut().skip(count) {
+            close_match.field_path.insert(0, name.to_string());
+        }
+    }
+
+    /// Keep only the close matches after the first `count` that `keep`
+    /// accepts.
+    pub fn retain_close_matches_after(
+        &mut self,
+        count: usize,
+        mut keep: impl FnMut(&CloseMatch) -> bool,
+    ) {
+        let mut index = 0;
+        self.close_matches.retain(|close_match| {
+            index += 1;
+            index <= count || keep(close_match)
+        });
     }
 
     /// How many close matches wait to be checked.
@@ -211,8 +260,16 @@ impl TypeParamSubstitution {
         echoes
     }
 
+    /// The type parameters bound to something other than themselves.
+    fn bound_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.bindings
+            .keys()
+            .filter(|name| !self.is_unbound(name))
+            .cloned()
+    }
+
     /// Whether `name` has no binding yet, or is bound only to itself.
-    fn is_unbound(&self, name: &str) -> bool {
+    pub(crate) fn is_unbound(&self, name: &str) -> bool {
         match self.bindings.get(name) {
             None => true,
             Some(bound) => matches!(bound.peel(), Type::TypeVar(other) if other == name),
@@ -223,6 +280,39 @@ impl TypeParamSubstitution {
     /// still replace.
     pub fn mentions_replaceable_binding(&self, ty: &Type) -> bool {
         super::infer::expr::mentions_type_var(ty, &|name| self.replaceable.contains(name))
+    }
+
+    /// Whether `ty` mentions a type parameter bound to a candidate that a
+    /// later argument may still widen or narrow.
+    pub fn mentions_candidate_binding(&self, ty: &Type) -> bool {
+        super::infer::expr::mentions_type_var(ty, &|name| self.is_candidate_binding(name))
+    }
+
+    /// Whether `ty` mentions a candidate binding that some argument other
+    /// than an object or array literal gave.
+    pub fn mentions_non_literal_candidate_binding(&self, ty: &Type) -> bool {
+        super::infer::expr::mentions_type_var(ty, &|name| {
+            self.is_candidate_binding(name) && !self.literal_candidates.contains(name)
+        })
+    }
+
+    /// These bindings without the candidates a later argument may still
+    /// widen or narrow.
+    pub fn without_candidate_bindings(&self) -> TypeParamSubstitution {
+        let mut loose = self.clone();
+        loose
+            .bindings
+            .retain(|name, _| !self.is_candidate_binding(name));
+        loose
+    }
+
+    /// Whether `name` is bound to a candidate a later argument may widen.
+    pub fn is_widenable(&self, name: &str) -> bool {
+        self.widenable.contains(name)
+    }
+
+    fn is_candidate_binding(&self, name: &str) -> bool {
+        self.widenable.contains(name) || self.narrowable.contains(name)
     }
 
     /// Make the replaceable bindings that `ty` mentions final, so no argument
@@ -358,18 +448,59 @@ impl TypeParamSubstitution {
         arg_ty: &Type,
         types: TypeResolver<'_>,
     ) -> Result<(), UnifyError> {
+        self.unify_argument_as(param_ty, arg_ty, types, false)
+    }
+
+    /// [`Self::unify_argument`] for an argument that is an object or array
+    /// literal, whose type joins the other literals' candidates.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn unify_literal_argument(
+        &mut self,
+        param_ty: &Type,
+        arg_ty: &Type,
+        types: TypeResolver<'_>,
+    ) -> Result<(), UnifyError> {
+        self.unify_argument_as(param_ty, arg_ty, types, true)
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn unify_argument_as(
+        &mut self,
+        param_ty: &Type,
+        arg_ty: &Type,
+        types: TypeResolver<'_>,
+        from_literal: bool,
+    ) -> Result<(), UnifyError> {
+        if !from_literal {
+            self.literal_candidates.retain(|name| {
+                !super::infer::expr::mentions_type_var(param_ty, &|var| var == name)
+            });
+        }
+        let bound_before: std::collections::BTreeSet<String> = self.bound_names().collect();
         let resolved = self.apply_or_record(param_ty, types.limits);
+        // An argument that fits the expected result's binding still replaces
+        // it, so the arguments, not the expected type, decide the inference.
         if !super::infer::expr::type_contains_type_var(&resolved)
+            && !self.mentions_replaceable_binding(param_ty)
             && assignable(arg_ty, &resolved, types)
         {
             return Ok(());
         }
-        self.keeping_close_matches_on_success(|sub| {
+        let unified = self.keeping_close_matches_on_success(|sub| {
             let mut unifier = Unifier::new(sub, Some(types), types.limits);
             unifier.subtype_widening = true;
             unifier.is_argument = true;
+            unifier.combines_literals = from_literal;
             unifier.unify(param_ty, arg_ty)
-        })
+        });
+        if from_literal {
+            let newly_bound: Vec<String> = self
+                .bound_names()
+                .filter(|name| !bound_before.contains(name))
+                .collect();
+            self.literal_candidates.extend(newly_bound);
+        }
+        unified
     }
 }
 
@@ -377,6 +508,8 @@ impl TypeParamSubstitution {
 struct Snapshot {
     bindings: BTreeMap<String, Type>,
     replaceable: std::collections::BTreeSet<String>,
+    widenable: std::collections::BTreeSet<String>,
+    narrowable: std::collections::BTreeSet<String>,
     whole_union_fallbacks: BTreeMap<String, Type>,
     close_matches_len: usize,
     assumed_len: usize,
@@ -403,6 +536,11 @@ struct Unifier<'a> {
     /// Whether the walk is inside a function type's parameter, where an
     /// argument may be wider than the type parameter's binding.
     contravariant: bool,
+    /// Whether the argument is an object or array literal, which widens a
+    /// binding other literals gave to the union of the two.
+    combines_literals: bool,
+    /// The object fields, outermost first, the walk is inside.
+    field_path: Vec<String>,
 }
 
 impl<'a> Unifier<'a> {
@@ -414,6 +552,20 @@ impl<'a> Unifier<'a> {
         // A type variable still binds to a readonly argument as readonly, or the
         // call's result would hand back a writable view of it.
         let bindable_arg = arg_ty.peel_preserving_readonly();
+        // A readonly array never stands for a mutable one; in a callback's
+        // parameter the slot's array is the one passed to the callback.
+        let drops_readonly = if self.contravariant {
+            drops_readonly(param_ty, arg_ty)
+        } else {
+            drops_readonly(arg_ty, param_ty)
+        };
+        if drops_readonly {
+            return Err(UnifyError::Mismatch {
+                expected: param_ty.clone(),
+                got: arg_ty.clone(),
+            });
+        }
+        let unpeeled_arg = arg_ty;
         let param_ty = param_ty.peel();
         let arg_ty = arg_ty.peel();
         if matches!(param_ty, Type::Error) || matches!(arg_ty, Type::Error) {
@@ -445,6 +597,28 @@ impl<'a> Unifier<'a> {
                 // Unified with an argument, a replaceable binding is the
                 // arguments' own from here on, whether or not it is replaced.
                 let replaceable = self.sub.replaceable.remove(name) && self.is_argument;
+                let from_callback_parameter = self.sub.narrowable.contains(name);
+                // The expected result's binding is only a hint, as tsc gives a
+                // return type's inference the lowest priority: the first
+                // argument replaces it as the first candidate, which later
+                // ones widen, and the result is checked against the expected
+                // type afterwards.
+                if replaceable && self.infers_from_covariant_argument() {
+                    self.sub.bindings.insert(name.clone(), arg_ty.clone());
+                    self.sub.widenable.insert(name.clone());
+                    return Ok(());
+                }
+                if self.contravariant {
+                    self.sub.widenable.remove(name);
+                } else {
+                    self.sub.narrowable.remove(name);
+                }
+                if self
+                    .unify_bound_by_assignability(name, &resolved, &arg_resolved, arg_ty)
+                    .is_some()
+                {
+                    return Ok(());
+                }
                 // Recurse instead of `==` to peel aliases at every level; remap to Conflict to pin the offending param.
                 return match self.unify(&resolved, &arg_resolved) {
                     Ok(()) => Ok(()),
@@ -454,6 +628,19 @@ impl<'a> Unifier<'a> {
                         self.sub.bindings.insert(name.clone(), arg_ty.clone());
                         Ok(())
                     }
+                    // An argument that neither fits a candidate binding nor
+                    // widens it is reported against it, as tsc reports it,
+                    // and so is one that doesn't fit what a callback's
+                    // parameter bound.
+                    Err(_)
+                        if self.subtype_widening
+                            && (self.sub.widenable.contains(name) || from_callback_parameter) =>
+                    {
+                        Err(UnifyError::Mismatch {
+                            expected: resolved,
+                            got: arg_resolved,
+                        })
+                    }
                     Err(_) => Err(UnifyError::Conflict {
                         name: name.clone(),
                         prev: resolved,
@@ -462,6 +649,11 @@ impl<'a> Unifier<'a> {
                 };
             }
             self.sub.bindings.insert(name.clone(), arg_ty.clone());
+            if self.infers_from_covariant_argument() {
+                self.sub.widenable.insert(name.clone());
+            } else if self.is_argument {
+                self.sub.narrowable.insert(name.clone());
+            }
             return Ok(());
         }
 
@@ -540,7 +732,7 @@ impl<'a> Unifier<'a> {
                                 got: arg_ty.clone(),
                             });
                         };
-                        self.unify(&expected.ty, &actual.ty)?;
+                        self.in_field(name, |u| u.unify(&expected.ty, &actual.ty))?;
                     }
                     return Ok(());
                 }
@@ -556,20 +748,21 @@ impl<'a> Unifier<'a> {
                         got: arg_ty.clone(),
                     });
                 }
-                for (va, vb) in a.values().zip(b.values()) {
+                for ((name, va), vb) in a.iter().zip(b.values()) {
                     if va.optional != vb.optional {
                         return Err(UnifyError::Mismatch {
                             expected: param_ty.clone(),
                             got: arg_ty.clone(),
                         });
                     }
-                    self.unify(&va.ty, &vb.ty)?;
+                    self.in_field(name, |u| u.unify(&va.ty, &vb.ty))?;
                 }
                 Ok(())
             }
             (
                 Type::InterfaceRef {
                     mangled: ma,
+                    name,
                     args: aa,
                     ..
                 },
@@ -582,6 +775,7 @@ impl<'a> Unifier<'a> {
             | (
                 Type::ClassRef {
                     mangled: ma,
+                    name,
                     args: aa,
                     ..
                 },
@@ -605,8 +799,18 @@ impl<'a> Unifier<'a> {
                 if aa.len() != ab.len() {
                     return Err(mismatch());
                 }
-                for (a, b) in aa.iter().zip(ab.iter()) {
-                    self.unify(a, b)?;
+                let variances = self.types.map_or_else(
+                    || vec![Variance::Covariant; aa.len()],
+                    |types| types.variances_or_covariant(ma, name, aa.len()),
+                );
+                for ((a, b), variance) in aa.iter().zip(ab.iter()).zip(variances) {
+                    // An argument the declaration only takes in (a callback
+                    // field's parameter) infers as a function parameter would.
+                    if variance == Variance::Contravariant {
+                        self.in_function_parameter(|u| u.unify(a, b))?;
+                    } else {
+                        self.unify(a, b)?;
+                    }
                 }
                 Ok(())
             }
@@ -636,6 +840,9 @@ impl<'a> Unifier<'a> {
             // two passes pair matching members first, then unify leftovers in order.
             (Type::Union(pa), Type::Union(pb)) => {
                 if let Some(unified) = self.unify_union_into_lone_type_var(pa, pb) {
+                    return unified;
+                }
+                if let Some(unified) = self.unify_union_into_lone_candidate(pa, pb) {
                     return unified;
                 }
                 if pa.len() != pb.len() {
@@ -679,9 +886,12 @@ impl<'a> Unifier<'a> {
             }
             // Union param against a single (non-union) arg: try each member.
             (Type::Union(pa), _) => {
+                // Each member sees the argument as written: a readonly array
+                // must not fit a mutable member.
+                let arg_ty = unpeeled_arg;
                 // Bottom fits every arm. Give an unbound variable a chance to
                 // infer from it before accepting an unrelated concrete arm.
-                if matches!(arg_ty, Type::Never) && self.subtype_widening {
+                if matches!(arg_ty.peel(), Type::Never) && self.subtype_widening {
                     let snap = self.snapshot();
                     if self
                         .without_subtype_widening(|u| u.unify(param_ty, arg_ty))
@@ -691,10 +901,19 @@ impl<'a> Unifier<'a> {
                     }
                     self.restore(snap);
                 }
+                if self.infer_from_readonly_into_mutable_member(pa, arg_ty) {
+                    return Ok(());
+                }
                 if self.unify_by_lone_type_var_rule(pa, arg_ty) {
                     return Ok(());
                 }
                 if self.defer_to_fitting_fallback(pa, arg_ty) {
+                    return Ok(());
+                }
+                if self.infer_through_structured_member(pa, arg_ty) {
+                    return Ok(());
+                }
+                if self.defer_to_identical_member(pa, arg_ty) {
                     return Ok(());
                 }
                 for m in self.fallback_type_vars_last(pa) {
@@ -752,6 +971,8 @@ impl<'a> Unifier<'a> {
             subtype_widening: false,
             is_argument: false,
             contravariant: false,
+            combines_literals: false,
+            field_path: Vec::new(),
         }
     }
 
@@ -762,6 +983,107 @@ impl<'a> Unifier<'a> {
             return false;
         };
         self.subtype_widening && assignable(arg, bound, types)
+    }
+
+    /// What `name`'s binding widens to for a covariant argument it doesn't
+    /// take, as tsc infers the common supertype of an argument's candidates:
+    /// the argument's own type when it is a supertype of the binding, and
+    /// with `null` set aside and added back otherwise (`pick(1, null)` is a
+    /// `number | null`). `None` when the binding is not a candidate an
+    /// argument may widen, or the two have no common supertype.
+    fn widened_binding(
+        &self,
+        name: &str,
+        arg: &Type,
+        bound: &Type,
+        unresolved_arg: &Type,
+    ) -> Option<Type> {
+        let types = self.types?;
+        if !self.subtype_widening || !self.sub.widenable.contains(name) {
+            return None;
+        }
+        if assignable(bound, arg, types) {
+            return Some(unresolved_arg.clone());
+        }
+        if self.combines_literals && self.sub.literal_candidates.contains(name) {
+            return Some(Type::union(vec![bound.clone(), unresolved_arg.clone()]));
+        }
+        // Literal candidates of one primitive form their union, as tsc infers
+        // where they are kept: `pick(1, 2)` is a `1 | 2`.
+        if bound.literal_base().is_some() && bound.literal_base() == arg.literal_base() {
+            return Some(Type::union(vec![bound.clone(), arg.clone()]));
+        }
+        // tsc sets a `null` candidate aside and adds it back to the common
+        // supertype of the rest; `None` stands for a candidate that is just
+        // `null`.
+        let non_null = |ty: &Type| {
+            (!matches!(ty.peel(), Type::Null)).then(|| super::infer::narrowing::strip_null(ty))
+        };
+        let involves_null = |ty: &Type| non_null(ty).as_ref() != Some(ty);
+        if !involves_null(bound) && !involves_null(arg) {
+            return None;
+        }
+        let supertype = match (non_null(bound), non_null(arg)) {
+            (None, None) => return None,
+            (Some(only), None) | (None, Some(only)) => only,
+            (Some(bound), Some(arg)) if assignable(&arg, &bound, types) => bound,
+            (Some(bound), Some(arg)) if assignable(&bound, &arg, types) => arg,
+            _ => return None,
+        };
+        Some(Type::union(vec![supertype, Type::Null]))
+    }
+
+    /// An argument against the type parameter `name` once it is bound to
+    /// `bound`, both fully known, decided by assignability as tsc checks
+    /// arguments: a covariant argument fits a supertype binding, or widens a
+    /// candidate binding to its own type; a callback's parameter must accept
+    /// the binding, or narrows a binding every use of which only passes values
+    /// in. `None` when neither holds, or outside an argument, for structural
+    /// unification to decide.
+    fn unify_bound_by_assignability(
+        &mut self,
+        name: &str,
+        bound: &Type,
+        arg: &Type,
+        unresolved_arg: &Type,
+    ) -> Option<()> {
+        let types = self.types?;
+        if !self.is_argument
+            || super::infer::expr::type_contains_type_var(bound)
+            || super::infer::expr::type_contains_type_var(arg)
+        {
+            return None;
+        }
+        let fits = if self.contravariant {
+            assignable(bound, arg, types)
+        } else {
+            self.subtype_widening && assignable(arg, bound, types)
+        };
+        if fits {
+            return Some(());
+        }
+        let rebound = if self.contravariant {
+            self.narrows_to_subtype(name, arg, bound)
+                .then(|| unresolved_arg.clone())
+        } else {
+            self.widened_binding(name, arg, bound, unresolved_arg)
+        }?;
+        self.sub.bindings.insert(name.to_string(), rebound);
+        Some(())
+    }
+
+    /// Whether a callback's parameter that failed to unify with `name`'s
+    /// binding is a subtype of it that the binding may narrow to: every use
+    /// of the binding so far only passes values in, so a narrower one still
+    /// fits them all.
+    fn narrows_to_subtype(&self, name: &str, arg: &Type, bound: &Type) -> bool {
+        let Some(types) = self.types else {
+            return false;
+        };
+        self.is_argument
+            && self.contravariant
+            && self.sub.narrowable.contains(name)
+            && assignable(arg, bound, types)
     }
 
     /// Unify a fixed-arity function type, `param_ty`, with an argument that
@@ -931,6 +1253,44 @@ impl<'a> Unifier<'a> {
         Some(Ok(()))
     }
 
+    /// A union argument against a union whose only type parameter is bound to
+    /// a candidate a later argument may still widen, or to the expected
+    /// result's hint an argument replaces: the members that fit
+    /// none of the concrete siblings are one more candidate, as tsc infers
+    /// them. `orDefault(5, pick)` with `orDefault<T>(fallback: T, value: T | null)`
+    /// and `pick: 1 | 2` widens `T` to `number`
+    /// from `1 | 2`, rather than pairing `2` with `null`. `None` when the
+    /// parameter has another shape or every member fits a sibling.
+    #[allow(clippy::result_large_err)]
+    fn unify_union_into_lone_candidate(
+        &mut self,
+        params: &[Type],
+        args: &[Type],
+    ) -> Option<Result<(), UnifyError>> {
+        let (type_vars, others): (Vec<&Type>, Vec<&Type>) = params
+            .iter()
+            .partition(|member| super::infer::expr::type_contains_type_var(member));
+        let [type_var] = type_vars[..] else {
+            return None;
+        };
+        let Type::TypeVar(name) = type_var.peel() else {
+            return None;
+        };
+        let replaceable = self.sub.replaceable.contains(name) && self.is_argument;
+        if !self.sub.is_candidate_binding(name) && !replaceable {
+            return None;
+        }
+        let rest: Vec<Type> = args
+            .iter()
+            .filter(|arg| !others.iter().any(|other| self.would_unify(other, arg)))
+            .cloned()
+            .collect();
+        if rest.is_empty() {
+            return None;
+        }
+        Some(self.unify(type_var, &Type::union(rest)))
+    }
+
     /// Defer `arg` when it fits the whole-union fallback of a member that is
     /// an unbound type parameter: tsc takes it as one more candidate of the
     /// fallback's priority, which the fallback already covers, so it binds
@@ -1049,8 +1409,57 @@ impl<'a> Unifier<'a> {
         true
     }
 
-    /// Unify `arg` with one of `others`, keeping its bindings, when
-    /// `type_var` has a whole-union fallback; returns whether one took it.
+    /// tsc infers from an argument to a union parameter's members that name
+    /// a type parameter inside them before the bare type parameter, which
+    /// takes the whole argument only at a lower priority: `{ v: m }` for
+    /// `A | Box<A>` binds `A` to `m`'s type. Returns whether such a member
+    /// took the argument and bound the lone unbound type parameter.
+    fn infer_through_structured_member(&mut self, params: &[Type], arg: &Type) -> bool {
+        if !self.infers_from_covariant_argument() {
+            return false;
+        }
+        let Some((Type::TypeVar(name), others)) = self
+            .split_lone_unbound_type_var(params)
+            .map(|(type_var, others)| (type_var.peel().clone(), others))
+        else {
+            return false;
+        };
+        for other in others {
+            if !super::infer::expr::mentions_type_var(other, &|var| var == name) {
+                continue;
+            }
+            let snap = self.snapshot();
+            if self.unify(other, arg).is_ok() && !self.sub.is_unbound(&name) {
+                return true;
+            }
+            self.restore(snap);
+        }
+        false
+    }
+
+    /// An argument identical to a member of its union parameter that names
+    /// no type parameter gives the unbound bare type parameters beside it
+    /// only a whole-union fallback, as tsc gives a naked type parameter the
+    /// lowest priority: `f(new Box(1), "s")` with `a: T | Box<number>` and
+    /// `c: T` binds `T` to `string`, and `h("x")` with `a: T | U | "x"`
+    /// binds both to `"x"`.
+    fn defer_to_identical_member(&mut self, params: &[Type], arg: &Type) -> bool {
+        if !self.infers_from_covariant_argument() {
+            return false;
+        }
+        let identical = params.iter().any(|member| {
+            !super::infer::expr::type_contains_type_var(member) && member.peel() == arg.peel()
+        });
+        if !identical || !params.iter().any(|member| self.is_unbound_type_var(member)) {
+            return false;
+        }
+        self.offer_to_type_vars_without_fallback(params, arg);
+        true
+    }
+
+    /// Unify `arg` with each of `others`, keeping the bindings of those that
+    /// take it, when `type_var` has a whole-union fallback; returns whether
+    /// one took it.
     /// tsc counts such an argument at most as another candidate of the
     /// fallback's priority, so it must not bind the type parameter ahead of
     /// the fallback.
@@ -1063,9 +1472,36 @@ impl<'a> Unifier<'a> {
         if !self.is_unbound_fallback_type_var(type_var) {
             return false;
         }
-        others
-            .iter()
-            .any(|other| self.unifies_or_rolls_back(other, arg))
+        // Every member infers from it, as in tsc: `Box<number>` for
+        // `T | Box<number> | Box<U>` binds `U` though the first member takes
+        // it as is.
+        let mut took = false;
+        for other in others {
+            took |= self.unifies_or_rolls_back(other, arg);
+        }
+        took
+    }
+
+    /// tsc infers from a readonly array argument through a mutable array
+    /// member, as `readonly Mode[]` binds `T` to `Mode` in `T | T[]`, and then
+    /// rejects the argument, which no member takes. Infer the same way and
+    /// leave the argument to be reported once inference is done.
+    fn infer_from_readonly_into_mutable_member(&mut self, params: &[Type], arg: &Type) -> bool {
+        if !self.infers_from_covariant_argument() || !arg.is_readonly_array() {
+            return false;
+        }
+        let Some(member) = params.iter().find(|member| {
+            matches!(member.peel(), Type::Array(_) | Type::Tuple(_))
+                && !member.is_readonly_array()
+                && super::infer::expr::type_contains_type_var(member)
+        }) else {
+            return false;
+        };
+        if !self.unifies_or_rolls_back(member, arg.peel()) {
+            return false;
+        }
+        self.record_close_match(params, member, arg);
+        true
     }
 
     /// Record that `arg` must fit the union parameter `params` once
@@ -1075,8 +1511,16 @@ impl<'a> Unifier<'a> {
             param: Type::union(params.to_vec()),
             matched_member: matched_member.clone(),
             arg: arg.clone(),
+            field_path: self.field_path.clone(),
             argument_span: None,
         });
+    }
+
+    fn in_field<R>(&mut self, name: &str, walk: impl FnOnce(&mut Self) -> R) -> R {
+        self.field_path.push(name.to_string());
+        let walked = walk(self);
+        self.field_path.pop();
+        walked
     }
 
     /// Offer `candidate` as `type_var`'s whole-union fallback. As tsc picks
@@ -1181,6 +1625,8 @@ impl<'a> Unifier<'a> {
         Snapshot {
             bindings: self.sub.bindings.clone(),
             replaceable: self.sub.replaceable.clone(),
+            widenable: self.sub.widenable.clone(),
+            narrowable: self.sub.narrowable.clone(),
             whole_union_fallbacks: self.sub.whole_union_fallbacks.clone(),
             close_matches_len: self.sub.close_matches.len(),
             assumed_len: self.assumed_pairs.len(),
@@ -1190,6 +1636,8 @@ impl<'a> Unifier<'a> {
     fn restore(&mut self, snapshot: Snapshot) {
         self.sub.bindings = snapshot.bindings;
         self.sub.replaceable = snapshot.replaceable;
+        self.sub.widenable = snapshot.widenable;
+        self.sub.narrowable = snapshot.narrowable;
         self.sub.whole_union_fallbacks = snapshot.whole_union_fallbacks;
         self.sub.close_matches.truncate(snapshot.close_matches_len);
         self.assumed_pairs.truncate(snapshot.assumed_len);

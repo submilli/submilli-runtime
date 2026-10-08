@@ -284,6 +284,33 @@ impl Inferer<'_> {
         Ok(widen_only(&flow, &widened))
     }
 
+    /// The type a generic call's result `ty` is reported at when it doesn't
+    /// fit `expected`: the fresh literals an argument kept are widened unless
+    /// the expected type names a literal of their kind, so `const n: number
+    /// = orNull(5)` reports `number | null`, where `const w: 1 | string =
+    /// first(1, 2)` reports `1 | 2`, as tsc does. tsc keeps them in a few
+    /// more cases (`const c: "x" = id(1)` reports `1`); only the message
+    /// differs there.
+    pub(super) fn reported_result_type(
+        &self,
+        kind: &TypedExprKind,
+        ty: &Type,
+        expected: &Type,
+    ) -> Result<Type, CompilerFailure> {
+        let (TypedExprKind::GenericCall { args, .. }
+        | TypedExprKind::GenericMethodCall { args, .. }) = kind
+        else {
+            return Ok(ty.clone());
+        };
+        let mut fresh = self.kept_fresh_literals(args)?;
+        let named_kinds: BTreeSet<Type> = declared_literals_unreduced(expected)
+            .iter()
+            .map(Type::widen_literal)
+            .collect();
+        fresh.retain(|literal| !named_kinds.contains(&literal.widen_literal()));
+        Ok(widen_only(ty, &fresh))
+    }
+
     /// The origin of the literal types of a binding initialized with `value`:
     /// declared when `annotated`, else inferred from `value`, whose type the
     /// binding takes as `bound`.
@@ -617,6 +644,14 @@ impl Inferer<'_> {
                     pending.push(*receiver);
                     self.method_result_is_declared(*receiver, &name.name, &expr.ty)?
                 }
+                // A generic call's literal types are declared but for those
+                // it may have inferred from a fresh literal (`create(phase)`
+                // with `phase: Phase` is a `Machine<Phase>` whose `state`
+                // keeps `Phase`).
+                TypedExprKind::GenericCall { .. } | TypedExprKind::GenericMethodCall { .. } => {
+                    let fresh = self.inferable_fresh_literals(id)?;
+                    deep_literals(&expr.ty).is_disjoint(&fresh)
+                }
                 // An element's own literal types are nested in the array.
                 TypedExprKind::ArrayLiteral { elements, .. } => {
                     let mut regular = true;
@@ -778,7 +813,7 @@ impl Inferer<'_> {
             return match literals {
                 BoundLiterals::Fresh => self.possibly_fresh_literals(value),
                 BoundLiterals::Regular => {
-                    self.whole_value_regular_literals(value, &expr.ty, Some(param))
+                    self.whole_value_regular_literals(value, &expr.ty, Some(param), is_counted)
                 }
             };
         };
@@ -798,7 +833,7 @@ impl Inferer<'_> {
             .try_expr(value)
             .map_err(crate::typechecker::arena_failure)?;
         let Some(parts) = literal_parts(&expr.kind) else {
-            return self.whole_value_regular_literals(value, &expr.ty, None);
+            return self.whole_value_regular_literals(value, &expr.ty, None, &|_| true);
         };
         let mut regular = BTreeSet::new();
         for part in parts {
@@ -810,16 +845,21 @@ impl Inferer<'_> {
     /// The regular literals `value`, of type `ty`, binds checked against
     /// `param`: its top-level ones and, when it binds what it holds inside
     /// (see [`binds_nested_literals`]) and every nested one is regular, those
-    /// too.
+    /// at the positions of `param` that name a type parameter `is_counted`
+    /// accepts.
     fn whole_value_regular_literals(
         &self,
         value: ExprId,
         ty: &Type,
         param: Option<&Type>,
+        is_counted: &dyn Fn(&str) -> bool,
     ) -> Result<BTreeSet<Type>, CompilerFailure> {
         let mut regular = self.regular_literals(value)?;
         if binds_nested_literals(param, ty) && self.are_nested_literals_regular(value)? {
-            regular.extend(deep_literals(ty));
+            regular.extend(match param {
+                Some(param) => deep_literals_bound_to(param, ty, is_counted),
+                None => deep_literals(ty),
+            });
         }
         Ok(regular)
     }
@@ -1265,6 +1305,42 @@ fn binds_nested_literals(param: Option<&Type>, ty: &Type) -> bool {
         ParamShape::WholeOrInside => {
             binds_inside_array(param) && matches!(ty.peel(), Type::Array(_) | Type::Tuple(_))
         }
+    }
+}
+
+/// The literals nested in `ty` that a value of that type, checked against
+/// `param`, binds to a type parameter `is_counted` accepts: those at the
+/// positions of a tuple, array or object that name one, so the `"on"` of a
+/// `[number, Mode]` checked against `[K, V]` counts only when `V` does. A
+/// position this can't pair up counts every literal under it.
+fn deep_literals_bound_to(
+    param: &Type,
+    ty: &Type,
+    is_counted: &dyn Fn(&str) -> bool,
+) -> BTreeSet<Type> {
+    if !super::expr::mentions_type_var(param, &is_counted) {
+        return BTreeSet::new();
+    }
+    match (param.peel(), ty.peel()) {
+        (Type::TypeVar(_), _) => deep_literals(ty),
+        (Type::Tuple(params), Type::Tuple(parts)) if params.len() == parts.len() => params
+            .iter()
+            .zip(parts)
+            .flat_map(|(param, part)| deep_literals_bound_to(param, part, is_counted))
+            .collect(),
+        (Type::Array(param), Type::Array(element)) => {
+            deep_literals_bound_to(param, element, is_counted)
+        }
+        (Type::Array(param), Type::Tuple(parts)) => parts
+            .iter()
+            .flat_map(|part| deep_literals_bound_to(param, part, is_counted))
+            .collect(),
+        (Type::Object { fields: params, .. }, Type::Object { fields: parts, .. }) => parts
+            .iter()
+            .filter_map(|(name, part)| Some((params.get(name)?, part)))
+            .flat_map(|(param, part)| deep_literals_bound_to(&param.ty, &part.ty, is_counted))
+            .collect(),
+        _ => deep_literals(ty),
     }
 }
 

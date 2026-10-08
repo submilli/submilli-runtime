@@ -633,6 +633,15 @@ impl Type {
         }
     }
 
+    /// The primitive this literal type, or union of literals of one
+    /// primitive, is a literal of: `number` for `1 | 2`, `None` for
+    /// `1 | "a"` or a type that is no literal.
+    pub fn literal_base(&self) -> Option<Type> {
+        let widened = self.widen_literal();
+        (widened != *self && matches!(widened, Type::Number | Type::String | Type::Boolean))
+            .then_some(widened)
+    }
+
     /// Whether every part of this type is a string — a `string`, a
     /// string-literal type, or a union of those.
     ///

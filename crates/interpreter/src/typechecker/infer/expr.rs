@@ -374,7 +374,7 @@ fn postfix_result_ty(operand_ty: &Type) -> Type {
 
 /// The type an array literal reads its hint as: peeled, and narrowed to the sole
 /// array-like member of a union.
-fn array_literal_hint_shape(hint: &Type) -> &Type {
+pub(super) fn array_literal_hint_shape(hint: &Type) -> &Type {
     let peeled = hint.peel();
     sole_array_like_member(peeled).unwrap_or(peeled)
 }
@@ -617,10 +617,10 @@ impl Inferer<'_> {
             ExprKind::ArrayLiteral { elements }
                 if expected.is_none() && self.ast.tuple_pattern_sources.contains(&expr_id) =>
             {
-                self.infer_pattern_tuple_literal(elements, span)
+                self.infer_pattern_tuple_literal(expr_id, elements, span)
             }
             ExprKind::ArrayLiteral { elements } => {
-                self.infer_array_literal(elements, expected, span)
+                self.infer_array_literal(expr_id, elements, expected, span)
             }
             ExprKind::FieldAccess { receiver, name } => {
                 self.infer_field_access(receiver, name, span)
@@ -774,6 +774,7 @@ impl Inferer<'_> {
             && !arrow_reported
             && !self.arguments_with_replaceable_hints.contains(&expr_id)
             && !assignable(&ty, want, self.resolver())
+            && !self.widens_candidate(expr_id, want, &ty)
         {
             let has_structural_diff = self
                 .render_optional_help(super::type_diff::format_type_diff(want, &ty))
@@ -792,7 +793,8 @@ impl Inferer<'_> {
             if let Some((narrow_help, _)) = self.narrowing_refusal_hint(&kind, &ty, want)? {
                 help.extend(narrow_help);
             }
-            self.error_with_help(span, format!("expected `{want}`, got `{ty}`"), help);
+            let shown = self.reported_result_type(&kind, &ty, want)?;
+            self.error_with_help(span, format!("expected `{want}`, got `{shown}`"), help);
         }
         self.check_expression_arity(&kind, &ty, span);
         let id = self
@@ -812,6 +814,13 @@ impl Inferer<'_> {
             self.type_size_checkpoint(Some(span))?;
         }
         Ok((id, ty))
+    }
+
+    /// Whether `expr_id`, a literal argument slot's value, widens the earlier
+    /// candidate `want` it was hinted with rather than mismatching it: the
+    /// candidate fits the value's type `ty`.
+    fn widens_candidate(&self, expr_id: ExprId, want: &Type, ty: &Type) -> bool {
+        self.values_widening_candidates.contains(&expr_id) && assignable(want, ty, self.resolver())
     }
 
     /// A primitive literal's type: the literal itself where it is kept or the
@@ -2574,11 +2583,6 @@ impl Inferer<'_> {
         };
         let shape = self.reduce_interfaces_to_shapes(&target_ty);
         let fits = assignable(&ty, &shape, self.resolver());
-        if !fits
-            && unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new()).is_some()
-        {
-            return Ok((kind, ty));
-        }
         let check = (!fits).then(|| Box::new(shape));
         let value = self
             .typed_ast
@@ -5221,6 +5225,13 @@ impl Inferer<'_> {
 
         let (receiver_hint, mut inferred_fields) =
             self.infer_object_receiver(&members, expected_fields.as_ref())?;
+        let inferred_ahead = self.infer_fields_ahead_of_callbacks(
+            literal,
+            &members,
+            expected_fields.as_ref(),
+            expected_index.as_ref(),
+            &mut inferred_fields,
+        )?;
 
         // walk members in source order, applying last-writer-wins
         // for both literal-position fields and spread sources. `merged`
@@ -5262,16 +5273,19 @@ impl Inferer<'_> {
                     // wins (the override is invariant, the surrounding
                     // hint can only restate it).
                     let override_sig = override_field_signature(&field.name.name);
-                    let hint: Option<Type> = override_sig
-                        .clone()
-                        .or_else(|| self.object_argument_field_hint(literal, &field.name.name))
-                        .or_else(|| {
-                            expected_fields
-                                .as_ref()
-                                .and_then(|m| m.get(&field.name.name))
-                                .map(|f| f.ty.clone())
-                                .or_else(|| expected_index.as_ref().map(|i| (*i.value).clone()))
-                        });
+                    let hint = self.object_field_hint(
+                        literal,
+                        &field.name.name,
+                        expected_fields.as_ref(),
+                        expected_index.as_ref(),
+                    );
+                    let expected_field_ty = expected_fields
+                        .as_ref()
+                        .and_then(|m| m.get(&field.name.name))
+                        .map(|f| f.ty.clone());
+                    self.next_function_keeps_returned_literals = !inferred_ahead
+                        .contains(&field.value)
+                        && self.field_keeps_returned_literals(literal, expected_field_ty.as_ref());
                     let previous_hint = self.object_this_hint.take();
                     if matches!(
                         self.ast
@@ -5287,23 +5301,31 @@ impl Inferer<'_> {
                         ty: value_ty,
                         already_errored,
                         rejected_void,
-                    } = self.infer_value_operand(
+                    } = self.infer_argument_slot_value(
+                        literal,
+                        &field.name.name,
                         field.value,
-                        hint.as_ref(),
-                        ValuePosition::FieldValue,
-                        inferred_fields.remove(&field.value),
+                        |this| {
+                            this.infer_value_operand(
+                                field.value,
+                                hint.as_ref(),
+                                ValuePosition::FieldValue,
+                                inferred_fields.remove(&field.value),
+                            )
+                        },
                     )?;
                     self.object_this_hint = previous_hint;
-                    let in_type_parameter_position = expected_fields
+                    let in_type_parameter_position = expected_field_ty
                         .as_ref()
-                        .and_then(|m| m.get(&field.name.name))
-                        .is_some_and(|expected| is_type_parameter_position(&expected.ty));
+                        .is_some_and(is_type_parameter_position);
                     let value_ty = if in_type_parameter_position {
                         self.widen_fresh_literals(typed_value, &value_ty)?
                     } else {
                         value_ty
                     };
-                    self.infer_from_object_argument_field(literal, &field.name.name, &value_ty);
+                    if !inferred_ahead.contains(&field.value) {
+                        self.infer_from_argument_slot(literal, &field.name.name, &value_ty);
+                    }
                     if !has_spread {
                         object_members.push(crate::TypedObjectMember::Value(typed_value));
                     }
@@ -5458,6 +5480,9 @@ impl Inferer<'_> {
                         fields: fields.clone(),
                     };
                     for (name, field) in fields {
+                        // A spread field binds type parameters for the fields
+                        // after it, as one written out does.
+                        self.infer_from_argument_slot(literal, &name, &field.ty);
                         let origin = crate::TypedObjectFieldSource::Spread {
                             source_index,
                             field_name: name.clone(),
@@ -6002,6 +6027,7 @@ impl Inferer<'_> {
 
     fn infer_array_literal(
         &mut self,
+        literal: ExprId,
         elements: Vec<crate::ArrayLiteralElement>,
         expected: Option<&Type>,
         span: Span,
@@ -6030,7 +6056,7 @@ impl Inferer<'_> {
                     )),
                 })
                 .collect::<Result<_, _>>()?;
-            return self.infer_tuple_literal(plain, expected_elems.clone(), span);
+            return self.infer_tuple_literal(literal, plain, expected_elems.clone(), span);
         }
 
         if let Some(Type::Union(members)) = expected {
@@ -6051,7 +6077,7 @@ impl Inferer<'_> {
                         _ => None,
                     })
                     .collect();
-                return self.infer_array_union_literal(elements, element_types, span);
+                return self.infer_array_union_literal(literal, elements, element_types, span);
             }
         }
 
@@ -6305,6 +6331,7 @@ impl Inferer<'_> {
     /// the caller then reports against the union.
     fn infer_array_union_literal(
         &mut self,
+        literal: ExprId,
         elements: Vec<crate::ArrayLiteralElement>,
         member_elements: Vec<Type>,
         span: Span,
@@ -6315,8 +6342,12 @@ impl Inferer<'_> {
             Type::union(member_elements.clone())
         };
         let errors_before = self.error_count();
-        let (kind, ty) =
-            self.infer_array_literal(elements, Some(&Type::Array(Box::new(context))), span)?;
+        let (kind, ty) = self.infer_array_literal(
+            literal,
+            elements,
+            Some(&Type::Array(Box::new(context))),
+            span,
+        )?;
         let TypedExprKind::ArrayLiteral { elements, .. } = kind else {
             return Ok((kind, ty));
         };
@@ -6722,6 +6753,7 @@ impl Inferer<'_> {
     /// of its elements' widened types, as TypeScript infers from the pattern.
     fn infer_pattern_tuple_literal(
         &mut self,
+        literal: ExprId,
         elements: Vec<crate::ArrayLiteralElement>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
@@ -6729,7 +6761,7 @@ impl Inferer<'_> {
         let mut element_types = Vec::with_capacity(elements.len());
         for element in &elements {
             let crate::ArrayLiteralElement::Value(id) = element else {
-                return self.infer_array_literal(elements, None, span);
+                return self.infer_array_literal(literal, elements, None, span);
             };
             let (typed_id, ty) = self.infer_expr(*id, None)?;
             element_types.push(self.widen_fresh_literals(typed_id, &ty)?);
@@ -6752,6 +6784,7 @@ impl Inferer<'_> {
     /// annotation so downstream type-checking doesn't cascade.
     fn infer_tuple_literal(
         &mut self,
+        literal: ExprId,
         elements: Vec<ExprId>,
         expected_elems: Vec<Type>,
         span: Span,
@@ -6785,35 +6818,35 @@ impl Inferer<'_> {
             ));
         }
 
-        let mut typed_elements: Vec<ExprId> = Vec::with_capacity(elements.len());
-        let mut slot_types: Vec<Type> = Vec::with_capacity(elements.len());
-        for (elem_id, expected_ty) in elements.iter().zip(expected_elems.iter()) {
-            let elem_span = self
-                .ast
-                .try_expr(*elem_id)
-                .map_err(super::arena_failure)?
-                .span;
-            let errors_before = self.error_count();
-            let (typed_id, elem_ty) = self.infer_expr(*elem_id, Some(expected_ty))?;
-            // Unbound generic-param slots take the inferred element type —
-            // `new Map([["a", 1]])` must report `[string, number]`, not
-            // `[K, V]`, so the call site can bind K and V.
-            let slot = if is_type_parameter_position(expected_ty) {
-                self.widen_fresh_literals(typed_id, &elem_ty)?
-            } else {
-                if self.error_count() == errors_before
-                    && !assignable(&elem_ty, expected_ty, self.resolver())
-                {
-                    self.error(
-                        elem_span,
-                        format!("expected `{expected_ty}`, got `{elem_ty}`"),
-                    );
+        // A generic call's argument types its function literal elements with
+        // an unannotated parameter last, each with what the other elements
+        // bound, as tsc's intra-expression inference does. The elements still
+        // run in source order.
+        let mut order: Vec<usize> = (0..elements.len()).collect();
+        if self.infers_one_at_a_time(literal) {
+            let mut context_sensitive = Vec::new();
+            for (index, elem_id) in elements.iter().enumerate() {
+                if self.is_context_sensitive_function(*elem_id)? {
+                    context_sensitive.push(index);
                 }
-                expected_ty.clone()
-            };
-            slot_types.push(slot);
-            typed_elements.push(typed_id);
+            }
+            order.retain(|index| !context_sensitive.contains(index));
+            order.extend(context_sensitive);
         }
+        let mut inferred: Vec<Option<(ExprId, Type)>> = vec![None; elements.len()];
+        for index in order {
+            let (Some(elem_id), Some(expected_ty)) =
+                (elements.get(index), expected_elems.get(index))
+            else {
+                continue;
+            };
+            let element = self.infer_tuple_element(literal, index, *elem_id, expected_ty)?;
+            if let Some(slot) = inferred.get_mut(index) {
+                *slot = Some(element);
+            }
+        }
+        let (typed_elements, slot_types): (Vec<ExprId>, Vec<Type>) =
+            inferred.into_iter().flatten().unzip();
 
         Ok((
             TypedExprKind::TupleLiteral {
@@ -6822,6 +6855,52 @@ impl Inferer<'_> {
             },
             Type::Tuple(slot_types),
         ))
+    }
+
+    /// Infer element `index` of the tuple literal `literal` against its slot
+    /// `expected_ty`, returning the typed element and the slot's type.
+    fn infer_tuple_element(
+        &mut self,
+        literal: ExprId,
+        index: usize,
+        elem_id: ExprId,
+        expected_ty: &Type,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let elem_span = self
+            .ast
+            .try_expr(elem_id)
+            .map_err(super::arena_failure)?
+            .span;
+        let errors_before = self.error_count();
+        let index = index.to_string();
+        let hint = self.argument_slot_hint(literal, &index);
+        let (typed_id, elem_ty) =
+            self.infer_argument_slot_value(literal, &index, elem_id, |this| {
+                this.infer_expr(elem_id, Some(hint.as_ref().unwrap_or(expected_ty)))
+            })?;
+        // Unbound generic-param slots take the inferred element type —
+        // `new Map([["a", 1]])` must report `[string, number]`, not
+        // `[K, V]`, so the call site can bind K and V.
+        let slot = if is_type_parameter_position(expected_ty) {
+            self.widen_fresh_literals(typed_id, &elem_ty)?
+        } else if type_contains_type_var(expected_ty) {
+            // A slot naming a type parameter still being inferred takes
+            // the element's own type too: `{ v: "x" }` for `{ v: T }`
+            // must reach the call as `{ v: string }` to bind `T`.
+            elem_ty
+        } else {
+            if self.error_count() == errors_before
+                && !assignable(&elem_ty, expected_ty, self.resolver())
+            {
+                self.error(
+                    elem_span,
+                    format!("expected `{expected_ty}`, got `{elem_ty}`"),
+                );
+            }
+            expected_ty.clone()
+        };
+        self.infer_from_argument_slot(literal, &index, &slot);
+        Ok((typed_id, slot))
     }
 
     /// Whether a user binding named `name` — local, top-level, or another `case`
@@ -8382,9 +8461,10 @@ impl Inferer<'_> {
 
     /// The types of a block body's returns to unify. Literal types kept for a
     /// function literal passed as the sole candidate of a type parameter that
-    /// is the call's result (see `returns_keep_literals`) widen when no one of
-    /// them covers the rest, as they would have without it: tsc would infer
-    /// their union, which one return type can't be.
+    /// is the call's result (see `returns_keep_literals`) form their union
+    /// when every return is a literal, as tsc infers (`() => { if (b) return
+    /// 1; return 2; }` returns `1 | 2`), and widen otherwise when no one of
+    /// them covers the rest.
     fn returned_types(&self, collected: Vec<(Type, Span)>) -> Vec<(Type, Span)> {
         if !self.returns_keep_literals {
             return collected;
@@ -8396,6 +8476,12 @@ impl Inferer<'_> {
         });
         if covered {
             return collected;
+        }
+        if let Some((_, span)) = collected.first().cloned()
+            && collected.iter().all(|(ty, _)| ty.literal_base().is_some())
+        {
+            let union = Type::union(collected.into_iter().map(|(ty, _)| ty).collect());
+            return vec![(union, span)];
         }
         collected
             .into_iter()

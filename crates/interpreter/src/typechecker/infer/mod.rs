@@ -44,6 +44,7 @@ mod type_diff;
 mod type_namespace;
 mod type_predicate;
 mod type_registry;
+pub(crate) mod variance;
 mod void_type_arguments;
 mod void_value;
 
@@ -129,6 +130,7 @@ pub fn infer_with_transitive_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         invoked_body_exit: None,
@@ -170,7 +172,8 @@ pub fn infer_with_transitive_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
-        object_argument_inference: None,
+        values_widening_candidates: BTreeSet::new(),
+        literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,
@@ -404,6 +407,7 @@ pub fn infer_package_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         invoked_body_exit: None,
@@ -445,7 +449,8 @@ pub fn infer_package_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
-        object_argument_inference: None,
+        values_widening_candidates: BTreeSet::new(),
+        literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         next_generic_param_id: 0,
@@ -733,6 +738,11 @@ pub(super) struct Inferer<'a> {
     /// `keeps_literal_types`, so it doesn't reach a conditional's branches,
     /// whose function types couldn't form one callable union.
     next_function_keeps_returned_literals: bool,
+    /// An object literal argument of a generic call, and the type parameters
+    /// the call infers that type only one of its fields: a function literal
+    /// in that field keeps its returned literals (see
+    /// [`Inferer::field_keeps_returned_literals`]).
+    fields_keeping_returned_literals: Option<(crate::ExprId, Vec<String>)>,
     aliased_conditions: aliased_conditions::AliasedConditions,
     /// The span of the arrow an immediately-invoked call is about to infer;
     /// see [`iife::immediately_invoked_arrow`].
@@ -883,9 +893,13 @@ pub(super) struct Inferer<'a> {
     /// their inference without being a requirement:
     /// an argument that doesn't fit it decides the type parameter instead.
     pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
-    /// The object literal argument whose fields a generic call is inferring
-    /// one at a time; see [`generic::ObjectArgumentInference`].
-    pub(super) object_argument_inference: Option<generic::ObjectArgumentInference>,
+    /// Values of literal argument slots typed as a type parameter an earlier
+    /// value bound to a candidate: one the candidate fits widens it rather
+    /// than mismatching it (`{ v: new Dog(), w: new Animal() }`).
+    pub(super) values_widening_candidates: BTreeSet<crate::ExprId>,
+    /// The object or tuple literal argument whose slots a generic call is
+    /// inferring one at a time; see [`generic::LiteralArgumentInference`].
+    pub(super) literal_argument_inference: Option<generic::LiteralArgumentInference>,
     pub(super) generics_in_scope: Vec<Vec<String>>,
     /// Empty during the signature pass; populated with fresh `GenericParam` ids at body entry.
     pub(super) body_instantiations: Vec<BTreeMap<String, Type>>,
