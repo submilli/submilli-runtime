@@ -338,12 +338,20 @@ impl Store {
 
     /// Replaces a stored run's file in one rename and leaves its index line as it is: for
     /// what is kept with a run after it was recorded (a test run's report), which changes
-    /// nothing its summary holds. The run must already be redacted.
+    /// nothing its summary holds. The run must already be redacted. A run removed since
+    /// it was loaded (by [`Store::clear`]) stays removed.
     pub(crate) fn rewrite_run(&self, run: &StoredRun) -> Result<()> {
         self.writer()?;
         let path = self.run_path(run.id);
         let staged = stage(&path, &json_bytes(run))?;
+        // Checked under the lock `clear` removes runs under, so it cannot remove the
+        // file between this check and the rename.
         let _inner = self.lock();
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(io_error(&path)(error)),
+        }
         staged
             .persist(&path)
             .map(drop)

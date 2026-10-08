@@ -7,7 +7,9 @@
 //! not compared (the filter language has no whole-value equality for them). A
 //! string equal to a bound, declared session variable is written as
 //! `${vars.NAME}`; every other value is written through the filter language's
-//! quoting, and a value holding a newline or control character is refused.
+//! quoting. A value holding a newline or control character is refused, and so
+//! is an integer past 2^53 - 1, which the filter language's f64 comparison
+//! cannot tell from its neighbours.
 //!
 //! The rule goes directly above the rule that decided, or at the end of the
 //! caller's block when the default decided. The text is edited line by line,
@@ -24,7 +26,7 @@ use std::ops::RangeInclusive;
 use serde_json::Value;
 
 use crate::filter::{self, VarBindings};
-use crate::permissions::{Action, ResolutionCause, RuleRef};
+use crate::permissions::{Action, PermissionRule, ResolutionCause, RuleRef};
 use crate::{Blueprint, BlueprintError, VariableDecl};
 
 /// The refused call a rule is drafted from.
@@ -40,9 +42,11 @@ pub struct DraftCall<'a> {
     /// The name the drafted rule carries, written as its first key; `None`
     /// drafts an unnamed rule. It must be unique within the caller's block.
     pub name: Option<&'a str>,
-    /// What decided the refusal, from [`Blueprint::explain_permission`]. The
-    /// draft is refused when the current text no longer decides the same way.
-    pub decided_by: &'a ResolutionCause,
+    /// The blueprint the refusal was decided under. The draft is refused when
+    /// the current text decides the call through a different rule (rules are
+    /// compared by content, not position, so rules added around it do not
+    /// count), or through a rule where the default decided, or the reverse.
+    pub decided_under: &'a Blueprint,
 }
 
 /// A drafted rule and the blueprint text that contains it.
@@ -75,6 +79,9 @@ pub enum DraftError {
     /// A string value holds `${vars.`, which the filter language always reads
     /// as a variable placeholder.
     UnquotableValue { field: String },
+    /// An integer field too large for an exact comparison: filters compare
+    /// numbers as f64, which cannot tell integers past 2^53 - 1 apart.
+    InexactNumber { field: String },
     /// A context field name the filter language cannot address as a single
     /// field (a dot, a dash, or a keyword such as `not`).
     UnaddressableField { field: String },
@@ -94,10 +101,16 @@ pub enum DraftError {
     CallerBlockNotFound { caller: String },
     /// More than one block in the text names the caller.
     CallerBlockAmbiguous { caller: String },
-    /// The text near the insertion uses YAML the splice does not edit:
-    /// anchors, aliases, tags, flow collections, or irregular indentation.
-    /// `line` is 1-based.
-    UnsupportedLayout { line: usize, reason: &'static str },
+    /// The text under `permissions:` (or the line endings of the whole text)
+    /// uses YAML the splice does not edit: anchors, aliases, tags, flow
+    /// collections, or irregular indentation. `line` is 1-based; `caller` is
+    /// the block the line is in, when that block's key could be read, which
+    /// may be another caller's than the one drafted for.
+    UnsupportedLayout {
+        line: usize,
+        caller: Option<String>,
+        reason: &'static str,
+    },
     /// The drafted text does not parse.
     DraftInvalid(BlueprintError),
     /// The drafted text changes a pre-existing line or rule.
@@ -135,6 +148,11 @@ impl fmt::Display for DraftError {
                 f,
                 "`{field}` holds `${{vars.`, which a filter string always reads as a variable"
             ),
+            DraftError::InexactNumber { field } => write!(
+                f,
+                "`{field}` is an integer too large for a filter to compare exactly; a rule \
+                 comparing it would also allow its neighbours"
+            ),
             DraftError::UnaddressableField { field } => {
                 write!(f, "context field `{field}` cannot be named in a filter")
             }
@@ -160,11 +178,20 @@ impl fmt::Display for DraftError {
                     "more than one `{caller}` block appears under `permissions:`"
                 )
             }
-            DraftError::UnsupportedLayout { line, reason } => write!(
-                f,
-                "line {line}: {reason}; add the rule by hand or rewrite the block in plain \
-                 block style"
-            ),
+            DraftError::UnsupportedLayout {
+                line,
+                caller,
+                reason,
+            } => {
+                write!(f, "line {line}")?;
+                if let Some(caller) = caller {
+                    write!(f, ", in the `{caller}` block")?;
+                }
+                write!(
+                    f,
+                    ": {reason}; add the rule by hand or rewrite the block in plain block style"
+                )
+            }
             DraftError::DraftInvalid(err) => {
                 write!(f, "the drafted blueprint does not parse: {err}")
             }
@@ -206,7 +233,11 @@ pub fn draft_allow(text: &str, call: &DraftCall<'_>) -> Result<Draft, DraftError
     if resolution.action == Action::Allow {
         return Err(DraftError::AlreadyAllowed);
     }
-    if resolution.cause != *call.decided_by {
+    let decided = call
+        .decided_under
+        .explain_permission(call.caller, call.capability, call.context, call.vars)
+        .cause;
+    if !same_decider(call.decided_under, &decided, &current, &resolution.cause) {
         return Err(DraftError::DecisionChanged {
             current: resolution.cause,
         });
@@ -235,6 +266,34 @@ pub fn draft_allow(text: &str, call: &DraftCall<'_>) -> Result<Draft, DraftError
         lines: first..=first + inserted.len().saturating_sub(1),
         overrides,
     })
+}
+
+/// Whether `was`, under `before`, and `now`, under `after`, are the same
+/// decider: rules with the same content, or the default both times (whether or
+/// not the caller has a block, since no rule in it matched).
+fn same_decider(
+    before: &Blueprint,
+    was: &ResolutionCause,
+    after: &Blueprint,
+    now: &ResolutionCause,
+) -> bool {
+    match (was, now) {
+        (ResolutionCause::Rule(was), ResolutionCause::Rule(now)) => {
+            match (rule_at(before, was), rule_at(after, now)) {
+                (Some(was), Some(now)) => was == now,
+                _ => false,
+            }
+        }
+        (ResolutionCause::Default { .. }, ResolutionCause::Default { .. }) => true,
+        _ => false,
+    }
+}
+
+fn rule_at<'b>(blueprint: &'b Blueprint, at: &RuleRef) -> Option<&'b PermissionRule> {
+    blueprint
+        .permissions
+        .get(&at.caller)
+        .and_then(|rules| rules.get(at.index))
 }
 
 // ---------------------------------------------------------------------------
@@ -294,7 +353,10 @@ fn operand(
     let operand = match value {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
-        Value::Number(n) => n.to_string(),
+        Value::Number(n) => {
+            require_exact_number(field, n)?;
+            n.to_string()
+        }
         Value::String(s) => {
             require_printable(field, s)?;
             match bound_variable(s, vars, declared) {
@@ -307,6 +369,21 @@ fn operand(
         Value::Array(_) | Value::Object(_) => return Ok(None),
     };
     Ok(Some(operand))
+}
+
+/// The largest integer an f64 holds with no other integer rounding to it.
+const MAX_EXACT_INTEGER: u64 = (1 << 53) - 1;
+
+/// Refuses an integer that a filter, comparing numbers as f64, would find
+/// equal to its neighbours. A number held as f64 compares exactly.
+fn require_exact_number(field: &str, n: &serde_json::Number) -> Result<(), DraftError> {
+    let magnitude = n.as_u64().or_else(|| n.as_i64().map(i64::unsigned_abs));
+    match magnitude {
+        Some(magnitude) if magnitude > MAX_EXACT_INTEGER => Err(DraftError::InexactNumber {
+            field: field.to_string(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// The first (by name) declared variable the session bound to `value`. Only
@@ -453,6 +530,7 @@ fn split_lines(text: &str) -> Result<Vec<Line<'_>>, DraftError> {
         if line.contains('\r') {
             return Err(DraftError::UnsupportedLayout {
                 line: lines.len() + 1,
+                caller: None,
                 reason: "a carriage return without a line feed ends a line",
             });
         }
@@ -498,7 +576,24 @@ const DEFAULT_DASH_OFFSET: usize = 2;
 fn unsupported(index: usize, reason: &'static str) -> DraftError {
     DraftError::UnsupportedLayout {
         line: index + 1,
+        caller: None,
         reason,
+    }
+}
+
+/// `error`, naming the caller block its line is in.
+fn in_block(error: DraftError, key: &str) -> DraftError {
+    match error {
+        DraftError::UnsupportedLayout {
+            line,
+            caller: None,
+            reason,
+        } => DraftError::UnsupportedLayout {
+            line,
+            caller: Some(key.to_string()),
+            reason,
+        },
+        other => other,
     }
 }
 
@@ -551,30 +646,41 @@ fn scan_permissions(lines: &[Line<'_>]) -> Result<Option<PermissionsLayout>, Dra
         let Some(caller) = layout.callers.last_mut() else {
             return Err(unsupported(index, "a list item has no caller key above it"));
         };
-        if caller.flow_empty {
-            return Err(unsupported(index, "a `[]` caller block has lines under it"));
-        }
-        refuse_node_properties(index, line)?;
-        let dash = match caller.dash {
-            Some(dash) => dash,
-            None if line.is_item() => *caller.dash.insert(DashStyle {
-                indent,
-                gap: item_gap(line),
-            }),
-            None => return Err(unsupported(index, "a caller block is not a list of rules")),
-        };
-        if indent < dash.indent {
-            return Err(unsupported(index, "rules are not evenly indented"));
-        }
-        if indent == dash.indent {
-            if !line.is_item() {
-                return Err(unsupported(index, "a caller block is not a list of rules"));
-            }
-            caller.items.push(index);
-        }
-        caller.end = index + 1;
+        scan_block_line(index, line, caller).map_err(|error| in_block(error, &caller.key))?;
     }
     Ok(Some(layout))
+}
+
+/// Adds line `index`, under `caller`'s header, to the block's layout.
+fn scan_block_line(
+    index: usize,
+    line: &Line<'_>,
+    caller: &mut CallerLayout,
+) -> Result<(), DraftError> {
+    if caller.flow_empty {
+        return Err(unsupported(index, "a `[]` caller block has lines under it"));
+    }
+    refuse_node_properties(index, line)?;
+    let indent = line.indent();
+    let dash = match caller.dash {
+        Some(dash) => dash,
+        None if line.is_item() => *caller.dash.insert(DashStyle {
+            indent,
+            gap: item_gap(line),
+        }),
+        None => return Err(unsupported(index, "a caller block is not a list of rules")),
+    };
+    if indent < dash.indent {
+        return Err(unsupported(index, "rules are not evenly indented"));
+    }
+    if indent == dash.indent {
+        if !line.is_item() {
+            return Err(unsupported(index, "a caller block is not a list of rules"));
+        }
+        caller.items.push(index);
+    }
+    caller.end = index + 1;
+    Ok(())
 }
 
 fn scan_caller_header(index: usize, line: &Line<'_>) -> Result<CallerLayout, DraftError> {
@@ -588,9 +694,9 @@ fn scan_caller_header(index: usize, line: &Line<'_>) -> Result<CallerLayout, Dra
         "" => false,
         "[]" => true,
         _ => {
-            return Err(unsupported(
-                index,
-                "a caller's rules are not written as a block list",
+            return Err(in_block(
+                unsupported(index, "a caller's rules are not written as a block list"),
+                &key,
             ));
         }
     };
@@ -1105,9 +1211,6 @@ mod tests {
         name: Option<&str>,
     ) -> Result<Draft, DraftError> {
         let blueprint = crate::parse(text).expect("fixture parses");
-        let cause = blueprint
-            .explain_permission(caller, capability, &context, bindings)
-            .cause;
         draft_allow(
             text,
             &DraftCall {
@@ -1116,7 +1219,28 @@ mod tests {
                 context: &context,
                 vars: bindings,
                 name,
-                decided_by: &cause,
+                decided_under: &blueprint,
+            },
+        )
+    }
+
+    /// Draft into `text` for a refusal decided under the blueprint `under`.
+    fn draft_under(
+        text: &str,
+        under: &str,
+        capability: &str,
+        context: Value,
+    ) -> Result<Draft, DraftError> {
+        let under = crate::parse(under).expect("fixture parses");
+        draft_allow(
+            text,
+            &DraftCall {
+                caller: "main",
+                capability,
+                context: &context,
+                vars: &VarBindings::new(),
+                name: None,
+                decided_under: &under,
             },
         )
     }
@@ -1570,6 +1694,46 @@ permissions:
     }
 
     #[test]
+    fn an_integer_a_filter_cannot_tell_from_its_neighbours_is_refused() {
+        // Filter numbers are f64: past 2^53 - 1, neighbouring integers compare equal.
+        for id in [
+            json!(9_007_199_254_740_992_u64),
+            json!(-9_007_199_254_740_993_i64),
+        ] {
+            let err = draft(
+                ODD_LAYOUT,
+                "main",
+                "x",
+                json!({ "id": id }),
+                &VarBindings::new(),
+            )
+            .expect_err("refused");
+            assert!(
+                matches!(&err, DraftError::InexactNumber { field } if field == "id"),
+                "{err:?}"
+            );
+        }
+        for (id, written) in [
+            (json!(9_007_199_254_740_991_u64), "9007199254740991"),
+            (json!(-9_007_199_254_740_991_i64), "-9007199254740991"),
+            (json!(0.1), "0.1"),
+        ] {
+            let draft = draft(
+                ODD_LAYOUT,
+                "main",
+                "x",
+                json!({ "id": id }),
+                &VarBindings::new(),
+            )
+            .expect("drafts");
+            assert_eq!(
+                rule_lines(&draft)[1],
+                format!("             filter: id == {written}")
+            );
+        }
+    }
+
+    #[test]
     fn anchors_and_flow_rules_are_refused() {
         let anchored = "name: a\npermissions:\n  main: &rules\n    - capability: a\n      \
                         action: deny\n  other: *rules\n";
@@ -1588,21 +1752,42 @@ permissions:
     }
 
     #[test]
+    fn a_refused_layout_in_another_callers_block_names_that_block() {
+        let text = "name: a\npermissions:\n  main:\n    - capability: a\n      action: deny\n  \
+                    other:\n    - { capability: a, action: deny }\n";
+        let err = draft(text, "main", "b", json!({}), &VarBindings::new()).expect_err("refused");
+        assert_eq!(
+            err.to_string(),
+            "line 7, in the `other` block: a flow collection is used; add the rule by hand or \
+             rewrite the block in plain block style"
+        );
+        let header = "name: a\npermissions:\n  other: &rules\n    - capability: a\n      \
+                      action: deny\n";
+        let err = draft(header, "main", "b", json!({}), &VarBindings::new()).expect_err("refused");
+        assert!(
+            err.to_string()
+                .starts_with("line 3, in the `other` block: a caller's rules"),
+            "{err}"
+        );
+        let unreadable = "name: a\npermissions:\n  \"o\\u00e9\": []\n";
+        let err =
+            draft(unreadable, "main", "b", json!({}), &VarBindings::new()).expect_err("refused");
+        assert!(
+            err.to_string()
+                .starts_with("line 3: a caller key is not a plain or quoted key"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn a_stale_or_allowed_decision_is_refused() {
         let context = json!({});
-        let stale = ResolutionCause::Default {
-            caller_block: false,
-        };
-        let err = draft_allow(
+        // The default decided; a rule decides now.
+        let err = draft_under(
             ODD_LAYOUT,
-            &DraftCall {
-                caller: "main",
-                capability: "acme.com/refunds.create",
-                context: &context,
-                vars: &VarBindings::new(),
-                name: None,
-                decided_by: &stale,
-            },
+            "name: s\n",
+            "acme.com/refunds.create",
+            context.clone(),
         )
         .expect_err("refused");
         assert!(matches!(err, DraftError::DecisionChanged { .. }), "{err:?}");
@@ -1617,6 +1802,37 @@ permissions:
         assert!(matches!(err, DraftError::AlreadyAllowed), "{err:?}");
     }
 
+    #[test]
+    fn the_same_rule_or_the_default_still_deciding_is_not_a_change() {
+        const DENY: &str =
+            "name: d\npermissions:\n  main:\n    - capability: b\n      action: deny\n";
+        // The default decided before the caller had a block; no rule in the new block matches.
+        let with_block =
+            "name: d\npermissions:\n  main:\n    - capability: a\n      action: allow\n";
+        let drafted = draft_under(with_block, "name: d\n", "b", json!({ "n": 2 })).expect("drafts");
+        assert_eq!(drafted.overrides, None);
+        // The deny rule that decided has moved down below a drafted allow.
+        let moved = "name: d\npermissions:\n  main:\n    - capability: b\n      filter: n == 1\n      \
+                     action: allow\n    - capability: b\n      action: deny\n";
+        let drafted = draft_under(moved, DENY, "b", json!({ "n": 2 })).expect("drafts");
+        assert_eq!(
+            drafted.overrides,
+            Some(RuleRef {
+                caller: "main".into(),
+                index: 1,
+                name: None,
+            })
+        );
+        // The rule in the deciding rule's place now says something else.
+        let rewritten = "name: d\npermissions:\n  main:\n    - capability: b\n      filter: n != 3\n      \
+                         action: deny\n";
+        let err = draft_under(rewritten, DENY, "b", json!({ "n": 2 })).expect_err("refused");
+        assert!(matches!(err, DraftError::DecisionChanged { .. }), "{err:?}");
+        // A rule decided; the default decides now.
+        let err = draft_under("name: d\n", DENY, "b", json!({ "n": 2 })).expect_err("refused");
+        assert!(matches!(err, DraftError::DecisionChanged { .. }), "{err:?}");
+    }
+
     fn check_splice(splice: &Splice) -> Result<String, DraftError> {
         let current = crate::parse(DENIES_STAGING).expect("parses");
         let lines = split_lines(DENIES_STAGING).expect("lines");
@@ -1627,7 +1843,7 @@ permissions:
             context: &context,
             vars: &VarBindings::new(),
             name: None,
-            decided_by: &ResolutionCause::Default { caller_block: true },
+            decided_under: &current,
         };
         apply_checked(&current, &lines, splice, &call, 3, &[])
     }

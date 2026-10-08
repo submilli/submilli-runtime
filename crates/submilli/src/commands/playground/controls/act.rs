@@ -1468,8 +1468,8 @@ pub(crate) fn draft_rule(
     let text = String::from_utf8(bytes.clone()).map_err(|_| {
         ActError::failure(format!("{} is not UTF-8 text", blueprint_path.display()))
     })?;
-    // What decided the refusal, under the version the run was decided under: the draft
-    // is refused when the file no longer decides the call that way.
+    // The version the run was decided under: the draft is refused when the file no
+    // longer decides the call through the same rule, or the default.
     let under = store.changes().ok().and_then(|changes| {
         let tag = run.recording.blueprint_version.as_deref()?;
         changes
@@ -1487,24 +1487,15 @@ pub(crate) fn draft_rule(
             ))
         })?,
     };
-    let variables = &run.recording.variables;
-    let decided_by = under
-        .explain_permission(
-            &record.caller,
-            &record.capability,
-            &record.context,
-            variables,
-        )
-        .cause;
     let draft = draft_allow(
         &text,
         &DraftCall {
             caller: &record.caller,
             capability: &record.capability,
             context: &record.context,
-            vars: variables,
+            vars: &run.recording.variables,
             name,
-            decided_by: &decided_by,
+            decided_under: &under,
         },
     )
     .map_err(|error| draft_error(&error, decision))?;

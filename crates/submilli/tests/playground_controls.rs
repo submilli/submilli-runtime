@@ -1068,6 +1068,53 @@ function main(): string {{
             );
         }
 
+        /// Two reads, each refused and caught.
+        const TWO_CAUGHT_READS: &str = r#"import { get } from "submilli:http";
+function main(): string {
+  let refused = 0;
+  try { get("http://127.0.0.1:9/a"); } catch (e: PermissionDeniedError) { refused = refused + 1; }
+  try { get("http://127.0.0.1:9/b"); } catch (e: PermissionDeniedError) { refused = refused + 1; }
+  return `${refused}`;
+}"#;
+
+        /// Drafts and writes a rule for each of a run's two denials in turn, then checks
+        /// the run's decisions recheck as allowed.
+        fn draft_each_denial_in_turn(blueprint: &str) {
+            let playground = Playground::with_blueprint(blueprint);
+            playground.start();
+            let program = playground.write("reads.ts", TWO_CAUGHT_READS);
+            let ran = playground.expect(0, &["exec", &program]);
+            let run = ran["run"].to_string();
+            let denied: Vec<String> = ran["denied"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|denial| denial.as_str().unwrap().to_owned())
+                .collect();
+            assert_eq!(denied.len(), 2, "{ran}");
+
+            playground.expect(0, &["draft-rule", &denied[0], "--write"]);
+            wait_for_version(&playground, 2);
+            // The second denial is still refused by the same rule, or by the default.
+            playground.expect(0, &["draft-rule", &denied[1], "--write"]);
+            wait_for_version(&playground, 3);
+            let rechecked = playground.expect(0, &["recheck", &run]);
+            assert_eq!(rechecked["newly_allowed"], 2, "{rechecked}");
+        }
+
+        #[test]
+        fn each_default_denial_of_a_run_drafts_after_the_first_adds_the_callers_block() {
+            draft_each_denial_in_turn("name: demo\nallow_insecure_http: true\ndefault: deny\n");
+        }
+
+        #[test]
+        fn each_denial_of_a_run_drafts_after_the_first_moves_the_deny_rule_down() {
+            draft_each_denial_in_turn(
+                "name: demo\nallow_insecure_http: true\ndefault: deny\npermissions:\n  main:\n  \
+                 - capability: http.get\n    action: deny\n",
+            );
+        }
+
         #[test]
         fn exec_records_compile_failures_labels_its_runs_and_takes_only_program_text() {
             let playground = Playground::starter();

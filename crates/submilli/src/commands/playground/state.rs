@@ -55,9 +55,10 @@ pub(crate) struct StateDir {
 /// value each variable had (kept after it is unset), and the names of the harness
 /// secrets bound. A secret's value is never written: it lives in the running
 /// playground's memory only, and the names are kept only to say, after a restart,
-/// that a secret has to be bound again.
+/// that a secret has to be bound again. A field it does not know (one a newer playground
+/// wrote) is ignored, so the variables saved beside it are still read.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub(crate) struct RememberedBinding {
     pub(crate) variables: BTreeMap<String, String>,
     pub(crate) last: BTreeMap<String, String>,
@@ -709,6 +710,15 @@ mod tests {
         write_binding_at(&path, &cleared).unwrap();
         assert_eq!(state.read_binding().unwrap(), Some(cleared));
         assert_eq!(mode(&path), 0o600);
+
+        // A field a newer playground added is ignored; the variables are kept.
+        fs::write(
+            &path,
+            "{\"variables\": {\"customerId\": \"cus_initech\"}, \"added_later\": true}",
+        )
+        .unwrap();
+        let read = state.read_binding().unwrap().expect("a binding");
+        assert_eq!(read.variables["customerId"], "cus_initech");
 
         fs::write(&path, "{\"variables\": 3}").unwrap();
         assert!(state.read_binding().is_err());

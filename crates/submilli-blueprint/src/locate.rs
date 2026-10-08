@@ -7,7 +7,9 @@
 //!
 //! Where the text uses anchors or aliases under `permissions:`, or writes a
 //! rule list in flow style (`[ ... ]`), a line would be a guess, so a rule is
-//! cited by caller block and index instead.
+//! cited by caller block and index instead. So is any rule in a text that
+//! breaks a line at NEL, LS, PS, or a lone `\r`: the blueprint parser and this
+//! one would disagree about where its rules are.
 
 use saphyr_parser::{Event, Parser, ScalarStyle, Span};
 
@@ -34,9 +36,10 @@ pub struct RuleLocation {
 pub enum Citation {
     /// The rule's line range in the text it was located in.
     Line(RuleLocation),
-    /// The text did not locate the rule: it does not parse, anchors or
-    /// aliases appear under `permissions:`, the rule list is flow style, or
-    /// the caller block or index does not exist in the text. The caller
+    /// The text did not locate the rule: it does not parse, it breaks a
+    /// line other than at `\n` or `\r\n`, anchors or aliases appear under
+    /// `permissions:`, the rule list is flow style, or the caller block or
+    /// index does not exist in the text. The caller
     /// block and zero-based index still name the rule.
     Index { caller: String, index: usize },
 }
@@ -147,8 +150,12 @@ struct Source<'t> {
 
 impl<'t> Source<'t> {
     /// Parse the first and only document. `None` on a scan error, an empty
-    /// or multi-document stream, or nesting beyond [`MAX_DEPTH`].
+    /// or multi-document stream, nesting beyond [`MAX_DEPTH`], or a line
+    /// break the two parsers read differently.
     fn parse(text: &'t str) -> Option<Self> {
+        if has_ambiguous_line_break(text) {
+            return None;
+        }
         let lines: Vec<&str> = text.lines().collect();
         let mut parser = Parser::new_from_str(text);
         let mut open: Vec<Node> = Vec::new();
@@ -233,6 +240,23 @@ impl<'t> Source<'t> {
             text = (*self.lines.get(line.checked_sub(1)?)?).to_string();
         }
     }
+}
+
+/// Whether `text` holds a line break other than `\n` or `\r\n`. The blueprint
+/// parser (`serde_yml`) also breaks lines at NEL, LS, and PS, which this
+/// parser reads as content, so the two would see different rules; and a lone
+/// `\r`, which this parser breaks at but [`str::lines`] does not, would
+/// misalign the source lines read back by position.
+fn has_ambiguous_line_break(text: &str) -> bool {
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{85}' | '\u{2028}' | '\u{2029}' => return true,
+            '\r' if chars.peek() != Some(&'\n') => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 impl Node {
@@ -484,6 +508,31 @@ default: deny
                 "{text:?}"
             );
         }
+    }
+
+    /// The blueprint parser also breaks lines at NEL, LS, and PS, and a lone
+    /// carriage return; this parser does not, so its rule count can differ.
+    #[test]
+    fn line_breaks_the_blueprint_parser_reads_differently_fall_back_to_the_index() {
+        for brk in ["\u{85}", "\u{2028}", "\u{2029}", "\r"] {
+            let text = format!(
+                "name: a\npermissions:\n  main:\n    # note{brk}    - capability: hidden\n    \
+                 - capability: b\n      action: allow\n"
+            );
+            assert_eq!(
+                locate_rule(&text, "main", 0),
+                Citation::Index {
+                    caller: "main".to_string(),
+                    index: 0
+                },
+                "{brk:?}"
+            );
+            assert_eq!(locate_key(&text, &["permissions", "main"]), None, "{brk:?}");
+        }
+        // A CRLF file is still located.
+        let crlf =
+            "name: a\r\npermissions:\r\n  main:\r\n    - capability: b\r\n      action: allow\r\n";
+        assert_eq!(line(locate_rule(crlf, "main", 0)).line, 4);
     }
 
     #[test]

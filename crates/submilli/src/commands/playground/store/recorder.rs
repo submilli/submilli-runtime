@@ -298,6 +298,15 @@ impl Shared {
         }
     }
 
+    /// The run's recording was dropped. A run dropped without finishing has no record and
+    /// will deliver no more events, so it ends here: no longer in flight, and pruned in time
+    /// like a finished run.
+    fn dropped(&self, execution_id: &str) {
+        if let Some(track) = self.tracks().get_mut(execution_id) {
+            track.finished_at.get_or_insert_with(Instant::now);
+        }
+    }
+
     fn backfill_later(self: &Arc<Self>, execution_id: String) {
         let shared = Arc::clone(self);
         let check = move || {
@@ -564,6 +573,7 @@ impl Drop for RunRecording {
         if let Err(error) = self.shared.store.unmark_running(self.id) {
             warn(&format!("run {} still listed as running: {error}", self.id));
         }
+        self.shared.dropped(&self.start.execution_id);
     }
 }
 

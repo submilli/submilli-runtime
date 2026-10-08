@@ -602,6 +602,39 @@ fn clear_removes_runs_resets_the_audit_window_and_ids_keep_counting() {
 }
 
 #[test]
+fn a_run_dropped_without_finishing_is_no_longer_in_flight() {
+    let world = World::new();
+    let dropped = world.start(run_start("exec-1", None));
+    assert_eq!(world.recorder.in_flight(1).as_deref(), Some("exec-1"));
+    drop(dropped);
+    assert_eq!(world.recorder.in_flight(1), None);
+    let finished_run = world.start(run_start("exec-2", None));
+    finished_run.finish(finished(Vec::new(), Vec::new()));
+    assert_eq!(world.recorder.in_flight(2), None);
+}
+
+#[test]
+fn rewriting_a_run_cleared_since_it_was_loaded_does_not_bring_it_back() {
+    let world = World::new();
+    world
+        .start(run_start("exec-1", None))
+        .finish(finished(Vec::new(), Vec::new()));
+    let loaded = world.store.load_run(1).unwrap().expect("stored");
+    world.store.clear().unwrap();
+    world.store.rewrite_run(&loaded).unwrap();
+    assert!(world.store.load_run(1).unwrap().is_none());
+    assert!(world.store.list_runs().unwrap().is_empty());
+    // A run still there is rewritten.
+    world
+        .start(run_start("exec-2", None))
+        .finish(finished(Vec::new(), Vec::new()));
+    let mut kept = world.store.load_run(2).unwrap().expect("stored");
+    kept.label = "kept".into();
+    world.store.rewrite_run(&kept).unwrap();
+    assert_eq!(world.store.load_run(2).unwrap().unwrap().label, "kept");
+}
+
+#[test]
 fn a_bytes_updated_entry_supersedes_its_versions_bytes_and_a_failed_apply_voids_one() {
     let world = World::new();
     let new = |bytes: &str| NewVersion {
