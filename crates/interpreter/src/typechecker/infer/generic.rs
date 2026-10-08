@@ -2044,15 +2044,12 @@ impl Inferer<'_> {
         )
     }
 
-    /// `Array.from({ length }, mapFn)` calls `mapFn` with `undefined` for each
-    /// element, which has no type here: the element arrives as `null`. A
-    /// callback whose element type doesn't admit `null` would read that
-    /// `null` as its declared type (`v: number` gives `null + i`, not
-    /// JavaScript's `NaN`), so it is refused rather than run with a wrong value.
     /// The source of an `Array.from` call when it is an array-like `{ length }`
     /// rather than an array, iterator or iterable. Only an object type is an
     /// array-like: TypeScript's `ArrayLike` has a number index signature,
     /// which an object type has implicitly and an interface or class doesn't.
+    /// A source with a string index signature is rejected too, since its keyed
+    /// entries would be its elements.
     fn array_like_source(
         &mut self,
         typed_args: &[ExprId],
@@ -2078,6 +2075,17 @@ impl Inferer<'_> {
         if super::assignable(&source_ty, &iterable, self.resolver())
             || !super::assignable(&source_ty, &has_length, self.resolver())
         {
+            return Ok(None);
+        }
+        if self.resolver().index_signature(&source_ty).is_some() {
+            self.error_with_help(
+                source_span,
+                format!(
+                    "`Array.from` doesn't read the keyed entries of `{source_ty}`: Submilli \
+                     treats an array-like `{{ length }}` as having no elements"
+                ),
+                vec!["convert the entries to an array first, or pass an array".to_string()],
+            );
             return Ok(None);
         }
         if !matches!(source_ty.peel(), Type::Object { .. }) {
@@ -2118,6 +2126,11 @@ impl Inferer<'_> {
         );
     }
 
+    /// `Array.from({ length }, mapFn)` calls `mapFn` with `undefined` for each
+    /// element, which has no type here: the element arrives as `null`. A
+    /// callback whose element type doesn't admit `null` would read that
+    /// `null` as its declared type (`v: number` gives `null + i`, not
+    /// JavaScript's `NaN`), so it is refused rather than run with a wrong value.
     fn reject_array_like_element_annotation(
         &mut self,
         typed_args: &[ExprId],
