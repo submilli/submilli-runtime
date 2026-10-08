@@ -2368,14 +2368,14 @@ impl Inferer<'_> {
             (typed_value, &value_ty),
             op_span,
         )?;
-        let check_ty = compound_result_target(&rw.read, &rw.write);
+        // The setter's type decides, even beside a getter typed `never`.
         if !matches!(result_ty, Type::Error)
-            && !matches!(check_ty, Type::Error)
-            && !assignable(&result_ty, check_ty, self.resolver())
+            && !matches!(rw.write, Type::Error)
+            && !assignable(&result_ty, &rw.write, self.resolver())
         {
             self.error(
                 value_span,
-                format!("expected `{check_ty}`, got `{result_ty}`"),
+                format!("expected `{}`, got `{result_ty}`", rw.write),
             );
         }
         let synth_binary = self
