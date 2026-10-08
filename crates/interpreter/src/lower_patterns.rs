@@ -8,8 +8,8 @@ use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::tree_height;
 
 use crate::{
-    ArrowBody, Ast, Binding, BindingKind, Expr, ExprId, ExprKind, Ident, ParamDecl, PatternOrigin,
-    Span, Stmt, StmtId, StmtKind,
+    ArrowBody, Ast, Binding, BindingKind, ClassMember, Expr, ExprId, ExprKind, Ident, ParamDecl,
+    PatternOrigin, Span, Stmt, StmtId, StmtKind,
 };
 
 pub fn lower(mut ast: Ast) -> Result<Ast, CompilerFailure> {
@@ -19,7 +19,9 @@ pub fn lower(mut ast: Ast) -> Result<Ast, CompilerFailure> {
     let mut ctx = LowerCtx { next_tmp: 0 };
     ctx.lower_arrows(&mut ast)?;
     ctx.lower_function_params(&mut ast)?;
+    ctx.lower_class_member_params(&mut ast)?;
     ctx.lower_for_of_patterns(&mut ast)?;
+    ctx.lower_for_pattern_inits(&mut ast)?;
     ctx.lower_pattern_stmts(&mut ast)?;
     Ok(ast)
 }
@@ -220,6 +222,65 @@ impl LowerCtx {
         Ok(())
     }
 
+    fn lower_class_member_params(&mut self, ast: &mut Ast) -> Result<(), CompilerFailure> {
+        for id in ast
+            .stmt_ids()
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+        {
+            let StmtKind::ClassDecl { members, .. } = &mut ast
+                .try_stmt_mut(id)
+                .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+                .kind
+            else {
+                continue;
+            };
+            let mut taken = std::mem::take(members);
+            let lowered = self.lower_member_params(ast, &mut taken);
+            // Restore the members before reporting a failure, so the class
+            // keeps its shape either way.
+            let StmtKind::ClassDecl { members, .. } = &mut ast
+                .try_stmt_mut(id)
+                .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+                .kind
+            else {
+                return Err(lowering_failure(
+                    "unexpected node kind during pattern lowering",
+                ));
+            };
+            *members = taken;
+            lowered?;
+        }
+
+        Ok(())
+    }
+
+    fn lower_member_params(
+        &mut self,
+        ast: &mut Ast,
+        members: &mut [ClassMember],
+    ) -> Result<(), CompilerFailure> {
+        for member in members {
+            let (params, body) = match member {
+                ClassMember::Method { params, body, .. }
+                | ClassMember::Constructor { params, body, .. } => (params.as_mut_slice(), *body),
+                ClassMember::Accessor {
+                    param: Some(param),
+                    body,
+                    ..
+                } => (std::slice::from_mut(param.as_mut()), *body),
+                ClassMember::Accessor { param: None, .. } | ClassMember::Field { .. } => continue,
+            };
+            if params.iter().all(|param| param.pattern.is_none()) {
+                continue;
+            }
+            let mut decompose = Vec::new();
+            self.materialise_pattern_params(ast, params, &mut decompose)?;
+            self.prepend_to_block(ast, body, decompose)?;
+        }
+
+        Ok(())
+    }
+
     fn lower_for_of_patterns(&mut self, ast: &mut Ast) -> Result<(), CompilerFailure> {
         for id in ast
             .stmt_ids()
@@ -311,6 +372,89 @@ impl LowerCtx {
             body,
         };
         let _ = stmt_span;
+
+        Ok(())
+    }
+
+    fn lower_for_pattern_inits(&mut self, ast: &mut Ast) -> Result<(), CompilerFailure> {
+        for id in ast
+            .stmt_ids()
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+        {
+            let StmtKind::For {
+                init: Some(init), ..
+            } = ast
+                .try_stmt(id)
+                .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+                .kind
+            else {
+                continue;
+            };
+            let is_let = match ast
+                .try_stmt(init)
+                .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+                .kind
+            {
+                StmtKind::LetPattern { .. } => true,
+                StmtKind::ConstPattern { .. } => false,
+                _ => continue,
+            };
+            self.hoist_for_pattern_init(ast, id, init, is_let)?;
+        }
+
+        Ok(())
+    }
+
+    /// `for (let [i, j] = a; c; u) body` becomes
+    /// `{ const dst = a; let i = dst[0]; let j = dst[1]; for (; c; u) body }`.
+    /// The bindings keep the loop's scope but lose the per-iteration copies a
+    /// `for` head's `let` gets, which only a closure capturing them observes;
+    /// inference rejects that case using [`Ast::for_pattern_init_bindings`].
+    fn hoist_for_pattern_init(
+        &mut self,
+        ast: &mut Ast,
+        id: StmtId,
+        init: StmtId,
+        is_let: bool,
+    ) -> Result<(), CompilerFailure> {
+        let mut hoisted = self.expand_pattern_stmt(ast, init)?;
+        let loop_stmt = ast
+            .try_stmt_mut(id)
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+        let span = loop_stmt.span;
+        let kind = std::mem::replace(&mut loop_stmt.kind, StmtKind::Block(Vec::new()));
+        let StmtKind::For {
+            condition,
+            update,
+            body,
+            ..
+        } = kind
+        else {
+            return Err(lowering_failure(
+                "unexpected node kind during pattern lowering",
+            ));
+        };
+        let lowered_loop = ast
+            .try_push_stmt(Stmt {
+                kind: StmtKind::For {
+                    init: None,
+                    condition,
+                    update,
+                    body,
+                },
+                span,
+            })
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+        if is_let {
+            let bindings = let_names(ast, &hoisted)?;
+            if !bindings.is_empty() {
+                ast.for_pattern_init_bindings.insert(lowered_loop, bindings);
+            }
+        }
+        hoisted.push(lowered_loop);
+        ast.try_stmt_mut(id)
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+            .kind = StmtKind::Block(hoisted);
 
         Ok(())
     }
@@ -763,6 +907,21 @@ fn make_decl(
             doc,
         }
     }
+}
+
+/// The names the `let` statements among `stmts` declare.
+fn let_names(ast: &Ast, stmts: &[StmtId]) -> Result<Vec<Ident>, CompilerFailure> {
+    let mut names = Vec::new();
+    for &stmt in stmts {
+        if let StmtKind::Let { name, .. } = &ast
+            .try_stmt(stmt)
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+            .kind
+        {
+            names.push(name.clone());
+        }
+    }
+    Ok(names)
 }
 
 fn lowering_failure(message: &str) -> CompilerFailure {

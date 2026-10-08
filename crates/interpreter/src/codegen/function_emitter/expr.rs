@@ -592,22 +592,16 @@ fn emit_global_ref(
     // ValueKind here — `FunctionRef` handles the
     // function-as-value path separately.
     //
-    // Static-interface receiver bindings (`console`, `Map`,
-    // `Temporal.Instant`) are inert — every call site drops the
-    // receiver — so they lower to a typed null with no global behind
-    // them (see `static_interface_of` in codegen::mod).
-    if let Type::InterfaceRef { mangled: iface, .. } = result_ty.peel()
-        && ctx.symbols.iface_dispatch(iface) == Some(crate::Dispatch::Static)
-    {
-        match ctx.symbols.value_type(result_ty)? {
-            ValType::Ref(RefType { heap_type, .. }) => {
-                emitter.instruction(Instruction::RefNull(heap_type));
-            }
-            other => {
-                return Err(crate::codegen::internal_failure(format!(
-                    "static-interface binding lowered to {other:?}"
-                )));
-            }
+    // Static-interface bindings (`console`, `Map`, `Temporal.Instant`) have
+    // no global behind them (see `static_interface_of` in codegen::mod). As
+    // a value, one reads as the host object that prints like the binding.
+    if let Some(iface) = static_interface(ctx, result_ty) {
+        emit_static_value(emitter, ctx, iface)?;
+        if let ValType::Ref(RefType {
+            nullable: false, ..
+        }) = ctx.symbols.value_type(result_ty)?
+        {
+            emitter.instruction(Instruction::RefAsNonNull);
         }
         return Ok(());
     }
@@ -623,6 +617,35 @@ fn emit_global_ref(
         emitter.instruction(Instruction::RefAsNonNull);
     }
 
+    Ok(())
+}
+
+/// The static-dispatch interface `ty` names, if any.
+fn static_interface<'a>(ctx: &CodegenCtx, ty: &'a Type) -> Option<&'a crate::MangledName> {
+    match ty.peel() {
+        Type::InterfaceRef { mangled, .. }
+            if ctx.symbols.iface_dispatch(mangled) == Some(crate::Dispatch::Static) =>
+        {
+            Some(mangled)
+        }
+        _ => None,
+    }
+}
+
+fn emit_static_value(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    iface: &crate::MangledName,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let tag = ctx.symbols.static_value_tag(iface).ok_or_else(|| {
+        crate::codegen::internal_failure("a static binding read as a value has a recorded tag")
+    })?;
+    super::emit_inline_string_literal(emitter, ctx, tag)?;
+    let helper = ctx
+        .symbols
+        .prelude_func_idx("ObjectConstructor##staticValue")
+        .ok_or_else(|| crate::codegen::internal_failure("the static value helper is imported"))?;
+    emitter.instruction(Instruction::Call(helper));
     Ok(())
 }
 
@@ -5034,7 +5057,9 @@ pub(crate) fn emit_method_call(
         .source_type(receiver)
         .map_err(crate::codegen::arena_failure)?
         .clone();
-    emit_receiver(emitter, ctx, receiver)?;
+    if !emit_dropped_static_receiver(emitter, ctx, receiver, iface)? {
+        emit_receiver(emitter, ctx, receiver)?;
+    }
     emit_method_call_with_receiver_on_stack(
         emitter,
         ctx,
@@ -5047,6 +5072,37 @@ pub(crate) fn emit_method_call(
         call_ret_ty,
     )?;
     Ok(())
+}
+
+/// A static-dispatch method drops its receiver, so a read of the binding it
+/// is called on needn't build the object the binding stands for: push a
+/// typed null in its place. Returns whether it did.
+fn emit_dropped_static_receiver(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: ExprId,
+    iface: &crate::MangledName,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let expr = ctx
+        .ta
+        .try_expr(receiver)
+        .map_err(crate::codegen::arena_failure)?;
+    if !matches!(expr.kind, TypedExprKind::GlobalRef { .. })
+        || static_interface(ctx, &expr.ty) != Some(iface)
+    {
+        return Ok(false);
+    }
+    match ctx.symbols.value_type(&expr.ty)? {
+        ValType::Ref(RefType { heap_type, .. }) => {
+            emitter.instruction(Instruction::RefNull(heap_type));
+        }
+        other => {
+            return Err(crate::codegen::internal_failure(format!(
+                "static-interface binding lowered to {other:?}"
+            )));
+        }
+    }
+    Ok(true)
 }
 
 /// Same as [`emit_method_call`], but assumes the receiver has
