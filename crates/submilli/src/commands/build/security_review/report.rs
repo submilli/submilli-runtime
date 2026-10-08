@@ -46,6 +46,9 @@ pub(super) struct Report {
     model: String,
     effort: Option<Effort>,
     skill_sha256: String,
+    source_sha256: Option<String>,
+    authority_sha256: Option<String>,
+    finding_origin: &'static str,
     packages: Vec<String>,
     files: BTreeMap<String, String>,
     reviewed_files: Vec<String>,
@@ -57,7 +60,7 @@ pub(super) struct Report {
 impl Report {
     pub fn pending(args: &Args) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             status: "incomplete",
             submilli_version: env!("CARGO_PKG_VERSION"),
             agent: args.agent,
@@ -65,6 +68,9 @@ impl Report {
             model: args.agent.model(&args.model).to_owned(),
             effort: args.effort,
             skill_sha256: format!("{:x}", Sha256::digest(SKILL)),
+            source_sha256: None,
+            authority_sha256: None,
+            finding_origin: "model",
             packages: Vec::new(),
             files: BTreeMap::new(),
             reviewed_files: Vec::new(),
@@ -74,7 +80,9 @@ impl Report {
         }
     }
 
-    pub fn set_snapshot(&mut self, snapshot: &Snapshot) {
+    pub fn set_snapshot(&mut self, snapshot: &Snapshot) -> anyhow::Result<()> {
+        self.source_sha256 = Some(snapshot.source_hash()?);
+        self.authority_sha256 = snapshot.authority.as_ref().map(|a| a.sha256.clone());
         self.packages.clone_from(&snapshot.packages);
         self.files = snapshot
             .files
@@ -82,6 +90,7 @@ impl Report {
             .map(|(name, source)| (name.clone(), source.sha256.clone()))
             .collect();
         self.coverage_gaps.clone_from(&snapshot.coverage_gaps);
+        Ok(())
     }
 
     pub fn accept(&mut self, response: Response, snapshot: &Snapshot) -> anyhow::Result<()> {

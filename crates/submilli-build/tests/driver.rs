@@ -458,7 +458,7 @@ path = "types"
 }
 
 #[test]
-fn non_literal_requires_warning_has_no_filter() {
+fn non_literal_requirement_is_preserved_without_warning() {
     let project = TempDir::new().expect("project tempdir");
     write_module(
         project.path(),
@@ -476,6 +476,9 @@ fn non_literal_requires_warning_has_no_filter() {
         "app/src/lib.subm",
         r#"
             import { charge } from "@acme/sdk";
+            /** Charge a customer.
+             * @param customer Customer ID.
+             */
             export function run(customer: string): void { charge(customer); }
         "#,
     );
@@ -505,13 +508,7 @@ path = "sdk"
 
     assert_eq!(app.capabilities.requires.len(), 1);
     assert_eq!(app.capabilities.requires[0].filter, None);
-    assert!(
-        app.warnings
-            .iter()
-            .any(|warning| warning.contains("non-literal argument")),
-        "expected non-literal warning, got: {:?}",
-        app.warnings
-    );
+    assert!(app.warnings.is_empty(), "{:?}", app.warnings);
 }
 
 #[test]
