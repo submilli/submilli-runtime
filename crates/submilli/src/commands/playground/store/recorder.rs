@@ -5,6 +5,7 @@
 //! every known secret is cut out of the serialized form, and only that is written.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -61,6 +62,9 @@ struct Shared {
     secrets: KnownSecrets,
     /// Runs in progress or recently finished, by the server's execution id.
     tracks: Mutex<HashMap<String, Track>>,
+    /// The server-wide sequence number of the last event delivered; a jump past the next
+    /// one means the server dropped events in between.
+    last_seq: AtomicU64,
 }
 
 /// What the recorder knows of one run while its events arrive.
@@ -74,6 +78,12 @@ struct Track {
     seen: HashSet<EventKey>,
     /// The run's end event arrived, with the count of its events the server dropped.
     end_event: Option<u64>,
+    /// Decision events delivered for the run: the last one's number in the run, while
+    /// none was dropped before it.
+    decisions_delivered: u64,
+    /// The server dropped an event while the run's events were still coming, so a
+    /// decision's number can no longer be told from the count.
+    numbering_lost: bool,
     /// The run's record, once it finished; what a backfill reads.
     record: Option<Backfill>,
     backfilled: bool,
@@ -126,6 +136,7 @@ impl Recorder {
                 store,
                 secrets,
                 tracks: Mutex::new(HashMap::new()),
+                last_seq: AtomicU64::new(0),
             }),
         }
     }
@@ -143,6 +154,12 @@ impl Recorder {
             .values()
             .find(|track| track.id == id && track.finished_at.is_none())
             .map(|track| track.execution_id.clone())
+    }
+
+    /// Whether this recorder started the run with server execution id `execution_id`
+    /// and still follows it: in flight, or finished a short while ago.
+    pub(crate) fn knows(&self, execution_id: &str) -> bool {
+        self.shared.tracks().contains_key(execution_id)
     }
 }
 
@@ -174,6 +191,8 @@ impl RunRecorderFactory for Recorder {
                 started_at_micros,
                 seen: HashSet::new(),
                 end_event: None,
+                decisions_delivered: 0,
+                numbering_lost: false,
                 record: None,
                 backfilled: false,
                 finished_at: None,
@@ -237,6 +256,16 @@ impl Shared {
 
     fn event(&self, event: SessionEvent) {
         let mut tracks = self.tracks();
+        let previous = self.last_seq.swap(event.seq, Ordering::Relaxed);
+        if event.seq > previous.saturating_add(1) {
+            // The dropped events may be any run's whose end has not arrived yet.
+            for track in tracks
+                .values_mut()
+                .filter(|track| track.end_event.is_none())
+            {
+                track.numbering_lost = true;
+            }
+        }
         let track = event
             .run_id
             .as_ref()
@@ -248,7 +277,7 @@ impl Shared {
                 call_index: None,
                 rank: 0,
             };
-            self.append(event.session_id.clone(), position, None, false, event);
+            self.append(event.session_id.clone(), position, None, false, None, event);
             return;
         };
         let key = EventKey::of(&event.kind);
@@ -259,6 +288,15 @@ impl Shared {
             track.seen.insert(key.clone());
         }
         let position = position_of(&event.kind, event.at_micros, track);
+        // A run's log keeps each decision and reports it from the run's own thread, so its
+        // decision events arrive in the order the record holds them.
+        let decision = match &event.kind {
+            EventKind::Decision { .. } => {
+                track.decisions_delivered = track.decisions_delivered.saturating_add(1);
+                (!track.numbering_lost).then_some(track.decisions_delivered)
+            }
+            _ => None,
+        };
         let run = Some(track.id);
         let session = track.session.clone();
         let end = match &event.kind {
@@ -269,7 +307,7 @@ impl Shared {
             // The backfill already wrote this run's end from its record.
             return;
         }
-        self.append(session, position, run, false, event);
+        self.append(session, position, run, false, decision, event);
         if let Some(dropped) = end {
             track.end_event = Some(dropped);
             if dropped > 0 && track.record.is_some() {
@@ -338,27 +376,28 @@ impl Shared {
             return;
         };
         track.backfilled = true;
-        let mut recovered: Vec<(Position, EventKind)> = Vec::new();
-        for decision in &record.decisions {
+        // Each with its decision's number in the run, which the record's order gives.
+        let mut recovered: Vec<(Position, Option<u64>, EventKind)> = Vec::new();
+        for (n, decision) in (1_u64..).zip(&record.decisions) {
             if track.seen.insert(EventKey::decision(decision)) {
                 let kind = EventKind::Decision {
                     record: Box::new(decision.clone()),
                 };
-                recovered.push((position_of(&kind, 0, track), kind));
+                recovered.push((position_of(&kind, 0, track), Some(n), kind));
             }
         }
         for call in record.calls.iter().filter(|call| call.outcome.is_some()) {
             if track.seen.insert(EventKey::CallFinished(call.call_index)) {
                 let kind = call_finished(call);
-                recovered.push((position_of(&kind, 0, track), kind));
+                recovered.push((position_of(&kind, 0, track), None, kind));
             }
         }
         let end_missing = track.end_event.is_none();
         if end_missing {
             let at = now_micros();
-            recovered.push((position_of(&record.end, at, track), record.end));
+            recovered.push((position_of(&record.end, at, track), None, record.end));
         }
-        recovered.sort_by_key(|(position, _)| *position);
+        recovered.sort_by_key(|(position, _, _)| *position);
         let execution_id = track.execution_id.clone();
         let gap = Gap {
             run_id: execution_id.clone(),
@@ -372,15 +411,20 @@ impl Shared {
             call_index: None,
             rank: u8::MAX,
         };
-        self.append_body(
+        self.append_stored(
             track.session.clone(),
-            format!("{execution_id}-gap"),
-            gap_position,
-            Some(track.id),
-            false,
-            EventBody::Gap(gap),
+            StoredEvent {
+                format: FORMAT,
+                session_seq: 0,
+                event_id: format!("{execution_id}-gap"),
+                position: gap_position,
+                run: Some(track.id),
+                backfilled: false,
+                decision: None,
+                body: EventBody::Gap(gap),
+            },
         );
-        for (n, (position, kind)) in recovered.into_iter().enumerate() {
+        for (n, (position, decision, kind)) in recovered.into_iter().enumerate() {
             let event = SessionEvent {
                 schema: EVENT_SCHEMA,
                 event_id: format!("{execution_id}-backfill-{n}"),
@@ -391,7 +435,14 @@ impl Shared {
                 tool_call_id: track.tool_call_id.clone(),
                 kind,
             };
-            self.append(track.session.clone(), position, Some(track.id), true, event);
+            self.append(
+                track.session.clone(),
+                position,
+                Some(track.id),
+                true,
+                decision,
+                event,
+            );
         }
     }
 
@@ -401,37 +452,24 @@ impl Shared {
         position: Position,
         run: Option<u64>,
         backfilled: bool,
+        decision: Option<u64>,
         event: SessionEvent,
     ) {
-        let event_id = event.event_id.clone();
-        self.append_body(
-            session,
-            event_id,
-            position,
-            run,
-            backfilled,
-            EventBody::Event(Box::new(event)),
-        );
-    }
-
-    fn append_body(
-        &self,
-        session: Option<String>,
-        event_id: String,
-        position: Position,
-        run: Option<u64>,
-        backfilled: bool,
-        body: EventBody,
-    ) {
-        let event = StoredEvent {
+        let stored = StoredEvent {
             format: FORMAT,
             session_seq: 0,
-            event_id,
+            event_id: event.event_id.clone(),
             position,
             run,
             backfilled,
-            body,
+            decision,
+            body: EventBody::Event(Box::new(event)),
         };
+        self.append_stored(session, stored);
+    }
+
+    /// Appends `event` to `session`'s log, which numbers it.
+    fn append_stored(&self, session: Option<String>, event: StoredEvent) {
         let appended = self
             .store
             .events

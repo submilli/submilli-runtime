@@ -20,6 +20,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::Result;
+use interpreter::runtime::DecisionRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use submilli_blueprint::{
@@ -37,14 +38,16 @@ use submilli_server::record::{
 };
 
 use super::super::Output;
+use super::super::api::{MAX_BODY_BYTES, feed};
 use super::super::client::{self, Probe, Running};
 use super::super::labels;
 use super::super::project;
 use super::super::state::{self, RememberedBinding, StateDir};
+use super::super::store::redact::REDACTED;
 use super::super::store::run::{DecisionRef, StoredRun, StoredTestReport};
 use super::super::store::sessions::SessionEntry;
 use super::super::store::{KnownSecrets, Recorder, Store, StoreError};
-use super::read::{self, ShowResult};
+use super::read::{self, FlipKind, ShowResult};
 use super::render::{
     self, EXIT_AWAITING_LIVE, EXIT_DENIED, EXIT_FAILURE, EXIT_NOT_RUNNING, EXIT_PACKAGE_RESOLUTION,
     EXIT_SUCCESS, EXIT_USAGE, Fence, Next, Page, RunRef, clean, next,
@@ -194,10 +197,20 @@ impl Answer {
             Output::Json => println!("{}", self.result),
             Output::Text => print!("{}", self.text),
         }
-        for note in &self.notes {
-            eprintln!("{note}");
+        for line in self.note_lines() {
+            eprintln!("{line}");
         }
         ExitCode::from(self.exit)
+    }
+
+    /// The notes as the terminal shows them: line by line, with no character that could
+    /// move its cursor or reorder a line.
+    fn note_lines(&self) -> Vec<String> {
+        self.notes
+            .iter()
+            .flat_map(|note| note.split('\n'))
+            .map(clean)
+            .collect()
     }
 }
 
@@ -206,8 +219,11 @@ impl Answer {
 pub(crate) struct ActError {
     pub(crate) exit: u8,
     pub(crate) kind: &'static str,
+    /// Our own words; what came from inside a run goes in `untrusted`.
     pub(crate) message: String,
     pub(crate) next: Vec<String>,
+    /// Values the refusal is about that came from inside a run, by name.
+    pub(crate) untrusted: serde_json::Map<String, Value>,
 }
 
 impl ActError {
@@ -217,14 +233,21 @@ impl ActError {
             kind,
             message: message.into(),
             next: Vec::new(),
+            untrusted: serde_json::Map::new(),
         }
+    }
+
+    /// Adds `value`, which came from inside a run, as `untrusted.<name>`.
+    fn untrusted(mut self, name: &str, value: impl Into<Value>) -> Self {
+        self.untrusted.insert(name.to_owned(), value.into());
+        self
     }
 
     fn usage(kind: &'static str, message: impl Into<String>) -> Self {
         Self::new(EXIT_USAGE, kind, message)
     }
 
-    fn failure(message: impl Into<String>) -> Self {
+    pub(crate) fn failure(message: impl Into<String>) -> Self {
         Self::new(EXIT_FAILURE, "failure", message)
     }
 
@@ -249,24 +272,36 @@ impl ActError {
 impl From<ReadError> for ActError {
     fn from(error: ReadError) -> Self {
         Self {
-            exit: error.exit(),
-            kind: error.kind(),
-            message: error.to_string(),
             next: error.next(),
+            ..Self::new(error.exit(), error.kind(), error.to_string())
         }
     }
 }
 
 impl From<ActError> for Answer {
+    /// The refusal as JSON (`untrusted` only when it has values), and as notes: the
+    /// message, then any untrusted values in the run-data fence.
     fn from(error: ActError) -> Self {
+        let mut result = json!({
+            "error": { "kind": error.kind, "message": error.message },
+            "next": error.next,
+        });
+        let mut notes = vec![error.message];
+        if !error.untrusted.is_empty() {
+            let mut fence = Fence::default();
+            for (name, value) in &error.untrusted {
+                fence.value(name, value);
+            }
+            let mut fenced = String::new();
+            fence.render(&mut fenced);
+            notes.push(fenced.trim_end().to_owned());
+            result["untrusted"] = Value::Object(error.untrusted);
+        }
         Self {
             exit: error.exit,
-            result: json!({
-                "error": { "kind": error.kind, "message": error.message },
-                "next": error.next,
-            }),
+            result,
             text: String::new(),
-            notes: vec![error.message],
+            notes,
         }
     }
 }
@@ -321,11 +356,13 @@ impl Binding {
         }
     }
 
-    /// Applies `request`: clear first, then unset, then set.
+    /// Applies `request`: clear first, then unset, then set. Clearing also forgets the
+    /// last values; unsetting keeps them, for a refusal to suggest.
     fn apply(&mut self, request: BindRequest) {
         if request.clear {
             self.variables.clear();
             self.secrets.clear();
+            self.last.clear();
             self.forgotten_secrets.clear();
         }
         for name in &request.unset {
@@ -374,6 +411,8 @@ pub(crate) struct Actions {
     pub(crate) blueprint_path: PathBuf,
     pub(crate) project_root: PathBuf,
     pub(crate) page: Page,
+    /// Runs a cancel was sent for, while they drain.
+    pub(crate) cancelling: Mutex<BTreeSet<u64>>,
 }
 
 impl Actions {
@@ -411,12 +450,16 @@ impl Actions {
     }
 
     /// The variables and secrets a new run gets: the binding's, for what `blueprint`
-    /// declares, under `overrides`. Refuses, naming `bind`, when a required one is missing.
+    /// declares, under `overrides`. Refuses an override the blueprint does not declare,
+    /// and, naming `bind`, a required value that is missing.
     fn for_new_run(
         &self,
         blueprint: &Blueprint,
         overrides: &BTreeMap<String, String>,
     ) -> Result<(Values, Values), ActError> {
+        if let Some(refused) = undeclared_variables(blueprint, overrides.keys()) {
+            return Err(refused);
+        }
         let binding = self.binding();
         let mut variables: BTreeMap<String, String> = binding
             .variables
@@ -466,7 +509,14 @@ impl Actions {
         if names.is_empty() {
             names.extend(missing_variable_named(message));
         }
-        missing_variables(message, &names, &self.binding().last)
+        bind_suggestion(message, &names, &self.binding().last)
+    }
+
+    /// A run that returned without being stored: why it did not run, when it says.
+    fn not_recorded(&self, response: &ExecuteResponse) -> ActError {
+        unsaved_run(response, &self.secrets, |message| {
+            self.missing_variables(message, None, &BTreeMap::new())
+        })
     }
 
     // ---- exec ----
@@ -606,7 +656,12 @@ impl Actions {
 
     /// The binding, after applying `request` when one is given.
     pub(crate) async fn bind(&self, request: Option<BindRequest>) -> Answer {
-        let changed = request.is_some();
+        let bound = request.as_ref().map(|request| {
+            (
+                request.variables.keys().cloned().collect::<Vec<_>>(),
+                request.secrets.keys().cloned().collect::<Vec<_>>(),
+            )
+        });
         let (binding, saved) = {
             let mut binding = self.binding.lock().unwrap_or_else(PoisonError::into_inner);
             let mut saved = Ok(());
@@ -620,11 +675,11 @@ impl Actions {
             }
             (binding.clone(), saved)
         };
-        let mut warnings = if changed {
-            self.open_sessions_that_differ(&binding).await
-        } else {
-            Vec::new()
-        };
+        let mut warnings = Vec::new();
+        if let Some((variables, secrets)) = &bound {
+            warnings.extend(self.undeclared_in_binding(variables, secrets).await);
+            warnings.extend(self.open_sessions_that_differ(&binding).await);
+        }
         if let Err(error) = saved {
             warnings.push(format!(
                 "the binding is in force, but saving it for the next start failed: {error:#}"
@@ -639,23 +694,49 @@ impl Actions {
             next: Vec::new(),
         };
         warnings.into_iter().fold(
-            Answer::of(EXIT_SUCCESS, &result, binding_text),
+            Answer::of(EXIT_SUCCESS, &result, render::binding_text),
             |answer, warning| answer.noted(format!("warning: {warning}")),
         )
     }
 
-    /// A warning for each open started session whose fixed values differ from `binding`.
-    async fn open_sessions_that_differ(&self, binding: &Binding) -> Vec<String> {
-        let Ok(log) = self.store.session_log() else {
+    /// A warning for each bound variable or secret the blueprint does not declare: new
+    /// runs leave it out.
+    async fn undeclared_in_binding(&self, variables: &[String], secrets: &[String]) -> Vec<String> {
+        let Ok(blueprint) = self.blueprint(&self.blueprint_name).await else {
             return Vec::new();
         };
-        let mut open: Vec<String> = Vec::new();
-        for line in log {
-            match line.entry {
-                SessionEntry::Started { session_id, .. } => open.push(session_id),
-                SessionEntry::Ended { session_id } => open.retain(|id| *id != session_id),
+        let mut warnings = Vec::new();
+        for name in variables {
+            if !blueprint.variables.contains_key(name) {
+                warnings.push(format!(
+                    "variable {} is not declared by the blueprint; new runs leave it out",
+                    clean(name)
+                ));
             }
         }
+        for name in secrets {
+            if !harness_declared(&blueprint, name) {
+                warnings.push(format!(
+                    "secret {} is not a harness secret the blueprint declares; new runs leave \
+                     it out",
+                    clean(name)
+                ));
+            }
+        }
+        warnings
+    }
+
+    /// A warning for each open started session whose fixed values differ from `binding`.
+    async fn open_sessions_that_differ(&self, binding: &Binding) -> Vec<String> {
+        let open = match self.logged_open_sessions() {
+            Ok(open) => open,
+            Err(error) => {
+                return vec![format!(
+                    "the session log could not be read, so open sessions were not checked \
+                     against the new values: {error}"
+                )];
+            }
+        };
         let mut warnings = Vec::new();
         for session in open {
             let Ok(Some(fixed)) = session_variables(&self.app, &session).await else {
@@ -716,59 +797,104 @@ impl Actions {
             },
         )
         .await
-        .map_err(|error| match &error {
-            SessionStartError::InvalidVariables(message) => {
+        .map_err(|error| {
+            session_start_error(&error, |message| {
                 self.missing_variables(message, Some(&blueprint), &variables)
-            }
-            _ => session_start_error(&error),
+            })
         })?;
-        let variables = match session_variables(&self.app, &session).await {
-            Ok(Some(fixed)) => fixed,
-            _ => variables,
+        // A session the log does not list could never be listed or ended, so it is ended
+        // here when it cannot be logged.
+        let logged = self.fixed_variables(&session).await.and_then(|variables| {
+            self.store
+                .append_session(SessionEntry::Started {
+                    session_id: session.clone(),
+                    variables: variables.clone(),
+                    label: labels::ASSISTANT.to_owned(),
+                })
+                .map(|()| variables)
+                .map_err(|error| ActError::store(&error))
+        });
+        let variables = match logged {
+            Ok(variables) => variables,
+            Err(error) => {
+                let _ = end_session(&self.app, &session).await;
+                return Err(error);
+            }
         };
+        let result = SessionResult {
+            kind: "session",
+            session: session.clone(),
+            open: true,
+            already_ended: false,
+            variables,
+            next: next([Next::Watch(session.clone()), Next::RunsInSession(session)]),
+        };
+        Ok(Answer::of(EXIT_SUCCESS, &result, render::session_text))
+    }
+
+    /// The variables a session just started holds, the server's defaults filled in.
+    async fn fixed_variables(&self, session: &str) -> Result<Values, ActError> {
+        match session_variables(&self.app, session).await {
+            Ok(Some(fixed)) => Ok(fixed),
+            Ok(None) => Err(ActError::failure(format!(
+                "session {} ended as it started",
+                clean(session)
+            ))),
+            Err(error) => Err(ActError::failure(format!(
+                "reading the variables of new session {} failed: {error}",
+                clean(session)
+            ))),
+        }
+    }
+
+    /// Ends `session`. One the server no longer has (it expired, or an earlier end was
+    /// not logged) but the log lists as open is logged as ended, so a retry settles it.
+    pub(crate) async fn session_end(&self, request: SessionEndRequest) -> Answer {
+        answer(self.try_session_end(request.session).await)
+    }
+
+    async fn try_session_end(&self, session: String) -> Result<Answer, ActError> {
+        let ended = end_session(&self.app, &session).await.map_err(|error| {
+            ActError::failure(format!(
+                "ending session {} failed: {error}",
+                clean(&session)
+            ))
+        })?;
+        let already_ended = !ended;
+        if already_ended {
+            let logged_open = self
+                .logged_open_sessions()
+                .map_err(|error| ActError::store(&error))?;
+            if !logged_open.contains(&session) {
+                return Err(unknown_session(&session));
+            }
+        }
         self.store
-            .append_session(SessionEntry::Started {
+            .append_session(SessionEntry::Ended {
                 session_id: session.clone(),
-                variables: variables.clone(),
-                label: labels::ASSISTANT.to_owned(),
             })
             .map_err(|error| ActError::store(&error))?;
         let result = SessionResult {
             kind: "session",
             session: session.clone(),
-            open: true,
-            variables,
-            next: next([Next::Watch(session.clone()), Next::RunsInSession(session)]),
-        };
-        Ok(Answer::of(EXIT_SUCCESS, &result, session_text))
-    }
-
-    pub(crate) async fn session_end(&self, request: SessionEndRequest) -> Answer {
-        let session = request.session;
-        let ended = match end_session(&self.app, &session).await {
-            Ok(true) => true,
-            Ok(false) => return unknown_session(&session).into(),
-            Err(error) => {
-                return ActError::failure(format!(
-                    "ending session {} failed: {error}",
-                    clean(&session)
-                ))
-                .into();
-            }
-        };
-        if let Err(error) = self.store.append_session(SessionEntry::Ended {
-            session_id: session.clone(),
-        }) {
-            return ActError::store(&error).into();
-        }
-        let result = SessionResult {
-            kind: "session",
-            session: session.clone(),
-            open: !ended,
+            open: false,
+            already_ended,
             variables: BTreeMap::new(),
             next: next([Next::RunsInSession(session), Next::Sessions]),
         };
-        Answer::of(EXIT_SUCCESS, &result, session_text)
+        Ok(Answer::of(EXIT_SUCCESS, &result, render::session_text))
+    }
+
+    /// The sessions the session log lists as started and not ended.
+    fn logged_open_sessions(&self) -> Result<Vec<String>, StoreError> {
+        let mut open: Vec<String> = Vec::new();
+        for line in self.store.session_log()? {
+            match line.entry {
+                SessionEntry::Started { session_id, .. } => open.push(session_id),
+                SessionEntry::Ended { session_id } => open.retain(|id| *id != session_id),
+            }
+        }
+        Ok(open)
     }
 
     // ---- recheck ----
@@ -796,12 +922,11 @@ impl Actions {
             let decision = DecisionRef {
                 run: id,
                 n: position.saturating_add(1),
-            }
-            .to_string();
+            };
             let change = match &check.verdict {
-                Verdict::NewlyAllowed => "newly-allowed",
-                Verdict::NewlyDenied => "newly-denied",
-                Verdict::UnchangedDifferentRule { .. } => "different-rule",
+                Verdict::NewlyAllowed => FlipKind::NewlyAllowed,
+                Verdict::NewlyDenied => FlipKind::NewlyDenied,
+                Verdict::UnchangedDifferentRule { .. } => FlipKind::DifferentRule,
                 Verdict::CantTell { .. } => {
                     cant_tell.push(decision);
                     continue;
@@ -811,7 +936,7 @@ impl Actions {
             if let Some(record) = stored.recording.decisions.get(position)
                 && !record.context.is_null()
             {
-                contexts.insert(decision.clone(), record.context.clone());
+                contexts.insert(decision, record.context.clone());
             }
             changes.push(RecheckChange {
                 decision,
@@ -826,9 +951,8 @@ impl Actions {
         }
         let mut suggestions: Vec<Next> = changes
             .iter()
-            .filter_map(|change| change.decision.parse().ok())
             .take(3)
-            .map(Next::Explain)
+            .map(|change| Next::Explain(change.decision))
             .collect();
         if !changes.is_empty() {
             suggestions.push(Next::Test(id));
@@ -841,10 +965,7 @@ impl Actions {
                 page: self.page.run(id),
                 blueprint_version: stored.recording.blueprint_version.clone(),
                 source: stored.label.clone(),
-                decision_refs: changes
-                    .iter()
-                    .map(|change| change.decision.clone())
-                    .collect(),
+                decision_refs: changes.iter().map(|change| change.decision).collect(),
             },
             in_force,
             ran: false,
@@ -860,7 +981,7 @@ impl Actions {
             next: next(suggestions),
             untrusted: RecheckUntrusted { contexts },
         };
-        Ok(Answer::of(EXIT_SUCCESS, &result, recheck_text))
+        Ok(Answer::of(EXIT_SUCCESS, &result, render::recheck_text))
     }
 
     fn load(&self, id: u64) -> Result<StoredRun, ActError> {
@@ -902,11 +1023,10 @@ impl Actions {
             },
         )
         .await
-        .map_err(|error| match &error {
-            TestError::InvalidVariables(message) => {
+        .map_err(|error| {
+            test_error(&error, source, &forgotten, |message| {
                 self.missing_variables(message, Some(&blueprint), &supplied)
-            }
-            _ => test_error(&error, source, &forgotten),
+            })
         })?;
         let id = match self.store.run_id_of(&outcome.response.execution_id) {
             Ok(Some(id)) => id,
@@ -978,7 +1098,7 @@ impl Actions {
                 request.name.as_deref(),
                 &self.page,
             )
-            .map(|result| Answer::of(EXIT_SUCCESS, &result, draft_text)),
+            .map(|result| Answer::of(EXIT_SUCCESS, &result, render::draft_text)),
         )
     }
 
@@ -990,14 +1110,7 @@ impl Actions {
                     removed,
                     next: next([Next::Runs]),
                 };
-                Answer::of(EXIT_SUCCESS, &result, |result| {
-                    format!(
-                        "Cleared {} run{}; run ids keep counting, and a new audit window starts \
-                         now.\n",
-                        result.removed,
-                        if result.removed == 1 { "" } else { "s" }
-                    )
-                })
+                Answer::of(EXIT_SUCCESS, &result, render::clear_text)
             }
             Err(error) => ActError::store(&error).into(),
         }
@@ -1016,42 +1129,83 @@ impl Actions {
                 .next([Next::Runs])
                 .into();
         };
+        let already = self.cancel_requested(run);
+        let mut cancelled = !already && self.app.cancel_run(&execution_id);
         // The playground numbers a run as it starts, a moment before the server can
         // cancel it, so a cancel that lands in between waits for it.
         let deadline = tokio::time::Instant::now() + CANCEL_REGISTRATION_WAIT;
-        let mut cancelled = self.app.cancel_run(&execution_id);
-        while !cancelled
+        while !already
+            && !cancelled
             && self.recorder.in_flight(run).is_some()
             && tokio::time::Instant::now() < deadline
         {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             cancelled = self.app.cancel_run(&execution_id);
         }
-        let result = CancelResult {
-            kind: "cancel",
-            run,
-            cancelled,
-            next: next([Next::Show(run)]),
-        };
-        let exit = if cancelled { EXIT_SUCCESS } else { EXIT_USAGE };
-        Answer::of(exit, &result, |result| {
-            if result.cancelled {
-                format!(
-                    "Cancelling run {}; it ends with a cancelled outcome once its calls drain.\n",
-                    result.run
-                )
-            } else {
-                format!(
-                    "Run {} finished before it could be cancelled.\n",
-                    result.run
-                )
-            }
-        })
+        if cancelled {
+            self.cancelling().insert(run);
+        }
+        let outcome = cancel_outcome(cancelled, already, self.recorder.in_flight(run).is_some());
+        Answer::of(
+            outcome.exit(),
+            &CancelResult::new(run, outcome),
+            render::cancel_text,
+        )
+    }
+
+    /// Whether a cancel of `run` was already sent, forgetting runs no longer in flight.
+    fn cancel_requested(&self, run: u64) -> bool {
+        let mut cancelling = self.cancelling();
+        cancelling.retain(|id| self.recorder.in_flight(*id).is_some());
+        cancelling.contains(&run)
+    }
+
+    fn cancelling(&self) -> std::sync::MutexGuard<'_, BTreeSet<u64>> {
+        // Poisoned only by a panic inside one of the short updates above, which leave the
+        // set whole either way.
+        self.cancelling
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 /// How long `cancel` waits for a run it found in flight to become cancellable.
 const CANCEL_REGISTRATION_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What a cancel of a run in flight came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum CancelOutcome {
+    /// This cancel stopped it; it ends once its calls drain.
+    Cancelling,
+    /// An earlier cancel stopped it, and it is still draining.
+    AlreadyCancelling,
+    /// It finished before it could be cancelled.
+    Finished,
+    /// It is still running, but the server did not take the cancel in time.
+    NotYetCancellable,
+}
+
+impl CancelOutcome {
+    fn exit(self) -> u8 {
+        match self {
+            Self::Cancelling | Self::AlreadyCancelling => EXIT_SUCCESS,
+            Self::Finished => EXIT_USAGE,
+            Self::NotYetCancellable => EXIT_FAILURE,
+        }
+    }
+}
+
+/// The outcome of a cancel that `cancelled` the run or not, after an earlier cancel
+/// (`already`), with the run `still_in_flight` or not.
+fn cancel_outcome(cancelled: bool, already: bool, still_in_flight: bool) -> CancelOutcome {
+    match (cancelled, already, still_in_flight) {
+        (true, _, _) => CancelOutcome::Cancelling,
+        (false, _, false) => CancelOutcome::Finished,
+        (false, true, true) => CancelOutcome::AlreadyCancelling,
+        (false, false, true) => CancelOutcome::NotYetCancellable,
+    }
+}
 
 /// Whether `blueprint` declares `name` as a secret its harness supplies.
 fn harness_declared(blueprint: &Blueprint, name: &str) -> bool {
@@ -1061,9 +1215,39 @@ fn harness_declared(blueprint: &Blueprint, name: &str) -> bool {
     )
 }
 
+/// The refusal for variables among `names` that `blueprint` does not declare, naming the
+/// ones it does; `None` when it declares them all.
+fn undeclared_variables<'a>(
+    blueprint: &Blueprint,
+    names: impl Iterator<Item = &'a String>,
+) -> Option<ActError> {
+    let undeclared: Vec<String> = names
+        .filter(|name| !blueprint.variables.contains_key(*name))
+        .map(|name| clean(name))
+        .collect();
+    if undeclared.is_empty() {
+        return None;
+    }
+    let declared: Vec<String> = blueprint.variables.keys().map(|name| clean(name)).collect();
+    let declares = if declared.is_empty() {
+        "it declares none".to_owned()
+    } else {
+        format!("it declares {}", declared.join(", "))
+    };
+    Some(ActError::usage(
+        "undeclared-variables",
+        format!(
+            "variable{} {} {} not declared by the blueprint; {declares}",
+            if undeclared.len() == 1 { "" } else { "s" },
+            undeclared.join(", "),
+            if undeclared.len() == 1 { "is" } else { "are" },
+        ),
+    ))
+}
+
 /// The refusal for missing required variables `names`, suggesting the `bind` command
 /// that sets them: each with its value in `last` when it had one, else `VALUE`.
-fn missing_variables(message: &str, names: &[String], last: &Values) -> ActError {
+fn bind_suggestion(message: &str, names: &[String], last: &Values) -> ActError {
     let pairs: Vec<String> = names
         .iter()
         .map(|name| {
@@ -1160,11 +1344,14 @@ fn session_run_error(error: &SessionRunError, session: &str) -> ActError {
     }
 }
 
-fn session_start_error(error: &SessionStartError) -> ActError {
+/// Why a session did not start; `missing_variables` words the refusal for variables
+/// that do not fit the blueprint.
+fn session_start_error(
+    error: &SessionStartError,
+    missing_variables: impl FnOnce(&str) -> ActError,
+) -> ActError {
     match error {
-        SessionStartError::InvalidVariables(message) => {
-            missing_variables(message, &[], &BTreeMap::new())
-        }
+        SessionStartError::InvalidVariables(message) => missing_variables(message),
         SessionStartError::InvalidSecrets(message) => ActError::usage(
             "missing-secrets",
             format!(
@@ -1180,7 +1367,14 @@ fn session_start_error(error: &SessionStartError) -> ActError {
     }
 }
 
-fn test_error(error: &TestError, source: u64, forgotten: &BTreeSet<String>) -> ActError {
+/// Why run `source` could not be tested; `missing_variables` words the refusal for
+/// variables that do not fit the blueprint.
+fn test_error(
+    error: &TestError,
+    source: u64,
+    forgotten: &BTreeSet<String>,
+    missing_variables: impl FnOnce(&str) -> ActError,
+) -> ActError {
     match error {
         TestError::NoProgram { .. } => ActError::usage(
             "no-program",
@@ -1192,7 +1386,7 @@ fn test_error(error: &TestError, source: u64, forgotten: &BTreeSet<String>) -> A
         )
         .next([Next::Show(source), Next::Runs]),
         TestError::BlueprintNotFound(_) => ActError::usage("blueprint-gone", error.to_string()),
-        TestError::InvalidVariables(message) => missing_variables(message, &[], &BTreeMap::new()),
+        TestError::InvalidVariables(message) => missing_variables(message),
         TestError::InvalidSecrets(message) => {
             let note = if forgotten.is_empty() {
                 ""
@@ -1231,35 +1425,30 @@ fn no_program(run: &StoredRun, action: &str) -> ActError {
     .next([Next::Show(run.id), Next::Runs])
 }
 
-impl Actions {
-    /// A run that returned without being stored: why it did not run, when it says.
-    fn not_recorded(&self, response: &ExecuteResponse) -> ActError {
-        match response.error.as_ref() {
-            Some(error) if error.kind == ErrorKind::InvalidRequest => {
-                self.missing_variables(&clean(&error.message), None, &BTreeMap::new())
-            }
-            _ => not_recorded(response),
-        }
-    }
-}
-
-/// A run that returned without being stored: why it did not run, when it says.
-fn not_recorded(response: &ExecuteResponse) -> ActError {
+/// A run that returned without being stored. A refusal before it ran says why in the
+/// server's words (`missing_variables` words one for variables that do not fit the
+/// blueprint); for one that ran, the error came from inside the run, so it goes in
+/// run-data, with every known secret cut out.
+fn unsaved_run(
+    response: &ExecuteResponse,
+    secrets: &KnownSecrets,
+    missing_variables: impl FnOnce(&str) -> ActError,
+) -> ActError {
     let Some(error) = &response.error else {
-        return ActError::failure(
-            "the run finished but was not stored; the playground's log says why",
-        );
+        return ActError::failure("the run ran but was not saved; the playground's log says why");
     };
     let message = clean(&error.message);
     match error.kind {
-        ErrorKind::InvalidRequest => missing_variables(&message, &[], &BTreeMap::new()),
+        ErrorKind::InvalidRequest => missing_variables(&message),
         ErrorKind::PackageResolution => {
             ActError::new(EXIT_PACKAGE_RESOLUTION, "package-resolution", message)
         }
         ErrorKind::BlueprintNotFound => ActError::usage("blueprint-gone", message),
-        _ => ActError::failure(format!(
-            "the run did not start and was not stored: {message}"
-        )),
+        _ => ActError::failure(
+            "the run ran but was not saved; the playground's log says why, and its error is \
+             in run-data",
+        )
+        .untrusted("error", secrets.redact_text(&error.message)),
     }
 }
 
@@ -1308,6 +1497,9 @@ pub(crate) struct SessionResult {
     pub(crate) kind: &'static str,
     pub(crate) session: String,
     pub(crate) open: bool,
+    /// `session end` found it already ended or expired on the server, and recorded that.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) already_ended: bool,
     pub(crate) variables: BTreeMap<String, String>,
     pub(crate) next: Vec<String>,
 }
@@ -1323,8 +1515,25 @@ pub(crate) struct ClearResult {
 pub(crate) struct CancelResult {
     pub(crate) kind: &'static str,
     pub(crate) run: u64,
+    /// The run is ending with a cancelled outcome, by this cancel or an earlier one.
     pub(crate) cancelled: bool,
+    pub(crate) outcome: CancelOutcome,
     pub(crate) next: Vec<String>,
+}
+
+impl CancelResult {
+    fn new(run: u64, outcome: CancelOutcome) -> Self {
+        Self {
+            kind: "cancel",
+            run,
+            cancelled: matches!(
+                outcome,
+                CancelOutcome::Cancelling | CancelOutcome::AlreadyCancelling
+            ),
+            outcome,
+            next: next([Next::Show(run)]),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1342,7 +1551,7 @@ pub(crate) struct RecheckResult {
     pub(crate) different_rule: usize,
     pub(crate) unchanged: usize,
     /// Decisions whose recording is too cut to resolve again.
-    pub(crate) cant_tell: Vec<String>,
+    pub(crate) cant_tell: Vec<DecisionRef>,
     pub(crate) changes: Vec<RecheckChange>,
     pub(crate) variables_filled: Vec<String>,
     pub(crate) variables_dropped: Vec<String>,
@@ -1353,9 +1562,8 @@ pub(crate) struct RecheckResult {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RecheckChange {
-    pub(crate) decision: String,
-    /// `newly-allowed`, `newly-denied`, or `different-rule`.
-    pub(crate) change: &'static str,
+    pub(crate) decision: DecisionRef,
+    pub(crate) change: FlipKind,
     pub(crate) caller: String,
     pub(crate) capability: String,
     /// What decides it now.
@@ -1365,7 +1573,7 @@ pub(crate) struct RecheckChange {
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct RecheckUntrusted {
     /// Each changed decision's recorded context, by its ref.
-    pub(crate) contexts: BTreeMap<String, Value>,
+    pub(crate) contexts: BTreeMap<DecisionRef, Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1374,7 +1582,7 @@ pub(crate) struct DraftResult {
     /// `page` links the decision.
     #[serde(flatten)]
     pub(crate) header: RunRef,
-    pub(crate) decision: String,
+    pub(crate) decision: DecisionRef,
     pub(crate) caller: String,
     pub(crate) capability: String,
     /// The blueprint file the rule goes in.
@@ -1431,34 +1639,7 @@ pub(crate) fn draft_rule(
         Ok(None) => return Err(ReadError::UnknownRun(decision.run).into()),
         Err(error) => return Err(ActError::store(&error)),
     };
-    let record = run.decision(decision.n).ok_or(ReadError::UnknownDecision {
-        decision,
-        count: run.recording.decisions.len(),
-    })?;
-    if record.allowed {
-        return Err(ActError::usage(
-            "not-a-denial",
-            format!("decision {decision} was allowed; there is no refusal to draft a rule from"),
-        )
-        .next([Next::Explain(decision)]));
-    }
-    if record.source != "policy" {
-        return Err(ActError::usage(
-            "not-a-policy-decision",
-            format!(
-                "decision {decision} was refused ahead of the policy, not by a rule or the \
-                 default, so no rule can allow it"
-            ),
-        )
-        .next([Next::Explain(decision)]));
-    }
-    if record.context_truncated || record.payload_dropped {
-        return Err(ActError::failure(format!(
-            "decision {decision}'s recorded context was cut to fit the recorder, so a rule \
-             drafted from it could match the wrong call; add the rule by hand"
-        ))
-        .next([Next::Explain(decision)]));
-    }
+    let record = refused_by_policy(&run, decision)?;
     let bytes = std::fs::read(blueprint_path).map_err(|error| {
         ActError::usage(
             "blueprint-gone",
@@ -1468,25 +1649,7 @@ pub(crate) fn draft_rule(
     let text = String::from_utf8(bytes.clone()).map_err(|_| {
         ActError::failure(format!("{} is not UTF-8 text", blueprint_path.display()))
     })?;
-    // The version the run was decided under: the draft is refused when the file no
-    // longer decides the call through the same rule, or the default.
-    let under = store.changes().ok().and_then(|changes| {
-        let tag = run.recording.blueprint_version.as_deref()?;
-        changes
-            .versions
-            .iter()
-            .find(|version| version.version.to_string() == tag)
-            .and_then(|version| submilli_blueprint::parse(&version.bytes).ok())
-    });
-    let under = match under {
-        Some(blueprint) => blueprint,
-        None => submilli_blueprint::parse(&text).map_err(|error| {
-            ActError::failure(format!(
-                "{} does not parse: {error}",
-                blueprint_path.display()
-            ))
-        })?,
-    };
+    let under = blueprint_decided_under(store, &run, &text, blueprint_path)?;
     let draft = draft_allow(
         &text,
         &DraftCall {
@@ -1502,10 +1665,11 @@ pub(crate) fn draft_rule(
     if write {
         write_blueprint(blueprint_path, &bytes, draft.text.as_bytes())?;
     }
-    let mut suggestions = vec![Next::Explain(decision), Next::Show(run.id)];
-    if write {
-        suggestions = vec![Next::Recheck(run.id), Next::Test(run.id), Next::Changes];
-    }
+    let suggestions = if write {
+        vec![Next::Recheck(run.id), Next::Test(run.id), Next::Changes]
+    } else {
+        vec![Next::Explain(decision), Next::Show(run.id)]
+    };
     Ok(DraftResult {
         kind: "draft",
         header: RunRef {
@@ -1513,9 +1677,9 @@ pub(crate) fn draft_rule(
             page: page.decision(decision),
             blueprint_version: run.recording.blueprint_version.clone(),
             source: run.label.clone(),
-            decision_refs: vec![decision.to_string()],
+            decision_refs: vec![decision],
         },
-        decision: decision.to_string(),
+        decision,
         caller: record.caller.clone(),
         capability: record.capability.clone(),
         file: blueprint_path.to_path_buf(),
@@ -1538,6 +1702,98 @@ pub(crate) fn draft_rule(
     })
 }
 
+/// Decision `decision` of `run`, when it is a refusal a rule can be drafted from: one the
+/// policy made, with its whole context recorded and no secret cut out of it.
+fn refused_by_policy(run: &StoredRun, decision: DecisionRef) -> Result<&DecisionRecord, ActError> {
+    let record = run.decision(decision.n).ok_or(ReadError::UnknownDecision {
+        decision,
+        count: run.recording.decisions.len(),
+    })?;
+    let refusal = |exit, kind, message: String| {
+        Err(ActError::new(exit, kind, message).next([Next::Explain(decision)]))
+    };
+    if record.allowed {
+        return refusal(
+            EXIT_USAGE,
+            "not-a-denial",
+            format!("decision {decision} was allowed; there is no refusal to draft a rule from"),
+        );
+    }
+    if record.source != "policy" {
+        return refusal(
+            EXIT_USAGE,
+            "not-a-policy-decision",
+            format!(
+                "decision {decision} was refused ahead of the policy, not by a rule or the \
+                 default, so no rule can allow it"
+            ),
+        );
+    }
+    if record.context_truncated || record.payload_dropped {
+        return refusal(
+            EXIT_FAILURE,
+            "failure",
+            format!(
+                "decision {decision}'s recorded context was cut to fit the recorder, so a rule \
+                 drafted from it could match the wrong call; add the rule by hand"
+            ),
+        );
+    }
+    if holds_redacted(&record.context) {
+        return refusal(
+            EXIT_FAILURE,
+            "redacted-value",
+            format!(
+                "decision {decision}'s recorded context holds a secret the store redacted, so \
+                 a rule drafted from it would compare against the redaction marker and never \
+                 match the live call; add the rule by hand, naming the secret through a \
+                 variable"
+            ),
+        );
+    }
+    Ok(record)
+}
+
+/// Whether a string in `value`, at any depth, holds what the store writes for a secret.
+fn holds_redacted(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains(REDACTED),
+        Value::Array(items) => items.iter().any(holds_redacted),
+        Value::Object(fields) => fields
+            .iter()
+            .any(|(key, item)| key.contains(REDACTED) || holds_redacted(item)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
+/// The blueprint `run` was decided under: its version's text from the change log, or, for
+/// a run whose version the log does not hold, the file's current `text`. A draft is
+/// refused when the file no longer decides the call through the same rule, or the default.
+fn blueprint_decided_under(
+    store: &Store,
+    run: &StoredRun,
+    text: &str,
+    path: &Path,
+) -> Result<Blueprint, ActError> {
+    let changes = store.changes().map_err(|error| ActError::store(&error))?;
+    let logged = run.recording.blueprint_version.as_deref().and_then(|tag| {
+        changes
+            .versions
+            .iter()
+            .find(|version| version.version.to_string() == tag)
+    });
+    let source = logged.map_or(text, |version| version.bytes.as_str());
+    submilli_blueprint::parse(source).map_err(|error| {
+        ActError::failure(match logged {
+            Some(version) => format!(
+                "blueprint version {} in the change log does not parse: {error}",
+                version.version
+            ),
+            None => format!("{} does not parse: {error}", path.display()),
+        })
+    })
+}
+
 fn draft_error(error: &DraftError, decision: DecisionRef) -> ActError {
     let name_refused = match error {
         DraftError::EmptyName | DraftError::DuplicateName { .. } => true,
@@ -1557,6 +1813,20 @@ fn draft_error(error: &DraftError, decision: DecisionRef) -> ActError {
         DraftError::CurrentInvalid(_) => "blueprint-invalid",
         _ => "draft-refused",
     };
+    let next = [
+        Next::Recheck(decision.run),
+        Next::Explain(decision),
+        Next::Changes,
+    ];
+    if let Some((reason, name, value)) = refusal_from_the_call(error) {
+        return ActError::new(
+            EXIT_FAILURE,
+            error_kind,
+            format!("no rule drafted for {decision}: {reason}"),
+        )
+        .untrusted(name, value)
+        .next(next);
+    }
     let message = match error {
         DraftError::AlreadyAllowed | DraftError::DecisionChanged { .. } => format!(
             "{error}; re-check run {} against the blueprint in force",
@@ -1564,18 +1834,68 @@ fn draft_error(error: &DraftError, decision: DecisionRef) -> ActError {
         ),
         _ => format!("no rule drafted for {decision}: {error}"),
     };
-    ActError::new(EXIT_FAILURE, error_kind, message).next([
-        Next::Recheck(decision.run),
-        Next::Explain(decision),
-        Next::Changes,
-    ])
+    ActError::new(EXIT_FAILURE, error_kind, message).next(next)
+}
+
+/// For a refusal whose words would quote the run's call (a context field's name, or the
+/// parser's message on text holding the call's values): our own words for it, and the
+/// name and value that go in run-data.
+fn refusal_from_the_call(error: &DraftError) -> Option<(String, &'static str, String)> {
+    let field = |reason: &str, field: &String| Some((reason.to_owned(), "field", field.clone()));
+    match error {
+        DraftError::UnsafeValue {
+            field: name,
+            character,
+        } => {
+            let kind = if matches!(character, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}') {
+                "a newline"
+            } else {
+                "a control character"
+            };
+            field(
+                &format!(
+                    "a field of the call (named in run-data) holds {kind} ({}), which a rule \
+                     cannot match safely",
+                    character.escape_unicode()
+                ),
+                name,
+            )
+        }
+        DraftError::UnquotableValue { field: name } => field(
+            "a field of the call (named in run-data) holds `${vars.`, which a filter string \
+             always reads as a variable",
+            name,
+        ),
+        DraftError::InexactNumber { field: name } => field(
+            "a field of the call (named in run-data) is an integer too large for a filter to \
+             compare exactly; a rule comparing it would also allow its neighbours",
+            name,
+        ),
+        DraftError::UnaddressableField { field: name } => field(
+            "a field of the call (named in run-data) cannot be named in a filter",
+            name,
+        ),
+        DraftError::TooBroad { field: name } => field(
+            "the drafted rule would also allow a call that differs in one field (named in \
+             run-data)",
+            name,
+        ),
+        DraftError::DraftInvalid(parse) => Some((
+            "the drafted blueprint does not parse (the parser's message is in run-data)".to_owned(),
+            "parse_error",
+            parse.to_string(),
+        )),
+        _ => None,
+    }
 }
 
 /// Replaces the blueprint file with `new`, only when it still holds `drafted_from`, in one
-/// rename in its own directory that keeps its permissions.
+/// rename in its own directory that keeps its permissions. A symlinked blueprint keeps its
+/// link: the file it points to is the one replaced.
 fn write_blueprint(path: &Path, drafted_from: &[u8], new: &[u8]) -> Result<(), ActError> {
     let failed =
         |error: std::io::Error| ActError::failure(format!("writing {}: {error}", path.display()));
+    let path = &std::fs::canonicalize(path).map_err(failed)?;
     let now = std::fs::read(path).map_err(failed)?;
     if now != drafted_from {
         return Err(ActError::failure(format!(
@@ -1596,213 +1916,6 @@ fn write_blueprint(path: &Path, drafted_from: &[u8], new: &[u8]) -> Result<(), A
         .persist(path)
         .map(drop)
         .map_err(|error| failed(error.error))
-}
-
-// ---- text forms ----------------------------------------------------------------------------
-
-fn next_lines(out: &mut String, next: &[String]) {
-    use std::fmt::Write as _;
-    if let Some((first, rest)) = next.split_first() {
-        let _ = writeln!(out, "next: {first}");
-        for command in rest {
-            let _ = writeln!(out, "      {command}");
-        }
-    }
-}
-
-fn binding_text(result: &BindingResult) -> String {
-    use std::fmt::Write as _;
-    let mut out =
-        String::from("binding for new runs, test runs' missing variables, and new sessions:\n");
-    if result.variables.is_empty() {
-        out.push_str("  variables: none\n");
-    }
-    for (name, value) in &result.variables {
-        let _ = writeln!(out, "  {}={}", clean(name), clean(value));
-    }
-    if result.secrets.is_empty() {
-        out.push_str("  secrets: none\n");
-    } else {
-        let _ = writeln!(
-            out,
-            "  secrets: {} (values held in the playground's memory only)",
-            clean(&result.secrets.join(", "))
-        );
-    }
-    if !result.to_bind_again.is_empty() {
-        let _ = writeln!(
-            out,
-            "  to bind again: {} (secret values are not kept across restarts; `submilli \
-             playground bind --secret NAME`)",
-            clean(&result.to_bind_again.join(", "))
-        );
-    }
-    out
-}
-
-fn session_text(result: &SessionResult) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    if result.open {
-        let vars: Vec<String> = result
-            .variables
-            .iter()
-            .map(|(name, value)| format!("{}={}", clean(name), clean(value)))
-            .collect();
-        let _ = writeln!(
-            out,
-            "session {} started with {} (fixed for every run in it)",
-            clean(&result.session),
-            if vars.is_empty() {
-                "no variables".to_owned()
-            } else {
-                vars.join(", ")
-            }
-        );
-        let _ = writeln!(
-            out,
-            "run in it with `submilli playground exec <file> --session {}`",
-            clean(&result.session)
-        );
-    } else {
-        let _ = writeln!(out, "session {} ended", clean(&result.session));
-    }
-    next_lines(&mut out, &result.next);
-    out
-}
-
-fn recheck_text(result: &RecheckResult) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    let mut fence = Fence::default();
-    let _ = writeln!(
-        out,
-        "recheck of run {} · {} · {} under {} (ran nothing, recorded nothing)",
-        result.header.run,
-        clean(&result.header.source),
-        render::version_text(result.header.blueprint_version.as_deref()),
-        render::version_text(result.in_force.as_deref())
-    );
-    let _ = writeln!(
-        out,
-        "page: {}",
-        result.header.page.as_deref().unwrap_or(render::NO_PAGE)
-    );
-    let _ = writeln!(
-        out,
-        "newly allowed {}, newly denied {}, different rule {}, unchanged {}",
-        result.newly_allowed, result.newly_denied, result.different_rule, result.unchanged
-    );
-    for change in &result.changes {
-        let _ = writeln!(
-            out,
-            "  {:<8} {:<15} {} → {}  now by {}",
-            change.decision,
-            change.change.replace('-', " "),
-            clean(&change.caller),
-            clean(&change.capability),
-            change.now_by
-        );
-        if let Some(context) = result.untrusted.contexts.get(&change.decision) {
-            fence.value(&format!("{} context", change.decision), context);
-        }
-    }
-    if !result.cant_tell.is_empty() {
-        let _ = writeln!(
-            out,
-            "can't tell (recording cut): {}",
-            result.cant_tell.join(" ")
-        );
-    }
-    if !result.variables_filled.is_empty() || !result.variables_dropped.is_empty() {
-        let _ = writeln!(
-            out,
-            "variables: filled from the binding {}; dropped {}",
-            or_none(&result.variables_filled),
-            or_none(&result.variables_dropped)
-        );
-    }
-    if result.recording_truncated {
-        let _ = writeln!(
-            out,
-            "the recording lost decisions to its caps, so this list may be incomplete"
-        );
-    }
-    fence.render(&mut out);
-    next_lines(&mut out, &result.next);
-    out
-}
-
-fn or_none(items: &[String]) -> String {
-    if items.is_empty() {
-        "none".to_owned()
-    } else {
-        clean(&items.join(", "))
-    }
-}
-
-fn draft_text(result: &DraftResult) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    let mut fence = Fence::default();
-    let _ = writeln!(
-        out,
-        "draft for {}  {} → {}  (run {} · {} · {})",
-        result.decision,
-        clean(&result.caller),
-        clean(&result.capability),
-        result.header.run,
-        clean(&result.header.source),
-        render::version_text(result.header.blueprint_version.as_deref())
-    );
-    let _ = writeln!(
-        out,
-        "page: {}",
-        result.header.page.as_deref().unwrap_or(render::NO_PAGE)
-    );
-    let _ = writeln!(
-        out,
-        "goes in: {}, lines {}-{}, in the `{}` block",
-        result.file_in_project.display(),
-        result.lines[0],
-        result.lines[1],
-        clean(&result.caller)
-    );
-    match &result.overrides {
-        Some(rule) => {
-            let _ = writeln!(
-                out,
-                "overrides: {} for this call only; it goes directly above it",
-                render::rule_label(&rule.caller, rule.index, rule.name.as_deref(), rule.line)
-            );
-        }
-        None => {
-            let _ = writeln!(out, "overrides: nothing; the default refused the call");
-        }
-    }
-    fence.text("rule", &result.untrusted.rule, 12);
-    fence.render(&mut out);
-    if result.name.is_none() {
-        let _ = writeln!(
-            out,
-            "unnamed: decisions will cite this rule by its place in the block; draft it with \
-             `--name <name>` to give it a name they cite instead"
-        );
-    }
-    if result.written {
-        let _ = writeln!(
-            out,
-            "written: the playground applies it and logs the new blueprint version"
-        );
-    } else {
-        let _ = writeln!(
-            out,
-            "not written: the file is unchanged. Review the rule; writing it into the file takes \
-             an explicit `--write`"
-        );
-    }
-    next_lines(&mut out, &result.next);
-    out
 }
 
 // ---- the CLI's side ------------------------------------------------------------------------
@@ -1876,11 +1989,42 @@ pub(crate) fn execute_action(request: &ActionRequest, output: Output) -> Result<
         Err(answer) => return Ok(answer.print(output)),
     };
     let (method, path, body) = request.route();
+    // Refused here rather than by the playground, which may close the connection before
+    // it has read a body it will not take.
+    let size = body.as_ref().map_or(0, |body| body.to_string().len());
+    if size > MAX_BODY_BYTES {
+        return Ok(Answer::from(ActError::usage(
+            "too-large",
+            format!(
+                "the request is {size} bytes, more than the {MAX_BODY_BYTES} the playground \
+                 takes; run a smaller program"
+            ),
+        ))
+        .print(output));
+    }
     let answer: Answer = match running.send(method, path, body.as_ref()) {
         Ok(answer) => answer,
-        Err(error) => ActError::failure(format!("{error:#}")).into(),
+        Err(error) => unanswered(&error)?,
     };
     Ok(answer.print(output))
+}
+
+/// What a control request that got no usable answer says: the playground refused it, or
+/// it stopped (or was never reached), or something else failed.
+fn unanswered(error: &anyhow::Error) -> Result<Answer> {
+    if let Some(refused) = error.downcast_ref::<client::Refused>() {
+        // What the request asked for was refused as asked: a body or path the route
+        // does not take, or one too large.
+        let usage = matches!(refused.status, 400 | 404 | 405 | 413 | 415 | 422);
+        let exit = if usage { EXIT_USAGE } else { EXIT_FAILURE };
+        return Ok(ActError::new(exit, "refused", clean(&refused.to_string())).into());
+    }
+    if error.downcast_ref::<client::Unanswered>().is_some()
+        && let Err(not_running) = connect()?
+    {
+        return Ok(not_running);
+    }
+    Ok(ActError::failure(format!("{error:#}")).into())
 }
 
 /// `draft-rule`, against the store and the blueprint file directly: it works with the
@@ -1891,35 +2035,41 @@ pub(crate) fn execute_draft(
     name: Option<&str>,
     output: Output,
 ) -> ExitCode {
-    let drafted = (|| {
-        let cwd = std::env::current_dir().map_err(|_| ActError::from(ReadError::NoProject))?;
-        let project = project::discover(&cwd, None)
-            .map_err(|error| ActError::usage("no-project", error.to_string()))?;
-        let state = StateDir::for_project(&project.root);
-        let store = match Store::open_read_only(&state.store_dir()) {
-            Ok(store) => store,
-            Err(StoreError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-                return Err(ReadError::UnknownRun(decision.run).into());
-            }
-            Err(error) => return Err(ActError::store(&error)),
-        };
-        let page = super::running_page(&state);
-        draft_rule(
-            &store,
-            &project.blueprint,
-            &project.root,
-            decision,
-            write,
-            name,
-            &page,
-        )
-    })();
-    answer(drafted.map(|result| Answer::of(EXIT_SUCCESS, &result, draft_text))).print(output)
+    answer(
+        draft_in_cwd(decision, write, name)
+            .map(|result| Answer::of(EXIT_SUCCESS, &result, render::draft_text)),
+    )
+    .print(output)
+}
+
+/// Drafts in the project around the current directory, against its store as it is.
+fn draft_in_cwd(
+    decision: DecisionRef,
+    write: bool,
+    name: Option<&str>,
+) -> Result<DraftResult, ActError> {
+    let cwd = std::env::current_dir().map_err(|_| ActError::from(ReadError::NoProject))?;
+    let project = project::discover(&cwd, None)
+        .map_err(|error| ActError::usage("no-project", error.to_string()))?;
+    let state = StateDir::for_project(&project.root);
+    let store = super::open_store(&state)
+        .map_err(|error| ActError::store(&error))?
+        .ok_or(ReadError::UnknownRun(decision.run))?;
+    draft_rule(
+        &store,
+        &project.blueprint,
+        &project.root,
+        decision,
+        write,
+        name,
+        &super::running_page(&state),
+    )
 }
 
 /// `watch`: follows a session's event feed and prints each event as one JSON line, until
 /// the session's last run finishes (with `follow`, until the session ends), the session
-/// ends, or the playground stops. Without a session, follows the most recent one.
+/// ends, or the playground stops. Without a session, follows the most recent one. A
+/// session already idle when `watch` starts ends it at once, after its events so far.
 pub(crate) fn execute_watch(
     session: Option<String>,
     follow: bool,
@@ -1929,73 +2079,91 @@ pub(crate) fn execute_watch(
         Ok(running) => running,
         Err(answer) => return Ok(answer.print(output)),
     };
-    let session = match session {
-        Some(session) => session,
-        None => match most_recent_session() {
-            Ok(Some(session)) => session,
-            Ok(None) => {
-                return Ok(Answer::from(
-                    ActError::usage(
-                        "no-sessions",
-                        "no sessions yet; run a program first, or start one with `submilli \
-                         playground session start`",
-                    )
-                    .next([Next::Sessions]),
-                )
-                .print(output));
-            }
-            Err(error) => return Ok(Answer::from(error).print(output)),
-        },
+    let session = match session.map_or_else(most_recent_session, Ok) {
+        Ok(session) => session,
+        Err(error) => return Ok(Answer::from(error).print(output)),
     };
     let path = format!("/api/sessions/{}/events", url_segment(&session));
     let stdout = std::io::stdout();
-    let mut idle = false;
-    let mut ended = false;
-    let mut decisions = std::collections::HashMap::new();
+    let mut end = WatchEnd::FeedClosed;
     let followed = running.follow(&path, None, |event| {
         let line = match event.name.as_str() {
-            "run-idle" => {
-                idle = true;
-                json!({ "kind": "run-idle", "session": session })
+            feed::RUN_IDLE => {
+                end = WatchEnd::Idle;
+                json!({ "kind": feed::RUN_IDLE, "session": session })
             }
-            "session-ended" => {
-                ended = true;
-                json!({ "kind": "session-ended", "session": session })
+            feed::SESSION_ENDED => {
+                end = WatchEnd::SessionEnded;
+                json!({ "kind": feed::SESSION_ENDED, "session": session })
+            }
+            feed::FEED_ERROR => {
+                let message = serde_json::from_str::<Value>(&event.data)
+                    .ok()
+                    .and_then(|data| data["message"].as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                end = WatchEnd::FeedFailed(message);
+                return false;
             }
             _ => watch_line(
                 event.id.as_deref().and_then(|id| id.parse::<u64>().ok()),
                 &serde_json::from_str::<Value>(&event.data).unwrap_or(Value::Null),
                 &session,
-                &mut decisions,
             ),
         };
         let mut out = stdout.lock();
         let _ = writeln!(out, "{line}");
         let _ = out.flush();
-        !ended && (follow || !idle)
+        match end {
+            WatchEnd::SessionEnded => false,
+            WatchEnd::Idle => follow,
+            WatchEnd::FeedClosed | WatchEnd::FeedFailed(_) => true,
+        }
     });
     if let Err(error) = followed {
-        return Ok(Answer::from(ActError::failure(format!("{error:#}"))).print(output));
-    }
-    if ended {
-        return Ok(ExitCode::from(EXIT_SUCCESS));
-    }
-    if follow {
-        eprintln!("the playground stopped; the session's feed ended with it");
-        return Ok(ExitCode::from(EXIT_SUCCESS));
-    }
-    if idle {
-        if matches!(output, Output::Text) {
-            eprintln!(
-                "the session is idle, so watch stopped; `submilli playground watch {} --follow` \
-                 keeps following its later runs until it ends",
-                render::shell_word(&session)
-            );
+        if let Some(refused) = error.downcast_ref::<client::Refused>()
+            && refused.status == 404
+        {
+            return Ok(Answer::from(unknown_session(&session)).print(output));
         }
-        return Ok(ExitCode::from(EXIT_SUCCESS));
+        return Ok(unanswered(&error)?.print(output));
     }
-    eprintln!("the playground stopped before the session's runs finished");
-    Ok(ExitCode::from(EXIT_NOT_RUNNING))
+    let exit = match end {
+        WatchEnd::SessionEnded => EXIT_SUCCESS,
+        WatchEnd::FeedFailed(message) => {
+            eprintln!("the session's feed failed: {}", clean(&message));
+            EXIT_FAILURE
+        }
+        WatchEnd::Idle if !follow => {
+            if matches!(output, Output::Text) {
+                eprintln!(
+                    "the session is idle, so watch stopped; `submilli playground watch {} \
+                     --follow` keeps following its later runs until it ends",
+                    render::shell_word(&session)
+                );
+            }
+            EXIT_SUCCESS
+        }
+        WatchEnd::Idle | WatchEnd::FeedClosed if follow => {
+            eprintln!("the playground stopped; the session's feed ended with it");
+            EXIT_SUCCESS
+        }
+        WatchEnd::Idle | WatchEnd::FeedClosed => {
+            eprintln!("the playground stopped before the session's runs finished");
+            EXIT_NOT_RUNNING
+        }
+    };
+    Ok(ExitCode::from(exit))
+}
+
+/// Why `watch` stopped following.
+enum WatchEnd {
+    /// The feed closed with nothing said: the playground stopped.
+    FeedClosed,
+    /// The session's runs finished, and none is in flight.
+    Idle,
+    SessionEnded,
+    /// The playground could not read the session's log; its message.
+    FeedFailed(String),
 }
 
 /// Fields of a session event that only say where it sits; the line carries them in its
@@ -2011,18 +2179,12 @@ const ENVELOPE_FIELDS: [&str; 6] = [
 
 /// One stored event as `watch` prints it: trusted fields (sequence, kind, session, run,
 /// time, ids, caller and capability names, outcomes, sizes) at the top, and what came from
-/// inside the run (a decision's context, its near misses' values and reason, an MCP
-/// client's own name) under `untrusted`.
+/// inside the run (a decision's context, its near misses' values, its reason and its
+/// cause's, an MCP client's own name and tool call id) under `untrusted`.
 ///
-/// A decision gets its `<run>.<n>` reference by counting the run's decisions as they
-/// arrive, which `watch` sees from the session's first event. A decision recovered after
-/// its run lost events under load arrives out of order, so it gets none.
-fn watch_line(
-    seq: Option<u64>,
-    stored: &Value,
-    session: &str,
-    decisions: &mut std::collections::HashMap<u64, usize>,
-) -> Value {
+/// A decision carries its `<run>.<n>` reference when the store numbered it: the number
+/// `show`, `explain`, and `draft-rule` take for the same decision.
+fn watch_line(seq: Option<u64>, stored: &Value, session: &str) -> Value {
     let mut line = serde_json::Map::new();
     let mut untrusted = serde_json::Map::new();
     line.insert("seq".into(), json!(seq));
@@ -2054,8 +2216,10 @@ fn watch_line(
     for field in ENVELOPE_FIELDS {
         fields.remove(field);
     }
-    if let Some(client) = fields.remove("client") {
-        untrusted.insert("client".into(), client);
+    for field in ["client", "tool_call_id"] {
+        if let Some(value) = fields.remove(field) {
+            untrusted.insert(field.into(), value);
+        }
     }
     if kind == "decision"
         && let Some(Value::Object(mut record)) = fields.remove("record")
@@ -2065,17 +2229,20 @@ fn watch_line(
                 untrusted.insert(field.into(), value);
             }
         }
+        // A refusal ahead of the policy says why in its cause, in words that may quote
+        // what the call passed.
+        if let Some(Value::Object(cause)) = record.get_mut("cause")
+            && let Some(reason) = cause.remove("reason")
+        {
+            untrusted.insert("cause_reason".into(), reason);
+        }
         // The decision's own place in its run, kept apart from the envelope's `seq`,
         // which is the session's sequence and the feed's resume cursor.
         if let Some(seq) = record.remove("seq") {
             record.insert("decision_seq".into(), seq);
         }
         record.remove("at_micros");
-        if let Some(run) = run
-            && stored["backfilled"].as_bool() != Some(true)
-        {
-            let n = decisions.entry(run).or_insert(0);
-            *n += 1;
+        if let (Some(run), Some(n)) = (run, stored["decision"].as_u64()) {
             line.insert("decision".into(), json!(format!("{run}.{n}")));
         }
         fields.extend(record);
@@ -2091,13 +2258,22 @@ fn watch_line(
     Value::Object(line)
 }
 
-fn most_recent_session() -> Result<Option<String>, ActError> {
+/// The most recent session, or the refusal that says there is none yet.
+fn most_recent_session() -> Result<String, ActError> {
     let reader = Reader::for_cwd()?;
-    Ok(read::sessions(&reader, 1)?
+    read::sessions(&reader, 1, super::super::now_micros())?
         .sessions
         .into_iter()
         .next()
-        .map(|row| row.session))
+        .map(|row| row.session)
+        .ok_or_else(|| {
+            ActError::usage(
+                "no-sessions",
+                "no sessions yet; run a program first, or start one with `submilli \
+                 playground session start`",
+            )
+            .next([Next::Sessions])
+        })
 }
 
 /// `text` as one path segment.

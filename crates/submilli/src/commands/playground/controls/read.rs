@@ -32,8 +32,8 @@ const MAX_TEXT_BYTES: usize = 4000;
 
 /// A caller and a capability.
 type PairKey = (String, String);
-/// An audit line: caller, capability, outcome, and what decided.
-type AuditKey = (String, String, &'static str, String);
+/// An audit line: caller, capability, verdict, and what decided.
+type AuditKey = (String, String, Verdict, String);
 
 // ---- shared pieces -----------------------------------------------------------------------
 
@@ -45,34 +45,37 @@ pub(crate) enum Outcome {
     /// A policy denial the program did not catch ended it.
     Denied {
         #[serde(skip_serializing_if = "Option::is_none")]
-        decision: Option<String>,
+        decision: Option<DecisionRef>,
     },
     /// A test run stopped at a call the recording could not answer.
     Stopped,
     /// Someone cancelled it while it ran.
     Cancelled,
     Failed {
-        error: String,
+        error: ErrorKind,
     },
     /// The program never reached the runner.
     NotDispatched {
-        error: Option<String>,
+        error: Option<ErrorKind>,
     },
 }
 
 impl Outcome {
-    fn of(error: Option<ErrorKind>, dispatched: bool, test: bool, denial: Option<String>) -> Self {
+    /// How a run with `error` ended. With `cancel_is_test_stop`, a cancel is the test
+    /// run stopping at a call it would have had to make live.
+    fn of(
+        error: Option<ErrorKind>,
+        dispatched: bool,
+        cancel_is_test_stop: bool,
+        denial: Option<DecisionRef>,
+    ) -> Self {
         match error {
             None => Self::Completed,
-            Some(_) if !dispatched => Self::NotDispatched {
-                error: error.map(kind_name),
-            },
+            Some(_) if !dispatched => Self::NotDispatched { error },
             Some(ErrorKind::PermissionDenied) => Self::Denied { decision: denial },
-            Some(ErrorKind::Cancelled) if test => Self::Stopped,
+            Some(ErrorKind::Cancelled) if cancel_is_test_stop => Self::Stopped,
             Some(ErrorKind::Cancelled) => Self::Cancelled,
-            Some(kind) => Self::Failed {
-                error: kind_name(kind),
-            },
+            Some(kind) => Self::Failed { error: kind },
         }
     }
 
@@ -83,64 +86,52 @@ impl Outcome {
             Self::Denied { decision: None } => "ended by an uncaught denial".to_owned(),
             Self::Stopped => "stopped".to_owned(),
             Self::Cancelled => "cancelled".to_owned(),
-            Self::Failed { error } => failed_text(error),
+            Self::Failed { error } => failed_text(*error),
             Self::NotDispatched { error } => format!(
                 "did not start{}",
-                error
-                    .as_ref()
-                    .map_or_else(String::new, |error| format!(": {}", error_words(error)))
+                error.map_or_else(String::new, |error| format!(": {}", error_words(error)))
             ),
         }
     }
 
     /// [`Self::text`], with the denials a completed run's program caught, by ref:
     /// `completed, 1 denial caught (2.3)`.
-    pub(crate) fn text_with_denials(&self, denied: &[String]) -> String {
+    pub(crate) fn text_with_denials(&self, denied: &[DecisionRef]) -> String {
         match (self, denied) {
             (Self::Completed, [_, ..]) => format!(
-                "completed, {} denial{} caught ({})",
-                denied.len(),
-                if denied.len() == 1 { "" } else { "s" },
-                denied.join(", ")
+                "completed, {} caught ({})",
+                super::render::plural(denied.len(), "denial"),
+                super::render::refs_text_with(denied, ", ")
             ),
             _ => self.text(),
         }
     }
 }
 
-/// A failed run's outcome in words, from the error kind its JSON keeps.
-fn failed_text(kind: &str) -> String {
+/// A failed run's outcome in words.
+fn failed_text(kind: ErrorKind) -> String {
     match kind {
-        "compile_error" => "failed to compile".to_owned(),
-        "runtime_error" => "failed with a runtime error".to_owned(),
+        ErrorKind::CompileError => "failed to compile".to_owned(),
+        ErrorKind::RuntimeError => "failed with a runtime error".to_owned(),
         other => format!("failed: {}", error_words(other)),
     }
 }
 
-/// An error kind (`submilli_server::error::ErrorKind`, as serialized) in words.
-fn error_words(kind: &str) -> String {
+/// An error kind in words.
+fn error_words(kind: ErrorKind) -> &'static str {
     match kind {
-        "compile_error" => "it did not compile",
-        "timeout" => "it ran out of time",
-        "fuel_exhausted" => "it ran out of fuel (its CPU budget)",
-        "memory_exhausted" => "it ran out of memory",
-        "stack_exhausted" => "it ran out of stack (recursion too deep)",
-        "cancelled" => "it was cancelled",
-        "permission_denied" => "a call was denied",
-        "runtime_error" => "a runtime error",
-        "blueprint_not_found" => "its blueprint was not found",
-        "package_resolution" => "a package it imports could not be built or found",
-        "invalid_request" => "its variables or secrets do not fit the blueprint",
-        other => return super::render::clean(&other.replace('_', " ")),
+        ErrorKind::CompileError => "it did not compile",
+        ErrorKind::Timeout => "it ran out of time",
+        ErrorKind::FuelExhausted => "it ran out of fuel (its CPU budget)",
+        ErrorKind::MemoryExhausted => "it ran out of memory",
+        ErrorKind::StackExhausted => "it ran out of stack (recursion too deep)",
+        ErrorKind::Cancelled => "it was cancelled",
+        ErrorKind::PermissionDenied => "a call was denied",
+        ErrorKind::RuntimeError => "a runtime error",
+        ErrorKind::BlueprintNotFound => "its blueprint was not found",
+        ErrorKind::PackageResolution => "a package it imports could not be built or found",
+        ErrorKind::InvalidRequest => "its variables or secrets do not fit the blueprint",
     }
-    .to_owned()
-}
-
-fn kind_name(kind: ErrorKind) -> String {
-    serde_json::to_value(kind)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| format!("{kind:?}"))
 }
 
 /// A rule of the blueprint, and where it is in the text of the version the run was
@@ -258,11 +249,40 @@ fn cite(text: &str, caller: &str, index: usize) -> Citation {
     submilli_blueprint::locate_rule(text, caller, index)
 }
 
-fn outcome_word(record: &DecisionRecord) -> &'static str {
-    match (record.allowed, record.action) {
-        (true, _) => "allow",
-        (false, DecisionAction::AskHuman) => "ask",
-        (false, _) => "deny",
+/// What a decision came to: allowed, held for a human, or denied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Verdict {
+    Allow,
+    Ask,
+    Deny,
+}
+
+impl Verdict {
+    fn of(record: &DecisionRecord) -> Self {
+        match (record.allowed, record.action) {
+            (true, _) => Self::Allow,
+            (false, DecisionAction::AskHuman) => Self::Ask,
+            (false, DecisionAction::Allow | DecisionAction::Deny) => Self::Deny,
+        }
+    }
+
+    /// `allow`, `ask`, or `deny`, as text lists show it.
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
+
+    /// What the audit says was done with the call.
+    fn done(self) -> &'static str {
+        match self {
+            Self::Allow => "allowed",
+            Self::Ask => "held for a human",
+            Self::Deny => "denied",
+        }
     }
 }
 
@@ -272,7 +292,7 @@ fn is_denial(record: &DecisionRecord) -> bool {
 
 /// The run's denials as `<run>.<n>`, leaving out those a host function swallowed to
 /// filter a listing: the denials the program saw, whether it caught them or not.
-fn denied_refs(run: &StoredRun) -> Vec<String> {
+fn denied_refs(run: &StoredRun) -> Vec<DecisionRef> {
     run.recording
         .decisions
         .iter()
@@ -342,12 +362,12 @@ fn cause_key(record: &DecisionRecord) -> String {
     }
 }
 
-fn reference(run: u64, position: usize) -> String {
+/// The decision at zero-based `position` in run `run`.
+fn reference(run: u64, position: usize) -> DecisionRef {
     DecisionRef {
         run,
         n: position.saturating_add(1),
     }
-    .to_string()
 }
 
 fn cap_text(text: &str, include: bool) -> String {
@@ -367,7 +387,7 @@ fn cap_text(text: &str, include: bool) -> String {
 }
 
 impl Reader {
-    fn header(&self, run: &StoredRun, decision_refs: Vec<String>) -> RunRef {
+    fn header(&self, run: &StoredRun, decision_refs: Vec<DecisionRef>) -> RunRef {
         RunRef {
             run: run.id,
             page: self.page.run(run.id),
@@ -377,7 +397,7 @@ impl Reader {
         }
     }
 
-    fn summary_header(&self, summary: &RunSummary, decision_refs: Vec<String>) -> RunRef {
+    fn summary_header(&self, summary: &RunSummary, decision_refs: Vec<DecisionRef>) -> RunRef {
         RunRef {
             run: summary.id,
             page: self.page.run(summary.id),
@@ -428,6 +448,30 @@ pub(crate) struct RunsQuery {
     pub(crate) now_micros: u64,
 }
 
+impl RunsQuery {
+    /// Whether a run with these traits is one the query lists.
+    fn matches(
+        &self,
+        id: u64,
+        label: &str,
+        session: Option<&String>,
+        started_at_micros: u64,
+    ) -> bool {
+        self.source.as_ref().is_none_or(|source| label == source)
+            && self
+                .session
+                .as_ref()
+                .is_none_or(|wanted| session == Some(wanted))
+            && match self.since {
+                None => true,
+                Some(Since::Run(after)) => id > after,
+                Some(Since::Micros(window)) => {
+                    started_at_micros >= self.now_micros.saturating_sub(window)
+                }
+            }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Since {
     /// Runs that started within this many microseconds of now.
@@ -472,6 +516,9 @@ pub(crate) struct RunsResult {
     pub(crate) more: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) note: Option<&'static str>,
+    /// Runs listed without their denials, because their files could not be read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) empty_message: Option<&'static str>,
     pub(crate) next: Vec<String>,
@@ -498,7 +545,7 @@ pub(crate) struct RunRow {
     pub(crate) outcome: Outcome,
     pub(crate) decisions: usize,
     /// The run's denials, by ref, as every run-bearing result lists them.
-    pub(crate) denied: Vec<String>,
+    pub(crate) denied: Vec<DecisionRef>,
     pub(crate) session: Option<String>,
     pub(crate) test_of: Option<u64>,
     /// For a rerun, the run whose program it ran again.
@@ -509,21 +556,12 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
     let mut summaries = reader.summaries()?;
     let store_empty = summaries.is_empty();
     summaries.retain(|summary| {
-        query
-            .source
-            .as_ref()
-            .is_none_or(|source| &summary.label == source)
-            && query
-                .session
-                .as_ref()
-                .is_none_or(|session| summary.session_id.as_ref() == Some(session))
-            && match query.since {
-                None => true,
-                Some(Since::Run(run)) => summary.id > run,
-                Some(Since::Micros(window)) => {
-                    summary.started_at_micros >= query.now_micros.saturating_sub(window)
-                }
-            }
+        query.matches(
+            summary.id,
+            &summary.label,
+            summary.session_id.as_ref(),
+            summary.started_at_micros,
+        )
     });
     summaries.sort_by_key(|summary| std::cmp::Reverse(summary.id));
     let limit = query.limit.max(1);
@@ -531,15 +569,26 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
     summaries.truncate(limit);
     let reruns = reader.reruns()?;
     let mut rows = Vec::with_capacity(summaries.len());
+    let mut warnings = Vec::new();
     for summary in &summaries {
         // Only a run with denials is read in full, for its denials' refs.
-        let (denials, last_denial) = if summary.denied > 0 {
-            let refs = denied_refs(&reader.load(summary.id)?);
-            let last = refs.last().cloned();
-            (refs, last)
+        let denials = if summary.denied > 0 {
+            match reader.load(summary.id) {
+                Ok(run) => denied_refs(&run),
+                // Cleared since the listing was read.
+                Err(ReadError::UnknownRun(_)) => continue,
+                Err(error) => {
+                    warnings.push(format!(
+                        "run {} is listed without its denials: {error}",
+                        summary.id
+                    ));
+                    Vec::new()
+                }
+            }
         } else {
-            (Vec::new(), None)
+            Vec::new()
         };
+        let last_denial = denials.last().copied();
         rows.push(RunRow {
             header: reader.summary_header(summary, denials.clone()),
             started_at_micros: summary.started_at_micros,
@@ -559,13 +608,11 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
     }
     let running = running_rows(reader, query, &summaries)?;
     let mut suggestions: Vec<Next> = running.iter().map(|row| Next::Cancel(row.run)).collect();
-    for row in &rows {
-        if let Some(denial) = row.header.decision_refs.first()
-            && let Ok(decision) = denial.parse()
-        {
-            suggestions.push(Next::Explain(decision));
-        }
-    }
+    suggestions.extend(
+        rows.iter()
+            .filter_map(|row| row.header.decision_refs.first().copied())
+            .map(Next::Explain),
+    );
     if let Some(row) = rows.first() {
         suggestions.insert(running.len().min(2), Next::Show(row.header.run));
     }
@@ -586,6 +633,7 @@ pub(crate) fn runs(reader: &Reader, query: &RunsQuery) -> Result<RunsResult, Rea
         running,
         runs: rows,
         more,
+        warnings,
         next: next(suggestions),
     })
 }
@@ -605,21 +653,12 @@ fn running_rows(
         .into_iter()
         .filter(|run| {
             stored.iter().all(|summary| summary.id != run.id)
-                && query
-                    .source
-                    .as_ref()
-                    .is_none_or(|source| &run.label == source)
-                && query
-                    .session
-                    .as_ref()
-                    .is_none_or(|session| run.session_id.as_ref() == Some(session))
-                && match query.since {
-                    None => true,
-                    Some(Since::Run(after)) => run.id > after,
-                    Some(Since::Micros(window)) => {
-                        run.started_at_micros >= query.now_micros.saturating_sub(window)
-                    }
-                }
+                && query.matches(
+                    run.id,
+                    &run.label,
+                    run.session_id.as_ref(),
+                    run.started_at_micros,
+                )
         })
         .map(|run| RunningRow {
             run: run.id,
@@ -649,7 +688,7 @@ pub(crate) struct ShowResult {
     pub(crate) outcome: Outcome,
     /// The denials the program saw, by ref: with a `completed` outcome, the ones it
     /// caught; with a denied one, the last is the one that ended it.
-    pub(crate) denied: Vec<String>,
+    pub(crate) denied: Vec<DecisionRef>,
     pub(crate) session: Option<String>,
     pub(crate) variables: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -673,8 +712,8 @@ pub(crate) struct ShowResult {
 #[derive(Debug, Serialize)]
 pub(crate) struct DecisionLine {
     /// Every decision the line stands for.
-    pub(crate) refs: Vec<String>,
-    pub(crate) outcome: &'static str,
+    pub(crate) refs: Vec<DecisionRef>,
+    pub(crate) outcome: Verdict,
     pub(crate) caller: String,
     pub(crate) capability: String,
     pub(crate) decided_by: String,
@@ -783,10 +822,10 @@ pub(crate) struct TestUntrusted {
 pub(crate) struct ShowUntrusted {
     /// Each decision line's context, by the line's first ref.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) contexts: BTreeMap<String, Value>,
+    pub(crate) contexts: BTreeMap<DecisionRef, Value>,
     /// Why the runtime refused a call, by ref.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub(crate) reasons: BTreeMap<String, String>,
+    pub(crate) reasons: BTreeMap<DecisionRef, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -817,76 +856,8 @@ pub(crate) fn show(
     let changes = reader.changes()?;
     let under = DecidedUnder::find(&changes, run.recording.blueprint_version.as_deref());
     let mut untrusted = ShowUntrusted::default();
-
-    // Identical allowed decisions (same caller, capability, cause, and context) share a
-    // line; a run is decided under one version, so these are within one version.
-    let mut lines: Vec<DecisionLine> = Vec::new();
-    let mut groups: BTreeMap<(String, String, String, String), usize> = BTreeMap::new();
-    let mut last_denial = None;
-    for (position, record) in run.recording.decisions.iter().enumerate() {
-        let decision_ref = reference(run.id, position);
-        if is_denial(record) && !record.filtered {
-            last_denial = Some(decision_ref.clone());
-        }
-        if record.allowed {
-            let key = (
-                record.caller.clone(),
-                record.capability.clone(),
-                cause_key(record),
-                serde_json::to_string(&record.context).unwrap_or_default(),
-            );
-            if let Some(line) = groups.get(&key).and_then(|index| lines.get_mut(*index)) {
-                line.refs.push(decision_ref);
-                continue;
-            }
-            groups.insert(key, lines.len());
-        }
-        if !record.context.is_null() {
-            untrusted
-                .contexts
-                .insert(decision_ref.clone(), record.context.clone());
-        }
-        if let DecisionCause::RuntimeInvariant { reason } = &record.cause {
-            untrusted
-                .reasons
-                .insert(decision_ref.clone(), reason.clone());
-        }
-        lines.push(DecisionLine {
-            refs: vec![decision_ref],
-            outcome: outcome_word(record),
-            caller: record.caller.clone(),
-            capability: record.capability.clone(),
-            decided_by: decided_by_phrase(record, &under),
-            near_misses: near_miss_rules(record, &under),
-            filtered: record.filtered,
-        });
-    }
-
-    let mut calls = CallSummary::default();
-    for call in &run.recording.calls {
-        calls.count += 1;
-        match call.outcome {
-            Some(interpreter::runtime::CallOutcome::Returned) => calls.returned += 1,
-            Some(interpreter::runtime::CallOutcome::Failed) => calls.failed += 1,
-            Some(interpreter::runtime::CallOutcome::Unfinished) | None => calls.unfinished += 1,
-        }
-        let has_body = [&call.request, &call.response]
-            .iter()
-            .any(|side| side.as_ref().is_some_and(|payload| payload.body.is_some()));
-        if has_body {
-            calls.with_bodies += 1;
-        }
-        if include_payloads {
-            untrusted.calls.insert(
-                call.call_index,
-                serde_json::json!({
-                    "capability": call.capability,
-                    "request": call.request,
-                    "response": call.response,
-                }),
-            );
-        }
-    }
+    let lines = decision_lines(&run, &under, &mut untrusted);
+    let calls = call_summary(&run, include_payloads, &mut untrusted);
 
     let is_test = run.entry == "test" || run.test_of.is_some();
     // A test run whose stored report names no stop was cancelled, not stopped.
@@ -911,11 +882,12 @@ pub(crate) fn show(
         .map(|result| cap_text(result, include_payloads));
     untrusted.console = cap_text(&run.console, include_payloads);
 
+    let denied = denied_refs(&run);
     let outcome = Outcome::of(
         run.error.as_ref().map(|error| error.kind),
         run.dispatched,
         stopped_by_test,
-        last_denial,
+        denied.last().copied(),
     );
     let test = if is_test {
         let (info, test_untrusted) = test_info(reader, &run, &outcome);
@@ -924,42 +896,10 @@ pub(crate) fn show(
     } else {
         None
     };
-
-    let denials: Vec<DecisionRef> = run
-        .recording
-        .decisions
-        .iter()
-        .enumerate()
-        .filter(|(_, record)| is_denial(record))
-        .map(|(position, _)| DecisionRef {
-            run: run.id,
-            n: position.saturating_add(1),
-        })
-        .collect();
-    let mut suggestions = Vec::new();
-    for denial in denials.iter().take(2) {
-        suggestions.push(Next::Explain(*denial));
-        suggestions.push(Next::DraftRule(*denial));
-    }
-    if let Some(source) = test.as_ref().and_then(|test| test.source_run) {
-        suggestions.push(Next::Compare(source, run.id));
-    }
     let rerun_of = reader.reruns()?.get(&run.id).copied();
-    if let Some(source) = rerun_of {
-        suggestions.push(Next::Compare(source, run.id));
-    }
-    if suggestions.is_empty()
-        && let Some(first) = lines.first().and_then(|line| line.refs.first())
-        && let Ok(decision) = first.parse()
-    {
-        suggestions.push(Next::Explain(decision));
-    }
-    if let Some(session) = &run.recording.session_id {
-        suggestions.push(Next::RunsInSession(session.clone()));
-    }
-
+    let next = show_next(&run, &lines, test.as_ref(), rerun_of);
     let refs = (1..=run.recording.decisions.len())
-        .map(|n| DecisionRef { run: run.id, n }.to_string())
+        .map(|n| DecisionRef { run: run.id, n })
         .collect();
     Ok(ShowResult {
         kind: "run",
@@ -970,7 +910,7 @@ pub(crate) fn show(
         started_at: super::render::rfc3339(run.started_at_micros),
         wall_ms: run.wall_ms,
         outcome,
-        denied: denied_refs(&run),
+        denied,
         session: run.recording.session_id.clone(),
         variables: run.recording.variables.clone(),
         note: (run.label == "app").then_some(APP_NOTE),
@@ -982,9 +922,129 @@ pub(crate) fn show(
         log_truncated: run.recording.log_truncated,
         calls,
         payloads_included: include_payloads,
-        next: next(suggestions),
+        next,
         untrusted,
     })
+}
+
+/// The run's decisions as `show` lists them, with each line's context and any runtime
+/// reason in `untrusted`. Identical allowed decisions (same caller, capability, cause,
+/// and context) share a line; a run is decided under one version, so these are within
+/// one version. Denials never share one.
+fn decision_lines(
+    run: &StoredRun,
+    under: &DecidedUnder<'_>,
+    untrusted: &mut ShowUntrusted,
+) -> Vec<DecisionLine> {
+    let mut lines: Vec<DecisionLine> = Vec::new();
+    let mut groups: BTreeMap<(String, String, String, String), usize> = BTreeMap::new();
+    for (position, record) in run.recording.decisions.iter().enumerate() {
+        let decision_ref = reference(run.id, position);
+        if record.allowed {
+            let key = (
+                record.caller.clone(),
+                record.capability.clone(),
+                cause_key(record),
+                serde_json::to_string(&record.context).unwrap_or_default(),
+            );
+            if let Some(line) = groups.get(&key).and_then(|index| lines.get_mut(*index)) {
+                line.refs.push(decision_ref);
+                continue;
+            }
+            groups.insert(key, lines.len());
+        }
+        if !record.context.is_null() {
+            untrusted
+                .contexts
+                .insert(decision_ref, record.context.clone());
+        }
+        if let DecisionCause::RuntimeInvariant { reason } = &record.cause {
+            untrusted.reasons.insert(decision_ref, reason.clone());
+        }
+        lines.push(DecisionLine {
+            refs: vec![decision_ref],
+            outcome: Verdict::of(record),
+            caller: record.caller.clone(),
+            capability: record.capability.clone(),
+            decided_by: decided_by_phrase(record, under),
+            near_misses: near_miss_rules(record, under),
+            filtered: record.filtered,
+        });
+    }
+    lines
+}
+
+/// The run's calls counted by how they ended, with each call's request and response in
+/// `untrusted` when `include_payloads` asks for them.
+fn call_summary(
+    run: &StoredRun,
+    include_payloads: bool,
+    untrusted: &mut ShowUntrusted,
+) -> CallSummary {
+    let mut calls = CallSummary::default();
+    for call in &run.recording.calls {
+        calls.count = calls.count.saturating_add(1);
+        let count = match call.outcome {
+            Some(interpreter::runtime::CallOutcome::Returned) => &mut calls.returned,
+            Some(interpreter::runtime::CallOutcome::Failed) => &mut calls.failed,
+            Some(interpreter::runtime::CallOutcome::Unfinished) | None => &mut calls.unfinished,
+        };
+        *count = count.saturating_add(1);
+        let has_body = [&call.request, &call.response]
+            .iter()
+            .any(|side| side.as_ref().is_some_and(|payload| payload.body.is_some()));
+        if has_body {
+            calls.with_bodies = calls.with_bodies.saturating_add(1);
+        }
+        if include_payloads {
+            untrusted.calls.insert(
+                call.call_index,
+                serde_json::json!({
+                    "capability": call.capability,
+                    "request": call.request,
+                    "response": call.response,
+                }),
+            );
+        }
+    }
+    calls
+}
+
+/// What `show` suggests next: explaining and drafting from its first denials, comparing
+/// a test or rerun with its source, and the other runs of its session.
+fn show_next(
+    run: &StoredRun,
+    lines: &[DecisionLine],
+    test: Option<&TestInfo>,
+    rerun_of: Option<u64>,
+) -> Vec<String> {
+    let mut suggestions = Vec::new();
+    let denials = run
+        .recording
+        .decisions
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| is_denial(record))
+        .map(|(position, _)| reference(run.id, position));
+    for denial in denials.take(2) {
+        suggestions.push(Next::Explain(denial));
+        suggestions.push(Next::DraftRule(denial));
+    }
+    if let Some(source) = test.and_then(|test| test.source_run) {
+        suggestions.push(Next::Compare(source, run.id));
+    }
+    if let Some(source) = rerun_of {
+        suggestions.push(Next::Compare(source, run.id));
+    }
+    if suggestions.is_empty()
+        && let Some(first) = lines.first().and_then(|line| line.refs.first())
+    {
+        suggestions.push(Next::Explain(*first));
+    }
+    if let Some(session) = &run.recording.session_id {
+        suggestions.push(Next::RunsInSession(session.clone()));
+    }
+    next(suggestions)
 }
 
 fn test_info(
@@ -1120,8 +1180,8 @@ pub(crate) struct ExplainResult {
     /// `page` here links the decision itself.
     #[serde(flatten)]
     pub(crate) header: RunRef,
-    pub(crate) decision: String,
-    pub(crate) outcome: &'static str,
+    pub(crate) decision: DecisionRef,
+    pub(crate) outcome: Verdict,
     pub(crate) caller: String,
     pub(crate) capability: String,
     pub(crate) decided_by: DecidedBy,
@@ -1132,10 +1192,21 @@ pub(crate) struct ExplainResult {
     pub(crate) untrusted: ExplainUntrusted,
 }
 
+/// What kind of thing decided a call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DecidedKind {
+    Rule,
+    Default,
+    /// The runtime, ahead of the policy.
+    Runtime,
+    /// The policy, which did not say how.
+    Unexplained,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct DecidedBy {
-    /// `rule`, `default`, `runtime`, or `unexplained`.
-    pub(crate) kind: &'static str,
+    pub(crate) kind: DecidedKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) rule: Option<RuleOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1149,13 +1220,13 @@ pub(crate) struct DecidedBy {
 
 impl DecidedBy {
     pub(crate) fn is_default(&self) -> bool {
-        self.kind == "default"
+        self.kind == DecidedKind::Default
     }
 
     pub(crate) fn text(&self) -> String {
         match (self.kind, &self.rule) {
-            ("rule", Some(rule)) => rule.text(),
-            ("default", _) => {
+            (DecidedKind::Rule, Some(rule)) => rule.text(),
+            (DecidedKind::Default, _) => {
                 let default = self
                     .default_action
                     .map_or_else(String::new, |action| format!("default: {action}; "));
@@ -1166,10 +1237,12 @@ impl DecidedBy {
                 };
                 format!("the default ({default}{block})")
             }
-            ("runtime", _) => {
+            (DecidedKind::Runtime, _) => {
                 "the runtime, ahead of the policy (its reason is in run-data)".to_owned()
             }
-            _ => "the policy, which did not explain it".to_owned(),
+            (DecidedKind::Rule | DecidedKind::Unexplained, _) => {
+                "the policy, which did not explain it".to_owned()
+            }
         }
     }
 }
@@ -1222,7 +1295,7 @@ pub(crate) fn explain(reader: &Reader, decision: DecisionRef) -> Result<ExplainR
     let (decided_by, reason) = match &record.cause {
         DecisionCause::Rule(rule) => (
             DecidedBy {
-                kind: "rule",
+                kind: DecidedKind::Rule,
                 rule: Some(under.rule(&rule.caller, rule.index, rule.name.as_deref())),
                 filter: under.filter(&rule.caller, rule.index),
                 default_action: None,
@@ -1232,7 +1305,7 @@ pub(crate) fn explain(reader: &Reader, decision: DecisionRef) -> Result<ExplainR
         ),
         DecisionCause::Default { caller_block } => (
             DecidedBy {
-                kind: "default",
+                kind: DecidedKind::Default,
                 rule: None,
                 filter: None,
                 default_action: under.default_action(),
@@ -1242,7 +1315,7 @@ pub(crate) fn explain(reader: &Reader, decision: DecisionRef) -> Result<ExplainR
         ),
         DecisionCause::RuntimeInvariant { reason } => (
             DecidedBy {
-                kind: "runtime",
+                kind: DecidedKind::Runtime,
                 rule: None,
                 filter: None,
                 default_action: None,
@@ -1252,7 +1325,7 @@ pub(crate) fn explain(reader: &Reader, decision: DecisionRef) -> Result<ExplainR
         ),
         DecisionCause::Unexplained => (
             DecidedBy {
-                kind: "unexplained",
+                kind: DecidedKind::Unexplained,
                 rule: None,
                 filter: None,
                 default_action: None,
@@ -1303,13 +1376,13 @@ pub(crate) fn explain(reader: &Reader, decision: DecisionRef) -> Result<ExplainR
     if is_denial(record) {
         suggestions.push(Next::DraftRule(decision));
     }
-    let mut header = reader.header(&run, vec![decision.to_string()]);
+    let mut header = reader.header(&run, vec![decision]);
     header.page = reader.page.decision(decision);
     Ok(ExplainResult {
         kind: "decision",
         header,
-        decision: decision.to_string(),
-        outcome: outcome_word(record),
+        decision,
+        outcome: Verdict::of(record),
         caller: record.caller.clone(),
         capability: record.capability.clone(),
         decided_by,
@@ -1362,8 +1435,8 @@ impl FlipKind {
 #[derive(Debug, Serialize)]
 pub(crate) struct Flip {
     pub(crate) kind: FlipKind,
-    pub(crate) before: String,
-    pub(crate) after: String,
+    pub(crate) before: DecisionRef,
+    pub(crate) after: DecisionRef,
     pub(crate) caller: String,
     pub(crate) capability: String,
     /// What decided in the later run.
@@ -1381,7 +1454,7 @@ pub(crate) struct Flip {
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct CompareUntrusted {
     /// Each changed decision's context in the later run, by its ref there.
-    pub(crate) contexts: BTreeMap<String, Value>,
+    pub(crate) contexts: BTreeMap<DecisionRef, Value>,
 }
 
 /// How `compare` pairs decisions, as it reports it.
@@ -1412,7 +1485,6 @@ pub(crate) fn compare(reader: &Reader, a: u64, b: u64) -> Result<CompareResult, 
 
     let mut flips = Vec::new();
     let mut untrusted = CompareUntrusted::default();
-    let mut unmatched = Vec::new();
     let mut before_refs = Vec::new();
     let mut after_refs = Vec::new();
     for (key, after_list) in &after_positions {
@@ -1436,9 +1508,7 @@ pub(crate) fn compare(reader: &Reader, a: u64, b: u64) -> Result<CompareResult, 
             let before_ref = reference(before.id, *before_position);
             let after_ref = reference(after.id, *after_position);
             if !now.context.is_null() {
-                untrusted
-                    .contexts
-                    .insert(after_ref.clone(), now.context.clone());
+                untrusted.contexts.insert(after_ref, now.context.clone());
             }
             let rule = match &now.cause {
                 DecisionCause::Rule(rule) => {
@@ -1446,8 +1516,8 @@ pub(crate) fn compare(reader: &Reader, a: u64, b: u64) -> Result<CompareResult, 
                 }
                 _ => None,
             };
-            before_refs.push(before_ref.clone());
-            after_refs.push(after_ref.clone());
+            before_refs.push(before_ref);
+            after_refs.push(after_ref);
             flips.push(Flip {
                 kind,
                 before: before_ref,
@@ -1461,38 +1531,21 @@ pub(crate) fn compare(reader: &Reader, a: u64, b: u64) -> Result<CompareResult, 
                     .then(|| decided_by_phrase(was, &before_under)),
             });
         }
-        if after_list.len() > before_list.len() {
-            unmatched.push(format!(
-                "{} more {} → {} decisions in run {} than in run {}",
-                after_list.len() - before_list.len(),
-                key.0,
-                key.1,
-                after.id,
-                before.id
-            ));
-        }
     }
-    for (key, before_list) in &before_positions {
-        let after_len = after_positions.get(key).map_or(0, Vec::len);
-        if before_list.len() > after_len {
-            unmatched.push(format!(
-                "{} more {} → {} decisions in run {} than in run {}",
-                before_list.len() - after_len,
-                key.0,
-                key.1,
-                before.id,
-                after.id
-            ));
-        }
-    }
-    flips.sort_by_key(|flip| flip.after.parse::<DecisionRef>().ok());
+    let mut unmatched = surplus(&after_positions, &before_positions, after.id, before.id);
+    unmatched.extend(surplus(
+        &before_positions,
+        &after_positions,
+        before.id,
+        after.id,
+    ));
+    flips.sort_by_key(|flip| flip.after);
 
-    let mut suggestions = Vec::new();
-    for flip in flips.iter().take(3) {
-        if let Ok(decision) = flip.after.parse() {
-            suggestions.push(Next::Explain(decision));
-        }
-    }
+    let mut suggestions: Vec<Next> = flips
+        .iter()
+        .take(3)
+        .map(|flip| Next::Explain(flip.after))
+        .collect();
     suggestions.push(Next::Show(after.id));
     Ok(CompareResult {
         kind: "compare",
@@ -1504,6 +1557,31 @@ pub(crate) fn compare(reader: &Reader, a: u64, b: u64) -> Result<CompareResult, 
         next: next(suggestions),
         untrusted,
     })
+}
+
+/// For each caller and capability that run `run` decided more often than run `other`,
+/// how many more, in words.
+fn surplus(
+    positions: &BTreeMap<PairKey, Vec<usize>>,
+    other_positions: &BTreeMap<PairKey, Vec<usize>>,
+    run: u64,
+    other: u64,
+) -> Vec<String> {
+    positions
+        .iter()
+        .filter_map(|(key, list)| {
+            let more = list
+                .len()
+                .saturating_sub(other_positions.get(key).map_or(0, Vec::len));
+            let (caller, capability) = key;
+            (more > 0).then(|| {
+                format!(
+                    "{more} more {caller} → {capability} decisions in run {run} than in run \
+                     {other}"
+                )
+            })
+        })
+        .collect()
 }
 
 // ---- audit ---------------------------------------------------------------------------------
@@ -1533,9 +1611,9 @@ pub(crate) struct AuditResult {
 pub(crate) struct AuditGroup {
     pub(crate) caller: String,
     pub(crate) capability: String,
-    pub(crate) outcome: &'static str,
+    pub(crate) outcome: Verdict,
     pub(crate) decided_by: String,
-    pub(crate) refs: Vec<String>,
+    pub(crate) refs: Vec<DecisionRef>,
     /// For a package caller: how it came to be in the closure.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) origin: Option<String>,
@@ -1544,7 +1622,7 @@ pub(crate) struct AuditGroup {
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct AuditUntrusted {
     /// Each listed decision's context, by ref.
-    pub(crate) contexts: BTreeMap<String, Value>,
+    pub(crate) contexts: BTreeMap<DecisionRef, Value>,
 }
 
 pub(crate) fn audit(reader: &Reader, query: AuditQuery) -> Result<AuditResult, ReadError> {
@@ -1585,40 +1663,36 @@ pub(crate) fn audit(reader: &Reader, query: AuditQuery) -> Result<AuditResult, R
                 continue;
             }
             let decision_ref = reference(run.id, position);
+            let verdict = Verdict::of(record);
             let decided_by = if record.allowed && by_default {
                 allowed_by_default_phrase(record, &under)
             } else {
-                let verb = match outcome_word(record) {
-                    "allow" => "allowed",
-                    "ask" => "held for a human",
-                    _ => "denied",
-                };
-                format!("{verb} {}", decided_by_phrase(record, &under))
+                format!("{} {}", verdict.done(), decided_by_phrase(record, &under))
             };
             let key = (
                 record.caller.clone(),
                 record.capability.clone(),
-                outcome_word(record),
+                verdict,
                 decided_by.clone(),
             );
             let slot = *index.entry(key).or_insert_with(|| {
                 groups.push(AuditGroup {
                     caller: record.caller.clone(),
                     capability: record.capability.clone(),
-                    outcome: outcome_word(record),
+                    outcome: verdict,
                     decided_by,
                     refs: Vec::new(),
                     origin: None,
                 });
-                groups.len() - 1
+                groups.len().saturating_sub(1)
             });
             if let Some(group) = groups.get_mut(slot) {
-                group.refs.push(decision_ref.clone());
+                group.refs.push(decision_ref);
             }
             if !record.context.is_null() {
                 untrusted
                     .contexts
-                    .insert(decision_ref.clone(), record.context.clone());
+                    .insert(decision_ref, record.context.clone());
             }
             refs.push(decision_ref);
         }
@@ -1641,12 +1715,12 @@ pub(crate) fn audit(reader: &Reader, query: AuditQuery) -> Result<AuditResult, R
         }
     }
 
-    let mut suggestions = Vec::new();
-    for group in groups.iter().take(3) {
-        if let Some(Ok(decision)) = group.refs.first().map(|r| r.parse()) {
-            suggestions.push(Next::Explain(decision));
-        }
-    }
+    let mut suggestions: Vec<Next> = groups
+        .iter()
+        .take(3)
+        .filter_map(|group| group.refs.first().copied())
+        .map(Next::Explain)
+        .collect();
     if !query.default_only {
         suggestions.push(Next::Audit { default_only: true });
     }
@@ -1799,6 +1873,17 @@ pub(crate) fn changes(reader: &Reader, only: Option<u64>) -> Result<ChangesResul
 
 // ---- sessions ------------------------------------------------------------------------------
 
+/// How long the blueprint in force lets a session sit idle before the server expires it:
+/// the change log's latest version, or the default before any is logged.
+fn idle_timeout(reader: &Reader) -> Result<std::time::Duration, ReadError> {
+    let changes = reader.changes()?;
+    Ok(changes
+        .current()
+        .and_then(|version| submilli_blueprint::parse(&version.bytes).ok())
+        .unwrap_or_default()
+        .idle_timeout)
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct SessionsResult {
     pub(crate) kind: &'static str,
@@ -1821,9 +1906,22 @@ pub(crate) struct SessionRow {
     pub(crate) denied: bool,
     /// For a session started through the playground: whether it is still open.
     pub(crate) open: Option<bool>,
+    /// A started session not ended here but idle longer than the blueprint's idle
+    /// timeout, which the server has let expire.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) expired: bool,
+    /// When it last did something: its start, or its last run's end.
+    #[serde(skip)]
+    last_active_micros: u64,
 }
 
-pub(crate) fn sessions(reader: &Reader, limit: usize) -> Result<SessionsResult, ReadError> {
+/// The sessions, newest first; a started session idle past the idle timeout at
+/// `now_micros` lists as expired.
+pub(crate) fn sessions(
+    reader: &Reader,
+    limit: usize,
+    now_micros: u64,
+) -> Result<SessionsResult, ReadError> {
     let mut rows: BTreeMap<String, SessionRow> = BTreeMap::new();
     let row = |rows: &mut BTreeMap<String, SessionRow>, id: &str, at: u64| {
         rows.entry(id.to_owned()).or_insert_with(|| SessionRow {
@@ -1836,6 +1934,8 @@ pub(crate) fn sessions(reader: &Reader, limit: usize) -> Result<SessionsResult, 
             runs: Vec::new(),
             denied: false,
             open: None,
+            expired: false,
+            last_active_micros: at,
         });
     };
     if let Some(store) = &reader.store {
@@ -1849,6 +1949,7 @@ pub(crate) fn sessions(reader: &Reader, limit: usize) -> Result<SessionsResult, 
                     variables, label, ..
                 } => {
                     session.started_at_micros = session.started_at_micros.min(line.at_micros);
+                    session.last_active_micros = session.last_active_micros.max(line.at_micros);
                     session.variables = variables;
                     if !session.sources.contains(&label) {
                         session.sources.push(label);
@@ -1874,9 +1975,21 @@ pub(crate) fn sessions(reader: &Reader, limit: usize) -> Result<SessionsResult, 
         if !session.sources.contains(&summary.label) {
             session.sources.push(summary.label.clone());
         }
-        session.run_count += 1;
+        session.run_count = session.run_count.saturating_add(1);
         session.runs.push(summary.id);
         session.denied |= summary.denied > 0;
+        let ended = summary
+            .started_at_micros
+            .saturating_add(summary.wall_ms.saturating_mul(1000));
+        session.last_active_micros = session.last_active_micros.max(ended);
+    }
+    let idle_timeout = idle_timeout(reader)?;
+    for session in rows.values_mut() {
+        let idle = now_micros.saturating_sub(session.last_active_micros);
+        if session.open == Some(true) && u128::from(idle) > idle_timeout.as_micros() {
+            session.open = Some(false);
+            session.expired = true;
+        }
     }
     let mut sessions: Vec<SessionRow> = rows.into_values().collect();
     sessions.sort_by(|a, b| {

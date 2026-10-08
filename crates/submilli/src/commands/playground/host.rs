@@ -351,6 +351,7 @@ async fn run(
         page: Page {
             base: Some(description.url.clone()),
         },
+        cancelling: std::sync::Mutex::default(),
     });
     // Flipped once the server has drained, so the event feeds end and the control
     // listener can close.
@@ -633,6 +634,7 @@ impl ControlRoutes {
             .merge(viewer)
             .merge(stand_in)
             .fallback(not_found)
+            .layer(axum::extract::DefaultBodyLimit::max(api::MAX_BODY_BYTES))
             .layer(middleware::from_fn_with_state(state.clone(), same_origin))
             .layer(middleware::from_fn(no_sniff))
             .with_state(state)

@@ -805,14 +805,13 @@ fn events_of_two_concurrent_runs_in_a_session_are_numbered_without_gaps_and_tail
         let store = Arc::clone(&world.store);
         let stop = Arc::clone(&stop);
         std::thread::spawn(move || {
-            let mut cursor = 0;
+            let mut offset = 0;
             let mut seen = Vec::new();
             loop {
                 let done = stop.load(std::sync::atomic::Ordering::Acquire);
-                for event in store.read_events_after(Some("sess"), cursor).unwrap() {
-                    cursor = event.session_seq;
-                    seen.push(event.event_id);
-                }
+                let (events, next) = store.read_events_from(Some("sess"), offset).unwrap();
+                offset = next;
+                seen.extend(events.into_iter().map(|event| event.event_id));
                 if done {
                     return seen;
                 }
@@ -897,6 +896,16 @@ fn a_partly_written_last_line_is_left_for_the_next_read() {
     std::io::Write::write_all(&mut file, b"{\"format\":1,\"session_seq\":2,\"ev").unwrap();
     let log = world.store.read_events(Some("sess")).unwrap();
     assert_eq!(log.events.len(), 1);
+
+    // A follower reads up to the partial line and picks up from there.
+    let (events, offset) = world.store.read_events_from(Some("sess"), 0).unwrap();
+    assert_eq!(events.len(), 1);
+    let whole = std::fs::metadata(&path).unwrap().len();
+    assert!(offset < whole);
+    std::io::Write::write_all(&mut file, b"\n").unwrap();
+    let (events, next) = world.store.read_events_from(Some("sess"), offset).unwrap();
+    assert!(events.is_empty(), "a line that does not parse is skipped");
+    assert_eq!(next, whole + 1);
 }
 
 #[test]
@@ -977,6 +986,50 @@ fn assert_backfilled_in_place(world: &World) {
         })
         .count();
     assert_eq!(decisions, 3);
+}
+
+#[test]
+fn decisions_are_numbered_as_the_run_keeps_them_and_left_unnumbered_after_a_drop() {
+    let world = World::new();
+    let recorder = world.start(run_start("exec-1", Some("sess")));
+    let decisions: Vec<DecisionRecord> = (0..4)
+        .map(|n| decision(n, "http.get", json!({ "n": n }), true))
+        .collect();
+    let send = |seq, kind| world.recorder.event(event(seq, "sess", "exec-1", kind));
+    let decided = |n: usize| EventKind::Decision {
+        record: Box::new(decisions[n].clone()),
+    };
+    send(1, run_started());
+    send(2, decided(0));
+    send(3, decided(1));
+    // The server dropped event 4, the third decision: what follows has no known place.
+    send(5, decided(3));
+    send(6, run_finished(1));
+    recorder.finish(finished(decisions.clone(), Vec::new()));
+    let log = world.store.read_events(Some("sess")).unwrap();
+    let numbered: Vec<(u64, Option<u64>, bool)> = log
+        .events
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::Event(e) => match &e.kind {
+                EventKind::Decision { record } => {
+                    Some((record.call_index, event.decision, event.backfilled))
+                }
+                _ => None,
+            },
+            EventBody::Gap(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        numbered,
+        [
+            (0, Some(1), false),
+            (1, Some(2), false),
+            (3, None, false),
+            // Recovered from the record, where its place is known.
+            (2, Some(3), true),
+        ]
+    );
 }
 
 #[test]

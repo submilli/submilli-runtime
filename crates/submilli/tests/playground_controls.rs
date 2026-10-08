@@ -1933,6 +1933,238 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         }
 
         #[test]
+        fn watch_on_a_session_never_seen_is_a_usage_error() {
+            let playground = Playground::starter();
+            playground.start();
+            let (refused, code) = playground.json(&["watch", "never-started"]);
+            assert_eq!(code, 2, "{refused}");
+            assert_eq!(refused["error"]["kind"], "unknown-session", "{refused}");
+            assert_next_is_safe(&refused);
+        }
+
+        #[test]
+        fn resuming_after_the_last_idle_gets_no_second_idle() {
+            let playground = Playground::starter();
+            let page = playground.start();
+            let admin = playground.token("admin");
+            let started = playground.expect(
+                0,
+                &["session", "start", "--var", "customerId=cus_northwind"],
+            );
+            let session = started["session"].as_str().unwrap().to_owned();
+            playground.expect(0, &["exec", "--example", "--session", &session]);
+            let (_, idle) = read_feed(&page, &admin, &session, None, usize::MAX);
+            assert!(idle, "a fresh connection to an idle session says so");
+            let logged = logged_events(&playground, &session);
+            // Ended, so the resumed feed closes once it has said what it has to say.
+            playground.expect(0, &["session", "end", &session]);
+            let (rest, idle) = read_feed(&page, &admin, &session, Some(logged), usize::MAX);
+            assert!(rest.is_empty(), "{rest:?}");
+            assert!(!idle, "the idle was already sent before the resume point");
+        }
+
+        #[test]
+        fn a_run_a_crashed_playground_left_unfinished_does_not_keep_watch_waiting() {
+            let playground = Playground::starter();
+            playground.start();
+            let started = playground.expect(
+                0,
+                &["session", "start", "--var", "customerId=cus_northwind"],
+            );
+            let session = started["session"].as_str().unwrap().to_owned();
+            let program = playground.write(
+                "loop.ts",
+                "function main(): number {\n  let total = 0;\n  for (let i = 0; i < 100000000000; i++) { total += i % 3; }\n  return total;\n}\n",
+            );
+            let running = playground
+                .command(&["exec", &program, "--session", &session, "--json"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            listed_running(&playground, &session);
+            let (status, _) = playground.json(&["status"]);
+            let pid = status["pid"].as_u64().unwrap().to_string();
+            let killed = Command::new("kill").args(["-KILL", &pid]).status().unwrap();
+            assert!(killed.success());
+            wait(running);
+            playground.start();
+
+            let mut watch = playground
+                .command(&["watch", &session])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let exited = loop {
+                if let Some(status) = watch.try_wait().unwrap() {
+                    break Some(status);
+                }
+                if Instant::now() > deadline {
+                    let _ = watch.kill();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            };
+            let output = wait(watch);
+            let status = exited.expect("watch still waiting on the crashed run");
+            assert!(status.success(), "{}", stderr(&output));
+            assert_eq!(watched_lines(&output).last().unwrap()["kind"], "run-idle");
+        }
+
+        #[test]
+        fn ending_a_session_the_server_no_longer_has_records_it_as_ended() {
+            let playground = Playground::starter();
+            playground.start();
+            // Listed open by the log, but unknown to the server, as one it let expire.
+            let log = playground.state().join("store/sessions.jsonl");
+            let mut text = std::fs::read_to_string(&log).unwrap_or_default();
+            text.push_str(
+                &json!({
+                    "format": 1,
+                    "at_micros": 1_700_000_000_000_000_u64,
+                    "kind": "started",
+                    "session_id": "s-gone",
+                    "variables": {},
+                    "label": "assistant",
+                })
+                .to_string(),
+            );
+            text.push('\n');
+            std::fs::write(&log, text).unwrap();
+            let listed = playground.expect(0, &["sessions"]);
+            let row = |listed: &Value| {
+                listed["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["session"] == "s-gone")
+                    .unwrap()
+                    .clone()
+            };
+            assert_eq!(row(&listed)["expired"], true, "{listed}");
+            let ended = playground.expect(0, &["session", "end", "s-gone"]);
+            assert_eq!(ended["already_ended"], true, "{ended}");
+            let listed = playground.expect(0, &["sessions"]);
+            assert_eq!(row(&listed)["open"], false, "{listed}");
+            assert!(row(&listed).get("expired").is_none(), "{listed}");
+            let (again, code) = playground.json(&["session", "end", "s-gone"]);
+            assert_eq!(code, 2, "{again}");
+            assert_eq!(again["error"]["kind"], "unknown-session");
+        }
+
+        #[test]
+        fn a_variable_the_blueprint_does_not_declare_is_refused_by_name() {
+            let playground = Playground::starter();
+            playground.start();
+            let (refused, code) = playground.json(&[
+                "exec",
+                "--example",
+                "--var",
+                "customerId=cus_northwind",
+                "--var",
+                "TYPO=1",
+            ]);
+            assert_eq!(code, 2, "{refused}");
+            assert_eq!(
+                refused["error"]["kind"], "undeclared-variables",
+                "{refused}"
+            );
+            let bound = playground.run(&["bind", "TYPO=1"]);
+            assert!(bound.status.success(), "{}", stderr(&bound));
+            assert!(
+                stderr(&bound).contains("TYPO is not declared by the blueprint"),
+                "{}",
+                stderr(&bound)
+            );
+        }
+
+        #[test]
+        fn a_program_too_large_for_the_api_is_a_usage_error() {
+            let playground = Playground::starter();
+            playground.start();
+            let huge = format!(
+                "function main(): string {{ return \"{}\"; }}\n",
+                "x".repeat(3 << 20)
+            );
+            let program = playground.write("huge.ts", &huge);
+            let (refused, code) = playground.json(&["exec", &program]);
+            assert_eq!(code, 2, "{refused}");
+            assert_eq!(refused["error"]["kind"], "too-large", "{refused}");
+        }
+
+        #[test]
+        fn a_malformed_read_request_answers_in_the_control_error_shape() {
+            let playground = Playground::starter();
+            let page = playground.start();
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .build()
+                .into();
+            for path in [
+                "/api/runs/abc",
+                "/api/runs/99999999999999999999",
+                "/api/runs?limit=-1",
+                "/api/compare/1/x",
+            ] {
+                let mut response = agent
+                    .get(&format!("{page}{path}"))
+                    .header(
+                        "authorization",
+                        &format!("Bearer {}", playground.token("admin")),
+                    )
+                    .call()
+                    .unwrap();
+                assert_eq!(response.status().as_u16(), 400, "{path}");
+                let body: Value =
+                    serde_json::from_str(&response.body_mut().read_to_string().unwrap()).unwrap();
+                assert_eq!(body["error"], "invalid_request", "{path}: {body}");
+                assert!(
+                    body["message"].as_str().is_some_and(|m| !m.is_empty()),
+                    "{body}"
+                );
+            }
+        }
+
+        #[test]
+        fn the_page_drafts_but_writing_takes_the_admin_route() {
+            let playground = Playground::starter();
+            let page = playground.start();
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let program = playground.write("caught.ts", CAUGHT);
+            let ran = playground.expect(0, &["exec", &program]);
+            let denial = ran["denied"][0].as_str().unwrap().to_owned();
+            let file = playground.root.join("submilli/blueprints/billing.yaml");
+            let before = std::fs::read(&file).unwrap();
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .build()
+                .into();
+            let post = |path: &str| {
+                let mut response = agent
+                    .post(&format!("{page}{path}"))
+                    .header(
+                        "authorization",
+                        &format!("Bearer {}", playground.token("admin")),
+                    )
+                    .header("content-type", "application/json")
+                    .send(json!({ "decision": denial, "write": true }).to_string())
+                    .unwrap();
+                let status = response.status().as_u16();
+                (status, response.body_mut().read_to_string().unwrap())
+            };
+            let (status, body) = post("/api/draft-rule");
+            assert_eq!(status, 403, "{body}");
+            assert_eq!(std::fs::read(&file).unwrap(), before);
+            let (status, body) = post("/api/draft-rule/write");
+            assert_eq!(status, 200, "{body}");
+            let answer: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(answer["result"]["written"], true, "{body}");
+            assert_ne!(std::fs::read(&file).unwrap(), before);
+        }
+
+        #[test]
         fn variables_are_remembered_across_a_restart_and_rerun_needs_no_new_binding() {
             let playground = Playground::starter();
             playground.start();

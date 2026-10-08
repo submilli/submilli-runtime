@@ -62,7 +62,7 @@ fn a_draft_prints_the_rule_as_run_data_and_leaves_the_file_alone() {
     );
     assert!(drafted.overrides.is_none());
     assert_next_is_safe(&drafted.next);
-    let text = draft_text(&drafted);
+    let text = render::draft_text(&drafted);
     let fenced = text
         .split(render::FENCE_OPEN)
         .nth(1)
@@ -153,7 +153,7 @@ fn a_draft_names_its_file_from_the_project_and_offers_a_name_in_prose() {
         drafted.file_in_project,
         Path::new("submilli/blueprints/billing.yaml")
     );
-    let text = draft_text(&drafted);
+    let text = render::draft_text(&drafted);
     assert!(
         text.contains("goes in: submilli/blueprints/billing.yaml, lines "),
         "{text}"
@@ -192,7 +192,7 @@ fn a_draft_names_its_file_from_the_project_and_offers_a_name_in_prose() {
         "{}",
         named.untrusted.rule
     );
-    assert!(!draft_text(&named).contains("--name"));
+    assert!(!render::draft_text(&named).contains("--name"));
     let written = submilli_blueprint::parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(
         written.permissions["main"][1].name.as_deref(),
@@ -373,14 +373,14 @@ fn requests_name_only_their_own_fields() {
 
 #[test]
 fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
-    let decision = |backfilled: bool| {
+    let decision = |n: Option<u64>| {
         json!({
             "format": 1,
             "session_seq": 4,
             "event_id": "e-4",
             "position": { "at_micros": 1, "rank": 1 },
             "run": 7,
-            "backfilled": backfilled,
+            "decision": n,
             "body": { "event": {
                 "schema": 1, "seq": 40, "session_id": "s-1", "run_id": "x-7",
                 "event_id": "e-4", "at_micros": 1_791_468_192_000_000_u64,
@@ -394,8 +394,7 @@ fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
             } },
         })
     };
-    let mut counts = std::collections::HashMap::new();
-    let first = watch_line(Some(4), &decision(false), "s-1", &mut counts);
+    let first = watch_line(Some(4), &decision(Some(1)), "s-1");
     assert_eq!(first["kind"], "decision");
     // The envelope's session sequence, not the decision's own place in its run.
     assert_eq!(first["seq"], 4);
@@ -409,10 +408,24 @@ fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
     let mut outside = first.clone();
     outside.as_object_mut().unwrap().remove("untrusted");
     assert!(!outside.to_string().contains(HOSTILE), "{first}");
-    let second = watch_line(Some(5), &decision(false), "s-1", &mut counts);
+    let second = watch_line(Some(5), &decision(Some(2)), "s-1");
     assert_eq!(second["decision"], "7.2");
-    let recovered = watch_line(Some(6), &decision(true), "s-1", &mut counts);
-    assert!(recovered.get("decision").is_none(), "{recovered}");
+    // The store could not tell its place in the run: no reference rather than a wrong one.
+    let unnumbered = watch_line(Some(6), &decision(None), "s-1");
+    assert!(unnumbered.get("decision").is_none(), "{unnumbered}");
+
+    // A refusal ahead of the policy: its reason may quote what the call passed.
+    let mut invariant = decision(Some(3));
+    invariant["body"]["event"]["tool_call_id"] = json!(HOSTILE);
+    invariant["body"]["event"]["record"]["cause"] =
+        json!({ "kind": "runtime-invariant", "reason": HOSTILE });
+    let refused = watch_line(Some(7), &invariant, "s-1");
+    assert_eq!(refused["cause"]["kind"], "runtime-invariant", "{refused}");
+    assert_eq!(refused["untrusted"]["cause_reason"], HOSTILE, "{refused}");
+    assert_eq!(refused["untrusted"]["tool_call_id"], HOSTILE, "{refused}");
+    let mut outside = refused.clone();
+    outside.as_object_mut().unwrap().remove("untrusted");
+    assert!(!outside.to_string().contains(HOSTILE), "{refused}");
 
     let started = json!({
         "session_seq": 1, "event_id": "e-1", "run": 7,
@@ -422,7 +435,7 @@ fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
             "blueprint": "billing", "client": HOSTILE, "at_micros": 1,
         } },
     });
-    let line = watch_line(Some(1), &started, "s-1", &mut counts);
+    let line = watch_line(Some(1), &started, "s-1");
     assert_eq!(line["kind"], "run-started");
     assert_eq!(line["label"], "assistant");
     assert_eq!(line["untrusted"]["client"], HOSTILE);
@@ -432,7 +445,7 @@ fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
 fn a_missing_variable_refusal_names_it_with_its_last_value_when_there_is_one() {
     let message = "required variable 'customerId' was not supplied";
     let names = vec!["customerId".to_owned()];
-    let fresh = missing_variables(message, &names, &BTreeMap::new());
+    let fresh = bind_suggestion(message, &names, &BTreeMap::new());
     assert_eq!(fresh.kind, "missing-variables");
     assert_eq!(fresh.exit, EXIT_USAGE);
     assert!(
@@ -443,7 +456,7 @@ fn a_missing_variable_refusal_names_it_with_its_last_value_when_there_is_one() {
         fresh.message
     );
     let last = BTreeMap::from([("customerId".to_owned(), "cus_northwind".to_owned())]);
-    let known = missing_variables(message, &names, &last);
+    let known = bind_suggestion(message, &names, &last);
     assert!(
         known
             .message
@@ -452,7 +465,7 @@ fn a_missing_variable_refusal_names_it_with_its_last_value_when_there_is_one() {
         known.message
     );
     let quoted = BTreeMap::from([("customerId".to_owned(), "two words".to_owned())]);
-    let spaced = missing_variables(message, &names, &quoted);
+    let spaced = bind_suggestion(message, &names, &quoted);
     assert!(
         spaced.message.contains("bind customerId='two words'`"),
         "{}",
@@ -506,4 +519,211 @@ fn the_saved_binding_keeps_variables_and_secret_names_but_never_a_secret_value()
         ..BindRequest::default()
     });
     assert!(restarted.to_remember().secret_names.is_empty());
+}
+
+#[test]
+fn a_refusal_naming_a_field_of_the_call_keeps_the_name_in_run_data() {
+    let field = format!("{HOSTILE}\u{1b}[2J");
+    for error in [
+        DraftError::UnaddressableField {
+            field: field.clone(),
+        },
+        DraftError::UnquotableValue {
+            field: field.clone(),
+        },
+        DraftError::InexactNumber {
+            field: field.clone(),
+        },
+        DraftError::TooBroad {
+            field: field.clone(),
+        },
+        DraftError::UnsafeValue {
+            field: field.clone(),
+            character: '\n',
+        },
+    ] {
+        let refused = draft_error(&error, DecisionRef { run: 4, n: 2 });
+        assert!(!refused.message.contains(HOSTILE), "{}", refused.message);
+        let answer: Answer = refused.into();
+        assert_eq!(
+            answer.result["untrusted"]["field"],
+            json!(field),
+            "{error:?}"
+        );
+        let mut outside = answer.result.clone();
+        outside.as_object_mut().unwrap().remove("untrusted");
+        assert!(!outside.to_string().contains(HOSTILE), "{error:?}");
+        let notes = answer.notes.join("\n");
+        assert!(!notes.contains('\u{1b}'), "{notes}");
+        let fenced = notes
+            .split(render::FENCE_OPEN)
+            .nth(1)
+            .expect("the field is fenced");
+        assert!(fenced.contains(HOSTILE), "{notes}");
+        assert!(
+            !notes
+                .split(render::FENCE_OPEN)
+                .next()
+                .unwrap()
+                .contains(HOSTILE)
+        );
+    }
+}
+
+#[test]
+fn every_note_prints_on_lines_without_control_characters() {
+    let answer = Answer {
+        exit: EXIT_FAILURE,
+        result: json!({}),
+        text: String::new(),
+        notes: vec!["a\u{1b}[2Jb\nc\u{202e}d".to_owned()],
+    };
+    assert_eq!(answer.note_lines(), ["a\\u{1b}[2Jb", "c\\u{202e}d"]);
+}
+
+#[test]
+fn a_run_that_was_not_saved_keeps_the_servers_message_in_run_data() {
+    let response = ExecuteResponse {
+        execution_id: "x-1".into(),
+        session_id: "s-1".into(),
+        result: None,
+        console: Vec::new(),
+        error: Some(submilli_server::error::ExecuteError {
+            kind: ErrorKind::RuntimeError,
+            message: HOSTILE.into(),
+            diagnostics: Vec::new(),
+            denial: None,
+        }),
+        discovery_warnings: Vec::new(),
+    };
+    let refused = unsaved_run(&response, &KnownSecrets::default(), |message| {
+        ActError::usage("missing-variables", message)
+    });
+    assert!(
+        refused.message.contains("ran but was not saved"),
+        "{}",
+        refused.message
+    );
+    assert!(!refused.message.contains(HOSTILE), "{}", refused.message);
+    let answer: Answer = refused.into();
+    assert_eq!(answer.result["untrusted"]["error"], HOSTILE);
+}
+
+#[test]
+fn a_context_holding_a_redacted_secret_is_not_drafted_from() {
+    let (fixture, _dir, file, run) = denied_run("sk_live_[redacted]");
+    let refused = draft_rule(
+        &fixture.store,
+        &file,
+        root(&file),
+        DecisionRef { run, n: 2 },
+        false,
+        None,
+        &Page::default(),
+    )
+    .unwrap_err();
+    assert_eq!(refused.kind, "redacted-value", "{}", refused.message);
+    assert!(refused.message.contains("redacted"), "{}", refused.message);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), BLUEPRINT);
+}
+
+#[test]
+fn a_change_log_that_cannot_be_read_stops_the_draft() {
+    let (fixture, _dir, file, run) = denied_run("cus_initech");
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(fixture.store.root().join("changes.jsonl"))
+        .unwrap();
+    writeln!(log, "{{\"format\":999}}").unwrap();
+    let refused = draft_rule(
+        &fixture.store,
+        &file,
+        root(&file),
+        DecisionRef { run, n: 2 },
+        false,
+        None,
+        &Page::default(),
+    )
+    .unwrap_err();
+    assert_eq!(refused.exit, EXIT_FAILURE);
+    assert!(
+        refused.message.contains("newer submilli"),
+        "{}",
+        refused.message
+    );
+}
+
+#[test]
+fn writing_through_a_symlinked_blueprint_changes_the_file_it_points_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("shared.yaml");
+    std::fs::write(&target, "before\n").unwrap();
+    let link = dir.path().join("billing.yaml");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    write_blueprint(&link, b"before\n", b"after\n").unwrap();
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "after\n");
+}
+
+#[test]
+fn clearing_the_binding_also_forgets_the_values_it_would_suggest() {
+    let mut binding = Binding::default();
+    binding.apply(BindRequest {
+        variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+        ..BindRequest::default()
+    });
+    binding.apply(BindRequest {
+        clear: true,
+        ..BindRequest::default()
+    });
+    assert!(binding.last.is_empty());
+    assert!(binding.to_remember().last.is_empty());
+}
+
+#[test]
+fn a_cancel_says_whether_it_stopped_the_run_or_another_already_is() {
+    assert_eq!(cancel_outcome(true, false, true), CancelOutcome::Cancelling);
+    assert_eq!(
+        cancel_outcome(false, true, true),
+        CancelOutcome::AlreadyCancelling
+    );
+    assert_eq!(cancel_outcome(false, false, false), CancelOutcome::Finished);
+    assert_eq!(
+        cancel_outcome(false, false, true),
+        CancelOutcome::NotYetCancellable
+    );
+    let text = |outcome| render::cancel_text(&CancelResult::new(7, outcome));
+    assert!(text(CancelOutcome::AlreadyCancelling).contains("already being cancelled"));
+    assert!(!text(CancelOutcome::NotYetCancellable).contains("finished"));
+    assert_eq!(CancelOutcome::AlreadyCancelling.exit(), EXIT_SUCCESS);
+    assert_eq!(CancelOutcome::Finished.exit(), EXIT_USAGE);
+}
+
+#[test]
+fn a_variable_the_blueprint_does_not_declare_is_named_as_undeclared() {
+    let blueprint = submilli_blueprint::parse(BLUEPRINT).unwrap();
+    let refused = undeclared_variables(
+        &blueprint,
+        ["TYPO".to_owned(), "customerId".to_owned()].iter(),
+    )
+    .unwrap();
+    assert_eq!(refused.kind, "undeclared-variables");
+    assert_eq!(refused.exit, EXIT_USAGE);
+    assert!(
+        refused.message.contains("TYPO")
+            && refused.message.contains("not declared by the blueprint"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        refused.message.contains("customerId"),
+        "names what it declares"
+    );
+    assert!(!refused.message.contains("bind"), "{}", refused.message);
+    assert!(undeclared_variables(&blueprint, ["customerId".to_owned()].iter()).is_none());
 }

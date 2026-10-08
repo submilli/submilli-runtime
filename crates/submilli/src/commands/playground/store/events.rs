@@ -20,7 +20,7 @@ use std::sync::{Mutex, PoisonError};
 use serde::{Deserialize, Serialize};
 use submilli_server::record::SessionEvent;
 
-use super::{Result, Store, StoreError, io_error, open_for_append, read_lines};
+use super::{Result, Store, StoreError, io_error, open_for_append, parse_record, read_lines};
 
 /// One line of a session's event log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +38,10 @@ pub(crate) struct StoredEvent {
     /// Recovered from the run's record after the server dropped it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) backfilled: bool,
+    /// For a decision, its number in its run (`<run>.<n>`, from 1), the one `show` and
+    /// `explain` give it; `None` when the store could not tell it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) decision: Option<u64>,
     pub(crate) body: EventBody,
 }
 
@@ -241,16 +245,50 @@ impl Store {
         })
     }
 
-    /// The events appended after `after` (a `session_seq`), for a reader following the
-    /// log: each complete line once, and nothing still being written.
-    pub(crate) fn read_events_after(
+    /// The events in the complete lines of a session's log from byte `offset` on, and
+    /// the offset just past the last of them: a reader following the log passes it back
+    /// to read each line once, and a line still being written waits for its newline. A
+    /// line that does not parse is skipped; one in a newer format is refused. An offset
+    /// past the end, after the logs were cleared, reads from the start.
+    pub(crate) fn read_events_from(
         &self,
         session: Option<&str>,
-        after: u64,
-    ) -> Result<Vec<StoredEvent>> {
-        let mut events = self.read_events(session)?.events;
-        events.retain(|event| event.session_seq > after);
-        Ok(events)
+        offset: u64,
+    ) -> Result<(Vec<StoredEvent>, u64)> {
+        use std::io::{Read as _, Seek as _};
+        let path = self.events_path(session);
+        let mut file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Vec::new(), 0));
+            }
+            Err(error) => return Err(io_error(&path)(error)),
+        };
+        let len = file.metadata().map_err(io_error(&path))?.len();
+        let start = if offset > len { 0 } else { offset };
+        file.seek(std::io::SeekFrom::Start(start))
+            .map_err(io_error(&path))?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(io_error(&path))?;
+        let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') else {
+            return Ok((Vec::new(), start));
+        };
+        let complete = bytes.get(..last_newline).unwrap_or_default();
+        let mut events = Vec::new();
+        for line in complete
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+        {
+            match parse_record::<StoredEvent>(&path, line) {
+                Ok(event) => events.push(event),
+                Err(StoreError::Corrupt { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let read = u64::try_from(last_newline)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        Ok((events, start.saturating_add(read)))
     }
 
     pub(crate) fn events_path(&self, session: Option<&str>) -> PathBuf {

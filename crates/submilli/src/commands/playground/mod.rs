@@ -127,7 +127,9 @@ pub enum PlaygroundCmd {
     /// Cancel a run in flight.
     Cancel(RunArg),
     /// Follow a session's events as JSON lines until its last run finishes (`--follow`:
-    /// until the session ends). Without a session, follows the most recent one.
+    /// until the session ends). Without a session, follows the most recent one. On a
+    /// session already idle it prints the events so far and exits at once, so start it
+    /// after the run it is to follow has started, or pass `--follow`.
     Watch(WatchArgs),
 }
 
@@ -470,92 +472,55 @@ pub fn execute(_args: Args) -> anyhow::Result<ExitCode> {
 
 #[cfg(unix)]
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
-    match args.cmd {
-        None => unix::start(args.start),
-        Some(PlaygroundCmd::Start(start)) => unix::start(start),
-        Some(PlaygroundCmd::Status(output)) => unix::status(Output::from_json(output.json)),
-        Some(PlaygroundCmd::Open(output)) => unix::open(Output::from_json(output.json)),
-        Some(PlaygroundCmd::Stop(output)) => unix::stop(Output::from_json(output.json)),
-        Some(PlaygroundCmd::Init(output)) => unix::init(Output::from_json(output.json)),
-        Some(
-            cmd @ (PlaygroundCmd::Runs(_)
-            | PlaygroundCmd::Show(_)
-            | PlaygroundCmd::Explain(_)
-            | PlaygroundCmd::Compare(_)
-            | PlaygroundCmd::Audit(_)
-            | PlaygroundCmd::Changes(_)
-            | PlaygroundCmd::Sessions(_)),
-        ) => read_command(cmd),
-        Some(cmd) => action_command(cmd),
-    }
-}
-
-/// An action control: reaches the running playground, except `draft-rule`, which works
-/// on the store and the blueprint file.
-#[cfg(unix)]
-fn action_command(cmd: PlaygroundCmd) -> anyhow::Result<ExitCode> {
     use controls::act::{
-        ActionRequest, BindRequest, ExecRequest, Mode, SessionEndRequest, SessionStartRequest,
-        TestRequest, execute_action, execute_draft, execute_watch,
+        ActionRequest, SessionEndRequest, SessionStartRequest, execute_action, execute_watch,
     };
-    let usage = |message: String| {
-        eprintln!("{message}");
-        Ok(ExitCode::from(controls::render::EXIT_USAGE))
+    use controls::read::AuditQuery;
+    use controls::{ReadRequest, execute_read};
+    let read = |request, json| execute_read(request, Output::from_json(json));
+    let act = |request, json| execute_action(&request, Output::from_json(json));
+    let Some(cmd) = args.cmd else {
+        return unix::start(args.start);
     };
-    let (request, json) = match cmd {
-        PlaygroundCmd::Exec(args) => {
-            let output = Output::from_json(args.json);
-            // Not running is said before anything else is checked.
-            if let Err(answer) = controls::act::connect()? {
-                return Ok(answer.print(output));
-            }
-            let code = match exec_program(args.file.as_deref(), args.example) {
-                Ok(code) => code,
-                Err(message) => return usage(message),
-            };
-            (
-                ActionRequest::Exec(ExecRequest {
-                    code,
-                    example: args.example,
-                    session: args.session,
-                    variables: args.vars.into_iter().collect(),
-                }),
-                args.json,
-            )
-        }
-        PlaygroundCmd::Bind(args) => {
-            let output = Output::from_json(args.json);
-            if let Err(answer) = controls::act::connect()? {
-                return Ok(answer.print(output));
-            }
-            let changes = !args.vars.is_empty()
-                || !args.secrets.is_empty()
-                || !args.unset.is_empty()
-                || args.clear;
-            let request = if changes {
-                let mut secrets = std::collections::BTreeMap::new();
-                for name in &args.secrets {
-                    match secret_value(name) {
-                        Ok(value) => {
-                            secrets.insert(name.clone(), value);
-                        }
-                        Err(message) => return usage(message),
-                    }
-                }
-                Some(BindRequest {
-                    variables: args.vars.into_iter().collect(),
-                    secrets,
-                    unset: args.unset,
-                    clear: args.clear,
-                })
-            } else {
-                None
-            };
-            (ActionRequest::Bind(request), args.json)
-        }
+    match cmd {
+        PlaygroundCmd::Start(start) => unix::start(start),
+        PlaygroundCmd::Status(output) => unix::status(Output::from_json(output.json)),
+        PlaygroundCmd::Open(output) => unix::open(Output::from_json(output.json)),
+        PlaygroundCmd::Stop(output) => unix::stop(Output::from_json(output.json)),
+        PlaygroundCmd::Init(output) => unix::init(Output::from_json(output.json)),
+        PlaygroundCmd::Runs(args) => runs(args),
+        PlaygroundCmd::Show(args) => read(
+            ReadRequest::Show {
+                run: args.run,
+                include_payloads: args.include_payloads,
+            },
+            args.json,
+        ),
+        PlaygroundCmd::Explain(args) => match args.decision.parse() {
+            Ok(decision) => read(ReadRequest::Explain(decision), args.json),
+            Err(message) => usage(&message),
+        },
+        PlaygroundCmd::Compare(args) => read(ReadRequest::Compare(args.a, args.b), args.json),
+        PlaygroundCmd::Audit(args) => read(
+            ReadRequest::Audit(AuditQuery {
+                default_only: args.default_only,
+                packages_only: args.packages_only,
+            }),
+            args.json,
+        ),
+        PlaygroundCmd::Changes(args) => read(ReadRequest::Changes(args.version), args.json),
+        PlaygroundCmd::Sessions(args) => read(
+            ReadRequest::Sessions {
+                limit: args.limit,
+                now_micros: now_micros(),
+            },
+            args.json,
+        ),
+        PlaygroundCmd::Exec(args) => exec(args),
+        PlaygroundCmd::Bind(args) => bind(args),
         PlaygroundCmd::Session(SessionArgs {
             cmd: SessionCmd::Start(args),
-        }) => (
+        }) => act(
             ActionRequest::SessionStart(SessionStartRequest {
                 variables: args.vars.into_iter().collect(),
             }),
@@ -563,63 +528,138 @@ fn action_command(cmd: PlaygroundCmd) -> anyhow::Result<ExitCode> {
         ),
         PlaygroundCmd::Session(SessionArgs {
             cmd: SessionCmd::End(args),
-        }) => (
+        }) => act(
             ActionRequest::SessionEnd(SessionEndRequest {
                 session: args.session,
             }),
             args.json,
         ),
-        PlaygroundCmd::Recheck(args) => (ActionRequest::Recheck(args.run), args.json),
-        PlaygroundCmd::Test(args) => {
-            let mode = if args.live {
-                Mode::Live
-            } else if args.reads_live {
-                Mode::ReadsLive
-            } else {
-                Mode::Recorded
-            };
-            (
-                ActionRequest::Test(TestRequest {
-                    run: args.run,
-                    mode,
-                }),
-                args.json,
-            )
-        }
-        PlaygroundCmd::Rerun(args) => (ActionRequest::Rerun(args.run), args.json),
-        PlaygroundCmd::Clear(args) => (ActionRequest::Clear, args.json),
-        PlaygroundCmd::Cancel(args) => (ActionRequest::Cancel(args.run), args.json),
-        PlaygroundCmd::DraftRule(args) => {
-            let output = Output::from_json(args.json);
-            return match args.decision.parse() {
-                Ok(decision) => Ok(execute_draft(
-                    decision,
-                    args.write,
-                    args.name.as_deref(),
-                    output,
-                )),
-                Err(message) => usage(message),
-            };
-        }
+        PlaygroundCmd::Recheck(args) => act(ActionRequest::Recheck(args.run), args.json),
+        PlaygroundCmd::Test(args) => test(args),
+        PlaygroundCmd::Rerun(args) => act(ActionRequest::Rerun(args.run), args.json),
+        PlaygroundCmd::DraftRule(args) => draft_rule(args),
+        PlaygroundCmd::Clear(args) => act(ActionRequest::Clear, args.json),
+        PlaygroundCmd::Cancel(args) => act(ActionRequest::Cancel(args.run), args.json),
         PlaygroundCmd::Watch(args) => {
-            return execute_watch(args.session, args.follow, Output::from_json(args.json));
+            execute_watch(args.session, args.follow, Output::from_json(args.json))
         }
-        PlaygroundCmd::Start(_)
-        | PlaygroundCmd::Status(_)
-        | PlaygroundCmd::Open(_)
-        | PlaygroundCmd::Stop(_)
-        | PlaygroundCmd::Init(_)
-        | PlaygroundCmd::Runs(_)
-        | PlaygroundCmd::Show(_)
-        | PlaygroundCmd::Explain(_)
-        | PlaygroundCmd::Compare(_)
-        | PlaygroundCmd::Audit(_)
-        | PlaygroundCmd::Changes(_)
-        | PlaygroundCmd::Sessions(_) => {
-            unreachable!("execute dispatches the lifecycle commands and the reads first")
-        }
+    }
+}
+
+/// A usage error the CLI finds before reaching any control: said on standard error.
+#[cfg(unix)]
+fn usage(message: &str) -> anyhow::Result<ExitCode> {
+    eprintln!("{message}");
+    Ok(ExitCode::from(controls::render::EXIT_USAGE))
+}
+
+#[cfg(unix)]
+fn runs(args: RunsArgs) -> anyhow::Result<ExitCode> {
+    use controls::read::RunsQuery;
+    let since = match args.since.as_deref().map(str::parse).transpose() {
+        Ok(since) => since,
+        Err(message) => return usage(&format!("--since: {message}")),
     };
-    execute_action(&request, Output::from_json(json))
+    controls::execute_read(
+        controls::ReadRequest::Runs(RunsQuery {
+            source: args.source,
+            since,
+            session: args.session,
+            limit: args.limit,
+            now_micros: now_micros(),
+        }),
+        Output::from_json(args.json),
+    )
+}
+
+/// `exec`: says first when the playground is not running, then reads the program.
+#[cfg(unix)]
+fn exec(args: ExecArgs) -> anyhow::Result<ExitCode> {
+    use controls::act::{ActionRequest, ExecRequest};
+    let output = Output::from_json(args.json);
+    if let Err(answer) = controls::act::connect()? {
+        return Ok(answer.print(output));
+    }
+    let code = match exec_program(args.file.as_deref(), args.example) {
+        Ok(code) => code,
+        Err(message) => return usage(&message),
+    };
+    controls::act::execute_action(
+        &ActionRequest::Exec(ExecRequest {
+            code,
+            example: args.example,
+            session: args.session,
+            variables: args.vars.into_iter().collect(),
+        }),
+        output,
+    )
+}
+
+/// `bind`: says first when the playground is not running, then reads the secrets' values
+/// from the environment or the local secret store.
+#[cfg(unix)]
+fn bind(args: BindArgs) -> anyhow::Result<ExitCode> {
+    use controls::act::{ActionRequest, BindRequest};
+    let output = Output::from_json(args.json);
+    if let Err(answer) = controls::act::connect()? {
+        return Ok(answer.print(output));
+    }
+    let changes =
+        !args.vars.is_empty() || !args.secrets.is_empty() || !args.unset.is_empty() || args.clear;
+    let request = if changes {
+        let mut secrets = std::collections::BTreeMap::new();
+        for name in &args.secrets {
+            match secret_value(name) {
+                Ok(value) => {
+                    secrets.insert(name.clone(), value);
+                }
+                Err(message) => return usage(&message),
+            }
+        }
+        Some(BindRequest {
+            variables: args.vars.into_iter().collect(),
+            secrets,
+            unset: args.unset,
+            clear: args.clear,
+        })
+    } else {
+        None
+    };
+    controls::act::execute_action(&ActionRequest::Bind(request), output)
+}
+
+#[cfg(unix)]
+fn test(args: TestArgs) -> anyhow::Result<ExitCode> {
+    use controls::act::{ActionRequest, Mode, TestRequest};
+    let mode = if args.live {
+        Mode::Live
+    } else if args.reads_live {
+        Mode::ReadsLive
+    } else {
+        Mode::Recorded
+    };
+    controls::act::execute_action(
+        &ActionRequest::Test(TestRequest {
+            run: args.run,
+            mode,
+        }),
+        Output::from_json(args.json),
+    )
+}
+
+/// `draft-rule`: works on the store and the blueprint file, with the playground running
+/// or not.
+#[cfg(unix)]
+fn draft_rule(args: DraftRuleArgs) -> anyhow::Result<ExitCode> {
+    match args.decision.parse() {
+        Ok(decision) => Ok(controls::act::execute_draft(
+            decision,
+            args.write,
+            args.name.as_deref(),
+            Output::from_json(args.json),
+        )),
+        Err(message) => usage(&message),
+    }
 }
 
 /// The program `exec` sends: the file's text, or the scaffolded example's.
@@ -637,7 +677,8 @@ fn exec_program(file: Option<&std::path::Path>, example: bool) -> Result<String,
     std::fs::read_to_string(&path).map_err(|error| {
         if example {
             format!(
-                "the example {} cannot be read ({error}); `submilli playground init` creates it                  in a new project",
+                "the example {} cannot be read ({error}); `submilli playground init` creates it \
+                 in a new project",
                 path.display()
             )
         } else {
@@ -663,60 +704,6 @@ fn secret_value(name: &str) -> Result<String, String> {
             "no value for `{name}`: export ${name}, or store one with `submilli secret put {name}`"
         )
     })
-}
-
-/// A read control: works against the store, with the playground running or not.
-#[cfg(unix)]
-fn read_command(cmd: PlaygroundCmd) -> anyhow::Result<ExitCode> {
-    use controls::read::{AuditQuery, RunsQuery};
-    use controls::{ReadRequest, execute_read};
-    let (request, json) = match cmd {
-        PlaygroundCmd::Runs(args) => {
-            let since = match args.since.as_deref().map(str::parse).transpose() {
-                Ok(since) => since,
-                Err(message) => {
-                    eprintln!("--since: {message}");
-                    return Ok(ExitCode::from(controls::render::EXIT_USAGE));
-                }
-            };
-            (
-                ReadRequest::Runs(RunsQuery {
-                    source: args.source,
-                    since,
-                    session: args.session,
-                    limit: args.limit,
-                    now_micros: now_micros(),
-                }),
-                args.json,
-            )
-        }
-        PlaygroundCmd::Show(args) => (
-            ReadRequest::Show {
-                run: args.run,
-                include_payloads: args.include_payloads,
-            },
-            args.json,
-        ),
-        PlaygroundCmd::Explain(args) => match args.decision.parse() {
-            Ok(decision) => (ReadRequest::Explain(decision), args.json),
-            Err(message) => {
-                eprintln!("{message}");
-                return Ok(ExitCode::from(controls::render::EXIT_USAGE));
-            }
-        },
-        PlaygroundCmd::Compare(args) => (ReadRequest::Compare(args.a, args.b), args.json),
-        PlaygroundCmd::Audit(args) => (
-            ReadRequest::Audit(AuditQuery {
-                default_only: args.default_only,
-                packages_only: args.packages_only,
-            }),
-            args.json,
-        ),
-        PlaygroundCmd::Changes(args) => (ReadRequest::Changes(args.version), args.json),
-        PlaygroundCmd::Sessions(args) => (ReadRequest::Sessions { limit: args.limit }, args.json),
-        _ => unreachable!("execute dispatches only the reads here"),
-    };
-    execute_read(request, Output::from_json(json))
 }
 
 #[cfg(unix)]

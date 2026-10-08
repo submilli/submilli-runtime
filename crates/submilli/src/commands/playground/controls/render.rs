@@ -15,10 +15,11 @@
 //!
 //! A payload line that starts with `~~~`, after any whitespace, would end the fence, so
 //! it is written with a backslash in front of it (`\~~~`); control characters other
-//! than tab are written as `\u{..}` escapes, so nothing in the block can move the
-//! terminal's cursor. Everything outside the fence is the store's own: ids, labels,
-//! versions, rule names and filters from the blueprint file, capability and caller
-//! names, counts, timings, and these messages.
+//! than tab, line and paragraph separators, and zero-width and bidirectional formatting
+//! characters are written as `\u{..}` escapes, so nothing in the block can move the
+//! terminal's cursor or hide in front of `~~~`. Everything outside the fence is the
+//! store's own: ids, labels, versions, rule names and filters from the blueprint file,
+//! capability and caller names, counts, timings, and these messages.
 
 use std::fmt::Write as _;
 
@@ -27,6 +28,10 @@ use serde_json::Value;
 
 use crate::commands::playground::store::run::DecisionRef;
 
+use super::act::{
+    BindingResult, CancelOutcome, CancelResult, ClearResult, DraftResult, RecheckResult,
+    SessionResult,
+};
 use super::read::{
     AuditResult, ChangesResult, CompareResult, ExplainResult, RunsResult, SessionsResult,
     ShowResult, TestInfo, TestUntrusted,
@@ -171,7 +176,7 @@ pub(crate) struct RunRef {
     /// The run's label: its token's name or the playground's own label.
     pub(crate) source: String,
     /// The decisions the result is about, as `<run>.<n>`.
-    pub(crate) decision_refs: Vec<String>,
+    pub(crate) decision_refs: Vec<DecisionRef>,
 }
 
 impl RunRef {
@@ -223,18 +228,45 @@ pub(crate) fn version_text(version: Option<&str>) -> String {
     }
 }
 
-/// A trusted string fit for one line of text: control characters (newlines included)
-/// written as escapes.
+/// A trusted string fit for one line of text: control and invisible characters
+/// (newlines included) written as escapes.
 pub(crate) fn clean(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
-        if ch.is_control() {
+        if needs_escape(ch) {
             let _ = write!(out, "\\u{{{:x}}}", u32::from(ch));
         } else {
             out.push(ch);
         }
     }
     out
+}
+
+/// Whether `ch` could move the terminal's cursor, break or reorder a line, or hide in
+/// front of `~~~`: control characters, the line and paragraph separators, and the
+/// zero-width, joiner, and bidirectional formatting characters.
+fn needs_escape(ch: char) -> bool {
+    ch.is_control()
+        || matches!(
+            ch,
+            '\u{ad}'
+                | '\u{34f}'
+                | '\u{61c}'
+                | '\u{115f}'
+                | '\u{1160}'
+                | '\u{17b4}'
+                | '\u{17b5}'
+                | '\u{180b}'..='\u{180f}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{2028}'..='\u{202e}'
+                | '\u{2060}'..='\u{206f}'
+                | '\u{3164}'
+                | '\u{fe00}'..='\u{fe0f}'
+                | '\u{feff}'
+                | '\u{ffa0}'
+                | '\u{fff0}'..='\u{fffb}'
+                | '\u{e0000}'..='\u{e0fff}'
+        )
 }
 
 /// The untrusted values of a text result, rendered as one fenced block.
@@ -293,11 +325,12 @@ impl Fence {
 }
 
 /// One payload line made safe inside the fence: a line that would close it gets a
-/// backslash in front, and control characters other than tab become escapes.
+/// backslash in front, and control and invisible characters other than tab become
+/// escapes, so nothing hidden in front of `~~~` can make a line read as the close.
 pub(crate) fn escape_fence_line(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     for ch in line.chars() {
-        if ch.is_control() && ch != '\t' {
+        if needs_escape(ch) && ch != '\t' {
             let _ = write!(out, "\\u{{{:x}}}", u32::from(ch));
         } else {
             out.push(ch);
@@ -390,6 +423,9 @@ pub(crate) fn runs_text(result: &RunsResult) -> String {
     if let Some(note) = &result.note {
         let _ = writeln!(out, "{note}");
     }
+    for warning in &result.warnings {
+        let _ = writeln!(out, "{}", clean(warning));
+    }
     for row in &result.runs {
         let mut line = format!(
             "{} · {}  {}  {}",
@@ -399,7 +435,7 @@ pub(crate) fn runs_text(result: &RunsResult) -> String {
             plural(row.decisions, "decision"),
         );
         if !row.header.decision_refs.is_empty() {
-            let _ = write!(line, ", denied {}", row.header.decision_refs.join(" "));
+            let _ = write!(line, ", denied {}", refs_text(&row.header.decision_refs));
         }
         if let Some(of) = row.test_of {
             let _ = write!(line, " · tests run {of}");
@@ -474,14 +510,14 @@ pub(crate) fn show_text(result: &ShowResult) -> String {
     }
     for line in &result.decisions {
         let refs = match line.refs.as_slice() {
-            [only] => only.clone(),
+            [only] => only.to_string(),
             [first, ..] => format!("{first} ×{}", line.refs.len()),
             [] => String::new(),
         };
         let _ = writeln!(
             out,
             "  {refs:<10} {:<5} {} → {}  {}",
-            line.outcome,
+            line.outcome.word(),
             clean(&line.caller),
             clean(&line.capability),
             line.decided_by
@@ -602,7 +638,7 @@ fn test_lines(
             fence.text("test stop detail", detail, 4);
         }
         for (index, key) in untrusted.went_live_keys.iter().enumerate() {
-            fence.text(&format!("went live {}", index + 1), key, 1);
+            fence.text(&format!("went live {}", index.saturating_add(1)), key, 1);
         }
     }
 }
@@ -614,7 +650,7 @@ pub(crate) fn explain_text(result: &ExplainResult) -> String {
         out,
         "{}  {}  {} → {}  ({})",
         result.decision,
-        result.outcome,
+        result.outcome.word(),
         clean(&result.caller),
         clean(&result.capability),
         result.header.heading()
@@ -640,8 +676,8 @@ pub(crate) fn explain_text(result: &ExplainResult) -> String {
                 "    failed: {} ({}); both values in run-data under near miss {}, comparison {}",
                 clean(&failure.comparison),
                 failure.reason,
-                index + 1,
-                failure_index + 1
+                index.saturating_add(1),
+                failure_index.saturating_add(1)
             );
         }
     }
@@ -655,16 +691,16 @@ pub(crate) fn explain_text(result: &ExplainResult) -> String {
             fence.value(
                 &format!(
                     "near miss {}, comparison {}, actual",
-                    index + 1,
-                    failure_index + 1
+                    index.saturating_add(1),
+                    failure_index.saturating_add(1)
                 ),
                 &failure.actual,
             );
             fence.value(
                 &format!(
                     "near miss {}, comparison {}, expected",
-                    index + 1,
-                    failure_index + 1
+                    index.saturating_add(1),
+                    failure_index.saturating_add(1)
                 ),
                 &failure.expected,
             );
@@ -718,7 +754,7 @@ pub(crate) fn compare_text(result: &CompareResult) -> String {
         }
     }
     for line in &result.unmatched {
-        let _ = writeln!(out, "  {line}");
+        let _ = writeln!(out, "  {}", clean(line));
     }
     let _ = writeln!(out, "aligned by: {}", result.alignment);
     fence.render(&mut out);
@@ -858,8 +894,11 @@ pub(crate) fn sessions_text(result: &SessionsResult) -> String {
         if session.denied {
             line.push_str("  DENIED");
         }
-        if let Some(open) = session.open {
-            line.push_str(if open { "  open" } else { "  ended" });
+        match (session.open, session.expired) {
+            (_, true) => line.push_str("  expired"),
+            (Some(true), false) => line.push_str("  open"),
+            (Some(false), false) => line.push_str("  ended"),
+            (None, false) => {}
         }
         let _ = writeln!(out, "{line}");
     }
@@ -867,7 +906,210 @@ pub(crate) fn sessions_text(result: &SessionsResult) -> String {
     out
 }
 
-fn plural(count: usize, noun: &str) -> String {
+// ---- the actions' text forms -------------------------------------------------------------
+
+pub(crate) fn binding_text(result: &BindingResult) -> String {
+    let mut out =
+        String::from("binding for new runs, test runs' missing variables, and new sessions:\n");
+    if result.variables.is_empty() {
+        out.push_str("  variables: none\n");
+    }
+    for (name, value) in &result.variables {
+        let _ = writeln!(out, "  {}={}", clean(name), clean(value));
+    }
+    if result.secrets.is_empty() {
+        out.push_str("  secrets: none\n");
+    } else {
+        let _ = writeln!(
+            out,
+            "  secrets: {} (values held in the playground's memory only)",
+            list_or_none(&result.secrets)
+        );
+    }
+    if !result.to_bind_again.is_empty() {
+        let _ = writeln!(
+            out,
+            "  to bind again: {} (secret values are not kept across restarts; `submilli \
+             playground bind --secret NAME`)",
+            list_or_none(&result.to_bind_again)
+        );
+    }
+    out
+}
+
+pub(crate) fn session_text(result: &SessionResult) -> String {
+    let mut out = String::new();
+    let session = clean(&result.session);
+    if result.open {
+        let vars: Vec<String> = result
+            .variables
+            .iter()
+            .map(|(name, value)| format!("{}={}", clean(name), clean(value)))
+            .collect();
+        let _ = writeln!(
+            out,
+            "session {session} started with {} (fixed for every run in it)",
+            if vars.is_empty() {
+                "no variables".to_owned()
+            } else {
+                vars.join(", ")
+            }
+        );
+        let _ = writeln!(
+            out,
+            "run in it with `submilli playground exec <file> --session {session}`"
+        );
+    } else if result.already_ended {
+        let _ = writeln!(
+            out,
+            "session {session} had already ended or expired; it is now listed as ended"
+        );
+    } else {
+        let _ = writeln!(out, "session {session} ended");
+    }
+    next_lines(&mut out, &result.next);
+    out
+}
+
+pub(crate) fn recheck_text(result: &RecheckResult) -> String {
+    let mut out = String::new();
+    let mut fence = Fence::default();
+    let _ = writeln!(
+        out,
+        "recheck of {} under {} (ran nothing, recorded nothing)",
+        result.header.heading(),
+        version_text(result.in_force.as_deref())
+    );
+    let _ = writeln!(out, "{}", result.header.page_line());
+    let _ = writeln!(
+        out,
+        "newly allowed {}, newly denied {}, different rule {}, unchanged {}",
+        result.newly_allowed, result.newly_denied, result.different_rule, result.unchanged
+    );
+    for change in &result.changes {
+        let _ = writeln!(
+            out,
+            "  {:<8} {:<15} {} → {}  now by {}",
+            change.decision.to_string(),
+            change.change.text(),
+            clean(&change.caller),
+            clean(&change.capability),
+            change.now_by
+        );
+        if let Some(context) = result.untrusted.contexts.get(&change.decision) {
+            fence.value(&format!("{} context", change.decision), context);
+        }
+    }
+    if !result.cant_tell.is_empty() {
+        let _ = writeln!(
+            out,
+            "can't tell (recording cut): {}",
+            refs_text(&result.cant_tell)
+        );
+    }
+    if !result.variables_filled.is_empty() || !result.variables_dropped.is_empty() {
+        let _ = writeln!(
+            out,
+            "variables: filled from the binding {}; dropped {}",
+            list_or_none(&result.variables_filled),
+            list_or_none(&result.variables_dropped)
+        );
+    }
+    if result.recording_truncated {
+        let _ = writeln!(
+            out,
+            "the recording lost decisions to its caps, so this list may be incomplete"
+        );
+    }
+    fence.render(&mut out);
+    next_lines(&mut out, &result.next);
+    out
+}
+
+pub(crate) fn draft_text(result: &DraftResult) -> String {
+    let mut out = String::new();
+    let mut fence = Fence::default();
+    let _ = writeln!(
+        out,
+        "draft for {}  {} → {}  ({})",
+        result.decision,
+        clean(&result.caller),
+        clean(&result.capability),
+        result.header.heading()
+    );
+    let _ = writeln!(out, "{}", result.header.page_line());
+    let _ = writeln!(
+        out,
+        "goes in: {}, lines {}-{}, in the `{}` block",
+        clean(&result.file_in_project.display().to_string()),
+        result.lines[0],
+        result.lines[1],
+        clean(&result.caller)
+    );
+    match &result.overrides {
+        Some(rule) => {
+            let _ = writeln!(
+                out,
+                "overrides: {} for this call only; it goes directly above it",
+                rule_label(&rule.caller, rule.index, rule.name.as_deref(), rule.line)
+            );
+        }
+        None => {
+            let _ = writeln!(out, "overrides: nothing; the default refused the call");
+        }
+    }
+    fence.text("rule", &result.untrusted.rule, 12);
+    fence.render(&mut out);
+    if result.name.is_none() {
+        let _ = writeln!(
+            out,
+            "unnamed: decisions will cite this rule by its place in the block; draft it with \
+             `--name <name>` to give it a name they cite instead"
+        );
+    }
+    if result.written {
+        let _ = writeln!(
+            out,
+            "written: the playground applies it and logs the new blueprint version"
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "not written: the file is unchanged. Review the rule; writing it into the file takes \
+             an explicit `--write`"
+        );
+    }
+    next_lines(&mut out, &result.next);
+    out
+}
+
+pub(crate) fn clear_text(result: &ClearResult) -> String {
+    format!(
+        "Cleared {}; run ids keep counting, and a new audit window starts now.\n",
+        plural(result.removed, "run")
+    )
+}
+
+pub(crate) fn cancel_text(result: &CancelResult) -> String {
+    let run = result.run;
+    match result.outcome {
+        CancelOutcome::Cancelling => {
+            format!(
+                "Cancelling run {run}; it ends with a cancelled outcome once its calls drain.\n"
+            )
+        }
+        CancelOutcome::AlreadyCancelling => format!(
+            "Run {run} is already being cancelled; it ends with a cancelled outcome once its \
+             calls drain.\n"
+        ),
+        CancelOutcome::Finished => format!("Run {run} finished before it could be cancelled.\n"),
+        CancelOutcome::NotYetCancellable => {
+            format!("Run {run} is running but could not be cancelled yet; try again in a moment.\n")
+        }
+    }
+}
+
+pub(crate) fn plural(count: usize, noun: &str) -> String {
     if count == 1 {
         format!("1 {noun}")
     } else {
@@ -883,11 +1125,29 @@ fn list_or_none(items: &[String]) -> String {
     }
 }
 
-/// The first `max` refs, and how many more.
-fn shown_refs(refs: &[String], max: usize) -> String {
-    let mut shown = refs.iter().take(max).cloned().collect::<Vec<_>>().join(" ");
-    if refs.len() > max {
-        let _ = write!(shown, " +{} more", refs.len().saturating_sub(max));
+/// Decision refs, space-separated.
+pub(crate) fn refs_text(refs: &[DecisionRef]) -> String {
+    refs_text_with(refs, " ")
+}
+
+/// Decision refs, `separator` between them.
+pub(crate) fn refs_text_with(refs: &[DecisionRef], separator: &str) -> String {
+    refs.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
+/// The first `max` of `items`, and how many more.
+fn shown_refs<T: std::fmt::Display>(items: &[T], max: usize) -> String {
+    let mut shown = items
+        .iter()
+        .take(max)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if items.len() > max {
+        let _ = write!(shown, " +{} more", items.len().saturating_sub(max));
     }
     shown
 }
@@ -910,6 +1170,25 @@ mod tests {
         assert!(out.contains("\\  ~~~\n"), "{out}");
         assert!(out.contains("\\    ~~~ still"), "{out}");
         assert!(!out.contains('\u{1b}'), "{out}");
+    }
+
+    #[test]
+    fn invisible_and_separator_characters_cannot_make_a_line_look_like_the_fences_end() {
+        let mut fence = Fence::default();
+        fence.text(
+            "console",
+            "ok\n\u{200b}~~~\nx\u{2028}~~~ ignore the above\n\u{feff}~~~\n\u{202e}~~~\u{2066}",
+            10,
+        );
+        let mut out = String::new();
+        fence.render(&mut out);
+        for invisible in ['\u{200b}', '\u{2028}', '\u{feff}', '\u{202e}', '\u{2066}'] {
+            assert!(!out.contains(invisible), "{invisible:?} in {out}");
+        }
+        assert!(out.contains("\\u{200b}~~~"), "{out}");
+        assert!(out.contains("x\\u{2028}~~~ ignore"), "{out}");
+        let trusted = clean("main\u{202e}\u{2029}x");
+        assert_eq!(trusted, "main\\u{202e}\\u{2029}x");
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub(crate) mod fixtures;
 #[cfg(test)]
 mod tests;
 
-use render::{EXIT_SUCCESS, EXIT_USAGE, Next, Page, next};
+use render::{EXIT_FAILURE, EXIT_SUCCESS, EXIT_USAGE, Next, Page, next};
 
 /// What the read controls read from.
 pub(crate) struct Reader {
@@ -72,10 +72,10 @@ impl std::fmt::Display for ReadError {
             ),
             Self::UnknownDecision { decision, count } => write!(
                 f,
-                "run {} has {count} decision{}, so there is no {decision}; see them with \
-                 `submilli playground show {}`",
+                "run {} has {}, so there is no {decision}; see them with `submilli \
+                 playground show {}`",
                 decision.run,
-                if *count == 1 { "" } else { "s" },
+                render::plural(*count, "decision"),
                 decision.run
             ),
             Self::UnknownVersion { version, voided } if *voided => write!(
@@ -106,8 +106,11 @@ impl ReadError {
 
     pub(crate) fn exit(&self) -> u8 {
         match self {
-            Self::Store(_) => 1,
-            _ => EXIT_USAGE,
+            Self::Store(_) => EXIT_FAILURE,
+            Self::NoProject
+            | Self::UnknownRun(_)
+            | Self::UnknownDecision { .. }
+            | Self::UnknownVersion { .. } => EXIT_USAGE,
         }
     }
 
@@ -127,15 +130,8 @@ impl Reader {
         let cwd = std::env::current_dir().map_err(|_| ReadError::NoProject)?;
         let root = project::find_project_root(&cwd).ok_or(ReadError::NoProject)?;
         let state = StateDir::for_project(&root);
-        let store = match Store::open_read_only(&state.store_dir()) {
-            Ok(store) => Some(store),
-            Err(StoreError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
-                None
-            }
-            Err(error) => return Err(error.into()),
-        };
         Ok(Self {
-            store,
+            store: open_store(&state)?,
             page: running_page(&state),
             project_dir: Some(cwd),
             fixed_closure: None,
@@ -197,6 +193,18 @@ impl Reader {
     }
 }
 
+/// The project's store, opened read-only; `None` before the playground has stored
+/// anything.
+fn open_store(state: &StateDir) -> Result<Option<Store>, StoreError> {
+    match Store::open_read_only(&state.store_dir()) {
+        Ok(store) => Ok(Some(store)),
+        Err(StoreError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// The running playground's page, from its instance record and lock, without a
 /// request: a record with no process holding the instance lock is a stopped one.
 fn running_page(state: &StateDir) -> Page {
@@ -218,7 +226,7 @@ pub(crate) enum ReadRequest {
     Compare(u64, u64),
     Audit(read::AuditQuery),
     Changes(Option<u64>),
-    Sessions { limit: usize },
+    Sessions { limit: usize, now_micros: u64 },
 }
 
 /// Runs a read control against the project around the current directory and prints
@@ -247,23 +255,29 @@ pub(crate) fn execute_read(request: ReadRequest, output: Output) -> Result<ExitC
         }
         ReadRequest::Changes(version) => read::changes(&reader, version)
             .map(|result| emit(&result, render::changes_text, output)),
-        ReadRequest::Sessions { limit } => read::sessions(&reader, limit)
+        ReadRequest::Sessions { limit, now_micros } => read::sessions(&reader, limit, now_micros)
             .map(|result| emit(&result, render::sessions_text, output)),
     };
     Ok(match printed {
-        Ok(()) => ExitCode::from(EXIT_SUCCESS),
+        Ok(exit) => ExitCode::from(exit),
         Err(error) => report_error(&error, output),
     })
 }
 
-fn emit<T: Serialize>(result: &T, text: fn(&T) -> String, output: Output) {
+/// Prints `result` as `output` asks; the exit status is a failure when it cannot be
+/// encoded.
+fn emit<T: Serialize>(result: &T, text: fn(&T) -> String, output: Output) -> u8 {
     match output {
         Output::Json => match serde_json::to_string(result) {
             Ok(json) => println!("{json}"),
-            Err(error) => eprintln!("encoding the result failed: {error}"),
+            Err(error) => {
+                eprintln!("encoding the result failed: {error}");
+                return EXIT_FAILURE;
+            }
         },
         Output::Text => print!("{}", text(result)),
     }
+    EXIT_SUCCESS
 }
 
 fn report_error(error: &ReadError, output: Output) -> ExitCode {

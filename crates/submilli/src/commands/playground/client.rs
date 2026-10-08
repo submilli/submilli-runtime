@@ -100,6 +100,47 @@ pub(crate) struct Running {
     admin: String,
 }
 
+/// The playground answered a control request with an error status.
+#[derive(Debug)]
+pub(crate) struct Refused {
+    pub(crate) status: u16,
+    /// The playground's own message, or the status when it gave none.
+    pub(crate) message: String,
+    request: String,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the playground refused {}: {}",
+            self.request, self.message
+        )
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// A control request that got no answer: the connection failed or broke, as it does when
+/// the playground stops.
+#[derive(Debug)]
+pub(crate) struct Unanswered {
+    url: String,
+    source: ureq::Error,
+}
+
+impl std::fmt::Display for Unanswered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "calling the playground at {}: {}", self.url, self.source)
+    }
+}
+
+impl std::error::Error for Unanswered {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 /// One server-sent event of a control feed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct FeedEvent {
@@ -228,7 +269,7 @@ impl Running {
             .context("building a control request")?;
         let mut response = long_agent()
             .run(request)
-            .with_context(|| format!("calling the playground at {url}"))?;
+            .map_err(|source| Unanswered { url, source })?;
         decode(method, path, &mut response)
     }
 
@@ -254,7 +295,7 @@ impl Running {
         let request = builder.body(()).context("building a control request")?;
         let mut response = long_agent()
             .run(request)
-            .with_context(|| format!("calling the playground at {url}"))?;
+            .map_err(|source| Unanswered { url, source })?;
         if !response.status().is_success() {
             return decode::<Value>("GET", path, &mut response).map(drop);
         }
@@ -319,7 +360,8 @@ impl Running {
     }
 }
 
-/// A control response's JSON. A refusal is an error naming the playground's message.
+/// A control response's JSON. A refusal is a [`Refused`] error with the playground's
+/// message.
 fn decode<T: DeserializeOwned>(
     method: &str,
     path: &str,
@@ -336,7 +378,12 @@ fn decode<T: DeserializeOwned>(
             .ok()
             .and_then(|body| body["message"].as_str().map(str::to_owned))
             .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
-        bail!("the playground refused {method} {path}: {message}");
+        return Err(Refused {
+            status: status.as_u16(),
+            message,
+            request: format!("{method} {path}"),
+        }
+        .into());
     }
     let body =
         body.with_context(|| format!("the playground's answer to {method} {path} is not JSON"))?;

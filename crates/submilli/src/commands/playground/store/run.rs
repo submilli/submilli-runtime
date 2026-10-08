@@ -292,6 +292,13 @@ impl std::fmt::Display for DecisionRef {
     }
 }
 
+/// Written as its text, `<run>.<n>`, which is how every result names a decision.
+impl Serialize for DecisionRef {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
 impl std::str::FromStr for DecisionRef {
     type Err = String;
 

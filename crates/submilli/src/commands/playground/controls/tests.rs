@@ -24,6 +24,11 @@ fn decision(text: &str) -> DecisionRef {
     text.parse().unwrap()
 }
 
+/// Decision refs as their text.
+fn texts(refs: &[DecisionRef]) -> Vec<String> {
+    refs.iter().map(ToString::to_string).collect()
+}
+
 fn json_of<T: serde::Serialize>(result: &T) -> Value {
     serde_json::to_value(result).unwrap()
 }
@@ -167,15 +172,15 @@ fn forty_calls_with_three_denials_show_one_allowed_line_and_each_denial() {
     let allowed: Vec<_> = shown
         .decisions
         .iter()
-        .filter(|line| line.outcome == "allow")
+        .filter(|line| line.outcome == read::Verdict::Allow)
         .collect();
     assert_eq!(allowed.len(), 1);
     assert_eq!(allowed[0].refs.len(), 37);
     let denied: Vec<_> = shown
         .decisions
         .iter()
-        .filter(|line| line.outcome == "deny")
-        .map(|line| line.refs.clone())
+        .filter(|line| line.outcome == read::Verdict::Deny)
+        .map(|line| texts(&line.refs))
         .collect();
     assert_eq!(denied, [vec!["1.8"], vec!["1.20"], vec!["1.34"]]);
     let text = render::show_text(&shown);
@@ -196,7 +201,7 @@ fn identical_allowed_calls_with_different_contexts_stay_apart() {
     let refs: Vec<_> = shown
         .decisions
         .iter()
-        .map(|line| line.refs.clone())
+        .map(|line| texts(&line.refs))
         .collect();
     assert_eq!(refs, [vec!["1.1", "1.3"], vec!["1.2"]]);
 }
@@ -210,7 +215,10 @@ fn compare_across_one_added_rule_reports_the_one_flip_newly_allowed_by_it() {
         panic!("one change: {:?}", compared.changes);
     };
     assert_eq!(flip.kind, read::FlipKind::NewlyAllowed);
-    assert_eq!((flip.before.as_str(), flip.after.as_str()), ("1.2", "2.2"));
+    assert_eq!(
+        (flip.before, flip.after),
+        (decision("1.2"), decision("2.2"))
+    );
     let rule = flip.rule.as_ref().unwrap();
     assert_eq!(rule.name.as_deref(), Some("parent-account-charges"));
     assert_eq!(rule.line, Some(13), "cited in the later run's version");
@@ -277,7 +285,7 @@ fn explain_on_a_denial_names_the_near_miss_its_line_the_comparison_and_both_valu
     );
     let (reader, _dir) = fixture.reader();
     let explained = read::explain(&reader, DecisionRef { run: id, n: 2 }).unwrap();
-    assert_eq!(explained.outcome, "deny");
+    assert_eq!(explained.outcome, read::Verdict::Deny);
     assert!(explained.decided_by.is_default());
     assert_eq!(explained.decided_by.default_action, Some("deny"));
     let [miss] = explained.near_misses.as_slice() else {
@@ -469,7 +477,7 @@ fn audit_default_only_lists_exactly_the_calls_the_default_allowed_and_their_orig
         .map(|group| {
             (
                 format!("{} {}", group.caller, group.capability),
-                group.refs.clone(),
+                texts(&group.refs),
             )
         })
         .collect();
@@ -605,7 +613,7 @@ fn every_result_carries_its_run_refs_page_version_source_and_next() {
     assert_next_is_safe(&audited);
 
     assert_next_is_safe(&json_of(&read::changes(&reader, None).unwrap()));
-    assert_next_is_safe(&json_of(&read::sessions(&reader, 20).unwrap()));
+    assert_next_is_safe(&json_of(&read::sessions(&reader, 20, 0).unwrap()));
 }
 
 #[test]
@@ -677,7 +685,7 @@ fn sessions_list_newest_first_with_variables_run_counts_and_the_denial() {
         })
         .unwrap();
     let (reader, _dir) = fixture.reader();
-    let listed = read::sessions(&reader, 20).unwrap();
+    let listed = read::sessions(&reader, 20, 0).unwrap();
     let rows: Vec<(&str, &str, usize, bool)> = listed
         .sessions
         .iter()
@@ -881,7 +889,7 @@ fn listing_stays_fast_with_a_few_hundred_runs() {
         },
     )
     .unwrap();
-    let sessions = read::sessions(&reader, 20).unwrap();
+    let sessions = read::sessions(&reader, 20, 0).unwrap();
     let elapsed = started.elapsed();
     assert_eq!(listed.runs.len(), 20);
     assert_eq!(listed.more, 280);
@@ -1191,4 +1199,96 @@ fn changes_say_in_words_when_a_change_cannot_be_classified() {
         json_of(&changes)["versions"][0]["classification"],
         "unknown"
     );
+}
+
+#[test]
+fn compare_prints_a_capability_named_by_the_run_on_one_clean_line() {
+    let mut fixture = Fixture::new();
+    let before = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
+    let odd = allowed_by_default(1, "main", "x\u{1b}[2J\u{2028}y", json!({}));
+    let after = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind"), odd]));
+    let (reader, _dir) = fixture.reader();
+    let compared = read::compare(&reader, before, after).unwrap();
+    assert_eq!(compared.unmatched.len(), 1, "{:?}", compared.unmatched);
+    let text = render::compare_text(&compared);
+    assert!(!text.contains('\u{1b}'), "{text}");
+    assert!(!text.contains('\u{2028}'), "{text}");
+    assert!(text.contains("x\\u{1b}[2J\\u{2028}y"), "{text}");
+}
+
+#[test]
+fn a_started_session_idle_past_its_timeout_lists_as_expired() {
+    let fixture = Fixture::new();
+    fixture.version(BLUEPRINT, initial(), "first");
+    for session in ["s-idle", "s-ended"] {
+        fixture
+            .store
+            .append_session(SessionEntry::Started {
+                session_id: session.into(),
+                variables: BTreeMap::new(),
+                label: "assistant".into(),
+            })
+            .unwrap();
+    }
+    fixture
+        .store
+        .append_session(SessionEntry::Ended {
+            session_id: "s-ended".into(),
+        })
+        .unwrap();
+    let (reader, _dir) = fixture.reader();
+    let now = super::super::now_micros();
+    let fresh = read::sessions(&reader, 20, now).unwrap();
+    let idle = fresh
+        .sessions
+        .iter()
+        .find(|row| row.session == "s-idle")
+        .unwrap();
+    assert_eq!((idle.open, idle.expired), (Some(true), false));
+
+    // Two days on, past the default idle timeout of a day.
+    let later = read::sessions(&reader, 20, now + 2 * 86_400_000_000).unwrap();
+    let idle = later
+        .sessions
+        .iter()
+        .find(|row| row.session == "s-idle")
+        .unwrap();
+    assert_eq!((idle.open, idle.expired), (Some(false), true));
+    let ended = later
+        .sessions
+        .iter()
+        .find(|row| row.session == "s-ended")
+        .unwrap();
+    assert_eq!((ended.open, ended.expired), (Some(false), false));
+    let text = render::sessions_text(&later);
+    let line = text
+        .lines()
+        .find(|line| line.starts_with("s-idle"))
+        .unwrap();
+    assert!(line.ends_with("  expired"), "{text}");
+}
+
+#[test]
+fn runs_lists_around_a_run_file_it_cannot_read_and_says_so() {
+    let mut fixture = Fixture::new();
+    let fine = fixture.run(RunSpec::new(vec![charges_denied(0, "cus_initech")]));
+    let broken = fixture.run(RunSpec::new(vec![charges_denied(0, "cus_initech")]));
+    std::fs::write(fixture.store.run_path(broken), b"{ not json").unwrap();
+    let (reader, _dir) = fixture.reader();
+    let listed = read::runs(
+        &reader,
+        &RunsQuery {
+            limit: 20,
+            ..RunsQuery::default()
+        },
+    )
+    .unwrap();
+    let ids: Vec<u64> = listed.runs.iter().map(|row| row.header.run).collect();
+    assert_eq!(ids, [broken, fine]);
+    assert_eq!(texts(&listed.runs[1].denied), [format!("{fine}.1")]);
+    assert!(listed.runs[0].denied.is_empty());
+    assert_eq!(listed.warnings.len(), 1, "{:?}", listed.warnings);
+    assert!(listed.warnings[0].contains(&format!("run {broken}")));
+    let text = render::runs_text(&listed);
+    assert!(text.contains(&listed.warnings[0]), "{text}");
 }
