@@ -4823,6 +4823,10 @@ impl Inferer<'_> {
     /// c: 4 }` against `{ a: null; b: string } | { a: string; c: number }`
     /// keeps only the first member, so `c` is unknown. With a spread nothing is
     /// ruled out, since the spread may overwrite a tag.
+    ///
+    /// Returns the unknown fields the literal's type leaves out: those of a
+    /// target whose fields are all optional, which would otherwise fail its
+    /// weak-type check too and report twice.
     fn report_unknown_union_fields(
         &mut self,
         union_members: &[Type],
@@ -4852,6 +4856,11 @@ impl Inferer<'_> {
             candidates
         };
 
+        // As for a single target, only a field unknown to members whose fields
+        // are all optional is left out of the literal's type.
+        let weak_target = candidates
+            .iter()
+            .all(|shape| shape.values().all(|field| field.optional));
         let mut known = std::collections::BTreeMap::new();
         for shape in candidates {
             for (name, field) in shape {
@@ -4861,7 +4870,9 @@ impl Inferer<'_> {
         for field in literal_fields {
             if !known.contains_key(&field.name.name) {
                 self.report_unknown_field(field, &known);
-                unknown.insert(field.name.name.clone());
+                if weak_target {
+                    unknown.insert(field.name.name.clone());
+                }
             }
         }
         Ok(unknown)
