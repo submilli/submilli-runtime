@@ -1114,7 +1114,9 @@ fn format_one_literal(ty: &Type) -> Option<String> {
         Type::NumberLiteral(n) => Some(format!("{}", n.0)),
         Type::BooleanLiteral(b) => Some(b.to_string()),
         Type::Object { fields, .. } => {
-            // Discriminated-union residuals are object variants; find the discriminant field's literal.
+            // Discriminated-union residuals are object variants; find the discriminant field's
+            // literal. Only a direct literal field can be the discriminant, so nested objects
+            // are skipped.
             for field in fields.values() {
                 if !matches!(field.ty.peel(), Type::Object { .. })
                     && let Some(lit) = format_one_literal(&field.ty)

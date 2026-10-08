@@ -1951,7 +1951,12 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
             }
             for (mname, m) in methods {
                 push_doc(out, &m.doc, &inner);
-                let mname = member_name(mname);
+                // A call signature is stored as the method `@call`.
+                let mname = if mname == "@call" {
+                    Cow::Borrowed("")
+                } else {
+                    member_name(mname)
+                };
                 let _ = writeln!(
                     out,
                     "{inner}{mname}{}({}): {};",
@@ -2287,10 +2292,12 @@ fn type_doc(kind: &TypeKind) -> &Option<DocComment> {
     }
 }
 
-/// A member name as declaration source: bare when it is an identifier, else
-/// quoted and escaped, as `"a b"` or `"\uD800"` must be.
+/// A member name as declaration source: bare when it is an ASCII identifier,
+/// else quoted and escaped, as `"a b"` or `"\uD800"` must be. A non-ASCII
+/// identifier is quoted too, since a TypeScript built on older Unicode tables
+/// may not read it.
 fn member_name(name: &str) -> Cow<'_, str> {
-    if crate::type_rendering::is_identifier_name(name) {
+    if name.is_ascii() && crate::type_rendering::is_identifier_name(name) {
         return Cow::Borrowed(name);
     }
     Cow::Owned(format!("\"{}\"", escape_string_literal(name)))
@@ -2306,7 +2313,7 @@ mod tests {
         crate::literal_units::push_lone_surrogate(&mut lone, 0xD800);
         assert_eq!(member_name("count"), "count");
         assert_eq!(member_name("$el_2"), "$el_2");
-        assert_eq!(member_name("café"), "café");
+        assert_eq!(member_name("café"), "\"café\"");
         assert_eq!(member_name("a b"), "\"a b\"");
         assert_eq!(member_name("0"), "\"0\"");
         assert_eq!(member_name(&lone), "\"\\uD800\"");
@@ -2747,6 +2754,13 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn builtin_docs_print_a_call_signature_without_a_name() {
+        let docs = builtin_docs("Number").expect("Number built-in");
+        assert!(docs.contains("  (value: "), "{docs}");
+        assert!(!docs.contains("@call"), "{docs}");
     }
 
     #[test]
