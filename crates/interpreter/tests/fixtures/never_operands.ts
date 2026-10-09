@@ -1,5 +1,5 @@
-// A `never` operand is accepted by `+`, arithmetic, bitwise, ordering and unary
-// `-`/`+`/`~`: no value of it exists, so the operator takes its result from the
+// A `never` operand is accepted by `+`, arithmetic, bitwise, ordering, unary
+// `-`/`+`/`~` and as a condition: no value of it exists, so the operator takes its result from the
 // other operand, as tsc does. Each use below either sits in a dead branch or
 // evaluates an expression that throws first.
 type Shape = { kind: "circle"; r: number } | { kind: "square"; side: number };
@@ -69,6 +69,13 @@ function main(): void {
   const counts: number[] = [1];
   try { counts[0] += fail("indexed"); } catch (e) { counts[0] = counts[0] + 1; }
   assert(text === "x!" && counts[0] === 2, "compound assignments throw before writing");
+
+  let tested = 0;
+  try { if (fail("if")) { tested = 1; } } catch (e) { tested += 10; }
+  try { tested = fail("ternary") ? 1 : 2; } catch (e) { tested += 10; }
+  try { tested = !fail("not") ? 1 : 2; } catch (e) { tested += 10; }
+  try { while (fail("while")) { tested = 1; } } catch (e) { tested += 10; }
+  assert(tested === 40, "a throwing condition throws before either branch");
 
   const counter = new Counter();
   let captured = 1;

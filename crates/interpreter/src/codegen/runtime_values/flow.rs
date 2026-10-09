@@ -265,6 +265,7 @@ fn connect_reads(
     for id in ast.expr_ids().map_err(crate::codegen::arena_failure)? {
         connect_expression(ast, id, flow)?;
         seed_imported_read(ast, dependencies, id, flow)?;
+        seed_never_read(ast, id, flow)?;
         if let Some(name) = locals.reads.get(&id) {
             flow.edge(Place::Local(name.clone()), Place::Expr(id));
             if matches!(
@@ -277,6 +278,29 @@ fn connect_reads(
             }
         }
         connect_live_narrow_read(ast, lowered, locals, sources, id, flow)?;
+    }
+    Ok(())
+}
+
+/// A read typed `never` still yields what its binding, field or element
+/// holds: tsc types `[]` as `never[]`, which an alias can fill, and lets a
+/// write store such an element anywhere. The read is wide, so what consumes it
+/// takes the value as it is rather than trusting that no value exists.
+fn seed_never_read(
+    ast: &TypedAst,
+    id: ExprId,
+    flow: &mut Flow,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let expr = ast.try_expr(id).map_err(crate::codegen::arena_failure)?;
+    let is_read = matches!(
+        expr.kind,
+        TypedExprKind::LocalRef { .. }
+            | TypedExprKind::LocalNarrowRef { .. }
+            | TypedExprKind::FieldAccess { .. }
+            | TypedExprKind::IndexAccess { .. }
+    );
+    if is_read && matches!(expr.ty, Type::Never) {
+        flow.widened.insert(Place::Expr(id));
     }
     Ok(())
 }
@@ -351,13 +375,6 @@ fn connect_live_narrow_read(
     let TypedExprKind::LocalNarrowRef { path, .. } = &expr.kind else {
         return Ok(());
     };
-    // A local read narrowed to `never` traps rather than reading the binding,
-    // so a closure doesn't capture it and there is no live value to connect.
-    // A field or global still reads its live value, which an alias or a call
-    // may have changed since the guard.
-    if matches!(expr.ty, Type::Never) && path.is_bare_local() {
-        return Ok(());
-    }
     let Some(source) = live_source(ast, lowered, locals, sources, id, flow)? else {
         return Ok(());
     };

@@ -26,7 +26,7 @@ use crate::type_size::{TypeBudget, TypeTooLarge, map_children};
 use crate::types::{EnumValue, LiteralF64};
 
 use super::type_aliases::alias_ref_body;
-use super::{Inferer, assignable, narrowing};
+use super::{Inferer, assignable, narrowing, object_normalization};
 
 /// Typed field initializers and whether their own diagnostics explain an error.
 pub(super) type InferredObjectFields = std::collections::BTreeMap<ExprId, (ExprId, Type, bool)>;
@@ -371,6 +371,15 @@ fn chain_step_phrasing(part: &ChainPart) -> Result<ChainStepPhrasing, CompilerFa
     })
 }
 
+/// Whether `++`/`--` takes an operand of `ty`: a number or a bigint, or
+/// `never`, which tsc accepts as it does in arithmetic.
+fn takes_postfix(ty: &Type) -> bool {
+    matches!(
+        ty.primitive_behavior(),
+        Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Never | Type::Error
+    )
+}
+
 fn postfix_result_ty(operand_ty: &Type) -> Type {
     if operand_ty.is_bigint() {
         Type::BigInt
@@ -533,16 +542,26 @@ impl Inferer<'_> {
             })
         });
         let expected = rehydrated_hint.as_ref().or(expected);
-        if let ExprKind::FunctionExpression {
-            name,
-            function,
-            this_type,
-        } = self
-            .ast
-            .try_expr(expr_id)
-            .map_err(super::arena_failure)?
-            .kind
-            .clone()
+        let mut held_argument = match self.held_arguments.get(&expr_id) {
+            Some(&held) => Some(
+                self.typed_ast
+                    .try_expr(held)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .clone(),
+            ),
+            None => None,
+        };
+        if held_argument.is_none()
+            && let ExprKind::FunctionExpression {
+                name,
+                function,
+                this_type,
+            } = self
+                .ast
+                .try_expr(expr_id)
+                .map_err(super::arena_failure)?
+                .kind
+                .clone()
         {
             return self.infer_function_expression(
                 name,
@@ -564,6 +583,9 @@ impl Inferer<'_> {
         // Propagate once after dispatch: per-arm `?` creates large temporary
         // results that inflate every recursive frame in debug builds.
         let (kind, ty) = (match expr.kind {
+            // An argument already evaluated into a temporary reads it again,
+            // and is checked against this signature's parameter below.
+            _ if let Some(held) = held_argument.take() => Ok((held.kind, held.ty)),
             // narrow primitive literals to their literal type
             // when the expected hint (directly or as a member of an
             // expected union) calls for it. Without the hint, widen
@@ -1454,7 +1476,7 @@ impl Inferer<'_> {
                                 .to_string(),
                         ],
                     );
-                } else if !self.is_condition_value(typed_lhs, &lhs_ty)? {
+                } else if !super::narrowing::condition_compatible(&lhs_ty) {
                     condition_error = true;
                     let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(lhs_span, &lhs_ty);
@@ -1477,9 +1499,7 @@ impl Inferer<'_> {
                 };
                 let (typed_rhs, rhs_ty) =
                     self.infer_conditional_operand(rhs, &rhs_env, rhs_expected)?;
-                if matches!(rhs_ty.peel(), Type::Void | Type::Never)
-                    && !self.is_condition_value(typed_rhs, &rhs_ty)?
-                {
+                if matches!(rhs_ty.peel(), Type::Void) {
                     condition_error = true;
                     let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
                     self.error_non_condition_type(rhs_span, &rhs_ty);
@@ -1635,7 +1655,7 @@ impl Inferer<'_> {
                                 .to_string(),
                         ],
                     );
-                } else if !self.is_condition_value(id, &operand_ty)? {
+                } else if !super::narrowing::condition_compatible(&operand_ty) {
                     let operand_span = self
                         .ast
                         .try_expr(operand)
@@ -2167,48 +2187,25 @@ impl Inferer<'_> {
             if self.reject_unsupported_array_call(&recv_ty, name) {
                 return Ok((TypedExprKind::Null, Type::Error));
             }
-            if let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
-                self.find_method(&recv_ty, &name.name)
-            {
-                // `flat` un-nests `depth` array levels — a return type the
-                // generic machinery can't express. Validate the literal depth
-                // and override the resolved return type before dispatch.
-                let mut sig = sig;
-                if name.name == "flat" && matches!(recv_ty.peel(), Type::Array(_)) {
-                    sig.ret = self.array_flat_return_type(&recv_ty, &args)?;
-                }
-                // Anything with substitution work — interface generics
-                // (`Array<T>`), method generics (`map<U>`), or both —
-                // goes through the unified pipeline. Only the no-
-                // generics-anywhere case (e.g. `console.log`,
-                // `(42).toString()`) takes the trivial path.
-                if interface_bindings.is_empty() && sig.generics.is_empty() {
-                    return self.infer_method_call(
-                        typed_receiver,
-                        iface_mangled,
-                        name.clone(),
-                        sig,
-                        type_args,
-                        args,
-                        span,
-                    );
-                }
-                let is_array = matches!(recv_ty.peel(), Type::Array(_));
-                let call = self.infer_generic_method_call(
-                    typed_receiver,
-                    iface_mangled,
-                    name.clone(),
-                    sig,
-                    interface_bindings,
+            if let Some(methods) = self.string_or_array_methods(&recv_ty, &name.name) {
+                let call = MethodCallSite {
+                    name: name.clone(),
                     type_args,
                     args,
                     expected,
                     span,
-                )?;
-                if is_array {
-                    return self.narrow_by_callback_predicate(&name.name, call, span);
-                }
-                return Ok(call);
+                };
+                return self.string_or_array_method_call(typed_receiver, methods, call);
+            }
+            if let Some(method) = self.find_method(&recv_ty, &name.name) {
+                let call = MethodCallSite {
+                    name: name.clone(),
+                    type_args,
+                    args,
+                    expected,
+                    span,
+                };
+                return self.infer_found_method_call(typed_receiver, &recv_ty, method, call);
             }
             if matches!(recv_ty.peel(), Type::InterfaceRef { .. })
                 && self
@@ -4983,13 +4980,18 @@ impl Inferer<'_> {
     /// c: 4 }` against `{ a: null; b: string } | { a: string; c: number }`
     /// keeps only the first member, so `c` is unknown. With a spread nothing is
     /// ruled out, since the spread may overwrite a tag.
+    ///
+    /// Returns the unknown fields the literal's type leaves out: those of a
+    /// target with a member whose fields are all optional, which would
+    /// otherwise fail its weak-type check too and report twice.
     fn report_unknown_union_fields(
         &mut self,
         union_members: &[Type],
         literal: &[crate::ObjectLiteralMember],
-    ) -> Result<(), CompilerFailure> {
+    ) -> Result<BTreeSet<String>, CompilerFailure> {
+        let mut unknown = BTreeSet::new();
         let Some(shapes) = self.union_object_shapes(union_members) else {
-            return Ok(());
+            return Ok(unknown);
         };
         let has_spread = literal
             .iter()
@@ -5006,11 +5008,17 @@ impl Inferer<'_> {
             shapes.iter().collect()
         } else {
             let Some(candidates) = self.rule_out_by_tags(&shapes, &literal_fields)? else {
-                return Ok(());
+                return Ok(unknown);
             };
             candidates
         };
 
+        // As for a single target, a field is left out of the literal's type
+        // only when a member it may be has only optional fields, whose
+        // weak-type check would report it again.
+        let has_weak_candidate = candidates
+            .iter()
+            .any(|shape| shape.values().all(|field| field.optional));
         let mut known = std::collections::BTreeMap::new();
         for shape in candidates {
             for (name, field) in shape {
@@ -5020,15 +5028,20 @@ impl Inferer<'_> {
         for field in literal_fields {
             if !known.contains_key(&field.name.name) {
                 self.report_unknown_field(field, &known);
+                if has_weak_candidate {
+                    unknown.insert(field.name.name.clone());
+                }
             }
         }
-        Ok(())
+        Ok(unknown)
     }
 
     /// Rejects a literal that tsc's unknown-field check skips but its weak-type
     /// check doesn't (TS2559): one whose fields, spreads included, are all
     /// absent from a target member whose fields are all optional, when no other
-    /// member of the target accepts it. Width subtyping alone would accept it.
+    /// member of the target accepts it. Returns whether it reported one. The
+    /// literal may take the target's type as a hint, which `assignable`'s own
+    /// weak-type rule would then never see.
     fn report_no_field_in_common(
         &mut self,
         expected: Option<&Type>,
@@ -5037,12 +5050,12 @@ impl Inferer<'_> {
             (crate::ObjectField, crate::TypedObjectFieldSource),
         >,
         span: Span,
-    ) {
+    ) -> bool {
         let Some(expected) = expected else {
-            return;
+            return false;
         };
         if literal_fields.is_empty() {
-            return;
+            return false;
         }
         let literal_ty = Type::Object {
             index: None,
@@ -5063,15 +5076,17 @@ impl Inferer<'_> {
             if is_disjoint_weak {
                 disjoint_weak.get_or_insert(target);
             } else if assignable(&literal_ty, target, self.resolver()) {
-                return;
+                return false;
             }
         }
-        if let Some(weak) = disjoint_weak {
-            self.error(
-                span,
-                format!("object literal has no fields in common with `{weak}`, whose fields are all optional"),
-            );
-        }
+        let Some(weak) = disjoint_weak else {
+            return false;
+        };
+        self.error(
+            span,
+            format!("object literal has no fields in common with `{weak}`, whose fields are all optional"),
+        );
+        true
     }
 
     /// The fields of an object type whose fields are all optional, if `ty` is one.
@@ -5196,7 +5211,14 @@ impl Inferer<'_> {
             .iter()
             .any(|m| matches!(m, crate::ObjectLiteralMember::Spread { .. }));
 
-        if let Some((key, table)) = self.union_discriminant_with_nominals(members) {
+        // A `null` member has no tag, so the tag is looked for among the
+        // others: `{ k: "a", … }` picks `A` from `A | B | null`.
+        let tagged: Vec<&Type> = members
+            .iter()
+            .filter(|member| !matches!(member.peel(), Type::Null))
+            .collect();
+        let tagged_types: Vec<Type> = tagged.iter().map(|member| (*member).clone()).collect();
+        if let Some((key, table)) = self.union_discriminant_with_nominals(&tagged_types) {
             let tag_value = literal
                 .iter()
                 .rev()
@@ -5216,7 +5238,7 @@ impl Inferer<'_> {
             if let Some(value) = tag_value
                 && let Some(idx) = table.get(&value)
             {
-                return Ok(members.get(idx.0 as usize));
+                return Ok(tagged.get(idx.0 as usize).copied());
             }
         }
         // A member with an index signature takes any names, so the names alone
@@ -5351,10 +5373,13 @@ impl Inferer<'_> {
             other => other,
         };
         let checks_unknown_fields = !self.is_inference_source(literal);
+        // Fields reported as unknown that the literal's type leaves out, so
+        // the slot it fills doesn't report them again.
+        let mut unknown_fields = BTreeSet::new();
         // Still the union only when no member was picked above, so this check
         // and the single-shape one below never both run.
         if checks_unknown_fields && let Some(Type::Union(union_members)) = peeled {
-            self.report_unknown_union_fields(union_members, &members)?;
+            unknown_fields = self.report_unknown_union_fields(union_members, &members)?;
         }
         let interface_target: Option<(crate::Package, String, crate::MangledName, Vec<Type>)> =
             match peeled {
@@ -5380,11 +5405,18 @@ impl Inferer<'_> {
             && !want.is_empty()
             && checks_unknown_fields
         {
+            // Against a type whose fields are all optional, an unknown field
+            // would also fail the weak-type check; elsewhere the mismatch
+            // names it as an extra field.
+            let is_weak_target = want.values().all(|field| field.optional);
             for member in &members {
                 if let crate::ObjectLiteralMember::Field(field) = member
                     && !want.contains_key(&field.name.name)
                 {
                     self.report_unknown_field(field, want);
+                    if is_weak_target {
+                        unknown_fields.insert(field.name.name.clone());
+                    }
                 }
             }
         }
@@ -5664,9 +5696,13 @@ impl Inferer<'_> {
             }
         }
 
-        if !checks_unknown_fields && spread_index_values.is_empty() {
-            self.report_no_field_in_common(expected, &merged, span);
-        }
+        // A literal rejected here reads as an error, so the slot it fills
+        // doesn't report it again.
+        let shares_no_field = if !checks_unknown_fields && spread_index_values.is_empty() {
+            self.report_no_field_in_common(expected, &merged, span)
+        } else {
+            false
+        };
 
         // If we had an expected shape, surface missing required fields.
         // Fresh object literal excess fields were reported above; values that
@@ -5816,7 +5852,9 @@ impl Inferer<'_> {
                 optional: field.optional,
                 ty: field.ty.clone(),
             });
-            resolved.insert(name, field);
+            if !unknown_fields.contains(&name) {
+                resolved.insert(name, field);
+            }
         }
 
         if let Some(own) = own_ty {
@@ -5834,20 +5872,21 @@ impl Inferer<'_> {
         // the surrounding slot is trivial, and the per-field checks
         // already fired above. Codegen and the shape collector derive
         // the structural Object shape from the typed origin list.
+        let kind = TypedExprKind::ObjectLiteral {
+            members: object_members,
+            fields: field_origins,
+        };
+        if shares_no_field {
+            return Ok((kind, Type::Error));
+        }
         if let Some((iface_package, iface_name, iface_mangled, iface_args)) = interface_target {
             return Ok((
-                TypedExprKind::ObjectLiteral {
-                    members: object_members,
-                    fields: field_origins,
-                },
+                kind,
                 Type::interface_ref(iface_package, iface_name, iface_mangled, iface_args),
             ));
         }
         Ok((
-            TypedExprKind::ObjectLiteral {
-                members: object_members,
-                fields: field_origins,
-            },
+            kind,
             Type::Object {
                 index: if spread_index_values.is_empty() {
                     None
@@ -6346,8 +6385,12 @@ impl Inferer<'_> {
         let object_literals = elements
             .iter()
             .map(|element| match element {
-                crate::ArrayLiteralElement::Value(id) => is_object_literal(self.ast, *id),
-                crate::ArrayLiteralElement::Spread { .. } => Ok(false),
+                crate::ArrayLiteralElement::Value(id) => {
+                    object_normalization::literal_element(self.ast, *id)
+                }
+                crate::ArrayLiteralElement::Spread { .. } => {
+                    Ok(object_normalization::LiteralElement::NONE)
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         let mut typed_elements: Vec<crate::TypedArrayElement> = Vec::with_capacity(elements.len());
@@ -6362,7 +6405,7 @@ impl Inferer<'_> {
         // elements join by type afterwards.
         let open_element_type = !hint_pins_element_ty;
         let normalization = if open_element_type {
-            object_literal_normalization(self.ast, &elements)?
+            object_normalization::array_normalization(self.ast, &elements)?
         } else {
             None
         };
@@ -6371,7 +6414,7 @@ impl Inferer<'_> {
         // fields, and the arrays then join by type.
         let arrays_of_object_literals = open_element_type
             && normalization.is_none()
-            && every_array_of_object_literals(self.ast, &elements)?;
+            && object_normalization::every_array_of_object_literals(self.ast, &elements)?;
         // Whether the running element type is still the first element's, which
         // mismatch messages name.
         let mut running_is_first = true;
@@ -6390,7 +6433,11 @@ impl Inferer<'_> {
                     // A literal that will normalize takes a hint only from a running
                     // type of its own shape, which one with other fields can't match.
                     let lacks_running_shape = normalization.is_some()
-                        && !has_running_shape(self.ast, elem_id, element_ty.as_ref())?;
+                        && !object_normalization::has_running_shape(
+                            self.ast,
+                            elem_id,
+                            element_ty.as_ref(),
+                        )?;
                     // Such a literal still takes the expected element type, which only
                     // reaches here when it holds an unbound type parameter: its empty
                     // arrays and callbacks need that context, as in tsc.
@@ -6440,7 +6487,7 @@ impl Inferer<'_> {
                     };
                     let join = ElementJoin {
                         widens: open_element_type && !already_errored,
-                        normalization: normalization.as_ref(),
+                        joins_as_union: normalization.is_some() || arrays_of_object_literals,
                     };
                     match self.joined_element_type(running, &elem_ty, join) {
                         Some(joined) => {
@@ -6541,17 +6588,25 @@ impl Inferer<'_> {
         // The seed widened every literal type to check the elements against;
         // the regular ones stay, as in TypeScript: `[h]` with `h: "hello"` is
         // `"hello"[]`.
-        let element_ty = if hint_pins_element_ty {
+        let element_ty = if let Some(normalizing) = &normalization {
+            // tsc reduces the literals' types to those no other is a subtype
+            // of before normalizing them against one another. An element that
+            // reported an error still normalizes, so reads of its siblings'
+            // fields don't report again.
+            let element_types = self.array_literal_element_types(&typed_elements)?;
+            let reduced = self.without_fresh_subtypes(element_types);
+            object_normalization::normalized(&reduced, normalizing)
+        } else if hint_pins_element_ty {
             if self.error_count() == errors_before && !own_element_types.is_empty() {
                 Type::union(own_element_types)
             } else {
                 element_ty
             }
-        } else if normalization.is_none() && self.error_count() == errors_before {
-            let element_ty =
-                self.best_common_element_type(element_ty, &typed_elements, &object_literals)?;
+        } else if self.error_count() > errors_before {
             self.kept_element_type(element_ty, &typed_elements)?
         } else {
+            let element_ty =
+                self.best_common_element_type(element_ty, &typed_elements, &object_literals)?;
             self.kept_element_type(element_ty, &typed_elements)?
         };
 
@@ -6679,27 +6734,17 @@ impl Inferer<'_> {
         elem_ty: &Type,
         join: ElementJoin,
     ) -> Option<Type> {
-        let fits = assignable(elem_ty, running, self.resolver());
-        // Object literals of the same shape join by type like any other
-        // elements; only differing fields need normalizing.
-        let shapes_differ = join
-            .normalization
-            .is_some_and(|nested_fields| !same_shape(running, elem_ty, nested_fields));
-        if fits && !shapes_differ {
+        if assignable(elem_ty, running, self.resolver()) {
             return Some(running.clone());
         }
         // A later element every earlier one fits becomes the element type, as
         // tsc's best common type: `[(x) => x, (x, y) => x * y]` holds
         // two-parameter functions.
-        if join.widens && !shapes_differ && assignable(running, elem_ty, self.resolver()) {
+        if join.widens && assignable(running, elem_ty, self.resolver()) {
             return Some(elem_ty.widen_literal());
         }
-        // Object literals with differing fields, or the same fields neither of
-        // which fits the other, join as tsc's normalized union:
-        // `[{ a: 0 }, { a: 1, b: "x" }]` holds
-        // `{ a: number; b?: never } | { a: number; b: string }`.
-        let nested_fields = join.normalization?;
-        normalized_object_union(running, &elem_ty.widen_literal(), nested_fields)
+        join.joins_as_union
+            .then(|| Type::union(vec![running.clone(), elem_ty.widen_literal()]))
     }
 
     /// Whether an expression reads a variable, a field or `this`.
@@ -7580,6 +7625,186 @@ impl Inferer<'_> {
             span,
         )?;
         Ok((TypedExprKind::Sequence { stmts, result }, Type::Number))
+    }
+
+    /// `receiver.name(args)` for the `method` `find_method` found on `recv_ty`.
+    fn infer_found_method_call(
+        &mut self,
+        typed_receiver: ExprId,
+        recv_ty: &Type,
+        method: FoundMethod,
+        call: MethodCallSite<'_>,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let MethodCallSite {
+            name,
+            type_args,
+            args,
+            expected,
+            span,
+        } = call;
+        let (mut sig, interface_bindings, iface_mangled, _dispatch) = method;
+        // `flat` un-nests `depth` array levels — a return type the
+        // generic machinery can't express. Validate the literal depth
+        // and override the resolved return type before dispatch.
+        if name.name == "flat" && matches!(recv_ty.peel(), Type::Array(_)) {
+            sig.ret = self.array_flat_return_type(recv_ty, &args)?;
+        }
+        // Anything with substitution work — interface generics
+        // (`Array<T>`), method generics (`map<U>`), or both —
+        // goes through the unified pipeline. Only the no-
+        // generics-anywhere case (e.g. `console.log`,
+        // `(42).toString()`) takes the trivial path.
+        if interface_bindings.is_empty() && sig.generics.is_empty() {
+            return self.infer_method_call(
+                typed_receiver,
+                iface_mangled,
+                name,
+                sig,
+                type_args,
+                args,
+                span,
+            );
+        }
+        let is_array = matches!(recv_ty.peel(), Type::Array(_));
+        let method = name.name.clone();
+        let call = self.infer_generic_method_call(
+            typed_receiver,
+            iface_mangled,
+            name,
+            sig,
+            interface_bindings,
+            type_args,
+            args,
+            expected,
+            span,
+        )?;
+        if is_array {
+            return self.narrow_by_callback_predicate(&method, call, span);
+        }
+        Ok(call)
+    }
+
+    /// `u.name(args)` where `u` is a union of strings with arrays or tuples,
+    /// and both declare `name`: as tsc calls a union's method, each argument
+    /// must fit both signatures. The two have no shared representation, so
+    /// `typeof u === "string"` picks the string's call or the array's, with
+    /// `u` and each argument evaluated once, before either.
+    fn string_or_array_method_call(
+        &mut self,
+        typed_receiver: ExprId,
+        methods: StringOrArrayMethods,
+        call: MethodCallSite<'_>,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let StringOrArrayMethods {
+            string_method,
+            arrays,
+            array_method,
+        } = methods;
+        let span = call.span;
+        let mut stmts = Vec::new();
+        let held = self.hold_in_temp(typed_receiver, "method_receiver", &mut stmts)?;
+        let mut held_arguments = BTreeMap::new();
+        for &arg in &call.args {
+            // A literal keeps its type, which either signature may need:
+            // `"a"` fits an `"a" | "b"` element where `string` wouldn't.
+            let (typed_arg, _) = self.infer_expr_keeping_literals(arg, None, true)?;
+            let held_arg = self.hold_in_temp(typed_arg, "method_argument", &mut stmts)?;
+            held_arguments.insert(arg, held_arg);
+        }
+        let (string_call, string_ret, array_call, array_ret) =
+            self.with_held_arguments(held_arguments, |this| {
+                let (string_call, string_ret) =
+                    this.narrowed_method_call(held, Type::String, string_method, call.clone())?;
+                // The array's call reports what the string's already did
+                // only once: a wrong argument count, say.
+                let reported = this.diagnostics.len();
+                let (array_call, array_ret) =
+                    this.narrowed_method_call(held, arrays, array_method, call)?;
+                this.drop_repeated_diagnostics(reported);
+                Ok((string_call, string_ret, array_call, array_ret))
+            })?;
+        let is_string = self.push_synthetic_expr(
+            TypedExprKind::TypeofTag {
+                value: held,
+                tag: crate::TypeofTagKind::String,
+            },
+            Type::Boolean,
+            span,
+        )?;
+        let result_ty = Type::union(vec![string_ret, array_ret]);
+        let result = self.push_synthetic_expr(
+            TypedExprKind::Ternary {
+                cond: is_string,
+                then_: string_call,
+                else_: array_call,
+            },
+            result_ty.clone(),
+            span,
+        )?;
+        Ok((TypedExprKind::Sequence { stmts, result }, result_ty))
+    }
+
+    /// When `recv_ty` is a union of strings with arrays or tuples that both
+    /// declare `name`, each side's method.
+    fn string_or_array_methods(&self, recv_ty: &Type, name: &str) -> Option<StringOrArrayMethods> {
+        let arrays = recv_ty.string_or_array_union_arrays()?;
+        Some(StringOrArrayMethods {
+            string_method: self.find_method(&Type::String, name)?,
+            array_method: self.find_method(&arrays, name)?,
+            arrays,
+        })
+    }
+
+    /// Runs `infer` with `held` (source argument to its temporary) in
+    /// [`Self::held_arguments`], removing them again whether or not it fails.
+    fn with_held_arguments<T>(
+        &mut self,
+        held: BTreeMap<ExprId, ExprId>,
+        infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
+    ) -> Result<T, CompilerFailure> {
+        let sources = held.keys().copied().collect::<Vec<_>>();
+        self.held_arguments.extend(held);
+        let result = infer(self);
+        for source in sources {
+            self.held_arguments.remove(&source);
+        }
+        result
+    }
+
+    /// Drops each diagnostic from `since` on that repeats an earlier one.
+    fn drop_repeated_diagnostics(&mut self, since: usize) {
+        let later = self.diagnostics.split_off(since);
+        for diagnostic in later {
+            let repeats = self.diagnostics[..since]
+                .iter()
+                .any(|seen| seen.span == diagnostic.span && seen.message == diagnostic.message);
+            if !repeats {
+                self.diagnostics.push(diagnostic);
+            }
+        }
+    }
+
+    /// `(held as narrowed).name(args)`, for a `held` known to hold `narrowed`.
+    fn narrowed_method_call(
+        &mut self,
+        held: ExprId,
+        narrowed: Type,
+        method: FoundMethod,
+        call: MethodCallSite<'_>,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let span = call.span;
+        let value = self.reread_temp(held)?;
+        let receiver = self.push_synthetic_expr(
+            TypedExprKind::Cast {
+                value,
+                target_ty: narrowed.clone(),
+                check: None,
+            },
+            narrowed.clone(),
+            span,
+        )?;
+        let (kind, ty) = self.infer_found_method_call(receiver, &narrowed, method, call)?;
+        Ok((self.push_synthetic_expr(kind, ty.clone(), span)?, ty))
     }
 
     /// `(held as narrowed).length`, for a `held` known to hold `narrowed`.
@@ -8963,6 +9188,13 @@ impl Inferer<'_> {
         }
     }
 
+    /// Whether `++`/`--` may write its result back to a slot of `target`. A
+    /// `never` slot takes it, as in tsc: it holds no value unless an alias
+    /// filled a `never[]`, and then the result is the number it would be.
+    fn postfix_write_fits(&self, result: &Type, target: &Type) -> bool {
+        matches!(target.peel(), Type::Never) || assignable(result, target, self.resolver())
+    }
+
     fn infer_postfix_ident(
         &mut self,
         op: crate::PostfixOp,
@@ -8982,10 +9214,7 @@ impl Inferer<'_> {
             let operand_ty = self
                 .lookup_narrowed_view(&path)
                 .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
-            if !matches!(
-                operand_ty.primitive_behavior(),
-                Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
-            ) {
+            if !takes_postfix(&operand_ty) {
                 self.error(
                     target.span,
                     format!(
@@ -9001,17 +9230,18 @@ impl Inferer<'_> {
             let result_ty = postfix_result_ty(&operand_ty);
             // For non-error declared types that aren't assignable from
             // the result, mirror `infer_assign`'s rejection.
-            let fits = assignable(&result_ty, &entry.ty, self.resolver());
+            let fits = self.postfix_write_fits(&result_ty, &entry.ty);
             if !matches!(entry.ty, Type::Error) && !fits {
                 self.error(
                     span,
                     format!("expected `{}`, got `{}`", entry.ty, result_ty),
                 );
             }
-            // A rejected write leaves the declared type, as in TypeScript.
+            // A rejected write leaves the declared type, as in TypeScript, and
+            // so does a write to a `never` binding, which tsc keeps `never`.
             if !fits {
                 self.invalidate_for_reassignment(path, target.span);
-            } else if !matches!(entry.ty, Type::Error) {
+            } else if !matches!(entry.ty, Type::Error | Type::Never) {
                 // Re-install assignment narrowing: result reads see the
                 // post-increment type.
                 self.install_assignment_narrowing(
@@ -9215,18 +9445,14 @@ impl Inferer<'_> {
             );
             Type::Error
         };
-        if !matches!(
-            target_ty.primitive_behavior(),
-            Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
-        ) {
+        if !takes_postfix(&target_ty) {
             self.error(
                 name.span,
                 format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{target_ty}`",),
             );
         }
         let result_ty = postfix_result_ty(&target_ty);
-        if !matches!(target_ty, Type::Error) && !assignable(&result_ty, &target_ty, self.resolver())
-        {
+        if !matches!(target_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &target_ty) {
             self.error(
                 name.span,
                 format!("expected `{target_ty}`, got `{result_ty}`"),
@@ -9273,10 +9499,7 @@ impl Inferer<'_> {
         let operand_ty = self
             .lookup_narrowed_view(&path)
             .map_or_else(|| ty.clone(), |view| view.narrowed_ty.clone());
-        if !matches!(
-            operand_ty.primitive_behavior(),
-            Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
-        ) {
+        if !takes_postfix(&operand_ty) {
             self.error(
                     name.span,
                     format!(
@@ -9285,7 +9508,7 @@ impl Inferer<'_> {
                 );
         }
         let result_ty = postfix_result_ty(&operand_ty);
-        if !matches!(ty, Type::Error) && !assignable(&result_ty, &ty, self.resolver()) {
+        if !matches!(ty, Type::Error) && !self.postfix_write_fits(&result_ty, &ty) {
             self.error(span, format!("expected `{ty}`, got `{result_ty}`"));
         }
         self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone())?;
@@ -9380,17 +9603,14 @@ impl Inferer<'_> {
             elem_ty.clone()
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
-        if !matches!(
-            read_ty.primitive_behavior(),
-            Type::Number | Type::NumberLiteral(_) | Type::BigInt | Type::Error
-        ) {
+        if !takes_postfix(&read_ty) {
             self.error(
                 span,
                 format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{read_ty}`",),
             );
         }
         let result_ty = postfix_result_ty(&read_ty);
-        if !matches!(elem_ty, Type::Error) && !assignable(&result_ty, &elem_ty, self.resolver()) {
+        if !matches!(elem_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &elem_ty) {
             self.error(span, format!("expected `{elem_ty}`, got `{result_ty}`"));
         }
         self.invalidate_index_write(typed_receiver, typed_index, span)?;
@@ -9424,7 +9644,7 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
         let cond_span = self.ast.try_expr(cond).map_err(super::arena_failure)?.span;
-        self.check_condition_ty(typed_cond, &cond_ty, cond_span)?;
+        self.check_condition_ty(&cond_ty, cond_span);
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
@@ -9436,10 +9656,7 @@ impl Inferer<'_> {
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
-        let result_ty = match empty_literal_join(self.ast, (then_, &then_ty), (else_, &else_ty))? {
-            Some(joined) => joined,
-            None => conditional_result_type(then_ty, else_ty, self.resolver()),
-        };
+        let result_ty = self.ternary_result_type((then_, then_ty), (else_, else_ty), expected)?;
         Ok((
             TypedExprKind::Ternary {
                 cond: typed_cond,
@@ -9448,6 +9665,28 @@ impl Inferer<'_> {
             },
             result_ty,
         ))
+    }
+
+    /// The type of a conditional whose branches have the given types.
+    fn ternary_result_type(
+        &self,
+        (then_, then_ty): (ExprId, Type),
+        (else_, else_ty): (ExprId, Type),
+        expected: Option<&Type>,
+    ) -> Result<Type, CompilerFailure> {
+        // Fresh object literals join as an array literal's elements do:
+        // `c ? { k: 1 } : { k: 2, m: 3 }` reads `m` from either.
+        if expected.is_none()
+            && let Some(normalizing) =
+                object_normalization::conditional_normalization(self.ast, then_, else_)?
+        {
+            let reduced = self.without_fresh_subtypes(vec![then_ty, else_ty]);
+            return Ok(object_normalization::normalized(&reduced, &normalizing));
+        }
+        if let Some(joined) = empty_literal_join(self.ast, (then_, &then_ty), (else_, &else_ty))? {
+            return Ok(joined);
+        }
+        Ok(conditional_result_type(then_ty, else_ty, self.resolver()))
     }
 
     /// The type of `a || b` or `a ?? b` when `a` decides the result: `a`'s own,
@@ -11535,14 +11774,6 @@ fn holds_no_element(ty: &Type) -> bool {
     }
 }
 
-fn is_object_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    Ok(matches!(
-        &ast.try_expr(id).map_err(super::arena_failure)?.kind,
-        ExprKind::ObjectLiteral { .. }
-    ))
-}
-
 fn is_empty_object_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
     let id = peel_parens(ast, expr)?;
     Ok(matches!(
@@ -11588,12 +11819,40 @@ fn matched_elements(running_is_first: bool) -> &'static str {
 }
 
 #[derive(Clone, Copy)]
-struct ElementJoin<'a> {
+struct ElementJoin {
     /// Whether a later element may widen the element type to its own.
     widens: bool,
-    /// Present when every element is a fresh object literal: the fields that
-    /// normalize one level down. See `object_literal_normalization`.
-    normalization: Option<&'a BTreeSet<String>>,
+    /// Whether elements that don't fit one another join as a union, which
+    /// the literal reduces and normalizes once every element is typed.
+    joins_as_union: bool,
+}
+
+/// A method `find_method` found: its signature, the receiver's type arguments,
+/// its interface and its dispatch.
+type FoundMethod = (
+    MethodSig,
+    BTreeMap<String, Type>,
+    crate::MangledName,
+    crate::Dispatch,
+);
+
+/// The methods a union of strings with arrays or tuples (`arrays`, their
+/// union) calls for one name, on each side.
+struct StringOrArrayMethods {
+    string_method: FoundMethod,
+    arrays: Type,
+    array_method: FoundMethod,
+}
+
+/// A method call's parts after its callee: what dispatch needs once the
+/// receiver is typed.
+#[derive(Clone)]
+struct MethodCallSite<'a> {
+    name: Ident,
+    type_args: Option<Vec<TypeAnnotation>>,
+    args: Vec<ExprId>,
+    expected: Option<&'a Type>,
+    span: Span,
 }
 
 #[derive(Clone, Copy)]
@@ -11611,319 +11870,6 @@ pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, 
             _ => return Ok(expr),
         }
     }
-}
-
-/// tsc normalizes only fresh object literals, whose types list every field
-/// they hold. When every element is one, the fields holding a fresh object
-/// literal in every element that has them, which normalize one level down.
-/// `None` otherwise: a value typed with fewer fields may hold the others, with
-/// any type.
-fn object_literal_normalization(
-    ast: &crate::Ast,
-    elements: &[crate::ArrayLiteralElement],
-) -> Result<Option<BTreeSet<String>>, CompilerFailure> {
-    let mut fresh = BTreeSet::new();
-    let mut stale = BTreeSet::new();
-    for element in elements {
-        let crate::ArrayLiteralElement::Value(id) = element else {
-            return Ok(None);
-        };
-        let Some(literals) = fresh_object_choices(ast, *id)? else {
-            return Ok(None);
-        };
-        for field in literals.into_iter().flatten() {
-            let names = if is_fresh_object(ast, field.value)? {
-                &mut fresh
-            } else {
-                &mut stale
-            };
-            names.insert(field.name.name.clone());
-        }
-    }
-    Ok(Some(fresh.difference(&stale).cloned().collect()))
-}
-
-/// The fields of a fresh object literal: one that only names its fields, with
-/// no spread or computed key that could bring in fields its type doesn't list.
-fn fresh_object_fields(
-    ast: &crate::Ast,
-    expr: ExprId,
-) -> Result<Option<Vec<&crate::ObjectLiteralField>>, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    let ExprKind::ObjectLiteral { members } = &ast.try_expr(id).map_err(super::arena_failure)?.kind
-    else {
-        return Ok(None);
-    };
-    Ok(members
-        .iter()
-        .map(|member| match member {
-            crate::ObjectLiteralMember::Field(field) => Some(field),
-            _ => None,
-        })
-        .collect())
-}
-
-/// Whether every element is a non-empty array literal whose elements are all
-/// fresh object literals, or conditionals choosing between them.
-fn every_array_of_object_literals(
-    ast: &crate::Ast,
-    elements: &[crate::ArrayLiteralElement],
-) -> Result<bool, CompilerFailure> {
-    for element in elements {
-        let crate::ArrayLiteralElement::Value(id) = element else {
-            return Ok(false);
-        };
-        let id = peel_parens(ast, *id)?;
-        let ExprKind::ArrayLiteral { elements: inner } =
-            &ast.try_expr(id).map_err(super::arena_failure)?.kind
-        else {
-            return Ok(false);
-        };
-        if inner.is_empty() || object_literal_normalization(ast, inner)?.is_none() {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// The fields of each fresh object literal `expr` may evaluate to: itself, or
-/// each branch of a conditional choosing between such literals. `None` when it
-/// may evaluate to anything else.
-fn fresh_object_choices(
-    ast: &crate::Ast,
-    expr: ExprId,
-) -> Result<Option<Vec<Vec<&crate::ObjectLiteralField>>>, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    if let ExprKind::Ternary { then_, else_, .. } =
-        &ast.try_expr(id).map_err(super::arena_failure)?.kind
-    {
-        let (Some(mut choices), Some(others)) = (
-            fresh_object_choices(ast, *then_)?,
-            fresh_object_choices(ast, *else_)?,
-        ) else {
-            return Ok(None);
-        };
-        choices.extend(others);
-        return Ok(Some(choices));
-    }
-    Ok(fresh_object_fields(ast, id)?.map(|fields| vec![fields]))
-}
-
-/// Whether the object literal `expr` names exactly the fields of `running`, a
-/// single object type, and so does each object literal it holds directly.
-fn has_running_shape(
-    ast: &crate::Ast,
-    expr: ExprId,
-    running: Option<&Type>,
-) -> Result<bool, CompilerFailure> {
-    let Some(Type::Object { fields, .. }) = running else {
-        return Ok(false);
-    };
-    let Some(literal_fields) = fresh_object_fields(ast, expr)? else {
-        return Ok(false);
-    };
-    let literal_names = literal_fields
-        .iter()
-        .map(|field| &field.name.name)
-        .collect::<BTreeSet<_>>();
-    if literal_names != fields.keys().collect() {
-        return Ok(false);
-    }
-    for field in literal_fields {
-        let running_field = fields.get(&field.name.name).map(|running| &running.ty);
-        if matches!(running_field, Some(Type::Object { .. }))
-            && fresh_object_fields(ast, field.value)?.is_some()
-            && !has_running_shape(ast, field.value, running_field)?
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// Whether `expr` evaluates to a fresh object literal: one, or a conditional
-/// choosing between two.
-fn is_fresh_object(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
-    let id = peel_parens(ast, expr)?;
-    if let ExprKind::Ternary { then_, else_, .. } =
-        &ast.try_expr(id).map_err(super::arena_failure)?.kind
-    {
-        return Ok(is_fresh_object(ast, *then_)? && is_fresh_object(ast, *else_)?);
-    }
-    Ok(fresh_object_fields(ast, id)?.is_some())
-}
-
-/// The object members of `ty`: itself, or each member of a union of objects.
-fn object_members(ty: &Type) -> Option<Vec<&Type>> {
-    match ty {
-        Type::Object { .. } => Some(vec![ty]),
-        Type::Union(members) => members
-            .iter()
-            .map(|member| matches!(member, Type::Object { .. }).then_some(member))
-            .collect(),
-        _ => None,
-    }
-}
-
-fn field_names(ty: &Type) -> BTreeSet<&String> {
-    member_field_maps(ty)
-        .flat_map(|fields| fields.keys())
-        .collect()
-}
-
-/// The field names across `types`.
-fn field_names_across<'a>(types: &[&'a Type]) -> BTreeSet<&'a String> {
-    types.iter().flat_map(|ty| field_names(ty)).collect()
-}
-
-/// Whether `left` and `right` name the same fields, and the same fields within
-/// each of `nested_fields`, the ones that normalize one level down.
-fn same_shape(left: &Type, right: &Type, nested_fields: &BTreeSet<String>) -> bool {
-    let nested_names =
-        |ty, name| field_names_across(&nested_field_types(member_field_maps(ty), name));
-    field_names(left) == field_names(right)
-        && nested_fields
-            .iter()
-            .all(|name| nested_names(left, name) == nested_names(right, name))
-}
-
-/// The field maps of `ty`'s object members, with or without an index.
-fn member_field_maps(ty: &Type) -> impl Iterator<Item = &ObjectFields> {
-    object_members(ty)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|member| match member {
-            Type::Object { fields, .. } => Some(fields),
-            _ => None,
-        })
-}
-
-/// The types field `name` holds across `members`, leaving out the fields an
-/// earlier join added, which say nothing about it.
-fn nested_field_types<'a>(
-    members: impl Iterator<Item = &'a ObjectFields>,
-    name: &str,
-) -> Vec<&'a Type> {
-    members
-        .filter_map(|fields| fields.get(name))
-        .filter(|field| !is_added_missing_field(field))
-        .map(|field| &field.ty)
-        .collect()
-}
-
-/// tsc's normalized union of object literal types: each member gains, as an
-/// optional `never` field (tsc's `?: undefined`), every field only other
-/// members declare, so any of them reads from the union. Each of
-/// `nested_fields` that holds objects in every member that has it is
-/// normalized the same way, one level down.
-/// `None` unless both sides are index-free objects.
-fn normalized_object_union(
-    left: &Type,
-    right: &Type,
-    nested_fields: &BTreeSet<String>,
-) -> Option<Type> {
-    let members = object_field_maps(left, right)?;
-    let all_names = members
-        .iter()
-        .flat_map(|fields| fields.keys())
-        .collect::<BTreeSet<_>>();
-    let nested_names_by_field = nested_object_field_names(&members, nested_fields);
-    let normalized = members
-        .into_iter()
-        .map(|fields| {
-            let mut fields = fields.clone();
-            for (name, nested_names) in &nested_names_by_field {
-                if let Some(field) = fields.get_mut(name) {
-                    field.ty = type_with_missing_fields(&field.ty, nested_names);
-                }
-            }
-            Type::Object {
-                fields: fields_with_missing(fields, all_names.iter().copied()),
-                index: None,
-            }
-        })
-        .collect();
-    Some(Type::union(normalized))
-}
-
-/// The field maps of the object members of `left` and `right`, or `None`
-/// unless every member is an index-free object.
-fn object_field_maps<'a>(left: &'a Type, right: &'a Type) -> Option<Vec<&'a ObjectFields>> {
-    let mut members = object_members(left)?;
-    members.extend(object_members(right)?);
-    members
-        .into_iter()
-        .map(|member| match member {
-            Type::Object {
-                fields,
-                index: None,
-            } => Some(fields),
-            _ => None,
-        })
-        .collect()
-}
-
-/// For each of `candidates` that holds objects in every member that has it,
-/// the field names across those objects.
-fn nested_object_field_names(
-    members: &[&ObjectFields],
-    candidates: &BTreeSet<String>,
-) -> BTreeMap<String, BTreeSet<String>> {
-    candidates
-        .iter()
-        .filter_map(|name| {
-            let field_types = nested_field_types(members.iter().copied(), name);
-            field_types
-                .iter()
-                .all(|ty| object_members(ty).is_some())
-                .then(|| {
-                    let nested_names = field_names_across(&field_types)
-                        .into_iter()
-                        .cloned()
-                        .collect();
-                    (name.clone(), nested_names)
-                })
-        })
-        .collect()
-}
-
-/// A field an earlier join added to normalize the running element type. It
-/// says nothing about the field's type, so it doesn't stop the field from
-/// holding objects.
-fn is_added_missing_field(field: &crate::ObjectField) -> bool {
-    field.optional && field.ty == Type::Never
-}
-
-/// Each object member of `ty` with the fields of `names` it lacks added as
-/// optional `never`, which reads as `null`.
-fn type_with_missing_fields(ty: &Type, names: &BTreeSet<String>) -> Type {
-    let Some(members) = object_members(ty) else {
-        return ty.clone();
-    };
-    Type::union(
-        members
-            .into_iter()
-            .map(|member| match member {
-                Type::Object { fields, index } => Type::Object {
-                    fields: fields_with_missing(fields.clone(), names.iter()),
-                    index: index.clone(),
-                },
-                other => other.clone(),
-            })
-            .collect(),
-    )
-}
-
-fn fields_with_missing<'a>(
-    mut fields: ObjectFields,
-    names: impl Iterator<Item = &'a String>,
-) -> ObjectFields {
-    for name in names {
-        fields
-            .entry(name.clone())
-            .or_insert_with(|| crate::ObjectField::optional(Type::Never));
-    }
-    fields
 }
 
 /// Whether `expr` is an empty `[]`, or holds one as a ternary branch or an

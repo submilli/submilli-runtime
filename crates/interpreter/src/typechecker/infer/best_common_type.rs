@@ -11,14 +11,13 @@ use crate::types::Type;
 
 use super::Inferer;
 use super::assignable::assignable;
+use super::object_normalization::{LiteralElement, has_excess_field};
 
 /// One distinct type an array literal's elements hold.
 struct Candidate {
     ty: Type,
-    /// Whether an object literal wrote it, which lists every field it holds,
-    /// so it has no field it doesn't name: tsc relates it to an optional field
-    /// it lacks.
-    fresh: bool,
+    /// What kind of literal wrote it. See [`LiteralElement`].
+    literal: LiteralElement,
 }
 
 impl Inferer<'_> {
@@ -32,7 +31,7 @@ impl Inferer<'_> {
         &self,
         joined: Type,
         elements: &[TypedArrayElement],
-        object_literals: &[bool],
+        object_literals: &[LiteralElement],
     ) -> Result<Type, CompilerFailure> {
         if super::literal_freshness::is_primitive_union(&joined) {
             return Ok(joined);
@@ -59,12 +58,38 @@ impl Inferer<'_> {
         Ok(if fits { union } else { joined })
     }
 
+    /// The union of `types`, each a fresh literal's, reduced to those no other
+    /// is a subtype of, as tsc reduces the object literals it then normalizes:
+    /// `{ a: { b: never[] } }` is dropped as a subtype of
+    /// `{ a: { b: number[] } }`, while `{ a: {} }` stays, having no field `b`.
+    pub(super) fn without_fresh_subtypes(&self, types: Vec<Type>) -> Type {
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for ty in types {
+            let ty = ty.widen_literal();
+            let members = match ty.peel() {
+                Type::Union(members) => members.clone(),
+                _ => vec![ty],
+            };
+            for member in members {
+                if !matches!(member.peel(), Type::Never)
+                    && !candidates.iter().any(|c| c.ty == member)
+                {
+                    candidates.push(Candidate {
+                        ty: member,
+                        literal: LiteralElement::FIELD_LITERAL,
+                    });
+                }
+            }
+        }
+        Type::union(self.without_subtypes(&candidates))
+    }
+
     /// The distinct types the elements hold, in source order, with a union's
     /// members counted one by one. `None` when one is an error.
     fn element_candidates(
         &self,
         elements: &[TypedArrayElement],
-        object_literals: &[bool],
+        object_literals: &[LiteralElement],
     ) -> Result<Option<Vec<Candidate>>, CompilerFailure> {
         let mut candidates: Vec<Candidate> = Vec::new();
         for (element, &object_literal) in elements.iter().zip(object_literals) {
@@ -72,11 +97,11 @@ impl Inferer<'_> {
                 .typed_ast
                 .try_expr(element.expr_id())
                 .map_err(crate::typechecker::arena_failure)?;
-            let (ty, fresh) = match element {
+            let (ty, literal) = match element {
                 TypedArrayElement::Value(_) => (typed.ty.widen_literal(), object_literal),
                 TypedArrayElement::Spread(_) => {
                     match super::expr::spread_element_type(typed.ty.peel()) {
-                        Some(ty) => (ty, false),
+                        Some(ty) => (ty, LiteralElement::NONE),
                         None => return Ok(None),
                     }
                 }
@@ -92,8 +117,11 @@ impl Inferer<'_> {
                     _ => {}
                 }
                 match candidates.iter_mut().find(|known| known.ty == member) {
-                    Some(known) => known.fresh &= fresh,
-                    None => candidates.push(Candidate { ty: member, fresh }),
+                    Some(known) => known.literal = known.literal.and(literal),
+                    None => candidates.push(Candidate {
+                        ty: member,
+                        literal,
+                    }),
                 }
             }
         }
@@ -132,12 +160,23 @@ impl Inferer<'_> {
         if !assignable(&source.ty, &target.ty, self.resolver()) {
             return false;
         }
-        source.fresh
+        // tsc keeps a source with a field the target lacks when the source is
+        // excess-checked or the target is a non-empty object literal type.
+        let rejects_extra_fields = source.literal.excess_checked
+            || (target.literal.object_literal && has_fields(&target.ty));
+        if rejects_extra_fields && has_excess_field(&source.ty, &target.ty) {
+            return false;
+        }
+        source.literal.object_literal
             || !lacks_optional_field(
                 &self.reduce_interfaces_to_shapes(&source.ty),
                 &self.reduce_interfaces_to_shapes(&target.ty),
             )
     }
+}
+
+fn has_fields(ty: &Type) -> bool {
+    matches!(ty.peel(), Type::Object { fields, .. } if !fields.is_empty())
 }
 
 /// Whether `challenger`, at `challenger_index`, stays over `incumbent` when

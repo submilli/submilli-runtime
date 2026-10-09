@@ -65,7 +65,7 @@ pub(crate) fn validate(ast: &Ast, source: &str, file: FileId) -> Result<(), Sour
             | StmtKind::Const { ty, .. }
             | StmtKind::LetPattern { ty, .. }
             | StmtKind::ConstPattern { ty, .. }
-            | StmtKind::ConstRest { ty, .. }
+            | StmtKind::ObjectRest { ty, .. }
             | StmtKind::ForOf { ty, .. }
             | StmtKind::ForOfPattern { ty, .. } => validator.optional(ty)?,
             StmtKind::Function {
@@ -169,7 +169,7 @@ impl<'a> Validator<'a> {
                 self.span(name.span)?;
                 self.doc(doc)?;
             }
-            StmtKind::ConstRest {
+            StmtKind::ObjectRest {
                 name, doc, exclude, ..
             } => {
                 self.span(name.span)?;

@@ -19,7 +19,45 @@ pub(super) fn type_mismatch_help(expected: &Type, got: &Type) -> Result<Vec<Stri
     if let Some(note) = guard_loss_note(got)? {
         help.push(note);
     }
+    if let Some(note) = weak_type_note(expected, got)? {
+        help.push(note);
+    }
     Ok(help)
+}
+
+/// Explains a rejection by the weak-type rule: an object type whose fields are
+/// all optional takes only a value that has at least one of them.
+fn weak_type_note(expected: &Type, got: &Type) -> Result<Option<String>, RenderError> {
+    let (
+        Type::Object {
+            fields: expected_fields,
+            index: None,
+        },
+        Type::Object {
+            fields: got_fields, ..
+        },
+    ) = (expected.peel(), got.peel())
+    else {
+        return Ok(None);
+    };
+    if !super::assignable::weak_type_rejects(got_fields, expected_fields) {
+        return Ok(None);
+    }
+    for ty in [expected, got] {
+        match crate::type_rendering::check_for_copy(ty) {
+            Ok(()) => {}
+            Err(RenderError::Truncated) => return Ok(Some(crate::rendering::TRUNCATED.into())),
+            Err(error) => return Err(error),
+        }
+    }
+    Writer::render(RenderLimits::default(), |out| {
+        out.push("every field of `")?;
+        write_type(out, expected)?;
+        out.push("` is optional, and `")?;
+        write_type(out, got)?;
+        out.push("` has none of them; as in TypeScript, a value must share at least one field with such a type")
+    })
+    .map(|rendered| Some(rendered.text))
 }
 
 pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<String>, RenderError> {
