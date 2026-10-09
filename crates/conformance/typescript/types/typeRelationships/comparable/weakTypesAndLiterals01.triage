@@ -1,1 +1,0 @@
-line 27, 36, 45 type: bug SUB-1189 an inferred return type is the first return the others are assignable to, and with no weak type check `WeakTypes` is assignable to its two-member narrowing, which then stands for both returns

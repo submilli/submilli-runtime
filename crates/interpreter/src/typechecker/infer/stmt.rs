@@ -268,7 +268,8 @@ impl Inferer<'_> {
                     "destructuring patterns must be lowered before inference",
                 ));
             }
-            StmtKind::ConstRest {
+            StmtKind::ObjectRest {
+                is_const,
                 name,
                 source,
                 exclude,
@@ -285,12 +286,22 @@ impl Inferer<'_> {
                     (typed_source, Type::Error)
                 };
                 self.scopes
-                    .insert(name.name.clone(), narrowed.clone(), true, name.span);
-                Ok(TypedStmtKind::Const {
-                    name,
-                    ty: narrowed,
-                    value: typed_value,
-                    doc,
+                    .insert(name.name.clone(), narrowed.clone(), is_const, name.span);
+                Ok(if is_const {
+                    TypedStmtKind::Const {
+                        name,
+                        ty: narrowed,
+                        value: typed_value,
+                        doc,
+                    }
+                } else {
+                    TypedStmtKind::Let {
+                        name,
+                        ty: narrowed,
+                        value: typed_value,
+                        boxed: false,
+                        doc,
+                    }
                 })
             }
         })?;
@@ -560,7 +571,7 @@ impl Inferer<'_> {
             .try_expr(condition)
             .map_err(super::arena_failure)?
             .span;
-        self.check_condition_ty(typed_cond, &cond_ty, cond_span)?;
+        self.check_condition_ty(&cond_ty, cond_span);
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
         let entry_reachable = self.reachable;
         let then_possible = self.condition_can_be(typed_cond, true)?;
@@ -1108,6 +1119,7 @@ impl Inferer<'_> {
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let lhs_path =
             narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
+        let reads_never = self.reads_ruled_out_as_never(&lhs_path);
         let (synth_lhs, lhs_ty) = if let Some(view) = self.lookup_narrowed_view(&lhs_path) {
             let binding = view.binding.clone();
             let narrowed_ty = view.narrowed_ty.clone();
@@ -1137,9 +1149,22 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?;
             (id, ty.clone())
         };
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty.widen_literal()))?;
+        let lhs_ty = if reads_never { Type::Never } else { lhs_ty };
+        let (typed_value, value_ty) =
+            self.infer_expr(value, compound_value_hint(&lhs_ty).as_ref())?;
         let result_ty =
             self.check_compound_arith(op, (synth_lhs, &lhs_ty), (typed_value, &value_ty), op_span)?;
+        let check_ty = compound_result_target(&lhs_ty, &ty);
+        if !matches!(result_ty, Type::Error)
+            && !matches!(check_ty, Type::Error)
+            && !assignable(&result_ty, check_ty, self.resolver())
+        {
+            let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
+            self.error(
+                value_span,
+                format!("expected `{check_ty}`, got `{result_ty}`"),
+            );
+        }
         let synth_binary = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -1998,6 +2023,7 @@ impl Inferer<'_> {
                     name: target.name.clone(),
                     decl_scope: entry.decl_scope,
                 });
+            let reads_never = self.reads_ruled_out_as_never(&lhs_path);
             let (synth_lhs, lhs_ty) = if let Some(view) = self.lookup_narrowed_view(&lhs_path) {
                 let binding = view.binding.clone();
                 let narrowed_ty = view.narrowed_ty.clone();
@@ -2027,7 +2053,9 @@ impl Inferer<'_> {
                     .map_err(crate::typechecker::arena_failure)?;
                 (id, target_ty.clone())
             };
-            let (typed_value, value_ty) = self.infer_expr(value, Some(&lhs_ty.widen_literal()))?;
+            let lhs_ty = if reads_never { Type::Never } else { lhs_ty };
+            let (typed_value, value_ty) =
+                self.infer_expr(value, compound_value_hint(&lhs_ty).as_ref())?;
             let result_ty = self.check_compound_arith(
                 op,
                 (synth_lhs, &lhs_ty),
@@ -2037,13 +2065,14 @@ impl Inferer<'_> {
             // Re-check assignability: catches literal-refined slots (e.g. `1|2|3`)
             // where arithmetic widens the result to `number`.
             let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
+            let check_ty = compound_result_target(&lhs_ty, &target_ty);
             if !matches!(result_ty, Type::Error)
-                && !matches!(target_ty, Type::Error)
-                && !assignable(&result_ty, &target_ty, self.resolver())
+                && !matches!(check_ty, Type::Error)
+                && !assignable(&result_ty, check_ty, self.resolver())
             {
                 self.error(
                     value_span,
-                    format!("expected `{target_ty}`, got `{result_ty}`"),
+                    format!("expected `{check_ty}`, got `{result_ty}`"),
                 );
             }
             let synth_binary = self
@@ -2322,7 +2351,8 @@ impl Inferer<'_> {
         stmt_span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&rw.read.widen_literal()))?;
+        let (typed_value, value_ty) =
+            self.infer_expr(value, compound_value_hint(&rw.read).as_ref())?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2342,6 +2372,7 @@ impl Inferer<'_> {
             (typed_value, &value_ty),
             op_span,
         )?;
+        // The setter's type decides, even beside a getter typed `never`.
         if !matches!(result_ty, Type::Error)
             && !matches!(rw.write, Type::Error)
             && !assignable(&result_ty, &rw.write, self.resolver())
@@ -2416,7 +2447,8 @@ impl Inferer<'_> {
             elem_ty.clone()
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
-        let (typed_value, value_ty) = self.infer_expr(value, Some(&elem_ty.widen_literal()))?;
+        let (typed_value, value_ty) =
+            self.infer_expr(value, compound_value_hint(&elem_ty).as_ref())?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2436,13 +2468,14 @@ impl Inferer<'_> {
             (typed_value, &value_ty),
             op_span,
         )?;
+        let check_ty = compound_result_target(&read_ty, &elem_ty);
         if !matches!(result_ty, Type::Error)
-            && !matches!(elem_ty, Type::Error)
-            && !assignable(&result_ty, &elem_ty, self.resolver())
+            && !matches!(check_ty, Type::Error)
+            && !assignable(&result_ty, check_ty, self.resolver())
         {
             self.error(
                 value_span,
-                format!("expected `{elem_ty}`, got `{result_ty}`"),
+                format!("expected `{check_ty}`, got `{result_ty}`"),
             );
         }
         let synth_binary = self
@@ -2498,6 +2531,26 @@ impl Inferer<'_> {
     }
 }
 
+/// The hint for a compound assignment's value: the target's widened read type,
+/// except that a `never` target hints nothing, so the result's own type is
+/// what gets reported against it, once.
+fn compound_value_hint(read_ty: &Type) -> Option<Type> {
+    if matches!(read_ty.peel(), Type::Never) {
+        return None;
+    }
+    Some(read_ty.widen_literal())
+}
+
+/// The type a compound assignment's result must fit: the declared type, or
+/// `never` when the target reads as `never` here, as tsc checks the result
+/// against the narrowed read.
+fn compound_result_target<'a>(read_ty: &'a Type, declared_ty: &'a Type) -> &'a Type {
+    if matches!(read_ty.peel(), Type::Never) {
+        return read_ty;
+    }
+    declared_ty
+}
+
 /// The arithmetic operator a compound assignment applies, as source text.
 pub(super) fn binary_op_text(op: BinOp) -> &'static str {
     match op {
@@ -2533,11 +2586,6 @@ pub(super) fn binary_op_text(op: BinOp) -> &'static str {
 pub(super) fn compound_arith_result(op: BinOp, lt: &Type, rt: &Type) -> Option<Type> {
     if matches!(lt.peel(), Type::Error) || matches!(rt.peel(), Type::Error) {
         return Some(Type::Error);
-    }
-    // A `never` target can't take the result back, so the read-modify-write has no
-    // rule even where the binary operator accepts the pair.
-    if matches!(lt.peel(), Type::Never) {
-        return None;
     }
     binary_arith_result(op, lt, rt)
 }
@@ -3238,7 +3286,7 @@ impl Inferer<'_> {
             .try_expr(condition)
             .map_err(super::arena_failure)?
             .span;
-        self.check_condition_ty(typed, &ty, cond_span)?;
+        self.check_condition_ty(&ty, cond_span);
         let writes = self
             .clause_write_scopes
             .pop()
@@ -3267,7 +3315,7 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         let (typed, ty) = self.infer_expr(condition, None)?;
-        self.check_condition_ty(typed, &ty, cond_span)?;
+        self.check_condition_ty(&ty, cond_span);
         let (_, false_env) = self.predicate_envs(typed)?;
         let mut exit = self.snapshot_active_narrowings(0).0;
         exit.extend_env(false_env);

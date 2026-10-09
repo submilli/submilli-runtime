@@ -537,6 +537,7 @@ impl State<'_> {
             .try_expr(id)
             .map_err(crate::typechecker::arena_failure)?;
         let span = expr.span;
+        let expr_ty = expr.ty.clone();
         let kind = expr.kind.clone();
         let _: () = match kind {
             TypedExprKind::LocalRef { ident, .. } => {
@@ -561,6 +562,12 @@ impl State<'_> {
                     let binding = self
                         .require_source(name)
                         .map_err(|failure| failure.with_span(span))?;
+                    // Codegen reads a local narrowed to `never` as it is (a
+                    // `never[]` an alias filled holds real values), so a
+                    // closure needs it.
+                    if matches!(expr_ty, Type::Never) {
+                        self.mark_cross_frame_capture(name, &binding)?;
+                    }
                     self.resolved.reads.insert(id, binding.name_ident);
                 }
             }
