@@ -194,7 +194,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
     let k = || Type::TypeVar("K".to_string());
     let v = || Type::TypeVar("V".to_string());
     let map_ty = || Type::prelude_interface("Map".to_string(), vec![k(), v()]);
-    let entry = || Type::Tuple(vec![k(), v()]);
+    let entry = || Type::Tuple(vec![k(), v()].into());
     let iter = |t: Type| Type::prelude_interface("Iterator".to_string(), vec![t]);
     let map = || Param::new("map", map_ty());
     let key = || Param::new("key", k());
@@ -207,7 +207,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "get",
         vec![map(), key()],
-        Type::Union(vec![v(), Type::Null]),
+        Type::Union(vec![v(), Type::Undefined]),
     );
     m(
         defs,
@@ -246,6 +246,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
                 Type::prelude_interface("Iterable".to_string(), vec![entry()]),
                 Type::prelude_interface("Iterator".to_string(), vec![entry()]),
                 Type::Null,
+                Type::Undefined,
             ]),
         )],
         map_ty(),
@@ -274,21 +275,23 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "get".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
                             ret: Type::Union(vec![
                                 Type::TypeVar("V".to_string()),
-                                Type::Null,
+                                Type::Undefined,
                             ]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the value associated with `key`, or `null` if the key is not present.\n * @param key The key to look up.\n */",
+                                "/**\n * Returns the value associated with `key`, or `undefined` if the key is not present.\n * @param key The key to look up.\n */",
                             ),
                         },
                     ),
                     (
                         "set".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("key", Type::TypeVar("K".to_string())),
@@ -307,6 +310,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "has".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
                             ret: Type::Boolean,
@@ -319,6 +323,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "delete".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
                             ret: Type::Boolean,
@@ -331,6 +336,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "keys".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("K".to_string())]),
@@ -343,6 +349,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "values".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("V".to_string())]),
@@ -355,12 +362,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "entries".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Tuple(vec![
                                 Type::TypeVar("K".to_string()),
                                 Type::TypeVar("V".to_string()),
-                            ])]),
+                            ].into())]),
                             predicate: None,
                             doc: doc(
                                 "/** Returns a lazy `Iterator<[K, V]>` over the entries — the same cursor `for-of` uses. */",
@@ -370,10 +378,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "forEach".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "callback",
                                 Type::Function {
+                                    optional: 0,
                                     params: vec![
                                         Type::TypeVar("V".to_string()),
                                         Type::TypeVar("K".to_string()),
@@ -403,12 +413,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         // `Iterable<[K, V]>`.
                         "iterator".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Tuple(vec![
                                     Type::TypeVar("K".to_string()),
                                     Type::TypeVar("V".to_string()),
-                                ])]),
+                                ].into())]),
                             predicate: None,
                             doc: doc(
                                 "/** Returns a fresh `Iterator<[K, V]>` over the entries in insertion order. It walks the map live: entries added later are visited, entries deleted first are skipped. */",
@@ -418,6 +429,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "clear".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::Void,
@@ -455,6 +467,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "new".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: vec!["K".to_string(), "V".to_string()],
                         params: vec![Param::with_default(
                             "entries",
@@ -462,24 +475,25 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 Type::Readonly(Box::new(Type::Array(Box::new(Type::Tuple(vec![
                                     Type::TypeVar("K".to_string()),
                                     Type::TypeVar("V".to_string()),
-                                ]))))),
+                                ].into()))))),
                                 Type::prelude_interface(
                                     "Iterable".to_string(),
                                     vec![Type::Tuple(vec![
                                         Type::TypeVar("K".to_string()),
                                         Type::TypeVar("V".to_string()),
-                                    ])],
+                                    ].into())],
                                 ),
                                 Type::prelude_interface(
                                     "Iterator".to_string(),
                                     vec![Type::Tuple(vec![
                                         Type::TypeVar("K".to_string()),
                                         Type::TypeVar("V".to_string()),
-                                    ])],
+                                    ].into())],
                                 ),
                                 Type::Null,
+                                Type::Undefined,
                             ]),
-                            crate::DefaultValue::Null,
+                            crate::DefaultValue::Undefined,
                         )],
                         ret: Type::prelude_interface("Map".to_string(), vec![
                                 Type::TypeVar("K".to_string()),

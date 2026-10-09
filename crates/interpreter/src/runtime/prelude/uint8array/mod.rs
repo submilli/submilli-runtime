@@ -171,7 +171,7 @@ fn length(caller: &mut Caller<'_, StoreData>, receiver: &Val, name: &str) -> was
     Ok(f64::from(arr.len(&mut *caller)?))
 }
 
-/// `at(index)` → the byte boxed as a `$boxed_number`, or `null` when out of range.
+/// `at(index)` → the byte boxed as a `$boxed_number`, or `undefined` when out of range.
 fn at(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
@@ -185,7 +185,7 @@ fn at(
             let byte = read_uint8(caller, arr, i)?;
             box_byte(caller, byte)
         }
-        None => Ok(Val::null_any_ref()),
+        None => super::undefined::value(caller),
     }
 }
 
@@ -646,20 +646,20 @@ fn hex_nibble(c: u16) -> wasmtime::Result<u8> {
     }
 }
 
-/// Read `Base64Options` — `(url_safe, omit_padding)`. A null/absent options object
+/// Read `Base64Options` — `(url_safe, omit_padding)`. An undefined/absent options object
 /// means standard alphabet, padded.
 fn read_base64_options(
     caller: &mut Caller<'_, StoreData>,
     opt: &Val,
 ) -> wasmtime::Result<(bool, bool)> {
-    if matches!(opt, Val::AnyRef(None)) {
+    if super::undefined::is_undefined(caller, opt)? {
         return Ok((false, false));
     }
     let (mut url_safe, mut omit_padding) = (false, false);
     for (name, value) in read_object_entries(caller, opt, "Base64Options")? {
-        // An optional field the caller omitted is materialized as `null`; leave
+        // An optional field the caller omitted is materialized as `undefined`; leave
         // the default for it.
-        if matches!(value, Val::AnyRef(None)) {
+        if super::undefined::is_undefined(caller, &value)? {
             continue;
         }
         match String::from_utf16_lossy(&name).as_str() {

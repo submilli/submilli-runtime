@@ -34,6 +34,7 @@ use crate::runtime::gc_singleton::{singleton_array, singleton_struct};
 #[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct IntrinsicTypes {
+    pub undefined: StructType,
     pub raw_string: ArrayType,
     pub vtable: StructType,
     pub object: StructType,
@@ -627,7 +628,21 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         ],
     )?;
 
+    let undefined = singleton_struct(
+        engine,
+        Final,
+        Some(object.clone()),
+        vec![
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(false, vtable.clone().into()))),
+            ),
+            FieldType::new(imm, StorageType::ValType(ValType::I64)),
+        ],
+    )?;
+
     Ok(IntrinsicTypes {
+        undefined,
         raw_string,
         vtable,
         object,
@@ -689,8 +704,6 @@ mod tests {
     };
     use wasmtime::Config;
 
-    const INTRINSIC_COUNT: u32 = 32;
-
     /// A module that declares the intrinsics and exports `t{idx}` as a nullable
     /// global referencing each type, so the compiled module's canonical handles
     /// can be read back. This is the old type-witness pattern, kept in the test
@@ -703,7 +716,7 @@ mod tests {
 
         let mut globals = GlobalSection::new();
         let mut exports = ExportSection::new();
-        for idx in 0..INTRINSIC_COUNT {
+        for idx in 0..crate::codegen::intrinsics::INTRINSIC_TYPE_COUNT {
             globals.global(
                 GlobalType {
                     val_type: EncValType::Ref(RefType {
@@ -756,6 +769,9 @@ mod tests {
         assert!(StructType::eq(&intr.string, &recovered_struct(3)));
         assert!(StructType::eq(&intr.boxed_number, &recovered_struct(4)));
         assert!(StructType::eq(&intr.boxed_boolean, &recovered_struct(5)));
+        assert!(StructType::eq(&intr.undefined, &recovered_struct(51)));
+        assert!(!StructType::eq(&intr.undefined, &intr.object));
+        assert!(!StructType::eq(&intr.undefined, &intr.boxed_boolean));
         assert!(ArrayType::eq(&intr.field_names, &recovered_array(6)));
         assert!(ArrayType::eq(&intr.object_fields, &recovered_array(7)));
         assert!(StructType::eq(&intr.object_shape, &recovered_struct(8)));

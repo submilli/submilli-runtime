@@ -2,7 +2,7 @@
 // error rather than a call that quietly does something else.
 //
 // This is a soundness boundary, not a style rule. The host decides a call is
-// typed by looking at whether the schema argument is non-null, while the
+// typed by looking at whether the schema argument is not undefined, while the
 // structural check that makes a typed call safe is a cast the typechecker emits
 // only when a type argument was written. A hand-written schema sets the first
 // without the second, so raw parsed JSON would reach the guest wearing the

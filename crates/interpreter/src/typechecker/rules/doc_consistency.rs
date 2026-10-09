@@ -327,6 +327,7 @@ mod tests {
             ty: Type::Number,
             boxed: false,
             rest: false,
+            optional: false,
             default: None,
         }
     }

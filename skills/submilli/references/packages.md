@@ -210,9 +210,9 @@ if (input.kind === "reply") reply(threadId, text); else post(channelId, text);
 
 // The decision goes through a flag, and the request reads the value again.
 let notify = false;
-if (input.mentions !== null) notify = true;
+if (input.mentions !== undefined) notify = true;
 if (notify) check("acme.com/mentions.notify", {});
-sendMentions(input.mentions);  // null on the first read, a list now: unchecked
+sendMentions(input.mentions);  // undefined on the first read, a list now: unchecked
 
 // The object holding a checked field is handed to a helper that reads it.
 check("acme.com/messages.post", { channelId: input.channelId });
@@ -280,10 +280,8 @@ export interface CancelInput {
  * List one customer's orders, newest first.
  * @capability acme.com/orders.list { customerId }
  */
-export function listOrders(customerId: string, page: PageOptions | null = null): Page<Order> {
-    const limit = page === null ? null : page.limit;
-    const cursor = page === null ? null : page.cursor;
-    const query = pageQuery(limit, cursor);
+export function listOrders(customerId: string, page?: PageOptions): Page<Order> {
+    const query = pageQuery(page?.limit, page?.cursor);
     check("acme.com/orders.list", { customerId: customerId });
     const path = "/customers/" + encodeComponent(customerId) + "/orders" + query;
     const response = request("GET", path, null);
@@ -295,8 +293,8 @@ export function listOrders(customerId: string, page: PageOptions | null = null):
  * policy filter sees the real customer even though the caller passes only an id.
  * @capability acme.com/orders.cancel { customerId: string, orderId: $orderId, totalCents: number }
  */
-export function cancelOrder(orderId: string, input: CancelInput | null = null): Order {
-    const reason = input === null ? null : input.reason;
+export function cancelOrder(orderId: string, input?: CancelInput): Order {
+    const reason = input?.reason;
     const order = fetchOrder(orderId);
     if (order === null) {
         throw new Error("order not found: " + orderId);
@@ -306,26 +304,23 @@ export function cancelOrder(orderId: string, input: CancelInput | null = null): 
         orderId: orderId,
         totalCents: order.totalCents,
     });
-    const body: CancelInput = reason === null ? {} : { reason: reason };
+    const body: CancelInput = reason === undefined ? {} : { reason: reason };
     const response = request("POST", "/orders/" + encodeComponent(orderId) + "/cancel", body);
     return JSON.parse(response.body) as Order;
 }
 
 /** Build the `?limit=&cursor=` suffix; exported so tests cover it without a token. */
-export function buildPageQuery(page: PageOptions | null): string {
-    if (page === null) {
-        return pageQuery(null, null);
-    }
-    return pageQuery(page.limit, page.cursor);
+export function buildPageQuery(page?: PageOptions): string {
+    return pageQuery(page?.limit, page?.cursor);
 }
 
-function pageQuery(requested: number | null, cursor: string | null): string {
-    const limit = requested === null ? 50 : requested;
+function pageQuery(requested: number | undefined, cursor: string | undefined): string {
+    const limit = requested === undefined ? 50 : requested;
     if (!(limit >= 1 && limit <= 100)) {
         throw new RangeError("limit must be between 1 and 100, got " + limit.toString());
     }
     let query = "?limit=" + limit.toString();
-    if (cursor !== null) {
+    if (cursor !== undefined) {
         query = query + "&cursor=" + encodeComponent(cursor);
     }
     return query;
@@ -343,7 +338,7 @@ function fetchOrder(orderId: string): Order | null {
 
 function request(method: string, path: string, body: {} | null): Response {
     const token = secrets.get("ORDERS_API_TOKEN");
-    if (token === null) {
+    if (token === undefined) {
         throw new Error("ORDERS_API_TOKEN is not configured for this blueprint");
     }
     const headers = new Map<string, string>();
@@ -375,9 +370,11 @@ Runtime rules that shape package code:
   failures throw. Object bodies are JSON-encoded with `application/json`.
   `Headers` is `Map<string, string>`.
 - Parse bodies with `JSON.parse(text) as T` where `T` is a data-only
-  interface. Model absence as `T | null`; there is no `undefined`. Optional
-  input fields (`reason?: string`) read as `null` when absent and are omitted
-  from the request when unset, so an update touches only fields the caller set.
+  interface. Optional fields (`reason?: string`) read as `undefined` when
+  absent; `null` is a distinct, explicit value, and a cast rejects it for
+  `reason?: string`. Type a field the API may send as null `reason?: string |
+  null`. Unset fields are omitted from the request, so an update touches only
+  fields the caller set.
 - Use `submilli:url` for `encodeComponent`, `encodeQuery`, and `parse`. Take a
   capability's `host` field from `parse(url).host`: it is lower-case with no
   trailing dot, the spelling `http.*` rules see.
@@ -443,7 +440,7 @@ import { label, expectException } from "submilli:test";
 import { buildPageQuery } from "@acme/orders";
 function main(): void {
   label("defaults to a page of 50");
-  assert(buildPageQuery(null) === "?limit=50", "default page size");
+  assert(buildPageQuery() === "?limit=50", "default page size");
   label("rejects a limit above 100");
   const error = expectException(() => { buildPageQuery({ limit: 101 }); }, "RangeError");
   assert(error.message.includes("limit"), "message names the argument");

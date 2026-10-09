@@ -483,7 +483,12 @@ impl VarianceWalk<'_, '_> {
                 }
             }
             Type::Array(inner) | Type::Readonly(inner) => self.walk(inner, polarity),
-            Type::Tuple(items) | Type::Union(items) => {
+            Type::Tuple(tuple) => {
+                for item in &tuple.elements {
+                    self.walk(item, polarity);
+                }
+            }
+            Type::Union(items) => {
                 for item in items {
                     self.walk(item, polarity);
                 }

@@ -8,7 +8,7 @@ class C4 extends Void  { }
 class C4a extends void {}
 class C5 extends Null { }
 class C5a extends null { }
-class C6 extends null { }
+class C6 extends undefined { }
 class C7 extends Undefined { }
 
 enum E { A }

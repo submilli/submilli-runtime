@@ -67,8 +67,8 @@ export interface Cycle {
     id: string;
     /** Cycle number within the team. */
     number: number;
-    /** Cycle name. */
-    name: string;
+    /** Cycle name, or null for an unnamed cycle. */
+    name: string | null;
     /** Cycle start time, or null when unset. */
     startsAt: string | null;
     /** Cycle end time, or null when unset. */
@@ -131,7 +131,7 @@ export interface Issue {
 
 /** A comment on an issue. */
 export interface Comment {
-    /** Parent thread, if this is a reply. */
+    /** Parent comment for a threaded reply; null for a top-level comment. */
     parent?: EntityReference | null;
     /** Stable UUID. */
     id: string;
@@ -256,8 +256,8 @@ export interface AgentActionContent {
     action: string;
     /** Action input, such as a path or search term. */
     parameter: string;
-    /** Optional Markdown action result. */
-    result?: string;
+    /** Markdown action result; a recorded action may return null before completion. */
+    result?: string | null;
 }
 
 /** Prompt activities are read-only: they originate from the user. */
@@ -273,20 +273,20 @@ export type AgentActivityContent = AgentTextContent | AgentActionContent;
 /** One choice presented with a select signal. */
 export interface AgentSelectOption {
     /** Human-readable label. */
-    label?: string;
+    label?: string | null;
     /** Value returned when the choice is selected. */
     value: string;
 }
 /** Metadata for authentication links and selection prompts. */
 export interface AgentSignalMetadata {
     /** URL to open. */
-    url?: string;
+    url?: string | null;
     /** Optional user allowed to complete authentication. */
-    userId?: string;
+    userId?: string | null;
     /** Provider shown in the authentication prompt. */
-    providerName?: string;
+    providerName?: string | null;
     /** Choices shown for a select signal. */
-    options?: AgentSelectOption[];
+    options?: AgentSelectOption[] | null;
 }
 
 /** One recorded session activity, including incoming user prompts. */
@@ -429,39 +429,29 @@ export function getIssue(id: string): Issue | null {
 }
 
 /**
- * List issues, optionally filtered and paginated.
- * @param filter Optional filters (team, assignee, state category, timestamps); `null` applies none. `teamId` is also checked against capability rules.
- * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * List issues, optionally filtered and paginated. `teamId` in the check is the filter's team, or
+ * null when the filter names no team.
+ * @param filter Optional filters (team, assignee, state category, timestamps); omit it to apply none. `teamId` is also checked against capability rules.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
  * @returns One page of issues in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listIssues { teamId: string }
  */
-export function listIssues(
-    filter: IssueFilter | null = null,
-    page: PageOptions | null = null,
-): Page<Issue> {
-    const teamId = filter === null ? null : filter.teamId;
-    const assigneeId = filter === null ? null : filter.assigneeId;
-    const stateType = filter === null ? null : filter.stateType;
-    const completedAtAfter = filter === null ? null : filter.completedAtAfter;
-    const completedAtBefore = filter === null ? null : filter.completedAtBefore;
-    const createdAtAfter = filter === null ? null : filter.createdAtAfter;
-    const updatedAtAfter = filter === null ? null : filter.updatedAtAfter;
-    const first = page === null ? null : page.first;
-    const after = page === null ? null : page.after;
-    let issueFilter: IssueFilter | null = null;
-    if (filter !== null) {
-        const owned: IssueFilter = {};
-        if (teamId !== null) owned.teamId = teamId;
-        if (assigneeId !== null) owned.assigneeId = assigneeId;
-        if (stateType !== null) owned.stateType = stateType;
-        if (completedAtAfter !== null) owned.completedAtAfter = completedAtAfter;
-        if (completedAtBefore !== null) owned.completedAtBefore = completedAtBefore;
-        if (createdAtAfter !== null) owned.createdAtAfter = createdAtAfter;
-        if (updatedAtAfter !== null) owned.updatedAtAfter = updatedAtAfter;
-        issueFilter = owned;
+export function listIssues(filter?: IssueFilter, page?: PageOptions): Page<Issue> {
+    const teamId = filter?.teamId;
+    let owned: IssueFilter | undefined;
+    if (filter !== undefined) {
+        owned = {
+            teamId: teamId,
+            assigneeId: filter.assigneeId,
+            stateType: filter.stateType,
+            completedAtAfter: filter.completedAtAfter,
+            completedAtBefore: filter.completedAtBefore,
+            createdAtAfter: filter.createdAtAfter,
+            updatedAtAfter: filter.updatedAtAfter,
+        };
     }
-    check("linear.app/listIssues", { teamId: teamId });
-    const vars = buildListIssuesVars(issueFilter, ownedPageOptions(first, after));
+    check("linear.app/listIssues", { teamId: teamId ?? null });
+    const vars = buildListIssuesVars(owned, page);
     const envelope = graphqlPost(LIST_ISSUES_QUERY, vars).json() as GraphQlResponse<ListIssuesData>;
     return requireData(envelope).issues;
 }
@@ -481,46 +471,37 @@ export function getTeam(id: string): Team | null {
 
 /**
  * List teams, paginated.
- * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
  * @returns One page of teams in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listTeams {}
  */
-export function listTeams(page: PageOptions | null = null): Page<Team> {
-    const first = page === null ? null : page.first;
-    const after = page === null ? null : page.after;
+export function listTeams(page?: PageOptions): Page<Team> {
     check("linear.app/listTeams", {});
-    const envelope = graphqlPost(LIST_TEAMS_QUERY, buildPageVars(ownedPageOptions(first, after)))
-        .json() as GraphQlResponse<ListTeamsData>;
+    const envelope = graphqlPost(LIST_TEAMS_QUERY, buildPageVars(page)).json() as GraphQlResponse<ListTeamsData>;
     return requireData(envelope).teams;
 }
 
 /**
  * List projects, paginated.
- * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
  * @returns One page of projects in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listProjects {}
  */
-export function listProjects(page: PageOptions | null = null): Page<Project> {
-    const first = page === null ? null : page.first;
-    const after = page === null ? null : page.after;
+export function listProjects(page?: PageOptions): Page<Project> {
     check("linear.app/listProjects", {});
-    const envelope = graphqlPost(LIST_PROJECTS_QUERY, buildPageVars(ownedPageOptions(first, after)))
-        .json() as GraphQlResponse<ListProjectsData>;
+    const envelope = graphqlPost(LIST_PROJECTS_QUERY, buildPageVars(page)).json() as GraphQlResponse<ListProjectsData>;
     return requireData(envelope).projects;
 }
 
 /**
  * List users, paginated.
- * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
  * @returns One page of users in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listUsers {}
  */
-export function listUsers(page: PageOptions | null = null): Page<User> {
-    const first = page === null ? null : page.first;
-    const after = page === null ? null : page.after;
+export function listUsers(page?: PageOptions): Page<User> {
     check("linear.app/listUsers", {});
-    const envelope = graphqlPost(LIST_USERS_QUERY, buildPageVars(ownedPageOptions(first, after)))
-        .json() as GraphQlResponse<ListUsersData>;
+    const envelope = graphqlPost(LIST_USERS_QUERY, buildPageVars(page)).json() as GraphQlResponse<ListUsersData>;
     return requireData(envelope).users;
 }
 
@@ -541,22 +522,16 @@ export function createIssue(input: IssueCreateInput): Issue {
     const assigneeId = input.assigneeId;
     const stateId = input.stateId;
     const priority = input.priority;
-    const requestedLabelIds = input.labelIds;
-    let labelIds: string[] | null = null;
-    if (requestedLabelIds !== null) {
-        const copied: string[] = [];
-        for (const labelId of requestedLabelIds) copied.push(labelId);
-        labelIds = copied;
-    }
+    const labelIds = input.labelIds?.slice();
     const projectId = input.projectId;
     const issueInput: IssueCreateInput = { teamId: teamId };
-    if (title !== null) issueInput.title = title;
-    if (description !== null) issueInput.description = description;
-    if (assigneeId !== null) issueInput.assigneeId = assigneeId;
-    if (stateId !== null) issueInput.stateId = stateId;
-    if (priority !== null) issueInput.priority = priority;
-    if (labelIds !== null) issueInput.labelIds = labelIds;
-    if (projectId !== null) issueInput.projectId = projectId;
+    if (title !== undefined) issueInput.title = title;
+    if (description !== undefined) issueInput.description = description;
+    if (assigneeId !== undefined) issueInput.assigneeId = assigneeId;
+    if (stateId !== undefined) issueInput.stateId = stateId;
+    if (priority !== undefined) issueInput.priority = priority;
+    if (labelIds !== undefined) issueInput.labelIds = labelIds;
+    if (projectId !== undefined) issueInput.projectId = projectId;
     check("linear.app/createIssue", { teamId: teamId });
     const vars: CreateIssueVars = { input: issueInput };
     const envelope = graphqlPost(CREATE_ISSUE_QUERY, vars).json() as GraphQlResponse<IssueCreateData>;
@@ -566,7 +541,7 @@ export function createIssue(input: IssueCreateInput): Issue {
 /**
  * Update an issue by UUID; returns the updated issue. The issue is read first, so the check
  * carries `teamId`, the team the issue belongs to. `projectId` is the project the update moves
- * the issue to, or null when it moves it nowhere.
+ * the issue to, or null when the update leaves the project unchanged.
  * @param id UUID of the issue to update.
  * @param input Fields to change; unset fields are left as they are. Throws if the issue does not exist.
  * @returns The issue after the update.
@@ -578,24 +553,18 @@ export function updateIssue(id: string, input: IssueUpdateInput): Issue {
     const assigneeId = input.assigneeId;
     const stateId = input.stateId;
     const priority = input.priority;
-    const requestedLabelIds = input.labelIds;
-    let labelIds: string[] | null = null;
-    if (requestedLabelIds !== null) {
-        const copied: string[] = [];
-        for (const labelId of requestedLabelIds) copied.push(labelId);
-        labelIds = copied;
-    }
+    const labelIds = input.labelIds?.slice();
     const projectId = input.projectId;
     const issueInput: IssueUpdateInput = {};
-    if (title !== null) issueInput.title = title;
-    if (description !== null) issueInput.description = description;
-    if (assigneeId !== null) issueInput.assigneeId = assigneeId;
-    if (stateId !== null) issueInput.stateId = stateId;
-    if (priority !== null) issueInput.priority = priority;
-    if (labelIds !== null) issueInput.labelIds = labelIds;
-    if (projectId !== null) issueInput.projectId = projectId;
+    if (title !== undefined) issueInput.title = title;
+    if (description !== undefined) issueInput.description = description;
+    if (assigneeId !== undefined) issueInput.assigneeId = assigneeId;
+    if (stateId !== undefined) issueInput.stateId = stateId;
+    if (priority !== undefined) issueInput.priority = priority;
+    if (labelIds !== undefined) issueInput.labelIds = labelIds;
+    if (projectId !== undefined) issueInput.projectId = projectId;
     const teamId = issueTeamId(id);
-    check("linear.app/updateIssue", { teamId: teamId, projectId: projectId });
+    check("linear.app/updateIssue", { teamId: teamId, projectId: projectId ?? null });
     const vars: UpdateIssueVars = { id: id, input: issueInput };
     const envelope = graphqlPost(UPDATE_ISSUE_QUERY, vars).json() as GraphQlResponse<IssueUpdateData>;
     return requirePayloadIssue(requireData(envelope).issueUpdate);
@@ -613,7 +582,7 @@ export function createComment(input: CommentCreateInput): Comment {
     const body = input.body;
     const parentId = input.parentId;
     const commentInput: CommentCreateInput = { issueId: issueId, body: body };
-    if (parentId !== null) commentInput.parentId = parentId;
+    if (parentId !== undefined) commentInput.parentId = parentId;
     const teamId = issueTeamId(issueId);
     check("linear.app/createComment", { teamId: teamId });
     const vars: CreateCommentVars = { input: commentInput };
@@ -660,15 +629,13 @@ function agentSessionTeamId(sessionId: string): string {
 
 /** Read comments, including parent IDs for threaded replies.
  * @param issueId UUID of the issue whose comments to read.
- * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
  * @returns One page of comments in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listComments { teamId: string }
  */
-export function listComments(issueId: string, page: PageOptions | null = null): Page<Comment> {
-    const first = page === null ? null : page.first;
-    const after = page === null ? null : page.after;
+export function listComments(issueId: string, page?: PageOptions): Page<Comment> {
     check("linear.app/listComments", { teamId: issueTeamId(issueId) });
-    const vars = buildEntityPageVars(issueId, first, after);
+    const vars = buildEntityPageVars(issueId, page);
     const envelope = graphqlPost(LIST_COMMENTS_QUERY, vars).json() as GraphQlResponse<IssueCommentsData>;
     return requireData(envelope).issue.comments;
 }
@@ -687,15 +654,13 @@ export function getAgentSession(id: string): AgentSession {
 
 /** Read a page of session activities, including user prompts and stop signals.
  * @param id Agent session UUID.
- * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; `null` requests the first 50 items.
+ * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
  * @returns One page of session activities, including user prompts in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  * @capability linear.app/listAgentActivities { teamId: string }
  */
-export function listAgentActivities(id: string, page: PageOptions | null = null): Page<AgentActivity> {
-    const first = page === null ? null : page.first;
-    const after = page === null ? null : page.after;
+export function listAgentActivities(id: string, page?: PageOptions): Page<AgentActivity> {
     check("linear.app/listAgentActivities", { teamId: agentSessionTeamId(id) });
-    const vars = buildEntityPageVars(id, first, after);
+    const vars = buildEntityPageVars(id, page);
     const envelope = graphqlPost(LIST_AGENT_ACTIVITIES_QUERY, vars).json() as GraphQlResponse<AgentActivitiesData>;
     return requireData(envelope).agentSession.activities;
 }
@@ -709,10 +674,10 @@ export function createAgentActivity(input: AgentActivityCreateInput): AgentActiv
     const { agentSessionId, content, ephemeral, id, signal, signalMetadata } = input;
     check("linear.app/createAgentActivity", { teamId: agentSessionTeamId(agentSessionId) });
     const owned: AgentActivityCreateInput = { agentSessionId: agentSessionId, content: content };
-    if (ephemeral !== null) owned.ephemeral = ephemeral;
-    if (id !== null) owned.id = id;
-    if (signal !== null) owned.signal = signal;
-    if (signalMetadata !== null) owned.signalMetadata = signalMetadata;
+    if (ephemeral !== undefined) owned.ephemeral = ephemeral;
+    if (id !== undefined) owned.id = id;
+    if (signal !== undefined) owned.signal = signal;
+    if (signalMetadata !== undefined) owned.signalMetadata = signalMetadata;
     const vars: CreateAgentActivityVars = { input: owned };
     const envelope = graphqlPost(CREATE_AGENT_ACTIVITY_QUERY, vars).json() as GraphQlResponse<AgentActivityCreateData>;
     const payload = requireData(envelope).agentActivityCreate;
@@ -744,7 +709,7 @@ export function createAgentSessionOnIssue(input: AgentSessionCreateOnIssueInput)
     const { issueId, externalUrls } = input;
     check("linear.app/createAgentSessionOnIssue", { teamId: issueTeamId(issueId) });
     const owned: AgentSessionCreateOnIssueInput = { issueId: issueId };
-    if (externalUrls !== null) owned.externalUrls = externalUrls;
+    if (externalUrls !== undefined) owned.externalUrls = externalUrls;
     const vars: CreateAgentSessionOnIssueVars = { input: owned };
     const envelope = graphqlPost(CREATE_AGENT_SESSION_ON_ISSUE_QUERY, vars).json() as GraphQlResponse<AgentSessionCreateOnIssueData>;
     return requireAgentSession(requireData(envelope).agentSessionCreateOnIssue, "agentSessionCreateOnIssue");
@@ -759,7 +724,7 @@ export function createAgentSessionOnComment(input: AgentSessionCreateOnCommentIn
     const { commentId, externalUrls } = input;
     check("linear.app/createAgentSessionOnComment", { teamId: commentTeamId(commentId) });
     const owned: AgentSessionCreateOnCommentInput = { commentId: commentId };
-    if (externalUrls !== null) owned.externalUrls = externalUrls;
+    if (externalUrls !== undefined) owned.externalUrls = externalUrls;
     const vars: CreateAgentSessionOnCommentVars = { input: owned };
     const envelope = graphqlPost(CREATE_AGENT_SESSION_ON_COMMENT_QUERY, vars).json() as GraphQlResponse<AgentSessionCreateOnCommentData>;
     return requireAgentSession(requireData(envelope).agentSessionCreateOnComment, "agentSessionCreateOnComment");
@@ -772,19 +737,9 @@ function requireAgentSession(payload: AgentSessionPayload, operation: string): A
     return payload.agentSession;
 }
 
-function buildEntityPageVars(id: string, first: number | null, after: string | null): EntityPageVars {
-    const pagination = buildPageVars(ownedPageOptions(first, after));
-    const vars: EntityPageVars = { id: id };
-    if (pagination.first !== null) vars.first = pagination.first;
-    if (pagination.after !== null) vars.after = pagination.after;
-    return vars;
-}
-
-function ownedPageOptions(first: number | null, after: string | null): PageOptions {
-    const page: PageOptions = {};
-    if (first !== null) page.first = first;
-    if (after !== null) page.after = after;
-    return page;
+function buildEntityPageVars(id: string, page: PageOptions | undefined): EntityPageVars {
+    const pagination = buildPageVars(page);
+    return { id: id, first: pagination.first, after: pagination.after };
 }
 
 // ---------------------------------------------------------------------------
@@ -806,12 +761,12 @@ function stripZoneAnnotation(timestamp: string): string {
 
 /**
  * Translate a curated `IssueFilter` into Linear's nested filter variable.
- * @param filter Curated issue filter, or `null` for no filtering.
- * @returns Linear filter variable containing only the supplied constraints; empty when `filter` is `null`. Timestamps lose any bracketed zone annotation.
+ * @param filter Curated issue filter; omit it for no filtering.
+ * @returns Linear filter variable containing only the supplied constraints; empty when `filter` is omitted. Timestamps lose any bracketed zone annotation.
  */
-export function buildIssueFilter(filter: IssueFilter | null): IssueFilterVar {
+export function buildIssueFilter(filter?: IssueFilter): IssueFilterVar {
     const out: IssueFilterVar = {};
-    if (filter === null) {
+    if (filter === undefined) {
         return out;
     }
     const teamId = filter.teamId;
@@ -821,29 +776,29 @@ export function buildIssueFilter(filter: IssueFilter | null): IssueFilterVar {
     const completedAtBefore = filter.completedAtBefore;
     const createdAtAfter = filter.createdAtAfter;
     const updatedAtAfter = filter.updatedAtAfter;
-    if (teamId !== null) {
+    if (teamId !== undefined) {
         out.team = { id: { eq: teamId } };
     }
-    if (assigneeId !== null) {
+    if (assigneeId !== undefined) {
         out.assignee = { id: { eq: assigneeId } };
     }
-    if (stateType !== null) {
+    if (stateType !== undefined) {
         out.state = { type: { eq: stateType } };
     }
-    if (completedAtAfter !== null || completedAtBefore !== null) {
+    if (completedAtAfter !== undefined || completedAtBefore !== undefined) {
         const completedAt: DateComparatorVar = {};
-        if (completedAtAfter !== null) {
+        if (completedAtAfter !== undefined) {
             completedAt.gte = stripZoneAnnotation(completedAtAfter);
         }
-        if (completedAtBefore !== null) {
+        if (completedAtBefore !== undefined) {
             completedAt.lt = stripZoneAnnotation(completedAtBefore);
         }
         out.completedAt = completedAt;
     }
-    if (createdAtAfter !== null) {
+    if (createdAtAfter !== undefined) {
         out.createdAt = { gte: stripZoneAnnotation(createdAtAfter) };
     }
-    if (updatedAtAfter !== null) {
+    if (updatedAtAfter !== undefined) {
         out.updatedAt = { gte: stripZoneAnnotation(updatedAtAfter) };
     }
     return out;
@@ -857,49 +812,26 @@ const DEFAULT_PAGE_SIZE = 50;
 
 /**
  * Build the `first`/`after` variables for a paginated list call.
- * @param page Optional pagination; `null` or an unset `first` uses the default page size of 50.
+ * @param page Optional pagination; omitting it or its `first` uses the default page size of 50.
  * @returns `first`/`after` variables; `after` is present only when a cursor was given.
  */
-export function buildPageVars(page: PageOptions | null): PageVars {
-    const out: PageVars = { first: DEFAULT_PAGE_SIZE };
-    if (page !== null) {
-        const first = page.first;
-        const after = page.after;
-        if (first !== null) {
-            out.first = first;
-        }
-        if (after !== null) {
-            out.after = after;
-        }
-    }
-    return out;
+export function buildPageVars(page?: PageOptions): PageVars {
+    return { first: page?.first ?? DEFAULT_PAGE_SIZE, after: page?.after ?? undefined };
 }
 
 /**
  * Build the variables for `listIssues` — pagination plus an optional filter.
- * @param filter Optional issue filter; `null` adds no filter variable.
- * @param page Optional pagination; `null` or an unset `first` uses the default page size of 50.
+ * @param filter Optional issue filter; omitting it adds no filter variable.
+ * @param page Optional pagination; omitting it or its `first` uses the default page size of 50.
  * @returns Variables for the issues query: `first`, optional `after`, and optional `filter`.
  */
-export function buildListIssuesVars(
-    filter: IssueFilter | null,
-    page: PageOptions | null,
-): ListIssuesVars {
-    const out: ListIssuesVars = { first: DEFAULT_PAGE_SIZE };
-    if (page !== null) {
-        const first = page.first;
-        const after = page.after;
-        if (first !== null) {
-            out.first = first;
-        }
-        if (after !== null) {
-            out.after = after;
-        }
-    }
-    if (filter !== null) {
-        out.filter = buildIssueFilter(filter);
-    }
-    return out;
+export function buildListIssuesVars(filter?: IssueFilter, page?: PageOptions): ListIssuesVars {
+    const pagination = buildPageVars(page);
+    return {
+        first: pagination.first,
+        after: pagination.after,
+        filter: filter === undefined ? undefined : buildIssueFilter(filter),
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -921,34 +853,37 @@ export interface GraphQlError {
     /** The generic top-level message (often just "Argument Validation Error"). */
     message: string;
     /** Field path to the error, e.g. `["issues"]`. */
-    path?: GraphQlPathSegment[];
+    path?: GraphQlPathSegment[] | null;
     /** Implementation-specific detail; where Linear hides the actionable cause. */
-    extensions?: GraphQlErrorExtensions;
+    extensions?: GraphQlErrorExtensions | null;
 }
 
 /** The subset of Linear's GraphQL error `extensions` we surface. */
 export interface GraphQlErrorExtensions {
     /** Machine code, e.g. "INVALID_INPUT". */
-    code?: string;
+    code?: string | null;
     /** A human-readable detail Linear sometimes includes. */
-    userPresentableMessage?: string;
+    userPresentableMessage?: string | null;
     /** Per-argument validation failures. */
-    validationErrors?: ValidationErrorDetail[];
+    validationErrors?: ValidationErrorDetail[] | null;
 }
 
 /** One class-validator failure inside `extensions.validationErrors`. */
 export interface ValidationErrorDetail {
     /** The offending argument/field name, e.g. "after". */
-    property?: string;
+    property?: string | null;
 }
 
-// `data` is read concretely per operation (`json<GraphQlResponse<XData>>()`):
-// JSON.parse can't target an unconstrained generic, so the envelope is parsed
+// `data` is read concretely per operation (`json() as GraphQlResponse<XData>`):
+// a runtime cast can't target an unconstrained generic, so the envelope is cast
 // with a concrete data type at each call site, then `requireData` does the
 // shared error/null unwrap generically (it only reads fields, never parses).
-interface GraphQlResponse<T> {
-    data: T | null;
-    errors?: GraphQlError[];
+/** A GraphQL response envelope. Exported so unit tests can cast response bodies to it. */
+export interface GraphQlResponse<T> {
+    /** The operation result; an error response omits it or sends null. */
+    data?: T | null;
+    /** GraphQL errors; absent or null when the operation succeeded. */
+    errors?: GraphQlError[] | null;
 }
 
 /** Linear's nested issue-filter variable shape (built by `buildIssueFilter`). */
@@ -1127,7 +1062,7 @@ const CREATE_COMMENT_QUERY = `mutation($input: CommentCreateInput!) { commentCre
 // literal secret name keeps the `secrets.get` capability statically filterable.
 function authorize(headers: Map<string, string>): void {
     const token = secrets.get("LINEAR_API_KEY");
-    if (token !== null) {
+    if (token !== undefined) {
         if (token.startsWith("lin_api_") || token.startsWith("Bearer ")) {
             headers.set("Authorization", token);
         } else {
@@ -1152,7 +1087,7 @@ function graphqlPost<V>(query: string, variables: V): Response {
 // The `errors`-only slice of the envelope, parseable without a concrete `data`
 // type (a failure body's `data` is null or absent).
 interface GraphQlErrorEnvelope {
-    errors?: GraphQlError[];
+    errors?: GraphQlError[] | null;
 }
 
 // Linear sends a GraphQL `errors` body even on 4xx/5xx (auth failures,
@@ -1169,7 +1104,7 @@ export function httpFailureMessage(status: number, statusText: string, body: str
     try {
         const envelope = JSON.parse(body) as GraphQlErrorEnvelope;
         const errors = envelope.errors;
-        if (errors !== null && errors.length > 0) {
+        if (errors && errors.length > 0) {
             return graphqlErrorMessage(errors);
         }
     } catch (e) {
@@ -1182,11 +1117,11 @@ export function httpFailureMessage(status: number, statusText: string, body: str
 // Generic but parse-free, so `T` may be a type parameter here (unlike json<T>).
 function requireData<T>(envelope: GraphQlResponse<T>): T {
     const errors = envelope.errors;
-    if (errors !== null && errors.length > 0) {
+    if (errors && errors.length > 0) {
         throw new Error(graphqlErrorMessage(errors));
     }
     const data = envelope.data;
-    if (data === null) {
+    if (data === undefined || data === null) {
         throw new Error("Linear GraphQL response had no data");
     }
     return data;
@@ -1208,22 +1143,20 @@ export function graphqlErrorMessage(errors: GraphQlError[]): string {
 function describeGraphqlError(err: GraphQlError): string {
     let detail = err.message;
     const ext = err.extensions;
-    if (ext !== null) {
-        const code = ext.code;
-        if (code !== null) {
-            detail = `${detail} [${code}]`;
-        }
-        const presentable = ext.userPresentableMessage;
-        if (presentable !== null) {
-            detail = `${detail}: ${presentable}`;
-        }
-        const args = invalidArguments(ext.validationErrors);
-        if (args.length > 0) {
-            detail = `${detail} (invalid arguments: ${args.join(", ")})`;
-        }
+    const code = ext?.code;
+    if (code) {
+        detail = `${detail} [${code}]`;
+    }
+    const presentable = ext?.userPresentableMessage;
+    if (presentable) {
+        detail = `${detail}: ${presentable}`;
+    }
+    const args = invalidArguments(ext?.validationErrors);
+    if (args.length > 0) {
+        detail = `${detail} (invalid arguments: ${args.join(", ")})`;
     }
     const path = err.path;
-    if (path !== null && path.length > 0) {
+    if (path && path.length > 0) {
         const segments: string[] = [];
         for (const segment of path) {
             if (typeof segment === "string") {
@@ -1237,14 +1170,13 @@ function describeGraphqlError(err: GraphQlError): string {
     return detail;
 }
 
-function invalidArguments(validationErrors: ValidationErrorDetail[] | null): string[] {
+function invalidArguments(validationErrors: ValidationErrorDetail[] | null | undefined): string[] {
     const properties: string[] = [];
-    if (validationErrors !== null) {
-        for (const detail of validationErrors) {
-            const property = detail.property;
-            if (property !== null) {
-                properties.push(property);
-            }
+    if (!validationErrors) return properties;
+    for (const detail of validationErrors) {
+        const property = detail.property;
+        if (property) {
+            properties.push(property);
         }
     }
     return properties;

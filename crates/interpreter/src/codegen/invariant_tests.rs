@@ -205,9 +205,7 @@ fn structural_subtypes_reject_unrepresentable_layouts() {
     let symbols = structural_symbols(true);
     emit(&symbols, subtype(object(Type::Number))).unwrap();
     assert_internal(emit(&symbols, subtype(Type::Number)).unwrap_err());
-    for field in [Type::Void, Type::Error] {
-        assert_internal(emit(&symbols, subtype(object(field))).unwrap_err());
-    }
+    assert_internal(emit(&symbols, subtype(object(Type::Error))).unwrap_err());
     // A `never` field is held only by code that never runs.
     emit(&symbols, subtype(object(Type::Never))).unwrap();
 }

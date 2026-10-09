@@ -12,7 +12,7 @@ class Foo {
 
 }
 
-/*pruned*/;                                                                    
+/*pruned*/;
 function getStringOrNumberOrNull(): string | number | null { return null as unknown as (string | number | null); }
 >getStringOrNumberOrNull : () => string | number | null
 >                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -26,29 +26,29 @@ function f1(): void {
 >f1 : () => void
 >   : ^^^^^^^^^^
 
-    /*pruned*/;                                           
-    /*pruned*/;                           
-                    
-     
+    /*pruned*/;
+    /*pruned*/;
+
+
 }
 
-/*pruned*/;          
-                                                           
-                                                           
-                                                        
-                            
-                     
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
 
 function f3(): void {
 >f3 : () => void
 >   : ^^^^^^^^^^
 
-    /*pruned*/;                                                 
-    /*pruned*/;                                 
-            
-     
+    /*pruned*/;
+    /*pruned*/;
+
+
 }
 
 function f4(): void {
@@ -96,11 +96,11 @@ const re = /./g
 >/./g : RegExp
 >     : ^^^^^^
 
-/*pruned*/;                                                                     
+/*pruned*/;
 
-/*pruned*/;                               
-                                                    
- 
+/*pruned*/;
+
+
 
 function main(): void {}
 >main : () => void

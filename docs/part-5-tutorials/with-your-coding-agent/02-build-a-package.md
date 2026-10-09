@@ -82,13 +82,13 @@ export interface Note {
  * List notes attached directly to this company, as the Attio API orders them.
  * Notes attached to the company's people are not included.
  * @param companyId The company's record id.
- * @param page Page size and offset; `null` for the first page.
+ * @param page Page size and offset; omit it for the first page.
  * @returns One page of notes.
  * @capability attio.com/notes.list { companyId: string }
  */
-export function listNotes(companyId: string, page: PageOptions | null = null): Page<Note> {
-    const limit = page === null ? null : page.limit;
-    const offset = page === null ? null : page.offset;
+export function listNotes(companyId: string, page?: PageOptions): Page<Note> {
+    const limit = page?.limit;
+    const offset = page?.offset;
     const id = normalizeRecordId(companyId);
     check("attio.com/notes.list", { companyId: id });
     const paging = resolvePage(limit, offset);

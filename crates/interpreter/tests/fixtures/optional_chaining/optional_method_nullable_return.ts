@@ -1,11 +1,11 @@
 // `a?.m()` where `m` itself returns a nullable type. The chain part's
-// `result_ty` is the method's *declared* return; the `| null` an optional step
+// `result_ty` is the method's *declared* return; the `| undefined` an optional step
 // contributes comes from the enclosing null-check, not from the part. Stripping
 // null off the declared return would discard a null the method genuinely
 // returns, and the return cast would then `ref.as_non_null` that very value.
 //
-// TypeScript semantics: a null *return* flows out as null, exactly like a null
-// receiver short-circuits — neither is an error.
+// TypeScript semantics: a null *return* flows out as null; a null receiver
+// short-circuits to undefined — neither is an error.
 class Leafy {
   constructor(public tag: string) {}
   at(i: number): Leafy | null {
@@ -33,7 +33,7 @@ function main(): void {
   // the method returns null — the chain yields null rather than trapping
   assert(root?.at(5) === null, "nullable return through an optional call");
   // ...and the same when a further optional step follows
-  assert(root?.at(5)?.tag === null, "optional step after a null-returning call");
+  assert(root?.at(5)?.tag === undefined, "optional step after a null-returning call");
   // the non-null path still reaches the value
   assert(root?.at(0)?.tag === "r", "non-null return continues the chain");
 
@@ -49,6 +49,6 @@ function main(): void {
 
   // a null receiver short-circuits regardless
   const gone: Leafy | null = null as Leafy | null;
-  assert(gone?.at(0) === null, "null receiver short-circuits");
-  assert(gone?.at(0)?.tag === null, "null receiver, two steps");
+  assert(gone?.at(0) === undefined, "null receiver short-circuits");
+  assert(gone?.at(0)?.tag === undefined, "null receiver, two steps");
 }

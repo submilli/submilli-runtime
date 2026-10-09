@@ -13,11 +13,13 @@ function a(x: string | number): void {
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
 
-    for (x = null; typeof x !== "number"; x = null) {
->x = null : null
->         : ^^^^
+    for (x = undefined; typeof x !== "number"; x = undefined) {
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >typeof x !== "number" : boolean
 >                      : ^^^^^^^
 >typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
@@ -26,10 +28,12 @@ function a(x: string | number): void {
 >  : ^^^^^^^^^^^^^^^
 >"number" : "number"
 >         : ^^^^^^^^
->x = null : null
->         : ^^^^
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         x; // string
 >x : string
@@ -47,11 +51,13 @@ function b(x: string | number): void {
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
 
-    for (x = null; typeof x !== "number"; x = null) {
->x = null : null
->         : ^^^^
+    for (x = undefined; typeof x !== "number"; x = undefined) {
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >typeof x !== "number" : boolean
 >                      : ^^^^^^^
 >typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
@@ -60,10 +66,12 @@ function b(x: string | number): void {
 >  : ^^^^^^^^^^^^^^^
 >"number" : "number"
 >         : ^^^^^^^^
->x = null : null
->         : ^^^^
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         x; // string
 >x : string
@@ -85,11 +93,13 @@ function c(x: string | number): void {
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
 
-    for (x = null; typeof x !== "number"; x = null) {
->x = null : null
->         : ^^^^
+    for (x = undefined; typeof x !== "number"; x = undefined) {
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >typeof x !== "number" : boolean
 >                      : ^^^^^^^
 >typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
@@ -98,10 +108,12 @@ function c(x: string | number): void {
 >  : ^^^^^^^^^^^^^^^
 >"number" : "number"
 >         : ^^^^^^^^
->x = null : null
->         : ^^^^
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         x; // string
 >x : string

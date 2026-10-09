@@ -1,56 +1,56 @@
 === nullishCoalescingOperator2.ts ===
 
-const a1: 'literal' | null | null = null as unknown as ('literal' | null | null);
->a1 : "literal" | null
->   : ^^^^^^^^^^^^^^^^
->null as unknown as ('literal' | null | null) : "literal" | null
->                                             : ^^^^^^^^^^^^^^^^
+const a1: 'literal' | undefined | null = null as unknown as ('literal' | undefined | null);
+>a1 : "literal" | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ('literal' | undefined | null) : "literal" | null | undefined
+>                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-const a2: '' | null | null = null as unknown as ('' | null | null);
->a2 : "" | null
->   : ^^^^^^^^^
->null as unknown as ('' | null | null) : "" | null
->                                      : ^^^^^^^^^
+const a2: '' | undefined | null = null as unknown as ('' | undefined | null);
+>a2 : "" | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ('' | undefined | null) : "" | null | undefined
+>                                           : ^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-const a3: 1 | null | null = null as unknown as (1 | null | null);
->a3 : 1 | null
->   : ^^^^^^^^
->null as unknown as (1 | null | null) : 1 | null
->                                     : ^^^^^^^^
+const a3: 1 | undefined | null = null as unknown as (1 | undefined | null);
+>a3 : 1 | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (1 | undefined | null) : 1 | null | undefined
+>                                          : ^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-const a4: 0 | null | null = null as unknown as (0 | null | null);
->a4 : 0 | null
->   : ^^^^^^^^
->null as unknown as (0 | null | null) : 0 | null
->                                     : ^^^^^^^^
+const a4: 0 | undefined | null = null as unknown as (0 | undefined | null);
+>a4 : 0 | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (0 | undefined | null) : 0 | null | undefined
+>                                          : ^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-const a5: true | null | null = null as unknown as (true | null | null);
->a5 : true | null
->   : ^^^^^^^^^^^
+const a5: true | undefined | null = null as unknown as (true | undefined | null);
+>a5 : true | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
 >true : true
 >     : ^^^^
->null as unknown as (true | null | null) : true | null
->                                        : ^^^^^^^^^^^
+>null as unknown as (true | undefined | null) : true | null | undefined
+>                                             : ^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 >true : true
 >     : ^^^^
 
-const a6: false | null | null = null as unknown as (false | null | null);
->a6 : false | null
->   : ^^^^^^^^^^^^
+const a6: false | undefined | null = null as unknown as (false | undefined | null);
+>a6 : false | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
 >false : false
 >      : ^^^^^
->null as unknown as (false | null | null) : false | null
->                                         : ^^^^^^^^^^^^
+>null as unknown as (false | undefined | null) : false | null | undefined
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 >false : false
@@ -72,7 +72,7 @@ const a8: never | null = null as unknown as (never | null);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                            
+/*pruned*/;
 
 
 const aa1 = a1 ?? 'whatever'
@@ -80,8 +80,8 @@ const aa1 = a1 ?? 'whatever'
 >    : ^^^^^^^^^^^^^^^^^^^^^^
 >a1 ?? 'whatever' : "literal" | "whatever"
 >                 : ^^^^^^^^^^^^^^^^^^^^^^
->a1 : "literal" | null
->   : ^^^^^^^^^^^^^^^^
+>a1 : "literal" | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >'whatever' : "whatever"
 >           : ^^^^^^^^^^
 
@@ -90,8 +90,8 @@ const aa2 = a2 ?? 'whatever'
 >    : ^^^^^^^^^^^^^^^
 >a2 ?? 'whatever' : "" | "whatever"
 >                 : ^^^^^^^^^^^^^^^
->a2 : "" | null
->   : ^^^^^^^^^
+>a2 : "" | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^
 >'whatever' : "whatever"
 >           : ^^^^^^^^^^
 
@@ -100,8 +100,8 @@ const aa3 = a3 ?? 'whatever'
 >    : ^^^^^^^^^^^^^^
 >a3 ?? 'whatever' : 1 | "whatever"
 >                 : ^^^^^^^^^^^^^^
->a3 : 1 | null
->   : ^^^^^^^^
+>a3 : 1 | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^
 >'whatever' : "whatever"
 >           : ^^^^^^^^^^
 
@@ -110,8 +110,8 @@ const aa4 = a4 ?? 'whatever'
 >    : ^^^^^^^^^^^^^^
 >a4 ?? 'whatever' : 0 | "whatever"
 >                 : ^^^^^^^^^^^^^^
->a4 : 0 | null
->   : ^^^^^^^^
+>a4 : 0 | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^
 >'whatever' : "whatever"
 >           : ^^^^^^^^^^
 
@@ -120,8 +120,8 @@ const aa5 = a5 ?? 'whatever'
 >    : ^^^^^^^^^^^^^^^^^
 >a5 ?? 'whatever' : true | "whatever"
 >                 : ^^^^^^^^^^^^^^^^^
->a5 : true | null
->   : ^^^^^^^^^^^
+>a5 : true | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
 >'whatever' : "whatever"
 >           : ^^^^^^^^^^
 
@@ -130,8 +130,8 @@ const aa6 = a6 ?? 'whatever'
 >    : ^^^^^^^^^^^^^^^^^^
 >a6 ?? 'whatever' : false | "whatever"
 >                 : ^^^^^^^^^^^^^^^^^^
->a6 : false | null
->   : ^^^^^^^^^^^^
+>a6 : false | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
 >'whatever' : "whatever"
 >           : ^^^^^^^^^^
 
@@ -155,7 +155,7 @@ const aa8 = a8 ?? 'whatever'
 >'whatever' : "whatever"
 >           : ^^^^^^^^^^
 
-/*pruned*/;                 
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

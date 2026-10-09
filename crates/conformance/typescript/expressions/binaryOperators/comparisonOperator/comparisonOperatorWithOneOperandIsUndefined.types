@@ -1,0 +1,1251 @@
+=== comparisonOperatorWithOneOperandIsUndefined.ts ===
+let x: typeof undefined = null as unknown as (typeof undefined);
+>x : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>null as unknown as (typeof undefined) : undefined
+>                                      : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+enum E { a, b, c }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+>c : E.c
+>  : ^^^
+
+
+function foo<T>(t: T): void {
+>foo : <T>(t: T) => void
+>    : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>t : T
+>  : ^
+
+    let foo_r1 = t < x;
+>foo_r1 : boolean
+>       : ^^^^^^^
+>t < x : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+    let foo_r2 = t > x;
+>foo_r2 : boolean
+>       : ^^^^^^^
+>t > x : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+    let foo_r3 = t <= x;
+>foo_r3 : boolean
+>       : ^^^^^^^
+>t <= x : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+    let foo_r4 = t >= x;
+>foo_r4 : boolean
+>       : ^^^^^^^
+>t >= x : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+    let foo_r5 = t == x;
+>foo_r5 : boolean
+>       : ^^^^^^^
+>t == x : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+    let foo_r6 = t != x;
+>foo_r6 : boolean
+>       : ^^^^^^^
+>t != x : boolean
+>       : ^^^^^^^
+>t : T
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+    let foo_r7 = t === x;
+>foo_r7 : boolean
+>       : ^^^^^^^
+>t === x : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+    let foo_r8 = t !== x;
+>foo_r8 : boolean
+>       : ^^^^^^^
+>t !== x : boolean
+>        : ^^^^^^^
+>t : T
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+    let foo_r1_2 = x < t;
+>foo_r1_2 : boolean
+>         : ^^^^^^^
+>x < t : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>t : T
+>  : ^
+
+    let foo_r2_2 = x > t;
+>foo_r2_2 : boolean
+>         : ^^^^^^^
+>x > t : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>t : T
+>  : ^
+
+    let foo_r3_2 = x <= t;
+>foo_r3_2 : boolean
+>         : ^^^^^^^
+>x <= t : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>t : T
+>  : ^
+
+    let foo_r4_2 = x >= t;
+>foo_r4_2 : boolean
+>         : ^^^^^^^
+>x >= t : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>t : T
+>  : ^
+
+    let foo_r5_2 = x == t;
+>foo_r5_2 : boolean
+>         : ^^^^^^^
+>x == t : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>t : T
+>  : ^
+
+    let foo_r6_2 = x != t;
+>foo_r6_2 : boolean
+>         : ^^^^^^^
+>x != t : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>t : T
+>  : ^
+
+    let foo_r7_2 = x === t;
+>foo_r7_2 : boolean
+>         : ^^^^^^^
+>x === t : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>t : T
+>  : ^
+
+    let foo_r8_2 = x !== t;
+>foo_r8_2 : boolean
+>         : ^^^^^^^
+>x !== t : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>t : T
+>  : ^
+
+}
+
+let a: boolean = null as unknown as (boolean);
+>a : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b: number = null as unknown as (number);
+>b : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let c: string = null as unknown as (string);
+>c : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let d: void = null as unknown as (void);
+>d : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let f: {} = null as unknown as ({});
+>f : {}
+>  : ^^
+>null as unknown as ({}) : {}
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let g: string[] = null as unknown as (string[]);
+>g : string[]
+>  : ^^^^^^^^
+>null as unknown as (string[]) : string[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// operator <
+let r1a1 = x < a;
+>r1a1 : boolean
+>     : ^^^^^^^
+>x < a : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r1a2 = x < b;
+>r1a2 : boolean
+>     : ^^^^^^^
+>x < b : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r1a3 = x < c;
+>r1a3 : boolean
+>     : ^^^^^^^
+>x < c : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+let r1a4 = x < d;
+>r1a4 : boolean
+>     : ^^^^^^^
+>x < d : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
+let r1a6 = x < f;
+>r1a6 : boolean
+>     : ^^^^^^^
+>x < f : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>f : {}
+>  : ^^
+
+let r1a7 = x < g;
+>r1a7 : boolean
+>     : ^^^^^^^
+>x < g : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+
+
+let r1b1 = a < x;
+>r1b1 : boolean
+>     : ^^^^^^^
+>a < x : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r1b2 = b < x;
+>r1b2 : boolean
+>     : ^^^^^^^
+>b < x : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r1b3 = c < x;
+>r1b3 : boolean
+>     : ^^^^^^^
+>c < x : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r1b4 = d < x;
+>r1b4 : boolean
+>     : ^^^^^^^
+>d < x : boolean
+>      : ^^^^^^^
+>d : void
+>  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+/*pruned*/;
+let r1b6 = f < x;
+>r1b6 : boolean
+>     : ^^^^^^^
+>f < x : boolean
+>      : ^^^^^^^
+>f : {}
+>  : ^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r1b7 = g < x;
+>r1b7 : boolean
+>     : ^^^^^^^
+>g < x : boolean
+>      : ^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+// operator >
+let r2a1 = x > a;
+>r2a1 : boolean
+>     : ^^^^^^^
+>x > a : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r2a2 = x > b;
+>r2a2 : boolean
+>     : ^^^^^^^
+>x > b : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r2a3 = x > c;
+>r2a3 : boolean
+>     : ^^^^^^^
+>x > c : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+let r2a4 = x > d;
+>r2a4 : boolean
+>     : ^^^^^^^
+>x > d : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
+let r2a6 = x > f;
+>r2a6 : boolean
+>     : ^^^^^^^
+>x > f : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>f : {}
+>  : ^^
+
+let r2a7 = x > g;
+>r2a7 : boolean
+>     : ^^^^^^^
+>x > g : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+
+
+let r2b1 = a > x;
+>r2b1 : boolean
+>     : ^^^^^^^
+>a > x : boolean
+>      : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r2b2 = b > x;
+>r2b2 : boolean
+>     : ^^^^^^^
+>b > x : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r2b3 = c > x;
+>r2b3 : boolean
+>     : ^^^^^^^
+>c > x : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r2b4 = d > x;
+>r2b4 : boolean
+>     : ^^^^^^^
+>d > x : boolean
+>      : ^^^^^^^
+>d : void
+>  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+/*pruned*/;
+let r2b6 = f > x;
+>r2b6 : boolean
+>     : ^^^^^^^
+>f > x : boolean
+>      : ^^^^^^^
+>f : {}
+>  : ^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r2b7 = g > x;
+>r2b7 : boolean
+>     : ^^^^^^^
+>g > x : boolean
+>      : ^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+// operator <=
+let r3a1 = x <= a;
+>r3a1 : boolean
+>     : ^^^^^^^
+>x <= a : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r3a2 = x <= b;
+>r3a2 : boolean
+>     : ^^^^^^^
+>x <= b : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r3a3 = x <= c;
+>r3a3 : boolean
+>     : ^^^^^^^
+>x <= c : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+let r3a4 = x <= d;
+>r3a4 : boolean
+>     : ^^^^^^^
+>x <= d : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
+let r3a6 = x <= f;
+>r3a6 : boolean
+>     : ^^^^^^^
+>x <= f : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>f : {}
+>  : ^^
+
+let r3a7 = x <= g;
+>r3a7 : boolean
+>     : ^^^^^^^
+>x <= g : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+
+
+let r3b1 = a <= x;
+>r3b1 : boolean
+>     : ^^^^^^^
+>a <= x : boolean
+>       : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r3b2 = b <= x;
+>r3b2 : boolean
+>     : ^^^^^^^
+>b <= x : boolean
+>       : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r3b3 = c <= x;
+>r3b3 : boolean
+>     : ^^^^^^^
+>c <= x : boolean
+>       : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r3b4 = d <= x;
+>r3b4 : boolean
+>     : ^^^^^^^
+>d <= x : boolean
+>       : ^^^^^^^
+>d : void
+>  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+/*pruned*/;
+let r3b6 = f <= x;
+>r3b6 : boolean
+>     : ^^^^^^^
+>f <= x : boolean
+>       : ^^^^^^^
+>f : {}
+>  : ^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r3b7 = g <= x;
+>r3b7 : boolean
+>     : ^^^^^^^
+>g <= x : boolean
+>       : ^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+// operator >=
+let r4a1 = x >= a;
+>r4a1 : boolean
+>     : ^^^^^^^
+>x >= a : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r4a2 = x >= b;
+>r4a2 : boolean
+>     : ^^^^^^^
+>x >= b : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r4a3 = x >= c;
+>r4a3 : boolean
+>     : ^^^^^^^
+>x >= c : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+let r4a4 = x >= d;
+>r4a4 : boolean
+>     : ^^^^^^^
+>x >= d : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
+let r4a6 = x >= f;
+>r4a6 : boolean
+>     : ^^^^^^^
+>x >= f : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>f : {}
+>  : ^^
+
+let r4a7 = x >= g;
+>r4a7 : boolean
+>     : ^^^^^^^
+>x >= g : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+
+
+let r4b1 = a >= x;
+>r4b1 : boolean
+>     : ^^^^^^^
+>a >= x : boolean
+>       : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r4b2 = b >= x;
+>r4b2 : boolean
+>     : ^^^^^^^
+>b >= x : boolean
+>       : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r4b3 = c >= x;
+>r4b3 : boolean
+>     : ^^^^^^^
+>c >= x : boolean
+>       : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r4b4 = d >= x;
+>r4b4 : boolean
+>     : ^^^^^^^
+>d >= x : boolean
+>       : ^^^^^^^
+>d : void
+>  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+/*pruned*/;
+let r4b6 = f >= x;
+>r4b6 : boolean
+>     : ^^^^^^^
+>f >= x : boolean
+>       : ^^^^^^^
+>f : {}
+>  : ^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r4b7 = g >= x;
+>r4b7 : boolean
+>     : ^^^^^^^
+>g >= x : boolean
+>       : ^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+// operator ==
+let r5a1 = x == a;
+>r5a1 : boolean
+>     : ^^^^^^^
+>x == a : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r5a2 = x == b;
+>r5a2 : boolean
+>     : ^^^^^^^
+>x == b : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r5a3 = x == c;
+>r5a3 : boolean
+>     : ^^^^^^^
+>x == c : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+let r5a4 = x == d;
+>r5a4 : boolean
+>     : ^^^^^^^
+>x == d : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
+let r5a6 = x == f;
+>r5a6 : boolean
+>     : ^^^^^^^
+>x == f : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>f : {}
+>  : ^^
+
+let r5a7 = x == g;
+>r5a7 : boolean
+>     : ^^^^^^^
+>x == g : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+
+
+let r5b1 = a == x;
+>r5b1 : boolean
+>     : ^^^^^^^
+>a == x : boolean
+>       : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r5b2 = b == x;
+>r5b2 : boolean
+>     : ^^^^^^^
+>b == x : boolean
+>       : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r5b3 = c == x;
+>r5b3 : boolean
+>     : ^^^^^^^
+>c == x : boolean
+>       : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r5b4 = d == x;
+>r5b4 : boolean
+>     : ^^^^^^^
+>d == x : boolean
+>       : ^^^^^^^
+>d : void
+>  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+/*pruned*/;
+let r5b6 = f == x;
+>r5b6 : boolean
+>     : ^^^^^^^
+>f == x : boolean
+>       : ^^^^^^^
+>f : {}
+>  : ^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r5b7 = g == x;
+>r5b7 : boolean
+>     : ^^^^^^^
+>g == x : boolean
+>       : ^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+// operator !=
+let r6a1 = x != a;
+>r6a1 : boolean
+>     : ^^^^^^^
+>x != a : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r6a2 = x != b;
+>r6a2 : boolean
+>     : ^^^^^^^
+>x != b : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r6a3 = x != c;
+>r6a3 : boolean
+>     : ^^^^^^^
+>x != c : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+let r6a4 = x != d;
+>r6a4 : boolean
+>     : ^^^^^^^
+>x != d : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
+let r6a6 = x != f;
+>r6a6 : boolean
+>     : ^^^^^^^
+>x != f : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>f : {}
+>  : ^^
+
+let r6a7 = x != g;
+>r6a7 : boolean
+>     : ^^^^^^^
+>x != g : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+
+
+let r6b1 = a != x;
+>r6b1 : boolean
+>     : ^^^^^^^
+>a != x : boolean
+>       : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r6b2 = b != x;
+>r6b2 : boolean
+>     : ^^^^^^^
+>b != x : boolean
+>       : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r6b3 = c != x;
+>r6b3 : boolean
+>     : ^^^^^^^
+>c != x : boolean
+>       : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r6b4 = d != x;
+>r6b4 : boolean
+>     : ^^^^^^^
+>d != x : boolean
+>       : ^^^^^^^
+>d : void
+>  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+/*pruned*/;
+let r6b6 = f != x;
+>r6b6 : boolean
+>     : ^^^^^^^
+>f != x : boolean
+>       : ^^^^^^^
+>f : {}
+>  : ^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r6b7 = g != x;
+>r6b7 : boolean
+>     : ^^^^^^^
+>g != x : boolean
+>       : ^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+// operator ===
+let r7a1 = x === a;
+>r7a1 : boolean
+>     : ^^^^^^^
+>x === a : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r7a2 = x === b;
+>r7a2 : boolean
+>     : ^^^^^^^
+>x === b : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r7a3 = x === c;
+>r7a3 : boolean
+>     : ^^^^^^^
+>x === c : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+let r7a4 = x === d;
+>r7a4 : boolean
+>     : ^^^^^^^
+>x === d : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
+let r7a6 = x === f;
+>r7a6 : boolean
+>     : ^^^^^^^
+>x === f : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>f : {}
+>  : ^^
+
+let r7a7 = x === g;
+>r7a7 : boolean
+>     : ^^^^^^^
+>x === g : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+
+
+let r7b1 = a === x;
+>r7b1 : boolean
+>     : ^^^^^^^
+>a === x : boolean
+>        : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r7b2 = b === x;
+>r7b2 : boolean
+>     : ^^^^^^^
+>b === x : boolean
+>        : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r7b3 = c === x;
+>r7b3 : boolean
+>     : ^^^^^^^
+>c === x : boolean
+>        : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r7b4 = d === x;
+>r7b4 : boolean
+>     : ^^^^^^^
+>d === x : boolean
+>        : ^^^^^^^
+>d : void
+>  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+/*pruned*/;
+let r7b6 = f === x;
+>r7b6 : boolean
+>     : ^^^^^^^
+>f === x : boolean
+>        : ^^^^^^^
+>f : {}
+>  : ^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r7b7 = g === x;
+>r7b7 : boolean
+>     : ^^^^^^^
+>g === x : boolean
+>        : ^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+// operator !==
+let r8a1 = x !== a;
+>r8a1 : boolean
+>     : ^^^^^^^
+>x !== a : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r8a2 = x !== b;
+>r8a2 : boolean
+>     : ^^^^^^^
+>x !== b : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r8a3 = x !== c;
+>r8a3 : boolean
+>     : ^^^^^^^
+>x !== c : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>c : string
+>  : ^^^^^^
+
+let r8a4 = x !== d;
+>r8a4 : boolean
+>     : ^^^^^^^
+>x !== d : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
+let r8a6 = x !== f;
+>r8a6 : boolean
+>     : ^^^^^^^
+>x !== f : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>f : {}
+>  : ^^
+
+let r8a7 = x !== g;
+>r8a7 : boolean
+>     : ^^^^^^^
+>x !== g : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+
+
+let r8b1 = a !== x;
+>r8b1 : boolean
+>     : ^^^^^^^
+>a !== x : boolean
+>        : ^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r8b2 = b !== x;
+>r8b2 : boolean
+>     : ^^^^^^^
+>b !== x : boolean
+>        : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r8b3 = c !== x;
+>r8b3 : boolean
+>     : ^^^^^^^
+>c !== x : boolean
+>        : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r8b4 = d !== x;
+>r8b4 : boolean
+>     : ^^^^^^^
+>d !== x : boolean
+>        : ^^^^^^^
+>d : void
+>  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+/*pruned*/;
+let r8b6 = f !== x;
+>r8b6 : boolean
+>     : ^^^^^^^
+>f !== x : boolean
+>        : ^^^^^^^
+>f : {}
+>  : ^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let r8b7 = g !== x;
+>r8b7 : boolean
+>     : ^^^^^^^
+>g !== x : boolean
+>        : ^^^^^^^
+>g : string[]
+>  : ^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,17 +1,17 @@
-types: 8 of 10 tsc entries compared, 4 differ
+types: 9 of 11 tsc entries compared, 4 differ
 
 line 4: foo
-  tsc:  () => [null]
+  tsc:  () => [undefined]
   ours: () => [string]
 
-line 4: function bar() { let intermediate: [string] = null as unknown as ([string]); return intermediate = [null]; }
-  tsc:  () => [null]
+line 4: function bar() { let intermediate: [string] = null as unknown as ([string]); return intermediate = [undefined]; }
+  tsc:  () => [undefined]
   ours: () => [string]
 
-line 6: intermediate = [null]
-  tsc:  [null]
+line 6: intermediate = [undefined]
+  tsc:  [undefined]
   ours: [string]
 
-line 6: [null]
-  tsc:  [null]
+line 6: [undefined]
+  tsc:  [undefined]
   ours: [string]

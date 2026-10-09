@@ -1,0 +1,5 @@
+types: 13 of 35 tsc entries compared, 0 differ
+
+errors:
+line 19: ours: field `a` does not exist on all members of `{} | { a: string; b: number }` (missing on `{}`) (tsc accepts)
+line 20: ours: field `a` does not exist on all members of `{} | { a: string; b: number }` (missing on `{}`) (tsc accepts)

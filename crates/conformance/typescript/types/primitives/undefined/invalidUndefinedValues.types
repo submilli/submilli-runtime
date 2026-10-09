@@ -1,0 +1,166 @@
+=== invalidUndefinedValues.ts ===
+let x: typeof undefined = null as unknown as (typeof undefined);
+>x : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>null as unknown as (typeof undefined) : undefined
+>                                      : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+x = 1;
+>x = 1 : 1
+>      : ^
+>x : undefined
+>  : ^^^^^^^^^
+>1 : 1
+>  : ^
+
+x = '';
+>x = '' : ""
+>       : ^^
+>x : undefined
+>  : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+x = true;
+>x = true : true
+>         : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let a: void = null as unknown as (void);
+>a : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+x = a;
+>x = a : void
+>      : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>a : void
+>  : ^^^^
+
+x = null;
+>x = null : null
+>         : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+class C { foo: string }
+>C : C
+>  : ^
+>foo : string
+>    : ^^^^^^
+
+/*pruned*/;
+x = C;
+>x = C : typeof C
+>      : ^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+
+/**/;
+
+interface I { foo: string }
+>I : I
+>  : ^
+>foo : string
+>    : ^^^^^^
+
+let c: I = null as unknown as (I);
+>c : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+x = c;
+>x = c : I
+>      : ^
+>x : undefined
+>  : ^^^^^^^^^
+>c : I
+>  : ^
+
+
+/*pruned*/;
+/**/;
+
+x = { f() { } }
+>x = { f() { } } : { f(): void; }
+>                : ^^^^^^^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>{ f() { } } : { f(): void; }
+>            : ^^^^^^^^^^^^^^
+>f : () => void
+>  : ^^^^^^^^^^
+
+
+function f<T>(a: T): void {
+>f : <T>(a: T) => void
+>  : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : T
+>  : ^
+
+    x = a;
+>x = a : T
+>      : ^
+>x : undefined
+>  : ^^^^^^^^^
+>a : T
+>  : ^
+
+}
+/**/;
+
+enum E { A }
+>E : E
+>  : ^
+>A : E.A
+>  : ^^^
+
+x = E;
+>x = E : typeof E
+>      : ^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>E : typeof E
+>  : ^^^^^^^^
+
+x = E.A;
+>x = E.A : E
+>        : ^
+>x : undefined
+>  : ^^^^^^^^^
+>E.A : E
+>    : ^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

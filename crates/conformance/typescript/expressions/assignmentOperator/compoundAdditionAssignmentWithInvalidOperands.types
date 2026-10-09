@@ -8,7 +8,14 @@ enum E { a, b }
 >  : ^^^
 
 
-/*pruned*/;                             
+let a: void = null as unknown as (void);
+>a : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 let x1: boolean = null as unknown as (boolean);
 >x1 : boolean
@@ -18,7 +25,14 @@ let x1: boolean = null as unknown as (boolean);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/**/;   
+x1 += a;
+>x1 += a : any
+>        : ^^^
+>x1 : boolean
+>   : ^^^^^^^
+>a : void
+>  : ^^^^
+
 x1 += true;
 >x1 += true : any
 >           : ^^^
@@ -61,11 +75,13 @@ x1 += null;
 >x1 : boolean
 >   : ^^^^^^^
 
-x1 += null;
->x1 += null : any
->           : ^^^
+x1 += undefined;
+>x1 += undefined : any
+>                : ^^^
 >x1 : boolean
 >   : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 let x2: {} = null as unknown as ({});
@@ -76,7 +92,14 @@ let x2: {} = null as unknown as ({});
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/**/;   
+x2 += a;
+>x2 += a : any
+>        : ^^^
+>x2 : {}
+>   : ^^
+>a : void
+>  : ^^^^
+
 x2 += true;
 >x2 += true : any
 >           : ^^^
@@ -119,21 +142,81 @@ x2 += null;
 >x2 : {}
 >   : ^^
 
-x2 += null;
->x2 += null : any
->           : ^^^
+x2 += undefined;
+>x2 += undefined : any
+>                : ^^^
 >x2 : {}
 >   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
-/*pruned*/;                              
-/**/;   
-/*pruned*/;
-/**/;   
-/**/;     
-/**/;    
-/*pruned*/;
-/*pruned*/;
+let x3: void = null as unknown as (void);
+>x3 : void
+>   : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+x3 += a;
+>x3 += a : any
+>        : ^^^
+>x3 : void
+>   : ^^^^
+>a : void
+>  : ^^^^
+
+x3 += true;
+>x3 += true : any
+>           : ^^^
+>x3 : void
+>   : ^^^^
+>true : true
+>     : ^^^^
+
+x3 += 0;
+>x3 += 0 : any
+>        : ^^^
+>x3 : void
+>   : ^^^^
+>0 : 0
+>  : ^
+
+x3 += E.a;
+>x3 += E.a : any
+>          : ^^^
+>x3 : void
+>   : ^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+x3 += {};
+>x3 += {} : any
+>         : ^^^
+>x3 : void
+>   : ^^^^
+>{} : {}
+>   : ^^
+
+x3 += null;
+>x3 += null : any
+>           : ^^^
+>x3 : void
+>   : ^^^^
+
+x3 += undefined;
+>x3 += undefined : any
+>                : ^^^
+>x3 : void
+>   : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
 
 let x4: number = null as unknown as (number);
 >x4 : number
@@ -143,7 +226,14 @@ let x4: number = null as unknown as (number);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/**/;   
+x4 += a;
+>x4 += a : any
+>        : ^^^
+>x4 : number
+>   : ^^^^^^
+>a : void
+>  : ^^^^
+
 x4 += true;
 >x4 += true : any
 >           : ^^^
@@ -161,10 +251,10 @@ x4 += {};
 >   : ^^
 
 
-/*pruned*/;                        
-/**/;   
 /*pruned*/;
-/**/;    
+/**/;
+/*pruned*/;
+/**/;
 
 function main(): void {}
 >main : () => void

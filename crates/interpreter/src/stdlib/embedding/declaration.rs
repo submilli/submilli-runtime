@@ -87,12 +87,12 @@ fn interface_type(name: &str) -> Type {
     }
 }
 
-fn nullable_number() -> Type {
-    Type::union(vec![Type::Number, Type::Null])
+fn optional_number() -> Type {
+    Type::union(vec![Type::Number, Type::Undefined])
 }
 
-fn nullable_string() -> Type {
-    Type::union(vec![Type::String, Type::Null])
+fn optional_string() -> Type {
+    Type::union(vec![Type::String, Type::Undefined])
 }
 
 fn insert_embeddings_interface(defs: &mut PackageDeclaration) {
@@ -124,14 +124,15 @@ fn insert_embeddings_interface(defs: &mut PackageDeclaration) {
     insert_property(
         &mut properties,
         "inputTokens",
-        nullable_number(),
-        "/** Input tokens the provider reported for the whole call, or `null` when it reported none. `null` means unknown, not free: the call may still have been billed. */",
+        optional_number(),
+        "/** Input tokens the provider reported for the whole call, or `undefined` when it reported none. `undefined` means unknown, not free: the call may still have been billed. */",
     );
 
     let mut methods = BTreeMap::new();
     methods.insert(
         "vector".to_string(),
         MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: vec![Param::new("index", Type::Number)],
             ret: Type::Array(Box::new(Type::Number)),
@@ -145,6 +146,7 @@ fn insert_embeddings_interface(defs: &mut PackageDeclaration) {
     methods.insert(
         "bytes".to_string(),
         MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: vec![Param::new("index", Type::Number)],
             ret: Type::Uint8Array,
@@ -175,8 +177,8 @@ fn insert_model_interface(defs: &mut PackageDeclaration) {
     insert_property(
         &mut properties,
         "description",
-        nullable_string(),
-        "/** Operator-authored deployment intent, or `null` when none was declared. Advice, not fact: it is free text. Always a single line, within a fixed length bound. */",
+        optional_string(),
+        "/** Operator-authored deployment intent, or `undefined` when none was declared. Advice, not fact: it is free text. Always a single line, within a fixed length bound. */",
     );
     insert_property(
         &mut properties,
@@ -187,8 +189,8 @@ fn insert_model_interface(defs: &mut PackageDeclaration) {
     insert_property(
         &mut properties,
         "maxInputTokens",
-        nullable_number(),
-        "/** The alias's input limit in tokens, or `null` when none is known. */",
+        optional_number(),
+        "/** The alias's input limit in tokens, or `undefined` when none is known. */",
     );
     insert_property(
         &mut properties,

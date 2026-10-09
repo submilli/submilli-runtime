@@ -26,11 +26,11 @@ pub fn package_declaration() -> PackageDeclaration {
             kind: ValueKind::Function {
                 generics: Vec::new(),
                 params: vec![Param::new("secret", Type::String)],
-                ret: Type::union(vec![Type::String, Type::Null]),
+                ret: Type::union(vec![Type::String, Type::Undefined]),
                 type_predicate: None,
                 doc: crate::doc(
                     crate::FileId::SECRETS,
-                    "/**\n * Resolve a Blueprint-declared secret by name. **Packages only** — a call from main-module code is refused whatever the policy says, because secret values must never reach it. From `main`, pass the secret *name* to the Package API that needs the credential; the Package resolves it internally and never returns it. Returns `null` when the secret is undeclared or unavailable. Traps if policy denies access or the resolver fails internally.\n * @param secret Secret name from the Blueprint `secrets:` block.\n * @capability secrets.get { name: $secret }\n */",
+                    "/**\n * Resolve a Blueprint-declared secret by name. **Packages only** — a call from main-module code is refused whatever the policy says, because secret values must never reach it. From `main`, pass the secret *name* to the Package API that needs the credential; the Package resolves it internally and never returns it. Returns `undefined` when the secret is undeclared or unavailable. Traps if policy denies access or the resolver fails internally.\n * @param secret Secret name from the Blueprint `secrets:` block.\n * @capability secrets.get { name: $secret }\n */",
                 ),
             },
         },
@@ -42,7 +42,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
     let string = ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(intr.string)));
-    // `string | null` lowers to the erased `(ref null $Object)` in codegen.
+    // `string | undefined` lowers to the erased `(ref null $Object)` in codegen.
     let nullable_object = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
     let ty = FuncType::new(&engine, [string], [nullable_object]);
     register_host_fn_async(
@@ -67,7 +67,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     .await
                     .map_err(|msg| wasmtime::Error::msg(format!("secrets.get {name}: {msg}")))?
                 else {
-                    *abi_result(results, 0)? = Val::AnyRef(None);
+                    *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
                     return Ok(());
                 };
 
@@ -206,7 +206,7 @@ mod tests {
     }
 
     /// Today `main` can tell a declared secret from an undeclared one by
-    /// whether it gets a value or `null`. The refusal closes that oracle: both
+    /// whether it gets a value or `undefined`. The refusal closes that oracle: both
     /// names must produce the identical message.
     #[tokio::test]
     async fn the_denial_is_identical_for_declared_and_undeclared_names() {
@@ -269,19 +269,19 @@ mod tests {
     /// R2: a package reading a secret is unchanged. Keeps both the found and
     /// the absent branch, and the context recorded for each.
     #[tokio::test]
-    async fn a_package_caller_still_reads_secrets_and_gets_null_for_absent_ones() {
+    async fn a_package_caller_still_reads_secrets_and_gets_undefined_for_absent_ones() {
         let source = r#"
             import { get } from "submilli:secrets";
 
             function main(): void {
                 const token = get("TOKEN");
-                assert(token !== null, "TOKEN should resolve");
-                if (token !== null) {
+                assert(token !== undefined, "TOKEN should resolve");
+                if (token !== undefined) {
                     assert(token === "tok-123", "TOKEN value");
                 }
 
                 const absent = get("ABSENT");
-                assert(absent === null, "missing secret is null");
+                assert(absent === undefined, "missing secret is undefined");
             }
         "#;
         let recording = Arc::new(RecordingCheck::default());

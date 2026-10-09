@@ -1,6 +1,6 @@
 // test262: test/built-ins/Array/prototype/at/returns-item.js
 // Adapted: dense array (sparse-hole element rejected by design); the hole's
-// `undefined` read is covered by the rejected original.
+// missing values are checked by the out-of-range case.
 
 function main(): void {
   const a = [1, 2, 3, 4, 5];
@@ -10,5 +10,5 @@ function main(): void {
   assertSameValue(a.at(2), 3, "a.at(2) must return 3");
   assertSameValue(a.at(3), 4, "a.at(3) must return 4");
   assertSameValue(a.at(4), 5, "a.at(4) must return 5");
-  assertSameValue(a.at(5), null, "a.at(5) past the end returns null");
+  assertSameValue(a.at(5), undefined, "a.at(5) past the end returns undefined");
 }

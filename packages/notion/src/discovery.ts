@@ -8,6 +8,7 @@ import {
     NotionView,
     PageResult,
     ResourceKind,
+    SearchOptions,
     SearchResult,
 } from "./types";
 import {
@@ -48,10 +49,10 @@ export {
 interface ApiSearchItem {
     object: string;
     id: string;
-    url?: string;
-    last_edited_time?: string;
+    url?: string | null;
+    last_edited_time?: string | null;
     properties?: unknown;
-    title?: unknown[];
+    title?: unknown[] | null;
 }
 
 /**
@@ -73,45 +74,25 @@ export function getSelf(): NotionUser {
     return userFrom(notionGet("/users/me").json());
 }
 
-/** Search fields the root module read from the caller's options; null where the caller gave none. */
-export interface SearchRequest {
-    /** Text to match against titles. */
-    query: string | null;
-    /** Restrict results to one object kind. */
-    kind: "page" | "data_source" | null;
-    /** Sort direction; results are unsorted when null. */
-    direction: "ascending" | "descending" | null;
-    /** Timestamp the sort applies to. */
-    timestamp: "last_edited_time" | null;
-    /** Requested page size. */
-    pageSize: number | null;
-    /** Cursor of the page to continue from. */
-    startCursor: string | null;
-}
-
 /**
  * Search titles visible to the connection.
  *
- * @param request Search text, filter, sort, and pagination fields; `null` fields use the Notion defaults.
+ * @param options Search text, filter, sort, and pagination fields; omitted fields use the Notion defaults.
  * @returns One page of matching pages and data sources; an empty `results` means nothing matched.
  */
-export function search(request: SearchRequest): PageResult<SearchResult> {
-    const query = request.query;
-    const kind = request.kind;
-    const direction = request.direction;
-    const timestamp = request.timestamp;
-    const startCursor = request.startCursor;
+export function search(options: SearchOptions): PageResult<SearchResult> {
+    const { query, kind, direction, timestamp, pageSize: requestedSize, startCursor } = options;
     const fields: string[] = [];
-    if (query !== null && query.length > 0) fields.push(fieldJson("query", query));
-    if (kind !== null) {
+    if (query !== undefined && query.length > 0) fields.push(fieldJson("query", query));
+    if (kind !== undefined) {
         fields.push("\"filter\":{\"property\":\"object\",\"value\":" + JSON.stringify(kind) + "}");
     }
-    if (direction !== null) {
-        const sortTimestamp = timestamp === null ? "last_edited_time" : timestamp;
+    if (direction !== undefined) {
+        const sortTimestamp = timestamp ?? "last_edited_time";
         fields.push("\"sort\":{\"direction\":" + JSON.stringify(direction) + ",\"timestamp\":" + JSON.stringify(sortTimestamp) + "}");
     }
-    fields.push(fieldJson("page_size", pageSize(request.pageSize)));
-    if (startCursor !== null) fields.push(fieldJson("start_cursor", startCursor));
+    fields.push(fieldJson("page_size", pageSize(requestedSize)));
+    if (startCursor !== undefined) fields.push(fieldJson("start_cursor", startCursor));
     const page = listFrom(notionPost("/search", objectJson(fields)));
     const results: SearchResult[] = [];
     for (const raw of page.results) results.push(searchResultFrom(raw));
@@ -182,11 +163,11 @@ export function getUser(id: string): NotionUser {
 /**
  * List users visible to the connection.
  *
- * @param requestedSize Users per page, 1 to 100; `null` uses 100.
- * @param startCursor Cursor from a previous page's `nextCursor`; `null` starts at the first user.
+ * @param requestedSize Users per page, 1 to 100; undefined uses 100.
+ * @param startCursor Cursor from a previous page's `nextCursor`; undefined starts at the first user.
  * @returns One page of users with pagination state.
  */
-export function listUsers(requestedSize: number | null, startCursor: string | null): PageResult<NotionUser> {
+export function listUsers(requestedSize: number | undefined, startCursor: string | undefined): PageResult<NotionUser> {
     const query = new Map<string, string>();
     putQuery(query, "start_cursor", startCursor);
     query.set("page_size", pageSize(requestedSize).toString());
@@ -206,16 +187,16 @@ function searchResultFrom(raw: unknown): SearchResult {
     return {
         kind: item.object === "data_source" ? "data_source" : "page",
         id: item.id,
-        url: text(item.url),
+        url: item.url ?? "",
         title: titleFrom(item),
-        lastEditedTime: text(item.last_edited_time),
+        lastEditedTime: item.last_edited_time ?? "",
         raw: raw,
     };
 }
 
 function titleFrom(item: ApiSearchItem): string {
-    if (item.title !== null) return richText(item.title);
-    if (item.properties === null) return "";
+    if (item.title) return richText(item.title);
+    if (item.properties === null || item.properties === undefined) return "";
     for (const entry of Object.entries(item.properties)) {
         const value = entry[1];
         if ("type" in value) {
@@ -231,8 +212,4 @@ function richText(items: unknown[]): string {
         if ("plain_text" in item && typeof item.plain_text === "string") parts.push(item.plain_text);
     }
     return parts.join("");
-}
-
-function text(value: string | null): string {
-    return value === null ? "" : value;
 }

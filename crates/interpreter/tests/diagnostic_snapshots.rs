@@ -379,28 +379,6 @@ function main(): void {
 }
 
 #[test]
-fn nullable_template_interpolation_offers_fix_trio() {
-    let source = "\
-function fmt(node: { title: string; completedAt: string | null }): string {
-  return `${node.title} (Completed: ${node.completedAt})`;
-}
-function main(): void { }
-";
-    insta::assert_snapshot!(render_all(source));
-}
-
-#[test]
-fn nullable_template_interpolation_complex_expr_parenthesized() {
-    let source = "\
-function fmt(a: string | null, b: string | null): string {
-  return `got: ${a ?? b}`;
-}
-function main(): void { }
-";
-    insta::assert_snapshot!(render_all(source));
-}
-
-#[test]
 fn null_tostring_offers_fix_trio() {
     insta::assert_snapshot!(render_inside_main(
         "  const n = null;\n  let s = n.toString();"

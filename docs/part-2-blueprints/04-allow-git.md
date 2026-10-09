@@ -94,14 +94,14 @@ submilli docs submilli:git
 submilli:git — Capability-controlled VFS repositories: history, staging, commits, branches and HTTPS fetch.
 …
 class Repository {
-  static clone(url: string, path: string, options?: null | { branch?: string }): Repository;
-  static init(path: string, options?: null | { branch?: string }): Repository;
+  static clone(url: string, path: string, options?: { branch?: string }): Repository;
+  static init(path: string, options?: { branch?: string }): Repository;
   static open(path: string): Repository;
   add(paths: string[]): void;
   commit(message: string): string;
-  status(): { branch: string | null; clean: boolean; entries: { … }[] };
-  log(options?: null | { limit?: number; offset?: number }): { commits: { … }[]; nextOffset: number | null };
-  diff(options?: null | { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string };
+  status(): { branch?: string; clean: boolean; entries: { … }[] };
+  log(options?: { limit?: number; offset?: number }): { commits: { … }[]; nextOffset?: number };
+  diff(options?: { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string };
   fetch(remote?: string, branch?: string): { branches: string[] };
   pull(remote?: string, branch?: string): { current: string; previous: string };
   …
@@ -144,7 +144,7 @@ submilli docs submilli:code
 submilli:code — Workspace tools: numbered reads, search, glob, tree, anchored edits and unified diffs.
 …
 function read(path: string, offset?: number, limit?: number): { lines: { line: number; text: string }[]; path: string; truncated: boolean };
-function search(pattern: string, options?: null | { caseSensitive?: boolean; context?: number; exclude?: string[]; include?: string[]; limit?: number; mode?: string; path?: string }): { … };
+function search(pattern: string, options?: { caseSensitive?: boolean; context?: number; exclude?: string[]; include?: string[]; limit?: number; mode?: string; path?: string }): { … };
 function tree(path: string, depth?: number): { entries: { depth: number; kind: string; modifiedAt: number; path: string }[]; truncated: boolean };
 function edit(path: string, oldString: string, newString: string, replaceAll?: boolean, nearLine?: number): { changed: boolean; diagnostics: { … }[]; diff: string; success: boolean };
 …

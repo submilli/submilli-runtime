@@ -1,6 +1,6 @@
 // test262: test/built-ins/RegExp/S15.10.2.5_A1_T4.js
-// expect-fail: a capture inside a quantified group should be cleared on iterations where it does not participate (ECMA-262 RepeatMatcher), so capture 4 should be null; the engine keeps "bbb" from an earlier iteration
-// RegExpExecArray shape adapted to RegExpMatch (unmatched captures are null, not undefined).
+// expect-fail: a capture inside a quantified group should be cleared on iterations where it does not participate (ECMA-262 RepeatMatcher), so capture 4 should be undefined; the engine keeps "bbb" from an earlier iteration
+// RegExpExecArray shape adapted to RegExpMatch (unmatched captures are undefined).
 
 function main(): void {
   const m = /(z)((a+)?(b+)?(c))*/.exec("zaacbbbcac");
@@ -20,6 +20,6 @@ function main(): void {
   assertSameValue(g1, "z", "capture 1");
   assertSameValue(g2, "ac", "capture 2 holds the last iteration");
   assertSameValue(g3, "a", "capture 3 holds the last iteration");
-  assertSameValue(g4, null, "capture 4 did not participate in the last iteration");
+  assertSameValue(g4, undefined, "capture 4 did not participate in the last iteration");
   assertSameValue(g5, "c", "capture 5");
 }

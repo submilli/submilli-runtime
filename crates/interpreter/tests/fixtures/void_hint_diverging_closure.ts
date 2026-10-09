@@ -109,7 +109,7 @@ function main(): void {
   let fromMapThrew = false;
   try {
     const f = byMap.get("k");
-    if (f !== null) {
+    if (f !== undefined) {
       f(1);
     }
   } catch (e) {

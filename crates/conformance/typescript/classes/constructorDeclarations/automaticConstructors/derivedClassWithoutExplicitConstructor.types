@@ -53,7 +53,7 @@ let r = new Derived(); // error
 >Derived : typeof Derived
 >        : ^^^^^^^^^^^^^^
 
-let r2 = new Derived(1); 
+let r2 = new Derived(1);
 >r2 : Derived
 >   : ^^^^^^^
 >new Derived(1) : Derived
@@ -90,10 +90,10 @@ class Base2<T> {
 
 }
 
-/*pruned*/;                               
-                 
-                
- 
+/*pruned*/;
+
+
+
 
 /*pruned*/;      // error
 /*pruned*/;                 // ok

@@ -61,7 +61,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     )?;
     let options = ValType::Ref(RefType::new(
         true,
-        HeapType::ConcreteStruct(types.intr.object_shape.clone()),
+        HeapType::ConcreteStruct(types.intr.object.clone()),
     ));
     let pair_with_options =
         FuncType::new(engine, [obj.clone(), obj.clone(), options], [obj.clone()]);
@@ -296,8 +296,8 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
                 Param::new("other", ty()),
                 Param::with_default(
                     "options",
-                    Type::Union(vec![shared::object_shape_type(&[]), Type::Null]),
-                    DefaultValue::Null,
+                    Type::Union(vec![shared::object_shape_type(&[]), Type::Undefined]),
+                    DefaultValue::Undefined,
                 ),
             ],
             shared::temporal_type("Duration"),

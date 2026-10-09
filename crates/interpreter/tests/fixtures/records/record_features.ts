@@ -1,7 +1,7 @@
 type Dictionary<T> = Record<string, T>;
 interface Counts extends BaseCounts { total: number; }
 interface BaseCounts { [key: string]: number; }
-function read<T>(values: Dictionary<T>, key: string): T | null { return values[key]; }
+function read<T>(values: Dictionary<T>, key: string): T | undefined { return values[key]; }
 function finite(key: "left" | "right"): number {
   const r: Record<"left" | "right", number> = { left: 1, right: 2 };
   r[key] = 4;

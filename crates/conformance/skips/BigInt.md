@@ -50,6 +50,6 @@ Representatives copied: `rejected/BigInt/prop-desc.js`,
 | Pattern | Reason |
 |:--|:--|
 | `constructor-trailing-leading-spaces.js` rows `"   0b1111"` and `"     "` | Ride the two `expect-fail` gaps above; the decimal-with-whitespace rows are ported. |
-| `prototype/toString/default-radix.js` `undefined`-argument rows | No `undefined`; the omitted-argument rows are ported and exercise the same default. |
+| `prototype/toString/default-radix.js` `undefined`-argument rows | Ported alongside omitted-argument rows. |
 | `prototype/toString/radix-err.js` `null` radix row | Compile error (`radix` is `number`); the 0/1/37 rows are ported. |
 | `string-is-code-units-of-decimal-digits-only.js` `BigInt(0n)` row | `BigInt()` takes `string \| number`; the other rows are ported. |

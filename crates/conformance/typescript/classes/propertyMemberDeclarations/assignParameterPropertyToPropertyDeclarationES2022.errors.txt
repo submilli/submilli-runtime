@@ -1,0 +1,3 @@
+assignParameterPropertyToPropertyDeclarationES2022.ts(4,24): error TS2729: Property 'bar' is used before its initialization.
+assignParameterPropertyToPropertyDeclarationES2022.ts(8,25): error TS2729: Property 'm3' is used before its initialization.
+assignParameterPropertyToPropertyDeclarationES2022.ts(14,25): error TS2729: Property 'baz' is used before its initialization.

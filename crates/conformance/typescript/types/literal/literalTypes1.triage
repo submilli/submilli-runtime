@@ -1,2 +1,1 @@
-line 64 extra: bug SUB-1196 (duplicate `case` label) a repeated `case` label is rejected, where tsc accepts it
-line 65 type: artifact the type comes from code we reject (the repeated `case null` on line 64), and each side's recovery type differs
+

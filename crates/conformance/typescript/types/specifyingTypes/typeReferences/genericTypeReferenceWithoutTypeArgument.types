@@ -1,6 +1,6 @@
 === genericTypeReferenceWithoutTypeArgument.ts ===
 // it is an error to use a generic type without type arguments
-// all of these are errors 
+// all of these are errors
 
 class C<T> {
 >C : C<T>
@@ -35,8 +35,8 @@ let a: { x: C } = null as unknown as ({ x: C });
 >x : any
 >  : ^^^
 
-/*pruned*/;                                               
-/*pruned*/;                                               
+/*pruned*/;
+/*pruned*/;
 
 let e = (x: C) => { let y: C = null as unknown as (C); return y; }
 >e : (x: C) => any
@@ -102,16 +102,16 @@ interface I extends C {}
 >  : ^
 
 
-/*pruned*/;  
-                                
- 
+/*pruned*/;
 
-/*pruned*/;             
-/*pruned*/;                
-/*pruned*/;                 
 
-/*pruned*/;                            
-/*pruned*/;                              
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
 
 let j = <C>null;
 >j : any
@@ -119,7 +119,7 @@ let j = <C>null;
 ><C>null : any
 >        : ^^^
 
-/*pruned*/;       
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

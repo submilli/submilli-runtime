@@ -180,14 +180,25 @@ pub fn to_string_radix_js(x: f64, radix: f64) -> Result<String, String> {
     Ok(out)
 }
 
-/// JS-spec `parseInt(s, radix)`.
+/// `parseInt(s, radix)` with the radix argument as JavaScript reads it:
+/// `ToInt32`, where 0 (including `NaN` and an omitted radix) means "detect a
+/// `0x` prefix, else base 10". Any other value outside 2–36 makes the result
+/// `NaN`.
+pub fn parse_int_with_radix(input: &str, radix: f64) -> f64 {
+    match u32::try_from(to_int32(radix)) {
+        Ok(radix @ (0 | 2..=36)) => parse_int_js(input, radix),
+        _ => f64::NAN,
+    }
+}
+
+/// JS-spec `parseInt(s, radix)` for an already-converted radix.
 ///
 /// `radix == 0` means auto-detect: `0x` / `0X` prefix → base 16,
 /// otherwise base 10. `radix == 16` also accepts the `0x` prefix.
 /// Other radices in `[2, 36]` are taken literally; out-of-range
 /// radices return `NaN`.
 pub fn parse_int_js(input: &str, radix: u32) -> f64 {
-    let s = input.trim_start_matches(is_ascii_whitespace);
+    let s = input.trim_start_matches(is_js_whitespace);
     if s.is_empty() {
         return f64::NAN;
     }
@@ -226,7 +237,7 @@ pub fn parse_int_js(input: &str, radix: u32) -> f64 {
 }
 
 pub fn parse_float_js(input: &str) -> f64 {
-    let s = input.trim_start_matches(is_ascii_whitespace);
+    let s = input.trim_start_matches(is_js_whitespace);
     if s.is_empty() {
         return f64::NAN;
     }
@@ -317,10 +328,6 @@ fn is_decimal_literal_byte(b: u8) -> bool {
     b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-')
 }
 
-fn is_ascii_whitespace(c: char) -> bool {
-    c.is_ascii_whitespace()
-}
-
 fn strip_sign(s: &str) -> (f64, &str) {
     if let Some(rest) = s.strip_prefix('+') {
         (1.0, rest)
@@ -331,9 +338,10 @@ fn strip_sign(s: &str) -> (f64, &str) {
     }
 }
 
+/// The digits after a `0x`/`0X` prefix. A bare prefix leaves none, which
+/// `parse_int_js` reports as `NaN`, as JavaScript does.
 fn strip_hex_prefix(s: &str) -> Option<&str> {
-    let rest = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
-    if rest.is_empty() { None } else { Some(rest) }
+    s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
 }
 
 fn float_prefix(s: &str) -> &str {

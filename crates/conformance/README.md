@@ -11,6 +11,9 @@ upstream test about it has been dealt with, and what both suites check of it. In
 TypeScript suite, every divergence from `tsc` is explained or listed as not yet
 explained, and every upstream test left out is listed with its reason.
 
+The [undefined migration](typescript/migrations/undefined.md) records its pinned
+upstream inventory, selected checks, retained adaptations and focused coverage.
+
 ## Running conformance
 
 Both suite bodies are disabled by default, including with `SUBMILLI_FULL_TEST=1`.
@@ -32,10 +35,10 @@ the official ECMA-262 conformance suite, adapted to our strict TypeScript
 subset. Run via `SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conformance`.
 
 **Why a hand-ported vendored subset (not a scripted port):** test262 cases
-assume dynamic typing, `undefined`, `var`, sparse arrays, `Symbol`,
+assume dynamic typing, `var`, sparse arrays, `Symbol`,
 property descriptors, and an `eval`-based harness. Translating those into a
 statically-typed subset requires judgment per case (splitting heterogeneous
-arrays by element type, adding annotations, choosing `null` for `undefined`),
+arrays by element type and adding annotations),
 which a script can't do reliably. The port is curated for *intent coverage*:
 each ported case mirrors one test262 case's intent and records its
 provenance; wholesale-skipped material is recorded in `SKIPS.md`.
@@ -54,7 +57,9 @@ skips/<Area>.md   per-area record of what was skipped or rejected, and why
 ```
 
 `CONFORMANCE_FILTER=<path substring> SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conformance` runs the
-matching subset of cases.
+matching subset of cases. `CONFORMANCE_CASES=<absolute file>` selects exact
+paths relative to `cases/`, one `.ts` path per line; blank lines and `#` comments
+are ignored. Missing paths fail the run. Use this for focused migrations.
 
 A ported case is a self-contained program with a `main(): void` entry point
 and a provenance header:
@@ -114,8 +119,8 @@ to `rejected/` (design decision) or `SKIPS.md` (not ported, with reason).
 1. Wrap the test body in `function main(): void { … }`; no top-level
    statements (top-level `const` is fine).
 2. `var` → `let`/`const`; add type annotations where inference needs them.
-3. `undefined` → `null`. Cases *about* `undefined` semantics (holes,
-   missing properties) are rejected by design.
+3. Preserve `undefined` and `null` as distinct values. Missing properties and
+   optional arguments use undefined; sparse-array holes remain unsupported.
 4. Heterogeneous arrays: split by element type, or use `unknown[]` with
    explicit element typing.
 5. Absent optional arguments: portable only when our signature declares

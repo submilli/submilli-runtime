@@ -1,0 +1,225 @@
+=== contextuallyTypedIifeStrict.ts ===
+// arrow
+/*pruned*/;
+// function expression
+/*pruned*/;
+// Lots of Irritating Superfluous Parentheses
+/*pruned*/;
+/*pruned*/;
+// multiple arguments
+/*pruned*/;
+// default parameters
+((m: number = 10) => m + 1)(12);
+>((m: number = 10) => m + 1)(12) : number
+>                                : ^^^^^^
+>((m: number = 10) => m + 1) : (m?: number) => number
+>                            : ^^^^^^^^^^^^^^^^^^^^^^
+>(m: number = 10) => m + 1 : (m?: number) => number
+>                          : ^^^^^^^^^^^^^^^^^^^^^^
+>m : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+>m + 1 : number
+>      : ^^^^^^
+>m : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>12 : 12
+>   : ^^
+
+((n: number = 10) => n + 1)();
+>((n: number = 10) => n + 1)() : number
+>                              : ^^^^^^
+>((n: number = 10) => n + 1) : (n?: number) => number
+>                            : ^^^^^^^^^^^^^^^^^^^^^^
+>(n: number = 10) => n + 1 : (n?: number) => number
+>                          : ^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>10 : 10
+>   : ^^
+>n + 1 : number
+>      : ^^^^^^
+>n : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+// optional parameters
+((j?) => j + 1)(12);
+>((j?) => j + 1)(12) : number
+>                    : ^^^^^^
+>((j?) => j + 1) : (j?: number | undefined) => number
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(j?) => j + 1 : (j?: number | undefined) => number
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>j : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>j + 1 : number
+>      : ^^^^^^
+>j : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>12 : 12
+>   : ^^
+
+((k?) => k + 1)();
+>((k?) => k + 1)() : any
+>                  : ^^^
+>((k?) => k + 1) : (k?: undefined) => any
+>                : ^^^^^^^^^^^^^^^^^^^^^^
+>(k?) => k + 1 : (k?: undefined) => any
+>              : ^^^^^^^^^^^^^^^^^^^^^^
+>k : undefined
+>  : ^^^^^^^^^
+>k + 1 : any
+>      : ^^^
+>k : undefined
+>  : ^^^^^^^^^
+>1 : 1
+>  : ^
+
+((l, o?) => l + o)(12);
+>((l, o?) => l + o)(12) : any
+>                       : ^^^
+>((l, o?) => l + o) : (l: number, o?: undefined) => any
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(l, o?) => l + o : (l: number, o?: undefined) => any
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>l : number
+>  : ^^^^^^
+>o : undefined
+>  : ^^^^^^^^^
+>l + o : any
+>      : ^^^
+>l : number
+>  : ^^^^^^
+>o : undefined
+>  : ^^^^^^^^^
+>12 : 12
+>   : ^^
+
+// rest parameters
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+// destructuring parameters (with defaults too!)
+/*pruned*/;
+/*pruned*/;
+(({ r = 17 } = { r: 18 }) => r)({r : 19});
+>(({ r = 17 } = { r: 18 }) => r)({r : 19}) : number
+>                                          : ^^^^^^
+>(({ r = 17 } = { r: 18 }) => r) : ({ r }?: { r: number; }) => number
+>                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>({ r = 17 } = { r: 18 }) => r : ({ r }?: { r: number; }) => number
+>                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>r : number
+>  : ^^^^^^
+>17 : 17
+>   : ^^
+>{ r: 18 } : { r: number; }
+>          : ^^^^^^^^^^^^^^
+>r : number
+>  : ^^^^^^
+>18 : 18
+>   : ^^
+>r : number
+>  : ^^^^^^
+>{r : 19} : { r: number; }
+>         : ^^^^^^^^^^^^^^
+>r : number
+>  : ^^^^^^
+>19 : 19
+>   : ^^
+
+(({ u = 22 } = { u: 23 }) => u)();
+>(({ u = 22 } = { u: 23 }) => u)() : number
+>                                  : ^^^^^^
+>(({ u = 22 } = { u: 23 }) => u) : ({ u }?: { u?: number; }) => number
+>                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>({ u = 22 } = { u: 23 }) => u : ({ u }?: { u?: number; }) => number
+>                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>u : number
+>  : ^^^^^^
+>22 : 22
+>   : ^^
+>{ u: 23 } : { u?: number; }
+>          : ^^^^^^^^^^^^^^^
+>u : number
+>  : ^^^^^^
+>23 : 23
+>   : ^^
+>u : number
+>  : ^^^^^^
+
+// contextually typed parameters.
+let twelve = (f => f(12))(i => i);
+>twelve : any
+>       : ^^^
+>(f => f(12))(i => i) : any
+>                     : ^^^
+>(f => f(12)) : (f: (i: any) => any) => any
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f => f(12) : (f: (i: any) => any) => any
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : (i: any) => any
+>  : ^^^^^^^^^^^^^^^
+>f(12) : any
+>      : ^^^
+>f : (i: any) => any
+>  : ^^^^^^^^^^^^^^^
+>12 : 12
+>   : ^^
+>i => i : (i: any) => any
+>       : ^^^^^^^^^^^^^^^
+>i : any
+>  : ^^^
+>i : any
+>  : ^^^
+
+let eleven = (o => o.a(11))({ a: function(n) { return n; } });
+>eleven : any
+>       : ^^^
+>(o => o.a(11))({ a: function(n) { return n; } }) : any
+>                                                 : ^^^
+>(o => o.a(11)) : (o: { a: (n: any) => any; }) => any
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>o => o.a(11) : (o: { a: (n: any) => any; }) => any
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>o : { a: (n: any) => any; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>o.a(11) : any
+>        : ^^^
+>o.a : (n: any) => any
+>    : ^^^^^^^^^^^^^^^
+>o : { a: (n: any) => any; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^
+>a : (n: any) => any
+>  : ^^^^^^^^^^^^^^^
+>11 : 11
+>   : ^^
+>{ a: function(n) { return n; } } : { a: (n: any) => any; }
+>                                 : ^^^^^^^^^^^^^^^^^^^^^^^
+>a : (n: any) => any
+>  : ^^^^^^^^^^^^^^^
+>function(n) { return n; } : (n: any) => any
+>                          : ^^^^^^^^^^^^^^^
+>n : any
+>  : ^^^
+>n : any
+>  : ^^^
+
+// missing arguments
+/*pruned*/;
+/*pruned*/;
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -44,15 +44,17 @@ const [...s2] = strArray;
 >strArray : string[]
 >         : ^^^^^^^^
 
-s2.push(null); // Should error, 'undefined' not part of s2's element type
->s2.push(null) : number
->              : ^^^^^^
+s2.push(undefined); // Should error, 'undefined' not part of s2's element type
+>s2.push(undefined) : number
+>                   : ^^^^^^
 >s2.push : (...items: string[]) => number
 >        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >s2 : string[]
 >   : ^^^^^^^^
 >push : (...items: string[]) => number
 >     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // Destructuring a rest element -> do not include undefined
@@ -66,15 +68,17 @@ const [, , ...s3] = strArray;
 >strArray : string[]
 >         : ^^^^^^^^
 
-s3.push(null); // Should error, 'undefined' not part of s2's element type
->s3.push(null) : number
->              : ^^^^^^
+s3.push(undefined); // Should error, 'undefined' not part of s2's element type
+>s3.push(undefined) : number
+>                   : ^^^^^^
 >s3.push : (...items: string[]) => number
 >        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >s3 : string[]
 >   : ^^^^^^^^
 >push : (...items: string[]) => number
 >     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // Declaration forms for object destructuring
@@ -131,30 +135,30 @@ t2.z.toString(); // Should error
 
 
 // Test intersections with declared properties
-/*pruned*/;                                                                                                                                   
+/*pruned*/;
 {
-    /*pruned*/;                     
+    /*pruned*/;
     /*pruned*/;  // Should OK
     /*pruned*/;  // Should OK
     /*pruned*/;  // Should error
 }
 
 {
-    /*pruned*/;                     
+    /*pruned*/;
     /*pruned*/;  // Should OK
     /*pruned*/;    // Should OK
     /*pruned*/;    // Should error
 }
 
 {
-    /*pruned*/;                     
-    ; 
+    /*pruned*/;
+    ;
                // Should OK
 
-    ; 
+    ;
                  // Should OK
 
-    ; 
+    ;
                  // Should error
 }
 
@@ -167,11 +171,11 @@ let target_string: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-let target_string_undef: string | null = null as unknown as (string | null);
->target_string_undef : string | null
->                    : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+let target_string_undef: string | undefined = null as unknown as (string | undefined);
+>target_string_undef : string | undefined
+>                    : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
@@ -190,7 +194,7 @@ let target_string_arr: string[] = null as unknown as (string[]);
 /*pruned*/;                            // Should OK
 
 {
-    /*pruned*/;                                                                                                                                 
+    /*pruned*/;
     /*pruned*/;                  // Should OK
 
     let q: number = null as unknown as (number);

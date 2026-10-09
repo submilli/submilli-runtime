@@ -72,6 +72,7 @@ fn huge_source_context_and_many_diagnostics_share_limits() {
 fn invalid_rest_signature_is_checked_but_display_never_panics() {
     let ty = Type::Function {
         params: Vec::new(),
+        optional: 0,
         ret: Box::new(Type::Number),
         predicate: None,
         has_rest: true,
@@ -101,7 +102,10 @@ fn type_depth_boundary_and_wide_types_abbreviate() {
             .unwrap()
             .truncated
     );
-    let wide = Type::Tuple(vec![Type::Number; 100_000]);
+    let wide = Type::Tuple(interpreter::TupleType {
+        elements: vec![Type::Number; 100_000],
+        optional: 0,
+    });
     let rendered = wide.render_checked(RenderLimits::default()).unwrap();
     assert!(rendered.truncated);
     assert!(rendered.text.len() <= RenderLimits::default().bytes);

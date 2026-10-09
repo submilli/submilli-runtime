@@ -11,8 +11,8 @@ function main(): void {
   assert(r.status === 200, "200 over the wire");
   assert(r.bytesWritten === 18, r.toString());
 
-  const back: string | null = readText("/out.txt");
-  if (back === null) {
+  const back: string | undefined = readText("/out.txt");
+  if (back === undefined) {
     assert(false, "readText returned null");
   } else {
     assert(back === "hello gzipped live", back);

@@ -119,11 +119,7 @@ fn emit_body(
     // argument JavaScript would pass it: an inner adapter would drop those
     // past its own arity. An adapter binds no receiver of its own.
     emit_original_identity(&mut body, ctx.symbols, original)?;
-    let result = if target.is_void {
-        wasm_encoder::BlockType::Empty
-    } else {
-        wasm_encoder::BlockType::Result(ctx.symbols.value_type(&crate::Type::Unknown)?)
-    };
+    let result = wasm_encoder::BlockType::Result(ctx.symbols.value_type(&crate::Type::Unknown)?);
     let sources = direct_sources(target, ctx.symbols);
     for &source in &sources {
         let structure = ctx
@@ -233,7 +229,7 @@ fn emit_direct_call(
     body: &mut Function,
     ctx: &CodegenCtx<'_>,
     source: ClosureSig,
-    target: ClosureSig,
+    _target: ClosureSig,
     original: u32,
     receiver: u32,
     env: u32,
@@ -269,17 +265,6 @@ fn emit_direct_call(
         field_index: 1,
     });
     body.instruction(&Instruction::CallRef(signature));
-    if !source.is_void && target.is_void {
-        body.instruction(&Instruction::Drop);
-    }
-    if source.is_void && !target.is_void {
-        let object = ctx
-            .symbols
-            .intrinsic_type_indices()
-            .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
-            .object;
-        body.instruction(&Instruction::RefNull(HeapType::Concrete(object)));
-    };
     Ok(())
 }
 
@@ -315,9 +300,6 @@ fn emit_default_adapter_call(
             .prelude_func_idx("__value_invoke_defaults")
             .ok_or_else(|| crate::codegen::internal_failure("default invocation collected"))?,
     ));
-    if target.is_void {
-        body.instruction(&Instruction::Drop);
-    };
     Ok(())
 }
 
@@ -400,19 +382,20 @@ pub fn emit_erased_cast(
     let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalTee(original));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
-        source_struct,
-    )));
-    emitter.instruction(Instruction::LocalGet(original));
-    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         target_struct,
     )));
-    emitter.instruction(Instruction::I32Or);
-    // Same-arity values need no metadata lookup or allocation.
+    // Void and value-returning closures now share an erased-result ABI and
+    // can canonicalize to the same Wasm type. Prefer the target before testing
+    // the opposite signature so compatible calls do not gain adapter frames.
     emitter.emit_if(wasm_encoder::BlockType::Result(ValType::I32));
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.emit_else();
     emitter.instruction(Instruction::LocalGet(original));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         source_struct,
     )));
+    emitter.emit_if(wasm_encoder::BlockType::Result(ValType::I32));
+    emitter.instruction(Instruction::I32Const(1));
     emitter.emit_else();
     emit_defaults_fit(
         emitter,
@@ -420,6 +403,7 @@ pub fn emit_erased_cast(
         original,
         DefaultsFitTarget::any_convention(target.arity),
     )?;
+    emitter.emit_end();
     emitter.emit_end();
     emitter.emit_if(wasm_encoder::BlockType::Result(target_slot));
     emit_wrap(emitter, ctx, target, original)?;
@@ -504,9 +488,9 @@ pub(super) fn emit_defaults_fit(
     emitter.instruction(Instruction::LocalGet(function));
     emitter.instruction(Instruction::F64Const(f64::from(target.arity).into()));
     super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number)?;
-    let results = target
-        .is_void
-        .map_or(-1.0, |is_void| if is_void { 0.0 } else { 1.0 });
+    // Void and value-returning closures share an erased-result ABI, so a
+    // known convention always reports one result.
+    let results = target.is_void.map_or(-1.0, |_| 1.0);
     emitter.instruction(Instruction::F64Const(results.into()));
     super::function_emitter::cast::emit_box(emitter, ctx, &crate::Type::Number)?;
     emitter.instruction(Instruction::F64Const(

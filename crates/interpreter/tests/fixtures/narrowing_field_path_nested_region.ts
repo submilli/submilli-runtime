@@ -10,12 +10,12 @@ interface PropertyBag {
 function countGuardedInCondition(properties: PropertyBag | null): number {
     if (properties === null) return 0;
     let count = 0;
-    if (properties.values !== null) {
+    if (properties.values !== undefined) {
         for (const property of properties.values) {
             count = count + 1;
         }
     }
-    if (properties.custom !== null) {
+    if (properties.custom !== undefined) {
         count = count + properties.custom.size;
     }
     return count;
@@ -23,7 +23,7 @@ function countGuardedInCondition(properties: PropertyBag | null): number {
 
 function blockGuard(p: PropertyBag | null): number {
     if (p !== null) {
-        if (p.values !== null) return p.values.length;
+        if (p.values !== undefined) return p.values.length;
     }
     return -1;
 }

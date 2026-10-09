@@ -407,11 +407,7 @@ fn generated_tsconfig_text(manifest: &ProjectManifest) -> String {
         "compilerOptions": {
             "noEmit": true,
             "strict": true,
-            // submilli reads optional fields as `T | null`, TS as `T | undefined` —
-            // irreconcilable without noise. tsserver is the navigation/completion
-            // layer; `submilli build check` is the checker, via the tasks.json
-            // problem matcher.
-            "strictNullChecks": false,
+            "strictNullChecks": true,
             // `strict` would type a `catch (e)` binding as `unknown`; submilli
             // binds it as `Error`, so `e.message` must not be flagged.
             "useUnknownInCatchVariables": false,

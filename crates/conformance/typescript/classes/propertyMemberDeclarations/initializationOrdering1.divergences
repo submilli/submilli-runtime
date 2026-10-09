@@ -1,1 +1,4 @@
 types: 7 of 20 tsc entries compared, 0 differ
+
+errors:
+line 14: ours: property `facade` is used before its initialization (tsc accepts)

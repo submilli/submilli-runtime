@@ -64,7 +64,7 @@ function main(): void {
   const maybe: Box | null = null as Box | null;
   const reached = maybe
     ?.v;
-  assert(reached === null, "member chain wrapped before `?.`");
+  assert(reached === undefined, "member chain wrapped before `?.`");
 
   const sub = new Sub();
   assert(sub.tag() === "sub", "class header wrapped before `extends`");

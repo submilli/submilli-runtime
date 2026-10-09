@@ -1,0 +1,5 @@
+types: 19 of 55 tsc entries compared, 0 differ
+
+errors:
+line 69: ours: `Test9 instanceof Test9D1` is always false: the types are not related (tsc accepts)
+line 74: ours: `Test9 instanceof Test9D2` is always false: the types are not related (tsc accepts)

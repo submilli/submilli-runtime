@@ -43,6 +43,7 @@ pub(super) fn has_nested_paths(ty: &crate::Type) -> bool {
         | Type::BigIntLiteral(_)
         | Type::Uint8Array
         | Type::Null
+        | Type::Undefined
         | Type::Void
         | Type::Unknown
         | Type::Never

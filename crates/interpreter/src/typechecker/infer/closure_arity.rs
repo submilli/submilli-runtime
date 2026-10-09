@@ -215,7 +215,10 @@ fn collect_callable_arities<'a>(
                 pending.extend(params.iter().map(|ty| (ty, context.clone())));
             }
             Type::Array(element) => pending.push((element, context)),
-            Type::Tuple(elements) | Type::Union(elements) => {
+            Type::Tuple(elements) => {
+                pending.extend(elements.iter().map(|ty| (ty, context.clone())));
+            }
+            Type::Union(elements) => {
                 pending.extend(elements.iter().map(|ty| (ty, context.clone())));
             }
             Type::Object { fields, index } => {

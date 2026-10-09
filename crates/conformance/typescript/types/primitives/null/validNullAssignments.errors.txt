@@ -1,0 +1,14 @@
+validNullAssignments.ts(2,5): error TS2322: Type 'null' is not assignable to type 'number'.
+validNullAssignments.ts(3,5): error TS2322: Type 'null' is not assignable to type 'boolean'.
+validNullAssignments.ts(4,5): error TS2322: Type 'null' is not assignable to type 'string'.
+validNullAssignments.ts(5,5): error TS2322: Type 'null' is not assignable to type 'void'.
+validNullAssignments.ts(7,5): error TS2322: Type 'null' is not assignable to type 'undefined'.
+validNullAssignments.ts(8,1): error TS2322: Type 'null' is not assignable to type 'undefined'.
+validNullAssignments.ts(11,3): error TS2540: Cannot assign to 'A' because it is a read-only property.
+validNullAssignments.ts(13,11): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+validNullAssignments.ts(16,1): error TS2629: Cannot assign to 'C' because it is a class.
+validNullAssignments.ts(20,1): error TS2322: Type 'null' is not assignable to type 'I'.
+validNullAssignments.ts(21,1): error TS2693: 'I' only refers to a type, but is being used as a value here.
+validNullAssignments.ts(26,5): error TS2322: Type 'null' is not assignable to type '{ f(): void; }'.
+validNullAssignments.ts(29,5): error TS2322: Type 'null' is not assignable to type 'T'.   'T' could be instantiated with an arbitrary type which could be unrelated to 'null'.
+validNullAssignments.ts(31,1): error TS2630: Cannot assign to 'i' because it is a function.

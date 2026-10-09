@@ -183,7 +183,7 @@ pub fn char_at(s: &Str, index: f64) -> Str {
 }
 
 /// `at`: like `charAt`, but a negative `index` counts from the end. `None` on
-/// OOB — `Array#at` and `Uint8Array#at` both answer `null` there, and `""` is
+/// OOB — `Array#at` and `Uint8Array#at` both answer `undefined` there, and `""` is
 /// indistinguishable from a legitimate empty read.
 pub fn at(s: &Str, index: f64) -> Option<Str> {
     let units = s.units();

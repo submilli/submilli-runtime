@@ -73,11 +73,25 @@ class Derived3<T> extends Base2<T> {
     }
 }
 
-/*pruned*/;                         
-                   
-                              
-     
- 
+class Derived4<T> extends Base2<T> {
+>Derived4 : Derived4<T>
+>         : ^^^^^^^^^^^
+>T : T
+>  : ^
+>Base2 : Base2<T>
+>      : ^^^^^^^^
+
+    constructor() {
+        let r = super(); // ok
+>r : void
+>  : ^^^^
+>super() : void
+>        : ^^^^
+>super : typeof Base2
+>      : ^^^^^^^^^^^^
+
+    }
+}
 
 function main(): void {}
 >main : () => void

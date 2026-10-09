@@ -12,7 +12,7 @@ type IssueStatusAlias = {
   default?: string;
 };
 
-function readType(status: IssueStatus | null): string | null {
+function readType(status: IssueStatus | null): string | undefined {
   return status?.type;
 }
 

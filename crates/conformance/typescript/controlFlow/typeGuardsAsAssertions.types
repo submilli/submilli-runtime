@@ -274,17 +274,19 @@ function f1(): void {
 >f1 : () => void
 >   : ^^^^^^^^^^
 
-    let x: string | number | null = null;
->x : string | number | null
->  : ^^^^^^^^^^^^^^^^^^^^^^
+    let x: string | number | undefined = undefined;
+>x : string | number | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     x;  // undefined
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
     if (x) {
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
         x;  // string | number (guard as assertion)
 >x : never
@@ -292,8 +294,8 @@ function f1(): void {
 
     }
     x;  // string | number | undefined
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
 }
 
@@ -301,21 +303,23 @@ function f2(): void {
 >f2 : () => void
 >   : ^^^^^^^^^^
 
-    let x: string | number | null = null;
->x : string | number | null
->  : ^^^^^^^^^^^^^^^^^^^^^^
+    let x: string | number | undefined = undefined;
+>x : string | number | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     x;  // undefined
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
     if (typeof x === "string") {
 >typeof x === "string" : boolean
 >                      : ^^^^^^^
 >typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 >"string" : "string"
 >         : ^^^^^^^^
 
@@ -325,8 +329,8 @@ function f2(): void {
 
     }
     x;  // string | undefined
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
 }
 
@@ -334,19 +338,21 @@ function f3(): void {
 >f3 : () => void
 >   : ^^^^^^^^^^
 
-    let x: string | number | null = null;
->x : string | number | null
->  : ^^^^^^^^^^^^^^^^^^^^^^
+    let x: string | number | undefined = undefined;
+>x : string | number | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     x;  // undefined
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
     if (!x) {
 >!x : true
 >   : ^^^^
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
         return;
     }
@@ -360,21 +366,23 @@ function f4(): void {
 >f4 : () => void
 >   : ^^^^^^^^^^
 
-    let x: string | number | null = null;
->x : string | number | null
->  : ^^^^^^^^^^^^^^^^^^^^^^
+    let x: string | number | undefined = undefined;
+>x : string | number | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     x;  // undefined
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
     if (typeof x === "boolean") {
 >typeof x === "boolean" : boolean
 >                       : ^^^^^^^
 >typeof x : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 >"boolean" : "boolean"
 >          : ^^^^^^^^^
 
@@ -384,8 +392,8 @@ function f4(): void {
 
     }
     x;  // undefined
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
 }
 
@@ -436,11 +444,11 @@ function f6(): void {
 >f6 : () => void
 >   : ^^^^^^^^^^
 
-    let x: string | null | null = null as unknown as (string | null | null);
->x : string | null
->  : ^^^^^^^^^^^^^
->null as unknown as (string | null | null) : string | null
->                                          : ^^^^^^^^^^^^^
+    let x: string | undefined | null = null as unknown as (string | undefined | null);
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined | null) : string | null | undefined
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
@@ -451,16 +459,16 @@ function f6(): void {
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x! : string
 >   : ^^^^^^
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >slice : (start?: number, end?: number) => string
 >      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     x = "";
 >x = "" : ""
 >       : ^^
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >"" : ""
 >   : ^^
 
@@ -476,11 +484,13 @@ function f6(): void {
 >slice : (start?: number, end?: number) => string
 >      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    x = null;
->x = null : null
->         : ^^^^
->x : string | null
->  : ^^^^^^^^^^^^^
+    x = undefined;
+>x = undefined : undefined
+>              : ^^^^^^^^^
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     x!.slice();
 >x!.slice() : string
@@ -489,16 +499,16 @@ function f6(): void {
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x! : string
 >   : ^^^^^^
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >slice : (start?: number, end?: number) => string
 >      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     x = null;
 >x = null : null
 >         : ^^^^
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
     x!.slice();
 >x!.slice() : string
@@ -507,18 +517,20 @@ function f6(): void {
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x! : string
 >   : ^^^^^^
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >slice : (start?: number, end?: number) => string
 >      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    x = <null | null>null;
->x = <null | null>null : null
->                      : ^^^^
->x : string | null
->  : ^^^^^^^^^^^^^
-><null | null>null : null
->                  : ^^^^
+    x = <undefined | null>undefined;
+>x = <undefined | null>undefined : null | undefined
+>                                : ^^^^^^^^^^^^^^^^
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+><undefined | null>undefined : null | undefined
+>                            : ^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     x!.slice();
 >x!.slice() : string
@@ -527,18 +539,18 @@ function f6(): void {
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x! : string
 >   : ^^^^^^
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >slice : (start?: number, end?: number) => string
 >      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    x = <string | null>"";
->x = <string | null>"" : string | null
->                      : ^^^^^^^^^^^^^
->x : string | null
->  : ^^^^^^^^^^^^^
-><string | null>"" : string | null
->                  : ^^^^^^^^^^^^^
+    x = <string | undefined>"";
+>x = <string | undefined>"" : string | undefined
+>                           : ^^^^^^^^^^^^^^^^^^
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+><string | undefined>"" : string | undefined
+>                       : ^^^^^^^^^^^^^^^^^^
 >"" : ""
 >   : ^^
 
@@ -549,16 +561,16 @@ function f6(): void {
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x! : string
 >   : ^^^^^^
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >slice : (start?: number, end?: number) => string
 >      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     x = <string | null>"";
 >x = <string | null>"" : string | null
 >                      : ^^^^^^^^^^^^^
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 ><string | null>"" : string | null
 >                  : ^^^^^^^^^^^^^
 >"" : ""

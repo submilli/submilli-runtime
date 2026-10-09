@@ -314,39 +314,47 @@ function foo5(x: number | string | boolean): void {
 >x : string
 >  : ^^^^^^
 
-        /*pruned*/;           
-                                
-         
+        function foo(): void {
+>foo : () => void
+>    : ^^^^^^^^^^
+
+            let z = x; // string
+>z : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number | boolean
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        }
     }
 }
-/*pruned*/;  
-                                                                                      
-                  
-                                                           
-                                                    
-                                    
-                            
-                
-                                      
-                                     
-                                     
-         
-     
- 
-/*pruned*/;   
-                                                                                      
-                     
-                                                           
-                                                    
-                                    
-                            
-                
-                                      
-                                     
-                                     
-         
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 function main(): void {}
 >main : () => void

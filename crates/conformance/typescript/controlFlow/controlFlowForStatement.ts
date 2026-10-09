@@ -36,7 +36,7 @@ function f(): void {
     for (; typeof x !== "string";) {
         x; // number | boolean
         if (typeof x === "number") break;
-        x = null;
+        x = undefined;
     }
     x; // string | number
 }

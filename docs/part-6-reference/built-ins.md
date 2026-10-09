@@ -42,11 +42,11 @@ Namespaces: JSON, Math, Temporal
 | `Uint8Array` | Type | Byte arrays, with hex and base64 conversion |
 | `TextEncoder`, `TextDecoder` | Type | UTF-8 encoding and decoding |
 | `Error` | Error class | The base error class. `throw` takes `Error` and its subclasses |
-| `TypeError` | Error class | Failed runtime type checks: a failed `as` cast, `x!` on `null`, invalid UTF-8, an invalid URL |
+| `TypeError` | Error class | Failed runtime type checks: a failed `as` cast, `x!` on `null` or `undefined`, invalid UTF-8, an invalid URL |
 | `RangeError` | Error class | Out-of-range values: an array index, bigint division by zero, invalid Temporal values, and argument-size caps |
 | `SyntaxError` | Error class | Text that fails to parse: `JSON.parse`, `BigInt()`, `Uint8Array.fromHex`, `new RegExp()` |
 | `URIError` | Error class | A malformed `%` escape in `decodeURI`, or a lone surrogate in `encodeURI` |
-| `ReferenceError` | Error class | Reading or writing a module variable or static field before its declaration has run |
+| `ReferenceError` | Error class | Reading or writing a module variable, static field, or parameter before its declaration or initialization has run |
 | `PermissionDeniedError` | Error class | A denied capability, with fields `caller`, `capability`, `reason` ([Permissions](/docs/reference/permissions)) |
 | `QuotaExceededError` | Error class | A budget refusal: filesystem space, model tokens, or session state ([Errors and limits](/docs/reference/errors-and-limits)) |
 | `JSON` | Namespace | `JSON.parse`, returning `unknown`, and `JSON.stringify` |
@@ -192,16 +192,16 @@ A homogeneous array of `T`.
 | Member | Description |
 | --- | --- |
 | `readonly length: number` | The number of elements in the array. |
-| `at(index: number): T \| null` | Returns the element at `index`, or `null` if out of range. |
+| `at(index: number): T \| undefined` | Returns the element at `index`, or `undefined` if out of range. |
 | `concat(...others: (readonly T[])[]): T[]` | Returns a new array containing this array's elements followed by every element of each `others` array, in order. |
 | `copyWithin(target: number, start?: number, end?: number): T[]` | Copies the slots `[start, end)` to `target`, in place (overlap-safe), and returns the array. |
 | `entries(): Iterator<[number, T]>` | Returns a live `Iterator<[number, T]>` of index/element pairs. |
 | `every(predicate: (arg0: T, arg1: number, arg2: T[]) => boolean): boolean` | Returns `true` if `predicate` returned `true` for every element. |
 | `fill(value: T, start?: number, end?: number): T[]` | Sets every slot in `[start, end)` to `value`, in place, and returns the array. |
 | `filter(predicate: (arg0: T, arg1: number, arg2: T[]) => boolean): T[]` | Returns a new array of the elements for which `predicate` returned `true`. |
-| `find(callback: (arg0: T, arg1: number, arg2: T[]) => boolean): T \| null` | Returns the first element for which `callback` returns `true`, or `null` if none match. |
+| `find(callback: (arg0: T, arg1: number, arg2: T[]) => boolean): T \| undefined` | Returns the first element for which `callback` returns `true`, or `undefined` if none match. |
 | `findIndex(callback: (arg0: T, arg1: number, arg2: T[]) => boolean): number` | Returns the index of the first element for which `callback` returns `true`, or `-1` if none match. |
-| `findLast(callback: (arg0: T, arg1: number, arg2: T[]) => boolean): T \| null` | Returns the last element for which `callback` returns `true`, or `null` if none match. |
+| `findLast(callback: (arg0: T, arg1: number, arg2: T[]) => boolean): T \| undefined` | Returns the last element for which `callback` returns `true`, or `undefined` if none match. |
 | `findLastIndex(callback: (arg0: T, arg1: number, arg2: T[]) => boolean): number` | Returns the index of the last element for which `callback` returns `true`, or `-1` if none match. |
 | `flat(depth?: number): T[]` | Flattens nested arrays up to `depth` levels into a new array. |
 | `flatMap<U>(callback: (arg0: T, arg1: number, arg2: T[]) => U[]): U[]` | Maps each element to an array via `callback`, then flattens the results one level. |
@@ -212,19 +212,19 @@ A homogeneous array of `T`.
 | `keys(): Iterator<number>` | Returns a live `Iterator<number>` of the indices — length is re-read on every step. |
 | `lastIndexOf(elem: T, fromIndex?: number): number` | Returns the index of the last element equal to `elem`, or `-1`. |
 | `map<U>(callback: (arg0: T, arg1: number, arg2: T[]) => U): U[]` | Returns a new array produced by applying `callback` to each element. |
-| `pop(): T \| null` | Removes the last element and returns it, or `null` if the array is empty. |
+| `pop(): T \| undefined` | Removes the last element and returns it, or `undefined` if the array is empty. |
 | `push(elem: T): number` | Appends `elem` to the end of the array. |
 | `reduce<U>(callback: (arg0: U, arg1: T, arg2: number, arg3: T[]) => U, initial: U): U` | Reduces the array to a single value. |
 | `reduceRight<U>(callback: (arg0: U, arg1: T, arg2: number, arg3: T[]) => U, initial: U): U` | Reduces the array right-to-left. |
 | `reverse(): T[]` | Reverses the array in place and returns it. |
-| `shift(): T \| null` | Removes and returns the first element, shifting the rest forward. |
+| `shift(): T \| undefined` | Removes and returns the first element, shifting the rest forward. |
 | `slice(start?: number, end?: number): T[]` | Returns a new array of the elements from `start` (inclusive) to `end` (exclusive). |
 | `some(predicate: (arg0: T, arg1: number, arg2: T[]) => boolean): boolean` | Returns `true` if `predicate` returned `true` for at least one element. |
-| `sort(compareFn?: ((arg0: T, arg1: T) => number) \| null): T[]` | Sorts the array in place and returns it. |
+| `sort(compareFn?: (arg0: T, arg1: T) => number): T[]` | Sorts the array in place and returns it. |
 | `splice(start: number, deleteCount?: number, ...items: T[]): T[]` | Removes `deleteCount` elements at `start`, inserts `items` there (in place), and returns the removed elements. |
 | `toJson(): string` | Returns the JSON representation of this array — `"["` + elements' `toJson()` joined with `","` + `"]"`. |
 | `toReversed(): T[]` | Returns a new array with the elements in reverse order; the receiver is not modified. |
-| `toSorted(compareFn?: ((arg0: T, arg1: T) => number) \| null): T[]` | Returns a new sorted array; the receiver is not modified. |
+| `toSorted(compareFn?: (arg0: T, arg1: T) => number): T[]` | Returns a new sorted array; the receiver is not modified. |
 | `toSpliced(start: number, deleteCount?: number, ...items: T[]): T[]` | Returns a new array with `deleteCount` elements removed at `start` and `items` inserted there; the receiver is not modified. |
 | `toString(): string` | Returns the elements joined with commas. |
 | `unshift(...items: T[]): number` | Prepends `items` (keeping their argument order) and returns the new length. |
@@ -241,7 +241,7 @@ Constructor object for `Array`.
 
 | Member | Description |
 | --- | --- |
-| `from<T, U>(src: { length: number } \| readonly T[] \| Iterable<T> \| Iterator<T>, mapFn?: null \| ((arg0: T, arg1: number) => U)): U[]` | Materializes any iterable — an array, string (code points), `Iterator<T>`, or `Iterable<T>` — into a fresh array. |
+| `from<T, U>(src: { length: number } \| readonly T[] \| Iterable<T> \| Iterator<T>, mapFn?: (arg0: T, arg1: number) => U): U[]` | Materializes any iterable — an array, string (code points), `Iterator<T>`, or `Iterable<T>` — into a fresh array. |
 | `isArray<T>(value: T): boolean` | Returns `true` when `value` is an array. |
 | `of<T>(...items: T[]): T[]` | Builds an array from its arguments — `Array.of(1, 2, 3)` is `[1, 2, 3]`. |
 
@@ -277,7 +277,7 @@ The built-in error class.
 
 | Member | Description |
 | --- | --- |
-| `static isError(value: unknown): boolean` | Returns `true` when `value` is an `Error` instance (including subclasses). |
+| `static isError(value?: unknown): boolean` | Returns `true` when `value` is an `Error` instance (including subclasses). |
 | `message: string` | The human-readable message passed to `new Error(message)`. |
 | `name: string` | The error class name. |
 | `constructor(message?: string)` |  |
@@ -293,7 +293,7 @@ A hash-backed key-value collection.
 | `delete(key: K): boolean` | Removes `key` from the map. |
 | `entries(): Iterator<[K, V]>` | Returns a lazy `Iterator<[K, V]>` over the entries — the same cursor `for-of` uses. |
 | `forEach(callback: (arg0: V, arg1: K, arg2: Map<K, V>) => void): void` | Calls `callback(value, key, map)` once for each entry in insertion order, including entries the callback adds. |
-| `get(key: K): V \| null` | Returns the value associated with `key`, or `null` if the key is not present. |
+| `get(key: K): V \| undefined` | Returns the value associated with `key`, or `undefined` if the key is not present. |
 | `has(key: K): boolean` | Returns `true` when `key` is present. |
 | `iterator(): Iterator<[K, V]>` | Returns a fresh `Iterator<[K, V]>` over the entries. |
 | `keys(): Iterator<K>` | Returns a lazy `Iterator<K>` over the keys in insertion order. It walks the map live: keys added later are visited, keys deleted first are skipped. |
@@ -310,7 +310,7 @@ Constructor object for `Map`.
 
 | Member | Description |
 | --- | --- |
-| `new<K, V>(entries?: null \| readonly [K, V][] \| Iterable<[K, V]> \| Iterator<[K, V]>): Map<K, V>` | Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([["a", 1]])`. |
+| `new<K, V>(entries?: readonly [K, V][] \| Iterable<[K, V]> \| Iterator<[K, V]> \| null): Map<K, V>` | Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([["a", 1]])`. |
 
 ## `Number`
 
@@ -363,8 +363,8 @@ Constructor object for `Object` — the enumeration statics (`keys`/`values`/`en
 | Member | Description |
 | --- | --- |
 | `entries(obj: unknown): [string, unknown][]` | Returns `[name, value]` pairs in canonical sorted key order. |
-| `hasOwn(obj: unknown, key: string): boolean` | Returns `true` when `obj` declares a field named `key`. |
-| `is(a: unknown, b: unknown): boolean` | SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`. |
+| `hasOwn(obj: unknown, key: string): boolean` | Returns `true` when `obj` has a field named `key`: an omitted optional field answers `false`, one holding `undefined` answers `true`. |
+| `is(a?: unknown, b?: unknown): boolean` | SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`. |
 | `keys(obj: unknown): string[]` | Returns the object's field names in canonical sorted order (the same order JSON output uses). |
 | `values(obj: unknown): unknown[]` | Returns the object's field values, aligned with `Object.keys` order. |
 
@@ -404,6 +404,14 @@ Record<K, V> accepts string keys.
 ```typescript
 type Record<K extends string, V> = { [P in K]: V };
 ```
+
+## `ReferenceError`
+
+The built-in reference-error class (`extends Error`, `name` = `"ReferenceError"`).
+
+| Member | Description |
+| --- | --- |
+| `constructor(message: string)` |  |
 
 ## `RegExp`
 
@@ -469,7 +477,7 @@ Constructor object for `Set`.
 
 | Member | Description |
 | --- | --- |
-| `new<T>(values?: null \| readonly T[] \| Iterable<T> \| Iterator<T>): Set<T>` | Construct a `Set<T>`, optionally from an iterable of values: `new Set([1, 2, 2])` dedups to size 2. |
+| `new<T>(values?: readonly T[] \| Iterable<T> \| Iterator<T> \| null): Set<T>` | Construct a `Set<T>`, optionally from an iterable of values: `new Set([1, 2, 2])` dedups to size 2. |
 
 ## `String`
 
@@ -478,10 +486,10 @@ The UTF-16 string type.
 | Member | Description |
 | --- | --- |
 | `readonly length: number` | The number of UTF-16 code units in the string. |
-| `at(index: number): string \| null` | Returns the code unit at `index` as a single-character string. |
+| `at(index: number): string \| undefined` | Returns the code unit at `index` as a single-character string. |
 | `charAt(index: number): string` | Returns the UTF-16 code unit at `index` as a single-character string. |
 | `charCodeAt(index: number): number` | Returns the UTF-16 code unit at `index` as an integer (0..65535), or `NaN` if out of range. |
-| `codePointAt(index: number): number \| null` | Returns the Unicode code point starting at `index`, decoding surrogate pairs into values up to 0x10FFFF. |
+| `codePointAt(index: number): number \| undefined` | Returns the Unicode code point starting at `index`, decoding surrogate pairs into values up to 0x10FFFF. |
 | `concat(other: string): string` | Returns a new string with `other` appended. |
 | `endsWith(search: string, endPosition?: number): boolean` | Returns `true` if the substring ending at `endPosition` ends with `search`. |
 | `equals(other: string): boolean` | Returns `true` when both strings have identical code units. |
@@ -585,15 +593,15 @@ Packed byte array.
 | --- | --- |
 | `readonly byteLength: number` | Equivalent to `length`. |
 | `readonly length: number` | The number of bytes in this array. |
-| `at(index: number): number \| null` | Returns the byte at `index`, or `null` if out of range. |
+| `at(index: number): number \| undefined` | Returns the byte at `index`, or `undefined` if out of range. |
 | `copyWithin(target: number, start?: number, end?: number): Uint8Array` | Copies `bytes[start..end)` to `bytes[target..]` in place. |
 | `equals(other: Uint8Array): boolean` | Byte-by-byte equality with `other`. |
 | `every(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): boolean` | Returns `true` iff `predicate(byte, index, array)` returns `true` for every byte. |
 | `fill(value: number, start?: number, end?: number): Uint8Array` | Converts `value` to a byte and writes it to every position in `[start, end)`. |
 | `filter(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): Uint8Array` | Returns a new `Uint8Array` containing every byte for which `predicate(byte, index, array)` returns `true`. |
-| `find(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number \| null` | Returns the first byte for which `predicate(byte, index, array)` returns `true`, or `null`. |
+| `find(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number \| undefined` | Returns the first byte for which `predicate(byte, index, array)` returns `true`, or `undefined`. |
 | `findIndex(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number` | Returns the index of the first matching byte, or `-1`. |
-| `findLast(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number \| null` | Returns the last byte for which `predicate(byte, index, array)` returns `true`, or `null`. |
+| `findLast(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number \| undefined` | Returns the last byte for which `predicate(byte, index, array)` returns `true`, or `undefined`. |
 | `findLastIndex(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number` | Returns the index of the last matching byte, or `-1`. |
 | `forEach(callback: (arg0: number, arg1: number, arg2: Uint8Array) => void): void` | Invokes `callback(byte, index, array)` for every byte in order. |
 | `includes(target: number, fromIndex?: number): boolean` | Returns `true` if `target` appears at or after `fromIndex`. |
@@ -607,13 +615,13 @@ Packed byte array.
 | `set(values: Uint8Array, offset?: number): void` | Copies `values` into this array starting at `offset`. |
 | `slice(start?: number, end?: number): Uint8Array` | Returns a fresh copy of the bytes in `[start, end)`. |
 | `some(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): boolean` | Returns `true` if `predicate` returns `true` for any byte. |
-| `sort(compareFn?: ((arg0: number, arg1: number) => number) \| null): Uint8Array` | Sorts bytes in place via `compareFn(a, b)`. |
+| `sort(compareFn?: (arg0: number, arg1: number) => number): Uint8Array` | Sorts bytes in place via `compareFn(a, b)`. |
 | `subarray(start?: number, end?: number): Uint8Array` | Deep-copy alias for `slice` under v1 (no `ArrayBuffer` view sharing). |
-| `toBase64(options?: Base64Options \| null): string` | Returns the bytes as a base64 string. |
+| `toBase64(options?: Base64Options): string` | Returns the bytes as a base64 string. |
 | `toHex(): string` | Returns the bytes as a lowercase hex string. |
 | `toJson(): string` | Returns this array's bytes as a standard (padded) base64 string wrapped in `"…"` (the JSON string form). |
 | `toReversed(): Uint8Array` | Returns a fresh copy with bytes reversed. |
-| `toSorted(compareFn?: ((arg0: number, arg1: number) => number) \| null): Uint8Array` | Returns a fresh copy sorted via `compareFn`. |
+| `toSorted(compareFn?: (arg0: number, arg1: number) => number): Uint8Array` | Returns a fresh copy sorted via `compareFn`. |
 | `toString(): string` | Returns this array's bytes joined as a comma-separated decimal string — e.g. `Uint8Array.new([1, 2, 3]).toString() === "1,2,3"`. |
 | `with(index: number, value: number): Uint8Array` | Returns a clone of this array with `value` converted to a byte and written at `index`. |
 
@@ -629,7 +637,7 @@ Constructor object for `Uint8Array`.
 | --- | --- |
 | `alloc(n: number): Uint8Array` | Allocate a zero-filled `Uint8Array` of length `n`. |
 | `fromArray(values: number[]): Uint8Array` | Build a new `Uint8Array` from `values` — canonical name for `Uint8Array.new(values)`. |
-| `fromBase64(s: string, options?: Base64Options \| null): Uint8Array` | Decode `s` as base64; `options.alphabet` picks standard vs URL-safe. |
+| `fromBase64(s: string, options?: Base64Options): Uint8Array` | Decode `s` as base64; `options.alphabet` picks standard vs URL-safe. |
 | `fromBytes(other: Uint8Array): Uint8Array` | Returns a deep copy of `other`. |
 | `fromHex(s: string): Uint8Array` | Decode `s` as a hex string. |
 | `new(values: number[] \| number): Uint8Array` | Build a new `Uint8Array`. |
@@ -640,7 +648,7 @@ Constructor object for `Uint8Array`.
 | Function | Capability | Description |
 | --- | --- | --- |
 | `parse(text: string): unknown` |  | Parse a JSON string as unknown; use `JSON.parse(s) as T` to validate a target type. |
-| `stringify<T>(value: T, replacer?: null, space?: number \| string \| null): string` |  | Serialize a value to a JSON string. |
+| `stringify<T>(value: T, replacer?: null, space?: number \| string \| null): string \| undefined` |  | Serialize a value to a JSON string, or return undefined when it has no JSON representation. |
 
 ## `Math`
 
@@ -1191,11 +1199,11 @@ Options for `Temporal.ZonedDateTime.round(...)`.
 | Function | Capability | Description |
 | --- | --- | --- |
 | `instant(): Temporal.Instant` |  | The current wall-clock instant. |
-| `plainDateISO(tz?: string \| null): Temporal.PlainDate` |  | Today's date in `tz`, or the system (local) zone if `tz` is omitted / null. |
-| `plainDateTimeISO(tz?: string \| null): Temporal.PlainDateTime` |  | The current date and wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / null. |
-| `plainTimeISO(tz?: string \| null): Temporal.PlainTime` |  | The current wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / null. |
+| `plainDateISO(tz?: string): Temporal.PlainDate` |  | Today's date in `tz`, or the system (local) zone if `tz` is omitted / undefined. |
+| `plainDateTimeISO(tz?: string): Temporal.PlainDateTime` |  | The current date and wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / undefined. |
+| `plainTimeISO(tz?: string): Temporal.PlainTime` |  | The current wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / undefined. |
 | `timeZoneId(): string` |  | The system IANA time-zone id (or `"UTC"` if the system zone can't be detected). |
-| `zonedDateTime(tz?: string \| null): Temporal.ZonedDateTime` |  | The current ZonedDateTime in `tz`, or the system zone if `tz` is null. |
-| `zonedDateTimeISO(tz?: string \| null): Temporal.ZonedDateTime` |  | The current ZonedDateTime in `tz`, or the system zone if `tz` is omitted / null. |
+| `zonedDateTime(tz?: string): Temporal.ZonedDateTime` |  | The current ZonedDateTime in `tz`, or the system zone if `tz` is undefined. |
+| `zonedDateTimeISO(tz?: string): Temporal.ZonedDateTime` |  | The current ZonedDateTime in `tz`, or the system zone if `tz` is omitted / undefined. |
 
 <!-- /generated:builtins -->

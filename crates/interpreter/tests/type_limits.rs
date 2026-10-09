@@ -318,7 +318,7 @@ fn a_runtime_check_too_large_for_one_function_is_reported_at_the_cast() {
     assert_eq!(
         message,
         format!(
-            "the runtime check of `null | I` makes its function larger than the {} bytes a function may have",
+            "the runtime check of `I | null` makes its function larger than the {} bytes a function may have",
             interpreter::compiler_limits::MAX_FUNCTION_BODY_BYTES
         )
     );

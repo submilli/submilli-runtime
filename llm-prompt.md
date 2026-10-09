@@ -21,8 +21,8 @@ metric — improving this prompt is a primary lever.
   compiles on the first try.
 - **Negative space first.** State what's NOT available before what is.
   LLMs default to Node.js / NPM / browser idioms; you have to push them
-  off explicitly. "No `undefined`" and "no NPM" are load-bearing in a
-  way that "use `submilli:fs` for file I/O" isn't.
+  off explicitly. "No `async`/`await`" and "no NPM" prevent assumptions
+  that a list of available modules alone does not address.
 - **No worked examples by default.** Examples are easy to add and hard
   to remove without breaking something downstream. If a class of bugs
   keeps appearing despite the prose, *then* add a one-liner example
@@ -100,19 +100,28 @@ Budget refusals (filesystem space, model tokens, and session state) throw
 `QuotaExceededError`, a catchable `Error`. Free space, reduce the request,
 or report the budget to the operator. Argument-size caps remain `RangeError`.
 
-Language deltas: no `undefined`, no `async`/`await`, no `Symbol` /
+Language deltas: no `async`/`await`, no `Symbol` /
 `Proxy`, no `any` (`unknown` requires narrowing), no `Date` (use the
-`Temporal` global), `==` aliases `===`. Truthiness and `&&` / `||` /
+`Temporal` global), `==` aliases `===`, so `x == null` is a compile error:
+write `x === null`, `x === undefined`, or both. Truthiness and `&&` / `||` /
 `??` use JS/TS truthiness and short-circuit semantics (an `unknown` condition
 must be narrowed first).
 Postfix `x!` is a runtime-checked non-null assertion: it
-narrows `T | null` to `T` and throws `TypeError` if the value is `null`.
+removes `null` and `undefined` from the type and throws `TypeError` for either.
+Missing properties, collection misses, and omitted optional parameters use
+`undefined`; `null` is distinct. Defaults apply to omission or `undefined`,
+never `null`. Optional chains yield `undefined`; `??` handles both values.
+`arr[i]` out of range throws `RangeError`; probe with `arr.at(i)`, which
+returns `undefined`. `let x: T;` needs an initializer unless `T` includes
+`undefined`. Template literals accept `null` and `undefined` and render them
+like `String(x)`.
 Return types are mandatory on function declarations (including `main`) and
 class methods; arrow functions can infer them.
 No runtime reflection: of `Object.prototype` only `.toString()` is
 available — no `.hasOwnProperty()`. The type system tells you what
-fields a value has; narrow optional values with `obj.field !== null`.
-`"field" in obj` narrows `unknown` or unions distinguished by field presence.
+fields a value has; narrow optional values with `obj.field !== undefined`.
+`"field" in obj` narrows `unknown` or unions distinguished by field presence;
+a present optional field can still hold `undefined`.
 Dynamic string keys also work with `key in obj`, without narrowing.
 Identifiers follow TypeScript — `type`, `from`,
 `of`, `as`, and `is` are contextual and may name variables — with one
@@ -121,8 +130,8 @@ words are fine as object keys (`{ type: "x" }`, read back as
 `obj.type`); for keys that aren't valid identifiers, quote them and
 index with a string literal (`{ "content-length": 5 }` →
 `obj["content-length"]`). Use `Record<string, V>` or `{ [key: string]: V }`
-for dynamic `obj[key]` reads and writes. Missing reads return `null`, so their
-read type is `V | null`; writes require `V`. `Record<"a" | "b", V>` requires
+for dynamic `obj[key]` reads and writes. Missing reads return `undefined`, so
+their read type is `V | undefined`; writes require `V`. `Record<"a" | "b", V>` requires
 both keys and reads them as `V`. Computed literals (`{ [key]: value }`), spread,
 and readonly string index signatures are supported. Keys must be strings;
 `keyof` an open string-indexed type is `string`. General mapped types and
@@ -131,12 +140,17 @@ Every program needs `function main()`; its return
 value is the output, delivered as a string: a `string` is emitted
 verbatim (so don't `JSON.stringify` it yourself — that double-encodes),
 `number`/`boolean` use `toString`, and objects/arrays serialize to
-JSON. `console.log` is a separate debug stream.
+JSON. Returning `undefined` produces no result; returning `null` produces
+the JSON text `null`. `console.log` is a separate debug stream.
 
+`JSON.stringify` omits undefined object fields, writes undefined array elements
+as null, and returns undefined for top-level undefined.
 Reading JSON text: `JSON.parse(s)`
 returns `unknown`. Validate and type the result with a runtime cast:
 `const x = JSON.parse(s) as T`. Do not write `JSON.parse<T>(s)` or
-rely on `const x: T = JSON.parse(s)`.
+rely on `const x: T = JSON.parse(s)`. A cast accepts a missing key for
+`x?: T` but rejects JSON `null`; declare a field the API may send as null
+`x?: T | null`.
 `T` can be a primitive (`string`, `number`, `boolean`), an object type,
 an array, or a data-only `interface` you declare (no methods) — and
 combinations like `Issue[]`.{mcp_packages}{git_package}
@@ -148,7 +162,7 @@ combinations like `Issue[]`.{mcp_packages}{git_package}
 
 Output: success returns just `main()`'s value as a string (a `string`
 return verbatim; numbers/booleans via `toString`; objects/arrays as
-JSON). Failure returns result + console + error details inline.
+JSON; `undefined` produces no result). Failure returns result + console + error details inline.
 `console.log` output is dropped from a *successful* result — read it
 back with the last-run tool.
 

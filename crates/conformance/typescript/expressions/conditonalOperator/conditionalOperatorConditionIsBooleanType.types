@@ -9,7 +9,7 @@ let condBoolean: boolean = null as unknown as (boolean);
 >                : ^^^^^^^
 
 
-/*pruned*/;                                  
+/*pruned*/;
 let exprBoolean1: boolean = null as unknown as (boolean);
 >exprBoolean1 : boolean
 >             : ^^^^^^^
@@ -34,9 +34,9 @@ let exprString1: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                             
+/*pruned*/;
 
-/*pruned*/;                                  
+/*pruned*/;
 let exprBoolean2: boolean = null as unknown as (boolean);
 >exprBoolean2 : boolean
 >             : ^^^^^^^
@@ -61,10 +61,10 @@ let exprString2: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                             
+/*pruned*/;
 
 //Cond is a boolean type variable
-/*pruned*/;                       
+/*pruned*/;
 condBoolean ? exprBoolean1 : exprBoolean2;
 >condBoolean ? exprBoolean1 : exprBoolean2 : boolean
 >                                          : ^^^^^^^
@@ -95,7 +95,7 @@ condBoolean ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                 
+/*pruned*/;
 condBoolean ? exprString1 : exprBoolean1; // union
 >condBoolean ? exprString1 : exprBoolean1 : string | boolean
 >                                         : ^^^^^^^^^^^^^^^^
@@ -108,7 +108,7 @@ condBoolean ? exprString1 : exprBoolean1; // union
 
 
 //Cond is a boolean type literal
-/*pruned*/;                
+/*pruned*/;
 false ? exprBoolean1 : exprBoolean2;
 >false ? exprBoolean1 : exprBoolean2 : boolean
 >                                    : ^^^^^^^
@@ -139,7 +139,7 @@ false ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                          
+/*pruned*/;
 true ? exprString1 : exprBoolean1; // union
 >true ? exprString1 : exprBoolean1 : string | boolean
 >                                  : ^^^^^^^^^^^^^^^^
@@ -152,7 +152,7 @@ true ? exprString1 : exprBoolean1; // union
 
 
 //Cond is a boolean type expression
-/*pruned*/;                 
+/*pruned*/;
 typeof "123" == "string" ? exprBoolean1 : exprBoolean2;
 >typeof "123" == "string" ? exprBoolean1 : exprBoolean2 : boolean
 >                                                       : ^^^^^^^
@@ -183,22 +183,26 @@ typeof "123" == "string" ? exprBoolean1 : exprBoolean2;
 >exprNumber2 : number
 >            : ^^^^^^
 
-null === null ? exprString1 : exprString2;
->null === null ? exprString1 : exprString2 : string
->                                          : ^^^^^^
->null === null : boolean
->              : ^^^^^^^
+null === undefined ? exprString1 : exprString2;
+>null === undefined ? exprString1 : exprString2 : string
+>                                               : ^^^^^^
+>null === undefined : boolean
+>                   : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >exprString1 : string
 >            : ^^^^^^
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                   
-null === null ? exprString1 : exprBoolean1; // union
->null === null ? exprString1 : exprBoolean1 : string | boolean
->                                           : ^^^^^^^^^^^^^^^^
->null === null : boolean
->              : ^^^^^^^
+/*pruned*/;
+null === undefined ? exprString1 : exprBoolean1; // union
+>null === undefined ? exprString1 : exprBoolean1 : string | boolean
+>                                                : ^^^^^^^^^^^^^^^^
+>null === undefined : boolean
+>                   : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >exprString1 : string
 >            : ^^^^^^
 >exprBoolean1 : boolean
@@ -206,7 +210,7 @@ null === null ? exprString1 : exprBoolean1; // union
 
 
 //Results shoud be same as Expr1 and Expr2
-/*pruned*/;                                          
+/*pruned*/;
 let resultIsBoolean1 = condBoolean ? exprBoolean1 : exprBoolean2;
 >resultIsBoolean1 : boolean
 >                 : ^^^^^^^
@@ -243,7 +247,7 @@ let resultIsString1 = condBoolean ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                                       
+/*pruned*/;
 let resultIsStringOrBoolean1 = condBoolean ? exprString1 : exprBoolean1; // union
 >resultIsStringOrBoolean1 : string | boolean
 >                         : ^^^^^^^^^^^^^^^^
@@ -257,7 +261,7 @@ let resultIsStringOrBoolean1 = condBoolean ? exprString1 : exprBoolean1; // unio
 >             : ^^^^^^^
 
 
-/*pruned*/;                                   
+/*pruned*/;
 let resultIsBoolean2 = false ? exprBoolean1 : exprBoolean2;
 >resultIsBoolean2 : boolean
 >                 : ^^^^^^^
@@ -294,7 +298,7 @@ let resultIsString2 = false ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                                
+/*pruned*/;
 let resultIsStringOrBoolean2 = true ? exprString1 : exprBoolean1; // union
 >resultIsStringOrBoolean2 : string | boolean
 >                         : ^^^^^^^^^^^^^^^^
@@ -320,7 +324,7 @@ let resultIsStringOrBoolean3 = false ? exprString1 : exprBoolean1; // union
 >             : ^^^^^^^
 
 
-/*pruned*/;                                    
+/*pruned*/;
 let resultIsBoolean3 = typeof "123" == "string" ? exprBoolean1 : exprBoolean2;
 >resultIsBoolean3 : boolean
 >                 : ^^^^^^^
@@ -355,19 +359,21 @@ let resultIsNumber3 = 2 > 1 ? exprNumber1 : exprNumber2;
 >exprNumber2 : number
 >            : ^^^^^^
 
-let resultIsString3 = null === null ? exprString1 : exprString2;
+let resultIsString3 = null === undefined ? exprString1 : exprString2;
 >resultIsString3 : string
 >                : ^^^^^^
->null === null ? exprString1 : exprString2 : string
->                                          : ^^^^^^
->null === null : boolean
->              : ^^^^^^^
+>null === undefined ? exprString1 : exprString2 : string
+>                                               : ^^^^^^
+>null === undefined : boolean
+>                   : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >exprString1 : string
 >            : ^^^^^^
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                                         
+/*pruned*/;
 let resultIsStringOrBoolean4 = typeof "123" === "string" ? exprString1 : exprBoolean1; // union
 >resultIsStringOrBoolean4 : string | boolean
 >                         : ^^^^^^^^^^^^^^^^

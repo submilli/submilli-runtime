@@ -1,0 +1,28 @@
+types: 94 of 164 tsc entries compared, 6 differ
+
+line 71: r16
+  tsc:  typeof c | null
+  ours: null
+
+line 71: true ? ac : null
+  tsc:  typeof c | null
+  ours: null
+
+line 71: ac
+  tsc:  typeof c
+  ours: <error>
+
+line 72: r16_2
+  tsc:  typeof c | null
+  ours: <error>
+
+line 72: true ? null : ac
+  tsc:  typeof c | null
+  ours: <error>
+
+line 72: ac
+  tsc:  typeof c
+  ours: <error>
+
+errors:
+line 70: ours: `c` is a class, not a value, so `typeof` has no type to take (tsc accepts)

@@ -34,6 +34,9 @@ pub(crate) async fn serialize(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
 ) -> wasmtime::Result<Vec<u16>> {
+    if crate::runtime::prelude::undefined::is_undefined(caller, value)? {
+        return Err(unsupported("top-level undefined"));
+    }
     reject_unsupported(caller, value, 0)?;
     if matches!(value, Val::AnyRef(None)) {
         return Ok("null".encode_utf16().collect());

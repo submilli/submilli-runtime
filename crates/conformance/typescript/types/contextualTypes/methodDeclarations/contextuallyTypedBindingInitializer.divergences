@@ -1,0 +1,5 @@
+types: 10 of 39 tsc entries compared, 1 differ
+
+line 13: { show: v => v.toString() }
+  tsc:  { show: (v: number) => string; }
+  ours: Show

@@ -517,8 +517,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     )
                     .await?
                     {
-                        Some(i) => super::box_byte(caller, bytes[i])?,
-                        None => Val::null_any_ref(),
+                        Some(i) => {
+                            let byte = *bytes.get(i).ok_or_else(|| {
+                                crate::runtime::host::fatal_host_error(
+                                    "Uint8Array#find: invalid result index",
+                                )
+                            })?;
+                            super::box_byte(caller, byte)?
+                        }
+                        None => crate::runtime::prelude::undefined::value(caller)?,
                     };
                     Ok(())
                 })
@@ -701,13 +708,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
-/// Read an optional comparator: `null` → default numeric order.
+/// Read an optional comparator: `undefined` → default numeric order.
 fn read_comparator(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     val: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<closure::Closure>> {
-    if matches!(val, Val::AnyRef(None)) {
+    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
         Ok(None)
     } else {
         Ok(Some(closure::read_callback(caller, val, name)?))
@@ -734,18 +741,19 @@ pub fn declare(defs: &mut PackageDeclaration) {
     let comparator = || {
         Type::Union(vec![
             Type::Function {
+                optional: 0,
                 params: vec![Type::Number, Type::Number],
                 ret: Box::new(Type::Number),
                 predicate: None,
                 has_rest: false,
             },
-            Type::Null,
+            Type::Undefined,
         ])
     };
     let base64_options = || {
         Type::Union(vec![
             Type::prelude_interface("Base64Options".to_string(), Vec::new()),
-            Type::Null,
+            Type::Undefined,
         ])
     };
 
@@ -759,7 +767,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "at",
         vec![u8a(), n("index")],
-        Type::Union(vec![Type::Number, Type::Null]),
+        Type::Union(vec![Type::Number, Type::Undefined]),
     );
     for name in ["slice", "subarray"] {
         m(
@@ -862,7 +870,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
             defs,
             name,
             vec![u8a(), callback()],
-            Type::Union(vec![Type::Number, Type::Null]),
+            Type::Union(vec![Type::Number, Type::Undefined]),
         );
     }
     for name in ["findIndex", "findLastIndex"] {
@@ -943,6 +951,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toString".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::String,
@@ -955,6 +964,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toJson".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::String,
@@ -967,6 +977,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "equals".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("other", Type::Uint8Array)],
                             ret: Type::Boolean,
@@ -979,6 +990,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "join".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::with_default(
                                 "separator",
@@ -995,6 +1007,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "reverse".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::Uint8Array,
@@ -1007,6 +1020,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "fill".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("value", Type::Number),
@@ -1021,6 +1035,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "copyWithin".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("target", Type::Number),
@@ -1035,6 +1050,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "slice".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::with_default("start", Type::Number, crate::DefaultValue::Number(0.0)),
@@ -1048,6 +1064,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "subarray".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::with_default("start", Type::Number, crate::DefaultValue::Number(0.0)),
@@ -1061,6 +1078,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "with".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("index", Type::Number),
@@ -1074,6 +1092,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "set".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("values", Type::Uint8Array),
@@ -1087,8 +1106,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "forEach".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("callback", Type::Function {
+                                optional: 0,
                                 params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Void),
                                 predicate: None,
@@ -1102,8 +1123,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "map".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("callback", Type::Function {
+                                optional: 0,
                                 params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Number),
                                 predicate: None,
@@ -1117,8 +1140,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "filter".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
+                                optional: 0,
                                 params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Unknown),
                                 predicate: None,
@@ -1132,8 +1157,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "some".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
+                                optional: 0,
                                 params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Unknown),
                                 predicate: None,
@@ -1147,8 +1174,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "every".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
+                                optional: 0,
                                 params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Unknown),
                                 predicate: None,
@@ -1162,9 +1191,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "reduce".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: vec!["U".to_string()],
                             params: vec![
                                 Param::new("callback", Type::Function {
+                                    optional: 0,
                                     params: byte_callback_params(vec![Type::TypeVar("U".to_string())]),
                                     ret: Box::new(Type::TypeVar("U".to_string())),
                                     predicate: None,
@@ -1180,9 +1211,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "reduceRight".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: vec!["U".to_string()],
                             params: vec![
                                 Param::new("callback", Type::Function {
+                                    optional: 0,
                                     params: byte_callback_params(vec![Type::TypeVar("U".to_string())]),
                                     ret: Box::new(Type::TypeVar("U".to_string())),
                                     predicate: None,
@@ -1198,16 +1231,18 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "at".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("index", Type::Number)],
-                            ret: Type::Union(vec![Type::Number, Type::Null]),
+                            ret: Type::Union(vec![Type::Number, Type::Undefined]),
                             predicate: None,
-                            doc: doc("/** Returns the byte at `index`, or `null` if out of range. Negative indices count from the end. */"),
+                            doc: doc("/** Returns the byte at `index`, or `undefined` if out of range. Negative indices count from the end. */"),
                         },
                     ),
                     (
                         "indexOf".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("target", Type::Number),
@@ -1221,10 +1256,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "lastIndexOf".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("target", Type::Number),
-                                Param::with_default("fromIndex", Type::Number, crate::DefaultValue::Number(f64::INFINITY)),
+                                Param::with_default("fromIndex", Type::Number, crate::DefaultValue::OmittedNumber { omitted: f64::INFINITY, undefined: 0.0 }),
                             ],
                             ret: Type::Number,
                             predicate: None,
@@ -1234,6 +1270,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "includes".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("target", Type::Number),
@@ -1247,38 +1284,44 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "find".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
+                                optional: 0,
                                 params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Boolean),
                                 predicate: None,
                                 has_rest: false,
                             })],
-                            ret: Type::Union(vec![Type::Number, Type::Null]),
+                            ret: Type::Union(vec![Type::Number, Type::Undefined]),
                             predicate: None,
-                            doc: doc("/** Returns the first byte for which `predicate(byte, index, array)` returns `true`, or `null`. */"),
+                            doc: doc("/** Returns the first byte for which `predicate(byte, index, array)` returns `true`, or `undefined`. */"),
                         },
                     ),
                     (
                         "findLast".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
+                                optional: 0,
                                 params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Unknown),
                                 predicate: None,
                                 has_rest: false,
                             })],
-                            ret: Type::Union(vec![Type::Number, Type::Null]),
+                            ret: Type::Union(vec![Type::Number, Type::Undefined]),
                             predicate: None,
-                            doc: doc("/** Returns the last byte for which `predicate(byte, index, array)` returns a truthy value, or `null`. */"),
+                            doc: doc("/** Returns the last byte for which `predicate(byte, index, array)` returns a truthy value, or `undefined`. */"),
                         },
                     ),
                     (
                         "findIndex".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
+                                optional: 0,
                                 params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Boolean),
                                 predicate: None,
@@ -1292,8 +1335,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "findLastIndex".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("predicate", Type::Function {
+                                optional: 0,
                                 params: byte_callback_params(Vec::new()),
                                 ret: Box::new(Type::Unknown),
                                 predicate: None,
@@ -1307,19 +1352,21 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "sort".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::with_default(
                                 "compareFn",
                                 Type::Union(vec![
                                     Type::Function {
+                                        optional: 0,
                                         params: vec![Type::Number, Type::Number],
                                         ret: Box::new(Type::Number),
                                         predicate: None,
                                         has_rest: false,
                                     },
-                                    Type::Null,
+                                    Type::Undefined,
                                 ]),
-                                crate::DefaultValue::Null,
+                                crate::DefaultValue::Undefined,
                             )],
                             ret: Type::Uint8Array,
                             predicate: None,
@@ -1329,6 +1376,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toReversed".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::Uint8Array,
@@ -1339,19 +1387,21 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toSorted".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::with_default(
                                 "compareFn",
                                 Type::Union(vec![
                                     Type::Function {
+                                        optional: 0,
                                         params: vec![Type::Number, Type::Number],
                                         ret: Box::new(Type::Number),
                                         predicate: None,
                                         has_rest: false,
                                     },
-                                    Type::Null,
+                                    Type::Undefined,
                                 ]),
-                                crate::DefaultValue::Null,
+                                crate::DefaultValue::Undefined,
                             )],
                             ret: Type::Uint8Array,
                             predicate: None,
@@ -1361,14 +1411,15 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toBase64".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::with_default(
                                 "options",
                                 Type::Union(vec![
                                     Type::prelude_interface("Base64Options".to_string(), Vec::new()),
-                                    Type::Null,
+                                    Type::Undefined,
                                 ]),
-                                crate::DefaultValue::Null,
+                                crate::DefaultValue::Undefined,
                             )],
                             ret: Type::String,
                             predicate: None,
@@ -1378,6 +1429,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toHex".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::String,
@@ -1428,6 +1480,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "new".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "values",
@@ -1446,6 +1499,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "alloc".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("n", Type::Number)],
                             ret: Type::Uint8Array,
@@ -1458,6 +1512,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "fromArray".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "values",
@@ -1473,6 +1528,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "fromBytes".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("other", Type::Uint8Array)],
                             ret: Type::Uint8Array,
@@ -1485,6 +1541,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "of".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::rest(
                                 "values",
@@ -1500,6 +1557,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "fromBase64".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("s", Type::String),
@@ -1507,9 +1565,9 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                     "options",
                                     Type::Union(vec![
                                         Type::prelude_interface("Base64Options".to_string(), Vec::new()),
-                                        Type::Null,
+                                        Type::Undefined,
                                     ]),
-                                    crate::DefaultValue::Null,
+                                    crate::DefaultValue::Undefined,
                                 ),
                             ],
                             ret: Type::Uint8Array,
@@ -1522,6 +1580,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "fromHex".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("s", Type::String)],
                             ret: Type::Uint8Array,

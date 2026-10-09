@@ -12,6 +12,7 @@ pub(super) fn emit_stringify(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     args: &[ExprId],
+    result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let [arg, rest @ ..] = args else {
         return Err(crate::codegen::internal_failure(
@@ -33,20 +34,69 @@ pub(super) fn emit_stringify(
     if args.len() == 1 {
         emit_expr(emitter, ctx, arg)?;
         emit_stringify_value(emitter, ctx, &arg_ty);
-        return Ok(());
+    } else {
+        emit_expr(emitter, ctx, arg)?;
+        let arg_local = emitter.add_anonymous_local(ctx.symbols.value_type(&arg_ty)?)?;
+        emitter.instruction(Instruction::LocalSet(arg_local));
+        emit_stringify_optional_args(emitter, ctx, args, arg_local, &arg_ty)?;
     }
-
-    emit_expr(emitter, ctx, arg)?;
-    let arg_local = emitter.add_anonymous_local(ctx.symbols.value_type(&arg_ty)?)?;
-    emitter.instruction(Instruction::LocalSet(arg_local));
-    emit_stringify_optional_args(emitter, ctx, args, arg_local, &arg_ty)?;
-    Ok(())
+    // Erasure can widen the operand to unknown while the checked expression
+    // still promises a string. Restore that result representation at the edge.
+    let emitted_ty = if may_stringify_undefined(&arg_ty) {
+        Type::union(vec![Type::String, Type::Undefined])
+    } else {
+        Type::String
+    };
+    super::cast::emit_coerce_to_slot(emitter, ctx, &emitted_ty, result_ty)
 }
 
-/// Serializes a value of `arg_ty` already on the stack into a `(ref $string)`.
+/// Serializes an on-stack value to a string or the undefined singleton when it
+/// has no JSON representation.
 /// Shared by `JSON.stringify` codegen and `main`'s output shim (for the structured
 /// returns it routes here — primitives take the `toString` path instead).
 pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty: &Type) {
+    if !may_stringify_undefined(arg_ty) {
+        emit_defined_stringify_value(emitter, ctx, arg_ty);
+        return;
+    }
+    let Some(intrinsics) = ctx.require(
+        ctx.symbols.intrinsic_type_indices(),
+        "intrinsics registered",
+    ) else {
+        return;
+    };
+    let Some(value) = ctx.latch(emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(intrinsics.object),
+    }))) else {
+        return;
+    };
+    emitter.instruction(Instruction::LocalSet(value));
+    emitter.instructions(crate::codegen::nullish::is_undefined_or_closure(
+        &[Instruction::LocalGet(value)],
+        intrinsics,
+    ));
+    emitter.emit_if(BlockType::Result(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intrinsics.object),
+    })));
+    if ctx
+        .latch(super::expr::emit_undefined(emitter, ctx))
+        .is_none()
+    {
+        return;
+    }
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(value));
+    emit_stringify_nullable(emitter, ctx);
+    emitter.emit_end();
+}
+
+fn may_stringify_undefined(ty: &Type) -> bool {
+    ty.any_member(&Type::stringifies_to_undefined)
+}
+
+fn emit_defined_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty: &Type) {
     // Peel first: the scalar arms below lower unboxed, so an alias reaching the
     // `_` vtable arm would push an f64/i32 where a ref is expected. A union of
     // number literals (`1 | 2`) lowers to an unboxed f64 too.
@@ -192,7 +242,28 @@ fn emit_stringify_optional_args(
 
     emitter.instruction(Instruction::LocalGet(arg_local));
     emit_stringify_value(emitter, ctx, arg_ty);
-    let _: () = match space {
+    let may_be_undefined = may_stringify_undefined(arg_ty);
+    if may_be_undefined {
+        let intr = ctx
+            .symbols
+            .intrinsic_type_indices()
+            .ok_or_else(|| crate::codegen::internal_failure("intrinsics registered"))?;
+        let result_type = ValType::Ref(RefType {
+            nullable: false,
+            heap_type: HeapType::Concrete(intr.object),
+        });
+        let result = emitter.add_anonymous_local(result_type)?;
+        emitter.instruction(Instruction::LocalTee(result));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+            intr.undefined,
+        )));
+        emitter.emit_if(BlockType::Result(result_type));
+        emitter.instruction(Instruction::LocalGet(result));
+        emitter.emit_else();
+        emitter.instruction(Instruction::LocalGet(result));
+        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(intr.string)));
+    }
+    match space {
         StringifySpace::None => {}
         StringifySpace::Dynamic(local) => emit_dynamic_space(emitter, ctx, local)?,
         StringifySpace::Number(local) => {
@@ -209,6 +280,9 @@ fn emit_stringify_optional_args(
             emit_wrap_raw_string(emitter, ctx);
         }
     };
+    if may_be_undefined {
+        emitter.emit_end();
+    }
     Ok(())
 }
 
@@ -243,12 +317,12 @@ fn emit_stringify_space_arg(
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::String(local)
         }
-        Type::Null => {
+        Type::Null | Type::Undefined | Type::Void => {
             emit_expr(emitter, ctx, space)?;
             emitter.instruction(Instruction::Drop);
             StringifySpace::None
         }
-        Type::Unknown => {
+        Type::Unknown | Type::Union(_) => {
             emit_expr(emitter, ctx, space)?;
             let local = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
             emitter.instruction(Instruction::LocalSet(local));
@@ -380,9 +454,9 @@ fn emit_to_json_direct(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, iface: &
 }
 
 /// Body of the exported `__main_output` shim: call `main`, then encode its result
-/// to the `(ref $string)` the runtime emits as the program's output. Emitted for
-/// every non-`void` return (`never`/`error` never produce a value). The host reads
-/// the returned `$string` verbatim.
+/// to the nullable string the runtime consumes as program output. Undefined
+/// uses the private ABI's null reference; language null produces the text
+/// `"null"`. The host reads concrete strings verbatim.
 pub(crate) fn emit_main_output_shim(
     ctx: &CodegenCtx,
     main_func_idx: u32,
@@ -391,6 +465,29 @@ pub(crate) fn emit_main_output_shim(
 ) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let mut emitter = FunctionEmitter::new(ctx, &[])?;
     emitter.instruction(Instruction::Call(main_func_idx));
+    let optional_output = may_stringify_undefined(return_ty);
+    if optional_output {
+        let intr = ctx
+            .symbols
+            .intrinsic_type_indices()
+            .ok_or_else(|| crate::codegen::internal_failure("intrinsics registered"))?;
+        let value = emitter.add_anonymous_local(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(intr.object),
+        }))?;
+        emitter.instruction(Instruction::LocalSet(value));
+        emitter.instructions(crate::codegen::nullish::is_undefined_or_closure(
+            &[Instruction::LocalGet(value)],
+            intr,
+        ));
+        emitter.emit_if(BlockType::Result(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(intr.string),
+        })));
+        emitter.instruction(Instruction::RefNull(HeapType::Concrete(intr.string)));
+        emitter.emit_else();
+        emitter.instruction(Instruction::LocalGet(value));
+    }
     let scalar_output = match source_return_ty.peel() {
         Type::String
         | Type::StringLiteral(_)
@@ -398,13 +495,16 @@ pub(crate) fn emit_main_output_shim(
         | Type::NumberLiteral(_)
         | Type::Boolean
         | Type::BooleanLiteral(_) => true,
-        Type::Union(members) => is_nullable_primitive(members),
+        Type::Union(members) => is_primitive_union(members),
         _ => false,
     };
     if return_ty == &Type::Unknown && scalar_output {
         emit_nullable_primitive_to_string(&mut emitter, ctx);
     } else {
         emit_main_output_value(&mut emitter, ctx, return_ty.peel());
+    }
+    if optional_output {
+        emitter.emit_end();
     }
     emitter.build()
 }
@@ -419,24 +519,29 @@ fn emit_main_output_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_t
         Type::String | Type::StringLiteral(_) => {}
         Type::Number | Type::NumberLiteral(_) => emit_number_to_string_radix10(emitter, ctx),
         Type::Boolean | Type::BooleanLiteral(_) => emit_to_string_direct(emitter, ctx, "Boolean"),
-        // A nullable primitive (`string | null`, the type of `readText` & friends)
-        // follows the primitive rule, not JSON: the string flows through verbatim.
-        Type::Union(members) if is_nullable_primitive(members) => {
+        // A union of primitives (`string | number`, `string | undefined`, …)
+        // follows the primitive rule, not JSON: whichever value it holds at run
+        // time prints as that primitive would, so a string flows through verbatim.
+        Type::Union(members) if is_primitive_union(members) => {
             emit_nullable_primitive_to_string(emitter, ctx);
         }
-        _ => emit_stringify_value(emitter, ctx, arg_ty),
+        Type::Undefined
+        | Type::Void
+        | Type::Unknown
+        | Type::TypeVar(_)
+        | Type::GenericParam { .. } => emit_stringify_nullable(emitter, ctx),
+        _ => emit_defined_stringify_value(emitter, ctx, arg_ty),
     }
 }
 
-/// `true` for a union of `null` and one-or-more bare primitives (`string`/`number`/
-/// `boolean` or their literals) — `string | null`, `number | null`, etc. Objects,
-/// arrays, and mixed-primitive unions fall through to JSON.
-fn is_nullable_primitive(members: &[Type]) -> bool {
-    let mut has_null = false;
+/// `true` for a union of bare primitives (`string`/`number`/`boolean` or their
+/// literals), optionally with `null` or `undefined`. Objects and arrays fall
+/// through to JSON.
+fn is_primitive_union(members: &[Type]) -> bool {
     let mut has_primitive = false;
     for member in members {
         match member.peel() {
-            Type::Null => has_null = true,
+            Type::Null | Type::Undefined => {}
             Type::String
             | Type::StringLiteral(_)
             | Type::Number
@@ -446,7 +551,7 @@ fn is_nullable_primitive(members: &[Type]) -> bool {
             _ => return false,
         }
     }
-    has_null && has_primitive
+    has_primitive
 }
 
 /// Renders a `(ref null $Object)`-lowered nullable primitive: the literal `null`
@@ -620,10 +725,12 @@ mod tests {
     fn invalid_json_arity_is_an_internal_failure_before_reading_arguments() {
         with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
             let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
-            assert_internal(emit_stringify(&mut emitter, ctx, &[]).unwrap_err());
+            assert_internal(emit_stringify(&mut emitter, ctx, &[], &Type::String).unwrap_err());
             assert_internal(emit_parse(&mut emitter, ctx, &[]).unwrap_err());
             let invalid = crate::ExprId(u32::MAX);
-            assert_internal(emit_stringify(&mut emitter, ctx, &[invalid; 4]).unwrap_err());
+            assert_internal(
+                emit_stringify(&mut emitter, ctx, &[invalid; 4], &Type::String).unwrap_err(),
+            );
             assert_internal(emit_parse(&mut emitter, ctx, &[invalid; 2]).unwrap_err());
             ctx.check_failure().unwrap();
         });

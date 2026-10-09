@@ -1,0 +1,29 @@
+// @target: es2015
+type F1 = (a: string, b?: string) => void;
+type F2 = (a: string, b?: string, c?: string) => void;
+type F3 = (a: string, ...rest: string[]) => void;
+type F4 = (a: string, b?: string, ...rest: string[]) => void;
+type F5 = (a: string, b: string) => void;
+
+let f12: F1 | F2 = null as unknown as (F1 | F2);
+f12("a");
+f12("a", "b");
+f12("a", "b", "c");  // ok
+
+let f34: F3 | F4 = null as unknown as (F3 | F4);
+f34("a");
+f34("a", "b");
+f34("a", "b", "c");
+
+let f1234: F1 | F2 | F3 | F4 = null as unknown as (F1 | F2 | F3 | F4);
+f1234("a");
+f1234("a", "b");
+f1234("a", "b", "c");  // ok
+
+let f12345: F1 | F2 | F3 | F4 | F5 = null as unknown as (F1 | F2 | F3 | F4 | F5);
+f12345("a");  // error
+f12345("a", "b");
+f12345("a", "b", "c");  // error
+
+
+function main(): void {}

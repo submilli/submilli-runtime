@@ -1,1 +1,3 @@
 line 16 type: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object`
+
+line 19, 20, 21 type: bug SUB-1543 a conditional of two functions reduces to the wider function type, where tsc keeps the union

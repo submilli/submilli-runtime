@@ -1,5 +1,5 @@
 // expect-error: unreachable code
-// expect-error: arrow function does not return a value on all paths
+// expect-error: field `peek` initializer is `() => number | undefined`, expected `() => number`
 // expect-error: no fallthrough
 // expect-error-count: 4
 class Machine {

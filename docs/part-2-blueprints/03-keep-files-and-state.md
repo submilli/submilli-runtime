@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "5f9a811e5b23b4ed98d6f7dc628e6244fd9808c02132fb09a27f25add805e8a8"
+  contentHash: "4286a65c3578d11de730c26a60cc7acaac29fe860ddbb123744401615e91aea9"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -77,9 +77,9 @@ function appendText(path: string, content: string): void;
 function exists(path: string): boolean;
 function list(path: string, recursive: boolean): Iterator<DirEntry>;
 function mkdir(path: string, recursive: boolean): void;
-function readText(path: string): string | null;
+function readText(path: string): string | undefined;
 function remove(path: string, recursive: boolean): void;
-function stat(path: string): Stat | null;
+function stat(path: string): Stat | undefined;
 function writeText(path: string, content: string): void;
 …
 ```
@@ -242,7 +242,7 @@ submilli docs submilli:session
 ```text
 submilli:session — Session-scoped key-value state: get/has/set/remove/list.
 …
-function get<T>(key: string): T;
+function get<T>(key: string): T | undefined;
 function has(key: string): boolean;
 function set(key: string, value: unknown): void;
 …
@@ -305,13 +305,15 @@ interface Progress {
 }
 
 function main(): string {
-    const progress = session.get<Progress | null>("progress");
-    if (progress === null) {
+    const progress = session.get<Progress>("progress");
+    if (progress === undefined) {
         return "nothing saved yet";
     }
     return `reviewed ${progress.reviewed}, next up ${progress.next}`;
 }
 ```
+
+`session.get` returns `undefined` for a key that was never set.
 
 The store exists only inside a session, which the application opens.
 `submilli run` has none, so use `submilli-server`. [Run the

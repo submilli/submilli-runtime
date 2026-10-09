@@ -3,11 +3,11 @@
 interface A {
     foo: {
         bar(): {
-            baz: 0 | 1 | 42 | null | ''
+            baz: 0 | 1 | 42 | undefined | ''
         }
-        baz: 0 | 1 | 42 | null | ''
+        baz: 0 | 1 | 42 | undefined | ''
     }
-    baz: 0 | 1 | 42 | null | ''
+    baz: 0 | 1 | 42 | undefined | ''
 }
 
 const result: A = null as unknown as (A);

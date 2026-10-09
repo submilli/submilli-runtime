@@ -9,9 +9,15 @@ interface I1 {
 
 }
 
-/*pruned*/;              
-               
- 
+interface I2 extends I1 {
+>I2 : I2
+>   : ^^
+
+    p2: number;
+>p2 : number
+>   : ^^^^^^
+
+}
 
 let x = { p1: 10, p2: 20 };
 >x : { p1: number; p2: number; }
@@ -27,7 +33,12 @@ let x = { p1: 10, p2: 20 };
 >20 : 20
 >   : ^^
 
-/*pruned*/;            
+let y: number | I2 = x;
+>y : number | I2
+>  : ^^^^^^^^^^^
+>x : { p1: number; p2: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 let z: I1 = x;
 >z : I1
 >  : ^^
@@ -35,7 +46,14 @@ let z: I1 = x;
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-/*pruned*/;            
+let a = <number | I2>z;
+>a : number | I2
+>  : ^^^^^^^^^^^
+><number | I2>z : number | I2
+>               : ^^^^^^^^^^^
+>z : I1
+>  : ^^
+
 let b = <number>z;
 >b : number
 >  : ^^^^^^
@@ -44,8 +62,22 @@ let b = <number>z;
 >z : I1
 >  : ^^
 
-/*pruned*/;   
-/*pruned*/;   
+let c = <I2>z;
+>c : I2
+>  : ^^
+><I2>z : I2
+>      : ^^
+>z : I1
+>  : ^^
+
+let d = <I1>y;
+>d : I1
+>  : ^^
+><I1>y : I1
+>      : ^^
+>y : I2
+>  : ^^
+
 
 
 function main(): void {}

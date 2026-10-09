@@ -9,29 +9,29 @@ function main(): void {
   m.set("c", 3);
   assert(m.size === 3, "three sets bring size to 3");
 
-  const a: number | null = m.get("a");
-  const b: number | null = m.get("b");
-  const c: number | null = m.get("c");
-  assert(a !== null && a === 1, "get(a) returns 1");
-  assert(b !== null && b === 2, "get(b) returns 2");
-  assert(c !== null && c === 3, "get(c) returns 3");
+  const a: number | undefined = m.get("a");
+  const b: number | undefined = m.get("b");
+  const c: number | undefined = m.get("c");
+  assert(a !== undefined && a === 1, "get(a) returns 1");
+  assert(b !== undefined && b === 2, "get(b) returns 2");
+  assert(c !== undefined && c === 3, "get(c) returns 3");
 
-  const missing: number | null = m.get("z");
-  assert(missing === null, "get(missing) returns null");
+  const missing: number | undefined = m.get("z");
+  assert(missing === undefined, "get(missing) returns undefined");
 
   assert(m.has("a"), "has(a) reports true");
   assert(!m.has("z"), "has(missing) reports false");
 
   m.set("a", 10);
-  const a2: number | null = m.get("a");
-  assert(a2 !== null && a2 === 10, "overwrite updates value");
+  const a2: number | undefined = m.get("a");
+  assert(a2 !== undefined && a2 === 10, "overwrite updates value");
   assert(m.size === 3, "overwrite leaves size unchanged");
 
   const removed: boolean = m.delete("b");
   assert(removed, "delete returns true for present key");
   assert(m.size === 2, "size drops to 2 after delete");
   assert(!m.has("b"), "deleted key no longer present");
-  assert(m.get("b") === null, "deleted key gets null");
+  assert(m.get("b") === undefined, "deleted key gets undefined");
 
   const removedAgain: boolean = m.delete("b");
   assert(!removedAgain, "delete returns false for absent key");
@@ -40,5 +40,5 @@ function main(): void {
   m.clear();
   assert(m.size === 0, "clear resets size");
   assert(!m.has("a"), "clear removes all entries");
-  assert(m.get("a") === null, "clear returns null for all keys");
+  assert(m.get("a") === undefined, "clear returns undefined for all keys");
 }

@@ -8,17 +8,24 @@ enum E { a, b }
 >  : ^^^
 
 
-/*pruned*/;                           
-/*pruned*/;                             
-
-/*pruned*/;                            
-/**/;   
-/**/;   
 /*pruned*/;
-/**/;   
-/**/;    
-/**/;     
-/**/;    
+let b: void = null as unknown as (void);
+>b : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;
+/**/;
+/**/;
+/*pruned*/;
+/**/;
+/**/;
+/**/;
+/**/;
 /*pruned*/;
 /*pruned*/;
 
@@ -30,8 +37,8 @@ let x2: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/**/;   
-/**/;   
+/**/;
+/**/;
 x2 += true;
 >x2 += true : string
 >           : ^^^^^^
@@ -82,11 +89,13 @@ x2 += null;
 >x2 : string
 >   : ^^^^^^
 
-x2 += null;
->x2 += null : string
->           : ^^^^^^
+x2 += undefined;
+>x2 += undefined : string
+>                : ^^^^^^
 >x2 : string
 >   : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 let x3: number = null as unknown as (number);
@@ -97,7 +106,7 @@ let x3: number = null as unknown as (number);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/**/;   
+/**/;
 x3 += 0;
 >x3 += 0 : number
 >        : ^^^^^^
@@ -124,17 +133,19 @@ x3 += null;
 >x3 : number
 >   : ^^^^^^
 
-x3 += null;
->x3 += null : any
->           : ^^^
+x3 += undefined;
+>x3 += undefined : any
+>                : ^^^
 >x3 : number
 >   : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
-/*pruned*/;                        
-/**/;   
-/**/;   
-/**/;     
+/*pruned*/;
+/**/;
+/**/;
+/**/;
 /*pruned*/;
 /*pruned*/;
 
@@ -146,7 +157,7 @@ let x5: boolean = null as unknown as (boolean);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/**/;   
+/**/;
 
 let x6: {} = null as unknown as ({});
 >x6 : {}
@@ -156,7 +167,7 @@ let x6: {} = null as unknown as ({});
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/**/;   
+/**/;
 x6 += '';
 >x6 += '' : string
 >         : ^^^^^^
@@ -166,8 +177,15 @@ x6 += '';
 >   : ^^
 
 
-/*pruned*/;                              
-/**/;   
+let x7: void = null as unknown as (void);
+>x7 : void
+>   : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/**/;
 
 function main(): void {}
 >main : () => void

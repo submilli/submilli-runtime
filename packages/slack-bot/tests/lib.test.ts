@@ -1,5 +1,5 @@
 import { label } from "submilli:test";
-import { SlackError, MessageRef, SendMessageInput } from "@submilli/slack-bot";
+import { SlackError, MessageRef, SendMessageInput, listUsers } from "@submilli/slack-bot";
 
 function main(): void {
     label("SlackError preserves stable machine-readable fields");
@@ -12,4 +12,13 @@ function main(): void {
     const send: SendMessageInput = { channelId: ref.channelId, text: "hello" };
     assert(send.channelId === "C1", "channel id passes through");
     assert(send.text === "hello", "message text passes through");
+
+    label("an unbound bot token is reported before any request");
+    let code = "none";
+    try {
+        listUsers();
+    } catch (e) {
+        if (e instanceof SlackError) code = e.code;
+    }
+    assert(code === "missing_token", "got " + code);
 }

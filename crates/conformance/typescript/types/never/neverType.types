@@ -94,25 +94,25 @@ function infiniteLoop2(): never {
     }
 }
 
-/*pruned*/;                                       
-                        
-                  
-                     
-                    
-                       
-     
-                                          
- 
+/*pruned*/;
 
-/*pruned*/;                                       
-                                   
-                                   
-                                       
- 
 
-/*pruned*/;                                     
-                                         
- 
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+/*pruned*/;
+
+
 
 class C {
 >C : C

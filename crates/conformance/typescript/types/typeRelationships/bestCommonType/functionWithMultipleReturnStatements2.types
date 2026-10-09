@@ -45,9 +45,9 @@ function f2(): 1 | 2 | null {
     }
 }
 
-function f4(): 1 | null {
->f4 : () => 1 | null
->   : ^^^^^^^^^^^^^^
+function f4(): 1 | undefined {
+>f4 : () => 1 | undefined
+>   : ^^^^^^^^^^^^^^^^^^^
 
     try {
         return 1;
@@ -59,7 +59,10 @@ function f4(): 1 | null {
 >e : unknown
 >  : ^^^^^^^
 
-        return null;
+        return undefined;
+>undefined : undefined
+>          : ^^^^^^^^^
+
     }
     finally {
         return 1;
@@ -69,10 +72,10 @@ function f4(): 1 | null {
     }
 }
 
-/*pruned*/;                
-             
-                        
- 
+/*pruned*/;
+
+
+
 
 function f6<T>(x: T): T | null {
 >f6 : <T>(x: T) => T | null
@@ -242,7 +245,7 @@ function f12(): ((x: Object) => void) | ((x: number) => void) {
 >  : ^^^^^^
 
     } else {
-        return (x: number) => { }        
+        return (x: number) => { }
 >(x: number) => { } : (x: number) => void
 >                   : ^^^^^^^^^^^^^^^^^^^
 >x : number

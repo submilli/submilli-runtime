@@ -167,6 +167,9 @@ async fn hash(caller: &mut Caller<'_, StoreData>, elem: &Val) -> wasmtime::Resul
     if is_null_key(caller, elem)? {
         return Ok(0);
     }
+    if super::undefined::is_undefined(caller, elem)? {
+        return Ok(1);
+    }
     match dispatch_vtable_slot(caller, elem, 3, &[]).await? {
         Val::I32(h) => Ok(h),
         other => Err(wasmtime::Error::msg(format!(
@@ -185,6 +188,11 @@ async fn equals(
     let right_null = is_null_key(caller, slot)?;
     if left_null || right_null {
         return Ok(left_null && right_null);
+    }
+    let left_undefined = super::undefined::is_undefined(caller, elem)?;
+    let right_undefined = super::undefined::is_undefined(caller, slot)?;
+    if left_undefined || right_undefined {
+        return Ok(left_undefined && right_undefined);
     }
     if both_nan(caller, elem, slot)? {
         return Ok(true);
@@ -810,7 +818,7 @@ pub(super) async fn construct(
     init: &Val,
 ) -> wasmtime::Result<Val> {
     let coll = build_empty(caller)?;
-    if is_null(init) {
+    if super::undefined::is_nullish(caller, init)? {
         return Ok(coll);
     }
 

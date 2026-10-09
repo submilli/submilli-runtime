@@ -2,7 +2,7 @@
 
 Sources: `test/built-ins/Number/**` (340 files), `test/built-ins/parseInt/**`
 (55), `test/built-ins/parseFloat/**` (54), `test/built-ins/isNaN/**` (15),
-`test/built-ins/isFinite/**` (15). 44 ported (38 passing, 4 `expect-fail`,
+`test/built-ins/isFinite/**` (15). 46 ported (42 passing, 2 `expect-fail`,
 2 `expect-error` pins), under `cases/Number/`, `cases/parseInt/`,
 `cases/parseFloat/`, `cases/isNaN/`, `cases/isFinite/`. Representative
 rejected originals under `rejected/Number/`, `rejected/parseInt/`,
@@ -26,8 +26,6 @@ constant-descriptor write tests (`MAX_VALUE`/`MIN_VALUE` `S15.7.3.x_A2-A4`,
 
 | Case | Gap |
 |:--|:--|
-| `parseInt/S15.1.2.2_A2_T10` | `parseInt` skips only ASCII whitespace; the standard's StrWhiteSpace includes the Unicode space separators (U+1680, U+2000-200A, U+202F, U+205F, U+3000), which currently make the parse return `NaN`. `Number(string)` trims them correctly — only the prefix parsers diverge. |
-| `parseFloat/S15.1.2.3_A2_T10` | Same Unicode-whitespace gap for `parseFloat`. The `*_U180E` variants (U+180E was whitespace in old Unicode) stay unported either way. |
 | `Number/prototype/toExponential/return-values` | `toExponential` rounds exact ties half-to-even — `(25).toExponential(0)` is `"2e+1"` — where the standard picks the larger candidate (`"3e+1"`). spec.md documents the half-to-even tie rule only for `toFixed`; for `toExponential` it says "follow the standard's forms", so this is a gap, not a documented divergence. All other rows of the table pass. |
 | `Number/prototype/toPrecision/infinity` | `toPrecision` validates the 1..100 precision range before the NaN/Infinity short-circuit and throws; the standard returns `"Infinity"`/`"-Infinity"` (and `"NaN"`) first, only then range-checks. `toExponential` gets this order right (its `infinity.js` is ported and passes); `toPrecision/nan.js` would hit the same gap but is built on a `valueOf` coercion trap, so it stays rejected. |
 
@@ -35,7 +33,7 @@ constant-descriptor write tests (`MAX_VALUE`/`MIN_VALUE` `S15.7.3.x_A2-A4`,
 
 | Case | Divergence |
 |:--|:--|
-| `Number/S9.3_A4.1_T1` | `Number(true)` — `Number(x)` takes `string \| bigint`; ToNumber(boolean) does not exist (spec.md "Numeric globals"). |
+| `Number/S9.3_A4.1_T1` | `Number(true)` — `Number(x)` takes `string \| bigint \| undefined`; ToNumber(boolean) does not exist (spec.md "Numeric globals"). |
 | `parseInt/S15.1.2.2_A1_T1` | `parseInt(true)` — the argument is typed `string`; no ToString coercion. |
 
 ## Rejected (design decisions)
@@ -59,5 +57,5 @@ constant-descriptor write tests (`MAX_VALUE`/`MIN_VALUE` `S15.7.3.x_A2-A4`,
 | `Number/isInteger/non-integers/infinity/nan`, `isSafeInteger/not-safe-integer/not-integer/infinity/nan`, `isNaN/nan`, `isFinite/infinity/nan` | Single-assert complements of the ported true-side tables, also covered by the fixtures `number_static_predicates.subm`/`number_global_predicates.subm`. |
 | `prototype/toString` radix files 3-36, `numeric-literal-tostring-default-radix.js`, `numeric-literal-tostring-radix-1/37.js`, `S15.7.4.2_A2_T*` digit tables | `a-z.ts` covers the full digit alphabet, `radix-2.ts` the NaN/Infinity/zero shapes; default radix and the 1/37 throws are in the fixture `number_to_string_radix.subm`. |
 | `prototype/toFixed/S15.7.4.5_A1.*`, `return-type.js` | Receiver arms are boxing; the digit-coercion rows are type errors; the plain rows repeat the fixture `number_to_fixed.subm`. |
-| `prototype/toExponential` `nan.js`, `range.js`, `this-is-0-*`, `undefined-fractiondigits.js`, `tointeger-fractiondigits.js`; `prototype/toPrecision` `exponential.js`, `this-is-0-*`, `undefined-precision-arg.js`, `tointeger-precision.js` | NaN/zero/omitted-argument shapes covered between the ported `return-values`/`range`/`infinity` cases and the fixture `number_to_precision_exponential.subm`; `undefined`-argument rows don't port (no `undefined`). |
+| `prototype/toExponential` `nan.js`, `range.js`, `this-is-0-*`, `tointeger-fractiondigits.js`; `prototype/toPrecision` `exponential.js`, `this-is-0-*`, `tointeger-precision.js` | NaN/zero shapes covered between the ported `return-values`/`range`/`infinity` cases and the fixture `number_to_precision_exponential.subm`; the omitted/explicit-undefined argument rows are ported as `undefined-fractiondigits.ts` and `undefined-precision-arg.ts`. |
 | `parseInt/S15.1.2.2_A2_T2-T9`, `A4.1_T1/T2`, `A5.2_T1/T2`, `A6.1_T2-T6`, `A7.1-A7.3`, `A8`, `15.1.2.2-2-1`; `parseFloat/S15.1.2.3_A2_T2-T9`, `A3_T2/T3`, `A4_T3-T7`, `A5_T2-T4`, `S15.1.2.3_A6`, `tonumber-numeric-separator-*` | Whitespace/garbage/radix-table variants of the ported representatives (`A2_T1`, `A4.2_T1`, `A5.1_T1`, `A6.1_T1`, `A3_T1`, `A4_T1/T2`, `A5_T1`); the 65536-code-point scans (`A8`, `A6`) and per-digit loops repeat the same predicate per character. Hex-prefix radix-0 detection is in the fixture `number_parse_statics.subm`. |

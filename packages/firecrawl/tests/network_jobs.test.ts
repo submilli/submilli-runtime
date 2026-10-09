@@ -14,7 +14,7 @@ function inspectAndCancel(kind: JobKind, id: string): void {
         const saved = downloadJobPage(kind, id, "/" + kind + "-page.json");
         assert(saved.status === 200 && saved.bytesWritten > 0, "VFS result envelope");
         const body = readText(saved.path);
-        assert(body !== null, "download exists");
+        assert(body !== undefined, "download exists");
         const downloaded = normalizeJobPageJson(body!, kind, id);
         assert(downloaded.status.length > 0, "downloaded status and pagination validate");
         const errors = getJobErrors(kind, id);
@@ -27,7 +27,7 @@ function inspectAndCancel(kind: JobKind, id: string): void {
 function main(): void {
     const key = secrets.get("FIRECRAWL_API_KEY");
     const url = secrets.get("FIRECRAWL_TEST_URL");
-    if (key === null || key.trim().length === 0 || url === null || url.trim().length === 0) {
+    if (key === undefined || key.trim().length === 0 || url === undefined || url.trim().length === 0) {
         label("skip: bind FIRECRAWL_API_KEY and FIRECRAWL_TEST_URL to create disposable jobs");
         return;
     }

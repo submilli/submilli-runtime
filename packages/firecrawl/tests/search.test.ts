@@ -39,11 +39,16 @@ function main(): void {
     const result = normalizeSearchJson('{"success":true,"data":{"web":[{"url":"https://example.com/a","title":"Search title","description":"Snippet","markdown":"full text","html":"<p>full text</p>","json":{"x":1},"metadata":{"sourceURL":"https://example.com/a","url":"https://example.org/final","custom":42}},{"url":"https://example.com/b","metadata":{"error":"timeout","statusCode":408}},{"url":"https://example.com/c","error":"scrape failed"}]},"warning":"partial","warnings":[{"code":"partial"}]}');
     assert(result.results.length === 3 && result.results[0].title === "Search title", "all search hits preserved");
     const page = result.results[0].content!;
-    assert(page.markdown === "full text" && page.url === "https://example.org/final" && JSON.stringify(page.metadata).includes('"custom":42'), "content and raw metadata");
+    const metadataJson = JSON.stringify(page.metadata);
+    assert(page.markdown === "full text" && page.url === "https://example.org/final" && metadataJson !== undefined && metadataJson.includes('"custom":42'), "content and raw metadata");
     assert(result.results[1].content!.error === "timeout" && result.results[2].error === "scrape failed", "partial failures");
-    assert(result.warning === "partial" && JSON.stringify(result.warnings).includes("partial"), "warnings preserved");
+    const warningsJson = JSON.stringify(result.warnings);
+    assert(result.warning === "partial" && warningsJson !== undefined && warningsJson.includes("partial"), "warnings preserved");
     assert(normalizeSearchJson('{"success":true,"data":{"web":[]}}').results.length === 0, "empty valid results");
     assert(normalizeSearchJson('{"success":true,"data":{"web":[{"url":"https://example.com","markdown":"text"}]}}').results[0].content!.markdown === "text", "metadata optional");
+    const nullHit = normalizeSearchJson('{"success":true,"id":null,"creditsUsed":null,"warning":null,"data":{"web":[{"url":"https://example.com","title":null,"description":null,"position":null,"markdown":"text","metadata":{"title":null,"sourceURL":null,"statusCode":null},"error":null}]}}');
+    assert(nullHit.id === null && nullHit.results[0].title === "" && nullHit.results[0].position === null, "JSON null search fields");
+    assert(nullHit.results[0].content!.title === null && nullHit.results[0].content!.markdown === "text", "JSON null result metadata keeps content");
 
     label("malformed search envelopes fail instead of appearing empty");
     for (const body of ["null", "not json", "{}", '{"success":false,"data":{"web":[]}}', '{"success":true,"data":[]}', '{"success":true,"data":{}}', '{"success":true,"data":{"web":[{"url":3}]}}', '{"success":true,"data":{"web":[{"url":"u","markdown":4}]}}']) {

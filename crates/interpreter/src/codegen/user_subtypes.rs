@@ -446,10 +446,11 @@ fn emit_subtype_to_json_vtable_body(
         f.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
         f.instruction(&Instruction::LocalSet(elem));
 
-        f.instruction(&Instruction::LocalGet(elem));
-        f.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(
-            intrinsics.closure,
-        )));
+        for instruction in
+            super::nullish::is_undefined_or_closure(&[Instruction::LocalGet(elem)], intrinsics)
+        {
+            f.instruction(&instruction);
+        }
         f.instruction(&Instruction::I32Eqz);
         f.instruction(&Instruction::If(BlockType::Empty));
 
@@ -899,14 +900,18 @@ fn emit_field_presence(
     body.instruction(&Instruction::Else);
     body.instruction(&Instruction::I32Const(1));
     body.instruction(&Instruction::End);
-    body.instruction(&Instruction::LocalGet(object));
-    body.instruction(&Instruction::StructGet {
-        struct_type_index: intrinsics.object_shape,
-        field_index: 2,
-    });
-    body.instruction(&Instruction::I32Const(slot.cast_signed()));
-    body.instruction(&Instruction::ArrayGet(intrinsics.object_fields));
-    body.instruction(&Instruction::RefIsNull);
+    let load_value = [
+        Instruction::LocalGet(object),
+        Instruction::StructGet {
+            struct_type_index: intrinsics.object_shape,
+            field_index: 2,
+        },
+        Instruction::I32Const(slot.cast_signed()),
+        Instruction::ArrayGet(intrinsics.object_fields),
+    ];
+    for instruction in super::nullish::is_nullish(&load_value, intrinsics) {
+        body.instruction(&instruction);
+    }
     body.instruction(&Instruction::I32Eqz);
     body.instruction(&Instruction::I32Or);
 }
@@ -1054,13 +1059,11 @@ fn emit_field_hash(
 fn reject_unrepresentable_field(field_ty: &Type) -> Result<(), CompilerFailure> {
     let field_ty = field_ty.peel();
     match field_ty {
-        Type::Void
-        | Type::Error
-        | Type::Alias { .. }
-        | Type::Refined { .. }
-        | Type::Readonly(_) => Err(internal_failure(format!(
-            "an object field of type `{field_ty}` reached structural equality or hashing"
-        ))),
+        Type::Error | Type::Alias { .. } | Type::Refined { .. } | Type::Readonly(_) => {
+            Err(internal_failure(format!(
+                "an object field of type `{field_ty}` reached structural equality or hashing"
+            )))
+        }
         _ => Ok(()),
     }
 }

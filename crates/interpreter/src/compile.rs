@@ -930,6 +930,7 @@ mod importless_library_tests {
         methods.insert(
             "size".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: Vec::new(),
                 ret: Type::Number,

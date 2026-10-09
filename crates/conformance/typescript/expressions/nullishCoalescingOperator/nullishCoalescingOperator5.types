@@ -1,212 +1,212 @@
 === nullishCoalescingOperator5.ts ===
 
-const a: string | null = null as unknown as (string | null);
->a : string | null
->  : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+const a: string | undefined = null as unknown as (string | undefined);
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-const b: string | null = null as unknown as (string | null);
->b : string | null
->  : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+const b: string | undefined = null as unknown as (string | undefined);
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-const c: string | null = null as unknown as (string | null);
->c : string | null
->  : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+const c: string | undefined = null as unknown as (string | undefined);
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
 
 // should be a syntax error
 a ?? b || c;
->a ?? b || c : string | null
->            : ^^^^^^^^^^^^^
->a ?? b : string | null
->       : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>a ?? b || c : string | undefined
+>            : ^^^^^^^^^^^^^^^^^^
+>a ?? b : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // should be a syntax error
 a || b ?? c;
->a || b ?? c : string | null
->            : ^^^^^^^^^^^^^
->a || b : string | null
->       : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>a || b ?? c : string | undefined
+>            : ^^^^^^^^^^^^^^^^^^
+>a || b : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // should be a syntax error
 a ?? b && c;
->a ?? b && c : string | null
->            : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->b && c : string | null
->       : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>a ?? b && c : string | undefined
+>            : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b && c : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // should be a syntax error
 a && b ?? c;
->a && b ?? c : string | null
->            : ^^^^^^^^^^^^^
->a && b : string | null
->       : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>a && b ?? c : string | undefined
+>            : ^^^^^^^^^^^^^^^^^^
+>a && b : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // Valid according to spec
 a ?? (b || c);
->a ?? (b || c) : string | null
->              : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->(b || c) : string | null
->         : ^^^^^^^^^^^^^
->b || c : string | null
->       : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>a ?? (b || c) : string | undefined
+>              : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>(b || c) : string | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+>b || c : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // Valid according to spec
 (a ?? b) || c;
->(a ?? b) || c : string | null
->              : ^^^^^^^^^^^^^
->(a ?? b) : string | null
->         : ^^^^^^^^^^^^^
->a ?? b : string | null
->       : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>(a ?? b) || c : string | undefined
+>              : ^^^^^^^^^^^^^^^^^^
+>(a ?? b) : string | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+>a ?? b : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // Valid according to spec
 (a || b) ?? c;
->(a || b) ?? c : string | null
->              : ^^^^^^^^^^^^^
->(a || b) : string | null
->         : ^^^^^^^^^^^^^
->a || b : string | null
->       : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>(a || b) ?? c : string | undefined
+>              : ^^^^^^^^^^^^^^^^^^
+>(a || b) : string | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+>a || b : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // Valid according to spec
 a || (b ?? c);
->a || (b ?? c) : string | null
->              : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->(b ?? c) : string | null
->         : ^^^^^^^^^^^^^
->b ?? c : string | null
->       : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>a || (b ?? c) : string | undefined
+>              : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>(b ?? c) : string | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+>b ?? c : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // Valid according to spec
 a ?? (b && c);
->a ?? (b && c) : string | null
->              : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->(b && c) : string | null
->         : ^^^^^^^^^^^^^
->b && c : string | null
->       : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>a ?? (b && c) : string | undefined
+>              : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>(b && c) : string | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+>b && c : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // Valid according to spec
 (a ?? b) && c;
->(a ?? b) && c : string | null
->              : ^^^^^^^^^^^^^
->(a ?? b) : string | null
->         : ^^^^^^^^^^^^^
->a ?? b : string | null
->       : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>(a ?? b) && c : string | undefined
+>              : ^^^^^^^^^^^^^^^^^^
+>(a ?? b) : string | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+>a ?? b : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // Valid according to spec
 (a && b) ?? c;
->(a && b) ?? c : string | null
->              : ^^^^^^^^^^^^^
->(a && b) : string | null
->         : ^^^^^^^^^^^^^
->a && b : string | null
->       : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>(a && b) ?? c : string | undefined
+>              : ^^^^^^^^^^^^^^^^^^
+>(a && b) : string | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+>a && b : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 // Valid according to spec
 a && (b ?? c);
->a && (b ?? c) : string | null
->              : ^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->(b ?? c) : string | null
->         : ^^^^^^^^^^^^^
->b ?? c : string | null
->       : ^^^^^^^^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>a && (b ?? c) : string | undefined
+>              : ^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>(b ?? c) : string | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+>b ?? c : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 

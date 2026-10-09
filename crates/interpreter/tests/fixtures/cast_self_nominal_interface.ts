@@ -12,12 +12,12 @@ function propertyCount(properties: PropertyBag | null): number {
     if (properties === null) return 0;
     const actual = properties as PropertyBag;
     let count = 0;
-    if (actual.values !== null) {
+    if (actual.values !== undefined) {
         for (const property of actual.values) {
             count = count + 1;
         }
     }
-    if (actual.custom !== null) {
+    if (actual.custom !== undefined) {
         count = count + actual.custom.size;
     }
     return count;

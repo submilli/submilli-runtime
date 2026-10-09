@@ -1,7 +1,7 @@
 === typeGuardsInProperties.ts ===
 
-// Note that type guards affect types of variables and parameters only and 
-// have no effect on members of objects such as properties. 
+// Note that type guards affect types of variables and parameters only and
+// have no effect on members of objects such as properties.
 
 let num: number = null as unknown as (number);
 >num : number
@@ -125,7 +125,7 @@ class C1 {
 
     }
 }
-/*pruned*/;                          
+/*pruned*/;
 /*pruned*/;                                      // string | number
 /*pruned*/;                                      // string | number
 let obj1: {

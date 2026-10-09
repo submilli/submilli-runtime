@@ -41,7 +41,7 @@ function f(foo: T): S {
 >    : ^^^
 
     }
-    else { 
+    else {
         return (foo as S[])[0];
 >(foo as S[])[0] : S
 >                : ^

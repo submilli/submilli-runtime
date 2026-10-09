@@ -21,7 +21,7 @@ function c(): void {
     x = "";
     while (cond) {
         x; // string
-        x = null;
+        x = undefined;
         if (typeof x === "string") continue;
         break;
     }

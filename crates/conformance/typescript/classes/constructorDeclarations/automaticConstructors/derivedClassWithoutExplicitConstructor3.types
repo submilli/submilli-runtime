@@ -187,10 +187,10 @@ class D<T> extends Base {
 }
 
 
-/*pruned*/;                            
-                 
-                
- 
+/*pruned*/;
+
+
+
 
 /*pruned*/;       // error
 /*pruned*/;                  // error

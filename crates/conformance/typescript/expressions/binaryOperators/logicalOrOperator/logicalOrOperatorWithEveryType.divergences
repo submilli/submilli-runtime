@@ -1,4 +1,4 @@
-types: 183 of 190 tsc entries compared, 24 differ
+types: 242 of 265 tsc entries compared, 28 differ
 
 line 36: rb7
   tsc:  { a: string; }
@@ -48,6 +48,22 @@ line 59: a8 || a4
   tsc:  string[]
   ours: string | string[]
 
+line 69: re7
+  tsc:  { a: string; }
+  ours: void | { a: string }
+
+line 69: a7 || a5
+  tsc:  { a: string; }
+  ours: void | { a: string }
+
+line 70: re8
+  tsc:  string[]
+  ours: void | string[]
+
+line 70: a8 || a5
+  tsc:  string[]
+  ours: void | string[]
+
 line 92: rh8
   tsc:  string[]
   ours: { a: string } | string[]
@@ -66,35 +82,35 @@ line 102: a7 || a8
 
 line 113: rj7
   tsc:  { a: string; }
-  ours: null | { a: string }
+  ours: { a: string } | null
 
 line 113: a7 || null
   tsc:  { a: string; }
-  ours: null | { a: string }
+  ours: { a: string } | null
 
 line 114: rj8
   tsc:  string[]
-  ours: null | string[]
+  ours: string[] | null
 
 line 114: a8 || null
   tsc:  string[]
-  ours: null | string[]
+  ours: string[] | null
 
 line 124: rf7
   tsc:  { a: string; }
-  ours: null | { a: string }
+  ours: { a: string } | undefined
 
-line 124: a7 || null
+line 124: a7 || undefined
   tsc:  { a: string; }
-  ours: null | { a: string }
+  ours: { a: string } | undefined
 
 line 125: rf8
   tsc:  string[]
-  ours: null | string[]
+  ours: string[] | undefined
 
-line 125: a8 || null
+line 125: a8 || undefined
   tsc:  string[]
-  ours: null | string[]
+  ours: string[] | undefined
 
 errors:
 line 38: tsc TS2873: This kind of expression is always falsy. (we accept)
@@ -103,6 +119,8 @@ line 49: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 50: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 60: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 61: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 71: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 72: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 93: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 94: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 104: tsc TS2873: This kind of expression is always falsy. (we accept)

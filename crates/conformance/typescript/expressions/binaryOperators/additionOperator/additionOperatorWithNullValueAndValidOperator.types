@@ -12,7 +12,7 @@ enum E { a, b, c }
 >  : ^^^
 
 
-/*pruned*/;                           
+/*pruned*/;
 let b: number = null as unknown as (number);
 >b : number
 >  : ^^^^^^
@@ -21,7 +21,7 @@ let b: number = null as unknown as (number);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                       
+/*pruned*/;
 let d: string = null as unknown as (string);
 >d : string
 >  : ^^^^^^
@@ -32,8 +32,8 @@ let d: string = null as unknown as (string);
 
 
 // null + any
-/*pruned*/;            
-/*pruned*/;            
+/*pruned*/;
+/*pruned*/;
 
 // null + number/enum
 let r3 = null + b;
@@ -52,7 +52,7 @@ let r4 = null + 1;
 >1 : 1
 >  : ^
 
-/*pruned*/;       
+/*pruned*/;
 let r6 = null + E.a;
 >r6 : any
 >   : ^^^
@@ -93,7 +93,7 @@ let r9 = 1 + null;
 >1 : 1
 >  : ^
 
-/*pruned*/;       
+/*pruned*/;
 let r11 = E.a + null;
 >r11 : any
 >    : ^^^

@@ -1,3 +1,5 @@
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(9,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(9,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(10,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(10,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(11,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
@@ -9,7 +11,9 @@ compoundExponentiationAssignmentLHSCannotBeAssigned.ts(14,8): error TS2363: The 
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(15,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(15,8): error TS18050: The value 'null' cannot be used here.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(16,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
-compoundExponentiationAssignmentLHSCannotBeAssigned.ts(16,8): error TS18050: The value 'null' cannot be used here.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(16,8): error TS18050: The value 'undefined' cannot be used here.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(20,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(20,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(21,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(21,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(22,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
@@ -21,7 +25,9 @@ compoundExponentiationAssignmentLHSCannotBeAssigned.ts(25,8): error TS2363: The 
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(26,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(26,8): error TS18050: The value 'null' cannot be used here.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(27,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
-compoundExponentiationAssignmentLHSCannotBeAssigned.ts(27,8): error TS18050: The value 'null' cannot be used here.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(27,8): error TS18050: The value 'undefined' cannot be used here.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(31,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(31,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(32,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(32,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(33,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
@@ -33,7 +39,22 @@ compoundExponentiationAssignmentLHSCannotBeAssigned.ts(36,8): error TS2363: The 
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(37,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(37,8): error TS18050: The value 'null' cannot be used here.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(38,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
-compoundExponentiationAssignmentLHSCannotBeAssigned.ts(38,8): error TS18050: The value 'null' cannot be used here.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(38,8): error TS18050: The value 'undefined' cannot be used here.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(42,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(42,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(43,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(43,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(44,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(45,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(45,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(46,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(47,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(47,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(48,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(48,8): error TS18050: The value 'null' cannot be used here.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(49,1): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(49,8): error TS18050: The value 'undefined' cannot be used here.
+compoundExponentiationAssignmentLHSCannotBeAssigned.ts(52,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(53,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(54,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundExponentiationAssignmentLHSCannotBeAssigned.ts(55,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.

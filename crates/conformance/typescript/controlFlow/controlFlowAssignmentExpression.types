@@ -7,7 +7,7 @@ let x: string | boolean | number = null as unknown as (string | boolean | number
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                             
+/*pruned*/;
 
 x = "";
 >x = "" : ""
@@ -42,7 +42,7 @@ x = true;
 >true : true
 >     : ^^^^
 
-/*pruned*/;                        
+/*pruned*/;
 x; // number
 >x : true
 >  : ^^^^

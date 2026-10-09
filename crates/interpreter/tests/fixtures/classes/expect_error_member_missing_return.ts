@@ -1,6 +1,6 @@
 // expect-error: method `Counter.pick` does not return a value on all paths
 // expect-error: getter `Counter.sign` does not return a value on all paths
-// expect-error: arrow function does not return a value on all paths
+// expect-error: field `next` initializer is `() => number | undefined`, expected `() => number`
 // expect-error-count: 3
 class Counter {
   private count: number = 0;

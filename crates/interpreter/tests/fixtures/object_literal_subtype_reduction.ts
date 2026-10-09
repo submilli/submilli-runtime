@@ -9,7 +9,7 @@ function main(): void {
     box.push(5);
     assert(box.join(",") === "1,5", "the empty array joins the numbers");
   }
-  assert(xs[0].a.b == null, "the empty object reads b as missing");
+  assert(xs[0].a.b === undefined, "the empty object reads b as missing");
 
   const o = { p: 1 };
   const withExtra = [o, { p: 2, q: 3 }];
@@ -20,7 +20,7 @@ function main(): void {
   // lacks an optional field the way any object literal may.
   const withOptional: { p: number; q?: number } = { p: 4, q: 5 };
   const spread = [withOptional, { ...o }];
-  assert(spread[0].q === 5 && spread[1].q == null, "the spread joins the type with the optional field");
+  assert(spread[0].q === 5 && spread[1].q === undefined, "the spread joins the type with the optional field");
 
   // A non-empty object literal target keeps a source with a field it lacks,
   // spread or not; an empty `{}` absorbs a spread.

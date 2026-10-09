@@ -105,8 +105,8 @@ be an object, whose members a filter names with a dot.
 
 ### Fields only some calls report
 
-A call that doesn't supply a field leaves it out, and a condition on a
-missing field is false.
+A call that doesn't supply a field, or passes it as `undefined`, leaves it
+out, and a condition on a missing field is false.
 
 | Capability | Field | Reported by |
 | --- | --- | --- |

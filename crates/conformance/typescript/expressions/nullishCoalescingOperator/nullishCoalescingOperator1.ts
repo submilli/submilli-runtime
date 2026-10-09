@@ -2,26 +2,26 @@
 // @strict: true
 // @allowUnreachableCode: false
 
-const a1: string | null | null = null as unknown as (string | null | null);
-const a2: string | null | null = null as unknown as (string | null | null);
-const a3: string | null | null = null as unknown as (string | null | null);
-const a4: string | null | null = null as unknown as (string | null | null);
+const a1: string | undefined | null = null as unknown as (string | undefined | null);
+const a2: string | undefined | null = null as unknown as (string | undefined | null);
+const a3: string | undefined | null = null as unknown as (string | undefined | null);
+const a4: string | undefined | null = null as unknown as (string | undefined | null);
 
-const b1: number | null | null = null as unknown as (number | null | null);
-const b2: number | null | null = null as unknown as (number | null | null);
-const b3: number | null | null = null as unknown as (number | null | null);
-const b4: number | null | null = null as unknown as (number | null | null);
+const b1: number | undefined | null = null as unknown as (number | undefined | null);
+const b2: number | undefined | null = null as unknown as (number | undefined | null);
+const b3: number | undefined | null = null as unknown as (number | undefined | null);
+const b4: number | undefined | null = null as unknown as (number | undefined | null);
 
-const c1: boolean | null | null = null as unknown as (boolean | null | null);
-const c2: boolean | null | null = null as unknown as (boolean | null | null);
-const c3: boolean | null | null = null as unknown as (boolean | null | null);
-const c4: boolean | null | null = null as unknown as (boolean | null | null);
+const c1: boolean | undefined | null = null as unknown as (boolean | undefined | null);
+const c2: boolean | undefined | null = null as unknown as (boolean | undefined | null);
+const c3: boolean | undefined | null = null as unknown as (boolean | undefined | null);
+const c4: boolean | undefined | null = null as unknown as (boolean | undefined | null);
 
 interface I { a: string }
-const d1: I | null | null = null as unknown as (I | null | null);
-const d2: I | null | null = null as unknown as (I | null | null);
-const d3: I | null | null = null as unknown as (I | null | null);
-const d4: I | null | null = null as unknown as (I | null | null);
+const d1: I | undefined | null = null as unknown as (I | undefined | null);
+const d2: I | undefined | null = null as unknown as (I | undefined | null);
+const d3: I | undefined | null = null as unknown as (I | undefined | null);
+const d4: I | undefined | null = null as unknown as (I | undefined | null);
 
 const aa1 = a1 ?? 'whatever';
 const aa2 = a2 ?? 'whatever';

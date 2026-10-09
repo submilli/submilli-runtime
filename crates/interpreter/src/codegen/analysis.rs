@@ -88,7 +88,7 @@ impl CodegenAnalysis {
                 .map_err(crate::codegen::arena_failure)?
                 .span;
             for ty in types {
-                let ty = crate::typechecker::infer::narrowing::strip_null(ty);
+                let ty = crate::typechecker::infer::narrowing::strip_nullish(ty);
                 analysis.visit_type_at(&ty, span)?;
                 analysis
                     .string_pool
@@ -134,6 +134,9 @@ impl CodegenAnalysis {
         }
         for f in &ta.functions {
             for p in &f.params {
+                if p.boxed {
+                    analysis.note_binding_cell();
+                }
                 analysis
                     .visit_type(&p.ty)
                     .map_err(|error| error.with_span(p.name.span))?;
@@ -150,12 +153,26 @@ impl CodegenAnalysis {
         for expr_id in ta.class_field_initializers() {
             analysis.walk_expr(ta, expr_id)?;
         }
-        if !ta.runtime_class_fields.is_empty() {
+        if !ta.runtime_class_fields.is_empty()
+            || ta
+                .runtime_class_parameters
+                .values()
+                .any(|params| !params.is_empty())
+            || ta
+                .functions
+                .iter()
+                .any(|function| !function.generics.is_empty())
+            || ta
+                .runtime_class_contexts
+                .values()
+                .any(|contexts| !contexts.is_empty())
+        {
             analysis
                 .mentioned_closure_sigs
                 .push(super::field_guards::signature());
         }
         analysis.note_narrowing_checks(ta)?;
+        analysis.note_inherited_conversions(ta, dependencies)?;
         for test in ta.runtime_type_tests.values() {
             analysis.note_narrowing_test(test)?;
         }
@@ -194,11 +211,7 @@ impl CodegenAnalysis {
                 .iter()
                 .any(|method| matches!(method.name.name.as_str(), "toString" | "toJson"))
             {
-                self.string_pool
-                    .intern_text(&cast_check::error_prefix(&Type::String));
-                for tag in cast_check::TYPE_TAG_STRINGS {
-                    self.string_pool.intern_text(tag);
-                }
+                self.note_conversion_dispatch()?;
             }
             for check in class
                 .fields
@@ -208,6 +221,64 @@ impl CodegenAnalysis {
                 self.note_narrowing_check(check)?;
             }
         }
+        Ok(())
+    }
+
+    /// A local subclass emits conversion forwarders even when the authored
+    /// methods live in a dependency and no expression calls them explicitly.
+    fn note_inherited_conversions(
+        &mut self,
+        ta: &TypedAst,
+        dependencies: &[&crate::PackageDeclaration],
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let mut parents: Vec<_> = ta
+            .types
+            .iter()
+            .filter_map(|decl| match decl {
+                crate::TypedTypeDecl::Class(class) => class.extends.as_ref(),
+                _ => None,
+            })
+            .collect();
+        let mut visited = BTreeSet::new();
+        while let Some(parent) = parents.pop() {
+            if !visited.insert(parent) {
+                continue;
+            }
+            let Some(symbol) = dependencies
+                .iter()
+                .flat_map(|package| package.runtime_types.values().chain(package.types.values()))
+                .find(|symbol| &symbol.mangled_name == parent)
+            else {
+                continue;
+            };
+            let crate::TypeKind::Class {
+                methods, extends, ..
+            } = &symbol.kind
+            else {
+                continue;
+            };
+            if methods.contains_key("toString") || methods.contains_key("toJson") {
+                self.note_conversion_dispatch()?;
+                return Ok(());
+            }
+            if let Some(extends) = extends {
+                parents.push(&extends.parent);
+            }
+        }
+        Ok(())
+    }
+
+    fn note_conversion_dispatch(&mut self) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.string_pool.intern_text("Value is not callable");
+        self.string_pool
+            .intern_text("Unbound function has no this receiver");
+        self.string_pool
+            .intern_text(&cast_check::error_prefix(&Type::String));
+        for tag in cast_check::TYPE_TAG_STRINGS {
+            self.string_pool.intern_text(tag);
+        }
+        self.mentioned_closure_sigs
+            .push(ClosureSig::of(0, &Type::String)?);
         Ok(())
     }
 
@@ -622,6 +693,7 @@ impl CodegenAnalysis {
             | TypedExprKind::String(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
+            | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
             | TypedExprKind::LocalRef { .. }
@@ -640,6 +712,14 @@ impl CodegenAnalysis {
         id: StmtId,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let stmt = ta.try_stmt(id).map_err(crate::codegen::arena_failure)?;
+        if matches!(
+            stmt.kind,
+            TypedStmtKind::Let { boxed: true, .. }
+                | TypedStmtKind::AssignLocal { boxed: true, .. }
+                | TypedStmtKind::ReboxLocal { .. }
+        ) {
+            self.note_binding_cell();
+        }
         let _: () = match &stmt.kind {
             TypedStmtKind::Let { ty, .. } | TypedStmtKind::Const { ty, .. } => {
                 self.visit_type_at(ty, stmt.span)?;
@@ -752,6 +832,23 @@ impl CodegenAnalysis {
         id: ExprId,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let expr = ta.try_expr(id).map_err(crate::codegen::arena_failure)?;
+        let has_binding_cell = match &expr.kind {
+            TypedExprKind::LocalRef { boxed: true, .. }
+            | TypedExprKind::PostfixUnary {
+                target: PostfixTarget::Local { boxed: true, .. },
+                ..
+            } => true,
+            TypedExprKind::Closure {
+                params, captured, ..
+            } => {
+                params.iter().any(|param| param.boxed)
+                    || captured.iter().any(|capture| capture.boxed)
+            }
+            _ => false,
+        };
+        if has_binding_cell {
+            self.note_binding_cell();
+        }
         if matches!(
             expr.kind,
             TypedExprKind::IndexAccess { .. }
@@ -804,6 +901,9 @@ impl CodegenAnalysis {
                 if let Some(name) = op.bitwise_name() {
                     self.dependency_usage
                         .note_value(crate::mangle::prelude(&format!("__value_{name}")));
+                    // The inline ToInt32 falls back to `x | 0` for huge values.
+                    self.dependency_usage
+                        .note_value(crate::mangle::prelude("__value_bitor"));
                 }
                 if matches!(op, BinOp::Pow) && matches!(expr.ty.peel(), Type::Number) {
                     self.dependency_usage
@@ -868,6 +968,8 @@ impl CodegenAnalysis {
                 if matches!(op, crate::UnOp::BitNot) {
                     self.dependency_usage
                         .note_value(crate::mangle::prelude("__value_bitnot"));
+                    self.dependency_usage
+                        .note_value(crate::mangle::prelude("__value_bitor"));
                 }
                 let operand_ty = ta
                     .try_expr(*operand)
@@ -900,6 +1002,10 @@ impl CodegenAnalysis {
                 Intrinsic::BigIntFromString => {
                     self.dependency_usage
                         .collect_bigint_host_value("fromString");
+                }
+                Intrinsic::ToString => {
+                    self.dependency_usage
+                        .note_value(crate::mangle::prelude("__value_to_string"));
                 }
                 Intrinsic::Assert => {}
             },
@@ -1095,6 +1201,7 @@ impl CodegenAnalysis {
             TypedExprKind::Number(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
+            | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::EffectThen { .. }
             | TypedExprKind::Sequence { .. }
@@ -1137,8 +1244,8 @@ impl CodegenAnalysis {
     /// records it: `walk_type` on an `InterfaceRef` visits type arguments only,
     /// and a `void` return contributes no type at all.
     ///
-    /// `InterfaceRef` only, unlike [`Self::note_shaped_property_access`]: a method on
-    /// an anonymous object type is a function-typed *field*, so it lowers to a
+    /// Classes and interfaces carry mutable method payloads. A method on
+    /// an anonymous object type is a function-typed field, so it lowers to a
     /// property read followed by a closure call, never to method dispatch.
     fn note_shape_dispatch(
         &mut self,
@@ -1150,14 +1257,22 @@ impl CodegenAnalysis {
         self.string_pool
             .intern_text("Unbound function has no this receiver");
         // An optional chain dispatches on the non-null half of its receiver.
-        let receiver_ty = crate::typechecker::infer::narrowing::strip_null(receiver_ty);
-        if !matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
+        let receiver_ty = crate::typechecker::infer::narrowing::strip_nullish(receiver_ty);
+        if !matches!(
+            receiver_ty.peel(),
+            Type::InterfaceRef { .. } | Type::ClassRef { .. }
+        ) {
             return Ok(());
         }
         self.mentioned_closure_sigs
             .push(ClosureSig::of(arity, ret)?);
 
         Ok(())
+    }
+
+    fn note_binding_cell(&mut self) {
+        self.string_pool
+            .intern_text(super::function_emitter::binding_cells::UNINITIALIZED_PARAMETER_MESSAGE);
     }
 
     /// Each step's receiver is the previous step's result, so a chain has to be
@@ -1196,7 +1311,7 @@ impl CodegenAnalysis {
                     ..
                 } => {
                     if ta.authored_call_arguments(*span).is_some()
-                        && !iface.as_str().starts_with("submilli:")
+                        && !crate::codegen::is_host_package(iface.as_str())
                     {
                         for helper in ["__value_member", "__value_invoke"] {
                             self.dependency_usage
@@ -1233,7 +1348,7 @@ impl CodegenAnalysis {
                     ..
                 } => {
                     if ta.authored_call_arguments(*span).is_some()
-                        && !iface.as_str().starts_with("submilli:")
+                        && !crate::codegen::is_host_package(iface.as_str())
                     {
                         for helper in ["__value_member", "__value_invoke"] {
                             self.dependency_usage
@@ -1327,7 +1442,7 @@ impl CodegenAnalysis {
 /// field-name scan, which is what carries the accessor branch. `infer_field_access`
 /// admits a union of object shapes as well as a single one.
 fn is_shaped_receiver(ty: &Type) -> bool {
-    let ty = crate::typechecker::infer::narrowing::strip_null(ty);
+    let ty = crate::typechecker::infer::narrowing::strip_nullish(ty);
     match ty.peel() {
         Type::InterfaceRef { .. } | Type::Object { .. } => true,
         Type::Union(members) => members

@@ -95,8 +95,8 @@ submilli docs submilli:llm
 ```text
 submilli:llm — Gated model calls: call/batch, and models() to discover them.
 …
-function batch<T>(model: string, prompts: string[], schema?: string | null): T;
-function call<T>(model: string, prompt: string, schema?: string | null): T;
+function batch<T>(model: string, prompts: string[], schema?: string): T;
+function call<T>(model: string, prompt: string, schema?: string): T;
 function models(): Model[];
 …
 ```
@@ -164,7 +164,7 @@ function main(): Verdict {
     const billing: string[] = [];
     for (let i = 0; i < answers.length; i++) {
         const text = answers[i].text;
-        if (text !== null && text.trim().toLowerCase().startsWith("yes")) {
+        if (text !== undefined && text.trim().toLowerCase().startsWith("yes")) {
             billing.push(tickets[i]);
         }
     }

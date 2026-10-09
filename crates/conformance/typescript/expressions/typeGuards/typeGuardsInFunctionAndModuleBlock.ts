@@ -45,9 +45,9 @@ function foo4(x: number | string | boolean): string {
 function foo5(x: number | string | boolean): void {
     if (typeof x === "string") {
         let y = x; // string;
-        /*pruned*/;           
-                                
-         
+        function foo(): void {
+            let z = x; // string
+        }
     }
 }
 /*pruned*/;  

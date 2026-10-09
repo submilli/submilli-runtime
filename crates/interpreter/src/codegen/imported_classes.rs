@@ -66,7 +66,7 @@ pub struct ImportedSlot {
 struct ClassInfo<'a> {
     generics: &'a [String],
     package: &'a str,
-    supports_instance_guards: bool,
+    compiled_class: bool,
     runtime_generics: &'a BTreeSet<MangledName>,
     name: &'a str,
     extends: Option<MangledName>,
@@ -311,9 +311,7 @@ fn collect_class_info<'a>(
                         generics,
                         runtime_generics: &defs.runtime_generics,
                         package: defs.package_name.as_str(),
-                        supports_instance_guards: defs
-                            .runtime_types
-                            .contains_key(sym.mangled_name.as_str()),
+                        compiled_class: defs.runtime_types.contains_key(sym.mangled_name.as_str()),
                         name: sym.name.as_str(),
                         // Layout and vtables depend on the parent's name;
                         // concrete arguments travel in the instance context.
@@ -492,11 +490,15 @@ fn reconstruct_one(
         .unwrap_or_default();
     for (name, (param_tys, ret_ty)) in &methods {
         let argument_metadata = match class.methods.get(name) {
-            Some(sig) => super::call_arguments::metadata(
-                sig.params
-                    .iter()
-                    .map(|param| (param.default.as_ref(), param.rest)),
-            ),
+            Some(sig) => super::call_arguments::metadata(sig.params.iter().map(|param| {
+                (
+                    param
+                        .default
+                        .as_ref()
+                        .or(param.optional.then_some(&crate::DefaultValue::Undefined)),
+                    param.rest,
+                )
+            })),
             None => None,
         };
         let generic = class
@@ -669,6 +671,15 @@ fn reconstruct_one(
         symbols.record_class_field_narrowing_check(mangled.clone(), name.clone(), check.clone());
     }
     for (i, slot) in slots.iter().enumerate() {
+        // Native classes keep their methods in the vtable, without the mutable
+        // closure payload emitted by the compiler for guest class instances.
+        if class.compiled_class
+            && !slot.generic
+            && !slot.name.starts_with("get ")
+            && !slot.name.starts_with("set ")
+        {
+            symbols.record_class_payload_method(mangled.clone(), slot.name.clone());
+        }
         symbols.record_class_method_slot(
             mangled.clone(),
             slot.name.clone(),
@@ -696,7 +707,7 @@ fn reconstruct_one(
         class.extends.as_ref(),
         wasm_u32(named_payload_len)?,
         (!class.generics.is_empty() || !narrowing_checks.is_empty() || parent_guarded)
-            && class.supports_instance_guards,
+            && class.compiled_class,
     )?;
 
     // 4. Import the constructor, ctor-init, and own method bodies.
@@ -772,6 +783,7 @@ fn reconstruct_one(
                 span: crate::Span::at(file),
             },
             ty: p.ty.clone(),
+            optional: p.optional,
             boxed: false,
             rest: p.rest,
             default: p.default.clone(),

@@ -306,8 +306,38 @@ let b9: { fn(): Derived } = null as unknown as ({ fn(): Derived });
 >   : ^^^^^^^^^^^^^
 
 
-/*pruned*/;                                                                   
-/*pruned*/;                                                                         
+let a10: { fn(a?: Base): void } = null as unknown as ({ fn(a?: Base): void });
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>fn : (a?: Base) => void
+>   : ^^^^^^^^^^^^^^^^^^
+>a : Base | undefined
+>  : ^^^^^^^^^^^^^^^^
+>null as unknown as ({ fn(a?: Base): void }) : { fn(a?: Base): void; }
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>fn : (a?: Base) => void
+>   : ^^^^^^^^^^^^^^^^^^
+>a : Base | undefined
+>  : ^^^^^^^^^^^^^^^^
+
+let b10: { fn(a?: Derived): void } = null as unknown as ({ fn(a?: Derived): void });
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>fn : (a?: Derived) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>a : Derived | undefined
+>  : ^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ fn(a?: Derived): void }) : { fn(a?: Derived): void; }
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>fn : (a?: Derived) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^
+>a : Derived | undefined
+>  : ^^^^^^^^^^^^^^^^^^^
+
 
 let a11: { fn(...a: Base[]): void } = null as unknown as ({ fn(...a: Base[]): void });
 >a11 : { fn(...a: Base[]): void; }
@@ -436,7 +466,16 @@ let r1a9 = a9 < b9;
 >b9 : { fn(): Derived; }
 >   : ^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;           
+let r1a10 = a10 < b10;
+>r1a10 : boolean
+>      : ^^^^^^^
+>a10 < b10 : boolean
+>          : ^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 let r1a11 = a11 < b11;
 >r1a11 : boolean
 >      : ^^^^^^^
@@ -539,7 +578,16 @@ let r1b9 = b9 < a9;
 >a9 : { fn(): Base; }
 >   : ^^^^^^^^^^^^^^^
 
-/*pruned*/;           
+let r1b10 = b10 < a10;
+>r1b10 : boolean
+>      : ^^^^^^^
+>b10 < a10 : boolean
+>          : ^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+
 let r1b11 = b11 < a11;
 >r1b11 : boolean
 >      : ^^^^^^^
@@ -643,7 +691,16 @@ let r2a9 = a9 > b9;
 >b9 : { fn(): Derived; }
 >   : ^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;           
+let r2a10 = a10 > b10;
+>r2a10 : boolean
+>      : ^^^^^^^
+>a10 > b10 : boolean
+>          : ^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 let r2a11 = a11 > b11;
 >r2a11 : boolean
 >      : ^^^^^^^
@@ -746,7 +803,16 @@ let r2b9 = b9 > a9;
 >a9 : { fn(): Base; }
 >   : ^^^^^^^^^^^^^^^
 
-/*pruned*/;           
+let r2b10 = b10 > a10;
+>r2b10 : boolean
+>      : ^^^^^^^
+>b10 > a10 : boolean
+>          : ^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+
 let r2b11 = b11 > a11;
 >r2b11 : boolean
 >      : ^^^^^^^
@@ -850,7 +916,16 @@ let r3a9 = a9 <= b9;
 >b9 : { fn(): Derived; }
 >   : ^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;            
+let r3a10 = a10 <= b10;
+>r3a10 : boolean
+>      : ^^^^^^^
+>a10 <= b10 : boolean
+>           : ^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 let r3a11 = a11 <= b11;
 >r3a11 : boolean
 >      : ^^^^^^^
@@ -953,7 +1028,16 @@ let r3b9 = b9 <= a9;
 >a9 : { fn(): Base; }
 >   : ^^^^^^^^^^^^^^^
 
-/*pruned*/;            
+let r3b10 = b10 <= a10;
+>r3b10 : boolean
+>      : ^^^^^^^
+>b10 <= a10 : boolean
+>           : ^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+
 let r3b11 = b11 <= a11;
 >r3b11 : boolean
 >      : ^^^^^^^
@@ -1057,7 +1141,16 @@ let r4a9 = a9 >= b9;
 >b9 : { fn(): Derived; }
 >   : ^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;            
+let r4a10 = a10 >= b10;
+>r4a10 : boolean
+>      : ^^^^^^^
+>a10 >= b10 : boolean
+>           : ^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 let r4a11 = a11 >= b11;
 >r4a11 : boolean
 >      : ^^^^^^^
@@ -1160,7 +1253,16 @@ let r4b9 = b9 >= a9;
 >a9 : { fn(): Base; }
 >   : ^^^^^^^^^^^^^^^
 
-/*pruned*/;            
+let r4b10 = b10 >= a10;
+>r4b10 : boolean
+>      : ^^^^^^^
+>b10 >= a10 : boolean
+>           : ^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+
 let r4b11 = b11 >= a11;
 >r4b11 : boolean
 >      : ^^^^^^^
@@ -1264,7 +1366,16 @@ let r5a9 = a9 == b9;
 >b9 : { fn(): Derived; }
 >   : ^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;            
+let r5a10 = a10 == b10;
+>r5a10 : boolean
+>      : ^^^^^^^
+>a10 == b10 : boolean
+>           : ^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 let r5a11 = a11 == b11;
 >r5a11 : boolean
 >      : ^^^^^^^
@@ -1367,7 +1478,16 @@ let r5b9 = b9 == a9;
 >a9 : { fn(): Base; }
 >   : ^^^^^^^^^^^^^^^
 
-/*pruned*/;            
+let r5b10 = b10 == a10;
+>r5b10 : boolean
+>      : ^^^^^^^
+>b10 == a10 : boolean
+>           : ^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+
 let r5b11 = b11 == a11;
 >r5b11 : boolean
 >      : ^^^^^^^
@@ -1471,7 +1591,16 @@ let r6a9 = a9 != b9;
 >b9 : { fn(): Derived; }
 >   : ^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;            
+let r6a10 = a10 != b10;
+>r6a10 : boolean
+>      : ^^^^^^^
+>a10 != b10 : boolean
+>           : ^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 let r6a11 = a11 != b11;
 >r6a11 : boolean
 >      : ^^^^^^^
@@ -1574,7 +1703,16 @@ let r6b9 = b9 != a9;
 >a9 : { fn(): Base; }
 >   : ^^^^^^^^^^^^^^^
 
-/*pruned*/;            
+let r6b10 = b10 != a10;
+>r6b10 : boolean
+>      : ^^^^^^^
+>b10 != a10 : boolean
+>           : ^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+
 let r6b11 = b11 != a11;
 >r6b11 : boolean
 >      : ^^^^^^^
@@ -1678,7 +1816,16 @@ let r7a9 = a9 === b9;
 >b9 : { fn(): Derived; }
 >   : ^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;             
+let r7a10 = a10 === b10;
+>r7a10 : boolean
+>      : ^^^^^^^
+>a10 === b10 : boolean
+>            : ^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 let r7a11 = a11 === b11;
 >r7a11 : boolean
 >      : ^^^^^^^
@@ -1781,7 +1928,16 @@ let r7b9 = b9 === a9;
 >a9 : { fn(): Base; }
 >   : ^^^^^^^^^^^^^^^
 
-/*pruned*/;             
+let r7b10 = b10 === a10;
+>r7b10 : boolean
+>      : ^^^^^^^
+>b10 === a10 : boolean
+>            : ^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+
 let r7b11 = b11 === a11;
 >r7b11 : boolean
 >      : ^^^^^^^
@@ -1885,7 +2041,16 @@ let r8a9 = a9 !== b9;
 >b9 : { fn(): Derived; }
 >   : ^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;             
+let r8a10 = a10 !== b10;
+>r8a10 : boolean
+>      : ^^^^^^^
+>a10 !== b10 : boolean
+>            : ^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 let r8a11 = a11 !== b11;
 >r8a11 : boolean
 >      : ^^^^^^^
@@ -1988,7 +2153,16 @@ let r8b9 = b9 !== a9;
 >a9 : { fn(): Base; }
 >   : ^^^^^^^^^^^^^^^
 
-/*pruned*/;             
+let r8b10 = b10 !== a10;
+>r8b10 : boolean
+>      : ^^^^^^^
+>b10 !== a10 : boolean
+>            : ^^^^^^^
+>b10 : { fn(a?: Derived): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a10 : { fn(a?: Base): void; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+
 let r8b11 = b11 !== a11;
 >r8b11 : boolean
 >      : ^^^^^^^

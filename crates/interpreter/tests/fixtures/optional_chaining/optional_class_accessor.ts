@@ -14,14 +14,14 @@ class Computed {
   }
 }
 
-function size_of(c: Computed | null): number | null {
+function size_of(c: Computed | null): number | undefined {
   return c?.size;
 }
 
 function main(): void {
   const c = new Computed(4);
   assert(size_of(c) === 8, "getter through optional chain");
-  assert(size_of(null) === null, "short-circuit on null receiver");
+  assert(size_of(null) === undefined, "short-circuit on null receiver");
 
   c.size = 20;
   assert(size_of(c) === 20, "getter reflects the setter");

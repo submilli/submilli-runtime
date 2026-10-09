@@ -9,8 +9,15 @@ use crate::codegen::function_emitter::{FunctionEmitter, cast};
 use crate::codegen::{CodegenCtx, cast_diagnostics as diagnostic};
 use crate::{ExprId, Ident, Span, Type};
 
-pub const TYPE_TAG_STRINGS: &[&str] =
-    &["string", "number", "boolean", "function", "object", "null"];
+pub const TYPE_TAG_STRINGS: &[&str] = &[
+    "string",
+    "number",
+    "boolean",
+    "function",
+    "object",
+    "null",
+    "undefined",
+];
 pub(super) const RECURSIVE_VALIDATOR_CAPACITY: i32 = 1024;
 
 #[derive(Clone, Copy)]
@@ -60,12 +67,6 @@ pub fn emit_cast(
         .map_err(crate::codegen::arena_failure)?
         .ty
         .clone();
-
-    // Inference refuses a written cast of `void`, so this one replaced a
-    // narrowing around an effect-only expression: there is no value to convert.
-    if source_ty.is_void() {
-        return emit_expr(emitter, ctx, value);
-    }
 
     // unknown accepts every value — box to $Object, no test.
     if matches!(target_ty.peel(), Type::Unknown) {
@@ -213,7 +214,7 @@ pub fn emit_non_null_assert_on_stack(
     emitter.instruction(Instruction::LocalSet(scratch));
 
     emitter.instruction(Instruction::LocalGet(scratch));
-    emitter.instruction(Instruction::RefIsNull);
+    crate::codegen::function_emitter::expr::emit_is_nullish(emitter, ctx)?;
     emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
     crate::codegen::throw::emit_type_error_throw(
         emitter,
@@ -303,6 +304,10 @@ fn emit_structural_test_inner(
         Type::Null => {
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefIsNull);
+        }
+        Type::Undefined | Type::Void => {
+            emitter.instruction(Instruction::LocalGet(value_local));
+            crate::codegen::function_emitter::expr::emit_is_undefined(emitter, ctx)?;
         }
         Type::Unknown => emitter.instruction(Instruction::I32Const(1)),
         Type::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)?),
@@ -551,25 +556,49 @@ fn emit_structural_test_inner(
                 field_index: 1,
             });
             emitter.instruction(Instruction::LocalSet(raw_local));
-            // Length must match before indexing slots (else array.get would trap).
+            // Validate the logical length before reading any tuple position.
+            let length = emitter.add_anonymous_local(ValType::I32)?;
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
             emitter.instruction(Instruction::StructGet {
                 struct_type_index: array_idx,
                 field_index: 2,
             });
-            emitter.instruction(Instruction::I32Const(elems.len() as i32));
-            emitter.instruction(Instruction::I32Eq);
+            emitter.instruction(Instruction::LocalTee(length));
+            emitter.instruction(Instruction::I32Const(
+                crate::codegen::wasm_u32(elems.len())?.cast_signed(),
+            ));
+            emitter.instruction(Instruction::I32LeU);
+            emitter.instruction(Instruction::LocalGet(length));
+            emitter.instruction(Instruction::I32Const(
+                crate::codegen::wasm_u32(elems.required_len())?.cast_signed(),
+            ));
+            emitter.instruction(Instruction::I32GeU);
+            emitter.instruction(Instruction::I32And);
             emitter.emit_if(i32_block);
             let elem_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
             emitter.instruction(Instruction::I32Const(1));
             for (idx, et) in elems.iter().enumerate() {
+                if idx >= elems.required_len() {
+                    emitter.instruction(Instruction::LocalGet(length));
+                    emitter.instruction(Instruction::I32Const(
+                        crate::codegen::wasm_u32(idx)?.cast_signed(),
+                    ));
+                    emitter.instruction(Instruction::I32LeU);
+                    emitter.emit_if(i32_block);
+                    emitter.instruction(Instruction::I32Const(1));
+                    emitter.emit_else();
+                }
                 let index = emitter.add_anonymous_local(ValType::I32)?;
-                emitter.instruction(Instruction::I32Const(idx as i32));
+                emitter.instruction(Instruction::I32Const(
+                    crate::codegen::wasm_u32(idx)?.cast_signed(),
+                ));
                 emitter.instruction(Instruction::LocalSet(index));
                 let parent_path = diagnostic::index(emitter, ctx, index);
                 emitter.instruction(Instruction::LocalGet(raw_local));
-                emitter.instruction(Instruction::I32Const(idx as i32));
+                emitter.instruction(Instruction::I32Const(
+                    crate::codegen::wasm_u32(idx)?.cast_signed(),
+                ));
                 emitter.instruction(Instruction::ArrayGet(intr.raw_array));
                 emitter.instruction(Instruction::LocalSet(elem_local));
                 emit_structural_test_inner(
@@ -581,6 +610,9 @@ fn emit_structural_test_inner(
                     validator_state,
                 )?;
                 diagnostic::pop(emitter, parent_path);
+                if idx >= elems.required_len() {
+                    emitter.emit_end();
+                }
                 emitter.instruction(Instruction::I32And);
             }
             emitter.emit_else();
@@ -774,7 +806,7 @@ pub(crate) fn emit_checked_cast_on_stack(
         Some(crate::FieldNarrowingTest::Shape(shape)) => {
             emit_structural_test(emitter, ctx, scratch, shape, target_ty)?;
         }
-        _ => emit_representation_test(emitter, ctx, scratch, target_ty)?,
+        _ => emit_target_test(emitter, ctx, scratch, target_ty)?,
     }
     emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
     emitter.instruction(Instruction::LocalGet(scratch));
@@ -821,7 +853,7 @@ fn is_interface_parameter(ty: &Type) -> bool {
         Type::Union(members) => {
             let mut non_null = members
                 .iter()
-                .filter(|member| !matches!(member.peel(), Type::Null));
+                .filter(|member| !matches!(member.peel(), Type::Null | Type::Undefined));
             non_null
                 .next()
                 .is_some_and(|member| matches!(member.peel(), Type::InterfaceRef { .. }))
@@ -873,13 +905,8 @@ pub(crate) fn emit_operation_cast_on_stack(
             )?;
             emitter.emit_end();
         }
-    } else if matches!(
-        ctx.symbols.value_type(target_ty)?,
-        ValType::F64 | ValType::I32
-    ) {
-        emit_structural_test(emitter, ctx, scratch, target_ty, target_ty)?;
     } else {
-        emit_representation_test(emitter, ctx, scratch, target_ty)?;
+        emit_target_test(emitter, ctx, scratch, target_ty)?;
     }
     emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
     emitter.instruction(Instruction::LocalGet(scratch));
@@ -889,6 +916,25 @@ pub(crate) fn emit_operation_cast_on_stack(
     emitter.emit_end();
     emitter.cast_diagnostic = previous_diagnostic;
     Ok(())
+}
+
+/// Pushes whether `value_local` holds a `target_ty`, for a target without a
+/// recorded runtime test. A primitive slot (`1 | 2` is an `f64`) has no
+/// reference shape to test, so its values are told apart structurally.
+fn emit_target_test(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    value_local: u32,
+    target_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if matches!(
+        ctx.symbols.value_type(target_ty)?,
+        ValType::F64 | ValType::I32
+    ) {
+        emit_structural_test(emitter, ctx, value_local, target_ty, target_ty)
+    } else {
+        emit_representation_test(emitter, ctx, value_local, target_ty)
+    }
 }
 
 /// The conservative fallback for types without a full structural validator.
@@ -991,14 +1037,32 @@ fn emit_field_conformance(
         interface_stack,
         validator_state,
     )?;
-    if field.optional {
+    // A missing key reads as `undefined`, so a field that admits it conforms
+    // without one: `{ parent: number | undefined }` round-trips through JSON.
+    let may_be_absent = field.optional || admits_undefined(&field.ty);
+    if may_be_absent {
         emitter.instruction(Instruction::LocalGet(locals.field));
-        emitter.instruction(Instruction::RefIsNull);
+        crate::codegen::function_emitter::expr::emit_is_undefined(emitter, ctx)?;
         emitter.instruction(Instruction::I32Or);
+    } else {
+        // A required undefined-valued property must still exist on the object.
+        emitter.instruction(Instruction::LocalGet(locals.object));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index: intrinsics.object_shape,
+            field_index: 1,
+        });
+        emitter.instruction(Instruction::LocalGet(index_local));
+        emitter.instruction(Instruction::ArrayGet(intrinsics.field_names));
+        crate::codegen::field_names::emit_name_presence(emitter, ctx)?;
+        emitter.instruction(Instruction::LocalGet(locals.field));
+        crate::codegen::function_emitter::expr::emit_is_nullish(emitter, ctx)?;
+        emitter.instruction(Instruction::I32Eqz);
+        emitter.instruction(Instruction::I32Or);
+        emitter.instruction(Instruction::I32And);
     }
     emitter.emit_else();
     let getter = crate::codegen::classes::accessor_getter_name(fname);
-    if field.optional {
+    if may_be_absent {
         // Absent and accessor-backed both conform, so the branch is constant.
         emitter.instruction(Instruction::I32Const(1));
     } else if crate::codegen::function_emitter::expr::accessor_branch_emittable(ctx, &getter) {
@@ -1150,9 +1214,15 @@ fn emit_interface_test_inner(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     ctx.charge_validator_step(emitter)?;
     let checkpoint = diagnostic::checkpoint(emitter, ctx);
-    if test.nullable {
+    if test.nullable || test.undefined {
         emitter.instruction(Instruction::LocalGet(value_local));
-        emitter.instruction(Instruction::RefIsNull);
+        if test.nullable && test.undefined {
+            crate::codegen::function_emitter::expr::emit_is_nullish(emitter, ctx)?;
+        } else if test.undefined {
+            crate::codegen::function_emitter::expr::emit_is_undefined(emitter, ctx)?;
+        } else {
+            emitter.instruction(Instruction::RefIsNull);
+        }
         emitter.emit_if(BlockType::Result(ValType::I32));
         emitter.instruction(Instruction::I32Const(1));
         emitter.emit_else();
@@ -1160,7 +1230,7 @@ fn emit_interface_test_inner(
 
     if !test.shape_allowed {
         emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state)?;
-        if test.nullable {
+        if test.nullable || test.undefined {
             emitter.emit_end();
         }
         return Ok(());
@@ -1244,7 +1314,7 @@ fn emit_interface_test_inner(
     emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state)?;
     emitter.emit_end();
 
-    if test.nullable {
+    if test.nullable || test.undefined {
         emitter.emit_end();
     }
     diagnostic::finish(emitter, ctx, checkpoint)?;
@@ -1908,11 +1978,17 @@ fn emit_runtime_type_string_checked(
     });
     let block = BlockType::Result(string_ref);
 
+    emitter.instruction(Instruction::LocalGet(scratch));
+    crate::codegen::function_emitter::expr::emit_is_undefined(emitter, ctx)?;
+    emitter.emit_if(block);
+    emit_type_tag(emitter, ctx, "undefined")?;
+    emitter.emit_else();
+
     // null gets its own arm rather than JS's "object" tag — clearer cast error messages.
     emitter.instruction(Instruction::LocalGet(scratch));
     emitter.instruction(Instruction::RefIsNull);
     emitter.emit_if(block);
-    emit_inline_string(emitter, ctx, "null");
+    emit_type_tag(emitter, ctx, "null")?;
     emitter.emit_else();
 
     emitter.instruction(Instruction::LocalGet(scratch));
@@ -1920,7 +1996,7 @@ fn emit_runtime_type_string_checked(
         string_type_idx,
     )));
     emitter.emit_if(block);
-    emit_inline_string(emitter, ctx, "string");
+    emit_type_tag(emitter, ctx, "string")?;
     emitter.emit_else();
 
     let num_idx = ctx
@@ -1930,7 +2006,7 @@ fn emit_runtime_type_string_checked(
     emitter.instruction(Instruction::LocalGet(scratch));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(num_idx)));
     emitter.emit_if(block);
-    emit_inline_string(emitter, ctx, "number");
+    emit_type_tag(emitter, ctx, "number")?;
     emitter.emit_else();
 
     let bool_idx = ctx
@@ -1940,7 +2016,7 @@ fn emit_runtime_type_string_checked(
     emitter.instruction(Instruction::LocalGet(scratch));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(bool_idx)));
     emitter.emit_if(block);
-    emit_inline_string(emitter, ctx, "boolean");
+    emit_type_tag(emitter, ctx, "boolean")?;
     emitter.emit_else();
 
     let closure_idx = ctx
@@ -1950,16 +2026,41 @@ fn emit_runtime_type_string_checked(
     emitter.instruction(Instruction::LocalGet(scratch));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(closure_idx)));
     emitter.emit_if(block);
-    emit_inline_string(emitter, ctx, "function");
+    emit_type_tag(emitter, ctx, "function")?;
     emitter.emit_else();
 
-    emit_inline_string(emitter, ctx, "object");
+    emit_type_tag(emitter, ctx, "object")?;
 
     for _ in 0..5 {
         emitter.emit_end();
     }
 
+    emitter.emit_end();
     Ok(())
+}
+
+/// Whether `ty` spells `undefined`. A required `unknown` field still needs its key.
+fn admits_undefined(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Undefined | Type::Void => true,
+        Type::Union(members) => members.iter().any(admits_undefined),
+        _ => false,
+    }
+}
+
+/// A tag the string pool interned is read from its data segment, which is
+/// smaller than spelling it out at each of the many failure paths that name it.
+fn emit_type_tag(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    tag: &str,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    match ctx.strings.lookup_text(tag) {
+        Some(pool_idx) => {
+            crate::codegen::function_emitter::emit_pooled_string(emitter, ctx, pool_idx)
+        }
+        None => emit_inline_string_checked(emitter, ctx, tag),
+    }
 }
 
 /// Visited entries pair the value with its effective type arguments. Forwarded

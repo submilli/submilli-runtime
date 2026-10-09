@@ -1,1 +1,4 @@
 types: 49 of 92 tsc entries compared, 0 differ
+
+errors:
+line 117: ours: expected `{} | null | undefined`, got `unknown` (tsc accepts)

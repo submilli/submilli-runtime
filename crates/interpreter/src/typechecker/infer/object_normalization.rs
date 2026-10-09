@@ -1,9 +1,8 @@
 //! tsc's normalization of fresh object literal types. When object literals
 //! join into one type, in an array literal or a conditional, each member gains
-//! every field only its siblings declare as an optional field tsc types
-//! `undefined` (here an optional `never`, which reads as `null`), so any field
-//! reads from the union: `[{ a: 0 }, { b: "x" }]` holds
-//! `{ a: number; b?: never } | { b: string; a?: never }`. A field that holds
+//! every field only its siblings declare as an optional `undefined` field, as
+//! tsc does, so any field reads from the union: `[{ a: 0 }, { b: "x" }]` holds
+//! `{ a: number; b?: undefined } | { b: string; a?: undefined }`. A field that holds
 //! object literals in every member normalizes the same way against the objects
 //! that field holds in the others, at every depth.
 //!
@@ -314,7 +313,7 @@ pub(super) fn has_excess_field(source: &Type, target: &Type) -> bool {
 
 /// A field normalization added. It says nothing about the field's type.
 pub(super) fn is_added_missing_field(field: &crate::ObjectField) -> bool {
-    field.optional && field.ty == Type::Never
+    field.optional && field.ty == Type::Undefined
 }
 
 /// `ty`, the join of sibling fresh object literals, with each object member
@@ -389,7 +388,7 @@ fn fields_with_missing<'a>(
     for name in names {
         fields
             .entry(name.clone())
-            .or_insert_with(|| crate::ObjectField::optional(Type::Never));
+            .or_insert_with(|| crate::ObjectField::optional(Type::Undefined));
     }
     fields
 }

@@ -156,6 +156,14 @@ fn install_routes(server: &MockServer) {
     });
 
     server.mock(|when, then| {
+        when.method(POST)
+            .path("/post-json-null")
+            .header("content-type", "application/json")
+            .body("null");
+        then.status(200);
+    });
+
+    server.mock(|when, then| {
         when.method(PUT)
             .path("/put-json")
             .header("content-type", "application/json")
@@ -244,7 +252,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = entry.expect("dir entry").path();
         if p.is_dir() {
             collect(&p, out);
-        } else if p.extension().and_then(|s| s.to_str()) == Some("subm") {
+        } else if matches!(p.extension().and_then(|s| s.to_str()), Some("subm" | "ts")) {
             out.push(p);
         }
     }

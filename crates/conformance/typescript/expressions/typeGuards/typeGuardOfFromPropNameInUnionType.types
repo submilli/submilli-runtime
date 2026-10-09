@@ -17,7 +17,7 @@ class C { b: Object; }
 >b : Object
 >  : ^^^^^^
 
-/*pruned*/;         
+/*pruned*/;
 
 function namedClasses(x: A | B): void {
 >namedClasses : (x: A | B) => void
@@ -61,13 +61,13 @@ function namedClasses(x: A | B): void {
     }
 }
 
-/*pruned*/;                                       
-                   
-                                   
-            
-                                     
-     
- 
+/*pruned*/;
+
+
+
+
+
+
 
 function anonymousClasses(x: { a: string; } | { b: number; }): void {
 >anonymousClasses : (x: { a: string; } | { b: number; }) => void
@@ -348,16 +348,16 @@ function innestedProperty(x: NestedClassWithProp): void {
     }
 }
 
-/*pruned*/;            
-                          
-                    
-                               
-                                        
-                
-                                        
-         
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
+
+
 
 // added for completeness
 class SelfAssert {
@@ -395,19 +395,19 @@ class SelfAssert {
     }
 }
 
-/*pruned*/;        
-                     
- 
+/*pruned*/;
 
-/*pruned*/;                  
-                   
-                   
-     
-                        
-                   
-     
-                           
- 
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
 
 
 function main(): void {}

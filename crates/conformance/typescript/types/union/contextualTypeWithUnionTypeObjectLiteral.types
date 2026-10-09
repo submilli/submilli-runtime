@@ -79,7 +79,7 @@ let objStrOrNum2: { prop: string | number } = objStr || objNum;
 // Spec says:
 // S is a union type and each constituent type of S is assignable to T.
 // T is a union type and S is assignable to at least one constituent type of T.
-// In case of objStrOrNum3, the S is not union Type but object Literal so we go to next step. 
+// In case of objStrOrNum3, the S is not union Type but object Literal so we go to next step.
 // Since T is union Type we only allow the assignment of either object with property of type string or object with property of type number but do not allow object with property of type string | number
 let objStrOrNum3: { prop: string } | { prop: number } = {
 >objStrOrNum3 : { prop: string; } | { prop: number; }
@@ -240,22 +240,22 @@ interface I21 {
 >  : ^^^^^^
 
 }
-/*pruned*/;                             
-/*pruned*/;                             
-/*pruned*/;                   
-/*pruned*/;                     
-/*pruned*/;                             
-                                                
-                            
-                 
-      
-  
-/*pruned*/;                             
-                                                
-                                
-                 
-      
-  
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
 let strOrNumber_2: string | number = null as unknown as (string | number);
 >strOrNumber_2 : string | number
 >              : ^^^^^^^^^^^^^^^

@@ -280,12 +280,12 @@ function lookUpClass(customerId: string): string {
     response.throwForStatus();
     const customer = response.json() as Customer;
     const customerClass = customer.metadata["class"];
-    return customerClass === null ? "standard" : customerClass;
+    return customerClass === undefined ? "standard" : customerClass;
 }
 
 function requestHeaders(form: boolean): Map<string, string> {
     const key = secrets.get("BILLING_API_KEY");
-    if (key === null) {
+    if (key === undefined) {
         throw new Error("BILLING_API_KEY is not configured for this blueprint");
     }
     const headers = new Map<string, string>();
@@ -462,12 +462,12 @@ function lookUpClass(customerId: string): string {
     response.throwForStatus();
     const customer = response.json() as Customer;
     const customerClass = customer.metadata["class"];
-    return customerClass === null ? "standard" : customerClass;
+    return customerClass === undefined ? "standard" : customerClass;
 }
 
 function requestHeaders(form: boolean): Map<string, string> {
     const key = secrets.get("BILLING_API_KEY");
-    if (key === null) {
+    if (key === undefined) {
         throw new Error("BILLING_API_KEY is not configured for this blueprint");
     }
     const headers = new Map<string, string>();

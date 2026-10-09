@@ -29,10 +29,10 @@ class D extends C {
 
 }
 
-/*pruned*/;                       
-/*pruned*/;   
-/*pruned*/;    
-/*pruned*/;        
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 let r4 = D.other();
 >r4 : void
 >   : ^^^^
@@ -86,10 +86,10 @@ class D2<T> extends C2<T> {
 
 }
 
-/*pruned*/;                                          
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;           
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 let r8 = D2.other(1);
 >r8 : void
 >   : ^^^^

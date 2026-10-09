@@ -217,13 +217,13 @@ function f14<T>(x: { a: 0; b: string } | { a: T, c: number }): void {
     }
 }
 
-type Result<T> = { error?: null, value: T } | { error: Error };
+type Result<T> = { error?: undefined, value: T } | { error: Error };
 >Result : Result<T>
 >       : ^^^^^^^^^
 >T : T
 >  : ^
->error : null | undefined
->      : ^^^^^^^^^^^^^^^^
+>error : undefined
+>      : ^^^^^^^^^
 >value : T
 >      : ^
 >error : Error
@@ -239,18 +239,18 @@ function f15(x: Result<number>): void {
     if (!x.error) {
 >!x.error : boolean
 >         : ^^^^^^^
->x.error : Error | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^
+>x.error : Error | undefined
+>        : ^^^^^^^^^^^^^^^^^
 >x : Result<number>
 >  : ^^^^^^^^^^^^^^
->error : Error | null | undefined
->      : ^^^^^^^^^^^^^^^^^^^^^^^^
+>error : Error | undefined
+>      : ^^^^^^^^^^^^^^^^^
 
         x.value;
 >x.value : number
 >        : ^^^^^^
->x : { error?: null; value: number; }
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { error?: undefined; value: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >value : number
 >      : ^^^^^^
 
@@ -339,37 +339,37 @@ type DataCarrier<Data> = WithError | WithoutError<Data>
 >     : ^^^^
 
 
-/*pruned*/;                                           
-                                 
-                                         
-                                       
-            
-                                          
-                                       
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
+
 
 // Repro from #28935
 
-/*pruned*/;                                                                               
+/*pruned*/;
 
-/*pruned*/;                   
-                  
-            
-     
-          
-            
-     
- 
+/*pruned*/;
 
-/*pruned*/;                   
-                           
-            
-     
-          
-            
-     
- 
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
 
 // Repro from #33448
 
@@ -418,14 +418,14 @@ type abc = a | b | c;
 >    : ^^^
 
 
-/*pruned*/;                               
-                               
-                     
-     
-          
-                      
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
 
 type RuntimeValue =
 >RuntimeValue : RuntimeValue
@@ -450,23 +450,23 @@ type RuntimeValue =
 >      : ^^^^^^^
 
 
-/*pruned*/;                                                
-                              
-                           
-     
-          
-                           
-     
- 
+/*pruned*/;
 
-/*pruned*/;                                                                       
-                              
-                           
-     
-          
-                           
-     
- 
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
 
 
 function main(): void {}

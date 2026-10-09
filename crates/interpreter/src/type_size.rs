@@ -288,7 +288,8 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
             }
         }
         Type::Array(inner) | Type::Readonly(inner) => visit(inner),
-        Type::Tuple(members) | Type::Union(members) => members.iter().for_each(visit),
+        Type::Tuple(members) => members.iter().for_each(visit),
+        Type::Union(members) => members.iter().for_each(visit),
         Type::Refined { original, ty } => {
             visit(original);
             visit(ty);
@@ -310,6 +311,7 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::Null
+        | Type::Undefined
         | Type::Void
         | Type::Unknown
         | Type::Error
@@ -345,6 +347,7 @@ pub fn map_children<E>(
             ret,
             predicate,
             has_rest,
+            optional,
         } => {
             let params = map_all(params)?;
             Type::Function {
@@ -358,6 +361,7 @@ pub fn map_children<E>(
                     None => None,
                 },
                 has_rest: *has_rest,
+                optional: *optional,
             }
         }
         Type::Object { fields, index } => Type::Object {
@@ -382,7 +386,10 @@ pub fn map_children<E>(
         },
         Type::Array(inner) => Type::Array(Box::new(map(inner)?)),
         Type::Readonly(inner) => Type::Readonly(Box::new(map(inner)?)),
-        Type::Tuple(members) => Type::Tuple(map_all(members)?),
+        Type::Tuple(members) => Type::Tuple(crate::types::TupleType {
+            elements: map_all(members)?,
+            optional: members.optional,
+        }),
         Type::Union(members) => Type::union(map_all(members)?),
         Type::Refined { original, ty } => Type::Refined {
             original: Box::new(map(original)?),
@@ -447,6 +454,7 @@ pub fn map_children<E>(
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::Null
+        | Type::Undefined
         | Type::Void
         | Type::Unknown
         | Type::Error
@@ -490,8 +498,8 @@ impl<'a> TypeChildren<'a> {
             Type::Array(inner) | Type::Readonly(inner) => {
                 children.trailing[0] = Some(inner);
             }
-            Type::Tuple(members)
-            | Type::Union(members)
+            Type::Tuple(tuple) => children.members = tuple.elements.iter(),
+            Type::Union(members)
             | Type::InterfaceRef { args: members, .. }
             | Type::ClassRef { args: members, .. }
             | Type::AliasRef { args: members, .. } => children.members = members.iter(),
@@ -510,6 +518,7 @@ impl<'a> TypeChildren<'a> {
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Null
+            | Type::Undefined
             | Type::Void
             | Type::Unknown
             | Type::Error
@@ -546,7 +555,7 @@ pub(crate) mod tests {
 
     /// A tuple of `n - 1` numbers: `n` nodes, depth 2.
     fn nodes(n: u64) -> Type {
-        Type::Tuple((1..n).map(|_| Type::Number).collect())
+        Type::Tuple((1..n).map(|_| Type::Number).collect::<Vec<_>>().into())
     }
 
     /// `depth - 1` arrays around a number.
@@ -635,7 +644,10 @@ pub(crate) mod tests {
 
     #[test]
     fn mixed_width_and_depth_keep_exact_counts_and_lifo_order() {
-        let ty = Type::Tuple(vec![nested(6), nodes(100_001), nested(3)]);
+        let ty = Type::Tuple(crate::types::TupleType {
+            elements: vec![nested(6), nodes(100_001), nested(3)],
+            optional: 0,
+        });
         let (extent, observed) =
             crate::type_walk::tests::observe(None, || measure(&ty, u64::MAX, u32::MAX).unwrap());
         assert_eq!(
@@ -762,22 +774,26 @@ pub(crate) mod tests {
                 asserted_type: Type::Number,
             })),
             has_rest: true,
+            optional: 0,
         };
         let package = crate::Package("main".into());
         let mangled = crate::mangle::prelude("Thing");
-        let ty = Type::Tuple(vec![
-            function,
-            Type::Readonly(Box::new(Type::Array(Box::new(Type::Number)))),
-            Type::union(vec![Type::Null, Type::String]),
-            Type::Refined {
-                original: Box::new(Type::TypeVar("T".into())),
-                ty: Box::new(Type::Number),
-            },
-            Type::interface_ref(package.clone(), "I", mangled.clone(), vec![Type::Number]),
-            Type::class_ref(package.clone(), "C", mangled.clone(), vec![Type::String]),
-            Type::alias_ref(package.clone(), "R", mangled.clone(), vec![Type::Null]),
-            Type::alias_ty(package, "A", mangled, vec![Type::Number], Box::new(object)),
-        ]);
+        let ty = Type::Tuple(
+            vec![
+                function,
+                Type::Readonly(Box::new(Type::Array(Box::new(Type::Number)))),
+                Type::union(vec![Type::Null, Type::String]),
+                Type::Refined {
+                    original: Box::new(Type::TypeVar("T".into())),
+                    ty: Box::new(Type::Number),
+                },
+                Type::interface_ref(package.clone(), "I", mangled.clone(), vec![Type::Number]),
+                Type::class_ref(package.clone(), "C", mangled.clone(), vec![Type::String]),
+                Type::alias_ref(package.clone(), "R", mangled.clone(), vec![Type::Null]),
+                Type::alias_ty(package, "A", mangled, vec![Type::Number], Box::new(object)),
+            ]
+            .into(),
+        );
         let mut visited = 0;
         for_each_child(&ty, |_| visited += 1);
         assert_eq!(visited, 8);

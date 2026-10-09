@@ -14,7 +14,7 @@
 // never be legal — for two false ones.
 // expect-error: cannot assign to `pair` through `A | B`: a union receiver has no single field layout to write
 // expect-error: expected `string`, got `number`
-// expect-error: cannot assign to field `pair` of `null | A`: the receiver can be `null`
+// expect-error: cannot assign to field `pair` of `A | null`: the receiver can be `null`
 // The value's own errors are never dropped — suppressing them would hide a
 // second real problem behind the first.
 // expect-error: unresolved identifier `notDefinedAnywhere`

@@ -1,0 +1,57 @@
+types: 96 of 157 tsc entries compared, 14 differ
+
+line 51: a
+  tsc:  boolean
+  ours: boolean | void
+
+line 55: a
+  tsc:  never
+  ours: void
+
+line 73: a
+  tsc:  boolean
+  ours: boolean | void
+
+line 78: a
+  tsc:  boolean
+  ours: boolean | void
+
+line 82: a
+  tsc:  never
+  ours: void
+
+line 87: a
+  tsc:  boolean
+  ours: boolean | void
+
+line 91: a
+  tsc:  undefined
+  ours: void | undefined
+
+line 143: a
+  tsc:  number | boolean
+  ours: number | boolean | void
+
+line 147: a
+  tsc:  number
+  ours: number | void
+
+line 165: a
+  tsc:  number | boolean
+  ours: number | boolean | void
+
+line 170: a
+  tsc:  number | boolean
+  ours: number | boolean | void
+
+line 174: a
+  tsc:  number
+  ours: number | void
+
+line 179: a
+  tsc:  number | boolean
+  ours: number | boolean | void
+
+line 183: a
+  tsc:  number | undefined
+  ours: number | void | undefined

@@ -1,6 +1,5 @@
 // test262: test/built-ins/Map/prototype/delete/does-not-break-iterators.js
-// Adapted: an exhausted result carries no `value` field here (no undefined);
-// presence is checked via `"value" in result`.
+// Yield results are narrowed before reading their value.
 
 function main(): void {
   const m = new Map<string, number>([
@@ -15,7 +14,7 @@ function main(): void {
 
   const n = e.next();
 
-  if ("value" in n) {
+  if (n.value !== undefined) {
     const entry = n.value;
     assertSameValue(entry[0], "c");
     assertSameValue(entry[1], 3);
@@ -24,6 +23,6 @@ function main(): void {
   }
 
   const last = e.next();
-  assert(!("value" in last), "exhausted result carries no value");
+  assertSameValue(last.value, undefined, "exhausted result has undefined value");
   assertSameValue(last.done, true);
 }

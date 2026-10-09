@@ -34,12 +34,12 @@ let c2 = new C(null); // error
 >  : ^^^^^^^^
 
 
-/*pruned*/;              
-                 
-                
- 
+/*pruned*/;
 
-/*pruned*/;     
+
+
+
+/*pruned*/;
 /*pruned*/;           // error
 
 function main(): void {}

@@ -9,8 +9,8 @@ function main(): void {
   }
   set("a".repeat(256), 1);
   set("b".repeat(256), 2);
-  const first = list("", 1, null);
-  assert(first.nextCursor !== null, "full-length key has a cursor");
+  const first = list("", 1);
+  assert(first.nextCursor !== undefined, "full-length key has a cursor");
   const second = list("", 1, first.nextCursor);
   assert(second.entries.length === 1, "a maximum legitimate cursor resumes");
 }

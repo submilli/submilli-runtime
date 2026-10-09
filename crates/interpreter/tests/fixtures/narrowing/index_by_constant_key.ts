@@ -3,12 +3,12 @@
 // assigned. This is how TypeScript narrows these reads.
 type Thing = { a: string | null; b: number | null };
 
-function upperOf(obj: Record<string, string | null>, key: string): string {
-  if (obj[key] !== null) {
+function upperOf(obj: Record<string, string>, key: string): string {
+  if (obj[key] !== undefined) {
     return obj[key].toUpperCase();
   }
   const doubled = key + key;
-  if (obj[doubled] === null) {
+  if (obj[doubled] === undefined) {
     return "-";
   }
   return obj[doubled];
@@ -35,10 +35,10 @@ function element(items: (string | number | null)[], position: number): number {
   return 0;
 }
 
-function keyInBlock(obj: Record<string, string | null>, flag: boolean): number {
+function keyInBlock(obj: Record<string, string>, flag: boolean): number {
   if (flag) {
     const key = "k";
-    if (obj[key] === null) {
+    if (obj[key] === undefined) {
       return -1;
     }
     return obj[key].length;
@@ -48,9 +48,9 @@ function keyInBlock(obj: Record<string, string | null>, flag: boolean): number {
 
 function main(): void {
   assert(upperOf({ x: "ab" }, "x") === "AB", "a parameter key");
-  assert(upperOf({ x: null, xx: "both" }, "x") === "both" && upperOf({ x: null, xx: null }, "x") === "-", "a `const` key");
+  assert(upperOf({ xx: "both" }, "x") === "both" && upperOf({}, "x") === "-", "a `const` key");
   assert(lengthOf({ a: "abc", b: null }, "a") === 3 && lengthOf({ a: null, b: 5 }, "b") === 105, "nested guards");
   assert(lengthOf({ a: null, b: null }, "a") === -1, "an early exit");
   assert(element(["abcd", 2], 0) === 4 && element(["x", 2], 1) === 20 && element([null], 0) === 0, "an element");
-  assert(keyInBlock({ k: "kk" }, true) === 2 && keyInBlock({ k: null }, true) === -1, "a key declared in a block");
+  assert(keyInBlock({ k: "kk" }, true) === 2 && keyInBlock({}, true) === -1, "a key declared in a block");
 }

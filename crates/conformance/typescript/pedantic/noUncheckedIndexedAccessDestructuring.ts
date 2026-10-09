@@ -13,11 +13,11 @@ s1.toString(); // Should error, s1 possibly undefined
 
 // Destructuring a rest element -> do not include undefined
 const [...s2] = strArray;
-s2.push(null); // Should error, 'undefined' not part of s2's element type
+s2.push(undefined); // Should error, 'undefined' not part of s2's element type
 
 // Destructuring a rest element -> do not include undefined
 const [, , ...s3] = strArray;
-s3.push(null); // Should error, 'undefined' not part of s2's element type
+s3.push(undefined); // Should error, 'undefined' not part of s2's element type
 
 // Declaration forms for object destructuring
 
@@ -59,7 +59,7 @@ t2.z.toString(); // Should error
 
 
 let target_string: string = null as unknown as (string);
-let target_string_undef: string | null = null as unknown as (string | null);
+let target_string_undef: string | undefined = null as unknown as (string | undefined);
 let target_string_arr: string[] = null as unknown as (string[]);
 
 // Assignment forms

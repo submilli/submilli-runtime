@@ -39,21 +39,21 @@ let r1b = f<number, string, number>(1, '');
 >   : ^^
 
 
-/*pruned*/;                                       
-/*pruned*/;                
-/*pruned*/;                                 
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;                                                                          
-/*pruned*/;                
-/*pruned*/;                                 
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/**/;    
-                            
-                    
-     
- 
-/*pruned*/;                         
-/*pruned*/;                                          
+/**/;
+
+
+
+
+/*pruned*/;
+/*pruned*/;
 
 interface I {
 >I : I
@@ -72,9 +72,9 @@ interface I {
 >  : ^
 
 }
-/*pruned*/;                       
-/*pruned*/;                 
-/*pruned*/;                                  
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 class C2<T, U> {
 >C2 : C2<T, U>
@@ -153,9 +153,9 @@ interface I2<T, U> {
 >  : ^
 
 }
-/*pruned*/;                                                          
-/*pruned*/;                  
-/*pruned*/;                                   
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

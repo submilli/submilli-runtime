@@ -35,7 +35,7 @@ function f2(x: 0 | 1 | 2): void {
     }
 }
 
-type Falsy = false | 0 | "" | null | null;
+type Falsy = false | 0 | "" | null | undefined;
 
 function f3(x: Falsy): void {
     if (x) {
@@ -61,7 +61,7 @@ function f4(x: 0 | 1 | true | string): void {
         case null:
             x;
             break;
-        case null:
+        case undefined:
             x;
             break;
         default:

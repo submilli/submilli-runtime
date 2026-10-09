@@ -18,7 +18,7 @@ let i0 = 0;
 >0 : 0
 >  : ^
 
-/*pruned*/;        
+/*pruned*/;
 
 let array1 = [1, 2, 3]
 >array1 : number[]
@@ -38,7 +38,7 @@ let i1 = 0;
 >0 : 0
 >  : ^
 
-/*pruned*/;                         
+/*pruned*/;
 
 let array2 = [1, 2, 3]
 >array2 : number[]
@@ -58,7 +58,7 @@ let i2 = 0;
 >0 : 0
 >  : ^
 
-/*pruned*/;                        
+/*pruned*/;
 
 let array3 = [2, 2, 3];
 >array3 : number[]
@@ -72,8 +72,8 @@ let array3 = [2, 2, 3];
 >3 : 3
 >  : ^
 
-/*pruned*/;        
-/*pruned*/;                                          
+/*pruned*/;
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

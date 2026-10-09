@@ -83,11 +83,11 @@ submilli docs @submilli/jina
 /**
  * Read a URL through the Reader, returning Jina's LLM-friendly markdown.
  * @param url Absolute URL of the page to read.
- * @param options Optional Reader settings; `null` uses Jina's defaults.
+ * @param options Optional Reader settings; omit it to use Jina's defaults.
  * @capability jina.ai/read { host: string }
  * @returns The page content as markdown text.
  */
-function read(url: string, options?: null | ReaderOptions): string;
+function read(url: string, options?: ReaderOptions): string;
 …
 ```
 

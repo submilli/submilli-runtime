@@ -117,7 +117,7 @@ async fn element_to_string(
 /// An element's text in `join`: `null` joins as the empty string, as in JavaScript
 /// (`[1, null].join()` is `"1,"`).
 async fn join_text(caller: &mut Caller<'_, StoreData>, elem: Val) -> wasmtime::Result<Vec<u16>> {
-    if is_null(&elem) {
+    if super::undefined::is_nullish(caller, &elem)? {
         return Ok(Vec::new());
     }
     element_to_string(caller, elem).await
@@ -133,6 +133,11 @@ async fn element_matches(
 ) -> wasmtime::Result<bool> {
     if is_null(&slot) || is_null(&target) {
         return Ok(is_null(&slot) && is_null(&target));
+    }
+    let left_undefined = super::undefined::is_undefined(caller, &slot)?;
+    let right_undefined = super::undefined::is_undefined(caller, &target)?;
+    if left_undefined || right_undefined {
+        return Ok(left_undefined && right_undefined);
     }
     element_equals(caller, slot, target).await
 }
@@ -208,12 +213,12 @@ fn last_from(x: f64, len: i32) -> Option<i32> {
 // Accessors
 // ---------------------------------------------------------------------------
 
-/// `at(index)`: one element read in place, `null` out of range.
+/// `at(index)`: one element read in place, `undefined` out of range.
 fn at(caller: &mut Caller<'_, StoreData>, receiver: &Val, index: f64) -> wasmtime::Result<Val> {
     let storage = ArrayStorage::read(caller, receiver)?;
     match at_index(index, storage.len as i32) {
         Some(i) => storage.get(caller, i as u32),
-        None => Ok(Val::null_any_ref()),
+        None => super::undefined::value(caller),
     }
 }
 
@@ -326,10 +331,13 @@ fn push(caller: &mut Caller<'_, StoreData>, receiver: &Val, elem: Val) -> wasmti
     crate::runtime::array_storage::ArrayStorage::read(caller, receiver)?.push(caller, elem)
 }
 
-/// `pop()`: the last element, removed in place; `null` when empty.
+/// `pop()`: the last element, removed in place; `undefined` when empty.
 fn pop(caller: &mut Caller<'_, StoreData>, receiver: &Val) -> wasmtime::Result<Val> {
     let popped = ArrayStorage::read(caller, receiver)?.pop(caller)?;
-    Ok(popped.unwrap_or_else(Val::null_any_ref))
+    match popped {
+        Some(value) => Ok(value),
+        None => super::undefined::value(caller),
+    }
 }
 
 fn shift(
@@ -338,7 +346,7 @@ fn shift(
     mut elements: Vec<Val>,
 ) -> wasmtime::Result<Val> {
     if elements.is_empty() {
-        return Ok(Val::null_any_ref());
+        return super::undefined::value(caller);
     }
     let first = elements.remove(0);
     replace_elements(caller, receiver, &elements)?;
@@ -488,13 +496,36 @@ async fn sort_elems(
     elements: &mut Vec<Val>,
     cmp: Option<&Closure>,
 ) -> wasmtime::Result<()> {
-    match cmp {
-        Some(cmp) => merge_sort(caller, elements, cmp, |_, elem| Ok(elem)).await,
-        None => sort::sort_by_string(caller, elements).await,
+    let original_len = elements.len();
+    let mut defined_len = 0usize;
+    for index in 0..original_len {
+        let element = *elements
+            .get(index)
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("sort: invalid element index"))?;
+        if !super::undefined::is_undefined(caller, &element)? {
+            let slot = elements.get_mut(defined_len).ok_or_else(|| {
+                crate::runtime::host::fatal_host_error("sort: invalid output index")
+            })?;
+            *slot = element;
+            defined_len += 1;
+        }
     }
+    elements.truncate(defined_len);
+    match cmp {
+        Some(cmp) => merge_sort(caller, elements, cmp, |_, element| Ok(element)).await?,
+        None => sort::sort_by_string(caller, elements).await?,
+    }
+    if defined_len != original_len {
+        let undefined = super::undefined::value(caller)?;
+        elements
+            .try_reserve_exact(original_len - defined_len)
+            .map_err(crate::runtime::host::fatal_host_error)?;
+        elements.resize(original_len, undefined);
+    }
+    Ok(())
 }
 
-/// `null` when `index` is out of range — [`install`] raises the catchable
+/// `None` when `index` is out of range — [`install`] raises the catchable
 /// `Error("index out of range")`.
 fn with(elements: &[Val], index: f64, value: Val) -> Option<Vec<Val>> {
     let i = at_index(index, elements.len() as i32)?;
@@ -789,7 +820,7 @@ pub(super) async fn from(
     use crate::runtime::prelude::closure;
     use crate::runtime::prelude::collection::{is_a, object_field, string_code_points, unbox_bool};
 
-    let map_closure = if is_null(map_fn) {
+    let map_closure = if super::undefined::is_undefined(caller, map_fn)? {
         None
     } else {
         Some(closure::read_callback(caller, map_fn, "Array.from mapFn")?)
@@ -854,7 +885,8 @@ pub(super) async fn from(
         let length = array_like_length(caller, &length)?;
         for index in 0..length {
             out.reserve(caller, 1)?;
-            let mapped = apply_map(caller, &map_fn, Val::AnyRef(None), index).await?;
+            let hole = super::undefined::value(caller)?;
+            let mapped = apply_map(caller, &map_fn, hole, index).await?;
             out.push(caller, mapped)?;
         }
         return build_array(caller, out.values());

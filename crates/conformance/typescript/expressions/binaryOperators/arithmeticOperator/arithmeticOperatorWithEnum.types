@@ -1,0 +1,863 @@
+=== arithmeticOperatorWithEnum.ts ===
+// operands of an enum type are treated as having the primitive type Number.
+
+enum E {
+>E : E
+>  : ^
+
+    a,
+>a : E.a
+>  : ^^^
+
+    b
+>b : E.b
+>  : ^^^
+
+}
+
+/*pruned*/;
+let b: number = null as unknown as (number);
+>b : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+
+// operator *
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let ra7 = E.a * b;
+>ra7 : number
+>    : ^^^^^^
+>E.a * b : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let ra8 = E.a * E.b;
+>ra8 : number
+>    : ^^^^^^
+>E.a * E.b : number
+>          : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let ra9 = E.a * 1;
+>ra9 : number
+>    : ^^^^^^
+>E.a * 1 : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let ra11 = b * E.b;
+>ra11 : number
+>     : ^^^^^^
+>b * E.b : number
+>        : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let ra12 = 1 * E.b;
+>ra12 : number
+>     : ^^^^^^
+>1 * E.b : number
+>        : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+// operator /
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rb7 = E.a / b;
+>rb7 : number
+>    : ^^^^^^
+>E.a / b : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let rb8 = E.a / E.b;
+>rb8 : number
+>    : ^^^^^^
+>E.a / E.b : number
+>          : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rb9 = E.a / 1;
+>rb9 : number
+>    : ^^^^^^
+>E.a / 1 : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let rb11 = b / E.b;
+>rb11 : number
+>     : ^^^^^^
+>b / E.b : number
+>        : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rb12 = 1 / E.b;
+>rb12 : number
+>     : ^^^^^^
+>1 / E.b : number
+>        : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+// operator %
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rc7 = E.a % b;
+>rc7 : number
+>    : ^^^^^^
+>E.a % b : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let rc8 = E.a % E.b;
+>rc8 : number
+>    : ^^^^^^
+>E.a % E.b : number
+>          : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rc9 = E.a % 1;
+>rc9 : number
+>    : ^^^^^^
+>E.a % 1 : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let rc11 = b % E.b;
+>rc11 : number
+>     : ^^^^^^
+>b % E.b : number
+>        : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rc12 = 1 % E.b;
+>rc12 : number
+>     : ^^^^^^
+>1 % E.b : number
+>        : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+// operator -
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rd7 = E.a - b;
+>rd7 : number
+>    : ^^^^^^
+>E.a - b : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let rd8 = E.a - E.b;
+>rd8 : number
+>    : ^^^^^^
+>E.a - E.b : number
+>          : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rd9 = E.a - 1;
+>rd9 : number
+>    : ^^^^^^
+>E.a - 1 : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let rd11 = b - E.b;
+>rd11 : number
+>     : ^^^^^^
+>b - E.b : number
+>        : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rd12 = 1 - E.b;
+>rd12 : number
+>     : ^^^^^^
+>1 - E.b : number
+>        : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+// operator <<
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let re7 = E.a << b;
+>re7 : number
+>    : ^^^^^^
+>E.a << b : number
+>         : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let re8 = E.a << E.b;
+>re8 : number
+>    : ^^^^^^
+>E.a << E.b : number
+>           : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let re9 = E.a << 1;
+>re9 : number
+>    : ^^^^^^
+>E.a << 1 : number
+>         : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let re11 = b << E.b;
+>re11 : number
+>     : ^^^^^^
+>b << E.b : number
+>         : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let re12 = 1 << E.b;
+>re12 : number
+>     : ^^^^^^
+>1 << E.b : number
+>         : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+// operator >>
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rf7 = E.a >> b;
+>rf7 : number
+>    : ^^^^^^
+>E.a >> b : number
+>         : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let rf8 = E.a >> E.b;
+>rf8 : number
+>    : ^^^^^^
+>E.a >> E.b : number
+>           : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rf9 = E.a >> 1;
+>rf9 : number
+>    : ^^^^^^
+>E.a >> 1 : number
+>         : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let rf11 = b >> E.b;
+>rf11 : number
+>     : ^^^^^^
+>b >> E.b : number
+>         : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rf12 = 1 >> E.b;
+>rf12 : number
+>     : ^^^^^^
+>1 >> E.b : number
+>         : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+// operator >>>
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rg7 = E.a >>> b;
+>rg7 : number
+>    : ^^^^^^
+>E.a >>> b : number
+>          : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let rg8 = E.a >>> E.b;
+>rg8 : number
+>    : ^^^^^^
+>E.a >>> E.b : number
+>            : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rg9 = E.a >>> 1;
+>rg9 : number
+>    : ^^^^^^
+>E.a >>> 1 : number
+>          : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let rg11 = b >>> E.b;
+>rg11 : number
+>     : ^^^^^^
+>b >>> E.b : number
+>          : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rg12 = 1 >>> E.b;
+>rg12 : number
+>     : ^^^^^^
+>1 >>> E.b : number
+>          : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+// operator &
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rh7 = E.a & b;
+>rh7 : number
+>    : ^^^^^^
+>E.a & b : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let rh8 = E.a & E.b;
+>rh8 : number
+>    : ^^^^^^
+>E.a & E.b : number
+>          : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rh9 = E.a & 1;
+>rh9 : number
+>    : ^^^^^^
+>E.a & 1 : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let rh11 = b & E.b;
+>rh11 : number
+>     : ^^^^^^
+>b & E.b : number
+>        : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rh12 = 1 & E.b;
+>rh12 : number
+>     : ^^^^^^
+>1 & E.b : number
+>        : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+// operator ^
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let ri7 = E.a ^ b;
+>ri7 : number
+>    : ^^^^^^
+>E.a ^ b : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let ri8 = E.a ^ E.b;
+>ri8 : number
+>    : ^^^^^^
+>E.a ^ E.b : number
+>          : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let ri9 = E.a ^ 1;
+>ri9 : number
+>    : ^^^^^^
+>E.a ^ 1 : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let ri11 = b ^ E.b;
+>ri11 : number
+>     : ^^^^^^
+>b ^ E.b : number
+>        : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let ri12 = 1 ^ E.b;
+>ri12 : number
+>     : ^^^^^^
+>1 ^ E.b : number
+>        : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+// operator |
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rj7 = E.a | b;
+>rj7 : number
+>    : ^^^^^^
+>E.a | b : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>b : number
+>  : ^^^^^^
+
+let rj8 = E.a | E.b;
+>rj8 : number
+>    : ^^^^^^
+>E.a | E.b : number
+>          : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rj9 = E.a | 1;
+>rj9 : number
+>    : ^^^^^^
+>E.a | 1 : number
+>        : ^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let rj11 = b | E.b;
+>rj11 : number
+>     : ^^^^^^
+>b | E.b : number
+>        : ^^^^^^
+>b : number
+>  : ^^^^^^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+let rj12 = 1 | E.b;
+>rj12 : number
+>     : ^^^^^^
+>1 | E.b : number
+>        : ^^^^^^
+>1 : 1
+>  : ^
+>E.b : E.b
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>b : E.b
+>  : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

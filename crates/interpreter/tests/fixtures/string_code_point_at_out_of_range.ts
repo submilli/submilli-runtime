@@ -1,5 +1,5 @@
-// `codePointAt` out of range has no code point: JavaScript returns
-// `undefined`, which Submilli spells `null`, so the result must be narrowed.
+// `codePointAt` out of range has no code point and returns `undefined`, as in
+// JavaScript, so the result must be narrowed.
 function main(): void {
   const s = "a😀";
   assert((s.codePointAt(1) ?? -1) === 0x1f600, "a surrogate pair decodes");

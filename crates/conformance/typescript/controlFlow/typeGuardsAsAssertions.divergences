@@ -1,4 +1,4 @@
-types: 121 of 200 tsc entries compared, 4 differ
+types: 127 of 206 tsc entries compared, 4 differ
 
 line 27: result
   tsc:  Optional<r>

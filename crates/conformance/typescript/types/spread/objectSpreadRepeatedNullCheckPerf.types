@@ -116,20 +116,22 @@ function parseWithSpread(config: Record<string, number>): Props {
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 
     return {
->{         ...config.a !== null && { a: config.a.toString() },         ...config.b !== null && { b: config.b.toString() },         ...config.c !== null && { c: config.c.toString() },         ...config.d !== null && { d: config.d.toString() },         ...config.e !== null && { e: config.e.toString() },         ...config.f !== null && { f: config.f.toString() },         ...config.g !== null && { g: config.g.toString() },         ...config.h !== null && { h: config.h.toString() },         ...config.i !== null && { i: config.i.toString() },         ...config.j !== null && { j: config.j.toString() },         ...config.k !== null && { k: config.k.toString() },         ...config.l !== null && { l: config.l.toString() },         ...config.m !== null && { m: config.m.toString() },         ...config.n !== null && { n: config.n.toString() },         ...config.o !== null && { o: config.o.toString() },         ...config.p !== null && { p: config.p.toString() },         ...config.q !== null && { q: config.q.toString() },         ...config.r !== null && { r: config.r.toString() },         ...config.s !== null && { s: config.s.toString() },         ...config.t !== null && { t: config.t.toString() },         ...config.u !== null && { u: config.u.toString() },         ...config.v !== null && { v: config.v.toString() },         ...config.w !== null && { w: config.w.toString() },         ...config.x !== null && { x: config.x.toString() },         ...config.y !== null && { y: config.y.toString() },         ...config.z !== null && { z: config.z.toString() }     } : { z?: string | undefined; y?: string | undefined; x?: string | undefined; w?: string | undefined; v?: string | undefined; u?: string | undefined; t?: string | undefined; s?: string | undefined; r?: string | undefined; q?: string | undefined; p?: string | undefined; o?: string | undefined; n?: string | undefined; m?: string | undefined; l?: string | undefined; k?: string | undefined; j?: string | undefined; i?: string | undefined; h?: string | undefined; g?: string | undefined; f?: string | undefined; e?: string | undefined; d?: string | undefined; c?: string | undefined; b?: string | undefined; a?: string | undefined; }
->                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         ...config.a !== undefined && { a: config.a.toString() },         ...config.b !== undefined && { b: config.b.toString() },         ...config.c !== undefined && { c: config.c.toString() },         ...config.d !== undefined && { d: config.d.toString() },         ...config.e !== undefined && { e: config.e.toString() },         ...config.f !== undefined && { f: config.f.toString() },         ...config.g !== undefined && { g: config.g.toString() },         ...config.h !== undefined && { h: config.h.toString() },         ...config.i !== undefined && { i: config.i.toString() },         ...config.j !== undefined && { j: config.j.toString() },         ...config.k !== undefined && { k: config.k.toString() },         ...config.l !== undefined && { l: config.l.toString() },         ...config.m !== undefined && { m: config.m.toString() },         ...config.n !== undefined && { n: config.n.toString() },         ...config.o !== undefined && { o: config.o.toString() },         ...config.p !== undefined && { p: config.p.toString() },         ...config.q !== undefined && { q: config.q.toString() },         ...config.r !== undefined && { r: config.r.toString() },         ...config.s !== undefined && { s: config.s.toString() },         ...config.t !== undefined && { t: config.t.toString() },         ...config.u !== undefined && { u: config.u.toString() },         ...config.v !== undefined && { v: config.v.toString() },         ...config.w !== undefined && { w: config.w.toString() },         ...config.x !== undefined && { x: config.x.toString() },         ...config.y !== undefined && { y: config.y.toString() },         ...config.z !== undefined && { z: config.z.toString() }     } : { z?: string | undefined; y?: string | undefined; x?: string | undefined; w?: string | undefined; v?: string | undefined; u?: string | undefined; t?: string | undefined; s?: string | undefined; r?: string | undefined; q?: string | undefined; p?: string | undefined; o?: string | undefined; n?: string | undefined; m?: string | undefined; l?: string | undefined; k?: string | undefined; j?: string | undefined; i?: string | undefined; h?: string | undefined; g?: string | undefined; f?: string | undefined; e?: string | undefined; d?: string | undefined; c?: string | undefined; b?: string | undefined; a?: string | undefined; }
+>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.a !== null && { a: config.a.toString() },
->config.a !== null && { a: config.a.toString() } : false | { a: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.a !== null : boolean
->                  : ^^^^^^^
+        ...config.a !== undefined && { a: config.a.toString() },
+>config.a !== undefined && { a: config.a.toString() } : false | { a: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.a !== undefined : boolean
+>                       : ^^^^^^^
 >config.a : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >a : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ a: config.a.toString() } : { a: string; }
 >                           : ^^^^^^^^^^^^^^
 >a : string
@@ -147,17 +149,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.b !== null && { b: config.b.toString() },
->config.b !== null && { b: config.b.toString() } : false | { b: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.b !== null : boolean
->                  : ^^^^^^^
+        ...config.b !== undefined && { b: config.b.toString() },
+>config.b !== undefined && { b: config.b.toString() } : false | { b: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.b !== undefined : boolean
+>                       : ^^^^^^^
 >config.b : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >b : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ b: config.b.toString() } : { b: string; }
 >                           : ^^^^^^^^^^^^^^
 >b : string
@@ -175,17 +179,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.c !== null && { c: config.c.toString() },
->config.c !== null && { c: config.c.toString() } : false | { c: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.c !== null : boolean
->                  : ^^^^^^^
+        ...config.c !== undefined && { c: config.c.toString() },
+>config.c !== undefined && { c: config.c.toString() } : false | { c: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.c !== undefined : boolean
+>                       : ^^^^^^^
 >config.c : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >c : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ c: config.c.toString() } : { c: string; }
 >                           : ^^^^^^^^^^^^^^
 >c : string
@@ -203,17 +209,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.d !== null && { d: config.d.toString() },
->config.d !== null && { d: config.d.toString() } : false | { d: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.d !== null : boolean
->                  : ^^^^^^^
+        ...config.d !== undefined && { d: config.d.toString() },
+>config.d !== undefined && { d: config.d.toString() } : false | { d: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.d !== undefined : boolean
+>                       : ^^^^^^^
 >config.d : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >d : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ d: config.d.toString() } : { d: string; }
 >                           : ^^^^^^^^^^^^^^
 >d : string
@@ -231,17 +239,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.e !== null && { e: config.e.toString() },
->config.e !== null && { e: config.e.toString() } : false | { e: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.e !== null : boolean
->                  : ^^^^^^^
+        ...config.e !== undefined && { e: config.e.toString() },
+>config.e !== undefined && { e: config.e.toString() } : false | { e: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.e !== undefined : boolean
+>                       : ^^^^^^^
 >config.e : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >e : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ e: config.e.toString() } : { e: string; }
 >                           : ^^^^^^^^^^^^^^
 >e : string
@@ -259,17 +269,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.f !== null && { f: config.f.toString() },
->config.f !== null && { f: config.f.toString() } : false | { f: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.f !== null : boolean
->                  : ^^^^^^^
+        ...config.f !== undefined && { f: config.f.toString() },
+>config.f !== undefined && { f: config.f.toString() } : false | { f: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.f !== undefined : boolean
+>                       : ^^^^^^^
 >config.f : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >f : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ f: config.f.toString() } : { f: string; }
 >                           : ^^^^^^^^^^^^^^
 >f : string
@@ -287,17 +299,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.g !== null && { g: config.g.toString() },
->config.g !== null && { g: config.g.toString() } : false | { g: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.g !== null : boolean
->                  : ^^^^^^^
+        ...config.g !== undefined && { g: config.g.toString() },
+>config.g !== undefined && { g: config.g.toString() } : false | { g: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.g !== undefined : boolean
+>                       : ^^^^^^^
 >config.g : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >g : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ g: config.g.toString() } : { g: string; }
 >                           : ^^^^^^^^^^^^^^
 >g : string
@@ -315,17 +329,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.h !== null && { h: config.h.toString() },
->config.h !== null && { h: config.h.toString() } : false | { h: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.h !== null : boolean
->                  : ^^^^^^^
+        ...config.h !== undefined && { h: config.h.toString() },
+>config.h !== undefined && { h: config.h.toString() } : false | { h: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.h !== undefined : boolean
+>                       : ^^^^^^^
 >config.h : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >h : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ h: config.h.toString() } : { h: string; }
 >                           : ^^^^^^^^^^^^^^
 >h : string
@@ -343,17 +359,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.i !== null && { i: config.i.toString() },
->config.i !== null && { i: config.i.toString() } : false | { i: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.i !== null : boolean
->                  : ^^^^^^^
+        ...config.i !== undefined && { i: config.i.toString() },
+>config.i !== undefined && { i: config.i.toString() } : false | { i: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.i !== undefined : boolean
+>                       : ^^^^^^^
 >config.i : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >i : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ i: config.i.toString() } : { i: string; }
 >                           : ^^^^^^^^^^^^^^
 >i : string
@@ -371,17 +389,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.j !== null && { j: config.j.toString() },
->config.j !== null && { j: config.j.toString() } : false | { j: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.j !== null : boolean
->                  : ^^^^^^^
+        ...config.j !== undefined && { j: config.j.toString() },
+>config.j !== undefined && { j: config.j.toString() } : false | { j: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.j !== undefined : boolean
+>                       : ^^^^^^^
 >config.j : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >j : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ j: config.j.toString() } : { j: string; }
 >                           : ^^^^^^^^^^^^^^
 >j : string
@@ -399,17 +419,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.k !== null && { k: config.k.toString() },
->config.k !== null && { k: config.k.toString() } : false | { k: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.k !== null : boolean
->                  : ^^^^^^^
+        ...config.k !== undefined && { k: config.k.toString() },
+>config.k !== undefined && { k: config.k.toString() } : false | { k: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.k !== undefined : boolean
+>                       : ^^^^^^^
 >config.k : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >k : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ k: config.k.toString() } : { k: string; }
 >                           : ^^^^^^^^^^^^^^
 >k : string
@@ -427,17 +449,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.l !== null && { l: config.l.toString() },
->config.l !== null && { l: config.l.toString() } : false | { l: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.l !== null : boolean
->                  : ^^^^^^^
+        ...config.l !== undefined && { l: config.l.toString() },
+>config.l !== undefined && { l: config.l.toString() } : false | { l: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.l !== undefined : boolean
+>                       : ^^^^^^^
 >config.l : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >l : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ l: config.l.toString() } : { l: string; }
 >                           : ^^^^^^^^^^^^^^
 >l : string
@@ -455,17 +479,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.m !== null && { m: config.m.toString() },
->config.m !== null && { m: config.m.toString() } : false | { m: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.m !== null : boolean
->                  : ^^^^^^^
+        ...config.m !== undefined && { m: config.m.toString() },
+>config.m !== undefined && { m: config.m.toString() } : false | { m: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.m !== undefined : boolean
+>                       : ^^^^^^^
 >config.m : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >m : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ m: config.m.toString() } : { m: string; }
 >                           : ^^^^^^^^^^^^^^
 >m : string
@@ -483,17 +509,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.n !== null && { n: config.n.toString() },
->config.n !== null && { n: config.n.toString() } : false | { n: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.n !== null : boolean
->                  : ^^^^^^^
+        ...config.n !== undefined && { n: config.n.toString() },
+>config.n !== undefined && { n: config.n.toString() } : false | { n: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.n !== undefined : boolean
+>                       : ^^^^^^^
 >config.n : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >n : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ n: config.n.toString() } : { n: string; }
 >                           : ^^^^^^^^^^^^^^
 >n : string
@@ -511,17 +539,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.o !== null && { o: config.o.toString() },
->config.o !== null && { o: config.o.toString() } : false | { o: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.o !== null : boolean
->                  : ^^^^^^^
+        ...config.o !== undefined && { o: config.o.toString() },
+>config.o !== undefined && { o: config.o.toString() } : false | { o: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.o !== undefined : boolean
+>                       : ^^^^^^^
 >config.o : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >o : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ o: config.o.toString() } : { o: string; }
 >                           : ^^^^^^^^^^^^^^
 >o : string
@@ -539,17 +569,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.p !== null && { p: config.p.toString() },
->config.p !== null && { p: config.p.toString() } : false | { p: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.p !== null : boolean
->                  : ^^^^^^^
+        ...config.p !== undefined && { p: config.p.toString() },
+>config.p !== undefined && { p: config.p.toString() } : false | { p: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.p !== undefined : boolean
+>                       : ^^^^^^^
 >config.p : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >p : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ p: config.p.toString() } : { p: string; }
 >                           : ^^^^^^^^^^^^^^
 >p : string
@@ -567,17 +599,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.q !== null && { q: config.q.toString() },
->config.q !== null && { q: config.q.toString() } : false | { q: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.q !== null : boolean
->                  : ^^^^^^^
+        ...config.q !== undefined && { q: config.q.toString() },
+>config.q !== undefined && { q: config.q.toString() } : false | { q: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.q !== undefined : boolean
+>                       : ^^^^^^^
 >config.q : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >q : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ q: config.q.toString() } : { q: string; }
 >                           : ^^^^^^^^^^^^^^
 >q : string
@@ -595,17 +629,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.r !== null && { r: config.r.toString() },
->config.r !== null && { r: config.r.toString() } : false | { r: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.r !== null : boolean
->                  : ^^^^^^^
+        ...config.r !== undefined && { r: config.r.toString() },
+>config.r !== undefined && { r: config.r.toString() } : false | { r: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.r !== undefined : boolean
+>                       : ^^^^^^^
 >config.r : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >r : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ r: config.r.toString() } : { r: string; }
 >                           : ^^^^^^^^^^^^^^
 >r : string
@@ -623,17 +659,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.s !== null && { s: config.s.toString() },
->config.s !== null && { s: config.s.toString() } : false | { s: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.s !== null : boolean
->                  : ^^^^^^^
+        ...config.s !== undefined && { s: config.s.toString() },
+>config.s !== undefined && { s: config.s.toString() } : false | { s: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.s !== undefined : boolean
+>                       : ^^^^^^^
 >config.s : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >s : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ s: config.s.toString() } : { s: string; }
 >                           : ^^^^^^^^^^^^^^
 >s : string
@@ -651,17 +689,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.t !== null && { t: config.t.toString() },
->config.t !== null && { t: config.t.toString() } : false | { t: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.t !== null : boolean
->                  : ^^^^^^^
+        ...config.t !== undefined && { t: config.t.toString() },
+>config.t !== undefined && { t: config.t.toString() } : false | { t: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.t !== undefined : boolean
+>                       : ^^^^^^^
 >config.t : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >t : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ t: config.t.toString() } : { t: string; }
 >                           : ^^^^^^^^^^^^^^
 >t : string
@@ -679,17 +719,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.u !== null && { u: config.u.toString() },
->config.u !== null && { u: config.u.toString() } : false | { u: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.u !== null : boolean
->                  : ^^^^^^^
+        ...config.u !== undefined && { u: config.u.toString() },
+>config.u !== undefined && { u: config.u.toString() } : false | { u: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.u !== undefined : boolean
+>                       : ^^^^^^^
 >config.u : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >u : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ u: config.u.toString() } : { u: string; }
 >                           : ^^^^^^^^^^^^^^
 >u : string
@@ -707,17 +749,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.v !== null && { v: config.v.toString() },
->config.v !== null && { v: config.v.toString() } : false | { v: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.v !== null : boolean
->                  : ^^^^^^^
+        ...config.v !== undefined && { v: config.v.toString() },
+>config.v !== undefined && { v: config.v.toString() } : false | { v: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.v !== undefined : boolean
+>                       : ^^^^^^^
 >config.v : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >v : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ v: config.v.toString() } : { v: string; }
 >                           : ^^^^^^^^^^^^^^
 >v : string
@@ -735,17 +779,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.w !== null && { w: config.w.toString() },
->config.w !== null && { w: config.w.toString() } : false | { w: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.w !== null : boolean
->                  : ^^^^^^^
+        ...config.w !== undefined && { w: config.w.toString() },
+>config.w !== undefined && { w: config.w.toString() } : false | { w: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.w !== undefined : boolean
+>                       : ^^^^^^^
 >config.w : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >w : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ w: config.w.toString() } : { w: string; }
 >                           : ^^^^^^^^^^^^^^
 >w : string
@@ -763,17 +809,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.x !== null && { x: config.x.toString() },
->config.x !== null && { x: config.x.toString() } : false | { x: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.x !== null : boolean
->                  : ^^^^^^^
+        ...config.x !== undefined && { x: config.x.toString() },
+>config.x !== undefined && { x: config.x.toString() } : false | { x: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.x !== undefined : boolean
+>                       : ^^^^^^^
 >config.x : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >x : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ x: config.x.toString() } : { x: string; }
 >                           : ^^^^^^^^^^^^^^
 >x : string
@@ -791,17 +839,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.y !== null && { y: config.y.toString() },
->config.y !== null && { y: config.y.toString() } : false | { y: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.y !== null : boolean
->                  : ^^^^^^^
+        ...config.y !== undefined && { y: config.y.toString() },
+>config.y !== undefined && { y: config.y.toString() } : false | { y: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.y !== undefined : boolean
+>                       : ^^^^^^^
 >config.y : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >y : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ y: config.y.toString() } : { y: string; }
 >                           : ^^^^^^^^^^^^^^
 >y : string
@@ -819,17 +869,19 @@ function parseWithSpread(config: Record<string, number>): Props {
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        ...config.z !== null && { z: config.z.toString() }
->config.z !== null && { z: config.z.toString() } : false | { z: string; }
->                                                : ^^^^^^^^^^^^^^^^^^^^^^
->config.z !== null : boolean
->                  : ^^^^^^^
+        ...config.z !== undefined && { z: config.z.toString() }
+>config.z !== undefined && { z: config.z.toString() } : false | { z: string; }
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^
+>config.z !== undefined : boolean
+>                       : ^^^^^^^
 >config.z : number
 >         : ^^^^^^
 >config : Record<string, number>
 >       : ^^^^^^^^^^^^^^^^^^^^^^
 >z : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >{ z: config.z.toString() } : { z: string; }
 >                           : ^^^^^^^^^^^^^^
 >z : string

@@ -20,18 +20,55 @@ use super::{Inferer, format_definition, format_signature, narrowing};
 /// you" pointer to a primary diagnostic.
 type DiagnosticAddon = (Vec<String>, Vec<(Span, String)>);
 
-/// Whether a type *spells* `null` — the signal that a failing read is about a
-/// missing narrowing rather than an unrelated mismatch. Deliberately narrower
-/// than `infer::expr`'s `type_admits_null`, which answers the semantic question.
-fn spells_null(ty: &Type) -> bool {
-    match ty.peel() {
-        Type::Null => true,
-        Type::Union(members) => members.iter().any(spells_null),
-        // `unknown` admits null too, but its callers gate on assignability and
-        // `unknown` is assignable to nothing, so reporting it here would never
-        // reach a hint. Explaining a missing `unknown` guard needs its own
-        // route, not this one.
-        _ => false,
+/// The message every plain type mismatch reports. Callers that drop a
+/// duplicate mismatch match against it, so the wording lives only here.
+pub(super) fn mismatch_message(
+    expected: &impl std::fmt::Display,
+    got: &impl std::fmt::Display,
+) -> String {
+    format!("expected `{expected}`, got `{got}`")
+}
+
+/// Whether a type *spells* `null` or `undefined` — the signal that a failing
+/// read is about a missing narrowing rather than an unrelated mismatch.
+/// Deliberately narrower than `infer::expr`'s `type_admits_nullish`, which
+/// answers the semantic question: `unknown` admits both too, but its callers
+/// gate on assignability and `unknown` is assignable to nothing, so it would
+/// never reach a hint here.
+fn spells_nullish(ty: &Type) -> bool {
+    ty.spells_null() || ty.spells_undefined()
+}
+
+/// The absent values a type spells, so a receiver diagnostic names and guards
+/// against exactly those: `null | A` needs only `!== null`.
+#[derive(Clone, Copy, Default)]
+struct Absence {
+    null: bool,
+    undefined: bool,
+}
+
+impl Absence {
+    fn of(ty: &Type) -> Self {
+        Self {
+            null: ty.spells_null(),
+            undefined: ty.spells_undefined(),
+        }
+    }
+
+    fn describe(self) -> &'static str {
+        match (self.null, self.undefined) {
+            (true, false) => "`null`",
+            (false, true) => "`undefined`",
+            _ => "nullish",
+        }
+    }
+
+    fn guard(self, recv: &str) -> String {
+        match (self.null, self.undefined) {
+            (true, false) => format!("{recv} !== null"),
+            (false, true) => format!("{recv} !== undefined"),
+            _ => format!("{recv} !== null && {recv} !== undefined"),
+        }
     }
 }
 
@@ -75,13 +112,6 @@ impl NonNullAccess {
             NonNullAccess::Method { takes_args: true } => "(…)",
         }
     }
-}
-
-/// Which string-coercion site rejected a nullable value — selects the
-/// rewrite shape shown by [`Inferer::nullable_string_fix_help`].
-pub(super) enum NullableStringContext {
-    Interpolation,
-    ToStringCall,
 }
 
 /// A read-modify-write operator: `x.f += v` or `x.f++`. Holds the operator
@@ -140,26 +170,6 @@ impl RwOp {
     }
 }
 
-/// A position that compares a value rather than testing it for truthiness.
-/// Sibling of [`ValuePosition`](super::void_value::ValuePosition) rather than
-/// a shared enum — the two sentence frames differ.
-#[derive(Clone, Copy)]
-pub(super) enum ComparisonPosition {
-    EqualityOperand,
-    SwitchDiscriminant,
-    NullishLeftOperand,
-}
-
-impl std::fmt::Display for ComparisonPosition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            ComparisonPosition::EqualityOperand => "an equality operand",
-            ComparisonPosition::SwitchDiscriminant => "a `switch` discriminant",
-            ComparisonPosition::NullishLeftOperand => "the left side of `??`",
-        })
-    }
-}
-
 impl<'a> Inferer<'a> {
     pub(super) fn error(&mut self, span: Span, message: String) {
         self.error_with_help_and_notes(span, message, vec![], vec![]);
@@ -187,30 +197,7 @@ impl<'a> Inferer<'a> {
             .count()
     }
 
-    /// A `void`/`never` expression where a value is compared rather than
-    /// tested for truthiness — a `switch` discriminant, an `===`/`!==`
-    /// operand, or the left side of `??`. Worded separately from
-    /// [`error_non_condition_type`](Self::error_non_condition_type) because
-    /// none of these positions is a condition, and truthiness is not what fails.
-    pub(super) fn error_non_comparable_type(
-        &mut self,
-        span: Span,
-        ty: &Type,
-        position: ComparisonPosition,
-    ) {
-        self.error_with_help(
-            span,
-            format!("cannot compare `{ty}`: {position} must be a value"),
-            vec![format!(
-                "`{ty}` produces no value to compare. Call something that returns \
-                 one, or drop the comparison and call this as its own statement."
-            )],
-        );
-    }
-
-    /// Only `void`/`never` reach this since JS truthiness landed — every
-    /// value-bearing type is condition-compatible. Comparison positions use
-    /// [`error_non_comparable_type`](Self::error_non_comparable_type) instead.
+    /// Bare `void` and `never` cannot be tested for truthiness.
     pub(super) fn error_non_condition_type(&mut self, span: Span, ty: &Type) {
         let help = vec![
             "conditions need a value to test for truthiness; this expression \
@@ -320,13 +307,13 @@ impl<'a> Inferer<'a> {
     /// that second half — advice that still fails when followed verbatim is worse
     /// than no advice, and a nullable operand sitting beside an unrelated mismatch
     /// is the common case, not the rare one.
-    pub(super) fn nullable_culprit(
+    pub(super) fn nullish_culprit(
         &self,
         operands: &[(ExprId, &Type)],
         accepts: impl Fn(&Type) -> bool,
     ) -> Option<ExprId> {
         operands.iter().find_map(|(expr, ty)| {
-            if !spells_null(ty) {
+            if !spells_nullish(ty) {
                 return None;
             }
             let non_null = super::narrow_scopes::non_null_form((*ty).clone())?;
@@ -336,7 +323,7 @@ impl<'a> Inferer<'a> {
 
     /// [`error_with_help`](Self::error_with_help) plus the narrowing hint for
     /// `culprit` — the operand a caller has already established is nullable *and*
-    /// the reason this site fails (see [`nullable_culprit`](Self::nullable_culprit)).
+    /// the reason this site fails (see [`nullish_culprit`](Self::nullish_culprit)).
     /// `None` emits the bare diagnostic.
     pub(super) fn error_with_narrowing_hint(
         &mut self,
@@ -368,14 +355,14 @@ impl<'a> Inferer<'a> {
         rhs: (ExprId, &Type),
         accepts: impl Fn(&Type, &Type) -> bool,
     ) -> Option<ExprId> {
-        self.nullable_culprit(&[lhs], |non_null| accepts(non_null, rhs.1))
-            .or_else(|| self.nullable_culprit(&[rhs], |non_null| accepts(lhs.1, non_null)))
+        self.nullish_culprit(&[lhs], |non_null| accepts(non_null, rhs.1))
+            .or_else(|| self.nullish_culprit(&[rhs], |non_null| accepts(lhs.1, non_null)))
             .or_else(|| {
                 // Both sides nullable: neither one-sided probe can match, yet a
                 // single guard may still cover both (`s + s`, or two variables
                 // guarded together). Try dropping `null` from both.
                 let rhs_non_null = super::narrow_scopes::non_null_form(rhs.1.clone())?;
-                self.nullable_culprit(&[lhs], |non_null| accepts(non_null, &rhs_non_null))
+                self.nullish_culprit(&[lhs], |non_null| accepts(non_null, &rhs_non_null))
             })
     }
 
@@ -420,7 +407,7 @@ impl<'a> Inferer<'a> {
         got: &Type,
         want: &Type,
     ) -> Result<Option<DiagnosticAddon>, crate::compiler_error::CompilerFailure> {
-        if !spells_null(got) {
+        if !spells_nullish(got) {
             return Ok(None);
         }
         let Some(non_null) = super::narrow_scopes::non_null_form(got.clone()) else {
@@ -473,6 +460,26 @@ impl<'a> Inferer<'a> {
             .unwrap_or_else(|| "v".to_string())
     }
 
+    /// What a local binding's declared type can be instead of a value; a deeper
+    /// path or another root falls back to guarding against both.
+    fn path_absence(&self, path: &narrowing::ReferencePath) -> Absence {
+        match (&path.root, path.chain.is_empty()) {
+            (narrowing::BindingId::Local { name, .. }, true) => self
+                .scopes
+                .get(name)
+                .map(|binding| Absence::of(&binding.ty))
+                .filter(|absence| absence.null || absence.undefined)
+                .unwrap_or(Absence {
+                    null: true,
+                    undefined: true,
+                }),
+            _ => Absence {
+                null: true,
+                undefined: true,
+            },
+        }
+    }
+
     /// The path is narrowed outside the closure we are currently inferring, but
     /// isn't one of the stable depth-0 narrowings that cross the
     /// boundary (stability rule 9).
@@ -486,8 +493,9 @@ impl<'a> Inferer<'a> {
                 "narrowing on `{rendered}` does not cross a closure boundary — \
                  only a directly narrowed binding with no later or nested-function \
                  writes keeps its narrowing inside a closure body. Bind it to a `const` \
-                 first: `const {tmp} = {rendered}; if ({tmp} !== null) {{ … }}` — or \
+                 first: `const {tmp} = {rendered}; if ({}) {{ … }}` — or \
                  re-narrow inside the closure.",
+                self.path_absence(path).guard(&tmp),
             )],
             Vec::new(),
         )
@@ -560,8 +568,9 @@ impl<'a> Inferer<'a> {
                 "narrowing on `{root_name}` was refused because a closure body \
                  reassigns `{root_name}` — stability rule 5. Read it into a \
                  `const` and write back: `const {tmp} = {root_name}; \
-                 if ({tmp} !== null) {{ {root_name} = {tmp}…; }}` — or, if \
-                 `{root_name}` never needs to change, declare it `const`."
+                 if ({}) {{ {root_name} = {tmp}…; }}` — or, if \
+                 `{root_name}` never needs to change, declare it `const`.",
+                self.path_absence(path).guard(&tmp),
             )],
             Vec::new(),
         )
@@ -852,7 +861,7 @@ impl<'a> Inferer<'a> {
     /// (`x.f += v`, `x.f++`), answering whether it did.
     ///
     /// Only when dropping `null` would actually make the operator legal — the
-    /// same rule [`nullable_culprit`](Self::nullable_culprit) enforces for the
+    /// same rule [`nullish_culprit`](Self::nullish_culprit) enforces for the
     /// operator diagnostics. A `boolean`, array, or literal-union field admits
     /// no `+=` whether or not it is nullable, and blaming the null there sends
     /// the reader after a guard that changes nothing; those fall through to the
@@ -871,10 +880,10 @@ impl<'a> Inferer<'a> {
         optional: bool,
         op: RwOp,
     ) -> bool {
-        // Compare against the *peeled* type: `strip_null` peels, so an alias of
-        // a non-nullable type would otherwise differ from its own declaration
-        // and read as nullable.
-        let non_null = narrowing::strip_null(field_ty);
+        // Compare against the *peeled* type: `strip_nullish` peels, so an alias
+        // of a non-nullish type would otherwise differ from its own declaration
+        // and read as nullish.
+        let non_null = narrowing::strip_nullish(field_ty);
         if !optional && non_null == *field_ty.peel() {
             return false;
         }
@@ -891,18 +900,21 @@ impl<'a> Inferer<'a> {
         };
         let rewrite = format!("{} {operand}", op.sign());
         let shape = if optional { "optional" } else { "nullable" };
-        let recv = self.rewritable_snippet(receiver_span);
+        let target = format!("{}.{}", self.rewritable_snippet(receiver_span), name.name);
+        let mut absence = Absence::of(field_ty);
+        absence.undefined |= optional;
         let op_text = op.text();
         self.error_with_help(
             name.span,
             format!(
-                "`{}` on `{receiver_ty}` is {shape}; `{op_text}` requires a non-null field",
+                "`{}` on `{receiver_ty}` is {shape}; `{op_text}` requires a field that is never {}",
                 name.name,
+                absence.describe(),
             ),
             vec![format!(
                 "narrowing does not reach the target of `{op_text}`; write the assignment out: \
-                 `if ({recv}.{n} !== null) {{ {recv}.{n} = {recv}.{n} {rewrite}; }}`",
-                n = name.name
+                 `if ({}) {{ {target} = {target} {rewrite}; }}`",
+                absence.guard(&target),
             )],
         );
         true
@@ -957,7 +969,8 @@ impl<'a> Inferer<'a> {
         let (message, mut help) = match nullable {
             Some(fix) => (
                 format!(
-                    "cannot read field `{name}` on `{receiver_ty}`: the receiver can be `null`"
+                    "cannot read field `{name}` on `{receiver_ty}`: the receiver can be {}",
+                    Absence::of(receiver_ty).describe(),
                 ),
                 vec![fix],
             ),
@@ -1133,7 +1146,7 @@ impl<'a> Inferer<'a> {
     /// its value is checked against. Stripping is identity on a null-free type,
     /// so both reporters can share this.
     pub(super) fn write_target_ty(&self, receiver_ty: &Type, field: &str) -> Option<Type> {
-        match narrowing::strip_null(receiver_ty) {
+        match narrowing::strip_nullish(receiver_ty) {
             Type::Union(members) => self.members_agree_on_write_ty(&members, field),
             single => self.union_member_field_write(&single, field).map(|w| w.ty),
         }
@@ -1165,8 +1178,9 @@ impl<'a> Inferer<'a> {
             Some(fix) => self.error_with_help(
                 name.span,
                 format!(
-                    "cannot assign to field `{}` of `{receiver_ty}`: the receiver can be `null`",
+                    "cannot assign to field `{}` of `{receiver_ty}`: the receiver can be {}",
                     name.name,
+                    Absence::of(receiver_ty).describe(),
                 ),
                 vec![fix],
             ),
@@ -1184,7 +1198,7 @@ impl<'a> Inferer<'a> {
     /// the assignment. `None` when the null is not what blocks the access.
     ///
     /// Claimed only when removing `null` makes *this* access legal — see
-    /// [`access_after_null`](Self::access_after_null). Advice that lands on a
+    /// [`access_after_nullish`](Self::access_after_nullish). Advice that lands on a
     /// second rejection is worse than the generic message it replaces, and it
     /// also costs the reader the type dump that message carries.
     fn nullable_receiver_fix(
@@ -1195,10 +1209,11 @@ impl<'a> Inferer<'a> {
         field: &str,
         side: MemberSide,
     ) -> Option<String> {
-        if !spells_null(receiver_ty) {
+        if !spells_nullish(receiver_ty) {
             return None;
         }
-        let access = self.access_after_null(&narrowing::strip_null(receiver_ty), field, side)?;
+        let access =
+            self.access_after_nullish(&narrowing::strip_nullish(receiver_ty), field, side)?;
         let recv = self.rewritable_snippet(recv_span);
         let member = format!("{field}{}", access.call_suffix());
         let (nonnull_rewrite, guard_body) = match side {
@@ -1230,7 +1245,10 @@ impl<'a> Inferer<'a> {
         );
         Some(match self.receiver_place(recv_path) {
             ReceiverPlace::Narrowable => {
-                format!("guard first — `if ({recv} !== null) {guard_body}` — or {nonnull_rewrite}")
+                format!(
+                    "guard first — `if ({}) {guard_body}` — or {nonnull_rewrite}",
+                    Absence::of(receiver_ty).guard(&recv),
+                )
             }
             ReceiverPlace::BindFirst(reason) => format!("{reason} — {bind_first}"),
             // Some pathless receivers narrow fine and some cannot, so the advice
@@ -1245,7 +1263,7 @@ impl<'a> Inferer<'a> {
     /// Field-*bearing* is not a strong enough test: a guard is only the fix if
     /// the access succeeds on the other side of it, and several shapes are
     /// field-bearing and fail anyway.
-    fn access_after_null(
+    fn access_after_nullish(
         &self,
         stripped: &Type,
         field: &str,
@@ -1261,10 +1279,10 @@ impl<'a> Inferer<'a> {
             (MemberSide::Read, single) => {
                 if let Some((sig, ..)) = self.find_method(single, field) {
                     return Some(NonNullAccess::Method {
-                        // A defaulted or rest parameter need not be passed, so a
+                        // An optional or rest parameter need not be passed, so a
                         // rewrite showing `(…)` for one would ask the reader to
                         // invent an argument list they do not owe.
-                        takes_args: sig.params.iter().any(|p| p.default.is_none() && !p.rest),
+                        takes_args: sig.params.iter().any(|p| !p.is_omittable() && !p.rest),
                     });
                 }
                 // `lookup_interface_property` rather than `find_property`: the
@@ -1421,9 +1439,11 @@ impl<'a> Inferer<'a> {
             // reader pick the branch where the field is `readonly`, which narrows
             // correctly and then rejects the write. Spellability is deliberately
             // not required: the literal is what the test compares, and it needs
-            // no type name.
-            let value = variants.iter().find_map(|(literal, idx)| {
-                let member = members.get(idx.0 as usize)?;
+            // no type name. A literal that names several members (`undefined`
+            // with optional discriminants) doesn't narrow to one, so it's skipped.
+            let value = variants.iter().find_map(|(literal, _)| {
+                let only = variants.get(literal)?;
+                let member = members.get(only.0 as usize)?;
                 self.union_member_field_writable(member, field)
                     .then(|| render_literal(literal))
             });
@@ -1483,59 +1503,40 @@ impl<'a> Inferer<'a> {
         help
     }
 
-    /// Reject binding a `void` value (`void` is a return type only — it has
-    /// no Wasm lowering). Checks the top-level type and direct union members
-    /// only, so nested return-position voids (`() => void`) stay legal.
-    /// Returns whether it errored.
-    pub(super) fn reject_void_binding(&mut self, ty: &Type, span: Span) -> bool {
-        let mentions_void = ty.carries_void();
-        if mentions_void {
-            self.error_with_help(
-                span,
-                "cannot bind a `void` value".to_string(),
-                vec![
-                    "`void` is a return type only — it carries no value. Call the \
-                     expression as a statement instead of binding its result."
-                        .to_string(),
-                ],
-            );
-        }
-        mentions_void
-    }
-
     /// Build the fix trio for a nullable value in a string context —
     /// the runtime-checked `!` assert, a `??` fallback, and narrowing —
     /// each rewritten against the offending expression's source text so
     /// the model can apply one verbatim.
-    pub(super) fn nullable_string_fix_help(
-        &self,
-        expr_span: Span,
-        context: NullableStringContext,
-    ) -> Vec<String> {
+    pub(super) fn nullish_string_fix_help(&self, expr_span: Span, ty: &Type) -> Vec<String> {
         let expr = self.rewritable_snippet(expr_span);
-        let (asserted, defaulted) = match context {
-            NullableStringContext::Interpolation => (
-                format!("`${{{expr}!}}`"),
-                format!("`${{{expr} ?? \"fallback\"}}`"),
-            ),
-            NullableStringContext::ToStringCall => (
-                format!("`{expr}!.toString()`"),
-                format!("`({expr} ?? \"fallback\").toString()`"),
-            ),
-        };
         vec![format!(
             "use a non-null value:\n\
-             \x20 {asserted} — assert non-null (throws `Error` at runtime if null)\n\
-             \x20 {defaulted} — provide a fallback\n\
-             \x20 or narrow first: `if ({expr} !== null) {{ … }}`"
+             \x20 `{expr}!.toString()` — assert non-null (throws `TypeError` at runtime if it is not)\n\
+             \x20 `({expr} ?? \"fallback\").toString()` — provide a fallback\n\
+             \x20 `String({expr})` — convert it, `null` included\n\
+             \x20 or narrow first: `if ({}) {{ … }}`",
+            Absence::of(ty).guard(&expr),
         )]
+    }
+
+    /// Remove the generic "expected `T`, got `U`" an expression reported under
+    /// its contextual type, when the caller reports the same mismatch better.
+    pub(super) fn drop_contextual_mismatch(&mut self, span: Span, expected: &Type, got: &Type) {
+        let message = mismatch_message(&expected, &got);
+        if let Some(index) = self
+            .diagnostics
+            .iter()
+            .rposition(|diagnostic| diagnostic.span == span && diagnostic.message == message)
+        {
+            self.diagnostics.remove(index);
+        }
     }
 
     /// Source text of `span`, ready to take a postfix `!` or a trailing
     /// `?? …`: simple reference paths pass through verbatim, other
     /// single-line expressions are parenthesized to stay
     /// precedence-correct, and anything unrenderable falls back to `x`.
-    fn rewritable_snippet(&self, span: Span) -> String {
+    pub(super) fn rewritable_snippet(&self, span: Span) -> String {
         self.rewritable_text(span)
             .unwrap_or_else(|| "x".to_string())
     }
@@ -1623,6 +1624,8 @@ fn render_literal(literal: &narrowing::LiteralValue) -> String {
         narrowing::LiteralValue::Number(n) => crate::runtime::number::format_number_js(n.0),
         narrowing::LiteralValue::Boolean(b) => b.to_string(),
         narrowing::LiteralValue::BigInt(digits) => format!("{digits}n"),
+        narrowing::LiteralValue::Null => "null".to_string(),
+        narrowing::LiteralValue::Undefined => "undefined".to_string(),
     }
 }
 
@@ -1634,17 +1637,17 @@ mod dropped_guard_tests {
     // narrowing source can't rebuild from declared types.
     const TYPES: &str = "class Leaf { z: number | null = 3; }\n\
         const key: string | null = \"k\";\n\
-        class Holder { leaves: Record<string, Leaf | null> = {}; }\n";
+        class Holder { leaves: Record<string, Leaf> = {}; }\n";
 
     #[test]
     fn dropped_guard_hint_stays_in_its_branch() {
         for (condition, guarded_arm) in [
             (
-                "key !== null && h.leaves[key] !== null && h.leaves[key].z !== null",
+                "key !== null && h.leaves[key] !== undefined && h.leaves[key].z !== null",
                 "thenValue",
             ),
             (
-                "key === null || h.leaves[key] === null || h.leaves[key].z === null",
+                "key === null || h.leaves[key] === undefined || h.leaves[key].z === null",
                 "elseValue",
             ),
         ] {
@@ -1693,7 +1696,7 @@ mod dropped_guard_tests {
             "{TYPES}
             function main(): number {{
                 const h = new Holder();
-                if (key === null || h.leaves[key] === null || h.leaves[key].z === null) return 0;
+                if (key === null || h.leaves[key] === undefined || h.leaves[key].z === null) return 0;
                 return h.leaves[key].z;
             }}"
         );
@@ -1713,7 +1716,7 @@ mod dropped_guard_tests {
     fn branch_join_keeps_only_a_common_dropped_refinement() {
         for (else_guard, expected_hint) in [
             (
-                "if (key === null || h.leaves[key] === null || h.leaves[key].z === null) return 0;",
+                "if (key === null || h.leaves[key] === undefined || h.leaves[key].z === null) return 0;",
                 true,
             ),
             ("", false),
@@ -1722,7 +1725,7 @@ mod dropped_guard_tests {
                 "{TYPES}
                 function read(h: Holder, flag: boolean): number {{
                     if (flag) {{
-                        if (key === null || h.leaves[key] === null || h.leaves[key].z === null) return 0;
+                        if (key === null || h.leaves[key] === undefined || h.leaves[key].z === null) return 0;
                     }} else {{ {else_guard} }}
                     return h.leaves[key].z;
                 }}"
@@ -1744,7 +1747,7 @@ mod dropped_guard_tests {
             "{TYPES}
             function first(): void {{
                 const h = new Holder();
-                do {{}} while (key !== null && h.leaves[key] !== null && h.leaves[key].z !== null);
+                do {{}} while (key !== null && h.leaves[key] !== undefined && h.leaves[key].z !== null);
                 const read = (): number => h.leaves[key].z;
             }}
             function second(): number {{

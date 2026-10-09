@@ -20,9 +20,9 @@ type ThisOrThatNode = ThisNode | ThatNode;
 
 function f01(u: unknown): void {
     let x1: {} = u;  // Error
-    let x2: {} | null | null = u;
-    let x3: {} | { x: string } | null | null = u;
-    let x4: ThisOrThatNode | null | null = u;
+    let x2: {} | null | undefined = u;
+    let x3: {} | { x: string } | null | undefined = u;
+    let x4: ThisOrThatNode | null | undefined = u;
 }
 
 function f10(x: unknown): void {
@@ -65,7 +65,7 @@ function f11<T>(x: T): void {
  
 
 function f20(x: unknown): void {
-    if (x !== null) {
+    if (x !== undefined) {
         x;  // {} | null
     }
     else {
@@ -77,13 +77,13 @@ function f20(x: unknown): void {
     else {
         x;  // null
     }
-    if (x !== null && x !== null) {
+    if (x !== undefined && x !== null) {
         x;  // {}
     }
     else {
         x;  // null | undefined
     }
-    if (x != null) {
+    if (x != undefined) {
         x;  // {}
     }
     else {
@@ -98,7 +98,7 @@ function f20(x: unknown): void {
 }
 
 function f21<T>(x: T): void {
-    if (x !== null) {
+    if (x !== undefined) {
         x;  // T & ({} | null)
     }
     else {
@@ -110,13 +110,13 @@ function f21<T>(x: T): void {
     else {
         x;  // T
     }
-    if (x !== null && x !== null) {
+    if (x !== undefined && x !== null) {
         x;  // T & {}
     }
     else {
         x;  // T
     }
-    if (x != null) {
+    if (x != undefined) {
         x;  // T & {}
     }
     else {
@@ -163,14 +163,14 @@ function f21<T>(x: T): void {
      
  
 
-function f23<T>(x: T | null | null): void {
-    if (x !== null) {
+function f23<T>(x: T | undefined | null): void {
+    if (x !== undefined) {
         x;  // T & {} | null
     }
     if (x !== null) {
         x;  // T & {} | undefined
     }
-    if (x != null) {
+    if (x != undefined) {
         x;  // T & {}
     }
     if (x != null) {
@@ -206,11 +206,11 @@ function possiblyNull<T>(x: T): T | null {
     return !!true ? x : null;  // T | null
 }
 
-function possiblyUndefined<T>(x: T): T | null {
-    return !!true ? x : null;  // T | undefined
+function possiblyUndefined<T>(x: T): T | undefined {
+    return !!true ? x : undefined;  // T | undefined
 }
 
-function possiblyNullOrUndefined<T>(x: T): T | null {
+function possiblyNullOrUndefined<T>(x: T): T | null | undefined {
     return possiblyUndefined(possiblyNull(x));  // T | null | undefined
 }
 
@@ -228,7 +228,7 @@ function possiblyNullOrUndefined<T>(x: T): T | null {
                                                            
  
 
-function f40(a: string | null, b: number | null | null): void {
+function f40(a: string | undefined, b: number | null | undefined): void {
     /*pruned*/;                            // string
     /*pruned*/;                            // number
 }
@@ -379,7 +379,7 @@ function fx10(x: string | number, y: number): void {
 // Repros from #50706
 
 function SendBlob(encoding: unknown): void {
-    if (encoding !== null && encoding !== 'utf8') {
+    if (encoding !== undefined && encoding !== 'utf8') {
         throw new Error('encoding');
     }
     encoding;
@@ -396,7 +396,7 @@ function SendBlob(encoding: unknown): void {
  
 
 function doSomething2(value: unknown): void {
-    if (value === null) {
+    if (value === undefined) {
         return;
     }
     if (value === 42) {

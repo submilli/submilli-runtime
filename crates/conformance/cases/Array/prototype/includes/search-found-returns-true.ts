@@ -1,8 +1,11 @@
 // test262: test/built-ins/Array/prototype/includes/search-found-returns-true.js
 // Adapted: the heterogeneous sample array is split by element type
-// (homogeneous arrays); Symbol dropped; undefined -> null.
+// (homogeneous arrays); Symbol dropped.
 
 function main(): void {
+  const missing: (number | undefined)[] = [undefined];
+  assertSameValue(missing.includes(undefined), true);
+
   const numbers = [42, 0, -1];
   assertSameValue(numbers.includes(42), true, "42");
   assertSameValue(numbers.includes(0), true, "0");

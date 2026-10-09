@@ -24,17 +24,17 @@ interface A { a: string }
 >a : string
 >  : ^^^^^^
 
-/*pruned*/;                        
+/*pruned*/;
 
-/*pruned*/;                          
-          
-                    
- 
+/*pruned*/;
 
-/*pruned*/;                                      
-          
-                    
- 
+
+
+
+/*pruned*/;
+
+
+
 
 interface AList1 {
 >AList1 : AList1
@@ -50,14 +50,14 @@ interface AList1 {
 
 }
 
-/*pruned*/;       
-                                         
- 
+/*pruned*/;
 
-/*pruned*/;                               
-          
-                    
- 
+
+
+/*pruned*/;
+
+
+
 
 interface AList2 {
 >AList2 : AList2
@@ -127,14 +127,14 @@ interface AList3 {
 
 }
 
-/*pruned*/;       
-                                                       
- 
+/*pruned*/;
 
-/*pruned*/;                               
-          
-                    
- 
+
+
+/*pruned*/;
+
+
+
 
 interface AList4 {
 >AList4 : AList4
@@ -150,14 +150,14 @@ interface AList4 {
 
 }
 
-/*pruned*/;       
-                                      
- 
+/*pruned*/;
 
-/*pruned*/;                               
-          
-                    
- 
+
+
+/*pruned*/;
+
+
+
 
 // Repro from #51620
 

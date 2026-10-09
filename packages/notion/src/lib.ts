@@ -1,12 +1,12 @@
 import { check } from "submilli:security";
-import discovery from "./discovery";
-import pages from "./pages";
+import * as discovery from "./discovery";
+import * as pages from "./pages";
 import { PreparedPageMove } from "./pages";
-import data from "./data";
-import views from "./views";
-import collaboration from "./collaboration";
-import blocks from "./blocks";
-import uploads from "./uploads";
+import * as data from "./data";
+import * as views from "./views";
+import * as collaboration from "./collaboration";
+import * as blocks from "./blocks";
+import * as uploads from "./uploads";
 import { BatchNotionError, NotionError, idFromRef, resolvePageContext } from "./transport";
 
 // Public interfaces live here so generated package declarations retain their
@@ -435,13 +435,13 @@ export interface CreatePageInput {
 export interface UpdatePageInput {
     /** Property values to change. */
     properties?: PropertyBag;
-    /** New page icon. */
+    /** New page icon; null removes it, as `clearIcon` does. */
     icon?: FileReference | null;
-    /** New page cover image. */
+    /** New page cover image; null removes it, as `clearCover` does. */
     cover?: FileReference | null;
-    /** True to remove the icon. */
+    /** True to remove the icon; takes precedence over `icon`. */
     clearIcon?: boolean;
-    /** True to remove the cover. */
+    /** True to remove the cover; takes precedence over `cover`. */
     clearCover?: boolean;
     /** Data source template (ID or URL) to apply to the page. */
     templateId?: string;
@@ -589,9 +589,9 @@ export interface ViewQuery {
     id: string;
     /** UUID of the queried view. */
     viewId: string;
-    /** When the cached result set expires (ISO 8601). */
+    /** When the cached result set expires (ISO 8601); empty when Notion does not report it. */
     expiresAt: string;
-    /** Total number of matching items. */
+    /** Total number of matching items; 0 when Notion does not report it. */
     totalCount: number;
     /** References to the first page of matching resources. */
     results: ResourceRef[];
@@ -728,26 +728,13 @@ export function getSelf(): NotionUser {
 
 /** Search titles visible to the connection.
  *
- * @param options Optional title text, kind filter, sort, `pageSize`, and `startCursor`; `null` lists everything visible, unsorted.
+ * @param options Optional title text, kind filter, sort, `pageSize`, and `startCursor`; omit it to list everything visible, unsorted.
  * @returns One page of matching pages and data sources; an empty `results` means nothing matched, and `nextCursor` continues when `hasMore` is true.
  * @capability submilli/notion.search {}
  */
-export function search(options: SearchOptions | null = null): PageResult<SearchResult> {
-    const query = options === null ? null : options.query;
-    const kind = options === null ? null : options.kind;
-    const direction = options === null ? null : options.direction;
-    const timestamp = options === null ? null : options.timestamp;
-    const pageSize = options === null ? null : options.pageSize;
-    const startCursor = options === null ? null : options.startCursor;
+export function search(options: SearchOptions = {}): PageResult<SearchResult> {
     check("submilli/notion.search", {});
-    return discovery.search({
-        query: query,
-        kind: kind,
-        direction: direction,
-        timestamp: timestamp,
-        pageSize: pageSize,
-        startCursor: startCursor,
-    });
+    return discovery.search(options);
 }
 
 /** Fetch one resource using its explicit kind.
@@ -813,13 +800,12 @@ export function getUser(ref: string): NotionUser {
 
 /** List users visible to the connection.
  *
- * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; `null` reads the first page of 100.
+ * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; omit it to read the first page of 100.
  * @returns One page of users; use `nextCursor` while `hasMore` is true.
  * @capability submilli/notion.listUsers {}
  */
-export function listUsers(options: PageOptions | null = null): PageResult<NotionUser> {
-    const pageSize = options === null ? null : options.pageSize;
-    const startCursor = options === null ? null : options.startCursor;
+export function listUsers(options: PageOptions = {}): PageResult<NotionUser> {
+    const { pageSize, startCursor } = options;
     check("submilli/notion.listUsers", {});
     return discovery.listUsers(pageSize, startCursor);
 }
@@ -835,12 +821,12 @@ export function createPage(input: CreatePageInput): NotionPage {
     const { type: parentType, id: parentRef } = parent;
     const parentId = pages.parentIdFrom(parentType, parentRef);
     const pageParent: PageParent = { type: parentType };
-    if (parentRef !== null) pageParent.id = parentRef;
+    if (parentRef !== undefined) pageParent.id = parentRef;
     const page: CreatePageInput = { parent: pageParent };
-    if (properties !== null) page.properties = properties;
-    if (content !== null) page.content = content;
-    if (icon !== null) page.icon = icon;
-    if (cover !== null) page.cover = cover;
+    if (properties !== undefined) page.properties = properties;
+    if (content !== undefined) page.content = content;
+    if (icon !== undefined) page.icon = icon;
+    if (cover !== undefined) page.cover = cover;
     pages.validatePageFields(page);
     check("submilli/notion.createPage", { parentId: parentId });
     return pages.createPage(parentId, page);
@@ -876,7 +862,7 @@ export function createPages(inputs: CreatePageInput[]): NotionPage[] {
 /** Update page properties, icon, cover, or template.
  *
  * @param ref Page ID or Notion URL.
- * @param input Fields to change; at least one must be set.
+ * @param input Fields to change; at least one must be set. A `null` icon or cover removes it.
  * @returns The updated page.
  * @capability submilli/notion.updatePage { pageId: string }
  */
@@ -1048,14 +1034,11 @@ export function updateDataSource(ref: string, input: UpdateDataSourceInput): Not
 /** Query pages and nested data sources.
  *
  * @param ref Data source ID, Notion URL, or `collection://` reference.
- * @param options Optional filter, sorts, result type, trash flag, property projection, and pagination; `null` returns the first 100 results unfiltered.
+ * @param options Optional filter, sorts, result type, trash flag, property projection, and pagination; omit it to return the first 100 results unfiltered.
  * @returns One page of matching pages and nested data sources; an empty `results` means nothing matched.
  * @capability submilli/notion.queryDataSource { dataSourceId: string }
  */
-export function queryDataSource(
-    ref: string,
-    options: QueryDataSourceOptions | null = null,
-): PageResult<DataSourceQueryItem> {
+export function queryDataSource(ref: string, options: QueryDataSourceOptions = {}): PageResult<DataSourceQueryItem> {
     const dataSourceId = idFromRef(ref, "data_source");
     check("submilli/notion.queryDataSource", { dataSourceId: dataSourceId });
     return data.queryDataSource(dataSourceId, options);
@@ -1064,17 +1047,12 @@ export function queryDataSource(
 /** List page templates available to a data source.
  *
  * @param ref Data source ID, Notion URL, or `collection://` reference.
- * @param options Optional template `name` filter, `pageSize`, and `startCursor`; `null` lists all templates.
+ * @param options Optional template `name` filter, `pageSize`, and `startCursor`; omit it to list all templates.
  * @returns One page of templates; an empty `results` means the data source defines none.
  * @capability submilli/notion.listDataSourceTemplates { dataSourceId: string }
  */
-export function listDataSourceTemplates(
-    ref: string,
-    options: ListTemplateOptions | null = null,
-): PageResult<DataSourceTemplate> {
-    const name = options === null ? null : options.name;
-    const pageSize = options === null ? null : options.pageSize;
-    const startCursor = options === null ? null : options.startCursor;
+export function listDataSourceTemplates(ref: string, options: ListTemplateOptions = {}): PageResult<DataSourceTemplate> {
+    const { name, pageSize, startCursor } = options;
     const dataSourceId = idFromRef(ref, "data_source");
     check("submilli/notion.listDataSourceTemplates", { dataSourceId: dataSourceId });
     return data.listDataSourceTemplates(dataSourceId, name, pageSize, startCursor);
@@ -1115,10 +1093,10 @@ export function createView(input: CreateViewInput): NotionView {
     const databaseId = idFromRef(databaseRef, "database");
     const dataSourceId = idFromRef(dataSourceRef, "data_source");
     const view: CreateViewInput = { databaseId: databaseRef, dataSourceId: dataSourceRef, name: name, type: type };
-    if (filter !== null) view.filter = filter;
-    if (sorts !== null) view.sorts = sorts;
-    if (configuration !== null) view.configuration = configuration;
-    if (position !== null) view.position = position;
+    if (filter !== null && filter !== undefined) view.filter = filter;
+    if (sorts !== undefined) view.sorts = sorts;
+    if (configuration !== null && configuration !== undefined) view.configuration = configuration;
+    if (position !== null && position !== undefined) view.position = position;
     check("submilli/notion.createView", { databaseId: databaseId, dataSourceId: dataSourceId });
     return views.createView(databaseId, dataSourceId, view);
 }
@@ -1139,13 +1117,12 @@ export function updateView(ref: string, input: UpdateViewInput): NotionView {
 /** List views belonging to a database.
  *
  * @param databaseRef Database ID or Notion URL.
- * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; `null` reads the first page of 100.
+ * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; omit it to read the first page of 100.
  * @returns One page of views; an empty `results` means the database has none.
  * @capability submilli/notion.listViews { databaseId: string }
  */
-export function listViews(databaseRef: string, options: PageOptions | null = null): PageResult<NotionView> {
-    const pageSize = options === null ? null : options.pageSize;
-    const startCursor = options === null ? null : options.startCursor;
+export function listViews(databaseRef: string, options: PageOptions = {}): PageResult<NotionView> {
+    const { pageSize, startCursor } = options;
     const databaseId = idFromRef(databaseRef, "database");
     check("submilli/notion.listViews", { databaseId: databaseId });
     return views.listViews(databaseId, pageSize, startCursor);
@@ -1211,13 +1188,12 @@ export function createComment(input: CreateCommentInput): NotionComment {
 /** List open comments for a page or block.
  *
  * @param ref Page or block ID, or a Notion URL.
- * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; `null` reads the first page of 100.
+ * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; omit it to read the first page of 100.
  * @returns One page of open comments; an empty `results` means there are none.
  * @capability submilli/notion.getComments { pageId: string }
  */
-export function getComments(ref: string, options: PageOptions | null = null): PageResult<NotionComment> {
-    const pageSize = options === null ? null : options.pageSize;
-    const startCursor = options === null ? null : options.startCursor;
+export function getComments(ref: string, options: PageOptions = {}): PageResult<NotionComment> {
+    const { pageSize, startCursor } = options;
     const context = resolvePageContext(ref);
     check("submilli/notion.getComments", { pageId: context.pageId });
     return collaboration.getComments(context, pageSize, startCursor);
@@ -1225,11 +1201,11 @@ export function getComments(ref: string, options: PageOptions | null = null): Pa
 
 /** Query meeting-note blocks visible to the integration user.
  *
- * @param options Optional filter, sorts, and limit (1 to 50, default 50); `null` uses the API defaults.
+ * @param options Optional filter, sorts, and limit (1 to 50, default 50); omit it to use the API defaults.
  * @returns Matching meeting-note blocks and whether more exist.
  * @capability submilli/notion.queryMeetingNotes {}
  */
-export function queryMeetingNotes(options: MeetingNotesOptions | null = null): MeetingNotesResult {
+export function queryMeetingNotes(options?: MeetingNotesOptions): MeetingNotesResult {
     check("submilli/notion.queryMeetingNotes", {});
     return collaboration.queryMeetingNotes(options);
 }
@@ -1249,13 +1225,12 @@ export function getBlock(ref: string): NotionBlock {
 /** List direct children of a block or page.
  *
  * @param ref Parent block or page ID, or a Notion URL.
- * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; `null` reads the first page of 100.
+ * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; omit it to read the first page of 100.
  * @returns One page of child blocks; an empty `results` means there are no children.
  * @capability submilli/notion.listBlockChildren { pageId: string }
  */
-export function listBlockChildren(ref: string, options: PageOptions | null = null): PageResult<NotionBlock> {
-    const pageSize = options === null ? null : options.pageSize;
-    const startCursor = options === null ? null : options.startCursor;
+export function listBlockChildren(ref: string, options: PageOptions = {}): PageResult<NotionBlock> {
+    const { pageSize, startCursor } = options;
     const context = resolvePageContext(ref);
     check("submilli/notion.listBlockChildren", { pageId: context.pageId });
     return blocks.listBlockChildren(context, pageSize, startCursor);
@@ -1264,15 +1239,14 @@ export function listBlockChildren(ref: string, options: PageOptions | null = nul
 /** Append block children at an optional position.
  *
  * @param ref Parent block or page ID, or a Notion URL.
- * @param input JSON-encoded child blocks (1 to 100) and an optional JSON-encoded position; `null` position appends at the end.
+ * @param input JSON-encoded child blocks (1 to 100) and an optional JSON-encoded position; omit `positionJson` to append at the end.
  * @returns The newly appended blocks.
  * @capability submilli/notion.appendBlockChildren { pageId: string }
  */
 export function appendBlockChildren(ref: string, input: AppendBlockChildrenInput): PageResult<NotionBlock> {
     const childrenJson: string[] = [];
     for (const childJson of input.childrenJson) childrenJson.push(childJson);
-    const position = input.positionJson;
-    const positionJson = position === null ? "" : position;
+    const positionJson = input.positionJson ?? "";
     const context = blocks.prepareAppendBlockChildren(ref, childrenJson, positionJson);
     check("submilli/notion.appendBlockChildren", { pageId: context.pageId });
     return blocks.appendBlockChildrenJson(context, childrenJson, positionJson);
@@ -1328,7 +1302,7 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): File
     const contentType = options.contentType;
     const chunkSize = options.chunkSize;
     const owned: FileUploadOptions = { filename: filename, contentType: contentType };
-    if (chunkSize !== null) owned.chunkSize = chunkSize;
+    if (chunkSize !== undefined) owned.chunkSize = chunkSize;
     check("submilli/notion.uploadFile", { path: sourcePath });
     return uploads.uploadFile(sourcePath, owned);
 }
@@ -1347,13 +1321,12 @@ export function getFileUpload(ref: string): FileUpload {
 
 /** List file uploads owned by this connection.
  *
- * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; `null` reads the first page of 100.
+ * @param options Optional `pageSize` (1 to 100, default 100) and `startCursor`; omit it to read the first page of 100.
  * @returns One page of file uploads created by this connection.
  * @capability submilli/notion.listFileUploads {}
  */
-export function listFileUploads(options: PageOptions | null = null): PageResult<FileUpload> {
-    const pageSize = options === null ? null : options.pageSize;
-    const startCursor = options === null ? null : options.startCursor;
+export function listFileUploads(options: PageOptions = {}): PageResult<FileUpload> {
+    const { pageSize, startCursor } = options;
     check("submilli/notion.listFileUploads", {});
     return uploads.listFileUploads(pageSize, startCursor);
 }

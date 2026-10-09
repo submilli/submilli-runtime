@@ -10,7 +10,7 @@ enum E { a, b, c }
 >  : ^^^
 
 
-/*pruned*/;                       
+/*pruned*/;
 let b: number = null as unknown as (number);
 >b : number
 >  : ^^^^^^
@@ -21,8 +21,8 @@ let b: number = null as unknown as (number);
 
 
 // operator <
-/*pruned*/;     
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
 let ra3 = E.a < b;
 >ra3 : boolean
 >    : ^^^^^^^
@@ -81,8 +81,8 @@ let ra6 = 0 < E.a;
 
 
 // operator >
-/*pruned*/;     
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
 let rb3 = E.a > b;
 >rb3 : boolean
 >    : ^^^^^^^
@@ -141,8 +141,8 @@ let rb6 = 0 > E.a;
 
 
 // operator <=
-/*pruned*/;      
-/*pruned*/;      
+/*pruned*/;
+/*pruned*/;
 let rc3 = E.a <= b;
 >rc3 : boolean
 >    : ^^^^^^^
@@ -201,8 +201,8 @@ let rc6 = 0 <= E.a;
 
 
 // operator >=
-/*pruned*/;      
-/*pruned*/;      
+/*pruned*/;
+/*pruned*/;
 let rd3 = E.a >= b;
 >rd3 : boolean
 >    : ^^^^^^^
@@ -261,8 +261,8 @@ let rd6 = 0 >= E.a;
 
 
 // operator ==
-/*pruned*/;      
-/*pruned*/;      
+/*pruned*/;
+/*pruned*/;
 let re3 = E.a == b;
 >re3 : boolean
 >    : ^^^^^^^
@@ -321,8 +321,8 @@ let re6 = 0 == E.a;
 
 
 // operator !=
-/*pruned*/;      
-/*pruned*/;      
+/*pruned*/;
+/*pruned*/;
 let rf3 = E.a != b;
 >rf3 : boolean
 >    : ^^^^^^^
@@ -381,8 +381,8 @@ let rf6 = 0 != E.a;
 
 
 // operator ===
-/*pruned*/;       
-/*pruned*/;       
+/*pruned*/;
+/*pruned*/;
 let rg3 = E.a === b;
 >rg3 : boolean
 >    : ^^^^^^^
@@ -441,8 +441,8 @@ let rg6 = 0 === E.a;
 
 
 // operator !==
-/*pruned*/;       
-/*pruned*/;       
+/*pruned*/;
+/*pruned*/;
 let rh3 = E.a !== b;
 >rh3 : boolean
 >    : ^^^^^^^

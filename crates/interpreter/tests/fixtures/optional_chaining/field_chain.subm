@@ -1,9 +1,9 @@
-function name_of(u: { name: string } | null): string | null {
+function name_of(u: { name: string } | null): string | undefined {
   return u?.name;
 }
 
 function main(): void {
   const present: { name: string } = { name: "alice" };
   assert(name_of(present) === "alice", "field read on non-null");
-  assert(name_of(null) === null, "short-circuit on null receiver");
+  assert(name_of(null) === undefined, "short-circuit on null receiver");
 }

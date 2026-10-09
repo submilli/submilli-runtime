@@ -20,8 +20,7 @@ use crate::runtime::host::{
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::map;
 use crate::stdlib::abi::{
-    self, backing_struct, install_field_getters, nullable_boxed_number_field,
-    nullable_object_field, nullable_string_field, string_field,
+    self, backing_struct, install_field_getters, nullable_object_field, string_field,
 };
 use crate::stdlib::dot_segments::refuse_dot_segments_in_path;
 use crate::{
@@ -115,8 +114,8 @@ pub fn package_declaration() -> PackageDeclaration {
         name: "URL".to_string(),
         args: Vec::new(),
     };
-    let nullable_number = Type::Union(vec![Type::Number, Type::Null]);
-    let nullable_string = Type::Union(vec![Type::String, Type::Null]);
+    let optional_number = Type::Union(vec![Type::Number, Type::Undefined]);
+    let optional_string = Type::Union(vec![Type::String, Type::Undefined]);
     let mut properties = BTreeMap::new();
     insert_url_property(
         &mut properties,
@@ -133,8 +132,8 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_url_property(
         &mut properties,
         "port",
-        nullable_number,
-        "/** Port number, or `null` when the URL omits one. Common scheme defaults (80 for http, 443 for https) are NOT applied. */",
+        optional_number,
+        "/** Port number, or `undefined` when the URL omits one. Common scheme defaults (80 for http, 443 for https) are NOT applied. */",
     );
     insert_url_property(
         &mut properties,
@@ -151,8 +150,8 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_url_property(
         &mut properties,
         "fragment",
-        nullable_string,
-        "/** Fragment string (without the `#` prefix), or `null` when the URL has no `#` segment. */",
+        optional_string,
+        "/** Fragment string (without the `#` prefix), or `undefined` when the URL has no `#` segment. */",
     );
     defs.types.insert(
         "URL".to_string(),
@@ -189,8 +188,8 @@ pub fn package_declaration() -> PackageDeclaration {
     );
 
     // Positional form; named/optional-arg form deferred until those features land.
-    let nullable_number_param = Type::Union(vec![Type::Number, Type::Null]);
-    let nullable_string_param = Type::Union(vec![Type::String, Type::Null]);
+    let optional_number_param = Type::Union(vec![Type::Number, Type::Undefined]);
+    let optional_string_param = Type::Union(vec![Type::String, Type::Undefined]);
     defs.values.insert(
         "build".to_string(),
         ValueSymbol {
@@ -202,15 +201,19 @@ pub fn package_declaration() -> PackageDeclaration {
                 params: vec![
                     Param::new("protocol", Type::String),
                     Param::new("host", Type::String),
-                    Param::new("port", nullable_number_param),
+                    Param::new("port", optional_number_param),
                     Param::new("path", Type::String),
                     Param::new("query", query_type()),
-                    Param::new("fragment", nullable_string_param),
+                    Param::with_default(
+                        "fragment",
+                        optional_string_param,
+                        crate::DefaultValue::Undefined,
+                    ),
                 ],
                 ret: Type::String,
                 type_predicate: None,
                 doc: url_doc(
-                    "/**\n * Serialise URL parts to an absolute URL string. Inverse of `parse`.\n * @param protocol Scheme (e.g. `\"https\"`), without `:`.\n * @param host Host name (e.g. `\"api.acme.com\"`), optionally with userinfo or a port. A `/`, `\\`, `?` or `#` in it throws `TypeError`; pass those parts as their own arguments.\n * @param port Port number, or `null` to omit the `:port` segment.\n * @param path Path component (typically starts with `/`). A `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError`.\n * @param query Query parameters as a `Query` (`Map<string, string>`). Empty map omits the `?` segment.\n * @param fragment Fragment string (without `#`), or `null` to omit.\n */",
+                    "/**\n * Serialise URL parts to an absolute URL string. Inverse of `parse`.\n * @param protocol Scheme (e.g. `\"https\"`), without `:`.\n * @param host Host name (e.g. `\"api.acme.com\"`), optionally with userinfo or a port. A `/`, `\\`, `?` or `#` in it throws `TypeError`; pass those parts as their own arguments.\n * @param port Port number, or `undefined` to omit the `:port` segment.\n * @param path Path component (typically starts with `/`). A `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError`.\n * @param query Query parameters as a `Query` (`Map<string, string>`). Empty map omits the `?` segment.\n * @param fragment Fragment string (without `#`); omit it or pass `undefined` for none.\n */",
                 ),
             },
         },
@@ -324,12 +327,12 @@ fn url_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType>
         engine,
         &intr,
         vec![
-            string_field(&intr),                // protocol
-            string_field(&intr),                // host
-            nullable_boxed_number_field(&intr), // port
-            string_field(&intr),                // path
-            nullable_object_field(&intr),       // query map
-            nullable_string_field(&intr),       // fragment
+            string_field(&intr),          // protocol
+            string_field(&intr),          // host
+            nullable_object_field(&intr), // port
+            string_field(&intr),          // path
+            nullable_object_field(&intr), // query map
+            nullable_object_field(&intr), // fragment
         ],
     )
 }
@@ -342,13 +345,13 @@ impl UrlParts {
             Some(p) => Val::AnyRef(Some(
                 write_boxed_number_struct(caller, f64::from(p))?.to_anyref(),
             )),
-            None => Val::AnyRef(None),
+            None => crate::runtime::prelude::undefined::value(caller)?,
         };
         let path = write_submilli_string_struct(caller, &self.path)?.to_anyref();
         let query = map::string_map_from_pairs(caller, &self.query).await?;
         let fragment = match &self.fragment {
             Some(f) => Val::AnyRef(Some(write_submilli_string_struct(caller, f)?.to_anyref())),
-            None => Val::AnyRef(None),
+            None => crate::runtime::prelude::undefined::value(caller)?,
         };
         let ty = url_backing_struct(caller.engine())?;
         abi::new_backing(
@@ -495,10 +498,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             [
                 string.clone(),          // protocol
                 string.clone(),          // host
-                nullable_object.clone(), // port: number | null
+                nullable_object.clone(), // port: number | undefined
                 string.clone(),          // path
                 nullable_object.clone(), // query
-                nullable_object,         // fragment: string | null
+                nullable_object,         // fragment: string | undefined
             ],
             [string],
         ),
@@ -507,12 +510,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             let protocol =
                 read_string_arg(&mut *caller, abi_arg(params, 0)?, "url.build (protocol)")?;
             let host = read_string_arg(&mut *caller, abi_arg(params, 1)?, "url.build (host)")?;
-            let port = read_nullable_number(caller, abi_arg(params, 2)?, "url.build (port)")?;
+            let port = read_optional_number(caller, abi_arg(params, 2)?, "url.build (port)")?;
             let path = read_string_arg(&mut *caller, abi_arg(params, 3)?, "url.build (path)")?;
             let query = map::string_entries(caller, abi_arg(params, 4)?)?;
-            let fragment = match abi_arg(params, 5)? {
-                Val::AnyRef(None) => None,
-                v => Some(read_string_arg(&mut *caller, v, "url.build (fragment)")?),
+            let fragment = abi_arg(params, 5)?;
+            let fragment = if crate::runtime::prelude::undefined::is_undefined(caller, fragment)? {
+                None
+            } else {
+                Some(read_string_arg(
+                    &mut *caller,
+                    fragment,
+                    "url.build (fragment)",
+                )?)
             };
             // `set_path` would remove the segment, so a caller's `..` would reach the parent.
             refuse_dot_segments_in_path(&path)
@@ -567,13 +576,13 @@ fn install_url_getters(
     )
 }
 
-/// Unbox a `number | null` param — `null`, or a `$boxed_number` — to a port.
-fn read_nullable_number(
+/// Unbox a `number | undefined` param — `undefined`, or a `$boxed_number` — to a port.
+fn read_optional_number(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<u16>> {
-    if matches!(val, Val::AnyRef(None)) {
+    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
         return Ok(None);
     }
     let n = read_boxed_number(caller, val, name)?;

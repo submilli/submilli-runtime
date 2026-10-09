@@ -1,1 +1,1 @@
-wideningTuples7.ts(6,28): error TS2322: Type 'null' is not assignable to type 'string'.
+wideningTuples7.ts(6,28): error TS2322: Type 'undefined' is not assignable to type 'string'.

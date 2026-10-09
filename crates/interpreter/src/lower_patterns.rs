@@ -8,7 +8,7 @@ use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::tree_height;
 
 use crate::{
-    ArrowBody, Ast, Binding, BindingKind, ClassMember, Expr, ExprId, ExprKind, Ident, ParamDecl,
+    Ast, Binding, BindingKind, ClassMember, Expr, ExprId, ExprKind, Ident, ParamDecl,
     PatternOrigin, Span, Stmt, StmtId, StmtKind,
 };
 
@@ -45,6 +45,15 @@ pub(crate) fn is_pattern_param(name: &str) -> bool {
 
 struct LowerCtx {
     next_tmp: u32,
+}
+
+/// What a pattern's bindings inherit from the declaration that holds it.
+#[derive(Clone, Copy)]
+struct PatternRoot {
+    is_const: bool,
+    /// Whether the declaration annotates the pattern's type, which its
+    /// defaults must then fit.
+    annotated: bool,
 }
 
 impl LowerCtx {
@@ -88,10 +97,6 @@ impl LowerCtx {
     }
 
     fn lower_arrow(&mut self, ast: &mut Ast, id: ExprId) -> Result<(), CompilerFailure> {
-        let arrow_span = ast
-            .try_expr(id)
-            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
-            .span;
         // Clone the kind to release the read borrow before we start
         // mutating other arena slots.
         let kind = ast
@@ -111,35 +116,7 @@ impl LowerCtx {
             ));
         };
 
-        let mut decompose: Vec<StmtId> = Vec::new();
-        self.materialise_pattern_params(ast, &mut params, &mut decompose)?;
-
-        let new_body = match body {
-            ArrowBody::Block(block_id) => {
-                self.prepend_to_block(ast, block_id, decompose)?;
-                ArrowBody::Block(block_id)
-            }
-            ArrowBody::Expr(expr_id) => {
-                let return_span = ast
-                    .try_expr(expr_id)
-                    .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
-                    .span;
-                let return_stmt = ast
-                    .try_push_stmt(Stmt {
-                        kind: StmtKind::Return(Some(expr_id)),
-                        span: return_span,
-                    })
-                    .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
-                decompose.push(return_stmt);
-                let block = ast
-                    .try_push_stmt(Stmt {
-                        kind: StmtKind::Block(decompose),
-                        span: arrow_span,
-                    })
-                    .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
-                ArrowBody::Block(block)
-            }
-        };
+        self.materialise_pattern_params(ast, &mut params)?;
 
         ast.try_expr_mut(id)
             .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
@@ -147,7 +124,7 @@ impl LowerCtx {
             params,
             return_type,
             type_predicate,
-            body: new_body,
+            body,
         };
 
         Ok(())
@@ -201,9 +178,7 @@ impl LowerCtx {
             ));
         };
 
-        let mut decompose: Vec<StmtId> = Vec::new();
-        self.materialise_pattern_params(ast, &mut params, &mut decompose)?;
-        self.prepend_to_block(ast, body, decompose)?;
+        self.materialise_pattern_params(ast, &mut params)?;
 
         ast.try_stmt_mut(id)
             .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
@@ -260,22 +235,16 @@ impl LowerCtx {
         members: &mut [ClassMember],
     ) -> Result<(), CompilerFailure> {
         for member in members {
-            let (params, body) = match member {
-                ClassMember::Method { params, body, .. }
-                | ClassMember::Constructor { params, body, .. } => (params.as_mut_slice(), *body),
+            let params = match member {
+                ClassMember::Method { params, .. } | ClassMember::Constructor { params, .. } => {
+                    params.as_mut_slice()
+                }
                 ClassMember::Accessor {
-                    param: Some(param),
-                    body,
-                    ..
-                } => (std::slice::from_mut(param.as_mut()), *body),
+                    param: Some(param), ..
+                } => std::slice::from_mut(param.as_mut()),
                 ClassMember::Accessor { param: None, .. } | ClassMember::Field { .. } => continue,
             };
-            if params.iter().all(|param| param.pattern.is_none()) {
-                continue;
-            }
-            let mut decompose = Vec::new();
-            self.materialise_pattern_params(ast, params, &mut decompose)?;
-            self.prepend_to_block(ast, body, decompose)?;
+            self.materialise_pattern_params(ast, params)?;
         }
 
         Ok(())
@@ -328,11 +297,15 @@ impl LowerCtx {
         let pattern_span = binding.span();
         let dst = self.fresh("dst", pattern_span)?;
         let is_const = matches!(binding_kind, BindingKind::Const);
+        let root = PatternRoot {
+            is_const,
+            annotated: ty.is_some(),
+        };
         let mut decompose = self.emit_decompose(
             ast,
             binding,
             dst.clone(),
-            is_const,
+            root,
             /*doc=*/ None,
             /*tuple_len=*/ None,
         )?;
@@ -559,11 +532,13 @@ impl LowerCtx {
             None => tuple_source_len(ast, &binding, value)?,
             Some(_) => None,
         };
-        if tuple_len.is_some() {
+        if let Some(len) = tuple_len {
+            pad_tuple_source(ast, value, len)?;
             ast.tuple_pattern_sources.insert(value);
         }
         let pattern_span = binding.span();
         let dst = self.fresh("dst", pattern_span)?;
+        let annotated = ty.is_some();
 
         // temp is always `const` even for `let` patterns — it's never re-assigned
         let dst_stmt = ast
@@ -579,7 +554,11 @@ impl LowerCtx {
             .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
 
         let mut out = vec![dst_stmt];
-        out.extend(self.emit_decompose(ast, binding, dst, is_const, doc, tuple_len)?);
+        let root = PatternRoot {
+            is_const,
+            annotated,
+        };
+        out.extend(self.emit_decompose(ast, binding, dst, root, doc, tuple_len)?);
         Ok(out)
     }
 
@@ -587,7 +566,6 @@ impl LowerCtx {
         &mut self,
         ast: &mut Ast,
         params: &mut [ParamDecl],
-        decompose: &mut Vec<StmtId>,
     ) -> Result<(), CompilerFailure> {
         for param in params.iter_mut() {
             let Some(pattern) = param.pattern.take() else {
@@ -595,10 +573,22 @@ impl LowerCtx {
             };
             let fresh = self.fresh(PATTERN_PARAM, pattern.span())?;
             param.name = fresh.clone();
-            decompose.extend(self.emit_decompose(
-                ast, pattern, fresh, /*is_const=*/ true, /*doc=*/ None,
-                /*tuple_len=*/ None,
-            )?);
+            let root = PatternRoot {
+                is_const: false,
+                annotated: param.ty.is_some(),
+            };
+            let statements = self.emit_decompose(
+                ast, pattern, fresh, root, /*doc=*/ None, /*tuple_len=*/ None,
+            )?;
+            if ast
+                .parameter_bindings
+                .insert(param.name.span, statements)
+                .is_some()
+            {
+                return Err(lowering_failure(
+                    "duplicate parameter binding span during pattern lowering",
+                ));
+            }
         }
 
         Ok(())
@@ -611,10 +601,11 @@ impl LowerCtx {
         ast: &mut Ast,
         binding: Binding,
         source: Ident,
-        is_const: bool,
+        root: PatternRoot,
         mut doc: Option<crate::DocComment>,
         tuple_len: Option<usize>,
     ) -> Result<Vec<StmtId>, CompilerFailure> {
+        let is_const = root.is_const;
         let mut out = Vec::new();
         match binding {
             Binding::Object {
@@ -639,9 +630,17 @@ impl LowerCtx {
                             span: field.span,
                         })
                         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+                    let value = self.apply_binding_default(
+                        ast,
+                        access,
+                        field.default,
+                        root.annotated,
+                        field.span,
+                        &mut out,
+                    )?;
                     let decl = ast
                         .try_push_stmt(Stmt {
-                            kind: make_decl(is_const, field.local, access, doc.take()),
+                            kind: make_decl(is_const, field.local, value, doc.take()),
                             span: field.span,
                         })
                         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
@@ -672,12 +671,23 @@ impl LowerCtx {
             }
             Binding::Array {
                 elems,
+                defaults,
                 rest,
                 span: pattern_span,
             } => {
+                if elems.len() != defaults.len() {
+                    return Err(lowering_failure(
+                        "array pattern defaults do not match element positions",
+                    ));
+                }
                 let elems_len = elems.len();
-                for (i, slot) in elems.into_iter().enumerate() {
-                    let Some(local) = slot else { continue };
+                for (i, (slot, default)) in elems.into_iter().zip(defaults).enumerate() {
+                    let Some(local) = slot else {
+                        if default.is_some() {
+                            return Err(lowering_failure("array pattern hole has a default value"));
+                        }
+                        continue;
+                    };
                     let recv = ast
                         .try_push_expr(Expr {
                             kind: ExprKind::Identifier(source.clone()),
@@ -707,9 +717,22 @@ impl LowerCtx {
                             slot_arity: elems_len,
                         },
                     );
+                    let access = if default.is_some() {
+                        self.guard_defaulted_array_read(ast, recv, idx, access, local.span)?
+                    } else {
+                        access
+                    };
+                    let value = self.apply_binding_default(
+                        ast,
+                        access,
+                        default,
+                        root.annotated,
+                        local.span,
+                        &mut out,
+                    )?;
                     let decl = ast
                         .try_push_stmt(Stmt {
-                            kind: make_decl(is_const, local.clone(), access, doc.take()),
+                            kind: make_decl(is_const, local.clone(), value, doc.take()),
                             span: local.span,
                         })
                         .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
@@ -735,46 +758,119 @@ impl LowerCtx {
         Ok(out)
     }
 
-    fn prepend_to_block(
+    /// A pattern default treats an absent element as undefined, while ordinary
+    /// index expressions retain their bounds checks.
+    fn guard_defaulted_array_read(
         &mut self,
         ast: &mut Ast,
-        block_id: StmtId,
-        prefix: Vec<StmtId>,
-    ) -> Result<(), CompilerFailure> {
-        if prefix.is_empty() {
-            return Ok(());
-        }
-        let original = match &ast
-            .try_stmt(block_id)
-            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
-            .kind
-        {
-            StmtKind::Block(stmts) => stmts.clone(),
-            _ => {
-                return Err(lowering_failure(
-                    "unexpected node kind during pattern lowering",
-                ));
-            }
-        };
-        let combined: Vec<StmtId> = prefix.into_iter().chain(original).collect();
-        ast.try_stmt_mut(block_id)
-            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
-            .kind = StmtKind::Block(combined);
+        receiver: ExprId,
+        index: ExprId,
+        access: ExprId,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        let length = push_expr(
+            ast,
+            ExprKind::FieldAccess {
+                receiver,
+                name: Ident {
+                    name: "length".to_string(),
+                    span,
+                },
+            },
+            span,
+        )?;
+        let in_bounds = push_expr(
+            ast,
+            ExprKind::Binary {
+                op: crate::BinOp::Lt,
+                lhs: index,
+                rhs: length,
+            },
+            span,
+        )?;
+        let zero = push_expr(ast, ExprKind::Number(0.0), span)?;
+        let undefined = push_expr(ast, ExprKind::Void { operand: zero }, span)?;
+        push_expr(
+            ast,
+            ExprKind::Ternary {
+                cond: in_bounds,
+                then_: access,
+                else_: undefined,
+            },
+            span,
+        )
+    }
 
-        Ok(())
+    /// Save the property/index read once, then evaluate its default only for undefined.
+    /// `void 0` is immune to a source binding named `undefined`.
+    fn apply_binding_default(
+        &mut self,
+        ast: &mut Ast,
+        access: ExprId,
+        default: Option<ExprId>,
+        annotated: bool,
+        span: Span,
+        out: &mut Vec<StmtId>,
+    ) -> Result<ExprId, CompilerFailure> {
+        let Some(default) = default else {
+            return Ok(access);
+        };
+        let saved = self.fresh("value", span)?;
+        let declaration = ast
+            .try_push_stmt(Stmt {
+                kind: make_decl(true, saved.clone(), access, None),
+                span,
+            })
+            .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+        out.push(declaration);
+        let saved_value = push_expr(ast, ExprKind::Identifier(saved.clone()), span)?;
+        let zero = push_expr(ast, ExprKind::Number(0.0), span)?;
+        let undefined = push_expr(ast, ExprKind::Void { operand: zero }, span)?;
+        let condition = push_expr(
+            ast,
+            ExprKind::Binary {
+                op: crate::BinOp::Eq,
+                lhs: saved_value,
+                rhs: undefined,
+            },
+            span,
+        )?;
+        let selected = push_expr(
+            ast,
+            ExprKind::Ternary {
+                cond: condition,
+                then_: default,
+                else_: saved_value,
+            },
+            span,
+        )?;
+        ast.binding_defaults.insert(
+            selected,
+            crate::ast::BindingDefault {
+                saved,
+                default,
+                annotated,
+            },
+        );
+        Ok(selected)
     }
 }
 
 /// The length of `value` when it is an array literal without spreads that
 /// `binding`, an array pattern, takes apart slot by slot, so TypeScript types
 /// it as a tuple. A pattern of only a rest element takes the literal whole, as
-/// an array.
+/// an array. When every slot past the literal's end has a default or is a
+/// hole, the length is the pattern's: [`pad_tuple_source`] fills those slots
+/// with `undefined`, as tsc pads the tuple (`const [a, b = a] = [1]`).
 fn tuple_source_len(
     ast: &Ast,
     binding: &Binding,
     value: ExprId,
 ) -> Result<Option<usize>, CompilerFailure> {
-    let Binding::Array { elems, .. } = binding else {
+    let Binding::Array {
+        elems, defaults, ..
+    } = binding
+    else {
         return Ok(None);
     };
     if elems.is_empty() {
@@ -790,7 +886,51 @@ fn tuple_source_len(
     let has_spread = elements
         .iter()
         .any(|element| matches!(element, crate::ArrayLiteralElement::Spread { .. }));
-    Ok((!has_spread).then_some(elements.len()))
+    if has_spread {
+        return Ok(None);
+    }
+    let padded = elems.len() > elements.len()
+        && (elements.len()..elems.len()).all(|slot| {
+            elems.get(slot).is_some_and(Option::is_none)
+                || defaults.get(slot).is_some_and(Option::is_some)
+        });
+    Ok(Some(if padded { elems.len() } else { elements.len() }))
+}
+
+/// Append `undefined` to the array literal `value` until it holds `len`
+/// elements. The literal only feeds a pattern's hidden source, so the padding
+/// is never observed; it gives each defaulted or hole slot an element to read.
+fn pad_tuple_source(ast: &mut Ast, value: ExprId, len: usize) -> Result<(), CompilerFailure> {
+    let expr = ast
+        .try_expr(value)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
+    let span = expr.span;
+    let ExprKind::ArrayLiteral { elements } = &expr.kind else {
+        return Ok(());
+    };
+    let missing = len.saturating_sub(elements.len());
+    if missing == 0 {
+        return Ok(());
+    }
+    let mut padding = Vec::with_capacity(missing);
+    for _ in 0..missing {
+        let undefined = Ident {
+            name: "undefined".to_string(),
+            span,
+        };
+        let element = push_expr(ast, ExprKind::Identifier(undefined), span)?;
+        ast.synthetic_undefined.insert(element);
+        padding.push(crate::ArrayLiteralElement::Value(element));
+    }
+    // The same literal, borrowed mutably now that the padding is allocated.
+    if let ExprKind::ArrayLiteral { elements } = &mut ast
+        .try_expr_mut(value)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+        .kind
+    {
+        elements.extend(padding);
+    }
+    Ok(())
 }
 
 /// `source.slice(from, source.length)`: the elements an array pattern's rest
@@ -1118,22 +1258,40 @@ mod tests {
             StmtKind::Block(s) => s.clone(),
             _ => panic!("body is not a Block"),
         };
-        // a-decl, b-decl, return  (no #pattern_dst — params bind directly to #pattern_p_N)
-        assert_eq!(body_stmts.len(), 3);
-        if let StmtKind::Const { name, .. } = &ast.try_stmt(body_stmts[0]).unwrap().kind {
+        assert_eq!(body_stmts.len(), 1);
+        let bindings = ast.parameter_bindings.get(&params[0].name.span).unwrap();
+        assert_eq!(bindings.len(), 2);
+        if let StmtKind::Let { name, .. } = &ast.try_stmt(bindings[0]).unwrap().kind {
             assert_eq!(name.name, "a");
         } else {
-            panic!("expected Const a");
+            panic!("expected Let a");
         }
-        if let StmtKind::Const { name, .. } = &ast.try_stmt(body_stmts[1]).unwrap().kind {
+        if let StmtKind::Let { name, .. } = &ast.try_stmt(bindings[1]).unwrap().kind {
             assert_eq!(name.name, "b");
         } else {
-            panic!("expected Const b");
+            panic!("expected Let b");
         }
         assert!(matches!(
-            ast.try_stmt(body_stmts[2]).unwrap().kind,
+            ast.try_stmt(body_stmts[0]).unwrap().kind,
             StmtKind::Return(_)
         ));
+    }
+
+    #[test]
+    fn parameter_object_rest_has_a_mutable_authored_binding() {
+        let ast = pipeline("function f({ head, ...tail }: T): number { return tail.value; }");
+        let StmtKind::Function { params, .. } = &ast.try_stmt(ast.top_level[0]).unwrap().kind
+        else {
+            panic!("expected function");
+        };
+        let bindings = ast.parameter_bindings.get(&params[0].name.span).unwrap();
+        assert_eq!(bindings.len(), 2);
+        let StmtKind::ObjectRest { is_const, name, .. } = &ast.try_stmt(bindings[1]).unwrap().kind
+        else {
+            panic!("expected object rest binding");
+        };
+        assert!(!*is_const);
+        assert_eq!(name.name, "tail");
     }
 
     #[test]
@@ -1144,8 +1302,15 @@ mod tests {
         let mut found = false;
         for i in 0..ast.exprs_len() {
             let e = ast.try_expr(crate::ExprId(i as u32)).unwrap();
-            if let crate::ExprKind::Arrow { body, .. } = &e.kind {
-                assert!(matches!(body, crate::ArrowBody::Block(_)));
+            if let crate::ExprKind::Arrow { params, body, .. } = &e.kind {
+                assert!(matches!(body, crate::ArrowBody::Expr(_)));
+                assert_eq!(
+                    ast.parameter_bindings
+                        .get(&params[0].name.span)
+                        .unwrap()
+                        .len(),
+                    2
+                );
                 found = true;
             }
         }
@@ -1278,6 +1443,111 @@ mod tests {
             }
             other => panic!("expected ConstPattern Object, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn defaults_save_each_access_once_and_test_undefined() {
+        for source in [
+            "const { a = fallback() } = source();",
+            "const [a = fallback()] = source();",
+        ] {
+            let ast = pipeline(source);
+            assert_eq!(ast.top_level.len(), 3);
+            let StmtKind::Const {
+                value: saved_access,
+                ..
+            } = ast.try_stmt(ast.top_level[1]).unwrap().kind
+            else {
+                panic!("expected saved read")
+            };
+            assert!(matches!(
+                ast.try_expr(saved_access).unwrap().kind,
+                crate::ExprKind::FieldAccess { .. } | crate::ExprKind::Ternary { .. }
+            ));
+            let StmtKind::Const { value, .. } = ast.try_stmt(ast.top_level[2]).unwrap().kind else {
+                panic!("expected binding")
+            };
+            let crate::ExprKind::Ternary { cond, then_, else_ } = ast.try_expr(value).unwrap().kind
+            else {
+                panic!("expected lazy default")
+            };
+            let crate::ExprKind::Binary {
+                op: crate::BinOp::Eq,
+                lhs,
+                rhs,
+            } = ast.try_expr(cond).unwrap().kind
+            else {
+                panic!("expected undefined comparison")
+            };
+            assert_eq!(lhs, else_);
+            assert!(matches!(
+                ast.try_expr(rhs).unwrap().kind,
+                crate::ExprKind::Void { .. }
+            ));
+            assert!(matches!(
+                ast.try_expr(then_).unwrap().kind,
+                crate::ExprKind::Call { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn array_defaults_keep_original_indices_and_origin_metadata() {
+        let ast = pipeline("const [, a = 1] = values;");
+        let StmtKind::Const { value, .. } = ast.try_stmt(ast.top_level[1]).unwrap().kind else {
+            panic!("expected saved index read")
+        };
+        let crate::ExprKind::Ternary {
+            cond,
+            then_: access,
+            else_,
+        } = ast.try_expr(value).unwrap().kind
+        else {
+            panic!("expected bounds guard")
+        };
+        assert!(matches!(
+            ast.try_expr(cond).unwrap().kind,
+            crate::ExprKind::Binary {
+                op: crate::BinOp::Lt,
+                ..
+            }
+        ));
+        assert!(matches!(
+            ast.try_expr(else_).unwrap().kind,
+            crate::ExprKind::Void { .. }
+        ));
+        let crate::ExprKind::IndexAccess { index, .. } = ast.try_expr(access).unwrap().kind else {
+            panic!("expected guarded index")
+        };
+        assert!(matches!(
+            ast.try_expr(index).unwrap().kind,
+            crate::ExprKind::Number(1.0)
+        ));
+        assert_eq!(ast.pattern_origins.get(&access).unwrap().slot_arity, 2);
+    }
+
+    #[test]
+    fn lowers_class_method_parameter_defaults() {
+        let ast = pipeline("class C { method({ x = 1 }: T): number { return x; } }");
+        let StmtKind::ClassDecl { ref members, .. } = ast.try_stmt(ast.top_level[0]).unwrap().kind
+        else {
+            panic!("expected class")
+        };
+        let crate::ClassMember::Method { params, body, .. } = &members[0] else {
+            panic!("expected method")
+        };
+        assert!(params[0].pattern.is_none());
+        let StmtKind::Block(ref statements) = ast.try_stmt(*body).unwrap().kind else {
+            panic!("expected block")
+        };
+        assert_eq!(statements.len(), 1);
+        assert_eq!(
+            ast.parameter_bindings
+                .get(&params[0].name.span)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     fn tokens_of(source: &str) -> Vec<Token> {

@@ -12,7 +12,7 @@ let c: typeof c = null as unknown as (typeof c);
 >c : any
 >  : ^^^
 
-/*pruned*/;                             
+/*pruned*/;
 let d: typeof e = null as unknown as (typeof e);
 >d : any
 >  : ^^^
@@ -25,7 +25,7 @@ let d: typeof e = null as unknown as (typeof e);
 >e : any
 >  : ^^^
 
-/*pruned*/;                             
+/*pruned*/;
 let e: typeof d = null as unknown as (typeof d);
 >e : any
 >  : ^^^
@@ -38,7 +38,7 @@ let e: typeof d = null as unknown as (typeof d);
 >d : any
 >  : ^^^
 
-/*pruned*/;                             
+/*pruned*/;
 
 interface Foo<T> { }
 >Foo : Foo<T>
@@ -58,7 +58,7 @@ let f: Array<typeof f> = null as unknown as (Array<typeof f>);
 >f : any
 >  : ^^^
 
-/*pruned*/;                             
+/*pruned*/;
 let f2: Foo<typeof f2> = null as unknown as (Foo<typeof f2>);
 >f2 : any
 >   : ^^^
@@ -71,7 +71,7 @@ let f2: Foo<typeof f2> = null as unknown as (Foo<typeof f2>);
 >f2 : any
 >   : ^^^
 
-/*pruned*/;                              
+/*pruned*/;
 let f3: Foo<typeof f3>[] = null as unknown as (Foo<typeof f3>[]);
 >f3 : any
 >   : ^^^
@@ -84,7 +84,7 @@ let f3: Foo<typeof f3>[] = null as unknown as (Foo<typeof f3>[]);
 >f3 : any
 >   : ^^^
 
-/*pruned*/;                              
+/*pruned*/;
 
 // None of these declarations should have any errors!
 // Truly recursive types
@@ -174,21 +174,21 @@ let i_2 = i(i);
 >i : (x: typeof i) => typeof x
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;                                                                                   
-/*pruned*/;    
+/*pruned*/;
+/*pruned*/;
 
 // Same as h, i, j with construct signatures
-/*pruned*/;                                                            
-/*pruned*/;         
-/*pruned*/;                                                                                  
-/*pruned*/;           
-/*pruned*/;                                                                                              
-/*pruned*/;           
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 // Indexers
-/*pruned*/;                                                                                                                   
-/*pruned*/;    
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 // Hybrid - contains type literals as well as type arguments
 // These two are recursive
@@ -283,7 +283,7 @@ let hy3: Foo2<typeof hy3, { x: typeof hy3 }> = null as unknown as (Foo2<typeof h
 >hy3 : any
 >    : ^^^
 
-/*pruned*/;                               
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

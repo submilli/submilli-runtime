@@ -27,7 +27,7 @@ function main(): void {
   assert(r.dimensions === 8, "the dimensions the alias declares");
   assert(r.identity.length > 0, "the result is labeled with an identity");
   assert(r.model === "fixture-embedding", "and with the alias it was embedded with");
-  assert(r.inputTokens !== null, "the provider reported usage");
+  assert(r.inputTokens !== undefined, "the provider reported usage");
 
   const v0 = r.vector(0);
   assert(v0.length === r.dimensions, "vector(0) has `dimensions` numbers");

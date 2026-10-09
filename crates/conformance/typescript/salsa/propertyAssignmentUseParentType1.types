@@ -30,8 +30,8 @@ interfaced.num = 123;
 >    : ^^^
 
 
-/*pruned*/;                                                  
-/*pruned*/;       
+/*pruned*/;
+/*pruned*/;
 
 export const ignoreJsdoc = () => true;
 >ignoreJsdoc : { (): boolean; extra: number; }

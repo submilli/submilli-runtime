@@ -33,7 +33,7 @@ ToUint8 as in the standard (`-1` stores 255); the interpreter fixture
 | `fromBase64/option-coercion.js`, `fromBase64/string-coercion.js`, `toBase64/option-coercion.js`, `toBase64/receiver-not-uint8array.js`, `toHex/receiver-not-uint8array.js` | Option-bag getter traps, ToString coercion, and receiver-brand checks; arguments are statically typed. Representative: `rejected/Uint8Array/fromBase64/option-coercion.js`. |
 | `TypedArray/prototype/*/predicate-call-parameters.js`, `callbackfn-arguments-*.js`, `callbackfn-this.js`, `predicate-call-this-*.js`, `*-is-not-callable*.js`, `callbackfn-returns-abrupt.js`, `return-abrupt-from-predicate-call.js` | `arguments` objects, `thisArg`, non-callable arguments, and abrupt-completion plumbing — all compile errors or generic try/catch behavior here. |
 | `at/index-non-numeric-argument-tointeger*.js`, `*/tointeger-*.js`, `*/fromIndex-infinity.js`, `*/fromIndex-minus-zero.js`, `*/coerced-*.js`, `with/valid-typedarray-index-checked-after-coercions.js`, `with/order-of-evaluation.js` | ToInteger coercion of non-number index arguments (strings, objects, `undefined`); indexes are typed `number`. |
-| `at/returns-undefined-for-out-of-range-index.js`, `find/return-undefined-if-predicate-returns-false-value.js` (and friends asserting `undefined`) | No `undefined`: `at` and `find*` return `T \| null`. The null-returning behavior is asserted in the ported find/findLast cases and the interpreter fixture `uint8array_at.subm`. |
+| `at/returns-undefined-for-out-of-range-index.js`, `find/return-undefined-if-predicate-returns-false-value.js` | Undefined misses are checked by the ported find/findLast cases and interpreter fixtures; additional duplicate predicate variants are not ported. |
 
 ## Known gaps (`expect-fail`)
 
@@ -53,7 +53,7 @@ ToUint8 as in the standard (`-1` stores 255); the interpreter fixture
 | `sort/sorted-values.js` float/negative/Infinity/NaN blocks | Other element types; the byte-valued blocks are ported in `sort/sorted-values.ts`. |
 | `indexOf`/`includes`/`lastIndexOf` `strict-comparison.js`, `length-zero-returns-*.js`, `fromIndex-equal-or-greater-length-returns-*.js`, `no-arg.js` | Strict-comparison vectors mix element types (`"42"`, `undefined`); the in-range behavior duplicates the ported search cases and the interpreter fixtures. |
 | `slice/results-with-different-relative-indexes.js`, `arraylength-internal.js`, `bit-precision.js`, `slice/result-does-not-copy-ordinary-properties.js` | Covered by the two ported slice cases; expando properties don't exist. |
-| `copyWithin/negative-target.js`, `negative-end.js`, `negative-out-of-bounds-*.js`, `non-negative-*.js` (rest), `undefined-end.js`, `return-this.js`, `fill/return-this.js`, `fill/absent-indices-computed-from-initial-length.js`, `fill/fill-values-custom-start-and-end.js` | Same clamping algebra as the two ported copyWithin cases and the fill trio; `returns this` is reference identity (covered value-wise by interpreter fixtures). |
+| `copyWithin/negative-target.js`, `negative-end.js`, `negative-out-of-bounds-*.js`, `non-negative-*.js` (rest), `return-this.js`, `fill/return-this.js`, `fill/absent-indices-computed-from-initial-length.js`, `fill/fill-values-custom-start-and-end.js` | Same clamping algebra as the two ported copyWithin cases and the fill trio; `returns this` is reference identity (covered value-wise by interpreter fixtures). |
 | `reverse/returns-original-object.js`, `toReversed/ignores-species.js`, `length-property-ignored.js`, `find/predicate-not-called-on-empty-array.js`, `findIndex/**`, `findLastIndex/**`, `every/**`, `some/**`, `forEach/**`, `map/**`, `filter/**`, `reduce/**`, `reduceRight/**`, `entries/**`, `keys/**`, `values/**` | Reference-identity asserts, or surface already exercised by the ported find/findLast cases and the substantial interpreter fixtures (`uint8array_*.subm`); iterators are rejected above. |
 | `toString.js`, `toLocaleString/**`, `join/custom-separator-*.js`, `join/get-length-uses-internal-arraylength.js` | `toString` is covered by `uint8array_to_string.subm`; locale is rejected; custom-separator vectors duplicate `uint8array_join.subm`. |
 | `Uint8Array` constructor cases (`TypedArrayConstructors/Uint8Array/**`) | Constructor overloads (length / buffer / iterable / species) don't exist — construction is `new Uint8Array(number[])` + statics (`alloc`, `of`, `fromArray`, `fromBytes`); covered by interpreter fixtures. |
@@ -71,8 +71,7 @@ ToUint8 as in the standard (`-1` stores 255); the interpreter fixture
 - `notSameValue(result, receiver)` identity checks (toReversed/toSorted/with
   `immutable.js`) are rewritten as mutation probes: write to the result,
   assert the receiver unchanged.
-- `set` return value asserts (`returns undefined`) are dropped — `set`
-  returns `void`.
+- `set` return-value assertions observe undefined for its void completion.
 - SyntaxError/TypeError/RangeError distinctions are erased: `assertThrows`
   matches the base `Error`.
-- JS `undefined` results (`find` miss) map to `null`.
+- JS undefined results are preserved, including find misses and void host completions.

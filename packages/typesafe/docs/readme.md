@@ -52,8 +52,8 @@ function main(): number {
 ```
 
 Each direct function makes one HTTP request. Its final `options` argument accepts
-`{ model: "jev-latest" }`; for a Noul without criteria, pass `null` as the third
-argument before supplying options. Single calls return the typed answer;
+`{ model: "jev-latest" }`; for a Noul without criteria, pass `undefined` as the
+third argument before supplying options. Single calls return the typed answer;
 use `batch` (even with one question) when you need the answering model and token
 usage as well. Builders validate question definitions and make no network calls.
 When several independent judgments share state, use the builders and `batch`
@@ -85,7 +85,7 @@ ambiguous rating.
 `batch({ state, questions, model? })` is synchronous. Use Maps for dynamic
 question IDs and criteria. Answers are returned in a Map under the same IDs;
 use `isNoulAnswer`, `isChoiceAnswer`, or `isScoreAnswer` to narrow an answer before
-reading its fields. These local type guards accept `Answer | null`, return false
+reading its fields. These local type guards accept `Answer | null | undefined`, return false
 for a missing answer or another variant, and make no HTTP calls. Their TypeScript
 predicates (for example, `answer is ChoiceAnswer`) let the compiler expose the
 variant's fields inside a successful branch or after a rejecting guard.

@@ -6,7 +6,7 @@ function alternatives(values: unknown[]): string {
   if (values[0] === "a" || values[0] === "b") { return values[0]; }
   return "other";
 }
-function optional(values: unknown[]): string | null {
+function optional(values: unknown[]): string | null | undefined {
   if (values[0] === "a") { return values?.[0]; }
   return null;
 }

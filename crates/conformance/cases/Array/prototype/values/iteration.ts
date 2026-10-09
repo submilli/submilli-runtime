@@ -1,8 +1,7 @@
 // test262: test/built-ins/Array/prototype/values/iteration.js
 // Adapted: `value` is read through a runtime-checked `as
 // IteratorYieldResult<string>` cast — the `done` field is typed boolean (not
-// a literal), so it does not narrow the IteratorResult union. The exhausted
-// result carries no value field (vs undefined in JS).
+// a literal), so it does not narrow the IteratorResult union.
 
 function main(): void {
   const array = ["a", "b", "c"];
@@ -22,4 +21,5 @@ function main(): void {
 
   result = iterator.next();
   assertSameValue(result.done, true, "Exhausted result `done` flag");
+  assertSameValue(result.value, undefined, "Exhausted result `value`");
 }

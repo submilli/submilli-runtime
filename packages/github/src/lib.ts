@@ -868,355 +868,355 @@ export class GitHubError extends Error {
 }
 
 interface ApiUser {
-    login?: string;
-    id?: number;
-    html_url?: string;
-    avatar_url?: string;
-    type?: string;
+    login?: string | null;
+    id?: number | null;
+    html_url?: string | null;
+    avatar_url?: string | null;
+    type?: string | null;
 }
 
 interface ApiOwner {
-    login?: string;
+    login?: string | null;
 }
 
 interface ApiRepository {
-    id?: number;
-    name?: string;
-    full_name?: string;
-    description?: string;
-    html_url?: string;
-    private?: boolean;
-    fork?: boolean;
-    archived?: boolean;
-    default_branch?: string;
-    language?: string;
-    topics?: string[];
-    stargazers_count?: number;
-    forks_count?: number;
-    open_issues_count?: number;
-    created_at?: string;
-    updated_at?: string;
-    pushed_at?: string;
+    id?: number | null;
+    name?: string | null;
+    full_name?: string | null;
+    description?: string | null;
+    html_url?: string | null;
+    private?: boolean | null;
+    fork?: boolean | null;
+    archived?: boolean | null;
+    default_branch?: string | null;
+    language?: string | null;
+    topics?: string[] | null;
+    stargazers_count?: number | null;
+    forks_count?: number | null;
+    open_issues_count?: number | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    pushed_at?: string | null;
 }
 
 interface ApiBranchCommit {
-    sha?: string;
+    sha?: string | null;
 }
 
 interface ApiBranch {
-    name?: string;
-    commit?: ApiBranchCommit;
-    protected?: boolean;
+    name?: string | null;
+    commit?: ApiBranchCommit | null;
+    protected?: boolean | null;
 }
 
 interface ApiContent {
-    type?: string;
-    name?: string;
-    path?: string;
-    sha?: string;
-    size?: number;
-    html_url?: string;
-    encoding?: string;
-    content?: string;
+    type?: string | null;
+    name?: string | null;
+    path?: string | null;
+    sha?: string | null;
+    size?: number | null;
+    html_url?: string | null;
+    encoding?: string | null;
+    content?: string | null;
 }
 
 interface ApiTreeEntry {
-    path?: string;
-    mode?: string;
-    type?: string;
-    sha?: string;
-    size?: number;
+    path?: string | null;
+    mode?: string | null;
+    type?: string | null;
+    sha?: string | null;
+    size?: number | null;
 }
 
 interface ApiTree {
-    sha?: string;
-    truncated?: boolean;
-    tree?: ApiTreeEntry[];
+    sha?: string | null;
+    truncated?: boolean | null;
+    tree?: ApiTreeEntry[] | null;
 }
 
 interface ApiGitActor {
-    name?: string;
-    email?: string;
-    date?: string;
+    name?: string | null;
+    email?: string | null;
+    date?: string | null;
 }
 
 interface ApiCommitBody {
-    message?: string;
-    author?: ApiGitActor;
-    committer?: ApiGitActor;
-    tree?: ApiBranchCommit;
+    message?: string | null;
+    author?: ApiGitActor | null;
+    committer?: ApiGitActor | null;
+    tree?: ApiBranchCommit | null;
 }
 
 interface ApiCommitStats {
-    additions?: number;
-    deletions?: number;
-    total?: number;
+    additions?: number | null;
+    deletions?: number | null;
+    total?: number | null;
 }
 
 interface ApiCommitFile {
-    filename?: string;
-    status?: string;
-    additions?: number;
-    deletions?: number;
-    changes?: number;
-    previous_filename?: string;
-    patch?: string;
+    filename?: string | null;
+    status?: string | null;
+    additions?: number | null;
+    deletions?: number | null;
+    changes?: number | null;
+    previous_filename?: string | null;
+    patch?: string | null;
 }
 
 interface ApiCommit {
-    sha?: string;
-    html_url?: string;
-    commit?: ApiCommitBody;
-    author?: ApiUser;
-    committer?: ApiUser;
-    stats?: ApiCommitStats;
-    files?: ApiCommitFile[];
+    sha?: string | null;
+    html_url?: string | null;
+    commit?: ApiCommitBody | null;
+    author?: ApiUser | null;
+    committer?: ApiUser | null;
+    stats?: ApiCommitStats | null;
+    files?: ApiCommitFile[] | null;
 }
 
 interface ApiRelease {
-    id?: number;
-    tag_name?: string;
-    name?: string;
-    body?: string;
-    html_url?: string;
-    draft?: boolean;
-    prerelease?: boolean;
-    created_at?: string;
-    published_at?: string;
-    author?: ApiUser;
+    id?: number | null;
+    tag_name?: string | null;
+    name?: string | null;
+    body?: string | null;
+    html_url?: string | null;
+    draft?: boolean | null;
+    prerelease?: boolean | null;
+    created_at?: string | null;
+    published_at?: string | null;
+    author?: ApiUser | null;
 }
 
 interface ApiLabel {
-    id?: number;
-    name?: string;
-    color?: string;
-    description?: string;
-    default?: boolean;
+    id?: number | null;
+    name?: string | null;
+    color?: string | null;
+    description?: string | null;
+    default?: boolean | null;
 }
 
 interface ApiMilestone {
-    id?: number;
-    number?: number;
-    title?: string;
-    description?: string;
-    state?: string;
-    due_on?: string;
+    id?: number | null;
+    number?: number | null;
+    title?: string | null;
+    description?: string | null;
+    state?: string | null;
+    due_on?: string | null;
 }
 
 interface ApiReactionSummary {
-    total_count?: number;
-    "+1"?: number;
-    "-1"?: number;
-    laugh?: number;
-    hooray?: number;
-    confused?: number;
-    heart?: number;
-    rocket?: number;
-    eyes?: number;
+    total_count?: number | null;
+    "+1"?: number | null;
+    "-1"?: number | null;
+    laugh?: number | null;
+    hooray?: number | null;
+    confused?: number | null;
+    heart?: number | null;
+    rocket?: number | null;
+    eyes?: number | null;
 }
 
 interface ApiComment {
-    id?: number;
-    body?: string;
-    html_url?: string;
-    user?: ApiUser;
-    author_association?: string;
-    created_at?: string;
-    updated_at?: string;
-    reactions?: ApiReactionSummary;
+    id?: number | null;
+    body?: string | null;
+    html_url?: string | null;
+    user?: ApiUser | null;
+    author_association?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    reactions?: ApiReactionSummary | null;
 }
 
 interface ApiIssue {
-    id?: number;
-    number?: number;
-    title?: string;
-    body?: string;
-    state?: string;
-    state_reason?: string;
-    locked?: boolean;
-    html_url?: string;
-    user?: ApiUser;
-    labels?: ApiLabel[];
-    assignees?: ApiUser[];
-    milestone?: ApiMilestone;
-    comments?: number;
-    created_at?: string;
-    updated_at?: string;
-    closed_at?: string;
+    id?: number | null;
+    number?: number | null;
+    title?: string | null;
+    body?: string | null;
+    state?: string | null;
+    state_reason?: string | null;
+    locked?: boolean | null;
+    html_url?: string | null;
+    user?: ApiUser | null;
+    labels?: ApiLabel[] | null;
+    assignees?: ApiUser[] | null;
+    milestone?: ApiMilestone | null;
+    comments?: number | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    closed_at?: string | null;
     pull_request?: unknown;
-    reactions?: ApiReactionSummary;
-    repository_url?: string;
-    draft?: boolean;
+    reactions?: ApiReactionSummary | null;
+    repository_url?: string | null;
+    draft?: boolean | null;
 }
 
 interface ApiPullRef {
-    label?: string;
-    ref?: string;
-    sha?: string;
-    user?: ApiUser;
-    repo?: ApiRepository;
+    label?: string | null;
+    ref?: string | null;
+    sha?: string | null;
+    user?: ApiUser | null;
+    repo?: ApiRepository | null;
 }
 
 interface ApiPullRequest {
-    id?: number;
-    number?: number;
-    title?: string;
-    body?: string;
-    state?: string;
-    draft?: boolean;
-    merged?: boolean;
-    mergeable?: boolean;
-    mergeable_state?: string;
-    html_url?: string;
-    user?: ApiUser;
-    labels?: ApiLabel[];
-    assignees?: ApiUser[];
-    requested_reviewers?: ApiUser[];
-    head?: ApiPullRef;
-    base?: ApiPullRef;
-    additions?: number;
-    deletions?: number;
-    changed_files?: number;
-    commits?: number;
-    comments?: number;
-    review_comments?: number;
-    created_at?: string;
-    updated_at?: string;
-    closed_at?: string;
-    merged_at?: string;
-    reactions?: ApiReactionSummary;
+    id?: number | null;
+    number?: number | null;
+    title?: string | null;
+    body?: string | null;
+    state?: string | null;
+    draft?: boolean | null;
+    merged?: boolean | null;
+    mergeable?: boolean | null;
+    mergeable_state?: string | null;
+    html_url?: string | null;
+    user?: ApiUser | null;
+    labels?: ApiLabel[] | null;
+    assignees?: ApiUser[] | null;
+    requested_reviewers?: ApiUser[] | null;
+    head?: ApiPullRef | null;
+    base?: ApiPullRef | null;
+    additions?: number | null;
+    deletions?: number | null;
+    changed_files?: number | null;
+    commits?: number | null;
+    comments?: number | null;
+    review_comments?: number | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    closed_at?: string | null;
+    merged_at?: string | null;
+    reactions?: ApiReactionSummary | null;
 }
 
 interface ApiPullFile {
-    sha?: string;
-    filename?: string;
-    status?: string;
-    additions?: number;
-    deletions?: number;
-    changes?: number;
-    previous_filename?: string;
-    patch?: string;
-    blob_url?: string;
+    sha?: string | null;
+    filename?: string | null;
+    status?: string | null;
+    additions?: number | null;
+    deletions?: number | null;
+    changes?: number | null;
+    previous_filename?: string | null;
+    patch?: string | null;
+    blob_url?: string | null;
 }
 
 interface ApiReview {
-    id?: number;
-    state?: string;
-    body?: string;
-    html_url?: string;
-    user?: ApiUser;
-    commit_id?: string;
-    submitted_at?: string;
-    author_association?: string;
+    id?: number | null;
+    state?: string | null;
+    body?: string | null;
+    html_url?: string | null;
+    user?: ApiUser | null;
+    commit_id?: string | null;
+    submitted_at?: string | null;
+    author_association?: string | null;
 }
 
 interface ApiMergeResult {
-    merged?: boolean;
-    message?: string;
-    sha?: string;
+    merged?: boolean | null;
+    message?: string | null;
+    sha?: string | null;
 }
 
 interface ApiTeam {
-    id?: number;
-    name?: string;
-    slug?: string;
-    description?: string;
-    privacy?: string;
-    html_url?: string;
-    organization?: ApiOwner;
+    id?: number | null;
+    name?: string | null;
+    slug?: string | null;
+    description?: string | null;
+    privacy?: string | null;
+    html_url?: string | null;
+    organization?: ApiOwner | null;
 }
 
 interface ApiRateResource {
-    limit?: number;
-    remaining?: number;
-    used?: number;
-    reset?: number;
+    limit?: number | null;
+    remaining?: number | null;
+    used?: number | null;
+    reset?: number | null;
 }
 
 interface ApiRateResources {
-    core?: ApiRateResource;
-    search?: ApiRateResource;
-    graphql?: ApiRateResource;
+    core?: ApiRateResource | null;
+    search?: ApiRateResource | null;
+    graphql?: ApiRateResource | null;
 }
 
 interface ApiRateLimit {
-    resources?: ApiRateResources;
+    resources?: ApiRateResources | null;
 }
 
 interface ApiSearchRepositoryItem {
-    id?: number;
-    name?: string;
-    full_name?: string;
-    description?: string;
-    html_url?: string;
-    private?: boolean;
-    fork?: boolean;
-    archived?: boolean;
-    default_branch?: string;
-    language?: string;
-    topics?: string[];
-    stargazers_count?: number;
-    forks_count?: number;
-    open_issues_count?: number;
-    created_at?: string;
-    updated_at?: string;
-    pushed_at?: string;
-    score?: number;
+    id?: number | null;
+    name?: string | null;
+    full_name?: string | null;
+    description?: string | null;
+    html_url?: string | null;
+    private?: boolean | null;
+    fork?: boolean | null;
+    archived?: boolean | null;
+    default_branch?: string | null;
+    language?: string | null;
+    topics?: string[] | null;
+    stargazers_count?: number | null;
+    forks_count?: number | null;
+    open_issues_count?: number | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    pushed_at?: string | null;
+    score?: number | null;
 }
 
 interface ApiCodeSearchItem {
-    name?: string;
-    path?: string;
-    sha?: string;
-    html_url?: string;
-    repository?: ApiRepository;
+    name?: string | null;
+    path?: string | null;
+    sha?: string | null;
+    html_url?: string | null;
+    repository?: ApiRepository | null;
 }
 
 interface ApiUserSearchItem {
-    login?: string;
-    id?: number;
-    html_url?: string;
-    avatar_url?: string;
-    type?: string;
-    score?: number;
+    login?: string | null;
+    id?: number | null;
+    html_url?: string | null;
+    avatar_url?: string | null;
+    type?: string | null;
+    score?: number | null;
 }
 
 interface ApiSearchRepositories {
-    total_count?: number;
-    incomplete_results?: boolean;
-    items?: ApiSearchRepositoryItem[];
+    total_count?: number | null;
+    incomplete_results?: boolean | null;
+    items?: ApiSearchRepositoryItem[] | null;
 }
 
 interface ApiSearchCode {
-    total_count?: number;
-    incomplete_results?: boolean;
-    items?: ApiCodeSearchItem[];
+    total_count?: number | null;
+    incomplete_results?: boolean | null;
+    items?: ApiCodeSearchItem[] | null;
 }
 
 interface ApiSearchUsers {
-    total_count?: number;
-    incomplete_results?: boolean;
-    items?: ApiUserSearchItem[];
+    total_count?: number | null;
+    incomplete_results?: boolean | null;
+    items?: ApiUserSearchItem[] | null;
 }
 
 interface ApiSearchIssues {
-    total_count?: number;
-    incomplete_results?: boolean;
-    items?: ApiIssue[];
+    total_count?: number | null;
+    incomplete_results?: boolean | null;
+    items?: ApiIssue[] | null;
 }
 
 interface ApiError {
-    message?: string;
-    documentation_url?: string;
-    status?: string;
-    errors?: unknown[];
+    message?: string | null;
+    documentation_url?: string | null;
+    status?: string | null;
+    errors?: unknown[] | null;
 }
 
 interface ApiErrorDetail {
-    resource?: string;
-    field?: string;
-    code?: string;
-    message?: string;
+    resource?: string | null;
+    field?: string | null;
+    code?: string | null;
+    message?: string | null;
 }
 
 interface GraphQlIssueVariables {
@@ -1231,61 +1231,62 @@ interface GraphQlIssueVariables {
 }
 
 interface GraphQlIssueConnection {
-    nodes?: ApiGraphQlIssue[];
-    pageInfo?: GraphQlPageInfo;
+    nodes?: ApiGraphQlIssue[] | null;
+    pageInfo?: GraphQlPageInfo | null;
 }
 
 interface ApiGraphQlCount {
-    totalCount?: number;
+    totalCount?: number | null;
 }
 
 interface ApiGraphQlLabels {
-    nodes?: ApiLabel[];
+    nodes?: ApiLabel[] | null;
 }
 
 interface ApiGraphQlUsers {
-    nodes?: ApiUser[];
+    nodes?: ApiUser[] | null;
 }
 
 interface ApiGraphQlIssue {
-    id?: number;
-    number?: number;
-    title?: string;
-    body?: string;
-    state?: string;
-    state_reason?: string;
-    locked?: boolean;
-    html_url?: string;
-    user?: ApiUser;
-    labels?: ApiGraphQlLabels;
-    assignees?: ApiGraphQlUsers;
-    milestone?: ApiMilestone;
-    comments?: ApiGraphQlCount;
-    created_at?: string;
-    updated_at?: string;
-    closed_at?: string;
+    id?: number | null;
+    number?: number | null;
+    title?: string | null;
+    body?: string | null;
+    state?: string | null;
+    state_reason?: string | null;
+    locked?: boolean | null;
+    html_url?: string | null;
+    user?: ApiUser | null;
+    labels?: ApiGraphQlLabels | null;
+    assignees?: ApiGraphQlUsers | null;
+    milestone?: ApiMilestone | null;
+    comments?: ApiGraphQlCount | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    closed_at?: string | null;
 }
 
 interface GraphQlRepository {
-    issues?: GraphQlIssueConnection;
+    issues?: GraphQlIssueConnection | null;
 }
 
 interface GraphQlIssueData {
-    repository?: GraphQlRepository;
+    repository?: GraphQlRepository | null;
 }
 
 interface GraphQlPageInfo {
-    hasNextPage?: boolean;
-    endCursor?: string;
+    hasNextPage?: boolean | null;
+    endCursor?: string | null;
 }
 
 interface GraphQlErrorItem {
-    message?: string;
+    message?: string | null;
 }
 
-interface GraphQlIssueEnvelope {
-    data?: GraphQlIssueData;
-    errors?: GraphQlErrorItem[];
+// `data` is read only when there are no errors: with errors it may be null or partial.
+interface GraphQlEnvelope {
+    data?: unknown;
+    errors?: GraphQlErrorItem[] | null;
 }
 
 interface GitBlobBody {
@@ -1294,19 +1295,19 @@ interface GitBlobBody {
 }
 
 interface ApiCreatedSha {
-    sha?: string;
+    sha?: string | null;
 }
 
 interface ApiGitCommit {
-    tree?: ApiBranchCommit;
+    tree?: ApiBranchCommit | null;
 }
 
 interface ApiGitRefObject {
-    sha?: string;
+    sha?: string | null;
 }
 
 interface ApiGitRef {
-    object?: ApiGitRefObject;
+    object?: ApiGitRefObject | null;
 }
 
 interface GitTreeItemBody {
@@ -1337,39 +1338,24 @@ interface GitUpdateRefBody {
     force: boolean;
 }
 
+// Every field the capabilities declare is sent, null when the operation does not name it: a check
+// omits an undefined field, and a filter such as `base == null` does not match a missing one.
 interface RepositoryCapabilityContext {
     owner: string;
     repo: string;
-    branch?: string;
-    path?: string | null;
-    ref?: string | null;
-    treeSha?: string;
-    head?: string;
-    base?: string;
+    branch: string | null;
+    path: string | null;
+    ref: string | null;
+    treeSha: string | null;
+    head: string | null;
+    base: string | null;
 }
 
 interface RepositoryNumberCapabilityContext {
     owner: string;
     repo: string;
     number: number;
-    base?: string;
-}
-
-interface PageRequest {
-    limit: number | null;
-    cursor: string | null;
-}
-
-interface SearchRequest {
-    sort: string | null;
-    order: string | null;
-    limit: number | null;
-    cursor: string | null;
-}
-
-interface FileReadRequest {
-    ref: string | null;
-    maxBytes: number | null;
+    base: string | null;
 }
 
 const ISSUE_QUERY = "query($owner:String!,$name:String!,$first:Int!,$after:String,$states:[IssueState!],$labels:[String!],$orderField:IssueOrderField!,$direction:OrderDirection!){repository(owner:$owner,name:$name){issues(first:$first,after:$after,states:$states,labels:$labels,orderBy:{field:$orderField,direction:$direction}){nodes{id:databaseId number title body state state_reason:stateReason locked html_url:url comments{totalCount} created_at:createdAt updated_at:updatedAt closed_at:closedAt user:author{login html_url:url avatar_url:avatarUrl type:__typename}labels(first:100){nodes{name color description}}assignees(first:100){nodes{login id:databaseId html_url:url avatar_url:avatarUrl type:__typename}}milestone{number title description state due_on:dueOn}}pageInfo{hasNextPage endCursor}}}}";
@@ -1384,15 +1370,13 @@ export function getViewer(): User {
 }
 
 /** List teams visible to the authenticated user.
- * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
  * @returns One page of teams the authenticated user belongs to; `nextPageToken` is "" on the last page.
  * @capability github.com/teams.list {}
  */
-export function listTeams(options: PageOptions | null = null): PageResult<Team> {
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
+export function listTeams(options: PageOptions = {}): PageResult<Team> {
     check("github.com/teams.list", {});
-    const response = githubGet("/user/teams", pageQuery({ limit: limit, cursor: cursor }));
+    const response = githubGet("/user/teams", pageQuery(options));
     const data = response.json() as ApiTeam[];
     const items: Team[] = [];
     for (const item of data) items.push(teamFrom(item));
@@ -1402,16 +1386,14 @@ export function listTeams(options: PageOptions | null = null): PageResult<Team> 
 /** List members of an organization team.
  * @param org Organization login that owns the team.
  * @param teamSlug Team slug (the URL form of the team name).
- * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
  * @returns One page of team members; `nextPageToken` is "" on the last page.
  * @capability github.com/teamMembers.list { org: string, teamSlug: string }
  */
-export function listTeamMembers(org: string, teamSlug: string, options: PageOptions | null = null): PageResult<User> {
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
+export function listTeamMembers(org: string, teamSlug: string, options: PageOptions = {}): PageResult<User> {
     check("github.com/teamMembers.list", { org: org, teamSlug: teamSlug });
     const path = "/orgs/" + segment(org, "organization") + "/teams/" + segment(teamSlug, "team slug") + "/members";
-    const response = githubGet(path, pageQuery({ limit: limit, cursor: cursor }));
+    const response = githubGet(path, pageQuery(options));
     const data = response.json() as ApiUser[];
     const items: User[] = [];
     for (const item of data) items.push(userFrom(item));
@@ -1420,18 +1402,14 @@ export function listTeamMembers(org: string, teamSlug: string, options: PageOpti
 
 /** Search repositories visible to the token.
  * @param query Non-empty GitHub search query for repositories, which may use qualifiers such as `language:rust`.
- * @param options Sort field, order, page size and `pageToken`; `null` uses best-match order, the first page and 30 items.
+ * @param options Sort field, order, page size and `pageToken`; omit it for best-match order, the first page and 30 items.
  * @returns One page of repository hits, each with a relevance `score`, plus `totalCount` and `incompleteResults`; `nextPageToken` is "" on the last page.
  * @capability github.com/repositories.search {}
  */
-export function searchRepositories(query: string, options: SearchOptions | null = null): SearchPageResult<RepositorySearchHit> {
-    const sort = options === null ? null : options.sort;
-    const order = options === null ? null : options.order;
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
+export function searchRepositories(query: string, options: SearchOptions = {}): SearchPageResult<RepositorySearchHit> {
     check("github.com/repositories.search", {});
     requireText(query, "query");
-    const response = githubGet("/search/repositories", searchQuery(query, { sort: sort, order: order, limit: limit, cursor: cursor }));
+    const response = githubGet("/search/repositories", searchQuery(query, options));
     const data = response.json() as ApiSearchRepositories;
     const items: RepositorySearchHit[] = [];
     for (const item of array(data.items)) {
@@ -1443,21 +1421,17 @@ export function searchRepositories(query: string, options: SearchOptions | null 
 /** Search code within one repository.
  * @param repository Owner and name of the repository.
  * @param query Non-empty GitHub search query for code, which may use qualifiers such as `language:rust`. The search is scoped to this repository automatically; `repo:`, `org:`, `user:`, `is:issue`, `is:pr` and `OR` are rejected.
- * @param options Sort field, order, page size and `pageToken`; `null` uses best-match order, the first page and 30 items.
+ * @param options Sort field, order, page size and `pageToken`; omit it for best-match order, the first page and 30 items.
  * @returns One page of code hits, each with file name, path, SHA and repository, plus `totalCount` and `incompleteResults`; `nextPageToken` is "" on the last page.
  * @capability github.com/code.search { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
-export function searchCode(repository: RepositoryRef, query: string, options: SearchOptions | null = null): SearchPageResult<CodeSearchHit> {
+export function searchCode(repository: RepositoryRef, query: string, options: SearchOptions = {}): SearchPageResult<CodeSearchHit> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const sort = options === null ? null : options.sort;
-    const order = options === null ? null : options.order;
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
     const context = checkedRepository(owner, name);
     check("github.com/code.search", context);
     const scoped = scopedSearch(query, owner, name, "");
-    const response = githubGet("/search/code", searchQuery(scoped, { sort: sort, order: order, limit: limit, cursor: cursor }));
+    const response = githubGet("/search/code", searchQuery(scoped, options));
     const data = response.json() as ApiSearchCode;
     const items: CodeSearchHit[] = [];
     for (const item of array(data.items)) {
@@ -1474,18 +1448,14 @@ export function searchCode(repository: RepositoryRef, query: string, options: Se
 
 /** Search GitHub users.
  * @param query Non-empty GitHub search query for users, which may use qualifiers such as `followers:>10`.
- * @param options Sort field, order, page size and `pageToken`; `null` uses best-match order, the first page and 30 items.
+ * @param options Sort field, order, page size and `pageToken`; omit it for best-match order, the first page and 30 items.
  * @returns One page of user hits, each with a relevance `score`, plus `totalCount` and `incompleteResults`; `nextPageToken` is "" on the last page.
  * @capability github.com/users.search {}
  */
-export function searchUsers(query: string, options: SearchOptions | null = null): SearchPageResult<UserSearchHit> {
-    const sort = options === null ? null : options.sort;
-    const order = options === null ? null : options.order;
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
+export function searchUsers(query: string, options: SearchOptions = {}): SearchPageResult<UserSearchHit> {
     check("github.com/users.search", {});
     requireText(query, "query");
-    const response = githubGet("/search/users", searchQuery(query, { sort: sort, order: order, limit: limit, cursor: cursor }));
+    const response = githubGet("/search/users", searchQuery(query, options));
     const data = response.json() as ApiSearchUsers;
     const items: UserSearchHit[] = [];
     for (const item of array(data.items)) items.push({ score: num(item.score), user: userFrom(item) });
@@ -1538,18 +1508,16 @@ export function getBranch(repository: RepositoryRef, branch: string): Branch | n
 
 /** List repository branches.
  * @param repository Owner and name of the repository.
- * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
  * @returns One page of branches; `nextPageToken` is "" on the last page.
  * @capability github.com/branches.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
-export function listBranches(repository: RepositoryRef, options: PageOptions | null = null): PageResult<Branch> {
+export function listBranches(repository: RepositoryRef, options: PageOptions = {}): PageResult<Branch> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
     const context = checkedRepository(owner, name);
     check("github.com/branches.list", context);
-    const response = githubGet(repositoryPath(owner, name) + "/branches", pageQuery({ limit: limit, cursor: cursor }));
+    const response = githubGet(repositoryPath(owner, name) + "/branches", pageQuery(options));
     const data = response.json() as ApiBranch[];
     const items: Branch[] = [];
     for (const item of data) items.push(branchFrom(item));
@@ -1558,30 +1526,24 @@ export function listBranches(repository: RepositoryRef, options: PageOptions | n
 
 /** List repository commits.
  * @param repository Owner and name of the repository.
- * @param options Filters (`sha`, `path`, `author`, `since`, `until`) and pagination; `null` lists the default branch's recent commits, 30 per page.
+ * @param options Filters (`sha`, `path`, `author`, `since`, `until`) and pagination; omit it to list the default branch's recent commits, 30 per page.
  * @returns One page of commits without stats or file lists; `nextPageToken` is "" on the last page.
  * @capability github.com/commits.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
-export function listCommits(repository: RepositoryRef, options: ListCommitsOptions | null = null): PageResult<Commit> {
+export function listCommits(repository: RepositoryRef, options: ListCommitsOptions = {}): PageResult<Commit> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const sha = options === null ? null : options.sha;
-    const path = options === null ? null : options.path;
-    const author = options === null ? null : options.author;
-    const since = options === null ? null : options.since;
-    const until = options === null ? null : options.until;
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
+    const { sha, path, author, since, until, limit, pageToken } = options;
     const context = checkedRepository(owner, name);
     context.ref = namedRef(sha);
     context.path = namedRef(path);
     check("github.com/commits.list", context);
-    const query = pageQuery({ limit: limit, cursor: cursor });
-    putQuery(query, "sha", context.ref);
-    putQuery(query, "path", context.path);
+    const query = pageQuery({ limit, pageToken });
+    putQuery(query, "sha", sha);
+    putQuery(query, "path", path);
     putQuery(query, "author", author);
-    putQuery(query, "since", since !== null ? toRfc3339(since, "since") : null);
-    putQuery(query, "until", until !== null ? toRfc3339(until, "until") : null);
+    putQuery(query, "since", since === undefined ? undefined : toRfc3339(since, "since"));
+    putQuery(query, "until", until === undefined ? undefined : toRfc3339(until, "until"));
     const response = githubGet(repositoryPath(owner, name) + "/commits", query);
     const data = response.json() as ApiCommit[];
     const items: Commit[] = [];
@@ -1592,33 +1554,31 @@ export function listCommits(repository: RepositoryRef, options: ListCommitsOptio
 /** Retrieve one commit with configurable detail.
  * @param repository Owner and name of the repository.
  * @param ref Commit SHA, branch or tag name.
- * @param detail `"none"`, `"stats"` or `"patch"`; `null` means `"stats"`.
+ * @param detail `"none"`, `"stats"` or `"patch"`; `"stats"` when omitted.
  * @returns The commit at the requested detail level, or `null` when the ref does not exist.
  * @capability github.com/commits.get { owner: string, repo: string, ref: string, branch: string, path: string, treeSha: string, head: string, base: string }
  */
-export function getCommit(repository: RepositoryRef, ref: string, detail: CommitDetail | null = null): Commit | null {
+export function getCommit(repository: RepositoryRef, ref: string, detail: CommitDetail = "stats"): Commit | null {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const context = repositoryContext(owner, name, "ref", ref);
     check("github.com/commits.get", context);
     const response = githubGetNullable(repositoryPath(owner, name) + "/commits/" + segment(ref, "commit ref"));
-    return response === null ? null : commitFrom(response.json() as ApiCommit, detail === null ? "stats" : detail);
+    return response === null ? null : commitFrom(response.json() as ApiCommit, detail);
 }
 
 /** List repository releases.
  * @param repository Owner and name of the repository.
- * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
  * @returns One page of releases; `nextPageToken` is "" on the last page.
  * @capability github.com/releases.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
-export function listReleases(repository: RepositoryRef, options: PageOptions | null = null): PageResult<Release> {
+export function listReleases(repository: RepositoryRef, options: PageOptions = {}): PageResult<Release> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
     const context = checkedRepository(owner, name);
     check("github.com/releases.list", context);
-    const response = githubGet(repositoryPath(owner, name) + "/releases", pageQuery({ limit: limit, cursor: cursor }));
+    const response = githubGet(repositoryPath(owner, name) + "/releases", pageQuery(options));
     const data = response.json() as ApiRelease[];
     const items: Release[] = [];
     for (const item of data) items.push(releaseFrom(item));
@@ -1643,15 +1603,14 @@ export function getLatestRelease(repository: RepositoryRef): Release | null {
  * names, or null for the repository's default branch.
  * @param repository Owner and name of the repository.
  * @param path Repository-relative file path, without a leading slash.
- * @param options `ref` (branch, tag or commit SHA) and `maxBytes`; `null` reads the default branch with the 10485760-byte limit.
+ * @param options `ref` (branch, tag or commit SHA) and `maxBytes`; omit it to read the default branch with the 10485760-byte limit.
  * @returns The file with its raw `bytes`, SHA and size, or `null` when the path does not exist.
  * @capability github.com/contents.readFile { owner: string, repo: string, path: string, ref: string, branch: string, treeSha: string, head: string, base: string }
  */
-export function readFile(repository: RepositoryRef, path: string, options: FileReadOptions | null = null): RepositoryFile | null {
+export function readFile(repository: RepositoryRef, path: string, options: FileReadOptions = {}): RepositoryFile | null {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const ref = options === null ? null : options.ref;
-    const maxBytes = options === null ? null : options.maxBytes;
+    const { ref, maxBytes } = options;
     const context = repositoryContext(owner, name, "path", path);
     context.ref = namedRef(ref);
     check("github.com/contents.readFile", context);
@@ -1661,15 +1620,14 @@ export function readFile(repository: RepositoryRef, path: string, options: FileR
 /** Read a repository file as strict UTF-8 text.
  * @param repository Owner and name of the repository.
  * @param path Repository-relative file path, without a leading slash.
- * @param options `ref` (branch, tag or commit SHA) and `maxBytes`; `null` reads the default branch with the 10485760-byte limit.
+ * @param options `ref` (branch, tag or commit SHA) and `maxBytes`; omit it to read the default branch with the 10485760-byte limit.
  * @returns The file with its decoded `text`, SHA and size, or `null` when the path does not exist.
  * @capability github.com/contents.readTextFile { owner: string, repo: string, path: string, ref: string, branch: string, treeSha: string, head: string, base: string }
  */
-export function readTextFile(repository: RepositoryRef, path: string, options: FileReadOptions | null = null): RepositoryTextFile | null {
+export function readTextFile(repository: RepositoryRef, path: string, options: FileReadOptions = {}): RepositoryTextFile | null {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const ref = options === null ? null : options.ref;
-    const maxBytes = options === null ? null : options.maxBytes;
+    const { ref, maxBytes } = options;
     const context = repositoryContext(owner, name, "path", path);
     context.ref = namedRef(ref);
     check("github.com/contents.readTextFile", context);
@@ -1687,14 +1645,14 @@ export function readTextFile(repository: RepositoryRef, path: string, options: F
 /** List direct entries in a repository directory.
  * @param repository Owner and name of the repository.
  * @param path Repository-relative directory path; "" lists the repository root.
- * @param options `ref` (branch, tag or commit SHA); `null` lists the default branch.
+ * @param options `ref` (branch, tag or commit SHA); omit it to list the default branch.
  * @returns The direct entries of the directory, each with its type, name, path, SHA and size.
  * @capability github.com/contents.listDirectory { owner: string, repo: string, path: string, ref: string, branch: string, treeSha: string, head: string, base: string }
  */
-export function listDirectory(repository: RepositoryRef, path: string, options: DirectoryOptions | null = null): DirectoryEntry[] {
+export function listDirectory(repository: RepositoryRef, path: string, options: DirectoryOptions = {}): DirectoryEntry[] {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const ref = options === null ? null : options.ref;
+    const { ref } = options;
     const context = repositoryContext(owner, name, "path", path);
     context.ref = namedRef(ref);
     check("github.com/contents.listDirectory", context);
@@ -1711,7 +1669,7 @@ export function listDirectory(repository: RepositoryRef, path: string, options: 
             path: str(item.path),
             sha: str(item.sha),
             size: num(item.size),
-            htmlUrl: nullableString(item.html_url),
+            htmlUrl: item.html_url ?? null,
         });
     }
     return items;
@@ -1741,7 +1699,7 @@ export function getTree(repository: RepositoryRef, treeSha: string, recursive: b
             mode: str(item.mode),
             type: str(item.type),
             sha: str(item.sha),
-            size: nullableNumber(item.size),
+            size: item.size ?? null,
         });
     }
     return { sha: str(data.sha), truncated: data.truncated === true, entries: entries };
@@ -1797,12 +1755,12 @@ export function commitFiles(repository: RepositoryRef, input: CommitFilesInput):
     requireText(message, "commit message");
     validateChanges(changes);
     const current = githubGet(repositoryPath(owner, name) + "/git/ref/heads/" + segment(branch, "branch")).json() as ApiGitRef;
-    const currentSha = current.object === null ? "" : str(current.object.sha);
+    const currentSha = str(current.object?.sha);
     if (currentSha !== expectedHeadSha) {
         throw validationError("branch_moved", "Branch head no longer matches expectedHeadSha");
     }
     const parent = githubGet(repositoryPath(owner, name) + "/git/commits/" + segment(expectedHeadSha, "expected head SHA")).json() as ApiGitCommit;
-    const parentTree = parent.tree === null ? "" : str(parent.tree.sha);
+    const parentTree = str(parent.tree?.sha);
     if (parentTree.length === 0) throw validationError("missing_tree", "Expected commit does not include a tree SHA");
     const treeItems: GitTreeItemBody[] = [];
     for (const change of changes) {
@@ -1811,7 +1769,7 @@ export function commitFiles(repository: RepositoryRef, input: CommitFilesInput):
             treeItems.push({ path: path, mode: "100644", type: "blob", sha: null });
         } else {
             const content = change.content;
-            if (content === null) throw validationError("missing_content", "Write change for " + path + " requires content");
+            if (content === undefined) throw validationError("missing_content", "Write change for " + path + " requires content");
             let encoded = "";
             let encoding = "utf-8";
             if (typeof content === "string") {
@@ -1857,7 +1815,7 @@ export function getIssue(repository: RepositoryRef, number: number): Issue | nul
     const response = githubGetNullable(repositoryPath(owner, name) + "/issues/" + issueNumber(number));
     if (response === null) return null;
     const data = response.json() as ApiIssue;
-    if (data.pull_request !== null) {
+    if (data.pull_request !== null && data.pull_request !== undefined) {
         throw validationError("wrong_resource_type", "GitHub number identifies a pull request; use getPullRequest");
     }
     return issueFrom(data);
@@ -1865,21 +1823,16 @@ export function getIssue(repository: RepositoryRef, number: number): Issue | nul
 
 /** List true issues using cursor pagination.
  * @param repository Owner and name of the repository.
- * @param options State, labels, ordering and pagination; `null` lists open and closed issues by most recently updated, 30 per page.
+ * @param options State, labels, ordering and pagination; omit it to list open and closed issues by most recently updated, 30 per page.
  * @returns One page of issues, excluding pull requests; `nextPageToken` is "" on the last page.
  * @capability github.com/issues.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
-export function listIssues(repository: RepositoryRef, options: ListIssuesOptions | null = null): PageResult<Issue> {
+export function listIssues(repository: RepositoryRef, options: ListIssuesOptions = {}): PageResult<Issue> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const state = options === null ? null : options.state;
-    const requestedLabels = options === null ? null : options.labels;
-    const orderBy = options === null ? null : options.orderBy;
-    const direction = options === null ? null : options.direction;
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
-    let labels: string[] | null = null;
-    if (requestedLabels !== null) {
+    const { state, labels: requestedLabels, orderBy, direction, limit, pageToken: cursor } = options;
+    let labels: string[] | undefined;
+    if (requestedLabels !== undefined) {
         const copied: string[] = [];
         for (const label of requestedLabels) copied.push(label);
         labels = copied;
@@ -1890,11 +1843,11 @@ export function listIssues(repository: RepositoryRef, options: ListIssuesOptions
         owner: owner,
         name: name,
         first: pageLimit(limit),
-        after: pageToken(cursor, false),
-        states: state === null ? null : [state],
-        labels: labels,
-        orderField: orderBy === null ? "UPDATED_AT" : orderBy,
-        direction: direction === null ? "DESC" : direction,
+        after: pageToken(cursor, false) ?? null,
+        states: state === undefined ? null : [state],
+        labels: labels ?? null,
+        orderField: orderBy ?? "UPDATED_AT",
+        direction: direction ?? "DESC",
     };
     const variableFields: string[] = [
         jsonProperty("owner", JSON.stringify(variables.owner)),
@@ -1910,13 +1863,14 @@ export function listIssues(repository: RepositoryRef, options: ListIssuesOptions
         jsonProperty("query", JSON.stringify(ISSUE_QUERY)),
         jsonProperty("variables", jsonObject(variableFields)),
     ]);
-    const envelope = githubPostGraphQl(body).json() as GraphQlIssueEnvelope;
-    if (envelope.errors !== null && envelope.errors.length > 0) {
+    const envelope = githubPostGraphQl(body).json() as GraphQlEnvelope;
+    const errors = array(envelope.errors);
+    if (errors.length > 0) {
         const messages: string[] = [];
-        for (const item of envelope.errors) messages.push(str(item.message));
+        for (const item of errors) messages.push(str(item.message));
         throw new GitHubError("graphql_error", messages.join("; "), 200, "", "", null, null, null, messages);
     }
-    const data = required(envelope.data, "GraphQL data");
+    const data = required(envelope.data, "GraphQL data") as GraphQlIssueData;
     const repositoryData = required(data.repository, "GraphQL repository");
     const connection = required(repositoryData.issues, "GraphQL issue connection");
     const items: Issue[] = [];
@@ -1929,20 +1883,16 @@ export function listIssues(repository: RepositoryRef, options: ListIssuesOptions
 /** Search issues within one repository.
  * @param repository Owner and name of the repository.
  * @param query Non-empty GitHub search query for issues, which may use qualifiers such as `is:open`. `is:issue` and the repository scope are added automatically; `repo:`, `org:`, `user:`, `is:issue`, `is:pr` and `OR` are rejected.
- * @param options Sort field, order, page size and `pageToken`; `null` uses best-match order, the first page and 30 items.
+ * @param options Sort field, order, page size and `pageToken`; omit it for best-match order, the first page and 30 items.
  * @returns One page of issues with `totalCount` and `incompleteResults`; `nextPageToken` is "" on the last page.
  * @capability github.com/issues.search { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
-export function searchIssues(repository: RepositoryRef, query: string, options: SearchOptions | null = null): SearchPageResult<Issue> {
+export function searchIssues(repository: RepositoryRef, query: string, options: SearchOptions = {}): SearchPageResult<Issue> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const sort = options === null ? null : options.sort;
-    const order = options === null ? null : options.order;
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
     const context = checkedRepository(owner, name);
     check("github.com/issues.search", context);
-    return searchIssuesOrPulls(owner, name, query, { sort: sort, order: order, limit: limit, cursor: cursor }, "is:issue", false);
+    return searchIssuesOrPulls(owner, name, query, options, "is:issue", false);
 }
 
 /** Create an issue.
@@ -1961,14 +1911,14 @@ export function createIssue(repository: RepositoryRef, input: CreateIssueInput):
         labels: requestedLabels,
         milestone,
     } = input;
-    let assignees: string[] | null = null;
-    if (requestedAssignees !== null) {
+    let assignees: string[] | undefined;
+    if (requestedAssignees !== undefined) {
         const copied: string[] = [];
         for (const assignee of requestedAssignees) copied.push(assignee);
         assignees = copied;
     }
-    let labels: string[] | null = null;
-    if (requestedLabels !== null) {
+    let labels: string[] | undefined;
+    if (requestedLabels !== undefined) {
         const copied: string[] = [];
         for (const label of requestedLabels) copied.push(label);
         labels = copied;
@@ -1977,10 +1927,10 @@ export function createIssue(repository: RepositoryRef, input: CreateIssueInput):
     check("github.com/issues.create", context);
     requireText(title, "issue title");
     const fields: string[] = [jsonProperty("title", JSON.stringify(title))];
-    if (description !== null) fields.push(jsonProperty("body", JSON.stringify(description)));
-    if (assignees !== null) fields.push(jsonProperty("assignees", stringArrayJson(assignees)));
-    if (labels !== null) fields.push(jsonProperty("labels", stringArrayJson(labels)));
-    if (milestone !== null) fields.push(jsonProperty("milestone", milestone.toString()));
+    if (description !== undefined) fields.push(jsonProperty("body", JSON.stringify(description)));
+    if (assignees !== undefined) fields.push(jsonProperty("assignees", stringArrayJson(assignees)));
+    if (labels !== undefined) fields.push(jsonProperty("labels", stringArrayJson(labels)));
+    if (milestone !== undefined) fields.push(jsonProperty("milestone", milestone.toString()));
     const body = jsonObject(fields);
     return issueFrom(githubPost(repositoryPath(owner, name) + "/issues", body).json() as ApiIssue);
 }
@@ -2006,14 +1956,14 @@ export function updateIssue(repository: RepositoryRef, number: number, input: Up
         state,
         stateReason,
     } = input;
-    let assignees: string[] | null = null;
-    if (requestedAssignees !== null) {
+    let assignees: string[] | undefined;
+    if (requestedAssignees !== undefined) {
         const copied: string[] = [];
         for (const assignee of requestedAssignees) copied.push(assignee);
         assignees = copied;
     }
-    let labels: string[] | null = null;
-    if (requestedLabels !== null) {
+    let labels: string[] | undefined;
+    if (requestedLabels !== undefined) {
         const copied: string[] = [];
         for (const label of requestedLabels) copied.push(label);
         labels = copied;
@@ -2021,15 +1971,15 @@ export function updateIssue(repository: RepositoryRef, number: number, input: Up
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/issues.update", context);
     const fields: string[] = [];
-    if (title !== null) fields.push(jsonProperty("title", JSON.stringify(title)));
-    if (description !== null) fields.push(jsonProperty("body", JSON.stringify(description)));
+    if (title !== undefined) fields.push(jsonProperty("title", JSON.stringify(title)));
+    if (description !== undefined) fields.push(jsonProperty("body", JSON.stringify(description)));
     if (clearBody === true) fields.push(jsonProperty("body", "null"));
-    if (assignees !== null) fields.push(jsonProperty("assignees", stringArrayJson(assignees)));
-    if (labels !== null) fields.push(jsonProperty("labels", stringArrayJson(labels)));
-    if (milestone !== null) fields.push(jsonProperty("milestone", milestone.toString()));
+    if (assignees !== undefined) fields.push(jsonProperty("assignees", stringArrayJson(assignees)));
+    if (labels !== undefined) fields.push(jsonProperty("labels", stringArrayJson(labels)));
+    if (milestone !== undefined) fields.push(jsonProperty("milestone", milestone.toString()));
     if (clearMilestone === true) fields.push(jsonProperty("milestone", "null"));
-    if (state !== null) fields.push(jsonProperty("state", JSON.stringify(state)));
-    if (stateReason !== null) fields.push(jsonProperty("state_reason", JSON.stringify(stateReason)));
+    if (state !== undefined) fields.push(jsonProperty("state", JSON.stringify(state)));
+    if (stateReason !== undefined) fields.push(jsonProperty("state_reason", JSON.stringify(stateReason)));
     requireFields(fields);
     const body = jsonObject(fields);
     return issueFrom(githubPatch(repositoryPath(owner, name) + "/issues/" + issueNumber(number), body).json() as ApiIssue);
@@ -2038,18 +1988,16 @@ export function updateIssue(repository: RepositoryRef, number: number, input: Up
 /** List issue comments.
  * @param repository Owner and name of the repository.
  * @param number Issue number within the repository.
- * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
  * @returns One page of comments on the issue; `nextPageToken` is "" on the last page.
  * @capability github.com/issueComments.list { owner: string, repo: string, number: number, base: string }
  */
-export function listIssueComments(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<Comment> {
+export function listIssueComments(repository: RepositoryRef, number: number, options: PageOptions = {}): PageResult<Comment> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/issueComments.list", context);
-    return listCommentsUnchecked(owner, name, number, { limit: limit, cursor: cursor });
+    return listCommentsUnchecked(owner, name, number, options);
 }
 
 /** Add an issue comment.
@@ -2069,18 +2017,16 @@ export function addIssueComment(repository: RepositoryRef, number: number, body:
 
 /** List labels in a repository.
  * @param repository Owner and name of the repository.
- * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
  * @returns One page of labels defined in the repository; `nextPageToken` is "" on the last page.
  * @capability github.com/labels.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
-export function listLabels(repository: RepositoryRef, options: PageOptions | null = null): PageResult<Label> {
+export function listLabels(repository: RepositoryRef, options: PageOptions = {}): PageResult<Label> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
     const context = checkedRepository(owner, name);
     check("github.com/labels.list", context);
-    const response = githubGet(repositoryPath(owner, name) + "/labels", pageQuery({ limit: limit, cursor: cursor }));
+    const response = githubGet(repositoryPath(owner, name) + "/labels", pageQuery(options));
     const data = response.json() as ApiLabel[];
     const items: Label[] = [];
     for (const item of data) items.push(labelFrom(item));
@@ -2103,23 +2049,17 @@ export function getPullRequest(repository: RepositoryRef, number: number): PullR
 
 /** List pull requests.
  * @param repository Owner and name of the repository.
- * @param options State, head and base filters, sorting and pagination; `null` lists open pull requests, 30 per page.
+ * @param options State, head and base filters, sorting and pagination; omit it to list open pull requests, 30 per page.
  * @returns One page of pull requests; `nextPageToken` is "" on the last page.
  * @capability github.com/pulls.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
-export function listPullRequests(repository: RepositoryRef, options: ListPullRequestsOptions | null = null): PageResult<PullRequest> {
+export function listPullRequests(repository: RepositoryRef, options: ListPullRequestsOptions = {}): PageResult<PullRequest> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const state = options === null ? null : options.state;
-    const head = options === null ? null : options.head;
-    const base = options === null ? null : options.base;
-    const sort = options === null ? null : options.sort;
-    const direction = options === null ? null : options.direction;
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
+    const { state, head, base, sort, direction } = options;
     const context = checkedRepository(owner, name);
     check("github.com/pulls.list", context);
-    const query = pageQuery({ limit: limit, cursor: cursor });
+    const query = pageQuery(options);
     putQuery(query, "state", state);
     putQuery(query, "head", head);
     putQuery(query, "base", base);
@@ -2146,8 +2086,10 @@ export function getPullRequestReactions(repository: RepositoryRef, number: numbe
     const response = githubGetNullable(repositoryPath(owner, name) + "/issues/" + issueNumber(number));
     if (response === null) return null;
     const data = response.json() as ApiIssue;
-    if (data.pull_request == null) throw validationError("wrong_resource_type", "GitHub number identifies an issue; use getIssue");
-    return reactionsFrom(data.reactions ?? null);
+    if (data.pull_request === null || data.pull_request === undefined) {
+        throw validationError("wrong_resource_type", "GitHub number identifies an issue; use getIssue");
+    }
+    return reactionsFrom(data.reactions);
 }
 
 /** Search issue metadata across repositories. Requires a separate, broader grant.
@@ -2156,14 +2098,9 @@ export function getPullRequestReactions(repository: RepositoryRef, number: numbe
  * @returns One page with repository identity, reactions, pagination and partial-result flags.
  * @capability github.com/issues.searchAcrossRepositories { query: string, author: string, createdSince: string, createdUntil: string }
  */
-export function searchIssuesAcrossRepositories(query: string, options: ResearchSearchOptions | null = null): ResearchPageResult<IssueSearchHit> {
-    const owned: ResearchOptionsSnapshot = {
-        author: options === null ? null : (options.author ?? null), createdSince: options === null ? null : (options.createdSince ?? null),
-        createdUntil: options === null ? null : (options.createdUntil ?? null), sort: options === null ? null : (options.sort ?? null),
-        order: options === null ? null : (options.order ?? null), limit: options === null ? null : (options.limit ?? null),
-        pageToken: options === null ? null : (options.pageToken ?? null),
-    };
-    const request = researchRequest(query, owned, "is:issue");
+export function searchIssuesAcrossRepositories(query: string, options: ResearchSearchOptions = {}): ResearchPageResult<IssueSearchHit> {
+    const { author, createdSince, createdUntil, sort, order, limit, pageToken } = options;
+    const request = researchRequest(query, { author, createdSince, createdUntil, sort, order, limit, pageToken }, "is:issue");
     check("github.com/issues.searchAcrossRepositories", {
         query: request.query, author: request.author, createdSince: request.createdSince, createdUntil: request.createdUntil,
     });
@@ -2171,7 +2108,9 @@ export function searchIssuesAcrossRepositories(query: string, options: ResearchS
     const data = researchData(response);
     const items: IssueSearchHit[] = [];
     for (const item of array(data.items)) {
-        if (item.pull_request != null) throw validationError("invalid_response", "Issue search returned a pull request");
+        if (item.pull_request !== null && item.pull_request !== undefined) {
+            throw validationError("invalid_response", "Issue search returned a pull request");
+        }
         items.push({ repository: searchRepository(item), issue: issueFrom(item) });
     }
     return researchPage(response, items, data, request.search);
@@ -2183,14 +2122,9 @@ export function searchIssuesAcrossRepositories(query: string, options: ResearchS
  * @returns One metadata page; select hits for explicit detail enrichment.
  * @capability github.com/pulls.searchAcrossRepositories { query: string, author: string, createdSince: string, createdUntil: string }
  */
-export function searchPullRequestsAcrossRepositories(query: string, options: ResearchSearchOptions | null = null): ResearchPageResult<PullRequestSearchHit> {
-    const owned: ResearchOptionsSnapshot = {
-        author: options === null ? null : (options.author ?? null), createdSince: options === null ? null : (options.createdSince ?? null),
-        createdUntil: options === null ? null : (options.createdUntil ?? null), sort: options === null ? null : (options.sort ?? null),
-        order: options === null ? null : (options.order ?? null), limit: options === null ? null : (options.limit ?? null),
-        pageToken: options === null ? null : (options.pageToken ?? null),
-    };
-    const request = researchRequest(query, owned, "is:pr");
+export function searchPullRequestsAcrossRepositories(query: string, options: ResearchSearchOptions = {}): ResearchPageResult<PullRequestSearchHit> {
+    const { author, createdSince, createdUntil, sort, order, limit, pageToken } = options;
+    const request = researchRequest(query, { author, createdSince, createdUntil, sort, order, limit, pageToken }, "is:pr");
     check("github.com/pulls.searchAcrossRepositories", {
         query: request.query, author: request.author, createdSince: request.createdSince, createdUntil: request.createdUntil,
     });
@@ -2204,16 +2138,11 @@ export function searchPullRequestsAcrossRepositories(query: string, options: Res
  * @returns One repository-restricted metadata page without per-hit HTTP requests.
  * @capability github.com/pulls.searchSummaries { owner: string, repo: string }
  */
-export function searchPullRequestSummaries(repository: RepositoryRef, query: string, options: ResearchSearchOptions | null = null): ResearchPageResult<PullRequestSearchHit> {
+export function searchPullRequestSummaries(repository: RepositoryRef, query: string, options: ResearchSearchOptions = {}): ResearchPageResult<PullRequestSearchHit> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const owned: ResearchOptionsSnapshot = {
-        author: options === null ? null : (options.author ?? null), createdSince: options === null ? null : (options.createdSince ?? null),
-        createdUntil: options === null ? null : (options.createdUntil ?? null), sort: options === null ? null : (options.sort ?? null),
-        order: options === null ? null : (options.order ?? null), limit: options === null ? null : (options.limit ?? null),
-        pageToken: options === null ? null : (options.pageToken ?? null),
-    };
-    const request = researchRequest(query, owned, "is:pr");
+    const { author, createdSince, createdUntil, sort, order, limit, pageToken } = options;
+    const request = researchRequest(query, { author, createdSince, createdUntil, sort, order, limit, pageToken }, "is:pr");
     // Keep the same scope parser as the existing repository-restricted endpoints.
     const scoped = scopedSearch(query, owner, name, "");
     request.query = scoped + request.query.slice(query.length);
@@ -2224,20 +2153,16 @@ export function searchPullRequestSummaries(repository: RepositoryRef, query: str
 /** Search pull requests within one repository.
  * @param repository Owner and name of the repository.
  * @param query Non-empty GitHub search query for pull requests, which may use qualifiers such as `is:open`. `is:pr` and the repository scope are added automatically; `repo:`, `org:`, `user:`, `is:issue`, `is:pr` and `OR` are rejected.
- * @param options Sort field, order, page size and `pageToken`; `null` uses best-match order, the first page and 30 items.
+ * @param options Sort field, order, page size and `pageToken`; omit it for best-match order, the first page and 30 items.
  * @returns One page of pull requests with `totalCount` and `incompleteResults`; `nextPageToken` is "" on the last page.
  * @capability github.com/pulls.search { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
  */
-export function searchPullRequests(repository: RepositoryRef, query: string, options: SearchOptions | null = null): SearchPageResult<PullRequest> {
+export function searchPullRequests(repository: RepositoryRef, query: string, options: SearchOptions = {}): SearchPageResult<PullRequest> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const sort = options === null ? null : options.sort;
-    const order = options === null ? null : options.order;
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
     const context = checkedRepository(owner, name);
     check("github.com/pulls.search", context);
-    const issues = searchIssuesOrPulls(owner, name, query, { sort: sort, order: order, limit: limit, cursor: cursor }, "is:pr", true);
+    const issues = searchIssuesOrPulls(owner, name, query, options, "is:pr", true);
     const items: PullRequest[] = [];
     for (const item of issues.items) {
         const pull = getPullRequestUnchecked(owner, name, item.number);
@@ -2274,9 +2199,9 @@ export function createPullRequest(repository: RepositoryRef, input: CreatePullRe
         jsonProperty("head", JSON.stringify(head)),
         jsonProperty("base", JSON.stringify(base)),
     ];
-    if (description !== null) fields.push(jsonProperty("body", JSON.stringify(description)));
-    if (draft !== null) fields.push(jsonProperty("draft", booleanJson(draft)));
-    if (maintainerCanModify !== null) {
+    if (description !== undefined) fields.push(jsonProperty("body", JSON.stringify(description)));
+    if (draft !== undefined) fields.push(jsonProperty("draft", booleanJson(draft)));
+    if (maintainerCanModify !== undefined) {
         fields.push(jsonProperty("maintainer_can_modify", booleanJson(maintainerCanModify)));
     }
     const body = jsonObject(fields);
@@ -2296,15 +2221,15 @@ export function updatePullRequest(repository: RepositoryRef, number: number, inp
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
     const { title, body: description, clearBody, base, state, maintainerCanModify } = input;
     const context = repositoryNumberContext(owner, name, number);
-    context.base = base;
+    context.base = base ?? null;
     check("github.com/pulls.update", context);
     const fields: string[] = [];
-    if (title !== null) fields.push(jsonProperty("title", JSON.stringify(title)));
-    if (description !== null) fields.push(jsonProperty("body", JSON.stringify(description)));
+    if (title !== undefined) fields.push(jsonProperty("title", JSON.stringify(title)));
+    if (description !== undefined) fields.push(jsonProperty("body", JSON.stringify(description)));
     if (clearBody === true) fields.push(jsonProperty("body", "null"));
-    if (base !== null) fields.push(jsonProperty("base", JSON.stringify(base)));
-    if (state !== null) fields.push(jsonProperty("state", JSON.stringify(state)));
-    if (maintainerCanModify !== null) {
+    if (base !== undefined) fields.push(jsonProperty("base", JSON.stringify(base)));
+    if (state !== undefined) fields.push(jsonProperty("state", JSON.stringify(state)));
+    if (maintainerCanModify !== undefined) {
         fields.push(jsonProperty("maintainer_can_modify", booleanJson(maintainerCanModify)));
     }
     requireFields(fields);
@@ -2315,24 +2240,21 @@ export function updatePullRequest(repository: RepositoryRef, number: number, inp
 /** Merge a pull request without force.
  * @param repository Owner and name of the repository.
  * @param number Pull request number within the repository.
- * @param input Merge `method`, commit title and message and `expectedHeadSha`; `null` uses GitHub's defaults.
+ * @param input Merge `method`, commit title and message and `expectedHeadSha`; omit it for GitHub's defaults.
  * @returns The merge result with `merged`, GitHub's `message` and the merge commit `sha`.
  * @capability github.com/pulls.merge { owner: string, repo: string, number: number, base: string }
  */
-export function mergePullRequest(repository: RepositoryRef, number: number, input: MergePullRequestInput | null = null): MergeResult {
+export function mergePullRequest(repository: RepositoryRef, number: number, input: MergePullRequestInput = {}): MergeResult {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const commitTitle = input === null ? null : input.commitTitle;
-    const commitMessage = input === null ? null : input.commitMessage;
-    const method = input === null ? null : input.method;
-    const expectedHeadSha = input === null ? null : input.expectedHeadSha;
+    const { commitTitle, commitMessage, method, expectedHeadSha } = input;
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pulls.merge", context);
     const fields: string[] = [];
-    if (commitTitle !== null) fields.push(jsonProperty("commit_title", JSON.stringify(commitTitle)));
-    if (commitMessage !== null) fields.push(jsonProperty("commit_message", JSON.stringify(commitMessage)));
-    if (method !== null) fields.push(jsonProperty("merge_method", JSON.stringify(method)));
-    if (expectedHeadSha !== null) fields.push(jsonProperty("sha", JSON.stringify(expectedHeadSha)));
+    if (commitTitle !== undefined) fields.push(jsonProperty("commit_title", JSON.stringify(commitTitle)));
+    if (commitMessage !== undefined) fields.push(jsonProperty("commit_message", JSON.stringify(commitMessage)));
+    if (method !== undefined) fields.push(jsonProperty("merge_method", JSON.stringify(method)));
+    if (expectedHeadSha !== undefined) fields.push(jsonProperty("sha", JSON.stringify(expectedHeadSha)));
     const body = jsonObject(fields);
     const data = githubPut(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/merge", body).json() as ApiMergeResult;
     return { merged: data.merged === true, message: str(data.message), sha: str(data.sha) };
@@ -2350,24 +2272,22 @@ export function getPullRequestDiff(repository: RepositoryRef, number: number): s
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pulls.diff", context);
     const path = repositoryPath(owner, name) + "/pulls/" + issueNumber(number);
-    return githubGet(path, null, "application/vnd.github.diff").body;
+    return githubGet(path, undefined, "application/vnd.github.diff").body;
 }
 
 /** List files changed by a pull request.
  * @param repository Owner and name of the repository.
  * @param number Pull request number within the repository.
- * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
  * @returns One page of files changed by the pull request; `nextPageToken` is "" on the last page.
  * @capability github.com/pullFiles.list { owner: string, repo: string, number: number, base: string }
  */
-export function listPullRequestFiles(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<PullRequestFile> {
+export function listPullRequestFiles(repository: RepositoryRef, number: number, options: PageOptions = {}): PageResult<PullRequestFile> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pullFiles.list", context);
-    const response = githubGet(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/files", pageQuery({ limit: limit, cursor: cursor }));
+    const response = githubGet(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/files", pageQuery(options));
     const data = response.json() as ApiPullFile[];
     const items: PullRequestFile[] = [];
     for (const item of data) items.push(pullFileFrom(item));
@@ -2377,18 +2297,16 @@ export function listPullRequestFiles(repository: RepositoryRef, number: number, 
 /** List pull request reviews.
  * @param repository Owner and name of the repository.
  * @param number Pull request number within the repository.
- * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
  * @returns One page of reviews of the pull request; `nextPageToken` is "" on the last page.
  * @capability github.com/pullReviews.list { owner: string, repo: string, number: number, base: string }
  */
-export function listPullRequestReviews(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<PullRequestReview> {
+export function listPullRequestReviews(repository: RepositoryRef, number: number, options: PageOptions = {}): PageResult<PullRequestReview> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pullReviews.list", context);
-    const response = githubGet(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/reviews", pageQuery({ limit: limit, cursor: cursor }));
+    const response = githubGet(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/reviews", pageQuery(options));
     const data = response.json() as ApiReview[];
     const items: PullRequestReview[] = [];
     for (const item of data) items.push(reviewFrom(item));
@@ -2408,9 +2326,9 @@ export function createPullRequestReview(repository: RepositoryRef, number: numbe
     const { body: summary, event, commitId, comments } = input;
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pullReviews.create", context);
-    if (event === "REQUEST_CHANGES") requireText(summary === null ? "" : summary, "review body");
+    if (event === "REQUEST_CHANGES") requireText(summary ?? "", "review body");
     const serializedComments: string[] = [];
-    if (comments !== null) {
+    if (comments !== undefined) {
         for (const item of comments) {
             validateReviewComment(item);
             const commentFields: string[] = [
@@ -2419,15 +2337,15 @@ export function createPullRequestReview(repository: RepositoryRef, number: numbe
                 jsonProperty("line", item.line.toString()),
                 jsonProperty("side", JSON.stringify(item.side)),
             ];
-            if (item.startLine !== null) commentFields.push(jsonProperty("start_line", item.startLine.toString()));
-            if (item.startSide !== null) commentFields.push(jsonProperty("start_side", JSON.stringify(item.startSide)));
+            if (item.startLine !== undefined) commentFields.push(jsonProperty("start_line", item.startLine.toString()));
+            if (item.startSide !== undefined) commentFields.push(jsonProperty("start_side", JSON.stringify(item.startSide)));
             serializedComments.push(jsonObject(commentFields));
         }
     }
     const fields: string[] = [jsonProperty("event", JSON.stringify(event))];
-    if (summary !== null) fields.push(jsonProperty("body", JSON.stringify(summary)));
-    if (commitId !== null) fields.push(jsonProperty("commit_id", JSON.stringify(commitId)));
-    if (comments !== null) fields.push(jsonProperty("comments", "[" + serializedComments.join(",") + "]"));
+    if (summary !== undefined) fields.push(jsonProperty("body", JSON.stringify(summary)));
+    if (commitId !== undefined) fields.push(jsonProperty("commit_id", JSON.stringify(commitId)));
+    if (comments !== undefined) fields.push(jsonProperty("comments", "[" + serializedComments.join(",") + "]"));
     const body = jsonObject(fields);
     return reviewFrom(githubPost(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/reviews", body).json() as ApiReview);
 }
@@ -2435,18 +2353,16 @@ export function createPullRequestReview(repository: RepositoryRef, number: numbe
 /** List general pull request comments.
  * @param repository Owner and name of the repository.
  * @param number Pull request number within the repository.
- * @param options Page size and `pageToken`; `null` uses the API defaults (first page, 30 items).
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
  * @returns One page of general (non-inline) comments on the pull request; `nextPageToken` is "" on the last page.
  * @capability github.com/pullComments.list { owner: string, repo: string, number: number, base: string }
  */
-export function listPullRequestComments(repository: RepositoryRef, number: number, options: PageOptions | null = null): PageResult<Comment> {
+export function listPullRequestComments(repository: RepositoryRef, number: number, options: PageOptions = {}): PageResult<Comment> {
     const { owner: requestedOwner, name: requestedName } = repository;
     const { owner, name } = canonicalRepository(requestedOwner, requestedName);
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.pageToken;
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pullComments.list", context);
-    return listCommentsUnchecked(owner, name, number, { limit: limit, cursor: cursor });
+    return listCommentsUnchecked(owner, name, number, options);
 }
 
 /** Add a general pull request comment.
@@ -2473,9 +2389,9 @@ function listCommentsUnchecked(
     owner: string,
     name: string,
     number: number,
-    page: PageRequest,
+    options: PageOptions,
 ): PageResult<Comment> {
-    const response = githubGet(repositoryPath(owner, name) + "/issues/" + issueNumber(number) + "/comments", pageQuery(page));
+    const response = githubGet(repositoryPath(owner, name) + "/issues/" + issueNumber(number) + "/comments", pageQuery(options));
     const data = response.json() as ApiComment[];
     const items: Comment[] = [];
     for (const item of data) items.push(commentFrom(item));
@@ -2489,32 +2405,19 @@ function addCommentUnchecked(owner: string, name: string, number: number, body: 
     );
 }
 
-interface ResearchOptionsSnapshot {
-    author: string | null;
-    createdSince: string | null;
-    createdUntil: string | null;
-    sort: string | null;
-    order: "asc" | "desc" | null;
-    limit: number | null;
-    pageToken: string | null;
-}
-
 interface ResearchRequest {
     query: string;
     author: string | null;
     createdSince: string | null;
     createdUntil: string | null;
-    search: SearchRequest;
+    search: SearchOptions;
 }
 
-function researchRequest(query: string, options: ResearchOptionsSnapshot, kind: string): ResearchRequest {
-    const author = options === null ? null : (options.author ?? null);
-    const since = options === null ? null : (options.createdSince ?? null);
-    const until = options === null ? null : (options.createdUntil ?? null);
-    const search: SearchRequest = {
-        sort: options === null ? null : (options.sort ?? null), order: options === null ? null : (options.order ?? null),
-        limit: options === null ? null : (options.limit ?? null), cursor: options === null ? null : (options.pageToken ?? null),
-    };
+// Callers read the caller's options into consts and pass a fresh object: what
+// reaches `check()` must be a value the caller can no longer change.
+function researchRequest(query: string, options: ResearchSearchOptions, kind: string): ResearchRequest {
+    const { author, createdSince: since, createdUntil: until, sort, order, limit: requestedLimit, pageToken: requestedToken } = options;
+    const search: SearchOptions = { sort: sort, order: order, limit: requestedLimit, pageToken: requestedToken };
     requireText(query, "search query");
     const syntax = searchSyntax(query);
     if (SEARCH_KIND.test(syntax) || SEARCH_OR.test(syntax) || /author:|created:/.test(syntax)) {
@@ -2522,7 +2425,7 @@ function researchRequest(query: string, options: ResearchOptionsSnapshot, kind: 
     }
     let value = query + " " + kind;
     let normalizedAuthor: string | null = null;
-    if (author !== null) {
+    if (author !== undefined) {
         if (!/^(app\/)?[A-Za-z0-9_-]+(\[bot\])?$/.test(author)) throw validationError("invalid_author", "author must be one GitHub login or app/login");
         normalizedAuthor = author.toLowerCase();
         value += " author:" + normalizedAuthor;
@@ -2541,16 +2444,16 @@ function researchRequest(query: string, options: ResearchOptionsSnapshot, kind: 
         value += " created:<=" + createdUntil;
     }
     const limit = pageLimit(search.limit);
-    const cursor = pageToken(search.cursor, true);
-    const page = cursor === null ? 1 : Number(cursor);
+    const cursor = pageToken(search.pageToken, true);
+    const page = cursor === undefined ? 1 : Number(cursor);
     if (!Number.isInteger(page) || page < 1 || (page - 1) * limit >= 1000) {
         throw validationError("invalid_page_token", "search page must fit within GitHub's 1,000-result ceiling");
     }
     return { query: value, author: normalizedAuthor, createdSince: createdSince, createdUntil: createdUntil, search: search };
 }
 
-function researchDate(value: string | null): string | null {
-    if (value === null) return null;
+function researchDate(value: string | undefined): string | null {
+    if (value === undefined) return null;
     if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) throw validationError("invalid_date_window", "search dates must use YYYY-MM-DD");
     const year = Number(value.slice(0, 4));
     const month = Number(value.slice(5, 7));
@@ -2578,7 +2481,9 @@ function pullSummaryPage(request: ResearchRequest): ResearchPageResult<PullReque
     const data = researchData(response);
     const items: PullRequestSearchHit[] = [];
     for (const item of array(data.items)) {
-        if (item.pull_request == null) throw validationError("invalid_response", "Pull-request search returned an issue");
+        if (item.pull_request === null || item.pull_request === undefined) {
+            throw validationError("invalid_response", "Pull-request search returned an issue");
+        }
         const issue = issueFrom(item);
         const summary: PullRequestSummary = {
             id: issue.id, number: issue.number, title: issue.title, body: issue.body, state: issue.state,
@@ -2594,14 +2499,14 @@ function pullSummaryPage(request: ResearchRequest): ResearchPageResult<PullReque
 
 function researchData(response: Response): ApiSearchIssues {
     const data = response.json() as ApiSearchIssues;
-    if (data.total_count == null || !Number.isSafeInteger(data.total_count) || data.total_count < 0
+    if (data.total_count === null || data.total_count === undefined || !Number.isSafeInteger(data.total_count) || data.total_count < 0
         || typeof data.incomplete_results !== "boolean" || !Array.isArray(data.items)) {
         throw validationError("invalid_response", "GitHub search must include items, total_count and incomplete_results");
     }
     return data;
 }
 
-function researchPage<T>(response: Response, items: T[], data: ApiSearchIssues, search: SearchRequest): ResearchPageResult<T> {
+function researchPage<T>(response: Response, items: T[], data: ApiSearchIssues, search: SearchOptions): ResearchPageResult<T> {
     const page = searchPageFrom(response, items, data.total_count, data.incomplete_results);
     const limit = pageLimit(search.limit);
     let next = page.nextPageToken;
@@ -2616,16 +2521,16 @@ function searchIssuesOrPulls(
     owner: string,
     name: string,
     query: string,
-    search: SearchRequest,
+    options: SearchOptions,
     kind: string,
     allowPulls: boolean,
 ): SearchPageResult<Issue> {
     const scoped = scopedSearch(query, owner, name, kind);
-    const response = githubGet("/search/issues", searchQuery(scoped, search));
+    const response = githubGet("/search/issues", searchQuery(scoped, options));
     const data = response.json() as ApiSearchIssues;
     const items: Issue[] = [];
     for (const item of array(data.items)) {
-        if (allowPulls || item.pull_request === null) items.push(issueFrom(item));
+        if (allowPulls || (item.pull_request === null || item.pull_request === undefined)) items.push(issueFrom(item));
     }
     return searchPageFrom(response, items, data.total_count, data.incomplete_results);
 }
@@ -2634,16 +2539,16 @@ function readFileUnchecked(
     owner: string,
     name: string,
     path: string,
-    request: FileReadRequest,
+    options: FileReadOptions,
 ): RepositoryFile | null {
     const cleanPath = repositoryFilePath(path);
     const query = new Map<string, string>();
-    putQuery(query, "ref", request.ref);
+    putQuery(query, "ref", options.ref);
     const response = githubGetNullable(repositoryPath(owner, name) + "/contents/" + encodedFilePath(cleanPath), query);
     if (response === null) return null;
     const data = response.json() as ApiContent;
     if (str(data.type) !== "file") throw validationError("not_a_file", cleanPath + " is not a repository file");
-    const maxBytes = fileLimit(request.maxBytes);
+    const maxBytes = fileLimit(options.maxBytes);
     const size = num(data.size);
     if (size > maxBytes) throw validationError("file_too_large", "GitHub file exceeds the " + maxBytes.toString() + " byte limit");
     let content = str(data.content);
@@ -2654,42 +2559,42 @@ function readFileUnchecked(
     }
     const bytes = decodeBase64(content);
     if (bytes.length > maxBytes) throw validationError("file_too_large", "Decoded GitHub file exceeds the configured limit");
-    return { path: str(data.path), sha: str(data.sha), size: size, htmlUrl: nullableString(data.html_url), bytes: bytes };
+    return { path: str(data.path), sha: str(data.sha), size: size, htmlUrl: data.html_url ?? null, bytes: bytes };
 }
 
 function githubGet(
     path: string,
-    query: Map<string, string> | null = null,
+    query?: Map<string, string>,
     accept: string = "application/vnd.github+json",
 ): Response {
-    const suffix = query === null ? "" : querySuffix(query);
+    const suffix = query === undefined ? "" : querySuffix(query);
     return requireOk(get(GITHUB_API + path.slice(1) + suffix, authHeaders(accept)));
 }
 
-function githubGetNullable(path: string, query: Map<string, string> | null = null): Response | null {
-    const suffix = query === null ? "" : querySuffix(query);
+function githubGetNullable(path: string, query?: Map<string, string>): Response | null {
+    const suffix = query === undefined ? "" : querySuffix(query);
     const response = get(GITHUB_API + path.slice(1) + suffix, authHeaders());
     if (response.status === 404) return null;
     return requireOk(response);
 }
 
-function githubPost(path: string, body: string | Uint8Array | {} | unknown[] | null): Response {
+function githubPost(path: string, body: string | {}): Response {
     return requireOk(post(GITHUB_API + path.slice(1), body, authHeaders()));
 }
 
-function githubPostGraphQl(body: string | Uint8Array | {} | unknown[] | null): Response {
+function githubPostGraphQl(body: string): Response {
     return requireOk(post(GRAPHQL_API, body, authHeaders()));
 }
 
-function githubPut(path: string, body: string | Uint8Array | {} | unknown[] | null): Response {
+function githubPut(path: string, body: string): Response {
     return requireOk(put(GITHUB_API + path.slice(1), body, authHeaders()));
 }
 
-function githubPatch(path: string, body: string | Uint8Array | {} | unknown[] | null): Response {
+function githubPatch(path: string, body: string): Response {
     return requireOk(githubPatchRaw(path, body));
 }
 
-function githubPatchRaw(path: string, body: string | Uint8Array | {} | unknown[] | null): Response {
+function githubPatchRaw(path: string, body: string | {}): Response {
     return patch(GITHUB_API + path.slice(1), body, authHeaders());
 }
 
@@ -2699,7 +2604,7 @@ function githubDelete(path: string): Response {
 
 function authHeaders(accept: string = "application/vnd.github+json"): Map<string, string> {
     const token = secrets.get("GITHUB_TOKEN");
-    if (token === null) throw validationError("missing_token", "GITHUB_TOKEN is not bound");
+    if (token === undefined) throw validationError("missing_token", "GITHUB_TOKEN is not bound");
     const headers = new Map<string, string>();
     headers.set("Authorization", "Bearer " + token);
     headers.set("Accept", accept);
@@ -2723,7 +2628,7 @@ function githubError(response: Response, overrideCode: string = "", overrideMess
     const errors: string[] = [];
     if (response.body.startsWith("{")) {
         const envelope = response.json() as ApiError;
-        if (overrideMessage.length === 0 && envelope.message !== null) message = envelope.message;
+        if (overrideMessage.length === 0) message = envelope.message ?? message;
         documentationUrl = str(envelope.documentation_url);
         for (const rawDetail of array(envelope.errors)) {
             let text = "";
@@ -2734,8 +2639,8 @@ function githubError(response: Response, overrideCode: string = "", overrideMess
                 text = str(detail.message);
                 if (text.length === 0) {
                     text = str(detail.resource);
-                    if (detail.field !== null) text += "." + detail.field;
-                    if (detail.code !== null) text += ": " + detail.code;
+                    if (detail.field) text += "." + detail.field;
+                    if (detail.code) text += ": " + detail.code;
                 }
             }
             if (text.length > 0) errors.push(text);
@@ -2778,19 +2683,19 @@ function toRfc3339(value: string, param: string): string {
     }
 }
 
-function pageQuery(request: PageRequest): Map<string, string> {
+function pageQuery(options: PageOptions): Map<string, string> {
     const query = new Map<string, string>();
-    query.set("per_page", pageLimit(request.limit).toString());
-    const page = pageToken(request.cursor, true);
-    if (page !== null) query.set("page", page);
+    query.set("per_page", pageLimit(options.limit).toString());
+    const page = pageToken(options.pageToken, true);
+    if (page !== undefined) query.set("page", page);
     return query;
 }
 
-function searchQuery(value: string, search: SearchRequest): Map<string, string> {
-    const query = pageQuery({ limit: search.limit, cursor: search.cursor });
+function searchQuery(value: string, options: SearchOptions): Map<string, string> {
+    const query = pageQuery(options);
     query.set("q", value);
-    putQuery(query, "sort", search.sort);
-    putQuery(query, "order", search.order);
+    putQuery(query, "sort", options.sort);
+    putQuery(query, "order", options.order);
     return query;
 }
 
@@ -2802,8 +2707,8 @@ function pageFrom<T>(response: Response, items: T[]): PageResult<T> {
 function searchPageFrom<T>(
     response: Response,
     items: T[],
-    totalCount: number | null,
-    incomplete: boolean | null,
+    totalCount?: number | null,
+    incomplete?: boolean | null,
 ): SearchPageResult<T> {
     const next = nextPageToken(response);
     return {
@@ -2834,21 +2739,21 @@ function nextPageToken(response: Response): string {
         if (amp >= 0 && amp < end) end = amp;
         if (close >= 0 && close < end) end = close;
         const cursor = part.slice(valueStart, end);
-        return pageToken(cursor, true) === null ? "" : cursor;
+        return pageToken(cursor, true) === undefined ? "" : cursor;
     }
     return "";
 }
 
-function pageLimit(value: number | null): number {
-    const limit = value === null ? DEFAULT_LIMIT : value;
+function pageLimit(value: number | undefined): number {
+    const limit = value ?? DEFAULT_LIMIT;
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
         throw validationError("invalid_page_size", "limit must be between 1 and " + MAX_LIMIT.toString());
     }
     return limit;
 }
 
-function pageToken(value: string | null, numeric: boolean): string | null {
-    if (value === null || value.length === 0) return null;
+function pageToken(value: string | undefined, numeric: boolean): string | undefined {
+    if (value === undefined || value.length === 0) return undefined;
     if (numeric) {
         for (let i = 0; i < value.length; i += 1) {
             const code = value.charCodeAt(i);
@@ -2917,7 +2822,7 @@ function checkedRepository(owner: string, name: string): RepositoryCapabilityCon
     if (!REPOSITORY_NAME.test(name) || name === "." || name === "..") {
         throw validationError("invalid_input", "repository name may contain only letters, digits, hyphens, underscores, and periods, and cannot be . or ..");
     }
-    return { owner: owner.toLowerCase(), repo: name.toLowerCase() };
+    return { owner: owner.toLowerCase(), repo: name.toLowerCase(), branch: null, path: null, ref: null, treeSha: null, head: null, base: null };
 }
 
 function repositoryContext(owner: string, name: string, field: string, value: string): RepositoryCapabilityContext {
@@ -2932,7 +2837,7 @@ function repositoryContext(owner: string, name: string, field: string, value: st
 function repositoryNumberContext(owner: string, name: string, number: number): RepositoryNumberCapabilityContext {
     requireIssueNumber(number);
     const context = checkedRepository(owner, name);
-    return { owner: context.owner, repo: context.repo, number: number };
+    return { owner: context.owner, repo: context.repo, number: number, base: null };
 }
 
 function repositoryPath(owner: string, name: string): string {
@@ -2942,8 +2847,8 @@ function repositoryPath(owner: string, name: string): string {
 
 // The ref a contents request names. An empty ref is not sent, so it is the default branch, which
 // the check reports as null.
-function namedRef(ref: string | null): string | null {
-    return ref === null || ref.length === 0 ? null : ref;
+function namedRef(ref: string | undefined): string | null {
+    return ref === undefined || ref.length === 0 ? null : ref;
 }
 
 // One path segment. `.` and `..` are refused: a URL parser reads them, escaped or not, as the
@@ -3046,14 +2951,14 @@ function validateChanges(changes: CommitFileChange[]): void {
         if (paths.has(path)) throw validationError("duplicate_path", "Commit contains duplicate path " + path);
         paths.set(path, true);
         if (change.type === "write") {
-            if (change.content === null) throw validationError("missing_content", "Write change for " + path + " requires content");
+            if (change.content === undefined) throw validationError("missing_content", "Write change for " + path + " requires content");
             if (typeof change.content === "string") {
                 bytes += new TextEncoder().encode(change.content).length;
             } else {
                 bytes += change.content.length;
             }
         } else if (change.type === "delete") {
-            if (change.content !== null) {
+            if (change.content !== undefined) {
                 throw validationError("unexpected_content", "Delete change for " + path + " must not include content");
             }
         } else {
@@ -3071,18 +2976,18 @@ function validateReviewComment(comment: ReviewCommentInput): void {
     if (comment.line < 1 || comment.line !== Math.floor(comment.line)) {
         throw validationError("invalid_line", "Review comment line must be a positive integer");
     }
-    if (comment.startLine !== null) {
+    if (comment.startLine !== undefined) {
         if (comment.startLine < 1 || comment.startLine > comment.line || comment.startLine !== Math.floor(comment.startLine)) {
             throw validationError("invalid_line", "Review comment startLine must be a positive integer no greater than line");
         }
-        if (comment.startSide === null) {
+        if (comment.startSide === undefined) {
             throw validationError("missing_start_side", "Review comment startSide is required with startLine");
         }
     }
 }
 
-function fileLimit(value: number | null): number {
-    const limit = value === null ? MAX_FILE_BYTES : value;
+function fileLimit(value: number | undefined): number {
+    const limit = value ?? MAX_FILE_BYTES;
     if (limit < 1 || limit > MAX_FILE_BYTES || limit !== Math.floor(limit)) {
         throw validationError("invalid_file_limit", "maxBytes must be an integer between 1 and " + MAX_FILE_BYTES.toString());
     }
@@ -3098,60 +3003,51 @@ function querySuffix(query: Map<string, string>): string {
     return encoded.length === 0 ? "" : "?" + encoded;
 }
 
-function putQuery(query: Map<string, string>, key: string, value: string | null): void {
-    if (value !== null && value.length > 0) query.set(key, value);
+function putQuery(query: Map<string, string>, key: string, value: string | undefined): void {
+    if (value !== undefined && value.length > 0) query.set(key, value);
 }
 
 function header(response: Response, name: string): string {
-    const value = response.headers.get(name);
-    return value === null ? "" : value;
+    return response.headers.get(name) ?? "";
 }
 
 function nullableHeader(response: Response, name: string): string | null {
-    return response.headers.get(name);
+    return response.headers.get(name) ?? null;
 }
 
 function numberHeader(response: Response, name: string): number | null {
     const value = response.headers.get(name);
-    if (value === null || value.length === 0) return null;
+    if (value === undefined || value.length === 0) return null;
     const parsed = Number(value);
     return isNaN(parsed) ? null : parsed;
 }
 
-function str(value: string | null): string {
-    return value === null ? "" : value;
+function str(value?: string | null): string {
+    return value ?? "";
 }
 
-function num(value: number | null): number {
-    return value === null ? 0 : value;
+function num(value?: number | null): number {
+    return value ?? 0;
 }
 
-function nullableString(value: string | null): string | null {
+function array<T>(value?: T[] | null): T[] {
+    const empty: T[] = [];
+    return value ?? empty;
+}
+
+function required<T>(value: T | null | undefined, label: string): T {
+    if (value === null || value === undefined) throw validationError("invalid_response", "GitHub response is missing " + label);
     return value;
 }
 
-function nullableNumber(value: number | null): number | null {
-    return value;
-}
-
-function array<T>(value: T[] | null): T[] {
-    return value === null ? [] : value;
-}
-
-function required<T>(value: T | null, label: string): T {
-    if (value === null) throw validationError("invalid_response", "GitHub response is missing " + label);
-    return value;
-}
-
-function userFrom(data: ApiUser | null): User {
-    if (data === null) return { login: "", id: 0, htmlUrl: "", avatarUrl: "", type: "" };
-    const value = data!;
+function userFrom(data?: ApiUser | null): User {
+    if (!data) return { login: "", id: 0, htmlUrl: "", avatarUrl: "", type: "" };
     return {
-        login: str(value.login),
-        id: num(value.id),
-        htmlUrl: str(value.html_url),
-        avatarUrl: str(value.avatar_url),
-        type: str(value.type),
+        login: str(data.login),
+        id: num(data.id),
+        htmlUrl: str(data.html_url),
+        avatarUrl: str(data.avatar_url),
+        type: str(data.type),
     };
 }
 
@@ -3160,10 +3056,10 @@ function teamFrom(data: ApiTeam): Team {
         id: num(data.id),
         name: str(data.name),
         slug: str(data.slug),
-        description: nullableString(data.description),
+        description: data.description ?? null,
         privacy: str(data.privacy),
         htmlUrl: str(data.html_url),
-        organization: data.organization === null ? "" : str(data.organization.login),
+        organization: str(data.organization?.login),
     };
 }
 
@@ -3172,41 +3068,42 @@ function repositoryFrom(data: ApiRepository): Repository {
         id: num(data.id),
         name: str(data.name),
         fullName: str(data.full_name),
-        description: nullableString(data.description),
+        description: data.description ?? null,
         htmlUrl: str(data.html_url),
         private: data.private === true,
         fork: data.fork === true,
         archived: data.archived === true,
         defaultBranch: str(data.default_branch),
-        language: nullableString(data.language),
+        language: data.language ?? null,
         topics: array(data.topics),
         stargazersCount: num(data.stargazers_count),
         forksCount: num(data.forks_count),
         openIssuesCount: num(data.open_issues_count),
         createdAt: str(data.created_at),
         updatedAt: str(data.updated_at),
-        pushedAt: nullableString(data.pushed_at),
+        pushedAt: data.pushed_at ?? null,
     };
 }
 
 function branchFrom(data: ApiBranch): Branch {
     return {
         name: str(data.name),
-        sha: data.commit === null ? "" : str(data.commit.sha),
+        sha: str(data.commit?.sha),
         protected: data.protected === true,
     };
 }
 
 function commitFrom(data: ApiCommit, detail: CommitDetail): Commit {
     const body = data.commit;
-    const author = body === null ? null : body.author;
-    const committer = body === null ? null : body.committer;
+    const author = body?.author;
+    const committer = body?.committer;
+    const apiStats = data.stats;
     let stats: CommitStats | null = null;
-    if (detail !== "none" && data.stats !== null) {
+    if (detail !== "none" && apiStats) {
         stats = {
-            additions: num(data.stats.additions),
-            deletions: num(data.stats.deletions),
-            total: num(data.stats.total),
+            additions: num(apiStats.additions),
+            deletions: num(apiStats.deletions),
+            total: num(apiStats.total),
         };
     }
     const files: CommitFile[] = [];
@@ -3218,23 +3115,23 @@ function commitFrom(data: ApiCommit, detail: CommitDetail): Commit {
                 additions: num(file.additions),
                 deletions: num(file.deletions),
                 changes: num(file.changes),
-                previousFilename: nullableString(file.previous_filename),
-                patch: detail === "patch" ? nullableString(file.patch) : null,
+                previousFilename: file.previous_filename ?? null,
+                patch: detail === "patch" ? (file.patch ?? null) : null,
             });
         }
     }
     return {
         sha: str(data.sha),
         htmlUrl: str(data.html_url),
-        message: body === null ? "" : str(body.message),
-        author: data.author === null ? null : userFrom(data.author),
-        committer: data.committer === null ? null : userFrom(data.committer),
-        authorName: author === null ? "" : str(author.name),
-        authorEmail: author === null ? "" : str(author.email),
-        authoredAt: author === null ? "" : str(author.date),
-        committerName: committer === null ? "" : str(committer.name),
-        committerEmail: committer === null ? "" : str(committer.email),
-        committedAt: committer === null ? "" : str(committer.date),
+        message: str(body?.message),
+        author: data.author ? userFrom(data.author) : null,
+        committer: data.committer ? userFrom(data.committer) : null,
+        authorName: str(author?.name),
+        authorEmail: str(author?.email),
+        authoredAt: str(author?.date),
+        committerName: str(committer?.name),
+        committerEmail: str(committer?.email),
+        committedAt: str(committer?.date),
         stats: stats,
         files: files,
     };
@@ -3244,13 +3141,13 @@ function releaseFrom(data: ApiRelease): Release {
     return {
         id: num(data.id),
         tagName: str(data.tag_name),
-        name: nullableString(data.name),
-        body: nullableString(data.body),
+        name: data.name ?? null,
+        body: data.body ?? null,
         htmlUrl: str(data.html_url),
         draft: data.draft === true,
         prerelease: data.prerelease === true,
         createdAt: str(data.created_at),
-        publishedAt: nullableString(data.published_at),
+        publishedAt: data.published_at ?? null,
         author: userFrom(data.author),
     };
 }
@@ -3260,43 +3157,42 @@ function labelFrom(data: ApiLabel): Label {
         id: num(data.id),
         name: str(data.name),
         color: str(data.color),
-        description: nullableString(data.description),
+        description: data.description ?? null,
         default: data.default === true,
     };
 }
 
-function milestoneFrom(data: ApiMilestone | null): Milestone | null {
-    if (data === null) return null;
-    const value = data!;
+function milestoneFrom(data?: ApiMilestone | null): Milestone | null {
+    if (!data) return null;
     return {
-        id: num(value.id),
-        number: num(value.number),
-        title: str(value.title),
-        description: nullableString(value.description),
-        state: str(value.state),
-        dueOn: nullableString(value.due_on),
+        id: num(data.id),
+        number: num(data.number),
+        title: str(data.title),
+        description: data.description ?? null,
+        state: str(data.state),
+        dueOn: data.due_on ?? null,
     };
 }
 
-function reactionsFrom(data: ApiReactionSummary | null): ReactionSummary | null {
-    if (data == null) return null;
+function reactionsFrom(data?: ApiReactionSummary | null): ReactionSummary | null {
+    if (!data) return null;
     return {
-        totalCount: reactionCount(data.total_count ?? null), thumbsUp: reactionCount(data["+1"] ?? null),
-        thumbsDown: reactionCount(data["-1"] ?? null), laugh: reactionCount(data.laugh ?? null),
-        hooray: reactionCount(data.hooray ?? null), confused: reactionCount(data.confused ?? null),
-        heart: reactionCount(data.heart ?? null), rocket: reactionCount(data.rocket ?? null), eyes: reactionCount(data.eyes ?? null),
+        totalCount: reactionCount(data.total_count), thumbsUp: reactionCount(data["+1"]),
+        thumbsDown: reactionCount(data["-1"]), laugh: reactionCount(data.laugh),
+        hooray: reactionCount(data.hooray), confused: reactionCount(data.confused),
+        heart: reactionCount(data.heart), rocket: reactionCount(data.rocket), eyes: reactionCount(data.eyes),
     };
 }
 
-function reactionCount(value: number | null): number | null {
-    if (value === null) return null;
+function reactionCount(value?: number | null): number | null {
+    if (value === undefined || value === null) return null;
     if (!Number.isSafeInteger(value) || value < 0) throw validationError("invalid_response", "GitHub reaction count must be a nonnegative integer");
     return value;
 }
 
 function commentFrom(data: ApiComment): Comment {
     return {
-        reactions: reactionsFrom(data.reactions ?? null),
+        reactions: reactionsFrom(data.reactions),
         id: num(data.id),
         body: str(data.body),
         htmlUrl: str(data.html_url),
@@ -3313,13 +3209,13 @@ function issueFrom(data: ApiIssue): Issue {
     const assignees: User[] = [];
     for (const user of array(data.assignees)) assignees.push(userFrom(user));
     return {
-        reactions: reactionsFrom(data.reactions ?? null),
+        reactions: reactionsFrom(data.reactions),
         id: num(data.id),
         number: num(data.number),
         title: str(data.title),
-        body: nullableString(data.body),
+        body: data.body ?? null,
         state: str(data.state).toLowerCase(),
-        stateReason: nullableString(data.state_reason),
+        stateReason: data.state_reason ?? null,
         locked: data.locked === true,
         htmlUrl: str(data.html_url),
         user: userFrom(data.user),
@@ -3329,57 +3225,43 @@ function issueFrom(data: ApiIssue): Issue {
         comments: num(data.comments),
         createdAt: str(data.created_at),
         updatedAt: str(data.updated_at),
-        closedAt: nullableString(data.closed_at),
+        closedAt: data.closed_at ?? null,
     };
 }
 
 function graphQlIssueFrom(data: ApiGraphQlIssue): Issue {
     const labels: Label[] = [];
-    if (data.labels !== null) {
-        for (const label of array(data.labels.nodes)) labels.push(labelFrom(label));
-    }
+    for (const label of array(data.labels?.nodes)) labels.push(labelFrom(label));
     const assignees: User[] = [];
-    if (data.assignees !== null) {
-        for (const user of array(data.assignees.nodes)) assignees.push(userFrom(user));
-    }
+    for (const user of array(data.assignees?.nodes)) assignees.push(userFrom(user));
     return {
         reactions: null,
         id: num(data.id),
         number: num(data.number),
         title: str(data.title),
-        body: nullableString(data.body),
+        body: data.body ?? null,
         state: str(data.state).toLowerCase(),
-        stateReason: nullableString(data.state_reason),
+        stateReason: data.state_reason ?? null,
         locked: data.locked === true,
         htmlUrl: str(data.html_url),
         user: userFrom(data.user),
         labels: labels,
         assignees: assignees,
         milestone: milestoneFrom(data.milestone),
-        comments: data.comments === null ? 0 : num(data.comments.totalCount),
+        comments: num(data.comments?.totalCount),
         createdAt: str(data.created_at),
         updatedAt: str(data.updated_at),
-        closedAt: nullableString(data.closed_at),
+        closedAt: data.closed_at ?? null,
     };
 }
 
-function pullRefFrom(data: ApiPullRef | null): PullRequestRef {
-    if (data === null) {
-        return {
-            label: "",
-            ref: "",
-            sha: "",
-            user: userFrom(null),
-            repository: null,
-        };
-    }
-    const value = data!;
+function pullRefFrom(data?: ApiPullRef | null): PullRequestRef {
     return {
-        label: str(value.label),
-        ref: str(value.ref),
-        sha: str(value.sha),
-        user: userFrom(value.user),
-        repository: value.repo === null ? null : repositoryFrom(value.repo),
+        label: str(data?.label),
+        ref: str(data?.ref),
+        sha: str(data?.sha),
+        user: userFrom(data?.user),
+        repository: data?.repo ? repositoryFrom(data.repo) : null,
     };
 }
 
@@ -3391,15 +3273,15 @@ function pullRequestFrom(data: ApiPullRequest): PullRequest {
     const reviewers: User[] = [];
     for (const user of array(data.requested_reviewers)) reviewers.push(userFrom(user));
     return {
-        reactions: reactionsFrom(data.reactions ?? null),
+        reactions: reactionsFrom(data.reactions),
         id: num(data.id),
         number: num(data.number),
         title: str(data.title),
-        body: nullableString(data.body),
+        body: data.body ?? null,
         state: str(data.state),
         draft: data.draft === true,
         merged: data.merged === true,
-        mergeable: data.mergeable,
+        mergeable: data.mergeable ?? null,
         mergeableState: str(data.mergeable_state),
         htmlUrl: str(data.html_url),
         user: userFrom(data.user),
@@ -3416,8 +3298,8 @@ function pullRequestFrom(data: ApiPullRequest): PullRequest {
         reviewComments: num(data.review_comments),
         createdAt: str(data.created_at),
         updatedAt: str(data.updated_at),
-        closedAt: nullableString(data.closed_at),
-        mergedAt: nullableString(data.merged_at),
+        closedAt: data.closed_at ?? null,
+        mergedAt: data.merged_at ?? null,
     };
 }
 
@@ -3429,8 +3311,8 @@ function pullFileFrom(data: ApiPullFile): PullRequestFile {
         additions: num(data.additions),
         deletions: num(data.deletions),
         changes: num(data.changes),
-        previousFilename: nullableString(data.previous_filename),
-        patch: nullableString(data.patch),
+        previousFilename: data.previous_filename ?? null,
+        patch: data.patch ?? null,
         blobUrl: str(data.blob_url),
     };
 }
@@ -3443,19 +3325,17 @@ function reviewFrom(data: ApiReview): PullRequestReview {
         htmlUrl: str(data.html_url),
         user: userFrom(data.user),
         commitId: str(data.commit_id),
-        submittedAt: nullableString(data.submitted_at),
+        submittedAt: data.submitted_at ?? null,
         authorAssociation: str(data.author_association),
     };
 }
 
-function rateResourceFrom(data: ApiRateResource | null): RateLimitResource {
-    if (data === null) return { limit: 0, remaining: 0, used: 0, resetAt: "" };
-    const value = data!;
+function rateResourceFrom(data?: ApiRateResource | null): RateLimitResource {
     return {
-        limit: num(value.limit),
-        remaining: num(value.remaining),
-        used: num(value.used),
-        resetAt: value.reset === null ? "" : value.reset.toString(),
+        limit: num(data?.limit),
+        remaining: num(data?.remaining),
+        used: num(data?.used),
+        resetAt: data?.reset?.toString() ?? "",
     };
 }
 

@@ -28,7 +28,7 @@ function mkOuter(): OOuter {
 class Holder {
   elems: (Inner | null)[] = [new Inner()];
   inner: Inner | null = new Inner();
-  first(): number | null {
+  first(): number | undefined {
     if (this.inner !== null) {
       return this?.inner.y;
     }
@@ -78,7 +78,7 @@ function main(): void {
   const w = new Outer();
   if (w.b !== null) {
     w.b = clearedInner();
-    assert(w?.b?.y === null, "a nullable write leaves the step nullable");
+    assert(w?.b?.y === undefined, "a nullable write leaves the step nullable");
   }
 
   // A narrowing whose path *ends* at an index is refused — no shadow local can
@@ -104,7 +104,7 @@ function main(): void {
   // codegen casts the slot to it.
   const t = new Tagged();
   if (typeof t.v === "number") {
-    const tv: number | null = t?.v;
+    const tv: number | undefined = t?.v;
     assert(tv === 7, "a `typeof`-narrowed step");
   }
   const k = new Kennel();

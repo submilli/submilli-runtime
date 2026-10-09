@@ -87,7 +87,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     None => Payload::meta(serde_json::json!({ "found": false })),
                 });
                 let Some(payload) = found else {
-                    *abi_result(results, 0)? = Val::AnyRef(None);
+                    *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
                     return Ok(());
                 };
                 // Read from the store (code units, two bytes each), then
@@ -215,8 +215,7 @@ fn install_getters(
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
     // `entries: Entry[]` lowers to a non-null `$Array`; `nextCursor: string |
-    // null` is a mixed union, so it lowers to the universal `(ref null $Object)`
-    // the `(ref null $string)` field widens into.
+    // undefined` is a mixed union, so it lowers to the universal `(ref null $Object)`.
     let array = ValType::Ref(RefType::new(
         false,
         HeapType::ConcreteStruct(intr.array.clone()),
@@ -264,7 +263,7 @@ fn page_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType
         &intr,
         vec![
             abi::array_field(&intr),           // entries
-            abi::nullable_string_field(&intr), // nextCursor
+            abi::nullable_object_field(&intr), // nextCursor
         ],
     )
 }
@@ -371,7 +370,7 @@ fn read_cursor(
     val: &Val,
     prefix: &[u16],
 ) -> wasmtime::Result<Option<Vec<u16>>> {
-    if matches!(val, Val::AnyRef(None)) {
+    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
         return Ok(None);
     }
     let max_units = cursor::max_cursor_units(provider(caller, "list")?.limits().max_key_units);
@@ -425,7 +424,7 @@ fn build_page(
             let st = crate::runtime::host::write_submilli_string_struct_units(caller, &units)?;
             Val::AnyRef(Some(st.to_anyref()))
         }
-        None => Val::AnyRef(None),
+        None => crate::runtime::prelude::undefined::value(caller)?,
     };
     let page_ty = page_backing_struct(caller.engine())?;
     abi::new_backing(caller, page_ty, &[array, cursor])
@@ -582,6 +581,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn top_level_undefined_does_not_replace_stored_value() {
+        let kv = Arc::new(InMemorySessionKv::default());
+        let key: Vec<u16> = "kept".encode_utf16().collect();
+        let original: Vec<u16> = r#"{"step":1}"#.encode_utf16().collect();
+        kv.set(&key, &original).expect("seed stored value");
+
+        let error = run(
+            r#"
+            import session from "submilli:session";
+            function main(): void {
+                session.set("kept", undefined);
+            }
+            "#,
+            Some(kv.clone()),
+        )
+        .await
+        .expect_err("top-level undefined has no stored JSON representation");
+
+        assert!(format!("{error:#}").contains("top-level undefined"));
+        assert_eq!(kv.get(&key).expect("read original"), Some(original));
+    }
+
+    #[tokio::test]
+    async fn nested_undefined_uses_json_object_and_array_rules() {
+        let kv = Arc::new(InMemorySessionKv::default());
+        run(
+            r#"
+            import session from "submilli:session";
+            function main(): void {
+                const items: unknown[] = [1, undefined, null];
+                session.set("nested", {
+                    kept: 1,
+                    omitted: undefined,
+                    inner: { omitted: undefined, kept: null },
+                    items,
+                });
+            }
+            "#,
+            Some(kv.clone()),
+        )
+        .await
+        .expect("nested undefined has JSON object and array representations");
+
+        let key: Vec<u16> = "nested".encode_utf16().collect();
+        let payload = kv
+            .get(&key)
+            .expect("read stored JSON")
+            .expect("stored value");
+        let text = String::from_utf16(&payload).expect("valid JSON text");
+        let actual: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "kept": 1,
+                "inner": { "kept": null },
+                "items": [1, null, null],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_value_is_undefined_and_stored_null_is_preserved() {
+        run(
+            r#"
+            import session from "submilli:session";
+            function main(): void {
+                const missing = session.get<string>("missing");
+                assert(missing === undefined, "missing keys yield undefined");
+                session.set("null", null);
+                const stored = session.get<null>("null");
+                assert(stored === null, "stored null stays null");
+                assert(session.has("null"), "stored null is present");
+                assert(!session.has("missing"), "missing key stays absent");
+            }
+            "#,
+            Some(Arc::new(InMemorySessionKv::default())),
+        )
+        .await
+        .expect("undefined and null remain distinct");
+    }
+
+    #[tokio::test]
     async fn narrowed_host_carriers() {
         let source = r#"
 import session from "submilli:session";
@@ -599,7 +680,7 @@ class PageField extends Parent { value: Page | null = null; }
 class EntryField extends Parent { value: Entry | null = null; }
 function main(): void {
  session.set("key", "value");
- const p = new PageField(); p.reset(session.list("", 10, null));
+ const p = new PageField(); p.reset(session.list("", 10));
  assert(p.value!.entries.length === 1, "Page");
  const e = new EntryField(); e.reset(p.value!.entries[0]);
  assert(e.value!.key === "key", "Entry");
@@ -799,17 +880,17 @@ function main(): void {
 
                 // A page sized to the whole keyspace: every key is a candidate,
                 // so anything the policy hides can only vanish silently.
-                const all = session.list("", 100, null);
+                const all = session.list("", 100);
                 assert(all.entries.length === 2, "only the permitted keys are counted");
                 assert(all.entries[0].key === "triage/a", "first permitted key");
                 assert(all.entries[1].key === "triage/b", "second permitted key");
-                assert(all.nextCursor === null, "the cursor does not point past hidden keys");
+                assert(all.nextCursor === undefined, "the cursor does not point past hidden keys");
 
                 // Listing a wholly denied prefix is empty and final, not an
                 // error: a throw would itself confirm the keys exist.
-                const denied = session.list("zzz/", 10, null);
+                const denied = session.list("zzz/", 10);
                 assert(denied.entries.length === 0, "a denied prefix lists as empty");
-                assert(denied.nextCursor === null, "and reports itself finished");
+                assert(denied.nextCursor === undefined, "and reports itself finished");
             }
         "#;
         let kv: Arc<dyn SessionKvStore> = Arc::new(InMemorySessionKv::default());
@@ -837,14 +918,14 @@ function main(): void {
 
                 let cursors = "";
                 let shown = 0;
-                let cursor: string | null = null;
+                let cursor: string | undefined;
                 let guard = 0;
                 while (guard < 10) {
                     guard = guard + 1;
                     const page = session.list("", 1, cursor);
                     shown = shown + page.entries.length;
                     const next = page.nextCursor;
-                    if (next === null) { break; }
+                    if (next === undefined) { break; }
                     cursors = cursors + next;
                     cursor = next;
                 }
@@ -885,7 +966,7 @@ function main(): void {
 
             function main(): string {
                 session.set("k", "SUPER_SECRET_PAYLOAD");
-                const page = session.list("", 10, null);
+                const page = session.list("", 10);
                 let rendered = "";
                 for (const entry of page.entries) {
                     rendered = rendered + entry.key + ":" + entry.sizeBytes.toString();

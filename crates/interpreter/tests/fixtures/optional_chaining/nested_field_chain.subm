@@ -1,9 +1,9 @@
-function street(addr: { home: { street: string } } | null): string | null {
+function street(addr: { home: { street: string } } | null): string | undefined {
   return addr?.home.street;
 }
 
 function main(): void {
   const present: { home: { street: string } } = { home: { street: "Main" } };
   assert(street(present) === "Main", "non-null reads through whole chain");
-  assert(street(null) === null, "null receiver short-circuits everything");
+  assert(street(null) === undefined, "null receiver short-circuits everything");
 }

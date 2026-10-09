@@ -75,105 +75,105 @@ let r4d2 = '' - null;
 let r4d3 = {} - null;
 
 // operator <<
-/*pruned*/;          
-/*pruned*/;          
-/*pruned*/;          
-
-/*pruned*/;          
-/*pruned*/;          
+let r5a1 = null << a;
+let r5a2 = null << b;
 /*pruned*/;          
 
-/*pruned*/;             
-/*pruned*/;           
-/*pruned*/;           
+let r5b1 = a << null;
+let r5b2 = b << null;
+/*pruned*/;          
 
-/*pruned*/;             
-/*pruned*/;           
-/*pruned*/;           
+let r5c1 = null << true;
+let r5c2 = null << '';
+let r5c3 = null << {};
+
+let r5d1 = true << null;
+let r5d2 = '' << null;
+let r5d3 = {} << null;
 
 // operator >>
-/*pruned*/;          
-/*pruned*/;          
-/*pruned*/;          
-
-/*pruned*/;          
-/*pruned*/;          
+let r6a1 = null >> a;
+let r6a2 = null >> b;
 /*pruned*/;          
 
-/*pruned*/;             
-/*pruned*/;           
-/*pruned*/;           
+let r6b1 = a >> null;
+let r6b2 = b >> null;
+/*pruned*/;          
 
-/*pruned*/;             
-/*pruned*/;           
-/*pruned*/;           
+let r6c1 = null >> true;
+let r6c2 = null >> '';
+let r6c3 = null >> {};
+
+let r6d1 = true >> null;
+let r6d2 = '' >> null;
+let r6d3 = {} >> null;
 
 // operator >>>
-/*pruned*/;           
-/*pruned*/;           
-/*pruned*/;           
-
-/*pruned*/;           
-/*pruned*/;           
+let r7a1 = null >>> a;
+let r7a2 = null >>> b;
 /*pruned*/;           
 
-/*pruned*/;              
-/*pruned*/;            
-/*pruned*/;            
+let r7b1 = a >>> null;
+let r7b2 = b >>> null;
+/*pruned*/;           
 
-/*pruned*/;              
-/*pruned*/;            
-/*pruned*/;            
+let r7c1 = null >>> true;
+let r7c2 = null >>> '';
+let r7c3 = null >>> {};
+
+let r7d1 = true >>> null;
+let r7d2 = '' >>> null;
+let r7d3 = {} >>> null;
 
 // operator &
-/*pruned*/;         
-/*pruned*/;         
-/*pruned*/;         
-
-/*pruned*/;         
-/*pruned*/;         
+let r8a1 = null & a;
+let r8a2 = null & b;
 /*pruned*/;         
 
-/*pruned*/;            
-/*pruned*/;          
-/*pruned*/;          
+let r8b1 = a & null;
+let r8b2 = b & null;
+/*pruned*/;         
 
-/*pruned*/;            
-/*pruned*/;          
-/*pruned*/;          
+let r8c1 = null & true;
+let r8c2 = null & '';
+let r8c3 = null & {};
+
+let r8d1 = true & null;
+let r8d2 = '' & null;
+let r8d3 = {} & null;
 
 // operator ^
-/*pruned*/;         
-/*pruned*/;         
-/*pruned*/;         
-
-/*pruned*/;         
-/*pruned*/;         
+let r9a1 = null ^ a;
+let r9a2 = null ^ b;
 /*pruned*/;         
 
-/*pruned*/;            
-/*pruned*/;          
-/*pruned*/;          
+let r9b1 = a ^ null;
+let r9b2 = b ^ null;
+/*pruned*/;         
 
-/*pruned*/;            
-/*pruned*/;          
-/*pruned*/;          
+let r9c1 = null ^ true;
+let r9c2 = null ^ '';
+let r9c3 = null ^ {};
+
+let r9d1 = true ^ null;
+let r9d2 = '' ^ null;
+let r9d3 = {} ^ null;
 
 // operator |
-/*pruned*/;          
-/*pruned*/;          
-/*pruned*/;          
-
-/*pruned*/;          
-/*pruned*/;          
+let r10a1 = null | a;
+let r10a2 = null | b;
 /*pruned*/;          
 
-/*pruned*/;             
-/*pruned*/;           
-/*pruned*/;           
+let r10b1 = a | null;
+let r10b2 = b | null;
+/*pruned*/;          
 
-/*pruned*/;             
-/*pruned*/;           
-/*pruned*/;           
+let r10c1 = null | true;
+let r10c2 = null | '';
+let r10c3 = null | {};
+
+let r10d1 = true | null;
+let r10d2 = '' | null;
+let r10d3 = {} | null;
 
 function main(): void {}

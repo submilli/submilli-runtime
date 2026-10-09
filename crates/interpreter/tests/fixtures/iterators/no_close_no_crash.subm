@@ -1,5 +1,5 @@
 function tick(i: number, n: number): IteratorResult<number> {
-  if (i >= n) { const r: IteratorResult<number> = { done: true }; return r; }
+  if (i >= n) { const r: IteratorResult<number> = { done: true, value: undefined }; return r; }
   const y: IteratorResult<number> = { done: false, value: i }; return y;
 }
 
@@ -12,5 +12,5 @@ function range(n: number): Iterator<number> {
 function main(): void {
   let sum: number = 0;
   for (const x of range(4)) { sum = sum + x; }
-  assert(sum === 6, "0 + 1 + 2 + 3 = 6 — finally elided the null close");
+  assert(sum === 6, "0 + 1 + 2 + 3 = 6 — finally elided the undefined close");
 }

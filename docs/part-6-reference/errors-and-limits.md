@@ -124,7 +124,7 @@ lookaround. A pattern with either throws `SyntaxError`.
 
 | Limit | Value | When passed |
 | --- | --- | --- |
-| A whole-file read, `fs.read` or `fs.readText` | 52,428,800 bytes, reported by `fs.maxReadSize()` | Returns `null` |
+| A whole-file read, `fs.read` or `fs.readText` | 52,428,800 bytes, reported by `fs.maxReadSize()` | Returns `undefined` |
 | `fs.readBytes` length | `fs.maxReadSize()` | `RangeError` |
 | Entries a recursive `fs.remove` scans | 10,000 | `Error` |
 | Directory depth `fs.list` walks in depth-first order | 32 | Deeper directories follow the rest of their parent's entries |

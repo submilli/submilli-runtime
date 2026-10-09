@@ -69,7 +69,8 @@ restricted blueprints. Each script has a blueprint of the same name:
   `type:` aliases and quoted values) and OR are refused. Unterminated and escaped quotes are refused
   because the search endpoints differ in their escape syntax.
 - `ref-filters.ts` shows that file reads are held to a rule on `ref`, and pull
-  request creation and retargeting to rules on `head` and `base`.
+  request creation and retargeting to rules on `head` and `base`, and that a
+  declared field an operation does not name is checked as null.
 - `request-values.ts` shows that the request the package builds names the
   repository the policy approved. The package reads a placeholder token from
   the local secret store, and the blueprint refuses the request with a reason that

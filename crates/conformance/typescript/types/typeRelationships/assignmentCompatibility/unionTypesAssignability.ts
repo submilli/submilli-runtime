@@ -58,7 +58,7 @@ unionNumberString = null;
 
 // undefined
 /*pruned*/;    
-unionNumberString = null;
+unionNumberString = undefined;
 
 // type parameters
 function foo<T, U>(t: T, u: U): void {

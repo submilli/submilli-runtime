@@ -1,9 +1,6 @@
 import { post, Response } from "submilli:http";
 
 function main(): void {
-  const r: Response = post("{{BASE}}/post-empty", null);
-  assert(r.status === 200, "explicit-null body posted empty");
-
-  const r2: Response = post("{{BASE}}/post-empty");
-  assert(r2.status === 200, "default-omitted body posted empty");
+  const r: Response = post("{{BASE}}/post-json-null", null);
+  assert(r.status === 200, "explicit-null body posted JSON null");
 }

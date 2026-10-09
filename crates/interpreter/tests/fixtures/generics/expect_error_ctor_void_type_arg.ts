@@ -1,6 +1,5 @@
-// expect-error: `void` cannot be used as a type argument to constructor of `Box<T>`
-// A written type argument on a `new` expression takes the same screen as one on
-// a plain call. The inferred counterpart is `expect_error_class_infer_void_arg`.
+// expect-error: expected `void`, got `number`
+// A valid void type argument does not admit a numeric constructor argument.
 class Box<T> {
   constructor(public value: T) {}
 }

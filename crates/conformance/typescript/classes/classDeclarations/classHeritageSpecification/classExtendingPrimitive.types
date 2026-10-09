@@ -43,9 +43,11 @@ class C5a extends null { }
 >C5a : C5a
 >    : ^^^
 
-class C6 extends null { }
+class C6 extends undefined { }
 >C6 : C6
 >   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 class C7 extends Undefined { }
 >C7 : C7
@@ -67,13 +69,13 @@ class C8 extends E { }
 >  : ^^^^^^^^
 
 
-/*pruned*/;                        
-/*pruned*/;                         
-/*pruned*/;                          
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;                           
-/*pruned*/;                           
-/*pruned*/;                            
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 
 function main(): void {}

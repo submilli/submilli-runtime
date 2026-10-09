@@ -2,18 +2,36 @@
 use crate::rendering::{RenderError, RenderLimits, RenderedText, Writer};
 use crate::{IndexSignature, ObjectField, Type};
 
+/// What a [`Frame::List`] writes, which decides how each item is spelled.
+#[derive(Clone, Copy)]
+enum ListKind {
+    /// Type arguments.
+    Plain,
+    /// Union members: a function member is parenthesized.
+    Union,
+    /// A function's parameters, named `argN`; items from `optional_from` on
+    /// are optional, and the last is the rest parameter when `rest`.
+    Params { rest: bool, optional_from: usize },
+    /// Tuple positions; items from `optional_from` on are optional.
+    Tuple { optional_from: usize },
+}
+
 enum Frame<'a> {
     Type(&'a Type, usize),
     Text(&'a str),
     List {
-        remaining: &'a [Type],
+        /// The items left to write, last first, so `pop` yields the next.
+        remaining: Vec<&'a Type>,
         index: usize,
         separator: &'static str,
-        params: bool,
-        rest: bool,
-        union: bool,
+        kind: ListKind,
         depth: usize,
     },
+    /// A type written beside a `?` marker, which already admits `undefined`:
+    /// a union drops its `undefined` member. The rule of
+    /// [`crate::types::shown_beside_optional_marker`], applied to borrowed
+    /// members because frames can't hold the owned type it returns.
+    Optional(&'a Type, usize),
     Fields {
         fields: std::collections::btree_map::Iter<'a, String, ObjectField>,
         index: Option<&'a IndexSignature>,
@@ -38,44 +56,82 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
                 write_node(out, &mut frames, ty, depth)?;
             }
             Frame::List {
-                remaining,
+                mut remaining,
                 index,
                 separator,
-                params,
-                rest,
-                union,
+                kind,
                 depth,
             } => {
-                let Some((ty, tail)) = remaining.split_first() else {
+                let Some(ty) = remaining.pop() else {
                     continue;
                 };
+                let last = remaining.is_empty();
                 if index != 0 {
                     out.push(separator)?;
                 }
-                if params {
-                    if rest && tail.is_empty() {
-                        out.push("...")?;
-                    }
-                    out.format(format_args!("arg{index}: "))?;
-                }
+                let next = index.checked_add(1).ok_or(RenderError::Formatting)?;
                 push(
                     &mut frames,
                     Frame::List {
-                        remaining: tail,
-                        index: index.checked_add(1).ok_or(RenderError::Formatting)?,
+                        remaining,
+                        index: next,
                         separator,
-                        params,
-                        rest,
-                        union,
+                        kind,
                         depth,
                     },
                 )?;
-                let parens = union && matches!(ty, Type::Function { .. });
-                if parens {
-                    out.push("(")?;
-                    push(&mut frames, Frame::Text(")"))?;
+                match kind {
+                    ListKind::Plain => push(&mut frames, Frame::Type(ty, depth))?,
+                    ListKind::Union => {
+                        let parens = matches!(ty, Type::Function { .. });
+                        if parens {
+                            out.push("(")?;
+                            push(&mut frames, Frame::Text(")"))?;
+                        }
+                        push(&mut frames, Frame::Type(ty, depth))?;
+                    }
+                    ListKind::Params {
+                        rest,
+                        optional_from,
+                    } => {
+                        let is_rest = rest && last;
+                        if is_rest {
+                            out.push("...")?;
+                        }
+                        if index >= optional_from && !is_rest {
+                            out.format(format_args!("arg{index}?: "))?;
+                            push(&mut frames, Frame::Optional(ty, depth))?;
+                        } else {
+                            out.format(format_args!("arg{index}: "))?;
+                            push(&mut frames, Frame::Type(ty, depth))?;
+                        }
+                    }
+                    ListKind::Tuple { optional_from } => {
+                        if index >= optional_from {
+                            out.push("(")?;
+                            push(&mut frames, Frame::Text(")?"))?;
+                        }
+                        push(&mut frames, Frame::Type(ty, depth))?;
+                    }
                 }
-                push(&mut frames, Frame::Type(ty, depth))?;
+            }
+            Frame::Optional(ty, depth) => {
+                out.depth(depth)?;
+                match ty.peel() {
+                    Type::Union(members)
+                        if members.iter().any(|m| matches!(m.peel(), Type::Undefined)) =>
+                    {
+                        let present: Vec<&Type> = crate::types::union_display_order(members)
+                            .into_iter()
+                            .filter(|m| !matches!(m.peel(), Type::Undefined))
+                            .collect();
+                        match present.as_slice() {
+                            [only] => push(&mut frames, Frame::Type(only, depth))?,
+                            _ => push(&mut frames, union_list(present, depth))?,
+                        }
+                    }
+                    _ => write_node(out, &mut frames, ty, depth)?,
+                }
             }
             Frame::Fields {
                 mut fields,
@@ -139,6 +195,7 @@ fn write_node<'a>(
         Type::Boolean => out.push("boolean"),
         Type::BooleanLiteral(value) => out.push(if *value { "true" } else { "false" }),
         Type::Null => out.push("null"),
+        Type::Undefined => out.push("undefined"),
         Type::Void => out.push("void"),
         Type::Unknown => out.push("unknown"),
         Type::Error => out.push("<error>"),
@@ -158,6 +215,7 @@ fn write_node<'a>(
             params,
             ret,
             has_rest,
+            optional,
             ..
         } => {
             if *has_rest && params.is_empty() {
@@ -168,15 +226,17 @@ fn write_node<'a>(
             out.push("(")?;
             push(frames, Frame::Type(ret, child))?;
             push(frames, Frame::Text(") => "))?;
+            let fixed = params.len().saturating_sub(usize::from(*has_rest));
             push(
                 frames,
                 Frame::List {
-                    remaining: params,
+                    remaining: params.iter().rev().collect(),
                     index: 0,
                     separator: ", ",
-                    params: true,
-                    rest: *has_rest,
-                    union: false,
+                    kind: ListKind::Params {
+                        rest: *has_rest,
+                        optional_from: fixed.saturating_sub(*optional),
+                    },
                     depth: child,
                 },
             )
@@ -212,10 +272,21 @@ fn write_node<'a>(
             out.push("readonly ")?;
             push(frames, Frame::Type(inner, child))
         }
-        Type::Tuple(types) => {
+        Type::Tuple(tuple) => {
             out.push("[")?;
             push(frames, Frame::Text("]"))?;
-            list(frames, types, ", ", false, child)
+            push(
+                frames,
+                Frame::List {
+                    remaining: tuple.elements.iter().rev().collect(),
+                    index: 0,
+                    separator: ", ",
+                    kind: ListKind::Tuple {
+                        optional_from: tuple.required_len(),
+                    },
+                    depth: child,
+                },
+            )
         }
         Type::Refined { original, ty } => {
             push(frames, Frame::Type(ty, child))?;
@@ -232,32 +303,35 @@ fn write_node<'a>(
             }
             out.push("<")?;
             push(frames, Frame::Text(">"))?;
-            list(frames, args, ", ", false, child)
+            push(
+                frames,
+                Frame::List {
+                    remaining: args.iter().rev().collect(),
+                    index: 0,
+                    separator: ", ",
+                    kind: ListKind::Plain,
+                    depth: child,
+                },
+            )
         }
-        Type::Union(members) => list(frames, members, " | ", true, child),
+        // `null` and `undefined` print last, as tsc prints them.
+        Type::Union(members) => push(
+            frames,
+            union_list(crate::types::union_display_order(members), child),
+        ),
     }
 }
 
-fn list<'a>(
-    frames: &mut Vec<Frame<'a>>,
-    types: &'a [Type],
-    separator: &'static str,
-    union: bool,
-    depth: usize,
-) -> Result<(), RenderError> {
-    push(
-        frames,
-        Frame::List {
-            remaining: types,
-            index: 0,
-            separator,
-            params: false,
-            rest: false,
-            union,
-            depth,
-        },
-    )
+fn union_list(members: Vec<&Type>, depth: usize) -> Frame<'_> {
+    Frame::List {
+        remaining: members.into_iter().rev().collect(),
+        index: 0,
+        separator: " | ",
+        kind: ListKind::Union,
+        depth,
+    }
 }
+
 fn push<'a>(frames: &mut Vec<Frame<'a>>, frame: Frame<'a>) -> Result<(), RenderError> {
     frames.try_reserve(1).map_err(|_| RenderError::Allocation)?;
     frames.push(frame);
@@ -521,7 +595,8 @@ fn child_count(ty: &Type) -> usize {
             .saturating_add(1 + usize::from(predicate.is_some())),
         Type::Object { fields, index } => fields.len().saturating_add(usize::from(index.is_some())),
         Type::Array(_) | Type::Readonly(_) => 1,
-        Type::Tuple(members) | Type::Union(members) => members.len(),
+        Type::Tuple(tuple) => tuple.elements.len(),
+        Type::Union(members) => members.len(),
         Type::Refined { .. } => 2,
         Type::InterfaceRef { args, .. }
         | Type::ClassRef { args, .. }
@@ -537,6 +612,7 @@ fn child_count(ty: &Type) -> usize {
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::Null
+        | Type::Undefined
         | Type::Void
         | Type::Unknown
         | Type::Error
@@ -562,7 +638,10 @@ mod tests {
         assert!(budget.check(&chunk).is_ok());
         assert!(matches!(budget.check(&chunk), Err(RenderError::Truncated)));
         let sub = TypeParamSubstitution::from_pairs(&["T".into()], &[chunk]);
-        let repeated = Type::Tuple(vec![Type::TypeVar("T".into()); 2]);
+        let repeated = Type::Tuple(crate::types::TupleType {
+            elements: vec![Type::TypeVar("T".into()); 2],
+            optional: 0,
+        });
         assert!(matches!(
             CopyBudget::default().check_substitution(&repeated, &sub),
             Err(RenderError::Truncated)
@@ -577,7 +656,10 @@ mod tests {
 
     #[test]
     fn copy_preflight_rejects_wide_frontiers_and_hidden_depth() {
-        let wide = Type::Tuple(vec![Type::Number; 100_000]);
+        let wide = Type::Tuple(crate::types::TupleType {
+            elements: vec![Type::Number; 100_000],
+            optional: 0,
+        });
         assert!(matches!(check_for_copy(&wide), Err(RenderError::Truncated)));
         assert!(check_for_copy(&Type::Number).is_ok());
         let mut deep = Type::Number;

@@ -1,0 +1,85 @@
+=== asOperator3.ts ===
+/*pruned*/;
+
+let a = `${123 + 456 as number}`;
+>a : string
+>  : ^^^^^^
+>`${123 + 456 as number}` : string
+>                         : ^^^^^^
+>123 + 456 as number : number
+>                    : ^^^^^^
+>123 + 456 : number
+>          : ^^^^^^
+>123 : 123
+>    : ^^^
+>456 : 456
+>    : ^^^
+
+let b = `leading ${123 + 456 as number}`;
+>b : string
+>  : ^^^^^^
+>`leading ${123 + 456 as number}` : string
+>                                 : ^^^^^^
+>123 + 456 as number : number
+>                    : ^^^^^^
+>123 + 456 : number
+>          : ^^^^^^
+>123 : 123
+>    : ^^^
+>456 : 456
+>    : ^^^
+
+let c = `${123 + 456 as number} trailing`;
+>c : string
+>  : ^^^^^^
+>`${123 + 456 as number} trailing` : string
+>                                  : ^^^^^^
+>123 + 456 as number : number
+>                    : ^^^^^^
+>123 + 456 : number
+>          : ^^^^^^
+>123 : 123
+>    : ^^^
+>456 : 456
+>    : ^^^
+
+let d = `Hello ${123} World` as string;
+>d : string
+>  : ^^^^^^
+>`Hello ${123} World` as string : string
+>                               : ^^^^^^
+>`Hello ${123} World` : "Hello 123 World"
+>                     : ^^^^^^^^^^^^^^^^^
+>123 : 123
+>    : ^^^
+
+let e = `Hello` as string;
+>e : string
+>  : ^^^^^^
+>`Hello` as string : string
+>                  : ^^^^^^
+>`Hello` : "Hello"
+>        : ^^^^^^^
+
+let f = 1 + `${1} end of string` as string;
+>f : string
+>  : ^^^^^^
+>1 + `${1} end of string` as string : string
+>                                   : ^^^^^^
+>1 + `${1} end of string` : string
+>                         : ^^^^^^
+>1 : 1
+>  : ^
+>`${1} end of string` : "1 end of string"
+>                     : ^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

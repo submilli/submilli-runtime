@@ -1,0 +1,476 @@
+=== arithmeticOperatorWithAnyAndNumber.ts ===
+/*pruned*/;
+let b: number = null as unknown as (number);
+>b : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// operator *
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let ra5 = 0 * 0;
+>ra5 : number
+>    : ^^^^^^
+>0 * 0 : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+let ra6 = b * 0;
+>ra6 : number
+>    : ^^^^^^
+>b * 0 : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let ra7 = 0 * b;
+>ra7 : number
+>    : ^^^^^^
+>0 * b : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let ra8 = b * b;
+>ra8 : number
+>    : ^^^^^^
+>b * b : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+// operator /
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rb5 = 0 / 0;
+>rb5 : number
+>    : ^^^^^^
+>0 / 0 : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+let rb6 = b / 0;
+>rb6 : number
+>    : ^^^^^^
+>b / 0 : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let rb7 = 0 / b;
+>rb7 : number
+>    : ^^^^^^
+>0 / b : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rb8 = b / b;
+>rb8 : number
+>    : ^^^^^^
+>b / b : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+// operator %
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rc5 = 0 % 0;
+>rc5 : number
+>    : ^^^^^^
+>0 % 0 : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+let rc6 = b % 0;
+>rc6 : number
+>    : ^^^^^^
+>b % 0 : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let rc7 = 0 % b;
+>rc7 : number
+>    : ^^^^^^
+>0 % b : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rc8 = b % b;
+>rc8 : number
+>    : ^^^^^^
+>b % b : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+// operator -
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rd5 = 0 - 0;
+>rd5 : number
+>    : ^^^^^^
+>0 - 0 : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+let rd6 = b - 0;
+>rd6 : number
+>    : ^^^^^^
+>b - 0 : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let rd7 = 0 - b;
+>rd7 : number
+>    : ^^^^^^
+>0 - b : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rd8 = b - b;
+>rd8 : number
+>    : ^^^^^^
+>b - b : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+// operator <<
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let re5 = 0 << 0;
+>re5 : number
+>    : ^^^^^^
+>0 << 0 : number
+>       : ^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+let re6 = b << 0;
+>re6 : number
+>    : ^^^^^^
+>b << 0 : number
+>       : ^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let re7 = 0 << b;
+>re7 : number
+>    : ^^^^^^
+>0 << b : number
+>       : ^^^^^^
+>0 : 0
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let re8 = b << b;
+>re8 : number
+>    : ^^^^^^
+>b << b : number
+>       : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+// operator >>
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rf5 = 0 >> 0;
+>rf5 : number
+>    : ^^^^^^
+>0 >> 0 : number
+>       : ^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+let rf6 = b >> 0;
+>rf6 : number
+>    : ^^^^^^
+>b >> 0 : number
+>       : ^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let rf7 = 0 >> b;
+>rf7 : number
+>    : ^^^^^^
+>0 >> b : number
+>       : ^^^^^^
+>0 : 0
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rf8 = b >> b;
+>rf8 : number
+>    : ^^^^^^
+>b >> b : number
+>       : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+// operator >>>
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rg5 = 0 >>> 0;
+>rg5 : number
+>    : ^^^^^^
+>0 >>> 0 : number
+>        : ^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+let rg6 = b >>> 0;
+>rg6 : number
+>    : ^^^^^^
+>b >>> 0 : number
+>        : ^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let rg7 = 0 >>> b;
+>rg7 : number
+>    : ^^^^^^
+>0 >>> b : number
+>        : ^^^^^^
+>0 : 0
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rg8 = b >>> b;
+>rg8 : number
+>    : ^^^^^^
+>b >>> b : number
+>        : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+// operator &
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rh5 = 0 & 0;
+>rh5 : number
+>    : ^^^^^^
+>0 & 0 : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+let rh6 = b & 0;
+>rh6 : number
+>    : ^^^^^^
+>b & 0 : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let rh7 = 0 & b;
+>rh7 : number
+>    : ^^^^^^
+>0 & b : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rh8 = b & b;
+>rh8 : number
+>    : ^^^^^^
+>b & b : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+// operator ^
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let ri5 = 0 ^ 0;
+>ri5 : number
+>    : ^^^^^^
+>0 ^ 0 : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+let ri6 = b ^ 0;
+>ri6 : number
+>    : ^^^^^^
+>b ^ 0 : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let ri7 = 0 ^ b;
+>ri7 : number
+>    : ^^^^^^
+>0 ^ b : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let ri8 = b ^ b;
+>ri8 : number
+>    : ^^^^^^
+>b ^ b : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+// operator |
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let rj5 = 0 | 0;
+>rj5 : number
+>    : ^^^^^^
+>0 | 0 : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>0 : 0
+>  : ^
+
+let rj6 = b | 0;
+>rj6 : number
+>    : ^^^^^^
+>b | 0 : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+let rj7 = 0 | b;
+>rj7 : number
+>    : ^^^^^^
+>0 | b : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rj8 = b | b;
+>rj8 : number
+>    : ^^^^^^
+>b | b : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

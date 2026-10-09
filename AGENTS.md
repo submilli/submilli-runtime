@@ -23,8 +23,9 @@ Changes must build and test from this repository without private documentation.
 - Use `.ts` for new source and fixtures; `.subm` remains supported.
 - Accept equivalent TypeScript syntax under the forgiveness principle. Do not
   introduce different semantics merely to accept another spelling.
-- `any` and `undefined` are unsupported. Use concrete types, `unknown`, or `null`.
-  Casts with `as` and non-null assertions are runtime-checked.
+- `any` is unsupported. Use concrete types or `unknown`. Missing values use
+  `undefined`; explicit `null` remains distinct. Optional fields read as
+  `T | undefined`. Casts with `as` and non-null assertions are runtime-checked.
 - Language feature changes need a fixture demonstrating their behavior.
 - Runtime strings are UTF-16 code units. Operate on those units rather than
   round-tripping through Rust UTF-8 strings, which loses lone surrogates.

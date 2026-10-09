@@ -64,16 +64,17 @@ function main(): void {
   }
   assert(scalar, "a scalar under an object type throws");
 
-  // A missing key under a non-nullable `T` is a null that fails the check,
-  // which is why a possibly-absent key wants `T | null`.
-  let absent = false;
+  // Missing keys return undefined; stored null still needs a nullable T.
+  assert(session.get<Progress>("m/absent") === undefined, "missing key returns undefined");
+  session.set("m/null", null);
+  let storedNull = false;
   try {
-    session.get<Progress>("m/absent");
-    assert(false, "a missing key must not pass a non-nullable T");
+    session.get<Progress>("m/null");
+    assert(false, "stored null must not pass a non-nullable T");
   } catch (e: Error) {
-    absent = true;
+    storedNull = true;
   }
-  assert(absent, "a missing key throws under a non-nullable T");
+  assert(storedNull, "stored null throws under a non-nullable T");
 
   // A union arm that matches nothing stored still throws.
   session.set("m/bool", true);
@@ -89,5 +90,5 @@ function main(): void {
   // The store is untouched by a failed read.
   assert(session.has("m/partial"), "a failed read leaves the entry in place");
   const recovered = session.get<Progress | null>("m/absent");
-  assert(recovered === null, "the session is still usable after a caught mismatch");
+  assert(recovered === undefined, "the session is still usable after a caught mismatch");
 }

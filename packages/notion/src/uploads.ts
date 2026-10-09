@@ -44,7 +44,7 @@ export {
 export function uploadFile(sourcePath: string, options: FileUploadOptions): FileUpload {
     validateUploadOptions(options);
     const source = stat(sourcePath);
-    if (source === null || source.kind !== "file") {
+    if (source === undefined || source.kind !== "file") {
         throw validationError("source_not_found", "upload source is not a VFS file");
     }
     if (source.size <= SINGLE_PART_LIMIT) return uploadSinglePart(sourcePath, source.size, options);
@@ -64,11 +64,11 @@ export function getFileUpload(uploadId: string): FileUpload {
 /**
  * List file uploads owned by this connection.
  *
- * @param requestedSize Uploads per page, 1 to 100; `null` uses 100.
- * @param startCursor Cursor from a previous page's `nextCursor`; `null` starts at the first upload.
+ * @param requestedSize Uploads per page, 1 to 100; undefined uses 100.
+ * @param startCursor Cursor from a previous page's `nextCursor`; undefined starts at the first upload.
  * @returns One page of file uploads.
  */
-export function listFileUploads(requestedSize: number | null, startCursor: string | null): PageResult<FileUpload> {
+export function listFileUploads(requestedSize: number | undefined, startCursor: string | undefined): PageResult<FileUpload> {
     const query = new Map<string, string>();
     putQuery(query, "start_cursor", startCursor);
     query.set("page_size", pageSize(requestedSize).toString());
@@ -87,11 +87,11 @@ function uploadSinglePart(sourcePath: string, size: number, options: FileUploadO
     const upload = createUpload("single_part", options, 1);
     const path = trustedUploadPath(upload.uploadUrl);
     const bytes = readBytes(sourcePath, 0, size);
-    return sendPart(path, upload.id, bytes, options, null);
+    return sendPart(path, upload.id, bytes, options);
 }
 
 function uploadMultiPart(sourcePath: string, size: number, options: FileUploadOptions): FileUpload {
-    const chunkSize = options.chunkSize === null ? DEFAULT_CHUNK_SIZE : options.chunkSize;
+    const chunkSize = options.chunkSize ?? DEFAULT_CHUNK_SIZE;
     if (chunkSize < MIN_CHUNK_SIZE || chunkSize > MAX_CHUNK_SIZE) {
         throw validationError("invalid_chunk_size", "multipart chunkSize must be between 5 MiB and 20 MiB");
     }
@@ -109,7 +109,7 @@ function uploadMultiPart(sourcePath: string, size: number, options: FileUploadOp
         partNumber += 1;
     }
     if (upload.completeUrl.length > 0) trustedUploadPath(upload.completeUrl);
-    return fileUploadFrom(notionPost("/file_uploads/" + pathId(upload.id) + "/complete", null).json());
+    return fileUploadFrom(notionPost("/file_uploads/" + pathId(upload.id) + "/complete").json());
 }
 
 function createUpload(mode: string, options: FileUploadOptions, partCount: number): FileUpload {
@@ -129,7 +129,7 @@ function sendPart(
     uploadId: string,
     bytes: Uint8Array,
     options: FileUploadOptions,
-    partNumber: number | null,
+    partNumber?: number,
 ): FileUpload {
     const boundary = "submilli-notion-" + uploadId.replaceAll("-", "");
     const body = multipartBody(boundary, bytes, options, partNumber);
@@ -144,10 +144,10 @@ function multipartBody(
     boundary: string,
     bytes: Uint8Array,
     options: FileUploadOptions,
-    partNumber: number | null,
+    partNumber: number | undefined,
 ): Uint8Array {
     let prefix = "";
-    if (partNumber !== null) {
+    if (partNumber !== undefined) {
         prefix += "--" + boundary + "\r\n"
             + "Content-Disposition: form-data; name=\"part_number\"\r\n\r\n"
             + partNumber.toString() + "\r\n";

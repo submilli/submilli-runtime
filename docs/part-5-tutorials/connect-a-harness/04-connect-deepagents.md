@@ -125,7 +125,7 @@ import jina from "@submilli/jina";
 
 function main(): string {
     const today = Temporal.Now.plainDateISO().toString();
-    const releases = jina.read("https://releases.rs/", null);
+    const releases = jina.read("https://releases.rs/");
     const search = jina.search("Rust blog.rust-lang.org latest stable release announcement", { timeout: 20 });
     return JSON.stringify({ today, releases, search }, null, 2);
 }

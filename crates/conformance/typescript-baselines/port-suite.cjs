@@ -9,7 +9,6 @@
 // A case already in the suite is left alone, so the cases ported whole before
 // pruning existed keep their form. `--refresh` ports again each case pruning cut
 // something from, so what it cut comes back once we support it.
-const ts = require("typescript");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -64,8 +63,6 @@ const EXCLUDED_DIRECTORIES = new Map([
   ["expressions/typeSatisfaction", "`satisfies`"],
   ["expressions/unaryOperators/bitwiseNotOperator", "bitwise operators"],
   ["expressions/unaryOperators/deleteOperator", "`delete`"],
-  ["expressions/unaryOperators/typeofOperator", "`typeof` as an expression"],
-  ["expressions/unaryOperators/voidOperator", "the `void` operator"],
   ["statements/VariableStatements/usingDeclarations", "`using` declarations"],
   ["statements/for-await-ofStatements", "async/await"],
   ["statements/for-inStatements", "`for…in`"],
@@ -84,7 +81,6 @@ const EXCLUDED_DIRECTORIES = new Map([
   ["types/nonPrimitive", "the `object` type"],
   ["types/objectTypeLiteral/constructSignatures", "construct signatures"],
   ["types/objectTypeLiteral/indexSignatures", "index signatures"],
-  ["types/primitives/undefined", "`undefined`"],
   ["types/thisType", "`this` types"],
   ["types/uniqueSymbol", "`Symbol`"],
 ]);
@@ -100,7 +96,6 @@ const EXCLUDED_NAMES = [
   [/ToAny/, "`any`"],
   [/Construct(or)?Signature/, "construct signatures"],
   [/extend\w+Interface/, "adding to a built-in interface"],
-  [/TypeOfUndefined/, "`undefined`"],
   [/InJs/, "JavaScript"],
 ];
 
@@ -131,6 +126,9 @@ const MIN_CHECKS = 5;
 
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes("--case-list") || args.includes("--apply-stage")) {
+    return require("./reimport-cases.cjs").main(args);
+  }
   const refresh = args[0] === "--refresh";
   const [typescript, caseErrors] = refresh ? args.slice(1) : args;
   if (!typescript || !caseErrors) {
@@ -232,7 +230,6 @@ async function portCase(upstream, caseErrors, rel) {
   };
   try {
     await run("node", [path.join(__dirname, "port-case.cjs"), path.join(upstream.conformance, rel), to]);
-    if (leavesUndefined(to)) return drop(REASONS.port, "it leaves an `undefined` it can't rewrite");
     const upstreamErrors = upstreamErrorCodes(upstream, rel);
     // The port renames a repeated `var`, so a check that repeats agree goes.
     if (upstreamErrors.has(`error ${REDECLARED_TYPE_ERROR}`)) {
@@ -271,7 +268,7 @@ function unsupportedCause(rel, lacking) {
 
 /** The codes of errors `tsc` reports on the ported case that the upstream baseline lacks:
  * the port caused it, as when `var` becoming `let` makes a repeated declaration a
- * redeclaration, `undefined` becoming `null` breaks an annotation, or strictness
+ * redeclaration, or strictness
  * inverts what a `@strict: false` case checks. Such a case tests the port. */
 function portCausedErrors(upstreamCodes, portedErrors) {
   return [...errorCodes(portedErrors)]
@@ -293,14 +290,6 @@ function errorCodes(text) {
   return new Set(text.match(/error TS\d+/g) ?? []);
 }
 
-/** Whether the port left an `undefined` its token scan missed, as it can after a
- * template literal with substitutions. */
-function leavesUndefined(file) {
-  const sourceFile = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
-  const visit = (node) => (ts.isIdentifier(node) && node.text === "undefined") || ts.forEachChild(node, visit) === true || undefined;
-  return ts.forEachChild(sourceFile, visit) === true;
-}
-
 /** `tsc`'s errors on a case, one `error TSn: message` per line. */
 async function tscErrorText(file) {
   const { stdout } = await run("node", [path.join(__dirname, "tsc-case.cjs"), file], { maxBuffer: 1 << 26 });
@@ -316,8 +305,7 @@ function printReasons(excluded) {
 }
 
 /** `ported` split into the cases to keep and those whose code, comments and options
- * aside, matches a case already in the suite or one kept before it: `undefined`
- * becoming `null` makes some upstream cases twins. */
+ * aside, matches a case already in the suite or one kept before it. */
 function dropDuplicates(ported) {
   const isPorted = new Set(ported);
   const seen = new Map(
@@ -453,7 +441,9 @@ function findCases(dir) {
     .sort();
 }
 
-main().catch((e) => {
+module.exports = { exclusionBeforePort, excludedDirectory, findCases, wasPruned, upstreamErrorCodes, portCausedErrors, codeOf, unsupportedCause, writeExcluded };
+
+if (require.main === module) main().catch((e) => {
   console.error(e);
   process.exit(1);
 });

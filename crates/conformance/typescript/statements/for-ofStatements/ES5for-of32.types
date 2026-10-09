@@ -48,7 +48,7 @@ for (let num of array) {
 >  : ^
 
     }
-    
+
     sum += num;
 >sum += num : number
 >           : ^^^^^^

@@ -34,7 +34,7 @@ value is a literal or a variable. It is never another field.
 
 | Operator | Value | True when |
 | --- | --- | --- |
-| `==` | String, number, `true`, `false`, `null`, or variable | The field has the value's type and equals it. `field == null` is true only when the field is present and null. |
+| `==` | String, number, `true`, `false`, `null`, or variable | The field has the value's type and equals it. `field == null` is true only when the field is present and null; a field passed as `undefined` is missing. |
 | `!=` | String, number, `true`, `false`, `null`, or variable | The field has the value's type and differs from it. |
 | `<`, `<=`, `>`, `>=` | Number or variable | The field is a number and compares so. |
 | `glob` | Quoted pattern, with or without variables | The field is a string and the whole of it fits the pattern. |

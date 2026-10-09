@@ -26,10 +26,10 @@ class Derived3<T> extends Base2<T> {
     }
 }
 
-/*pruned*/;                         
-                   
-                              
-     
- 
+class Derived4<T> extends Base2<T> {
+    constructor() {
+        let r = super(); // ok
+    }
+}
 
 function main(): void {}

@@ -17,5 +17,5 @@ function main(): void {
   }
   assert(hex(found.match) === "61 d800 62", "the match keeps it");
   const capture = found.groups[0];
-  assert(capture !== null && hex(capture) === "d800", "the capture keeps it");
+  assert(capture !== undefined && hex(capture) === "d800", "the capture keeps it");
 }

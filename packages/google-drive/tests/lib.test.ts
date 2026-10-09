@@ -5,6 +5,7 @@ import {
     FileUploadOptions,
     FileDownloadOptions,
     ShareFileInput,
+    getFile,
 } from "@submilli/google-drive";
 
 function main(): void {
@@ -32,4 +33,17 @@ function main(): void {
     assert(upload.parentId === "folder1", "upload placement is explicit");
     assert(download.overwrite === false, "overwrite behavior is explicit");
     assert(share.emailAddress === "person@example.com", "one sharing principal is represented");
+
+    label("an unbound access token is reported before any request");
+    assert(failure(() => { getFile("file1"); }) === "missing_token", "no token");
+}
+
+function failure(call: () => void): string {
+    try {
+        call();
+    } catch (e) {
+        if (e instanceof DriveError) return e.code;
+        return "unexpected";
+    }
+    return "none";
 }

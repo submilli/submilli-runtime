@@ -1,4 +1,4 @@
-types: 183 of 188 tsc entries compared, 32 differ
+types: 242 of 263 tsc entries compared, 43 differ
 
 line 30: rb3
   tsc:  boolean | 0
@@ -17,12 +17,12 @@ line 36: null && a2
   ours: boolean | null
 
 line 37: rb10
-  tsc:  null
-  ours: boolean | null
+  tsc:  undefined
+  ours: boolean | undefined
 
-line 37: null && a2
-  tsc:  null
-  ours: boolean | null
+line 37: undefined && a2
+  tsc:  undefined
+  ours: boolean | undefined
 
 line 47: rc9
   tsc:  null
@@ -33,12 +33,12 @@ line 47: null && a3
   ours: number | null
 
 line 48: rc10
-  tsc:  null
-  ours: number | null
+  tsc:  undefined
+  ours: number | undefined
 
-line 48: null && a3
-  tsc:  null
-  ours: number | null
+line 48: undefined && a3
+  tsc:  undefined
+  ours: number | undefined
 
 line 52: rd3
   tsc:  string | 0
@@ -57,12 +57,40 @@ line 58: null && a4
   ours: string | null
 
 line 59: rd10
-  tsc:  null
-  ours: string | null
+  tsc:  undefined
+  ours: string | undefined
 
-line 59: null && a4
+line 59: undefined && a4
+  tsc:  undefined
+  ours: string | undefined
+
+line 63: re3
+  tsc:  void | 0
+  ours: number | void
+
+line 63: a3 && a5
+  tsc:  void | 0
+  ours: number | void
+
+line 65: a5
+  tsc:  never
+  ours: void
+
+line 69: re9
   tsc:  null
-  ours: string | null
+  ours: void | null
+
+line 69: null && a5
+  tsc:  null
+  ours: void | null
+
+line 70: re10
+  tsc:  undefined
+  ours: void
+
+line 70: undefined && a5
+  tsc:  undefined
+  ours: void
 
 line 85: rg3
   tsc:  {} | 0
@@ -74,19 +102,19 @@ line 85: a3 && a7
 
 line 91: rg9
   tsc:  null
-  ours: null | {}
+  ours: {} | null
 
 line 91: null && a7
   tsc:  null
-  ours: null | {}
+  ours: {} | null
 
 line 92: rg10
-  tsc:  null
-  ours: null | {}
+  tsc:  undefined
+  ours: {} | undefined
 
-line 92: null && a7
-  tsc:  null
-  ours: null | {}
+line 92: undefined && a7
+  tsc:  undefined
+  ours: {} | undefined
 
 line 96: rh3
   tsc:  0 | string[]
@@ -98,19 +126,19 @@ line 96: a3 && a8
 
 line 102: rh9
   tsc:  null
-  ours: null | string[]
+  ours: string[] | null
 
 line 102: null && a8
   tsc:  null
-  ours: null | string[]
+  ours: string[] | null
 
 line 103: rh10
-  tsc:  null
-  ours: null | string[]
+  tsc:  undefined
+  ours: string[] | undefined
 
-line 103: null && a8
-  tsc:  null
-  ours: null | string[]
+line 103: undefined && a8
+  tsc:  undefined
+  ours: string[] | undefined
 
 line 107: ri3
   tsc:  0 | null
@@ -120,13 +148,29 @@ line 107: a3 && null
   tsc:  0 | null
   ours: number | null
 
-line 118: rj3
-  tsc:  0 | null
-  ours: number | null
+line 114: ri10
+  tsc:  undefined
+  ours: null | undefined
 
-line 118: a3 && null
-  tsc:  0 | null
-  ours: number | null
+line 114: undefined && null
+  tsc:  undefined
+  ours: null | undefined
+
+line 118: rj3
+  tsc:  0 | undefined
+  ours: number | undefined
+
+line 118: a3 && undefined
+  tsc:  0 | undefined
+  ours: number | undefined
+
+line 124: rj9
+  tsc:  null
+  ours: null | undefined
+
+line 124: null && undefined
+  tsc:  null
+  ours: null | undefined
 
 errors:
 line 36: tsc TS2873: This kind of expression is always falsy. (we accept)
@@ -135,6 +179,8 @@ line 47: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 48: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 58: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 59: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 69: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 70: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 91: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 92: tsc TS2873: This kind of expression is always falsy. (we accept)
 line 102: tsc TS2873: This kind of expression is always falsy. (we accept)

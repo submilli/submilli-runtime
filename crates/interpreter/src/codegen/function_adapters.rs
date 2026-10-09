@@ -173,7 +173,7 @@ pub fn emit_bodies(
                 "adapter target function recorded during user-function pre-pass",
             )
         })?;
-        let Type::Function { params, ret, .. } = &meta.signature else {
+        let Type::Function { params, .. } = &meta.signature else {
             return Err(super::internal_failure(
                 "adapter signature requires a function type",
             ));
@@ -202,13 +202,25 @@ pub fn emit_bodies(
             .symbols
             .top_level_fn(&meta.mangled)
             .ok_or_else(|| crate::codegen::internal_failure("adapter target signature recorded"))?;
-        if target.params.len() != params.len() || target.ret.is_void() != ret.is_void() {
+        if target.params.len() != params.len() {
             return Err(super::internal_failure(
                 "adapter signature disagrees with its target",
             ));
         }
         for (i, p_ty) in target.params.iter().enumerate() {
             emitter.instruction(Instruction::LocalGet(super::parameter_local(i)?));
+            let default = ctx
+                .symbols
+                .host_call_defaults(target_idx, target.params.len())
+                .get(i)
+                .and_then(Option::as_ref);
+            super::argument_defaults::emit_argument(
+                &mut emitter,
+                ctx,
+                &Type::Unknown,
+                object_ref,
+                default,
+            )?;
             crate::codegen::cast_check::emit_checked_parameter_cast_on_stack(
                 &mut emitter,
                 ctx,
@@ -217,7 +229,9 @@ pub fn emit_bodies(
             )?;
         }
         emitter.instruction(Instruction::Call(target_idx));
-        if !ret.is_void() {
+        if ctx.symbols.resultless_functions.contains(&target_idx) {
+            super::function_emitter::expr::emit_undefined(&mut emitter, ctx)?;
+        } else {
             cast::emit_box(&mut emitter, ctx, &target.ret)?;
         }
         let built = emitter.build()?;

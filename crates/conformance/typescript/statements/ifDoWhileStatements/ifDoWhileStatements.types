@@ -37,10 +37,10 @@ class C2 extends C {
 }
 
 /*pruned*/;
-              
-                  
-                    
- 
+
+
+
+
 
 function F(x: string): number { return 42; }
 >F : (x: string) => number
@@ -63,21 +63,21 @@ function F2(x: number): boolean { return x < 42; }
 >   : ^^
 
 
-/*pruned*/;  
-                    
-                     
-     
+/*pruned*/;
 
-                                                                  
- 
 
-/*pruned*/;  
-                    
-                   
-     
 
-                                                                  
- 
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
 
 // literals
 if (true) { }
@@ -97,9 +97,18 @@ if (null) { }
 while (null) { }
 do { }while(null)
 
-if (null) { }
-while (null) { }
-do { }while(null)
+if (undefined) { }
+>undefined : undefined
+>          : ^^^^^^^^^
+
+while (undefined) { }
+>undefined : undefined
+>          : ^^^^^^^^^
+
+do { }while(undefined)
+>undefined : undefined
+>          : ^^^^^^^^^
+
 
 if (0.0) { }
 >0.0 : 0
@@ -279,9 +288,9 @@ do { }while(new C())
 >  : ^^^^^^^^
 
 
-/*pruned*/;        
-/*pruned*/;           
-/*pruned*/;            
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 // references
 let a = true;
@@ -320,9 +329,11 @@ do { }while(b)
 >  : ^^^
 
 
-let c = null;
+let c = undefined;
 >c : any
 >  : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 if (c) { }
 >c : any
@@ -501,14 +512,43 @@ do { }while(k)
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-/*pruned*/;                                
-/*pruned*/;  
-/*pruned*/;     
-/*pruned*/;      
+function fn(x?: string): I { return null; }
+>fn : (x?: string) => I
+>   : ^^^^^^^^^^^^^^^^^
+>x : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;
-/*pruned*/;   
-/*pruned*/;    
+if (fn()) { }
+>fn() : I
+>     : ^
+>fn : (x?: string) => I
+>   : ^^^^^^^^^^^^^^^^^
+
+while (fn()) { }
+>fn() : I
+>     : ^
+>fn : (x?: string) => I
+>   : ^^^^^^^^^^^^^^^^^
+
+do { }while(fn())
+>fn() : I
+>     : ^
+>fn : (x?: string) => I
+>   : ^^^^^^^^^^^^^^^^^
+
+
+if (fn) { }
+>fn : (x?: string) => I
+>   : ^^^^^^^^^^^^^^^^^
+
+while (fn) { }
+>fn : (x?: string) => I
+>   : ^^^^^^^^^^^^^^^^^
+
+do { }while(fn)
+>fn : (x?: string) => I
+>   : ^^^^^^^^^^^^^^^^^
+
 
 
 

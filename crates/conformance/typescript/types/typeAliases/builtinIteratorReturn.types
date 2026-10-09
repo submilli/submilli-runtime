@@ -8,8 +8,8 @@ const array: number[] = null as unknown as (number[]);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                                               
-/*pruned*/;                                               
+/*pruned*/;
+/*pruned*/;
 
 const i0 = array[Symbol.iterator]();
 >i0 : ArrayIterator<number>
@@ -70,30 +70,30 @@ for (const x of array);
 >      : ^^^^^^^^
 
 
-/*pruned*/;                       
-/*pruned*/;             
-/*pruned*/;           
-/*pruned*/;              
-/*pruned*/;          
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;                       
-/*pruned*/;             
-/*pruned*/;            
-/*pruned*/;               
-/*pruned*/;          
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;                                                                                     
-/*pruned*/;                                                                                   
-/*pruned*/;                                                                                           
-const i15: Iterable<number, null> = null as unknown as (Iterable<number, null>);
->i15 : Iterable<number, null>
->    : ^^^^^^^^^^^^^^^^^^^^^^
->null as unknown as (Iterable<number, null>) : Iterable<number, null>
->                                            : ^^^^^^^^^^^^^^^^^^^^^^
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+const i15: Iterable<number, undefined> = null as unknown as (Iterable<number, undefined>);
+>i15 : Iterable<number, undefined>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Iterable<number, undefined>) : Iterable<number, undefined>
+>                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                                                   
+/*pruned*/;
 const i17: Iterable<number, boolean> = null as unknown as (Iterable<number, boolean>);
 >i17 : Iterable<number, boolean>
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^

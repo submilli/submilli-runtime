@@ -1,0 +1,19 @@
+types: 53 of 108 tsc entries compared, 2 differ
+
+line 25: xNever.f()
+  tsc:  { a: never; }
+  ours: <error>
+
+line 25: xNever
+  tsc:  X<never>
+  ours: <error>
+
+errors:
+line 25: tsc TS2554: Expected 1 arguments, but got 0. (we accept)
+line 24: ours: `never` cannot be used as a type argument to class `X` — use a value type (tsc accepts)
+line 36: ours: expected 1 argument(s), got 0 (tsc accepts)
+line 37: ours: expected 1 argument(s), got 0 (tsc accepts)
+line 49: ours: expected 3 argument(s), got 2 (tsc accepts)
+line 67: ours: expected 3 argument(s), got 2 (tsc accepts)
+line 68: ours: expected 3 argument(s), got 1 (tsc accepts)
+line 69: ours: expected 3 argument(s), got 0 (tsc accepts)

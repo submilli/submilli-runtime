@@ -8,6 +8,7 @@ use wasm_encoder::{
 };
 #[derive(Clone, Copy, Debug)]
 pub struct IntrinsicTypeIndices {
+    pub undefined: u32,
     pub raw_string: u32,
     pub vtable: u32,
     pub object: u32,
@@ -64,9 +65,10 @@ pub struct IntrinsicTypeIndices {
 
 /// Number of types [`declare_intrinsic_types`] emits — the first free type index
 /// in every module.
-pub const INTRINSIC_TYPE_COUNT: u32 = 51;
+pub const INTRINSIC_TYPE_COUNT: u32 = 52;
 
 pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices {
+    let undefined = 51u32;
     let raw_string = 0u32;
     let vtable = 1u32;
     let object = 2u32;
@@ -792,8 +794,9 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     fieldtype_ref(vtable),
                     fieldtype_ref(string),
                     fieldtype_ref(string),
+                    // port: `number | undefined`
                     FieldType {
-                        element_type: StorageType::Val(ref_null(boxed_number)),
+                        element_type: StorageType::Val(ref_null(object)),
                         mutable: false,
                     },
                     fieldtype_ref(string),
@@ -801,8 +804,9 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                         element_type: StorageType::Val(ref_null(object)),
                         mutable: false,
                     },
+                    // fragment: `string | undefined`
                     FieldType {
-                        element_type: StorageType::Val(ref_null(string)),
+                        element_type: StorageType::Val(ref_null(object)),
                         mutable: false,
                     },
                 ]
@@ -860,10 +864,6 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
     };
     let host_object = FieldType {
         element_type: StorageType::Val(ref_null(object)),
-        mutable: false,
-    };
-    let host_string = FieldType {
-        element_type: StorageType::Val(ref_null(string)),
         mutable: false,
     };
     // fs_stat
@@ -969,11 +969,18 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
             Some(object),
         )
     });
-    // session_page
+    // session_page: `nextCursor` is `string | undefined`
     types.ty().subtype(&SubType {
         is_final: true,
         ..substruct(
-            vec![fieldtype_ref(vtable), fieldtype_ref(array), host_string],
+            vec![
+                fieldtype_ref(vtable),
+                fieldtype_ref(array),
+                FieldType {
+                    element_type: StorageType::Val(ref_null(object)),
+                    mutable: false,
+                },
+            ],
             Some(object),
         )
     });
@@ -994,7 +1001,24 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         )
     });
 
+    // A separate final subtype makes undefined distinguishable from every
+    // boxed primitive and from a plain object after generic erasure.
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                FieldType {
+                    element_type: StorageType::Val(ValType::I64),
+                    mutable: false,
+                },
+            ],
+            Some(object),
+        )
+    });
+
     IntrinsicTypeIndices {
+        undefined,
         raw_string,
         vtable,
         object,
@@ -1061,6 +1085,7 @@ pub(crate) fn intrinsic_supertypes(
     indices: IntrinsicTypeIndices,
 ) -> impl IntoIterator<Item = (u32, u32)> {
     [
+        (indices.undefined, indices.object),
         (indices.string, indices.object),
         (indices.boxed_number, indices.object),
         (indices.boxed_boolean, indices.object),
@@ -1267,6 +1292,7 @@ mod tests {
         assert_eq!(indices.temporal_plain_year_month, 39);
         assert_eq!(indices.temporal_plain_month_day, 40);
         assert_eq!(indices.fs_mount_info, 50);
-        assert_eq!(super::INTRINSIC_TYPE_COUNT, 51);
+        assert_eq!(indices.undefined, 51);
+        assert_eq!(super::INTRINSIC_TYPE_COUNT, 52);
     }
 }

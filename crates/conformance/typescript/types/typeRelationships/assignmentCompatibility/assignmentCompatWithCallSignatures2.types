@@ -12,7 +12,7 @@ interface T {
 >  : ^^^^^^
 
 }
-/*pruned*/;                       
+/*pruned*/;
 let a: { f(x: number): void } = null as unknown as ({ f(x: number): void });
 >a : { f(x: number): void; }
 >  : ^^^^^^^^^^^^^^^^^^^^^^^
@@ -30,8 +30,8 @@ let a: { f(x: number): void } = null as unknown as ({ f(x: number): void });
 >  : ^^^^^^
 
 
-/**/; 
-/**/; 
+/**/;
+/**/;
 
 interface S {
 >S : S
@@ -44,7 +44,7 @@ interface S {
 >  : ^^^^^^
 
 }
-/*pruned*/;                       
+/*pruned*/;
 let a2: { f(x: number): string } = null as unknown as ({ f(x: number): string });
 >a2 : { f(x: number): string; }
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -61,9 +61,9 @@ let a2: { f(x: number): string } = null as unknown as ({ f(x: number): string })
 >x : number
 >  : ^^^^^^
 
-/**/; 
-/**/;  
-/**/; 
+/**/;
+/**/;
+/**/;
 a = a2;
 >a = a2 : { f(x: number): string; }
 >       : ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -73,10 +73,10 @@ a = a2;
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-/*pruned*/;        
-/*pruned*/;              
-/*pruned*/;                          
-/*pruned*/;                        
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 a = { f: () => 1 }
 >a = { f: () => 1 } : { f: () => number; }
 >                   : ^^^^^^^^^^^^^^^^^^^^
@@ -91,7 +91,7 @@ a = { f: () => 1 }
 >1 : 1
 >  : ^
 
-/*pruned*/;               
+/*pruned*/;
 a = { f: function (x: number) { return ''; } }
 >a = { f: function (x: number) { return ''; } } : { f: (x: number) => string; }
 >                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -110,8 +110,8 @@ a = { f: function (x: number) { return ''; } }
 
 
 // errors
-/*pruned*/; 
-/*pruned*/;                            
+/*pruned*/;
+/*pruned*/;
 a = () => 1;
 >a = () => 1 : () => number
 >            : ^^^^^^^^^^^^
@@ -146,7 +146,7 @@ interface S2 {
 >  : ^^^^^^
 
 }
-/*pruned*/;                          
+/*pruned*/;
 let a3: { f(x: string): void } = null as unknown as ({ f(x: string): void });
 >a3 : { f(x: string): void; }
 >   : ^^^^^^^^^^^^^^^^^^^^^^^
@@ -164,11 +164,11 @@ let a3: { f(x: string): void } = null as unknown as ({ f(x: string): void });
 >  : ^^^^^^
 
 // these are errors
-/**/;  
-/**/;  
-/*pruned*/;          
-/*pruned*/;                            
-/**/;  
+/**/;
+/**/;
+/*pruned*/;
+/*pruned*/;
+/**/;
 a = a3;
 >a = a3 : { f(x: string): void; }
 >       : ^^^^^^^^^^^^^^^^^^^^^^^

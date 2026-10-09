@@ -49,6 +49,6 @@ function main(): void {
   // when a provider cannot be relied on to honor a schema.
   const raw = llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
   assert(raw.ok, "the untyped form accepts a response of any shape");
-  assert(raw.text !== null, "and hands the prose back for the caller to parse");
+  assert(raw.text !== undefined, "and hands the prose back for the caller to parse");
   assert((raw.text as string).length > 0, "with the text intact");
 }

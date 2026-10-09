@@ -344,14 +344,20 @@ pub fn declare(defs: &mut PackageDeclaration) {
         "groups",
         match_key("groups"),
         vec![match_self()],
-        Type::Array(Box::new(Type::Union(vec![Type::String, Type::Null]))),
+        Type::Array(Box::new(Type::Union(vec![Type::String, Type::Undefined]))),
     );
     declare_method(
         defs,
         "namedGroups",
         match_key("namedGroups"),
         vec![match_self()],
-        Type::prelude_interface("Map".to_string(), vec![Type::String, Type::String]),
+        Type::prelude_interface(
+            "Map".to_string(),
+            vec![
+                Type::String,
+                Type::Union(vec![Type::String, Type::Undefined]),
+            ],
+        ),
     );
 
     // String regex-arm methods
@@ -446,6 +452,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "test".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("s", Type::String)],
                             ret: Type::Boolean,
@@ -458,6 +465,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "exec".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("s", Type::String)],
                             ret: Type::Union(vec![
@@ -570,25 +578,25 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         PropertySig {
                             ty: Type::Array(Box::new(Type::Union(vec![
                                 Type::String,
-                                Type::Null,
+                                Type::Undefined,
                             ]))),
                             readonly: true,
                             intrinsic: false,
                             optional: false,
                             doc: doc(
-                                "/** Numbered capture groups (1..n). `null` entries represent groups that did not participate in the match (e.g. alternation arms). */",
+                                "/** Numbered capture groups (1..n). `undefined` entries represent groups that did not participate in the match (e.g. alternation arms). */",
                             ),
                         },
                     ),
                     (
                         "namedGroups".to_string(),
                         PropertySig {
-                            ty: Type::prelude_interface("Map".to_string(), vec![Type::String, Type::String]),
+                            ty: Type::prelude_interface("Map".to_string(), vec![Type::String, Type::Union(vec![Type::String, Type::Undefined])]),
                             readonly: true,
                             intrinsic: false,
                             optional: false,
                             doc: doc(
-                                "/** Named capture groups as a `Map<string, string>`. Unmatched named captures are omitted (no entry in the map). */",
+                                "/** Named capture groups as a `Map<string, string | undefined>`. Unmatched named captures have an undefined value. */",
                             ),
                         },
                     ),
@@ -612,6 +620,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "new".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: Vec::new(),
                         params: vec![
                             Param::new("source", Type::String),

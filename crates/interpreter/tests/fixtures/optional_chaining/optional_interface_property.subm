@@ -1,8 +1,8 @@
-function size(xs: number[] | null): number | null {
+function size(xs: number[] | null): number | undefined {
   return xs?.length;
 }
 
 function main(): void {
   assert(size([1, 2, 3]) === 3, "non-null length");
-  assert(size(null) === null, "null short-circuits length");
+  assert(size(null) === undefined, "null short-circuits length");
 }

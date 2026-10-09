@@ -7,9 +7,9 @@ function main(): void {
   assert(bytes.at(-1) === 40, "at -1 (last)");
   assert(bytes.at(-4) === 10, "at -length (first)");
 
-  assert(bytes.at(4) === null, "at length is null");
-  assert(bytes.at(-5) === null, "at -length-1 is null");
+  assert(bytes.at(4) === undefined, "at length is undefined");
+  assert(bytes.at(-5) === undefined, "at -length-1 is undefined");
 
   let empty: Uint8Array = Uint8Array.alloc(0);
-  assert(empty.at(0) === null, "at on empty");
+  assert(empty.at(0) === undefined, "at on empty");
 }

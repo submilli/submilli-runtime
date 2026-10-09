@@ -7,9 +7,6 @@ thread_local! {
     static FAIL_RENDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-const VOID_IS_NOT_A_VALUE: &str = "`void` is not a value: a function declared `: void` produces nothing. \
-Call it as its own statement, then produce the value separately.";
-
 pub(super) fn type_mismatch_help(expected: &Type, got: &Type) -> Result<Vec<String>, RenderError> {
     let mut help = Vec::new();
     help.try_reserve(2).map_err(|_| RenderError::Allocation)?;
@@ -79,15 +76,11 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<Str
         (expected, got),
         (Type::Object { .. }, Type::Object { .. }) | (Type::Function { .. }, Type::Function { .. })
     );
-    let is_void = matches!(got.peel(), Type::Void) && !matches!(expected.peel(), Type::Void);
     let readonly = super::assignable::drops_readonly(got, expected);
-    if !has_diff && !is_void && !readonly {
+    if !has_diff && !readonly {
         return Ok(None);
     }
     Writer::render(RenderLimits::default(), |out| {
-        if is_void {
-            return out.push(VOID_IS_NOT_A_VALUE);
-        }
         if readonly {
             out.push("`")?;
             write_type(out, got)?;
@@ -113,6 +106,18 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<Str
                     write_expected(out, expected, got)
                 }
             }
+            // Differing optional counts make the parameter lists differ
+            // where no row shows it, so the plain mismatch says more.
+            (
+                Type::Function {
+                    optional: a_optional,
+                    ..
+                },
+                Type::Function {
+                    optional: b_optional,
+                    ..
+                },
+            ) if a_optional != b_optional => write_expected(out, expected, got),
             (
                 Type::Function {
                     params: a,
@@ -419,12 +424,14 @@ mod tests {
                 ret: Box::new(Type::Void),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
             &Type::Function {
                 params: vec![Type::Number, Type::Number],
                 ret: Box::new(Type::Void),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
         );
         insta::assert_snapshot!(out.unwrap());
@@ -438,12 +445,14 @@ mod tests {
                 ret: Box::new(Type::Boolean),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
             &Type::Function {
                 params: vec![Type::Number, Type::Number],
                 ret: Box::new(Type::Boolean),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
         );
         insta::assert_snapshot!(out.unwrap());
@@ -457,12 +466,14 @@ mod tests {
                 ret: Box::new(Type::Number),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
             &Type::Function {
                 params: vec![],
                 ret: Box::new(Type::String),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
         );
         insta::assert_snapshot!(out.unwrap());
@@ -476,12 +487,14 @@ mod tests {
                 ret: Box::new(Type::Boolean),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
             &Type::Function {
                 params: vec![Type::String, Type::String, Type::Number],
                 ret: Box::new(Type::Void),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
         );
         insta::assert_snapshot!(out.unwrap());

@@ -1,0 +1,5 @@
+contextuallyTypedIifeStrict.ts(16,10): error TS18048: 'j' is possibly 'undefined'.
+contextuallyTypedIifeStrict.ts(17,10): error TS18048: 'k' is possibly 'undefined'.
+contextuallyTypedIifeStrict.ts(18,17): error TS18048: 'o' is possibly 'undefined'.
+contextuallyTypedIifeStrict.ts(30,27): error TS7006: Parameter 'i' implicitly has an 'any' type.
+contextuallyTypedIifeStrict.ts(31,43): error TS7006: Parameter 'n' implicitly has an 'any' type.

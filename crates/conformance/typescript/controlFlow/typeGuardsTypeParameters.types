@@ -96,15 +96,15 @@ function f2<T>(x: T): void {
 
 // Repro from #13872
 
-/*pruned*/;                                            
-                                 
-                             
-                                
-                                        
-                                
-         
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
+
 
 
 function main(): void {}

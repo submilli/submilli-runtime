@@ -120,7 +120,7 @@ let unionTuple2: [C, string | number, D] = [new C(), "foo", new D()];
 >D : typeof D
 >  : ^^^^^^^^
 
-let unionTuple3: [number, string| number] = [10, "foo"]; 
+let unionTuple3: [number, string| number] = [10, "foo"];
 >unionTuple3 : [number, string | number]
 >            : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >[10, "foo"] : [number, string]
@@ -216,14 +216,14 @@ numStrTuple = unionTuple3;
 
 
 // repro from #29311
-/*pruned*/;               
-/*pruned*/;                        
-/*pruned*/;              
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 // #52551
-/*pruned*/;         
-/*pruned*/;                                                   
-/*pruned*/;                       
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 
 function main(): void {}

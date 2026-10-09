@@ -65,7 +65,7 @@ function source(count: number): Source<Box> {
           churn();
           n++;
           if (n > count) {
-            const done: IteratorResult<Box> = { done: true };
+            const done: IteratorResult<Box> = { done: true, value: undefined };
             return done;
           }
           const step: IteratorResult<Box> = { done: false, value: new Box(n) };
@@ -86,12 +86,13 @@ function pairSource(count: number): Source<[Box, Box]> {
           churn();
           n++;
           if (n > count) {
-            const done: IteratorResult<[Box, Box]> = { done: true };
+            const done: IteratorResult<[Box, Box]> = { done: true, value: undefined };
             return done;
           }
+          const pair: [Box, Box] = [new Box(n), new Box(n * 10)];
           const step: IteratorResult<[Box, Box]> = {
             done: false,
-            value: [new Box(n), new Box(n * 10)],
+            value: pair,
           };
           return step;
         },
@@ -195,7 +196,7 @@ function droppedElements(): void {
     return box.v === 8;
   });
   churn();
-  assert(found !== null && found.v === 8, "find keeps elements its callback removed");
+  assert(found !== undefined && found.v === 8, "find keeps elements its callback removed");
 
   const tested = boxes(8);
   const every = tested.every((box: Box) => {

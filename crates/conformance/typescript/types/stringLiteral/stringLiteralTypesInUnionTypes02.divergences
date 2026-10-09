@@ -1,4 +1,4 @@
-types: 24 of 32 tsc entries compared, 11 differ
+types: 26 of 34 tsc entries compared, 11 differ
 
 line 8: y
   tsc:  string

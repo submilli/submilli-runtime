@@ -21,7 +21,7 @@ function foo<T>(x: (a: T) => T): T {
 }
 
 /*pruned*/;                   // {}
-/*pruned*/;                            // string 
+/*pruned*/;                            // string
 let r3 = foo(x => ''); // {}
 >r3 : unknown
 >   : ^^^^^^^
@@ -78,7 +78,7 @@ let r5 = foo2(1, (a) => ''); // string
 >'' : ""
 >   : ^^
 
-/*pruned*/;                                       
+/*pruned*/;
 
 function foo3<T, U>(x: T, cb: (a: T) => U, y: U): U {
 >foo3 : <T, U>(x: T, cb: (a: T) => U, y: U) => U

@@ -7,7 +7,7 @@ if (true) {
     let x = 3;
     for (let x = 0; ;) { }
 }
-let x_3 = <number>null;
+let x_3 = <number>undefined;
 
 // new declaration space, making redeclaring x as a string valid
 function declSpace(): void {
@@ -18,10 +18,10 @@ interface Point { x: number; y: number; }
 
 let p: Point = null as unknown as (Point);
 let p_2 = { x: 1, y: 2 };
-let p_3: Point = { x: 0, y: null };
-let p_4 = { x: 1, y: <number>null };
+let p_3: Point = { x: 0, y: undefined };
+let p_4 = { x: 1, y: <number>undefined };
 let p_5: { x: number; y: number; } = { x: 1, y: 2 };
-let p_6 = <{ x: number; y: number; }>{ x: 0, y: null };
+let p_6 = <{ x: number; y: number; }>{ x: 0, y: undefined };
 let p_7: typeof p = null as unknown as (typeof p);
 
 let fn = function (s: string) { return 42; }

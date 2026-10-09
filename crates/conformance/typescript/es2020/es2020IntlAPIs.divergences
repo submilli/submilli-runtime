@@ -1,0 +1,70 @@
+types: 43 of 207 tsc entries compared, 14 differ
+
+line 22: rtf1.format(3, 'quarter')
+  tsc:  string
+  ours: <error>
+
+line 22: rtf1
+  tsc:  Intl.RelativeTimeFormat
+  ours: <error>
+
+line 25: rtf1.format(-1, 'day')
+  tsc:  string
+  ours: <error>
+
+line 25: rtf1
+  tsc:  Intl.RelativeTimeFormat
+  ours: <error>
+
+line 30: rtf2.format(2, 'day')
+  tsc:  string
+  ours: <error>
+
+line 30: rtf2
+  tsc:  Intl.RelativeTimeFormat
+  ours: <error>
+
+line 37: regionNamesInEnglish.of('US')
+  tsc:  string | undefined
+  ours: <error>
+
+line 37: regionNamesInEnglish
+  tsc:  Intl.DisplayNames
+  ours: <error>
+
+line 40: regionNamesInTraditionalChinese.of('US')
+  tsc:  string | undefined
+  ours: <error>
+
+line 40: regionNamesInTraditionalChinese
+  tsc:  Intl.DisplayNames
+  ours: <error>
+
+line 55: localesArg
+  tsc:  (string | Intl.Locale)[]
+  ours: string[]
+
+line 55: ["es-ES", new Intl.Locale("en-US")]
+  tsc:  (string | Intl.Locale)[]
+  ours: string[]
+
+line 57: localesArg
+  tsc:  (string | Intl.Locale)[]
+  ours: string[]
+
+line 59: localesArg
+  tsc:  (string | Intl.Locale)[]
+  ours: string[]
+
+errors:
+line 20: ours: unresolved identifier `Intl` (tsc accepts)
+line 28: ours: unresolved identifier `Intl` (tsc accepts)
+line 34: ours: unresolved identifier `Intl` (tsc accepts)
+line 35: ours: unresolved identifier `Intl` (tsc accepts)
+line 48: ours: unresolved identifier `Intl` (tsc accepts)
+line 53: ours: unresolved identifier `Intl` (tsc accepts)
+line 55: ours: unresolved identifier `Intl` (tsc accepts)
+line 56: ours: unresolved identifier `Intl` (tsc accepts)
+line 57: ours: unresolved identifier `Intl` (tsc accepts)
+line 58: ours: unresolved identifier `Intl` (tsc accepts)
+line 59: ours: unresolved identifier `Intl` (tsc accepts)

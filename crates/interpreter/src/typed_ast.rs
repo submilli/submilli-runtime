@@ -19,6 +19,7 @@ pub enum TypedExprKind {
     String(String),
     Boolean(bool),
     Null,
+    Undefined,
     /// `this` inside a class method or constructor body. A leaf; `TypedExpr.ty`
     /// carries the enclosing class's `Type::ClassRef`. Codegen lowers it to
     /// `local.get <this-slot>` (the receiver param for methods, the allocated
@@ -50,9 +51,9 @@ pub enum TypedExprKind {
     },
     /// Evaluate `effect`, discard its value, then yield `result`.
     ///
-    /// No surface syntax lowers to this — the comma operator is out of scope.
-    /// It exists so a fold that decides an expression's *value* statically can
-    /// still keep the computation that produced the operand: `typeof f() ===
+    /// The `void` operator lowers to this with an undefined result. It also
+    /// lets a fold that decides an expression's *value* statically keep the
+    /// computation that produced the operand: `typeof f() ===
     /// "number"` has a constant answer when `f`'s return type decides the tag,
     /// but JS evaluates the operand either way.
     EffectThen {
@@ -409,11 +410,11 @@ pub struct TypedObjectFieldOrigin {
     pub name: Ident,
     pub source: TypedObjectFieldSource,
     /// Carried so the shape collector and codegen build the object's struct
-    /// with the right optional flags — an absent optional must read back null
-    /// and be omitted by `JSON.stringify`, not materialized as a `null` slot.
+    /// with the right optional flags — an absent optional must read back
+    /// `undefined` and be omitted by `JSON.stringify`.
     pub optional: bool,
     /// The field's declared type, not the source value's type. They diverge for
-    /// a null-filled optional field (value is `Type::Null`, declared type is the
+    /// an `undefined`-filled optional field (value is `Type::Undefined`, declared type is the
     /// real type) and for a literal widened to its hint. The shape collector and
     /// codegen must build the object's struct — and its `TypeInfo` — from this so
     /// `JSON.stringify` serializes by the declared type, not the fill value.
@@ -421,7 +422,7 @@ pub struct TypedObjectFieldOrigin {
 }
 
 /// The structural type an object literal of type `ty` is built with. Its fields
-/// come from `fields`, which hold the null-filled optional fields and the
+/// come from `fields`, which hold the `undefined`-filled optional fields and the
 /// declared field types a literal's own type can leave out or narrow. A type
 /// with an index signature (from a spread) is already the layout.
 pub fn object_literal_layout(ty: &Type, fields: &[TypedObjectFieldOrigin]) -> Type {
@@ -525,9 +526,10 @@ impl TypedArrayElement {
     }
 }
 
-/// `"undefined"` is unsupported — Submilli has no `undefined`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TypeofTagKind {
+    Undefined,
+    BigInt,
     Number,
     String,
     Boolean,
@@ -547,6 +549,9 @@ pub enum Intrinsic {
     JsonParse,
     /// `BigInt.fromString(s)` — decimal parse via `submilli:bigint.fromString`; throws on failure.
     BigIntFromString,
+    /// A template interpolation whose value may be `null`, `undefined` or of a
+    /// type only known at run time — JavaScript's ToString, as `${x}` performs.
+    ToString,
 }
 
 impl Intrinsic {
@@ -566,6 +571,7 @@ impl Intrinsic {
                 Param::new("condition", Type::Boolean),
                 Param {
                     name: "message".to_string(),
+                    optional: true,
                     ty: Type::String,
                     default: Some(crate::DefaultValue::String("assertion failed".to_string())),
                     rest: false,
@@ -574,6 +580,7 @@ impl Intrinsic {
             Intrinsic::BigIntFromString => vec![Param::new("value", Type::String)],
             Intrinsic::JsonStringify => vec![Param::new("value", Type::Error)],
             Intrinsic::JsonParse => vec![Param::new("text", Type::String)],
+            Intrinsic::ToString => vec![Param::new("value", Type::Unknown)],
         }
     }
 
@@ -584,6 +591,7 @@ impl Intrinsic {
             Intrinsic::BigIntFromString => crate::Type::BigInt,
             Intrinsic::JsonStringify => crate::Type::String,
             Intrinsic::JsonParse => crate::Type::Unknown,
+            Intrinsic::ToString => crate::Type::String,
         }
     }
 
@@ -593,6 +601,7 @@ impl Intrinsic {
             Intrinsic::BigIntFromString => "BigInt.fromString",
             Intrinsic::JsonStringify => "JSON.stringify",
             Intrinsic::JsonParse => "JSON.parse",
+            Intrinsic::ToString => "String",
         }
     }
 }
@@ -810,6 +819,9 @@ pub enum TypedSwitchValue {
     Null {
         span: Span,
     },
+    Undefined {
+        span: Span,
+    },
     /// `value` is the lowered runtime representation.
     Enum {
         enum_name: MangledName,
@@ -829,6 +841,8 @@ pub enum EnumVariantPayload {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedParam {
     pub name: Ident,
+    /// Whether the caller may omit this parameter.
+    pub optional: bool,
     pub ty: Type,
     /// Set by Capture when an inner closure captures this param. The Wasm signature
     /// is unaffected — codegen emits a body prologue that wraps the arg into
@@ -843,6 +857,8 @@ pub struct TypedParam {
 
 #[derive(Default, Clone, Debug)]
 pub struct TypedAst {
+    /// Number of parameter-initialization statements before a wrapped body.
+    pub parameter_default_prologues: std::collections::BTreeMap<StmtId, usize>,
     /// Receiver types for ordinary function expressions; arrows capture their receiver.
     pub closure_this: std::collections::BTreeMap<ExprId, Type>,
     /// Named function-expression bindings, scoped to their closure body.
@@ -856,6 +872,12 @@ pub struct TypedAst {
     pub placeholder_closures: std::collections::BTreeSet<ExprId>,
     /// Arguments before omitted defaults and rest packing, keyed by call span.
     pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<ExprId>>,
+    /// Parameter declaration types before optional/default ABI input widening.
+    pub authored_parameter_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
+    /// Synthetic reads of incoming arguments before a parameter becomes initialized.
+    pub parameter_inputs: std::collections::BTreeSet<ExprId>,
+    /// Callee prologue statements that initialize parameters and pattern bindings.
+    pub parameter_initializations: std::collections::BTreeSet<StmtId>,
     /// Authored expression types retained by runtime-value lowering for member
     /// selection. Physical slot types live on the lowered expressions.
     pub runtime_source_types: std::collections::BTreeMap<ExprId, Type>,
@@ -1157,6 +1179,8 @@ pub struct InterfaceNarrowingTest {
     #[serde(default = "interface_shape_allowed_default")]
     pub shape_allowed: bool,
     pub nullable: bool,
+    #[serde(default)]
+    pub undefined: bool,
 }
 
 fn interface_shape_allowed_default() -> bool {
@@ -1218,6 +1242,8 @@ pub(crate) fn field_runtime_type_is_testable(ty: &Type) -> bool {
 fn runtime_type_is_testable_inner(ty: &Type, allow_recursive_ref: bool) -> bool {
     match ty.peel() {
         Type::Null
+        | Type::Undefined
+        | Type::Void
         | Type::Number
         | Type::NumberLiteral(_)
         | Type::Boolean
@@ -1233,7 +1259,10 @@ fn runtime_type_is_testable_inner(ty: &Type, allow_recursive_ref: bool) -> bool 
         | Type::ClassRef { .. } => true,
         Type::AliasRef { .. } | Type::InterfaceRef { .. } => allow_recursive_ref,
         Type::Array(elem) => runtime_type_is_testable_inner(elem, allow_recursive_ref),
-        Type::Tuple(elems) | Type::Union(elems) => elems
+        Type::Tuple(elems) => elems
+            .iter()
+            .all(|elem| runtime_type_is_testable_inner(elem, allow_recursive_ref)),
+        Type::Union(elems) => elems
             .iter()
             .all(|elem| runtime_type_is_testable_inner(elem, allow_recursive_ref)),
         Type::Object { fields, index } => {
@@ -1476,6 +1505,7 @@ impl TypedAst {
                 | TypedExprKind::String(_)
                 | TypedExprKind::Boolean(_)
                 | TypedExprKind::Null
+                | TypedExprKind::Undefined
                 | TypedExprKind::This
                 | TypedExprKind::Regex { .. }
                 | TypedExprKind::LocalRef { .. }
@@ -1628,6 +1658,7 @@ mod tests {
     #[test]
     fn typed_param_construction() {
         let p = TypedParam {
+            optional: false,
             name: Ident {
                 name: "param".to_string(),
                 span: Span::new(crate::FileId(0), 10, 15).unwrap(),

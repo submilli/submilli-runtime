@@ -42,7 +42,12 @@ pub(crate) fn alias_ref_names(ty: &Type) -> BTreeSet<MangledName> {
 fn walk_alias_refs(ty: &Type, visit: &mut dyn FnMut(&MangledName)) {
     match ty {
         Type::AliasRef { mangled, .. } => visit(mangled),
-        Type::Union(ms) | Type::Tuple(ms) => {
+        Type::Tuple(ms) => {
+            for m in ms {
+                walk_alias_refs(m, visit);
+            }
+        }
+        Type::Union(ms) => {
             for m in ms {
                 walk_alias_refs(m, visit);
             }

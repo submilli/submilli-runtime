@@ -18,7 +18,7 @@ function main(): void {
   keys.set(sub, 7);
   sub.message = "changed";
   assert(keys.get(sub) === 7);
-  assert(keys.get(new NotFoundError("changed")) === null);
+  assert(keys.get(new NotFoundError("changed")) === undefined);
   assert(base !== sub);
   assert(sub !== base);
 

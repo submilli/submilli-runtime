@@ -1,4 +1,28 @@
-types: 48 of 80 tsc entries compared, 0 differ
+types: 48 of 80 tsc entries compared, 6 differ
+
+line 17: d1
+  tsc:  { a: string | number; }
+  ours: { a: number | string | undefined }
+
+line 17: { a: 123, ...d }
+  tsc:  { a: string | number; }
+  ours: { a: number | string | undefined }
+
+line 21: c2
+  tsc:  { a: string | number; }
+  ours: { a: number | string | undefined }
+
+line 21: { a: 123, ...(t ? c : {}) }
+  tsc:  { a: string | number; }
+  ours: { a: number | string | undefined }
+
+line 22: d2
+  tsc:  { a: string | number; }
+  ours: { a: number | string | undefined }
+
+line 22: { a: 123, ...(t ? d : {}) }
+  tsc:  { a: string | number; }
+  ours: { a: number | string | undefined }
 
 errors:
 line 14: tsc TS2783: 'a' is specified more than once, so this usage will be overwritten. (we accept)

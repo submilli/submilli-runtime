@@ -24,9 +24,9 @@ class Derived2 extends Base { baz: string; }
 >baz : string
 >    : ^^^^^^
 
-/*pruned*/;                                
-/*pruned*/;                                         
-/*pruned*/;                                            
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 let r2 = true ? 1 : '';
 >r2 : string | number
@@ -40,7 +40,7 @@ let r2 = true ? 1 : '';
 >'' : ""
 >   : ^^
 
-/*pruned*/;                        
+/*pruned*/;
 
 function foo<T, U>(t: T, u: U): T | U {
 >foo : <T, U>(t: T, u: U) => T | U
@@ -66,13 +66,13 @@ function foo<T, U>(t: T, u: U): T | U {
 
 }
 
-/*pruned*/;                                                                               
-                                                    
- 
+/*pruned*/;
 
-/*pruned*/;                                                
-                        
- 
+
+
+/*pruned*/;
+
+
 
 function main(): void {}
 >main : () => void

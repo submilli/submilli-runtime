@@ -26,9 +26,11 @@ function foo(): void {
 
 }
 
-class C1 extends null { }
+class C1 extends undefined { }
 >C1 : C1
 >   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 class C2 extends true { }
 >C2 : C2

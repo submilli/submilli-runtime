@@ -1,51 +1,69 @@
 === literalTypesAndDestructuring.ts ===
 
-let x: { a: 0 | 1 | null } = null as unknown as ({ a: 0 | 1 | null });
->x : { a: 0 | 1 | null; }
->  : ^^^^^^^^^^^^^^^^^^^^
->a : 0 | 1 | null
->  : ^^^^^^^^^^^^
->null as unknown as ({ a: 0 | 1 | null }) : { a: 0 | 1 | null; }
->                                         : ^^^^^^^^^^^^^^^^^^^^
+let x: { a: 0 | 1 | undefined } = null as unknown as ({ a: 0 | 1 | undefined });
+>x : { a: 0 | 1 | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : 0 | 1 | undefined
+>  : ^^^^^^^^^^^^^^^^^
+>null as unknown as ({ a: 0 | 1 | undefined }) : { a: 0 | 1 | undefined; }
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
->a : 0 | 1 | null
->  : ^^^^^^^^^^^^
+>a : 0 | 1 | undefined
+>  : ^^^^^^^^^^^^^^^^^
 
 
 let { a: a1 } = x;
 >a : any
 >  : ^^^
->a1 : 0 | 1 | null
->   : ^^^^^^^^^^^^
->x : { a: 0 | 1 | null; }
->  : ^^^^^^^^^^^^^^^^^^^^
+>a1 : 0 | 1 | undefined
+>   : ^^^^^^^^^^^^^^^^^
+>x : { a: 0 | 1 | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;           
-/*pruned*/;           
-/*pruned*/;                    
+let { a: a2 = 0 } = x;
+>a : any
+>  : ^^^
+>a2 : 0 | 1
+>   : ^^^^^
+>0 : 0
+>  : ^
+>x : { a: 0 | 1 | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let { a: a3 = 2 } = x;
+>a : any
+>  : ^^^
+>a3 : number
+>   : ^^^^^^
+>2 : 2
+>  : ^
+>x : { a: 0 | 1 | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/*pruned*/;
 
 let b1 = x.a;
->b1 : 0 | 1 | null
->   : ^^^^^^^^^^^^
->x.a : 0 | 1 | null
->    : ^^^^^^^^^^^^
->x : { a: 0 | 1 | null; }
->  : ^^^^^^^^^^^^^^^^^^^^
->a : 0 | 1 | null
->  : ^^^^^^^^^^^^
+>b1 : 0 | 1 | undefined
+>   : ^^^^^^^^^^^^^^^^^
+>x.a : 0 | 1 | undefined
+>    : ^^^^^^^^^^^^^^^^^
+>x : { a: 0 | 1 | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : 0 | 1 | undefined
+>  : ^^^^^^^^^^^^^^^^^
 
 let b2 = x.a ?? 0;
 >b2 : 0 | 1
 >   : ^^^^^
 >x.a ?? 0 : 0 | 1
 >         : ^^^^^
->x.a : 0 | 1 | null
->    : ^^^^^^^^^^^^
->x : { a: 0 | 1 | null; }
->  : ^^^^^^^^^^^^^^^^^^^^
->a : 0 | 1 | null
->  : ^^^^^^^^^^^^
+>x.a : 0 | 1 | undefined
+>    : ^^^^^^^^^^^^^^^^^
+>x : { a: 0 | 1 | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : 0 | 1 | undefined
+>  : ^^^^^^^^^^^^^^^^^
 >0 : 0
 >  : ^
 
@@ -54,16 +72,16 @@ let b3 = x.a ?? 2;
 >   : ^^^^^^
 >x.a ?? 2 : 0 | 1 | 2
 >         : ^^^^^^^^^
->x.a : 0 | 1 | null
->    : ^^^^^^^^^^^^
->x : { a: 0 | 1 | null; }
->  : ^^^^^^^^^^^^^^^^^^^^
->a : 0 | 1 | null
->  : ^^^^^^^^^^^^
+>x.a : 0 | 1 | undefined
+>    : ^^^^^^^^^^^^^^^^^
+>x : { a: 0 | 1 | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : 0 | 1 | undefined
+>  : ^^^^^^^^^^^^^^^^^
 >2 : 2
 >  : ^
 
-/*pruned*/;                
+/*pruned*/;
 
 // Repro from #35693
 
@@ -71,15 +89,27 @@ interface Foo {
 >Foo : Foo
 >    : ^^^
 
-  bar: 'yo' | 'ha' | null;
->bar : "yo" | "ha" | null
->    : ^^^^^^^^^^^^^^^^^^
+  bar: 'yo' | 'ha' | undefined;
+>bar : "yo" | "ha" | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
 
 }
 
-/*pruned*/;                    
+let { bar = 'yo' } = {} as Foo;
+>bar : "yo" | "ha"
+>    : ^^^^^^^^^^^
+>'yo' : "yo"
+>     : ^^^^
+>{} as Foo : Foo
+>          : ^^^
+>{} : {}
+>   : ^^
 
-;     // "yo" | "ha"
+
+bar;  // "yo" | "ha"
+>bar : "yo" | "ha"
+>    : ^^^^^^^^^^^
+
 
 
 function main(): void {}

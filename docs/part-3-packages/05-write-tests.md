@@ -111,7 +111,7 @@ ok   packages/billing/tests/lib.test.ts :: refuses a zero amount
 FAIL packages/billing/tests/network.test.ts
 error: Error: BILLING_API_KEY is not configured for this blueprint
   at requestHeaders (@acme/billing/lib:73:25)  [thrown here]
-72 |     if (key === null) {
+72 |     if (key === undefined) {
 73 |         throw new Error("BILLING_API_KEY is not configured for this blueprint");
    |                         ^
 74 |     }

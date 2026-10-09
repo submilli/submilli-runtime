@@ -8,6 +8,7 @@ import {
     buildListIssuesVars,
     graphqlErrorMessage,
     httpFailureMessage,
+    GraphQlResponse,
     IssueCreateInput,
     IssueUpdateInput,
     Page,
@@ -16,7 +17,7 @@ import {
 
 function main(): void {
     label("issue filter: empty cases");
-    assert(JSON.stringify(buildIssueFilter(null)) === "{}", "null filter is empty");
+    assert(JSON.stringify(buildIssueFilter()) === "{}", "omitted filter is empty");
     assert(JSON.stringify(buildIssueFilter({})) === "{}", "filter with no fields is empty");
 
     label("issue filter: single clause, others omitted");
@@ -70,8 +71,8 @@ function main(): void {
 
     label("page vars: a default `first` is always sent (Linear rejects `after` without it)");
     assert(
-        JSON.stringify(buildPageVars(null)) === "{\"first\":50}",
-        "null page still sends a default first",
+        JSON.stringify(buildPageVars()) === "{\"first\":50}",
+        "omitted page still sends a default first",
     );
     assert(JSON.stringify(buildPageVars({ first: 25 })) === "{\"first\":25}", "explicit first wins");
     assert(
@@ -90,11 +91,11 @@ function main(): void {
         "filter and first present, after omitted",
     );
     assert(
-        JSON.stringify(buildListIssuesVars(null, null)) === "{\"first\":50}",
+        JSON.stringify(buildListIssuesVars()) === "{\"first\":50}",
         "no filter, no page still sends a default first",
     );
     assert(
-        JSON.stringify(buildListIssuesVars(null, { after: "cur" })) === "{\"after\":\"cur\",\"first\":50}",
+        JSON.stringify(buildListIssuesVars(undefined, { after: "cur" })) === "{\"after\":\"cur\",\"first\":50}",
         "cursor-only list-issues page gets a default first",
     );
 
@@ -192,4 +193,35 @@ function main(): void {
         { message: "Argument Validation Error", extensions: { userPresentableMessage: "after needs first" } },
     ]);
     assert(presentable.includes("after needs first"), "user-presentable message is surfaced");
+
+    label("an errors-only 200 body casts, so the GraphQL error is reported instead of a cast failure");
+    const errorsOnly = JSON.parse(
+        "{\"errors\":[{\"message\":\"Entity not found\",\"path\":null,\"extensions\":null}]}",
+    ) as GraphQlResponse<Issue>;
+    assert(errorsOnly.data === undefined, "omitted data reads as undefined");
+    const errorsOnlyErrors = errorsOnly.errors;
+    assert(
+        errorsOnlyErrors !== undefined && errorsOnlyErrors !== null &&
+            graphqlErrorMessage(errorsOnlyErrors) === "Linear GraphQL error: Entity not found",
+        "null path and extensions are tolerated",
+    );
+    const nullErrors = JSON.parse("{\"data\":null,\"errors\":null}") as GraphQlResponse<Issue>;
+    assert(nullErrors.data === null && nullErrors.errors === null, "explicit nulls cast");
+
+    label("null extension fields are skipped when rendering");
+    assert(
+        httpFailureMessage(
+            400,
+            "Bad Request",
+            "{\"errors\":[{\"message\":\"Bad\",\"extensions\":{\"code\":null,\"userPresentableMessage\":null,\"validationErrors\":[{\"property\":null},{\"property\":\"first\"}]}}]}",
+        ) === "Linear GraphQL error: Bad (invalid arguments: first)",
+        "null code, message, and property are skipped",
+    );
+
+    label("an issue in an unnamed cycle parses");
+    const page = JSON.parse(
+        "{\"nodes\":[{\"id\":\"i\",\"identifier\":\"ENG-1\",\"number\":1,\"title\":\"T\",\"description\":null,\"priority\":0,\"priorityLabel\":\"No priority\",\"url\":\"https://linear.app/x\",\"createdAt\":\"2026-01-01T00:00:00Z\",\"updatedAt\":\"2026-01-01T00:00:00Z\",\"completedAt\":null,\"canceledAt\":null,\"startedAt\":null,\"triagedAt\":null,\"archivedAt\":null,\"autoClosedAt\":null,\"dueDate\":null,\"estimate\":null,\"labelIds\":[],\"assignee\":null,\"creator\":null,\"team\":null,\"state\":null,\"project\":null,\"cycle\":{\"id\":\"c\",\"number\":3,\"name\":null,\"startsAt\":null,\"endsAt\":null}}],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}",
+    ) as Page<Issue>;
+    const cycle = page.nodes[0].cycle;
+    assert(cycle !== null && cycle.name === null, "unnamed cycle has a null name");
 }

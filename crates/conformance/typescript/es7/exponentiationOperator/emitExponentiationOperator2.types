@@ -7,8 +7,8 @@ let temp = 10;
 >   : ^^
 
 
-/*pruned*/; 
-/*pruned*/; 
+/*pruned*/;
+/*pruned*/;
 temp++ ** 3;
 >temp++ ** 3 : number
 >            : ^^^^^^
@@ -29,11 +29,11 @@ temp-- ** 3;
 >3 : 3
 >  : ^
 
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 temp-- ** 3;
 >temp-- ** 3 : number
 >            : ^^^^^^
@@ -150,19 +150,19 @@ temp-- % temp ** 3;
 >  : ^
 
 
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/; 
-/*pruned*/; 
+/*pruned*/;
+/*pruned*/;
 3 ** temp++;
 >3 ** temp++ : number
 >            : ^^^^^^
@@ -184,8 +184,8 @@ temp-- % temp ** 3;
 >     : ^^^^^^
 
 
-/*pruned*/;      
-/*pruned*/;      
+/*pruned*/;
+/*pruned*/;
 3 ** temp++ ** 2;
 >3 ** temp++ ** 2 : number
 >                 : ^^^^^^
@@ -215,17 +215,17 @@ temp-- % temp ** 3;
 >  : ^
 
 
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

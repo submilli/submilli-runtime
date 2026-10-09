@@ -124,7 +124,7 @@ impl std::hash::Hash for Package {
     fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
-/// `optional: true` means reads widen to `ty | null` and construction may omit the field.
+/// `optional: true` means reads widen to `ty | undefined` and construction may omit the field.
 /// Distinct from a value-nullable field (`ty: T | null, optional: false`): must be present
 /// but can be null.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -161,7 +161,7 @@ impl ObjectField {
     }
 
     /// The type a *read* of this field yields: an optional field widens to
-    /// `T | null`, since absence at construction is null at read. Every field
+    /// `T | undefined`, since an absent property reads as undefined. Every field
     /// read — object type, interface property, class field, union member, and
     /// codegen's mirror of all four — goes through this, so the widening rule
     /// has one definition.
@@ -173,7 +173,7 @@ impl ObjectField {
     /// (an interface `PropertySig`, a class `FieldSig`).
     pub fn widen_optional(optional: bool, ty: Type) -> Type {
         if optional {
-            Type::union(vec![ty, Type::Null])
+            Type::union(vec![ty, Type::Undefined])
         } else {
             ty
         }
@@ -207,7 +207,7 @@ impl IndexSignature {
     }
 
     pub fn read_ty(&self) -> Type {
-        Type::union(vec![(*self.value).clone(), Type::Null])
+        Type::union(vec![(*self.value).clone(), Type::Undefined])
     }
 }
 
@@ -215,6 +215,70 @@ impl IndexSignature {
 pub struct TypePredicate {
     pub parameter_index: u32,
     pub asserted_type: Type,
+}
+
+/// Tuple positions and the number of trailing positions that may be omitted.
+/// Optional positions include `Undefined` in their element type.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct TupleType {
+    pub elements: Vec<Type>,
+    pub optional: usize,
+}
+
+impl TupleType {
+    pub fn required_len(&self) -> usize {
+        self.elements.len().saturating_sub(self.optional)
+    }
+
+    pub fn map(&self, transform: impl FnMut(&Type) -> Type) -> Self {
+        Self {
+            elements: self.elements.iter().map(transform).collect(),
+            optional: self.optional,
+        }
+    }
+
+    pub fn try_map<E>(&self, transform: impl FnMut(&Type) -> Result<Type, E>) -> Result<Self, E> {
+        Ok(Self {
+            elements: self
+                .elements
+                .iter()
+                .map(transform)
+                .collect::<Result<_, _>>()?,
+            optional: self.optional,
+        })
+    }
+}
+
+impl From<Vec<Type>> for TupleType {
+    fn from(elements: Vec<Type>) -> Self {
+        Self {
+            elements,
+            optional: 0,
+        }
+    }
+}
+
+impl std::ops::Deref for TupleType {
+    type Target = [Type];
+    fn deref(&self) -> &Self::Target {
+        &self.elements
+    }
+}
+
+impl IntoIterator for TupleType {
+    type Item = Type;
+    type IntoIter = std::vec::IntoIter<Type>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.elements.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a TupleType {
+    type Item = &'a Type;
+    type IntoIter = std::slice::Iter<'a, Type>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.elements.iter()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -236,12 +300,16 @@ pub enum Type {
     /// folds `true | false` into `boolean`, which is what `boolean` means.
     BooleanLiteral(bool),
     Null,
+    /// The single undefined value, distinct from language null and Wasm null.
+    Undefined,
     Void,
     /// Unlike TypeScript's `any`, requires explicit narrowing before use.
     /// `Unknown | T` collapses to `Unknown`.
     Unknown,
     Function {
         params: Vec<Type>,
+        /// Number of trailing fixed parameters callers may omit.
+        optional: usize,
         ret: Box<Type>,
         /// Boxed to break the `Type → Function → TypePredicate → Type` cycle. Guards are
         /// assignable to plain functions but not vice versa.
@@ -257,7 +325,7 @@ pub enum Type {
     Array(Box<Type>),
     /// Parser rejects empty tuples. Index access requires an integer literal; out-of-range and
     /// non-literal indices are rejected at typecheck time. Lowers to `(ref $Array)` at runtime.
-    Tuple(Vec<Type>),
+    Tuple(TupleType),
     /// `readonly T[]` (also spelled `ReadonlyArray<T>`) or `readonly [A, B]`. The inner
     /// type is always a [`Type::Array`] or [`Type::Tuple`]: the wrapper only forbids
     /// writes, so [`Type::peel`] strips it and every read path sees the plain array.
@@ -356,6 +424,10 @@ pub enum Type {
 }
 
 impl Type {
+    pub fn tuple(elements: Vec<Type>) -> Self {
+        Self::Tuple(elements.into())
+    }
+
     /// A receiver whose computed string keys use the object property carrier.
     pub fn is_structural_object(&self) -> bool {
         match self.peel() {
@@ -673,7 +745,7 @@ impl Type {
             .iter()
             .map(|member| match member.peel() {
                 Type::Array(element) => Some((**element).clone()),
-                Type::Tuple(positions) => Some(Type::union(positions.clone())),
+                Type::Tuple(positions) => Some(Type::union(positions.elements.clone())),
                 _ => None,
             })
             .collect::<Option<Vec<_>>>()?;
@@ -850,6 +922,50 @@ impl Type {
         }
     }
 
+    /// Whether any member, through unions, satisfies `leaf`, which sees peeled
+    /// types. Syntactic: an alias reference is a leaf, not expanded; the
+    /// typechecker's `any_resolved_member` follows alias bodies through its
+    /// resolver.
+    pub fn any_member(&self, leaf: &dyn Fn(&Type) -> bool) -> bool {
+        match self.peel() {
+            Type::Union(members) => members.iter().any(|member| member.any_member(leaf)),
+            member => leaf(member),
+        }
+    }
+
+    /// Whether every member, through unions, satisfies `leaf`. Syntactic,
+    /// like [`Type::any_member`].
+    pub fn all_members(&self, leaf: &dyn Fn(&Type) -> bool) -> bool {
+        !self.any_member(&|member| !leaf(member))
+    }
+
+    /// Whether `null` is spelled among the members. Syntactic, unlike the
+    /// typechecker's `type_admits_null`: `unknown` doesn't count.
+    pub fn spells_null(&self) -> bool {
+        self.any_member(&|member| matches!(member, Type::Null))
+    }
+
+    /// Whether `undefined`, or an erased `void` result, is spelled among the
+    /// members. `unknown` and type parameters don't count.
+    pub fn spells_undefined(&self) -> bool {
+        self.any_member(&|member| matches!(member, Type::Undefined | Type::Void))
+    }
+
+    /// Whether a value of the member type `leaf` has no JSON text at the
+    /// document root, so `JSON.stringify` returns `undefined` for it.
+    /// Objects and arrays holding such values still produce a document.
+    pub fn stringifies_to_undefined(leaf: &Type) -> bool {
+        matches!(
+            leaf,
+            Type::Undefined
+                | Type::Void
+                | Type::Unknown
+                | Type::GenericParam { .. }
+                | Type::TypeVar(_)
+                | Type::Function { .. }
+        )
+    }
+
     /// Normalizes to a flat member list that is unique *by peeled type*.
     ///
     /// Both halves peel because a nominal key is unsound here: an alias whose
@@ -961,7 +1077,7 @@ impl Type {
                 crate::mangle::prelude("Array"),
                 prelude,
                 "Array",
-                vec![Type::union(elements.clone())],
+                vec![Type::union(elements.elements.clone())],
             )),
             Type::Object { .. } | Type::TypeVar(_) | Type::GenericParam { .. } => Some((
                 crate::mangle::prelude("Object"),
@@ -1004,6 +1120,24 @@ impl Type {
             )),
             _ => None,
         }
+    }
+}
+
+/// `ty` as written beside a `?` marker, which already admits `undefined`: without
+/// its `undefined` member. A type that is only `undefined` stays as it is.
+/// Every renderer of optional parameters shows them through this, except
+/// `type_rendering`'s `Frame::Optional`, which applies the same rule to
+/// borrowed members.
+pub(crate) fn shown_beside_optional_marker(ty: &Type) -> Type {
+    match ty.peel() {
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .filter(|member| !matches!(member.peel(), Type::Undefined))
+                .cloned()
+                .collect(),
+        ),
+        _ => ty.clone(),
     }
 }
 
@@ -1169,6 +1303,19 @@ impl Type {
     }
 }
 
+/// A union's members in the order they are printed. Members are stored in
+/// canonical order, which puts `null` and `undefined` first; they print last,
+/// as TypeScript prints them: `string | null | undefined`.
+pub fn union_display_order(members: &[Type]) -> Vec<&Type> {
+    let mut ordered: Vec<&Type> = members.iter().collect();
+    ordered.sort_by_key(|m| match m {
+        Type::Null => 1,
+        Type::Undefined => 2,
+        _ => 0,
+    });
+    ordered
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.render_checked(crate::rendering::RenderLimits::default()) {
@@ -1181,6 +1328,48 @@ impl fmt::Display for Type {
 #[cfg(test)]
 mod tests {
     use super::{Package, Type};
+
+    #[test]
+    fn tuple_mapping_preserves_optional_positions() {
+        let tuple = super::TupleType {
+            elements: vec![Type::NumberLiteral(super::LiteralF64(1.0)), Type::Undefined],
+            optional: 1,
+        };
+        let mapped = tuple.map(Type::widen_literal);
+        assert_eq!(mapped.optional, 1);
+        assert_eq!(mapped.required_len(), 1);
+        assert_eq!(mapped.elements, vec![Type::Number, Type::Undefined]);
+    }
+
+    #[test]
+    fn optional_fields_read_as_undefined() {
+        let field = super::ObjectField::optional(Type::String);
+        assert_eq!(
+            field.read_ty(),
+            Type::union(vec![Type::String, Type::Undefined])
+        );
+    }
+
+    #[test]
+    fn optional_function_and_tuple_display_preserve_omission() {
+        let ty = Type::Function {
+            params: vec![Type::union(vec![Type::String, Type::Undefined])],
+            optional: 1,
+            ret: Box::new(Type::Void),
+            predicate: None,
+            has_rest: false,
+        };
+        // An optional parameter admits `undefined` already, as `tsc` prints it.
+        assert_eq!(ty.to_string(), "(arg0?: string) => void");
+        let tuple = Type::Tuple(super::TupleType {
+            elements: vec![
+                Type::Number,
+                Type::union(vec![Type::String, Type::Undefined]),
+            ],
+            optional: 1,
+        });
+        assert_eq!(tuple.to_string(), "[number, (string | undefined)?]");
+    }
 
     #[test]
     fn atomic_display() {
@@ -1206,7 +1395,10 @@ mod tests {
             "readonly number[][]"
         );
         assert_eq!(
-            Type::Readonly(Box::new(Type::Tuple(vec![Type::Number, Type::String]))).to_string(),
+            Type::Readonly(Box::new(Type::Tuple(
+                vec![Type::Number, Type::String].into()
+            )))
+            .to_string(),
             "readonly [number, string]"
         );
         assert!(readonly.is_readonly_array());
@@ -1241,18 +1433,21 @@ mod tests {
             ret: Box::new(Type::Boolean),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let b = Type::Function {
             params: vec![Type::Number, Type::String],
             ret: Box::new(Type::Boolean),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let c = Type::Function {
             params: vec![Type::Number],
             ret: Box::new(Type::Boolean),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         assert_eq!(a, b);
         assert_ne!(a, c);
@@ -1265,6 +1460,7 @@ mod tests {
             ret: Box::new(Type::Number),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         assert_eq!(t.to_string(), "() => number");
     }
@@ -1276,6 +1472,7 @@ mod tests {
             ret: Box::new(Type::Boolean),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         assert_eq!(t.to_string(), "(arg0: number) => boolean");
     }
@@ -1287,6 +1484,7 @@ mod tests {
             ret: Box::new(Type::Void),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         assert_eq!(t.to_string(), "(arg0: number, arg1: string) => void");
     }
@@ -1298,12 +1496,14 @@ mod tests {
             ret: Box::new(Type::Number),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let outer = Type::Function {
             params: vec![],
             ret: Box::new(inner),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         assert_eq!(outer.to_string(), "() => () => number");
     }
@@ -1315,6 +1515,7 @@ mod tests {
             ret: Box::new(Type::Boolean),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         assert_eq!(t.clone(), t);
     }
@@ -1461,6 +1662,7 @@ mod tests {
             ret: Box::new(Type::TypeVar("U".to_string())),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         assert_eq!(func.to_string(), "(arg0: T) => U");
     }
@@ -1550,6 +1752,7 @@ mod tests {
             ret: Box::new(Type::String),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let t = Type::union(vec![fn_ty, Type::Boolean]);
         assert_eq!(t.to_string(), "boolean | (() => string)");

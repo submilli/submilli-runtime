@@ -108,7 +108,7 @@ function f2(x: 0 | 1 | 2): void {
     }
 }
 
-type Falsy = false | 0 | "" | null | null;
+type Falsy = false | 0 | "" | null | undefined;
 >Falsy : Falsy
 >      : ^^^^^
 >false : false
@@ -187,7 +187,10 @@ function f4(x: 0 | 1 | true | string): void {
 >  : ^^^^^
 
             break;
-        case null:
+        case undefined:
+>undefined : undefined
+>          : ^^^^^^^^^
+
             x;
 >x : never
 >  : ^^^^^

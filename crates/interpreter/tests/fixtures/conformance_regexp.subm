@@ -14,8 +14,8 @@ function main(): void {
     assert(m.index === 6, "match offset");
     const g1 = m.groups[0];
     const g2 = m.groups[1];
-    assert(g1 !== null && g2 !== null, "both groups captured");
-    if (g1 !== null && g2 !== null) {
+    assert(g1 !== undefined && g2 !== undefined, "both groups captured");
+    if (g1 !== undefined && g2 !== undefined) {
       assert(g1 === "12" && g2 === "34", "capture contents");
     }
   } else {

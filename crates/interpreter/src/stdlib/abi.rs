@@ -19,20 +19,12 @@ pub(crate) fn string_field(intr: &IntrinsicTypes) -> FieldType {
     ref_field(intr.string.clone().into(), false)
 }
 
-pub(crate) fn nullable_string_field(intr: &IntrinsicTypes) -> FieldType {
-    ref_field(intr.string.clone().into(), true)
-}
-
 pub(crate) fn nullable_object_field(intr: &IntrinsicTypes) -> FieldType {
     ref_field(intr.object.clone().into(), true)
 }
 
 pub(crate) fn array_field(intr: &IntrinsicTypes) -> FieldType {
     ref_field(intr.array.clone().into(), false)
-}
-
-pub(crate) fn nullable_boxed_number_field(intr: &IntrinsicTypes) -> FieldType {
-    ref_field(intr.boxed_number.clone().into(), true)
 }
 
 pub(crate) fn f64_field() -> FieldType {

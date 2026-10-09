@@ -1,4 +1,4 @@
-types: 35 of 58 tsc entries compared, 2 differ
+types: 37 of 60 tsc entries compared, 2 differ
 
 line 11: s1
   tsc:  string | undefined

@@ -8,7 +8,7 @@ export class Dog extends Animal {
 }
 
 export class Holder {
-  v: Animal | null = new Animal();
+  v: Animal | null | undefined = new Animal();
   tag?: string = "parent-tag";
 }
 

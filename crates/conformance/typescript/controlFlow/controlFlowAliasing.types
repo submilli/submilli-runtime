@@ -188,27 +188,29 @@ function f13(x: string | number | boolean): void {
     }
 }
 
-function f14(x: number | null | null): number | null {
->f14 : (x: number | null | null) => number | null
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->x : number | null
->  : ^^^^^^^^^^^^^
+function f14(x: number | null | undefined): number | null {
+>f14 : (x: number | null | undefined) => number | null
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    const notUndefined = x !== null;
+    const notUndefined = x !== undefined;
 >notUndefined : boolean
 >             : ^^^^^^^
->x !== null : boolean
->           : ^^^^^^^
->x : number | null
->  : ^^^^^^^^^^^^^
+>x !== undefined : boolean
+>                : ^^^^^^^
+>x : number | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     return notUndefined ? x : 0;
->notUndefined ? x : 0 : number
->                     : ^^^^^^
+>notUndefined ? x : 0 : number | null
+>                     : ^^^^^^^^^^^^^
 >notUndefined : boolean
 >             : ^^^^^^^
->x : number
->  : ^^^^^^
+>x : number | null
+>  : ^^^^^^^^^^^^^
 >0 : 0
 >  : ^
 
@@ -868,16 +870,83 @@ function f27(outer: { obj: { kind: 'foo', foo: string } | { kind: 'bar', bar: nu
     }
 }
 
-/*pruned*/;                                                                            
-                                            
-                                            
-                
-                
-     
-                
-                
-     
- 
+function f28(obj?: { kind: 'foo', foo: string } | { kind: 'bar', bar: number }): void {
+>f28 : (obj?: { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; } | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>kind : "foo"
+>     : ^^^^^
+>foo : string
+>    : ^^^^^^
+>kind : "bar"
+>     : ^^^^^
+>bar : number
+>    : ^^^^^^
+
+    const isFoo = obj && obj.kind === 'foo';
+>isFoo : boolean | undefined
+>      : ^^^^^^^^^^^^^^^^^^^
+>obj && obj.kind === 'foo' : boolean | undefined
+>                          : ^^^^^^^^^^^^^^^^^^^
+>obj : { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; } | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj.kind === 'foo' : boolean
+>                   : ^^^^^^^
+>obj.kind : "foo" | "bar"
+>         : ^^^^^^^^^^^^^
+>obj : { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>kind : "foo" | "bar"
+>     : ^^^^^^^^^^^^^
+>'foo' : "foo"
+>      : ^^^^^
+
+    const isBar = obj && obj.kind === 'bar';
+>isBar : boolean | undefined
+>      : ^^^^^^^^^^^^^^^^^^^
+>obj && obj.kind === 'bar' : boolean | undefined
+>                          : ^^^^^^^^^^^^^^^^^^^
+>obj : { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; } | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj.kind === 'bar' : boolean
+>                   : ^^^^^^^
+>obj.kind : "foo" | "bar"
+>         : ^^^^^^^^^^^^^
+>obj : { kind: "foo"; foo: string; } | { kind: "bar"; bar: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>kind : "foo" | "bar"
+>     : ^^^^^^^^^^^^^
+>'bar' : "bar"
+>      : ^^^^^
+
+    if (isFoo) {
+>isFoo : boolean | undefined
+>      : ^^^^^^^^^^^^^^^^^^^
+
+        obj.foo;
+>obj.foo : string
+>        : ^^^^^^
+>obj : { kind: "foo"; foo: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo : string
+>    : ^^^^^^
+
+    }
+    if (isBar) {
+>isBar : boolean | undefined
+>      : ^^^^^^^^^^^^^^^^^^^
+
+        obj.bar;
+>obj.bar : number
+>        : ^^^^^^
+>obj : { kind: "bar"; bar: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>bar : number
+>    : ^^^^^^
+
+    }
+}
 
 // Narrowing by aliased discriminant property access
 
@@ -1442,30 +1511,30 @@ const a = obj.fn();
 
 
 // repro from https://github.com/microsoft/TypeScript/issues/53267
-/*pruned*/;  
-                                                          
-                         
-   
- 
+/*pruned*/;
+
+
+
+
 
 class A53267 {
 >A53267 : A53267
 >       : ^^^^^^
 
-  public readonly testNumber: number | null;
->testNumber : number | null
->           : ^^^^^^^^^^^^^
+  public readonly testNumber: number | undefined;
+>testNumber : number | undefined
+>           : ^^^^^^^^^^^^^^^^^^
 
 
   foo(): void {
 >foo : () => void
 >    : ^^^^^^^^^^
 
-    /*pruned*/;                                       
+    /*pruned*/;
 
-    /*pruned*/;    
-                                        
-     
+    /*pruned*/;
+
+
   }
 }
 

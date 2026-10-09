@@ -1,0 +1,94 @@
+=== logicalAssignment5.ts ===
+
+function foo1 (f?: (a: number) => void): void {
+>foo1 : (f?: (a: number) => void) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : ((a: number) => void) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    /*pruned*/;
+    /**/;
+}
+
+function foo2 (f?: (a: number) => void): void {
+>foo2 : (f?: (a: number) => void) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : ((a: number) => void) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    /*pruned*/;
+    /**/;
+}
+
+function foo3 (f?: (a: number) => void): void {
+>foo3 : (f?: (a: number) => void) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : ((a: number) => void) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    /*pruned*/;
+    f(42)
+>f(42) : void
+>      : ^^^^
+>f : ((a: number) => void) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+}
+
+function bar1 (f?: (a: number) => void): void {
+>bar1 : (f?: (a: number) => void) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : ((a: number) => void) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    /*pruned*/;
+    /**/;
+}
+
+function bar2 (f?: (a: number) => void): void {
+>bar2 : (f?: (a: number) => void) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : ((a: number) => void) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    /*pruned*/;
+    /**/;
+}
+
+function bar3 (f?: (a: number) => void): void {
+>bar3 : (f?: (a: number) => void) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : ((a: number) => void) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+    /*pruned*/;
+    f(42)
+>f(42) : void
+>      : ^^^^
+>f : ((a: number) => void) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

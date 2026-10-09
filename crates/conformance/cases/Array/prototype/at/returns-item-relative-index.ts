@@ -1,5 +1,5 @@
 // test262: test/built-ins/Array/prototype/at/returns-item-relative-index.js
-// Adapted: dense array; out-of-range yields null (no undefined).
+// Adapted: dense array; sparse elements remain outside this port.
 
 function main(): void {
   const a = [1, 2, 3, 4, 5];
@@ -9,5 +9,5 @@ function main(): void {
   assertSameValue(a.at(-2), 4, "a.at(-2) must return 4");
   assertSameValue(a.at(-3), 3, "a.at(-3) must return 3");
   assertSameValue(a.at(-4), 2, "a.at(-4) must return 2");
-  assertSameValue(a.at(-6), null, "a.at(-6) before the start returns null");
+  assertSameValue(a.at(-6), undefined, "a.at(-6) before the start returns undefined");
 }

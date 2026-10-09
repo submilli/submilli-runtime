@@ -44,8 +44,8 @@ function f13(x: string | number | boolean): void {
     }
 }
 
-function f14(x: number | null | null): number | null {
-    const notUndefined = x !== null;
+function f14(x: number | null | undefined): number | null {
+    const notUndefined = x !== undefined;
     return notUndefined ? x : 0;
 }
 
@@ -162,16 +162,16 @@ function f27(outer: { obj: { kind: 'foo', foo: string } | { kind: 'bar', bar: nu
     }
 }
 
-/*pruned*/;                                                                            
-                                            
-                                            
-                
-                
-     
-                
-                
-     
- 
+function f28(obj?: { kind: 'foo', foo: string } | { kind: 'bar', bar: number }): void {
+    const isFoo = obj && obj.kind === 'foo';
+    const isBar = obj && obj.kind === 'bar';
+    if (isFoo) {
+        obj.foo;
+    }
+    if (isBar) {
+        obj.bar;
+    }
+}
 
 // Narrowing by aliased discriminant property access
 
@@ -293,7 +293,7 @@ const a = obj.fn();
  
 
 class A53267 {
-  public readonly testNumber: number | null;
+  public readonly testNumber: number | undefined;
 
   foo(): void {
     /*pruned*/;                                       

@@ -1,83 +1,83 @@
 === objectSpreadRepeatedComplexity.ts ===
-function f(cnd: Record<number, boolean>): { prop20a?: number | null; prop20b?: number | null; prop19a?: number | null; prop19b?: number | null; prop18a?: number | null; prop18b?: number | null; prop17a?: number | null; prop17b?: number | null; prop16a?: number | null; prop16b?: number | null; prop15a?: number | null; prop15b?: number | null; prop14a?: number | null; prop14b?: number | null; prop13a?: number | null; prop13b?: number | null; prop12a?: number | null; prop12b?: number | null; prop11a?: number | null; prop11b?: number | null; prop10a?: number | null; prop10b?: number | null; prop9a?: number | null; prop9b?: number | null; prop8a?: number | null; prop8b?: number | null; prop7a?: number | null; prop7b?: number | null; prop6a?: number | null; prop6b?: number | null; prop5a?: number | null; prop5b?: number | null; prop4a?: number | null; prop4b?: number | null; prop3a?: number | null; prop3b?: number | null; prop0?: number | null; } {
->f : (cnd: Record<number, boolean>) => { prop20a?: number | null; prop20b?: number | null; prop19a?: number | null; prop19b?: number | null; prop18a?: number | null; prop18b?: number | null; prop17a?: number | null; prop17b?: number | null; prop16a?: number | null; prop16b?: number | null; prop15a?: number | null; prop15b?: number | null; prop14a?: number | null; prop14b?: number | null; prop13a?: number | null; prop13b?: number | null; prop12a?: number | null; prop12b?: number | null; prop11a?: number | null; prop11b?: number | null; prop10a?: number | null; prop10b?: number | null; prop9a?: number | null; prop9b?: number | null; prop8a?: number | null; prop8b?: number | null; prop7a?: number | null; prop7b?: number | null; prop6a?: number | null; prop6b?: number | null; prop5a?: number | null; prop5b?: number | null; prop4a?: number | null; prop4b?: number | null; prop3a?: number | null; prop3b?: number | null; prop0?: number | null; }
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+function f(cnd: Record<number, boolean>): { prop20a?: number | undefined; prop20b?: number | undefined; prop19a?: number | undefined; prop19b?: number | undefined; prop18a?: number | undefined; prop18b?: number | undefined; prop17a?: number | undefined; prop17b?: number | undefined; prop16a?: number | undefined; prop16b?: number | undefined; prop15a?: number | undefined; prop15b?: number | undefined; prop14a?: number | undefined; prop14b?: number | undefined; prop13a?: number | undefined; prop13b?: number | undefined; prop12a?: number | undefined; prop12b?: number | undefined; prop11a?: number | undefined; prop11b?: number | undefined; prop10a?: number | undefined; prop10b?: number | undefined; prop9a?: number | undefined; prop9b?: number | undefined; prop8a?: number | undefined; prop8b?: number | undefined; prop7a?: number | undefined; prop7b?: number | undefined; prop6a?: number | undefined; prop6b?: number | undefined; prop5a?: number | undefined; prop5b?: number | undefined; prop4a?: number | undefined; prop4b?: number | undefined; prop3a?: number | undefined; prop3b?: number | undefined; prop0?: number | undefined; } {
+>f : (cnd: Record<number, boolean>) => { prop20a?: number | undefined; prop20b?: number | undefined; prop19a?: number | undefined; prop19b?: number | undefined; prop18a?: number | undefined; prop18b?: number | undefined; prop17a?: number | undefined; prop17b?: number | undefined; prop16a?: number | undefined; prop16b?: number | undefined; prop15a?: number | undefined; prop15b?: number | undefined; prop14a?: number | undefined; prop14b?: number | undefined; prop13a?: number | undefined; prop13b?: number | undefined; prop12a?: number | undefined; prop12b?: number | undefined; prop11a?: number | undefined; prop11b?: number | undefined; prop10a?: number | undefined; prop10b?: number | undefined; prop9a?: number | undefined; prop9b?: number | undefined; prop8a?: number | undefined; prop8b?: number | undefined; prop7a?: number | undefined; prop7b?: number | undefined; prop6a?: number | undefined; prop6b?: number | undefined; prop5a?: number | undefined; prop5b?: number | undefined; prop4a?: number | undefined; prop4b?: number | undefined; prop3a?: number | undefined; prop3b?: number | undefined; prop0?: number | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >cnd : Record<number, boolean>
 >    : ^^^^^^^^^^^^^^^^^^^^^^^
->prop20a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop20b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop19a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop19b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop18a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop18b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop17a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop17b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop16a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop16b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop15a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop15b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop14a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop14b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop13a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop13b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop12a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop12b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop11a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop11b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop10a : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop10b : number | null | undefined
->        : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop9a : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop9b : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop8a : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop8b : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop7a : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop7b : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop6a : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop6b : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop5a : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop5b : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop4a : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop4b : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop3a : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop3b : number | null | undefined
->       : ^^^^^^^^^^^^^^^^^^^^^^^^^
->prop0 : number | null | undefined
->      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>prop20a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop20b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop19a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop19b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop18a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop18b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop17a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop17b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop16a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop16b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop15a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop15b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop14a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop14b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop13a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop13b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop12a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop12b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop11a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop11b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop10a : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop10b : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>prop9a : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop9b : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop8a : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop8b : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop7a : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop7b : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop6a : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop6b : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop5a : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop5b : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop4a : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop4b : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop3a : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop3b : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>prop0 : number | undefined
+>      : ^^^^^^^^^^^^^^^^^^
 
     // Type is a union of 2^(n-1) members, where n is the number of spread objects
     return {

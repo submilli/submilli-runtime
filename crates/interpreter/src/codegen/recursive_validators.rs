@@ -501,7 +501,7 @@ fn type_reaches_interface(
     }
     match ty {
         Type::Array(element) => type_reaches_interface(element, target, ta, visited),
-        Type::Tuple(elements) | Type::Union(elements) => elements
+        Type::Tuple(crate::types::TupleType { elements, .. }) | Type::Union(elements) => elements
             .iter()
             .any(|element| type_reaches_interface(element, target, ta, visited)),
         Type::Object { fields, index } => {
@@ -609,7 +609,7 @@ impl<'a, 'b> Traversal<'a, 'b> {
                 references
             }
             Type::Array(element) => self.walk(element)?,
-            Type::Tuple(elements) | Type::Union(elements) => {
+            Type::Tuple(crate::types::TupleType { elements, .. }) | Type::Union(elements) => {
                 let mut references = false;
                 for element in elements {
                     references |= self.walk(element)?;
@@ -720,7 +720,10 @@ fn collect_descriptor_arguments(ty: &Type, out: &mut BTreeSet<Type>) {
             }
         }
         Type::Array(ty) => collect_descriptor_arguments(ty, out),
-        Type::Union(types) | Type::Tuple(types) => {
+        Type::Union(types)
+        | Type::Tuple(crate::types::TupleType {
+            elements: types, ..
+        }) => {
             for ty in types {
                 collect_descriptor_arguments(ty, out);
             }

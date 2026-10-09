@@ -16,15 +16,15 @@ function foo(): boolean { return true; }
 >     : ^^^^
 
 
-/**/;    
-                       
-                                           
- 
-/*pruned*/;  
-                                  
- 
+/**/;
 
-/*pruned*/;        
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
 
 // boolean type var
 let ResultIsNumber1 = +BOOLEAN;
@@ -63,8 +63,8 @@ let ResultIsNumber3 = +{ x: true, y: false };
 
 
 // boolean type expressions
-/*pruned*/;                   
-/*pruned*/;                
+/*pruned*/;
+/*pruned*/;
 let ResultIsNumber6 = +foo();
 >ResultIsNumber6 : number
 >                : ^^^^^^
@@ -75,7 +75,7 @@ let ResultIsNumber6 = +foo();
 >foo : () => boolean
 >    : ^^^^^^^^^^^^^
 
-/*pruned*/;                    
+/*pruned*/;
 
 // miss assignment operators
 +true;
@@ -98,8 +98,8 @@ let ResultIsNumber6 = +foo();
 >foo : () => boolean
 >    : ^^^^^^^^^^^^^
 
-/*pruned*/;  
-/**/;   
+/*pruned*/;
+/**/;
 /**/;
 
 function main(): void {}

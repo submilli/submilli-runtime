@@ -1,6 +1,6 @@
 // test262: test/built-ins/Array/prototype/unshift/S15.4.4.13_A1_T1.js
 // Adapted: the just-unshifted slot is the only defined one, so the original's
-// x[1] === undefined probes become at() === null checks.
+// x[1] === undefined probes become at() === undefined checks.
 
 function main(): void {
   const x: number[] = [];
@@ -10,7 +10,7 @@ function main(): void {
 
   unshift = x.unshift();
   assert(unshift === 1, "x.unshift(1); x.unshift() === 1");
-  assert(x.at(1) === null, "x.unshift(1); x.unshift(); x.at(1) === null");
+  assert(x.at(1) === undefined, "x.unshift(1); x.unshift(); x.at(1) === undefined");
 
   unshift = x.unshift(-1);
   assert(unshift === 2, "x.unshift(1); x.unshift(); x.unshift(-1) === 2");

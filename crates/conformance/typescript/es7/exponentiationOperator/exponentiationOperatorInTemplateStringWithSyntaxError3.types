@@ -12,7 +12,7 @@ let t2 = 10;
 >10 : 10
 >   : ^^
 
-/**/; 
+/**/;
 
 // Error: early syntax error using ES7 SimpleUnaryExpression on left-hand side without ()
 // With TemplateTail
@@ -32,7 +32,7 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                 
+/*pruned*/;
 `${-t1++ ** t2 - t1} world`;
 >`${-t1++ ** t2 - t1} world` : string
 >                            : ^^^^^^
@@ -134,7 +134,7 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                                    
+/*pruned*/;
 `${-t1++ ** t2 - t1}${-t1++ ** t2 - t1} world`;
 >`${-t1++ ** t2 - t1}${-t1++ ** t2 - t1} world` : string
 >                                               : ^^^^^^
@@ -292,7 +292,7 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                                              
+/*pruned*/;
 `${-t1++ ** t2 - t1} hello world ${-t1++ ** t2 - t1} !!`;
 >`${-t1++ ** t2 - t1} hello world ${-t1++ ** t2 - t1} !!` : string
 >                                                         : ^^^^^^

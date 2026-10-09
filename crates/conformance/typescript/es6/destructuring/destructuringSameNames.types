@@ -15,20 +15,20 @@ let { foo, foo: bar } = { foo: 1 };
 >1 : 1
 >  : ^
 
-/*pruned*/;                 
-/*pruned*/;                      
-/*pruned*/;                      
-/*pruned*/;                               
-/*pruned*/;                               
-/*pruned*/;                           
-/*pruned*/;                                    
-/*pruned*/;                           
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;              
-/*pruned*/;              
-/*pruned*/;                          
-/*pruned*/;                          
-/*pruned*/;                          
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 // Error cases
 

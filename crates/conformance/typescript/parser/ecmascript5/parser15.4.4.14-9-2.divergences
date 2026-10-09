@@ -1,0 +1,48 @@
+types: 26 of 81 tsc entries compared, 10 differ
+
+line 14: obj
+  tsc:  { toString: () => number; }
+  ours: {}
+
+line 14: {toString:function (){return 0}}
+  tsc:  { toString: () => number; }
+  ours: {}
+
+line 18: a.indexOf(-(4/3))
+  tsc:  number
+  ours: <error>
+
+line 18: a
+  tsc:  (boolean | null | undefined)[]
+  ours: <error>
+
+line 19: a.indexOf(0)
+  tsc:  number
+  ours: <error>
+
+line 19: a
+  tsc:  (boolean | null | undefined)[]
+  ours: <error>
+
+line 20: a.indexOf(-0)
+  tsc:  number
+  ours: <error>
+
+line 20: a
+  tsc:  (boolean | null | undefined)[]
+  ours: <error>
+
+line 21: a.indexOf(1)
+  tsc:  number
+  ours: <error>
+
+line 21: a
+  tsc:  (boolean | null | undefined)[]
+  ours: <error>
+
+errors:
+line 18: tsc TS2345: Argument of type 'number' is not assignable to parameter of type 'boolean | null | undefined'. (we accept)
+line 19: tsc TS2345: Argument of type '0' is not assignable to parameter of type 'boolean | null | undefined'. (we accept)
+line 20: tsc TS2345: Argument of type '0' is not assignable to parameter of type 'boolean | null | undefined'. (we accept)
+line 21: tsc TS2345: Argument of type '1' is not assignable to parameter of type 'boolean | null | undefined'. (we accept)
+line 14: ours: expected `string`, got `number` (tsc accepts)

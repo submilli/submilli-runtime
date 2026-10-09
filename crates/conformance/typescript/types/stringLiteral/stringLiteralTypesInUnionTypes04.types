@@ -5,13 +5,17 @@ type T = "" | "foo";
 >  : ^
 
 
-let x: T = null;
+let x: T = undefined;
 >x : T
 >  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let y: T = null;
+let y: T = undefined;
 >y : T
 >  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 if (x === "") {

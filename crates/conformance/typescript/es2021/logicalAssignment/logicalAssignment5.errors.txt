@@ -1,0 +1,2 @@
+logicalAssignment5.ts(16,5): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+logicalAssignment5.ts(31,5): error TS2722: Cannot invoke an object which is possibly 'undefined'.

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "78032a3ef09beb8b9c064f16d6f0aff5f82a4a3765c549ae2f4e1370e5bdae38"
+  contentHash: "63bd26274885095d39e877f555f6881a0fc89a76a8c947a4e75667dd297c25df"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -337,8 +337,9 @@ The documentation line says which:
 
 Discovery warns once per server with the count of tools that return
 `unknown`. A cast from `unknown` is checked when it runs. A field the type
-declares must be present with that type, and fields it doesn't declare are
-ignored.
+declares must be present with that type unless it is optional, and fields it
+doesn't declare are ignored. An optional `owner?: string` still rejects
+`null`. Declare `owner?: string | null` when the server may send it.
 
 ```typescript title="cast.ts"
 import helpdesk from "@mcp/helpdesk";

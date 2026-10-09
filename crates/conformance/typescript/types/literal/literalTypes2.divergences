@@ -1,4 +1,4 @@
-types: 107 of 202 tsc entries compared, 5 differ
+types: 148 of 310 tsc entries compared, 7 differ
 
 line 94: c1
   tsc:  (string | number)[]
@@ -15,6 +15,14 @@ line 97: x1
 line 97: [1, "foo"]
   tsc:  (string | number)[]
   ours: number[]
+
+line 103: { c1: false, c2: 1, c3: "bar" }
+  tsc:  { c1?: false; c2?: 1; c3?: "bar"; }
+  ours: { c1: boolean; c2: number; c3: string }
+
+line 104: { x1: false, x2: 1, x3: "bar" }
+  tsc:  { x1?: false; x2?: number; x3?: string; }
+  ours: { x1: boolean; x2: number; x3: string }
 
 line 179: append(aa, 1)
   tsc:  Bit[]

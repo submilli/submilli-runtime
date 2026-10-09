@@ -1,0 +1,13 @@
+types: 55 of 89 tsc entries compared, 3 differ
+
+line 23: t2
+  tsc:  T2
+  ours: T1
+
+line 28: t3
+  tsc:  T3
+  ours: T2
+
+line 33: t4
+  tsc:  T4
+  ours: T3

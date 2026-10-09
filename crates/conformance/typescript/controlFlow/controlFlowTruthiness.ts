@@ -1,7 +1,7 @@
 // @target: es2015
 // @strictNullChecks: true
 
-function foo(): string | null { return null as unknown as (string | null); }
+function foo(): string | undefined { return null as unknown as (string | undefined); }
 
 function f1(): void {
     let x = foo();
@@ -14,7 +14,7 @@ function f1(): void {
 }
 
 function f2(): void {
-    let x: string | null = null as unknown as (string | null);
+    let x: string | undefined = null as unknown as (string | undefined);
     x = foo();
     if (x) {
         x; // string
@@ -25,7 +25,7 @@ function f2(): void {
 }
 
 function f3(): void {
-    let x: string | null = null as unknown as (string | null);
+    let x: string | undefined = null as unknown as (string | undefined);
     if (x = foo()) {
         x; // string
     }
@@ -35,7 +35,7 @@ function f3(): void {
 }
 
 function f4(): void {
-    let x: string | null = null as unknown as (string | null);
+    let x: string | undefined = null as unknown as (string | undefined);
     if (!(x = foo())) {
         x; // string | undefined
     }
@@ -45,8 +45,8 @@ function f4(): void {
 }
 
 function f5(): void {
-    let x: string | null = null as unknown as (string | null);
-    let y: string | null = null as unknown as (string | null);
+    let x: string | undefined = null as unknown as (string | undefined);
+    let y: string | undefined = null as unknown as (string | undefined);
     if (x = y = foo()) {
         x; // string
         y; // string | undefined

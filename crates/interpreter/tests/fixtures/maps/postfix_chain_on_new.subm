@@ -28,6 +28,6 @@ function main(): void {
   assert(sz === 0, "field access on new Map() reads size 0");
 
   // Index access chained directly off a `new`-built array-returning expression.
-  const first: number | null = new Map<string, number>().set("k", 5).get("k");
+  const first: number | undefined = new Map<string, number>().set("k", 5).get("k");
   assert(first === 5, "method chain after new resolves through get");
 }

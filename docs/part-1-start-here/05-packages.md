@@ -73,7 +73,7 @@ export function applyCredit(customerId: string, amount: number): Credit {
     check("acme.com/credits.apply", { customerId, customerClass, amount });
 
     const key = secrets.get("BILLING_API_KEY");
-    if (key === null) {
+    if (key === undefined) {
         throw new Error("BILLING_API_KEY is not configured for this blueprint");
     }
     const headers = new Map<string, string>();

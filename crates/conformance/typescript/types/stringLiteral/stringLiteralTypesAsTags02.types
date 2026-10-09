@@ -43,8 +43,8 @@ interface B extends Entity {
 
 }
 
-/*pruned*/;                                              
-/*pruned*/;                                              
+/*pruned*/;
+/*pruned*/;
 function hasKind(entity: Entity, kind: Kind): entity is (A | B) {
 >hasKind : (entity: Entity, kind: Kind) => entity is (A | B)
 >        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

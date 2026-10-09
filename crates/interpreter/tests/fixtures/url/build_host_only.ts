@@ -6,7 +6,7 @@ import { build } from "submilli:url";
 
 function outcome(protocol: string, host: string, path: string): string {
   try {
-    return "built " + build(protocol, host, null, path, new Map<string, string>(), null);
+    return "built " + build(protocol, host, undefined, path, new Map<string, string>(), undefined);
   } catch (e) {
     if (e instanceof TypeError) return e.message;
     throw e;
@@ -29,9 +29,9 @@ function main(): void {
   refused("", "example.com", "/", "is not a scheme");
 
   const ordinary = new Map<string, string>();
-  assert(build("https", "example.com", null, "/orders", ordinary, null) === "https://example.com/orders", "host name");
-  assert(build("https", "example.com:8443", null, "/a", ordinary, null) === "https://example.com:8443/a", "host with a port");
-  assert(build("https", "[::1]", 8080, "/a", ordinary, null) === "https://[::1]:8080/a", "IPv6 host");
-  assert(build("https", "user:pw@example.com", null, "/a", ordinary, null) === "https://user:pw@example.com/a", "userinfo");
-  assert(build("HTTPS", "example.com", null, "/a", ordinary, null) === "https://example.com/a", "scheme in upper case");
+  assert(build("https", "example.com", undefined, "/orders", ordinary, undefined) === "https://example.com/orders", "host name");
+  assert(build("https", "example.com:8443", undefined, "/a", ordinary, undefined) === "https://example.com:8443/a", "host with a port");
+  assert(build("https", "[::1]", 8080, "/a", ordinary, undefined) === "https://[::1]:8080/a", "IPv6 host");
+  assert(build("https", "user:pw@example.com", undefined, "/a", ordinary, undefined) === "https://user:pw@example.com/a", "userinfo");
+  assert(build("HTTPS", "example.com", undefined, "/a", ordinary, undefined) === "https://example.com/a", "scheme in upper case");
 }

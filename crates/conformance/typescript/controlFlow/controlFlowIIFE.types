@@ -125,17 +125,17 @@ function f3(): void {
 >"string" : "string"
 >         : ^^^^^^^^
 
-        /*pruned*/;                            
+        /*pruned*/;
     }
 }
 
 // Repros from #8381
 
-let maybeNumber: number | null = null as unknown as (number | null);
->maybeNumber : number | null
->            : ^^^^^^^^^^^^^
->null as unknown as (number | null) : number | null
->                                   : ^^^^^^^^^^^^^
+let maybeNumber: number | undefined = null as unknown as (number | undefined);
+>maybeNumber : number | undefined
+>            : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (number | undefined) : number | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
@@ -150,8 +150,8 @@ let maybeNumber: number | null = null as unknown as (number | null);
     maybeNumber = 1;
 >maybeNumber = 1 : 1
 >                : ^
->maybeNumber : number | null
->            : ^^^^^^^^^^^^^
+>maybeNumber : number | undefined
+>            : ^^^^^^^^^^^^^^^^^^
 >1 : 1
 >  : ^
 
@@ -162,11 +162,13 @@ maybeNumber++;
 >maybeNumber : number
 >            : ^^^^^^
 
-if (maybeNumber !== null) {
->maybeNumber !== null : boolean
->                     : ^^^^^^^
+if (maybeNumber !== undefined) {
+>maybeNumber !== undefined : boolean
+>                          : ^^^^^^^
 >maybeNumber : number
 >            : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     maybeNumber++;
 >maybeNumber++ : number
@@ -176,19 +178,19 @@ if (maybeNumber !== null) {
 
 }
 
-let test: string | null = null as unknown as (string | null);
->test : string | null
->     : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+let test: string | undefined = null as unknown as (string | undefined);
+>test : string | undefined
+>     : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
 if (!test) {
 >!test : boolean
 >      : ^^^^^^^
->test : string | null
->     : ^^^^^^^^^^^^^
+>test : string | undefined
+>     : ^^^^^^^^^^^^^^^^^^
 
     throw new Error('Test is not defined');
 >new Error('Test is not defined') : Error
@@ -258,22 +260,22 @@ function f4(): void {
 
 }
 
-/*pruned*/;          
-                                                
-                  
-                
-              
-         
-                         
- 
+/*pruned*/;
 
-/*pruned*/;          
-                                                
-                       
-                    
-         
-                         
- 
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
 
 function main(): void {}
 >main : () => void

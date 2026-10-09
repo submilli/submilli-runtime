@@ -1,0 +1,60 @@
+=== strictNullChecksNoWidening.ts ===
+
+let a1 = null;
+>a1 : any
+>   : ^^^
+
+let a2 = undefined;
+>a2 : any
+>   : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let a3 = void 0;
+>a3 : undefined
+>   : ^^^^^^^^^
+>void 0 : undefined
+>       : ^^^^^^^^^
+>0 : 0
+>  : ^
+
+
+let b1 = [];
+>b1 : any[]
+>   : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+/*pruned*/;
+let b3 = [undefined];
+>b3 : undefined[]
+>   : ^^^^^^^^^^^
+>[undefined] : undefined[]
+>            : ^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let b4 = [[], []];
+>b4 : never[][]
+>   : ^^^^^^^^^
+>[[], []] : never[][]
+>         : ^^^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

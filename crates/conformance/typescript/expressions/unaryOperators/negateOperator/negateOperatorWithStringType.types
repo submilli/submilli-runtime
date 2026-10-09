@@ -26,15 +26,15 @@ function foo(): string { return "abc"; }
 >      : ^^^^^
 
 
-/**/;    
-                      
-                                       
- 
-/*pruned*/;  
-                              
- 
+/**/;
 
-/*pruned*/;        
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
 
 // string type var
 let ResultIsNumber1 = -STRING;
@@ -101,8 +101,8 @@ let ResultIsNumber5 = -{ x: "", y: (s: string) => { return s; } };
 
 
 // string type expressions
-/*pruned*/;                   
-/*pruned*/;                
+/*pruned*/;
+/*pruned*/;
 let ResultIsNumber8 = -STRING1[0];
 >ResultIsNumber8 : number
 >                : ^^^^^^
@@ -125,7 +125,7 @@ let ResultIsNumber9 = -foo();
 >foo : () => string
 >    : ^^^^^^^^^^^^
 
-/*pruned*/;                     
+/*pruned*/;
 let ResultIsNumber11 = -(STRING + STRING);
 >ResultIsNumber11 : number
 >                 : ^^^^^^
@@ -184,7 +184,7 @@ let ResultIsNumber12 = -STRING.charAt(0);
 >foo : () => string
 >    : ^^^^^^^^^^^^
 
-/*pruned*/; 
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

@@ -48,7 +48,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         false,
         |caller, params, results| {
             let time_zone = match abi_arg(params, 0)? {
-                Val::AnyRef(None) => None,
+                value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => None,
                 _ => Some(read_string_arg(
                     caller,
                     abi_arg(params, 0)?,
@@ -75,7 +75,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         false,
         |caller, params, results| {
             let time_zone = match abi_arg(params, 0)? {
-                Val::AnyRef(None) => None,
+                value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => None,
                 _ => Some(read_string_arg(
                     caller,
                     abi_arg(params, 0)?,
@@ -164,14 +164,14 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     Ok(())
 }
 
-/// The current moment in the `tz` argument's zone (system zone when null).
+/// The current moment in the `tz` argument's zone (system zone when undefined).
 fn now_zoned(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     tz: &Val,
     label: &'static str,
 ) -> wasmtime::Result<jiff::Zoned> {
     let tz = match tz {
-        Val::AnyRef(None) => None,
+        value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => None,
         _ => Some(read_string_arg(caller, tz, label)?),
     };
     let (zoned, _id) = super::zoned_date_time_iso(caller, tz.as_deref())?;
@@ -216,8 +216,8 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
                         generics: Vec::new(),
                         params: vec![Param::with_default(
                             "timeZone",
-                            Type::Union(vec![Type::String, Type::Null]),
-                            DefaultValue::Null,
+                            Type::Union(vec![Type::String, Type::Undefined]),
+                            DefaultValue::Undefined,
                         )],
                         ret: shared::temporal_type("ZonedDateTime"),
                         type_predicate: None,

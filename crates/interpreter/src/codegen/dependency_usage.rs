@@ -460,6 +460,7 @@ impl DependencyUsage {
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Null
+            | Type::Undefined
             | Type::Void
             | Type::Never
             | Type::Unknown
@@ -548,11 +549,12 @@ impl DependencyUsage {
                 member,
             ));
         }
-        // The internal throw sites (bounds, cast, non-null assert, `assert`)
+        // The internal throw sites (bounds, casts, parameter TDZ, assertions)
         // call the reconstructed class constructors, so these classes must
         // reconstruct in every module.
         self.note_type(crate::mangle::prelude("Error"));
         self.note_type(crate::mangle::prelude("RangeError"));
+        self.note_type(crate::mangle::prelude("ReferenceError"));
         self.note_type(crate::mangle::prelude("TypeError"));
     }
 }

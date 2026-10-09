@@ -12,6 +12,6 @@ function main(): void {
   invoke(h);
   assert(seen === "16", "void-returning dispatch in the declaring package");
   assert(maybe(h) === "15", "optional-chain dispatch");
-  assert(maybe(null) === null, "optional chain short-circuits");
+  assert(maybe(null) === undefined, "optional chain short-circuits");
   assert(unrelated() === 2, "unrelated shape shares the field name");
 }

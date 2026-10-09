@@ -12,7 +12,7 @@ function fn3(): boolean { }
 >fn3 : () => boolean
 >    : ^^^^^^^^^^^^^
 
-/*pruned*/;              
+/*pruned*/;
 /*pruned*/;              // should be valid: any includes void
 
 interface I { id: number }
@@ -45,7 +45,7 @@ class D extends C {
 >     : ^^^^^^
 
 }
-function fn10(): D { return { id: 12 }; } 
+function fn10(): D { return { id: 12 }; }
 >fn10 : () => D
 >     : ^^^^^^^
 >{ id: 12 } : { id: number; }

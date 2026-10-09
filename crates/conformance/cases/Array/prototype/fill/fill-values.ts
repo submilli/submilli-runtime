@@ -1,6 +1,6 @@
 // test262: test/built-ins/Array/prototype/fill/fill-values.js
 // Adapted: the `[0, 0].fill()` row is dropped — `value` is a required
-// parameter here (no undefined to default to).
+// parameter in the typed signature, as in TypeScript.
 
 function main(): void {
   const empty: number[] = [];

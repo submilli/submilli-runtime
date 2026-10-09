@@ -1,8 +1,1 @@
-types: 40 of 63 tsc entries compared, 1 differ
-
-line 65: x
-  tsc:  never
-  ours: 0 | 1 | string | true
-
-errors:
-line 64: ours: duplicate `case` label (tsc accepts)
+types: 41 of 64 tsc entries compared, 0 differ

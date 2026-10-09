@@ -1,11 +1,14 @@
 // test262: test/built-ins/Map/prototype/get/returns-value-different-key-types.js
-// Adapted: Symbol and undefined keys dropped by design; the single map carries
+// Adapted: Symbol keys dropped by design; the single map carries
 // a union key type.
 
-type Key = string | number | { x: number } | number[] | null;
+type Key = string | number | { x: number } | number[] | null | undefined;
 
 function main(): void {
   const map = new Map<Key, number>();
+
+  map.set(undefined, 4);
+  assertSameValue(map.get(undefined), 4);
 
   map.set("bar", 0);
   assertSameValue(map.get("bar"), 0);

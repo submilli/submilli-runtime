@@ -27,7 +27,7 @@ class E extends C { foo2(): void { } }
 >foo2 : () => void
 >     : ^^^^^^^^^^
 
-/*pruned*/;                                     
+/*pruned*/;
 
 let num: number = null as unknown as (number);
 >num : number
@@ -45,19 +45,19 @@ let str: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                       
-/*pruned*/;                       
-/*pruned*/;                       
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 // A union type U is assignable to a type T if each type in U is assignable to T
-/**/; 
-/**/; 
+/**/;
+/**/;
 /*pruned*/;  // ok
-/**/; 
-/**/; 
+/**/;
+/**/;
 /*pruned*/;  // error e is not assignable to d
-/**/; 
-/**/; 
+/**/;
+/**/;
 /*pruned*/;  // error d is not assignable to e
 num = num;
 >num = num : number
@@ -109,14 +109,14 @@ str = unionNumberString; // error since number is not assignable to string
 
 
 // A type T is assignable to a union type U if T is assignable to any type in U
-/**/; 
-/**/; 
+/**/;
+/**/;
 /*pruned*/;  // error since C is not assinable to either D or E
-/**/; 
-/**/; 
+/**/;
+/**/;
 /*pruned*/;  // ok
-/**/; 
-/**/; 
+/**/;
+/**/;
 /*pruned*/;  // ok
 num = num;
 >num = num : number
@@ -134,7 +134,7 @@ str = num;
 >num : number
 >    : ^^^^^^
 
-unionNumberString = num; // ok 
+unionNumberString = num; // ok
 >unionNumberString = num : number
 >                        : ^^^^^^
 >unionNumberString : string | number
@@ -168,14 +168,14 @@ unionNumberString = str; // ok
 
 
 // Any
-/*pruned*/;                                
-/*pruned*/;      
-/*pruned*/;                
-/*pruned*/;      
-/*pruned*/;                
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 // null
-/*pruned*/;    
+/*pruned*/;
 unionNumberString = null;
 >unionNumberString = null : null
 >                         : ^^^^
@@ -184,12 +184,14 @@ unionNumberString = null;
 
 
 // undefined
-/*pruned*/;    
-unionNumberString = null;
->unionNumberString = null : null
->                         : ^^^^
+/*pruned*/;
+unionNumberString = undefined;
+>unionNumberString = undefined : undefined
+>                              : ^^^^^^^^^
 >unionNumberString : string | number
 >                  : ^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // type parameters
@@ -221,10 +223,10 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;                                
+    /*pruned*/;
     /**/;  // ok
     /**/;  // ok
-    /**/;    
+    /**/;
     /**/;  // error U not assignable to T
     /**/;  // error T not assignable to U
 }

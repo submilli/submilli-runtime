@@ -1,0 +1,27 @@
+=== validUndefinedValues.ts ===
+let x: typeof undefined = null as unknown as (typeof undefined);
+>x : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>null as unknown as (typeof undefined) : undefined
+>                                      : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+x = undefined;
+>x = undefined : undefined
+>              : ^^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

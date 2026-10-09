@@ -191,6 +191,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toString".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::with_default(
                                 "radix",
@@ -207,6 +208,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toJson".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::String,
@@ -236,6 +238,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "@call".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: Vec::new(),
                         params: vec![Param::new(
                             "value",

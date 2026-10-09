@@ -165,7 +165,7 @@ pub fn builtin_lookup(name: &str) -> BuiltinLookup {
     };
 
     if head.eq_ignore_ascii_case("Record") && rest.is_empty() {
-        return BuiltinLookup::Found("/** Record<K, V> accepts string keys. With K = string, reads return V | null and writes require V. Finite string-literal keys are all required. Equivalent open syntax: { [key: string]: V }. */\ntype Record<K extends string, V> = { [P in K]: V };\n".into());
+        return BuiltinLookup::Found("/** Record<K, V> accepts string keys. With K = string, reads return V | undefined and writes require V. Finite string-literal keys are all required. Equivalent open syntax: { [key: string]: V }. */\ntype Record<K extends string, V> = { [P in K]: V };\n".into());
     }
     if head.eq_ignore_ascii_case(JSON_BUILTIN) {
         let defs = json_package_declaration();
@@ -334,10 +334,11 @@ fn render_type_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Stri
         let name = resolve_ignore_case(methods.keys(), member)?;
         let m = &methods[&name];
         push_doc(&mut body, &m.doc, "  ");
+        let optional = if m.optional { "?" } else { "" };
         let name = method_prefix(&name);
         let _ = writeln!(
             body,
-            "  {name}{}({}): {};",
+            "  {name}{optional}{}({}): {};",
             generics_str(&m.generics),
             params_str(&m.params, m.doc.as_ref()),
             m.ret
@@ -402,10 +403,11 @@ fn render_class_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Str
             .filter(|n| method_visibility.get(n) != Some(&crate::Visibility::Private))?;
         let m = &methods[&name];
         push_doc(&mut body, &m.doc, "  ");
+        let optional = if m.optional { "?" } else { "" };
         let name = member_name(&name);
         let _ = writeln!(
             body,
-            "  {name}{}({}): {};",
+            "  {name}{optional}{}({}): {};",
             generics_str(&m.generics),
             params_str(&m.params, m.doc.as_ref()),
             m.ret
@@ -1426,10 +1428,11 @@ fn render_ts_type(
             for (mname, m) in methods {
                 push_doc(out, &m.doc, &inner);
                 let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                let optional = if m.optional { "?" } else { "" };
                 let mname = method_prefix(mname);
                 let _ = writeln!(
                     out,
-                    "{inner}{mname}{}({}): {ret};",
+                    "{inner}{mname}{optional}{}({}): {ret};",
                     generics_str(&m.generics),
                     ts_params_str(&m.params, m.doc.as_ref())
                 );
@@ -1538,10 +1541,11 @@ fn render_ts_type(
                 }
                 push_doc(out, &m.doc, &inner);
                 let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                let optional = if m.optional { "?" } else { "" };
                 let mname = member_name(mname);
                 let _ = writeln!(
                     out,
-                    "{inner}{mname}{}({}): {ret};",
+                    "{inner}{mname}{optional}{}({}): {ret};",
                     generics_str(&m.generics),
                     ts_params_str(&m.params, m.doc.as_ref())
                 );
@@ -1684,6 +1688,7 @@ fn ts_type(ty: &Type) -> String {
         Type::Boolean => "boolean".to_string(),
         Type::BooleanLiteral(value) => value.to_string(),
         Type::Null => "null".to_string(),
+        Type::Undefined => "undefined".to_string(),
         Type::Void => "void".to_string(),
         Type::Unknown => "unknown".to_string(),
         Type::Function {
@@ -1691,6 +1696,7 @@ fn ts_type(ty: &Type) -> String {
             ret,
             predicate,
             has_rest,
+            optional,
         } => {
             let params = params
                 .iter()
@@ -1701,7 +1707,13 @@ fn ts_type(ty: &Type) -> String {
                     } else {
                         ""
                     };
-                    format!("{prefix}arg{i}: {}", ts_type(p))
+                    let fixed = params.len().saturating_sub(usize::from(*has_rest));
+                    if i < fixed && i >= fixed.saturating_sub(*optional) {
+                        let shown = crate::types::shown_beside_optional_marker(p);
+                        format!("{prefix}arg{i}?: {}", ts_type(&shown))
+                    } else {
+                        format!("{prefix}arg{i}: {}", ts_type(p))
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -1733,7 +1745,18 @@ fn ts_type(ty: &Type) -> String {
         }
         Type::Array(elem) => format!("{}[]", ts_type_array_element(elem)),
         Type::Tuple(elements) => {
-            let elements = elements.iter().map(ts_type).collect::<Vec<_>>().join(", ");
+            let elements = elements
+                .iter()
+                .enumerate()
+                .map(|(index, ty)| {
+                    if index >= elements.len().saturating_sub(elements.optional) {
+                        format!("({})?", ts_type(ty))
+                    } else {
+                        ts_type(ty)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("[{elements}]")
         }
         Type::Readonly(inner) => format!("readonly {}", ts_type(inner)),
@@ -1744,8 +1767,8 @@ fn ts_type(ty: &Type) -> String {
         | Type::ClassRef { name, args, .. }
         | Type::Alias { name, args, .. } => ts_named_type(name, args),
         Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => name.clone(),
-        Type::Union(members) => members
-            .iter()
+        Type::Union(members) => crate::types::union_display_order(members)
+            .into_iter()
             .map(ts_type_union_member)
             .collect::<Vec<_>>()
             .join(" | "),
@@ -1852,20 +1875,22 @@ fn json_package_declaration() -> PackageDeclaration {
                     Param::new("value", Type::TypeVar("T".to_string())),
                     Param {
                         name: "replacer".to_string(),
-                        ty: Type::Null,
-                        default: Some(crate::DefaultValue::Null),
+                        ty: Type::union(vec![Type::Null, Type::Undefined]),
+                        default: Some(crate::DefaultValue::Undefined),
+                        optional: false,
                         rest: false,
                     },
                     Param {
                         name: "space".to_string(),
-                        ty: Type::union(vec![Type::Number, Type::String, Type::Null]),
-                        default: Some(crate::DefaultValue::Null),
+                        ty: Type::union(vec![Type::Number, Type::String, Type::Null, Type::Undefined]),
+                        default: Some(crate::DefaultValue::Undefined),
+                        optional: false,
                         rest: false,
                     },
                 ],
-                ret: Type::String,
+                ret: Type::union(vec![Type::String, Type::Undefined]),
                 type_predicate: None,
-                doc: crate::doc(FileId::JSON, "/** Serialize a value to a JSON string. */"),
+                doc: crate::doc(FileId::JSON, "/** Serialize a value to a JSON string, or return undefined when it has no JSON representation. */"),
             },
         },
     );
@@ -1937,7 +1962,8 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 let mname = method_prefix(mname);
                 let _ = writeln!(
                     out,
-                    "{inner}{mname}{}({}): {};",
+                    "{inner}{mname}{}{}({}): {};",
+                    if m.optional { "?" } else { "" },
                     generics_str(&m.generics),
                     params_str(&m.params, m.doc.as_ref()),
                     m.ret
@@ -2035,7 +2061,8 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 let mname = member_name(mname);
                 let _ = writeln!(
                     out,
-                    "{inner}{mname}{}({}): {};",
+                    "{inner}{mname}{}{}({}): {};",
+                    if m.optional { "?" } else { "" },
                     generics_str(&m.generics),
                     params_str(&m.params, m.doc.as_ref()),
                     m.ret
@@ -2121,10 +2148,26 @@ fn rendered_params(
     params
         .iter()
         .zip(names)
-        .map(|(p, name)| {
+        .enumerate()
+        .map(|(index, (p, name))| {
             let prefix = if p.rest { "..." } else { "" };
-            let opt = if p.default.is_some() { "?" } else { "" };
-            format!("{prefix}{name}{opt}: {}", format_type(&p.ty))
+            // A parameter a required one follows can't be written `x?`.
+            let later_required = params
+                .iter()
+                .skip(index.saturating_add(1))
+                .any(|later| !later.is_omittable() && !later.rest);
+            let opt = if p.is_omittable() && !later_required {
+                "?"
+            } else {
+                ""
+            };
+            // `x?: T` already admits `undefined`; printing it again is noise.
+            let ty = if opt.is_empty() {
+                p.ty.clone()
+            } else {
+                crate::types::shown_beside_optional_marker(&p.ty)
+            };
+            format!("{prefix}{name}{opt}: {}", format_type(&ty))
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -2779,7 +2822,7 @@ mod tests {
     fn builtin_docs_handles_json_intrinsic() {
         let docs = builtin_docs("JSON").expect("JSON built-in");
         assert!(docs.contains(
-            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string;"
+            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined;"
         ));
         assert!(docs.contains("function parse(text: string): unknown;"));
     }
@@ -3338,12 +3381,12 @@ mod tests {
         assert!(docs.contains("declare namespace Temporal {"));
         assert!(docs.contains("declare namespace JSON {"));
         assert!(docs.contains(
-            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string;"
+            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined;"
         ));
         assert!(docs.contains("interface Function {}"));
         assert!(docs.contains("interface IArguments {}"));
         assert!(docs.contains("declare class Error {"));
-        assert!(docs.contains("static isError(value: unknown): value is Error;"));
+        assert!(docs.contains("static isError(value?: unknown): value is Error;"));
         assert!(!docs.contains("ErrorConstructor"));
         assert!(!docs.contains("declare module"));
         assert!(!docs.contains("function string_concat"));
@@ -3352,7 +3395,7 @@ mod tests {
     #[test]
     fn d_ts_renderer_uses_typescript_call_and_predicate_signatures() {
         let docs = render_lib_submilli_d_ts();
-        assert!(docs.contains("(value: string | bigint): number;"));
+        assert!(docs.contains("(value: string | bigint | undefined): number;"));
         assert!(docs.contains("isArray<T>(value: T): value is T & unknown[];"));
         assert!(!docs.contains("@call"));
     }
@@ -3460,6 +3503,7 @@ mod tests {
             doc: None,
         };
         let method = |ret| MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: Vec::new(),
             ret,
@@ -3604,6 +3648,7 @@ mod tests {
         use crate::{FieldSig, MethodSig, Param, Visibility};
 
         let method = |ret: Type| MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: vec![Param::new("x", Type::Number)],
             ret,

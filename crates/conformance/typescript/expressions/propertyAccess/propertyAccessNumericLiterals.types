@@ -29,7 +29,7 @@
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;      
+/*pruned*/;
 1e0.toString();
 >1e0.toString() : string
 >               : ^^^^^^
@@ -60,7 +60,7 @@
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;        
+/*pruned*/;
 8.8e5.toString();
 >8.8e5.toString() : string
 >                 : ^^^^^^
@@ -81,7 +81,7 @@
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;      
+/*pruned*/;
 88e4.toString();
 >88e4.toString() : string
 >                : ^^^^^^
@@ -92,7 +92,7 @@
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;      
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

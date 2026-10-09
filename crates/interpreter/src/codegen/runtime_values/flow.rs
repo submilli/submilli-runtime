@@ -785,7 +785,8 @@ fn connect_optional_chain(
         let step = Place::Chain(id, index);
         match part {
             crate::TypedChainPart::Index { result_ty, .. } => {
-                let receiver_type = crate::typechecker::infer::narrowing::strip_null(receiver_ty);
+                let receiver_type =
+                    crate::typechecker::infer::narrowing::strip_nullish(receiver_ty);
                 if receiver_type.peel() != &Type::Uint8Array {
                     flow.widened.insert(step.clone());
                     flow.edge(Place::Element, step.clone());

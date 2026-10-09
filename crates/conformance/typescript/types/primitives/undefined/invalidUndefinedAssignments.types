@@ -1,0 +1,114 @@
+=== invalidUndefinedAssignments.ts ===
+let x: typeof undefined = null as unknown as (typeof undefined);
+>x : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>null as unknown as (typeof undefined) : undefined
+>                                      : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+enum E { A }
+>E : E
+>  : ^
+>A : E.A
+>  : ^^^
+
+E = x;
+>E = x : undefined
+>      : ^^^^^^^^^
+>E : any
+>  : ^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+E.A = x;
+>E.A = x : undefined
+>        : ^^^^^^^^^
+>E.A : any
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>A : any
+>  : ^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+class C { foo: string }
+>C : C
+>  : ^
+>foo : string
+>    : ^^^^^^
+
+/*pruned*/;
+C = x;
+>C = x : undefined
+>      : ^^^^^^^^^
+>C : any
+>  : ^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+interface I { foo: string }
+>I : I
+>  : ^
+>foo : string
+>    : ^^^^^^
+
+let g: I = null as unknown as (I);
+>g : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+g = x;
+>g = x : undefined
+>      : ^^^^^^^^^
+>g : I
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+I = x;
+>I = x : undefined
+>      : ^^^^^^^^^
+>I : any
+>  : ^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+/*pruned*/;
+/**/;
+
+function i<T>(a: T): void { }
+>i : <T>(a: T) => void
+>  : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : T
+>  : ^
+
+// BUG 767030
+i = x;
+>i = x : undefined
+>      : ^^^^^^^^^
+>i : any
+>  : ^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

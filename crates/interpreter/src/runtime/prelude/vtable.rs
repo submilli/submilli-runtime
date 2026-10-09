@@ -152,6 +152,9 @@ pub(crate) async fn dispatch_vtable_slot(
     slot: usize,
     extra: &[Val],
 ) -> wasmtime::Result<Val> {
+    if super::undefined::is_undefined(caller, object)? {
+        return undefined_slot(caller, slot, extra);
+    }
     let st = as_struct(caller, object, "vtable dispatch receiver")?;
     let vtable = match st.field(&mut *caller, 0)? {
         Val::AnyRef(Some(any)) => any,
@@ -164,7 +167,12 @@ pub(crate) async fn dispatch_vtable_slot(
         Val::FuncRef(Some(func)) => func,
         other => wasmtime::bail!("vtable dispatch: slot {slot} is {other:?}"),
     };
-    let mut args = Vec::with_capacity(1 + extra.len());
+    let count = extra
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| fatal_host_error("vtable dispatch argument count overflow"))?;
+    let mut args = Vec::new();
+    args.try_reserve_exact(count).map_err(fatal_host_error)?;
     args.push(*object);
     args.extend_from_slice(extra);
     let mut out = [Val::null_any_ref()];
@@ -175,6 +183,32 @@ pub(crate) async fn dispatch_vtable_slot(
     let [result] = out;
     Ok(result)
 }
+
+/// Undefined shares the object vtable but has no structural fields. Its JSON
+/// slot is used only after the serializer has chosen the array-element context;
+/// top-level undefined and omitted object fields are handled before dispatch.
+fn undefined_slot(
+    caller: &mut Caller<'_, StoreData>,
+    slot: usize,
+    extra: &[Val],
+) -> wasmtime::Result<Val> {
+    match slot {
+        0 | 1 => {
+            let text = if slot == 0 { "undefined" } else { "null" };
+            Ok(Val::AnyRef(Some(
+                write_submilli_string_struct(caller, text)?.to_anyref(),
+            )))
+        }
+        2 => Ok(Val::I32(i32::from(super::undefined::is_undefined(
+            caller,
+            abi_arg(extra, 0)?,
+        )?))),
+        3 => Ok(Val::I32(UNDEFINED_HASH as i32)),
+        _ => Err(fatal_host_error("invalid undefined vtable slot")),
+    }
+}
+
+const UNDEFINED_HASH: u32 = 0x6fbc_2a13;
 
 /// Count one level into the universal-vtable walk. These bodies are host
 /// frames, so without a bound a cyclic graph recurses until the *native* stack
@@ -577,6 +611,10 @@ fn build_object_vtable(
         intr.to_string_fn.clone(),
         |caller, params, results| {
             Box::new(async move {
+                if super::undefined::is_undefined(caller, abi_arg(params, 0)?)? {
+                    *abi_result(results, 0)? = undefined_slot(caller, 0, &[])?;
+                    return Ok(());
+                }
                 if let Some(value) =
                     object_override(&mut *caller, abi_arg(params, 0)?, "toString").await?
                 {
@@ -604,6 +642,10 @@ fn build_object_vtable(
             let raw_string = raw_string.clone();
             let string_ty = string_ty.clone();
             Box::new(async move {
+                if super::undefined::is_undefined(caller, abi_arg(params, 0)?)? {
+                    *abi_result(results, 0)? = undefined_slot(caller, 1, &[])?;
+                    return Ok(());
+                }
                 *abi_result(results, 0)? =
                     object_to_json(&mut *caller, abi_arg(params, 0)?, &raw_string, &string_ty)
                         .await?;
@@ -806,6 +848,11 @@ async fn object_equals(
     recv: &Val,
     other: &Val,
 ) -> wasmtime::Result<bool> {
+    let recv_undefined = super::undefined::is_undefined(caller, recv)?;
+    let other_undefined = super::undefined::is_undefined(caller, other)?;
+    if recv_undefined || other_undefined {
+        return Ok(recv_undefined && other_undefined);
+    }
     let (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) = (recv, other) else {
         return Ok(matches!(
             (recv, other),
@@ -863,6 +910,9 @@ async fn object_equals(
 }
 
 async fn object_hash(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<u32> {
+    if super::undefined::is_undefined(caller, recv)? {
+        return Ok(UNDEFINED_HASH);
+    }
     if is_collection_backing(caller, recv)? {
         return identity_hash(caller, recv);
     }
@@ -1918,6 +1968,91 @@ fn is_function(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn undefined_is_primitive_across_vtable_and_nested_serialization() {
+        use crate::runtime::{RuntimeConfig, Vfs, install_runtime_async};
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let mut linker = Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let probe = Func::new_async(
+            &mut store,
+            wasmtime::FuncType::new(&engine, [], []),
+            |mut caller, _, _| {
+                Box::new(async move {
+                    let undefined = super::super::undefined::value(&mut caller)?;
+                    let intr = intrinsic_types(&mut caller)?;
+                    let vtable = crate::runtime::host::host_object_vtable(&mut caller)?;
+                    let pre = StructRefPre::new(&mut caller, intr.undefined.clone());
+                    let independent = Val::AnyRef(Some(
+                        StructRef::new(&mut caller, &pre, &[vtable, Val::I64(0)])?.to_anyref(),
+                    ));
+                    assert!(object_equals(&mut caller, &undefined, &independent).await?);
+                    assert!(!object_equals(&mut caller, &undefined, &Val::null_any_ref()).await?);
+                    assert_eq!(
+                        object_hash(&mut caller, &undefined).await?,
+                        object_hash(&mut caller, &independent).await?,
+                    );
+                    assert!(!super::super::value::truthy(&mut caller, &undefined)?);
+                    assert!(
+                        super::super::value::to_number(&mut caller, &undefined)
+                            .await?
+                            .is_nan()
+                    );
+                    let text = dispatch_vtable_slot(&mut caller, &undefined, 0, &[]).await?;
+                    assert_eq!(
+                        read_string_units(&mut caller, &text, "undefined")?,
+                        "undefined".encode_utf16().collect::<Vec<_>>(),
+                    );
+                    // Direct guest dispatch reads the shared object vtable itself.
+                    let table = as_struct(&mut caller, &vtable, "object vtable")?;
+                    let Val::FuncRef(Some(to_string)) = table.field(&mut caller, 0)? else {
+                        panic!("missing object toString slot");
+                    };
+                    let mut out = [Val::null_any_ref()];
+                    to_string
+                        .call_async(&mut caller, &[undefined], &mut out)
+                        .await?;
+                    assert_eq!(
+                        read_string_units(&mut caller, &out[0], "undefined")?,
+                        "undefined".encode_utf16().collect::<Vec<_>>(),
+                    );
+                    let array = crate::runtime::host::write_submilli_array_struct(
+                        &mut caller,
+                        &[undefined, Val::null_any_ref()],
+                    )?;
+                    let array = Val::AnyRef(Some(array.to_anyref()));
+                    let output = serialization::array(&mut caller, &array, true).await?;
+                    assert_eq!(String::from_utf16(output.units()).unwrap(), "[null,null]");
+                    let output = serialization::array(&mut caller, &array, false).await?;
+                    assert_eq!(String::from_utf16(output.units()).unwrap(), ",");
+                    let done = super::super::iterator::iter_done(&mut caller)?;
+                    let output = serialization::object(&mut caller, &done).await?;
+                    assert_eq!(
+                        String::from_utf16(output.units()).unwrap(),
+                        r#"{"done":true}"#
+                    );
+                    assert!(
+                        super::super::collection::object_field_present(
+                            &mut caller,
+                            &done,
+                            "value",
+                        )?
+                        .is_some()
+                    );
+                    Ok(())
+                })
+            },
+        );
+        store.set_fuel(100000).unwrap();
+        probe.call_async(&mut store, &[], &mut []).await.unwrap();
+    }
 
     #[test]
     fn fnv_hash_matches_reference() {

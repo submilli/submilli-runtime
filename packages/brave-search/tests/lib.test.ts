@@ -24,6 +24,8 @@ function main(): void {
         spellcheck: false, country: "GB", searchLanguage: "en", freshness: "2026-01-01to2026-02-01", safeSearch: "strict" });
     assert(decodeComponent(selected).includes("country=GB&search_lang=en&freshness=2026-01-01to2026-02-01"), "shared options");
     assert(selected.includes("extra_snippets=false&spellcheck=false"), "explicit false preserved");
+    const unset = buildSearchQuery("test", { country: undefined, freshness: undefined, count: undefined });
+    assert(!unset.includes("country=") && !unset.includes("freshness=") && unset.includes("count=10"), "undefined fields use defaults");
 
     label("query and numeric boundaries reject before HTTP");
     expectError("invalid_argument", () => { buildSearchQuery(" \t\n"); });
@@ -67,6 +69,9 @@ function main(): void {
     const sparse = normalizeSearchJson('{"type":"search","web":{"results":[{"title":"Page","url":"https://example.com"}]}}', "q", 0);
     assert(sparse.items[0].extraSnippets.length === 0, "missing snippets normalize empty");
     assert(normalizeSearchJson('{"type":"search","query":{"more_results_available":false},"web":{"results":[]}}', "q", 0).nextOffset === null, "explicit final page");
+    const nulls = normalizeSearchJson('{"type":"search","query":{"original":null,"altered":null,"more_results_available":null},"web":{"results":[{"title":"Page","url":"https://example.com","description":null,"extra_snippets":null,"age":null}]}}', "fallback", 0);
+    assert(nulls.items[0].description === "" && nulls.items[0].extraSnippets.length === 0 && nulls.items[0].age === null, "JSON null item fields normalize");
+    assert(nulls.originalQuery === "fallback" && nulls.alteredQuery === null && nulls.nextOffset === null, "JSON null query metadata normalizes");
     expectError("invalid_response", () => { normalizeSearchJson("{}", "q", 0); });
     expectError("invalid_response", () => { normalizeSearchJson('{"type":"search","web":{"results":[{"title":"x"}]}}', "q", 0); });
     expectError("invalid_response", () => { normalizeSearchJson('{"type":"search","web":{"results":[{"title":3,"url":"x"}]}}', "q", 0); });
@@ -100,6 +105,7 @@ function main(): void {
     assert(limited.code === "rate_limited" && limited.status === 429 && limited.retryAfter === "10", "provider details preserve retry metadata");
     assert(braveHttpError(422, null, '{"type":"ErrorResponse"}').message.endsWith(": ErrorResponse"), "type without detail");
     assert(braveHttpError(422, null, '{"error":{"detail":"Invalid query"}}').message.endsWith(": Invalid query"), "detail without type");
+    assert(braveHttpError(422, null, '{"type":"ErrorResponse","error":{"detail":null}}').message.endsWith("HTTP 422: ErrorResponse"), "JSON null detail keeps type");
     for (const invalid of ["", "<html>bad gateway</html>", "{broken", "null", "[]", "{}",
         '{"type":7}', '{"error":{"detail":[]}}', '{"type":"","error":{"detail":""}}']) {
         const fallback = braveHttpError(422, "5", invalid);
