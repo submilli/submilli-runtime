@@ -15,12 +15,12 @@ fall under them.
 Our `Uint8Array` deliberately diverges from ECMA-262 (spec.md §1.2): it is a
 primitive packed-byte type that **owns its storage** — there is no
 `ArrayBuffer`, no views, no `.buffer`/`.byteOffset`. `subarray` is a deep
-copy, indexed writes truncate non-negative values to the low 8 bits and
-saturate negatives to 0, and the base64/hex codecs are the
+copy, and the base64/hex codecs are the
 `fromBase64`/`fromHex` statics + `toBase64`/`toHex` methods with a typed
 `Base64Options` (`alphabet?`, `omitPadding?` — no `lastChunkHandling`).
-Counter-vectors: `divergence/subarray-deep-copy.ts`,
-`divergence/byte-write-saturates-negative.ts`.
+Counter-vector: `divergence/subarray-deep-copy.ts`. Byte writes go through
+ToUint8 as in the standard (`-1` stores 255); the interpreter fixture
+`uint8array_wraps_like_to_uint8.ts` pins it.
 
 ## Rejected (design decision; representatives under `rejected/Uint8Array/`)
 
@@ -28,7 +28,7 @@ Counter-vectors: `divergence/subarray-deep-copy.ts`,
 |:--|:--|
 | `TypedArray/**` and `Uint8Array/**` cases mentioning `ArrayBuffer`/`SharedArrayBuffer`/`DataView`: `detached-buffer*.js`, `resizable-buffer*.js`, `immutable-buffer.js`, `*-resize*.js`, `*-grow*.js`, `*-shrink*.js`, `*-detach*.js`, `*-sab.js`, `buffer/**`, `byteLength/**`, `byteOffset/**`, `subarray/result-is-new-instance-with-shared-buffer.js`, `set/typedarray-arg-set-values-same-buffer-*.js`, … | No buffer backing at all — `Uint8Array` owns its storage. Representatives: `rejected/Uint8Array/prototype/toBase64/detached-buffer.js`, `rejected/Uint8Array/prototype/subarray/result-is-new-instance-with-shared-buffer.js`, `rejected/Uint8Array/prototype/set/typedarray-arg-set-values-same-buffer-other-type.js`. |
 | `TypedArray/**` / `TypedArrayConstructors/**` material for other element types (`Int8Array`…`Float64Array`, `BigInt64Array`, `Uint8ClampedArray`, the `BigInt/` subdirectories, `ctors*/**`, `from/**`, `of/**`, internals) | Only `Uint8Array` exists; the rest of the family (and the abstract `%TypedArray%` base, `Symbol.iterator`, `Symbol.toStringTag`, `keys`/`values`/`entries` iterators, `toLocaleString`) is deferred or rejected (docs/ecma-262-gaps.md §23). |
-| Byte-conversion coercion vectors (`set/array-arg-src-tonumber-value-type-conversions.js`, `fill/fill-values-conversion-operations*.js`, `set/array-arg-src-tonumber-value-conversions.js`, `with/early-type-coercion.js`, `with/index-casted-to-number.js`) | Writes take typed `number`s — no ToNumber coercion of strings/objects/booleans; and negative values saturate to 0 instead of ToUint8 wrap. Representative: `rejected/Uint8Array/prototype/set/array-arg-src-tonumber-value-type-conversions.js`; counter-vector `divergence/byte-write-saturates-negative.ts`. |
+| Byte-conversion coercion vectors (`set/array-arg-src-tonumber-value-type-conversions.js`, `fill/fill-values-conversion-operations*.js`, `set/array-arg-src-tonumber-value-conversions.js`, `with/early-type-coercion.js`, `with/index-casted-to-number.js`) | Writes take typed `number`s — no ToNumber coercion of strings/objects/booleans. Representative: `rejected/Uint8Array/prototype/set/array-arg-src-tonumber-value-type-conversions.js`. |
 | `Uint8Array/prototype/setFromBase64/**`, `setFromHex/**` | In-place decode into an existing array (offset/written bookkeeping, partial writes into views) is absent by design; decoding goes through the `fromBase64`/`fromHex` statics, which return fresh arrays. Representatives: `rejected/Uint8Array/prototype/setFromBase64/results.js`, `rejected/Uint8Array/prototype/setFromHex/results.js`. |
 | `fromBase64/option-coercion.js`, `fromBase64/string-coercion.js`, `toBase64/option-coercion.js`, `toBase64/receiver-not-uint8array.js`, `toHex/receiver-not-uint8array.js` | Option-bag getter traps, ToString coercion, and receiver-brand checks; arguments are statically typed. Representative: `rejected/Uint8Array/fromBase64/option-coercion.js`. |
 | `TypedArray/prototype/*/predicate-call-parameters.js`, `callbackfn-arguments-*.js`, `callbackfn-this.js`, `predicate-call-this-*.js`, `*-is-not-callable*.js`, `callbackfn-returns-abrupt.js`, `return-abrupt-from-predicate-call.js` | `arguments` objects, `thisArg`, non-callable arguments, and abrupt-completion plumbing — all compile errors or generic try/catch behavior here. |

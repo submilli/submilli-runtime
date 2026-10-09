@@ -1885,10 +1885,16 @@ fn codegen_inner(
             string_vtable_global_idx,
         )?;
     }
-    for &stmt_id in &ctx.ta.top_level_statements {
+    for (index, &stmt_id) in ctx.ta.top_level_statements.iter().enumerate() {
+        init_guard::emit_mark_classes_declared(&mut start_emitter, &ctx, index);
         emit_statement(&mut start_emitter, &ctx, stmt_id)?;
         ctx.check_failure()?;
     }
+    init_guard::emit_mark_classes_declared(
+        &mut start_emitter,
+        &ctx,
+        ctx.ta.top_level_statements.len(),
+    );
     let mut debug_functions = dwarf::DebugFunctions::default();
     debug_functions.write(
         &mut code,

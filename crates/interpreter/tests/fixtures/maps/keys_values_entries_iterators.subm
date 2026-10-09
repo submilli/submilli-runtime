@@ -25,13 +25,13 @@ function main(): void {
   }
   assert(rendered === "x10y20z30", "entries pair key and value");
 
-  // Snapshot semantics: a set() after cursor creation is invisible to it.
+  // As in JavaScript, a set() after cursor creation is visited.
   const it = m.keys();
   m.set("w", 40);
-  let snap = "";
+  let live = "";
   for (const k of it) {
-    snap = snap + k;
+    live = live + k;
   }
-  assert(snap === "xyz", "cursor walks the snapshot");
+  assert(live === "xyzw", "cursor sees the later set");
   assert(m.size === 4, "map itself sees the new entry");
 }

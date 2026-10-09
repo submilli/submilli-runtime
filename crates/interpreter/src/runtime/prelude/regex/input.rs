@@ -19,6 +19,9 @@ pub(crate) struct InputCache {
 pub(super) struct DecodedInput {
     text: String,
     offsets: Option<Offsets>,
+    /// The input's code units, kept only when it has a lone surrogate: `text`
+    /// holds U+FFFD there, so slices must come from the units.
+    lone_surrogate_units: Option<Vec<u16>>,
     _charge: InputBytes,
 }
 
@@ -52,6 +55,23 @@ impl DecodedInput {
                 .map(|byte| *byte as usize);
         }
         Some(byte)
+    }
+
+    /// The code units of the input between two byte offsets of `text`.
+    pub(super) fn units(&self, bytes: std::ops::Range<usize>) -> wasmtime::Result<Vec<u16>> {
+        let Some(units) = &self.lone_surrogate_units else {
+            let text = self
+                .text
+                .get(bytes)
+                .ok_or_else(|| fatal_host_error("RegExp: invalid byte span"))?;
+            return Ok(text.encode_utf16().collect());
+        };
+        let start = self.byte_to_unit(bytes.start)?;
+        let end = self.byte_to_unit(bytes.end)?;
+        units
+            .get(start..end)
+            .map(<[u16]>::to_vec)
+            .ok_or_else(|| fatal_host_error("RegExp: invalid unit span"))
     }
 
     pub(super) fn advance(&self, unit: usize, unicode: bool) -> wasmtime::Result<usize> {
@@ -128,17 +148,27 @@ fn decode(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<D
         .checked_mul(3)
         .ok_or_else(|| fatal_host_error("RegExp input too large"))?;
     let mut charge = InputBytes::new(&caller.data().tenant_limits, capacity as u64)?;
-    let _temporary = InputBytes::new(&caller.data().tenant_limits, (len as u64) * 2)?;
+    let units_charge = InputBytes::new(&caller.data().tenant_limits, (len as u64) * 2)?;
     let units = read_code_units(&mut *caller, raw, "RegExp input")?;
     fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
     let mut text = String::new();
     text.try_reserve_exact(capacity).map_err(fatal_host_error)?;
     let mut ascii = true;
-    for scalar in char::decode_utf16(units) {
-        let scalar = scalar.unwrap_or(char::REPLACEMENT_CHARACTER);
+    let mut lone_surrogate = false;
+    for scalar in char::decode_utf16(units.iter().copied()) {
+        let scalar = scalar.unwrap_or_else(|_| {
+            lone_surrogate = true;
+            char::REPLACEMENT_CHARACTER
+        });
         ascii &= scalar.is_ascii();
         text.push(scalar);
     }
+    let lone_surrogate_units = if lone_surrogate {
+        charge.absorb(units_charge)?;
+        Some(units)
+    } else {
+        None
+    };
     let offsets = if ascii {
         None
     } else {
@@ -180,6 +210,7 @@ fn decode(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<D
     Ok(DecodedInput {
         text,
         offsets,
+        lone_surrogate_units,
         _charge: charge,
     })
 }
@@ -248,7 +279,7 @@ mod tests {
                         )?;
                         let text = read(&mut caller, &Val::AnyRef(Some(input.to_anyref())))?;
                         assert_eq!(&**text, "a\u{fffd}😀");
-                        assert_eq!(caller.data().tenant_limits.host_attached_bytes(), 68);
+                        assert_eq!(caller.data().tenant_limits.host_attached_bytes(), 76);
                     }
                     1 => {
                         let root = caller.data().regex_input.as_ref().unwrap().root;

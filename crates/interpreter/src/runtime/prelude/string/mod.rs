@@ -196,15 +196,6 @@ pub fn char_code_at(s: &Str, index: f64) -> f64 {
     unit_index(units.len(), index).map_or(f64::NAN, |i| units[i] as f64)
 }
 
-/// `codePointAt`: like `charCodeAt`, but decodes a surrogate pair into the full
-/// code point. `NaN` out of range.
-pub fn code_point_at(s: &Str, index: f64) -> f64 {
-    let units = s.units();
-    unit_index(units.len(), index).map_or(f64::NAN, |i| {
-        code_point(units[i], units.get(i + 1).copied())
-    })
-}
-
 /// `slice`: negatives count from the end; empty when `start >= end` after
 /// normalization.
 pub fn slice(s: &Str, start: f64, end: f64) -> Str {
@@ -468,45 +459,47 @@ pub fn to_well_formed(s: &Str) -> Str {
     Str::from_units(out)
 }
 
-/// Decode to a Rust `String` for Unicode normalization. This is the one sanctioned UTF-8 round-trip — those crates
-/// work on `char`s — and matches the prior `submilli:string` decode
-/// (`String::from_utf16_lossy`, so a lone surrogate becomes U+FFFD).
-fn decode(s: &Str) -> String {
-    String::from_utf16_lossy(s.units())
-}
-
-fn encode(s: String) -> Str {
-    Str::from_units(s.encode_utf16().collect())
-}
-
 pub use transforms::{to_lower_case, to_upper_case, trim, trim_end, trim_start};
 
 /// `normalize`: Unicode normalization. `form` must be `"NFC"`/`"NFD"`/`"NFKC"`/
-/// `"NFKD"` (default `"NFC"`); any other value throws.
+/// `"NFKD"` (default `"NFC"`); any other value throws. A lone surrogate is
+/// kept: it neither decomposes nor composes, so the text on each side of it
+/// normalizes on its own.
 pub fn normalize(s: &Str, form: &Str) -> Result<Str> {
-    let text = decode(s);
-    let out: String = match decode(form).as_str() {
-        "NFC" => text.nfc().collect(),
-        "NFD" => text.nfd().collect(),
-        "NFKC" => text.nfkc().collect(),
-        "NFKD" => text.nfkd().collect(),
+    let form: fn(&str) -> String = match String::from_utf16_lossy(form.units()).as_str() {
+        "NFC" => |text| text.nfc().collect(),
+        "NFD" => |text| text.nfd().collect(),
+        "NFKC" => |text| text.nfkc().collect(),
+        "NFKD" => |text| text.nfkd().collect(),
         _ => {
             return Err(RangeError(
                 "String.normalize: invalid form — must be 'NFC', 'NFD', 'NFKC', or 'NFKD'",
             ));
         }
     };
-    Ok(encode(out))
+    let mut out = Vec::with_capacity(s.units().len());
+    let mut run = String::new();
+    for scalar in char::decode_utf16(s.units().iter().copied()) {
+        match scalar {
+            Ok(c) => run.push(c),
+            Err(lone) => {
+                out.extend(form(&run).encode_utf16());
+                run.clear();
+                out.push(lone.unpaired_surrogate());
+            }
+        }
+    }
+    out.extend(form(&run).encode_utf16());
+    Ok(Str::from_units(out))
 }
 
-/// `String.fromCharCode(...codes)`: one UTF-16 code unit per argument. Values
-/// trunc-sat to unsigned then mask to 16 bits, so negatives saturate to 0
-/// (matching the `Uint8Array` constructor's divergence from JS's modulo wrap).
+/// `String.fromCharCode(...codes)`: one UTF-16 code unit per argument, through
+/// JavaScript's `ToUint16`, so `-1` is U+FFFF.
 pub fn from_char_code(codes: &[f64]) -> Str {
     Str::from_units(
         codes
             .iter()
-            .map(|&x| ((x as u32) & 0xFFFF) as u16)
+            .map(|&x| crate::runtime::number::to_uint16(x))
             .collect(),
     )
 }

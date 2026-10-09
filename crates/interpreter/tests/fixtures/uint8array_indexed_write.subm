@@ -18,5 +18,5 @@ function main(): void {
   bytes[0] = 511;
   assert(bytes[0] === 255, "511 truncates to 255");
   bytes[0] = -1;
-  assert(bytes[0] === 0, "negative saturates to 0 (matches ctor)");
+  assert(bytes[0] === 255, "a negative wraps modulo 256, as in JavaScript");
 }

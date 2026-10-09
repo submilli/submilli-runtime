@@ -7,6 +7,7 @@
 //! `packages.*` / `builtins.docs` tools, the server's REST surface, and the
 //! `submilli docs` / `search` / `builtins` CLI commands.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
@@ -327,11 +328,13 @@ fn render_type_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Stri
         push_doc(&mut body, &prop.doc, "  ");
         let ro = if prop.readonly { "readonly " } else { "" };
         let opt = if prop.optional { "?" } else { "" };
+        let name = member_name(&name);
         let _ = writeln!(body, "  {ro}{name}{opt}: {};", prop.ty);
     } else {
         let name = resolve_ignore_case(methods.keys(), member)?;
         let m = &methods[&name];
         push_doc(&mut body, &m.doc, "  ");
+        let name = method_prefix(&name);
         let _ = writeln!(
             body,
             "  {name}{}({}): {};",
@@ -370,12 +373,14 @@ fn render_class_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Str
         let field = &static_fields[&name];
         push_doc(&mut body, &field.doc, "  ");
         let ro = if field.readonly { "readonly " } else { "" };
+        let name = member_name(&name);
         let _ = writeln!(body, "  static {ro}{name}: {};", field.ty);
     } else if let Some(name) = resolve_ignore_case(statics.keys(), member)
         .filter(|n| static_visibility.get(n) != Some(&crate::Visibility::Private))
     {
         let m = &statics[&name];
         push_doc(&mut body, &m.doc, "  ");
+        let name = member_name(&name);
         let _ = writeln!(
             body,
             "  static {name}{}({}): {};",
@@ -390,12 +395,14 @@ fn render_class_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Str
         push_doc(&mut body, &field.doc, "  ");
         let ro = if field.readonly { "readonly " } else { "" };
         let opt = if field.optional { "?" } else { "" };
+        let name = member_name(&name);
         let _ = writeln!(body, "  {ro}{name}{opt}: {};", field.ty);
     } else {
         let name = resolve_ignore_case(methods.keys(), member)
             .filter(|n| method_visibility.get(n) != Some(&crate::Visibility::Private))?;
         let m = &methods[&name];
         push_doc(&mut body, &m.doc, "  ");
+        let name = member_name(&name);
         let _ = writeln!(
             body,
             "  {name}{}({}): {};",
@@ -1413,37 +1420,19 @@ fn render_ts_type(
                 push_doc(out, &prop.doc, &inner);
                 let ro = if prop.readonly { "readonly " } else { "" };
                 let opt = if prop.optional { "?" } else { "" };
+                let pname = member_name(pname);
                 let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {};", ts_type(&prop.ty));
             }
             for (mname, m) in methods {
                 push_doc(out, &m.doc, &inner);
                 let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
-                match mname.as_str() {
-                    "@call" => {
-                        let _ = writeln!(
-                            out,
-                            "{inner}{}({}): {ret};",
-                            generics_str(&m.generics),
-                            ts_params_str(&m.params, m.doc.as_ref())
-                        );
-                    }
-                    "new" => {
-                        let _ = writeln!(
-                            out,
-                            "{inner}new {}({}): {ret};",
-                            generics_str(&m.generics),
-                            ts_params_str(&m.params, m.doc.as_ref())
-                        );
-                    }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "{inner}{mname}{}({}): {ret};",
-                            generics_str(&m.generics),
-                            ts_params_str(&m.params, m.doc.as_ref())
-                        );
-                    }
-                }
+                let mname = method_prefix(mname);
+                let _ = writeln!(
+                    out,
+                    "{inner}{mname}{}({}): {ret};",
+                    generics_str(&m.generics),
+                    ts_params_str(&m.params, m.doc.as_ref())
+                );
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
@@ -1499,6 +1488,7 @@ fn render_ts_type(
                 }
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}static {ro}{fname}: {};", ts_type(&field.ty));
             }
             for (mname, m) in statics {
@@ -1507,6 +1497,7 @@ fn render_ts_type(
                 }
                 push_doc(out, &m.doc, &inner);
                 let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}static {mname}{}({}): {ret};",
@@ -1523,6 +1514,7 @@ fn render_ts_type(
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let opt = if field.optional { "?" } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}{ro}{fname}{opt}: {};", ts_type(&field.ty));
             }
             render_class_accessors(out, fields, accessors, &inner, ts_type);
@@ -1546,6 +1538,7 @@ fn render_ts_type(
                 }
                 push_doc(out, &m.doc, &inner);
                 let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}{mname}{}({}): {ret};",
@@ -1583,6 +1576,7 @@ fn render_class_accessors(
         if fields.get(name).map(|f| f.visibility) == Some(crate::Visibility::Private) {
             continue;
         }
+        let name = member_name(name);
         match (get, set) {
             (Some(r), Some(p)) if r == &p.ty => {
                 let _ = writeln!(out, "{inner}{name}: {};", fmt_ty(r));
@@ -1723,6 +1717,7 @@ fn ts_type(ty: &Type) -> String {
                 .map(|(name, field)| {
                     let opt = if field.optional { "?" } else { "" };
                     let ro = if field.readonly { "readonly " } else { "" };
+                    let name = member_name(name);
                     format!("{ro}{name}{opt}: {}", ts_type(&field.ty))
                 })
                 .collect();
@@ -1934,10 +1929,12 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 push_doc(out, &prop.doc, &inner);
                 let ro = if prop.readonly { "readonly " } else { "" };
                 let opt = if prop.optional { "?" } else { "" };
+                let pname = member_name(pname);
                 let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {};", prop.ty);
             }
             for (mname, m) in methods {
                 push_doc(out, &m.doc, &inner);
+                let mname = method_prefix(mname);
                 let _ = writeln!(
                     out,
                     "{inner}{mname}{}({}): {};",
@@ -1958,7 +1955,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
         TypeKind::StringEnum { variants, .. } => {
             let _ = writeln!(out, "{indent}enum {name} {{");
             for (v, value) in variants {
-                let _ = writeln!(out, "{inner}{v} = \"{value}\",");
+                let _ = writeln!(out, "{inner}{v} = \"{}\",", escape_string_literal(value));
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
@@ -1993,6 +1990,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 }
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}static {ro}{fname}: {};", field.ty);
             }
             for (mname, m) in statics {
@@ -2000,6 +1998,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                     continue;
                 }
                 push_doc(out, &m.doc, &inner);
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}static {mname}{}({}): {};",
@@ -2017,6 +2016,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let opt = if field.optional { "?" } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}{ro}{fname}{opt}: {};", field.ty);
             }
             render_class_accessors(out, fields, accessors, &inner, ToString::to_string);
@@ -2032,6 +2032,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                     continue;
                 }
                 push_doc(out, &m.doc, &inner);
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}{mname}{}({}): {};",
@@ -2269,9 +2270,43 @@ fn type_doc(kind: &TypeKind) -> &Option<DocComment> {
     }
 }
 
+/// What a method's declaration line starts with: nothing for a call signature
+/// (stored as the method `@call`), `new ` for a construct signature, else its
+/// member name.
+fn method_prefix(name: &str) -> Cow<'_, str> {
+    match name {
+        "@call" => Cow::Borrowed(""),
+        "new" => Cow::Borrowed("new "),
+        _ => member_name(name),
+    }
+}
+
+/// A member name as declaration source: bare when it is an ASCII identifier,
+/// else quoted and escaped, as `"a b"` or `"\uD800"` must be. A non-ASCII
+/// identifier is quoted too, since a TypeScript built on older Unicode tables
+/// may not read it.
+fn member_name(name: &str) -> Cow<'_, str> {
+    if name.is_ascii() && crate::type_rendering::is_identifier_name(name) {
+        return Cow::Borrowed(name);
+    }
+    Cow::Owned(format!("\"{}\"", escape_string_literal(name)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_names_are_quoted_unless_identifiers() {
+        let mut lone = String::new();
+        crate::literal_units::push_lone_surrogate(&mut lone, 0xD800);
+        assert_eq!(member_name("count"), "count");
+        assert_eq!(member_name("$el_2"), "$el_2");
+        assert_eq!(member_name("café"), "\"café\"");
+        assert_eq!(member_name("a b"), "\"a b\"");
+        assert_eq!(member_name("0"), "\"0\"");
+        assert_eq!(member_name(&lone), "\"\\uD800\"");
+    }
 
     #[test]
     fn destructured_display_names_are_valid_and_distinct() {
@@ -2707,6 +2742,15 @@ mod tests {
                     symbol.name
                 );
             }
+        }
+    }
+
+    #[test]
+    fn builtin_docs_print_a_call_signature_without_a_name() {
+        for name in ["Number", "Number.@call"] {
+            let docs = builtin_docs(name).expect("Number built-in");
+            assert!(docs.contains("  (value: "), "{docs}");
+            assert!(!docs.contains("@call"), "{docs}");
         }
     }
 

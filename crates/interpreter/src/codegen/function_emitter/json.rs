@@ -554,10 +554,11 @@ pub(crate) fn emit_inline_const_raw_string(
     let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
         crate::codegen::internal_failure("inline string intrinsic types are missing")
     })?;
-    let array_size = u32::try_from(text.encode_utf16().count()).map_err(|_| {
+    let units = crate::literal_units::literal_units(text);
+    let array_size = u32::try_from(units.len()).map_err(|_| {
         crate::codegen::internal_failure("inline string exceeds the array length representation")
     })?;
-    for unit in text.encode_utf16() {
+    for unit in units {
         emitter.instruction(Instruction::I32Const(i32::from(unit)));
     }
     emitter.instruction(Instruction::ArrayNewFixed {
@@ -573,10 +574,8 @@ pub(crate) fn emit_raw_string_matches_literal(
     key_raw_local: u32,
     expected: &str,
 ) {
-    let Some(expected_length) = emitter
-        .ctx
-        .latch(crate::codegen::wasm_u32(expected.encode_utf16().count()))
-    else {
+    let expected = crate::literal_units::literal_units(expected);
+    let Some(expected_length) = emitter.ctx.latch(crate::codegen::wasm_u32(expected.len())) else {
         return;
     };
     let Some(result_local) = emitter.ctx.latch(emitter.add_anonymous_local(ValType::I32)) else {
@@ -593,7 +592,7 @@ pub(crate) fn emit_raw_string_matches_literal(
     emitter.instruction(Instruction::I32Ne);
     emitter.instruction(Instruction::BrIf(0));
 
-    for (unit, i) in expected.encode_utf16().zip(0..expected_length) {
+    for (&unit, i) in expected.iter().zip(0..expected_length) {
         emitter.instruction(Instruction::LocalGet(key_raw_local));
         emitter.instruction(Instruction::I32Const(i as i32));
         emitter.instruction(Instruction::ArrayGetU(intrinsics.raw_string));

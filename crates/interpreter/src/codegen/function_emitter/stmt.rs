@@ -658,9 +658,7 @@ fn emit_uint8_index_store(
             .ty,
         &Type::Number,
     )?;
-    emitter.instruction(Instruction::I32TruncSatF64U);
-    emitter.instruction(Instruction::I32Const(0xff));
-    emitter.instruction(Instruction::I32And);
+    emit_to_uint8(emitter)?;
     emitter.instruction(Instruction::LocalSet(value_local));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: uint8_idx,
@@ -672,6 +670,26 @@ fn emit_uint8_index_store(
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::ArraySet(raw_uint8_idx));
+    Ok(())
+}
+
+/// JavaScript's `ToUint8` on the `f64` on the stack, leaving an `i32` byte:
+/// truncate, then reduce modulo 256 (so `-1` is 255). Every step is exact in
+/// `f64`; `NaN` and `±Infinity` become `NaN`, which `trunc_sat` maps to 0.
+fn emit_to_uint8(
+    emitter: &mut FunctionEmitter,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let truncated = emitter.add_anonymous_local(ValType::F64)?;
+    emitter.instruction(Instruction::F64Trunc);
+    emitter.instruction(Instruction::LocalTee(truncated));
+    emitter.instruction(Instruction::LocalGet(truncated));
+    emitter.instruction(Instruction::F64Const(256.0.into()));
+    emitter.instruction(Instruction::F64Div);
+    emitter.instruction(Instruction::F64Floor);
+    emitter.instruction(Instruction::F64Const(256.0.into()));
+    emitter.instruction(Instruction::F64Mul);
+    emitter.instruction(Instruction::F64Sub);
+    emitter.instruction(Instruction::I32TruncSatF64U);
     Ok(())
 }
 

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d0883e47ac58eeb6786996514ce891f174c764b55d4f4654297b9e3669ef8185"
+  contentHash: "50b732be4b2f183dae62202de6d71675f34035f254ddc46f9a30a9c31e27f61c"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -57,7 +57,7 @@ submilli builtins Map
 
 ```text
 /**
- * A hash-backed key-value collection. Keys are compared by structural equality through each key's `equals` method; lookup buckets via `hash`. Insertion-order iteration is not guaranteed in v1.
+ * A hash-backed key-value collection. Keys are compared by structural equality through each key's `equals` method; lookup buckets via `hash`. Iteration follows insertion order.
  */
 interface Map<K, V> {
   /**

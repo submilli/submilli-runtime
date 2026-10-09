@@ -35,6 +35,7 @@ impl<'a> Inferer<'a> {
                 // evaluate here, in source order interleaved with `let`/`const` —
                 // the TS module-initialization order.
                 StmtKind::ClassDecl { name, members, .. } => {
+                    self.record_class_declaration_point(&name.name);
                     self.infer_static_field_globals(&name, &members)?;
                 }
                 StmtKind::Import { .. } => {}
@@ -212,6 +213,16 @@ impl<'a> Inferer<'a> {
             .filter(|(name, _)| self.function_written_globals.contains(*name))
             .map(|(_, entry)| entry.mangled_name.clone())
             .collect()
+    }
+
+    fn record_class_declaration_point(&mut self, class_name: &str) {
+        let Some(sym) = self.types.lookup(class_name) else {
+            return;
+        };
+        let point = self.typed_ast.top_level_statements.len();
+        self.typed_ast
+            .class_declaration_points
+            .insert(sym.mangled_name.clone(), point);
     }
 
     /// One module global per static field, keyed `Class#static#name`. Fields

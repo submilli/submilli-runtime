@@ -26,7 +26,7 @@ line, a name it declares, or the type `tsc` printed. It is approximate, and
 `COVERAGE_SAMPLE=<feature>` prints what it counted. It shows a feature that
 pruning nearly removed.
 
-Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 test262 cases.
+Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 672 test262 cases.
 
 ## Types
 
@@ -182,15 +182,15 @@ Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 te
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
 | String literals | §1.7 | done | 1444 | 236 | 1208 | 0 | 972 | 2 of 2 | — | — |  |
 | Template literals | §1.7 | done | 276 | 15 | 261 | 0 | 120 | 1 of 1 | — | — |  |
-| String methods | §1.7 | done | — | — | — | — | — | — | 81 | 502 |  |
+| String methods | §1.7 | done | — | — | — | — | — | — | 86 | 550 |  |
 
 ## Built-ins
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
 | `Map` | §2.7 | done | 17 | 5 | 12 | 0 | 5 | 1 of 1 | 19 | 97 |  |
-| `Set` | §2.7 | done | 3 | 1 | 2 | 0 | 1 | 1 of 1 | 23 | 66 |  |
-| `Uint8Array` | §1.2 | done | — | — | — | — | — | — | 49 | 284 |  |
+| `Set` | §2.7 | done | 3 | 1 | 2 | 0 | 1 | 1 of 1 | 24 | 79 |  |
+| `Uint8Array` | §1.2 | done | — | — | — | — | — | — | 48 | 277 |  |
 | `TextEncoder` / `TextDecoder` | §1.2 | n/a | — | — | — | — | — | — | — | — | WHATWG Encoding, not ECMAScript: test262 has no tests for it |
 | `Boolean` | §1.6 | done | — | — | — | — | — | — | 5 | 15 |  |
 | `Number` and numeric globals | §1.6 | done | — | — | — | — | — | — | 48 | 297 |  |
@@ -198,7 +198,7 @@ Upstream: 4463 single-file TypeScript tests. Suite: 452 TypeScript cases, 665 te
 | `Object` statics | §1.6 | done | — | — | — | — | — | — | 24 | 105 |  |
 | `JSON` | §1.6 | done | — | — | — | — | — | — | 26 | 59 |  |
 | `Math` | §1.10 | done | — | — | — | — | — | — | 60 | 234 |  |
-| `RegExp` | §1.7 | done | — | — | — | — | — | — | 45 | 223 |  |
+| `RegExp` | §1.7 | done | — | — | — | — | — | — | 47 | 229 |  |
 | `Temporal` | §1.7 | done | — | — | — | — | — | — | 41 | 288 |  |
 | `PermissionDeniedError` | §1.8 | n/a | — | — | — | — | — | — | — | — | Submilli-specific: capability denials have no upstream counterpart |
 

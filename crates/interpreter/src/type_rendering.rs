@@ -267,22 +267,34 @@ fn push<'a>(frames: &mut Vec<Frame<'a>>, frame: Frame<'a>) -> Result<(), RenderE
 /// A field name as TypeScript prints it: bare when it is an identifier (keywords
 /// included), otherwise a quoted string, as `"a b"` and `"1"` are.
 fn write_field_name(out: &mut Writer, name: &str) -> Result<(), RenderError> {
-    let mut chars = name.chars();
-    let is_identifier = chars
-        .next()
-        .is_some_and(|c| c == '_' || c == '$' || unicode_ident::is_xid_start(c))
-        && chars.all(|c| c == '_' || c == '$' || unicode_ident::is_xid_continue(c));
-    if is_identifier {
+    if is_identifier_name(name) {
         out.push(name)
     } else {
         write_string(out, name)
     }
 }
 
+/// Whether a member name can be written bare, as an identifier (keywords
+/// included), rather than as a quoted string.
+pub(crate) fn is_identifier_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c == '_' || c == '$' || unicode_ident::is_xid_start(c))
+        && chars.all(|c| c == '_' || c == '$' || unicode_ident::is_xid_continue(c))
+}
+
 pub(crate) fn write_string(out: &mut Writer, value: &str) -> Result<(), RenderError> {
     out.push("\"")?;
-    let mut chars = value.chars().peekable();
+    let mut chars = crate::literal_units::literal_chars(value).peekable();
     while let Some(ch) = chars.next() {
+        let ch = match ch {
+            Ok(ch) => ch,
+            Err(lone) => {
+                out.format(format_args!("\\u{lone:04X}"))?;
+                continue;
+            }
+        };
         match ch {
             '"' => out.push("\\\"")?,
             '\\' => out.push("\\\\")?,
@@ -292,7 +304,12 @@ pub(crate) fn write_string(out: &mut Writer, value: &str) -> Result<(), RenderEr
             '\u{8}' => out.push("\\b")?,
             '\u{b}' => out.push("\\v")?,
             '\u{c}' => out.push("\\f")?,
-            '\0' if chars.peek().is_some_and(char::is_ascii_digit) => out.push("\\x00")?,
+            '\0' if chars
+                .peek()
+                .is_some_and(|next| next.is_ok_and(|d| d.is_ascii_digit())) =>
+            {
+                out.push("\\x00")?;
+            }
             '\0' => out.push("\\0")?,
             '\u{0}'..='\u{1f}' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
                 out.format(format_args!("\\u{:04X}", u32::from(ch)))?;

@@ -1011,8 +1011,15 @@ impl Type {
 /// type (`escapeString` in TypeScript's `utilities.ts`): `"G\"HI"`, `"a\nb"`.
 pub(crate) fn escape_string_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
+    let mut chars = crate::literal_units::literal_chars(s).peekable();
     while let Some(c) = chars.next() {
+        let c = match c {
+            Ok(c) => c,
+            Err(lone) => {
+                out.push_str(&format!("\\u{lone:04X}"));
+                continue;
+            }
+        };
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
@@ -1023,7 +1030,12 @@ pub(crate) fn escape_string_literal(s: &str) -> String {
             '\u{b}' => out.push_str("\\v"),
             '\u{c}' => out.push_str("\\f"),
             // `\0` before a digit would read as an octal escape.
-            '\0' if chars.peek().is_some_and(char::is_ascii_digit) => out.push_str("\\x00"),
+            '\0' if chars
+                .peek()
+                .is_some_and(|next| next.is_ok_and(|d| d.is_ascii_digit())) =>
+            {
+                out.push_str("\\x00");
+            }
             '\0' => out.push_str("\\0"),
             '\u{0}'..='\u{1f}' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
                 out.push_str(&format!("\\u{:04X}", u32::from(c)));

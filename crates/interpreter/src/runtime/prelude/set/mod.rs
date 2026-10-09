@@ -22,8 +22,8 @@ pub(crate) use install::declare_types;
 pub use install::{declare, install};
 
 use wasmtime::{
-    ArrayRef, ArrayRefPre, Caller, FieldType, Finality, HeapType, Mutability, RefType, Rooted,
-    StorageType, StructRef, StructRefPre, StructType, Val, ValType,
+    ArrayRef, ArrayRefPre, Caller, FieldType, Finality, Mutability, RefType, Rooted, StorageType,
+    StructRef, StructRefPre, StructType, Val, ValType,
 };
 
 use crate::runtime::StoreData;
@@ -33,14 +33,16 @@ use crate::runtime::host::{host_map_tombstone, host_object_vtable, write_submill
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
 use crate::runtime::prelude::closure::{self, Closure};
 use crate::runtime::prelude::collection::{
-    decode_key, encode_key, is_null_key, probe_capacity, rehash_capacity,
+    both_nan, decode_key, encode_key, is_null_key, probe_capacity, rehash_capacity,
 };
 use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
 use crate::runtime::prelude::iterator::{
-    IterKind, IteratorSource, as_struct, build_iterator, iter_done, iter_yield, next_closure_type,
-    shared_next,
+    IterKind, IteratorSource, build_iterator, iter_done, iter_yield, next_closure_type, shared_next,
 };
-use crate::runtime::prelude::keep::{KeptValue, keep_all};
+use crate::runtime::prelude::keep::KeptValue;
+use crate::runtime::prelude::ledger::{
+    LedgerCursor, LedgerFields, forward_cleared, forward_rehashed,
+};
 use crate::runtime::prelude::map::raw_index_array_type;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
 
@@ -183,6 +185,9 @@ async fn equals(
     let right_null = is_null_key(caller, slot)?;
     if left_null || right_null {
         return Ok(left_null && right_null);
+    }
+    if both_nan(caller, elem, slot)? {
+        return Ok(true);
     }
     match dispatch_vtable_slot(caller, elem, 2, &[*slot]).await? {
         Val::I32(b) => Ok(b != 0),
@@ -376,6 +381,9 @@ pub(super) async fn delete(
 /// `Set#clear(self) -> void`. Swaps in fresh empty backing arrays.
 pub(super) fn clear(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::Result<()> {
     let b = backing(caller, recv)?;
+    let old_elements = field_array(caller, &b, F_ELEMENTS)?;
+    let old_order = field_array(caller, &b, F_ORDER)?;
+    let old_order_len = field_i32(caller, &b, F_ORDER_LEN)?;
     let elements = new_raw_array(caller, INITIAL_CAPACITY)?;
     let order = new_index_array(caller, INITIAL_CAPACITY)?;
     let hashes = new_index_array(caller, INITIAL_CAPACITY)?;
@@ -398,7 +406,14 @@ pub(super) fn clear(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime:
         F_ORDER_POSITIONS,
         Val::AnyRef(Some(positions.to_anyref())),
     )?;
-    Ok(())
+    forward_cleared(
+        caller,
+        &old_elements,
+        &old_order,
+        old_order_len,
+        &elements,
+        &order,
+    )
 }
 
 /// `Set#size` — the element count as a `number`. Ported (unlike `Map#size`) so
@@ -485,62 +500,65 @@ fn rehash(
         F_ORDER_POSITIONS,
         Val::AnyRef(Some(new_positions.to_anyref())),
     )?;
-    Ok(())
+    forward_rehashed(caller, &old_elements, &new_elements, &new_order)
 }
 
 // ---------------------------------------------------------------------------
 // forEach + iteration
 // ---------------------------------------------------------------------------
 
-/// `Set#forEach(self, callback)` — walks the insertion-order ledger (skipping
-/// `-1` holes) and calls `callback(element)` for each live element. The backing
-/// arrays are captured once, matching the Wasm body's local-capture semantics.
+/// Where the ledger walk finds a set's elements, ledger and ledger length.
+const LEDGER: LedgerFields = LedgerFields {
+    entries: F_ELEMENTS,
+    order: F_ORDER,
+    order_len: F_ORDER_LEN,
+};
+
+/// `Set#forEach(self, callback)` — calls `callback(element, element, set)` for
+/// each element in insertion order. Like an iterator it walks the set live, so
+/// it visits elements the callback adds and skips ones it deletes.
 pub(super) async fn for_each(
     caller: &mut Caller<'_, StoreData>,
     recv: &Val,
     f: &Closure,
 ) -> wasmtime::Result<()> {
     let b = backing(caller, recv)?;
-    let elements = field_array(caller, &b, F_ELEMENTS)?;
-    let order = field_array(caller, &b, F_ORDER)?;
-    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
-    // A callback that clears or grows the set swaps these arrays out of it.
-    keep_all(
-        caller,
-        &[elements, order].map(|array| Val::AnyRef(Some(array.to_anyref()))),
-    )?;
-    for o in 0..order_len {
-        let Val::I32(idx) = order.get(&mut *caller, o as u32)? else {
-            continue;
+    // Kept in a host-allocated struct: a callback that grows or clears the set
+    // leaves the cursor's arrays reachable from nothing else.
+    let stored = LedgerCursor::start(caller, b, LEDGER)?.to_val(caller)?;
+    loop {
+        let mut cursor = LedgerCursor::from_val(caller, &stored)?;
+        let Some(bucket) = cursor.next_bucket(caller, LEDGER)? else {
+            return Ok(());
         };
-        if idx == -1 {
-            continue;
-        }
-        let elem = elements.get(&mut *caller, idx as u32)?;
-        let elem = decode_key(caller, elem)?;
+        cursor.store(caller, &stored)?;
+        let elem = set_element(caller, &cursor, bucket)?;
         // JS passes the element twice, keeping Map's `(value, key, map)` shape.
         f.call_dynamic(caller, &[elem, elem, *recv]).await?;
     }
-    Ok(())
 }
 
-/// Build a `keys`/`values`/`entries`/`iterator` iterator. Like the Map cursor
-/// (and JS `Set` iterator semantics) it captures the backing's `elements`/`order`
-/// references plus `order_len` at construction time, then reads them **live**
-/// each step: a `delete` of an unvisited element is observed (its ledger slot is
-/// `-1`, so the step skips it), while elements added afterward — or a resize that
-/// swaps in a fresh array — are invisible (the captured `order_len` bounds the
-/// walk and the captured refs outlive the swap).
+/// The element in `bucket` of the set's current array.
+fn set_element(
+    caller: &mut Caller<'_, StoreData>,
+    cursor: &LedgerCursor,
+    bucket: u32,
+) -> wasmtime::Result<Val> {
+    let elements = cursor.current_array(caller, F_ELEMENTS)?;
+    let elem = elements.get(&mut *caller, bucket)?;
+    decode_key(caller, elem)
+}
+
+/// Build a `keys`/`values`/`entries`/`iterator` iterator over the set's
+/// ledger. It walks the set live, as a JavaScript `Set` iterator does: see
+/// [`LedgerCursor`].
 fn make_set_iterator(
     caller: &mut Caller<'_, StoreData>,
     recv: &Val,
     kind: IterKind,
 ) -> wasmtime::Result<Val> {
     let b = backing(caller, recv)?;
-    let elements = field_array(caller, &b, F_ELEMENTS)?;
-    let order = field_array(caller, &b, F_ORDER)?;
-    let order_len = field_i32(caller, &b, F_ORDER_LEN)?;
-    let cursor = make_set_cursor(caller, &elements, &order, order_len)?;
+    let cursor = LedgerCursor::start(caller, b, LEDGER)?.to_val(caller)?;
 
     let intr = intrinsic_types(&mut *caller)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
@@ -554,109 +572,33 @@ fn make_set_iterator(
     build_iterator(caller, next_struct, next, cursor)
 }
 
-/// `(struct (mut i32 pos) (ref null any) (ref null any) (i32 order_len))` — the
-/// host-private set cursor: position, captured elements/order arrays, and the
-/// captured ledger length. Host-only, so its shape matches no codegen type.
-fn make_set_cursor(
-    caller: &mut Caller<'_, StoreData>,
-    elements: &Rooted<ArrayRef>,
-    order: &Rooted<ArrayRef>,
-    order_len: i32,
-) -> wasmtime::Result<Val> {
-    let imm = Mutability::Const;
-    let cursor_ty = singleton_struct(
-        caller.engine(),
-        Finality::Final,
-        None,
-        vec![
-            FieldType::new(Mutability::Var, StorageType::ValType(ValType::I32)),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(true, HeapType::Any))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(true, HeapType::Any))),
-            ),
-            FieldType::new(imm, StorageType::ValType(ValType::I32)),
-        ],
-    )?;
-    let pre = StructRefPre::new(&mut *caller, cursor_ty);
-    let st = StructRef::new(
-        &mut *caller,
-        &pre,
-        &[
-            Val::I32(0),
-            Val::AnyRef(Some(elements.to_anyref())),
-            Val::AnyRef(Some(order.to_anyref())),
-            Val::I32(order_len),
-        ],
-    )?;
-    Ok(Val::AnyRef(Some(st.to_anyref())))
-}
-
-/// One `next()` step: walk the captured ledger from the cursor position, skip
-/// `-1` (deleted) slots, and yield the projected element at the first live slot —
-/// or `{ done: true }` past `order_len`. `Keys`/`Values` both yield the element;
-/// `Entries` boxes it into a `[value, value]` pair (mirroring `Map#entries`).
+/// One `next()` step: yield the element at the cursor's next live ledger slot,
+/// or `{ done: true }`. `Keys`/`Values` both yield the element; `Entries` boxes
+/// it into a `[value, value]` pair (mirroring `Map#entries`).
 fn set_next_step(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
     results: &mut [Val],
     kind: IterKind,
 ) -> wasmtime::Result<()> {
-    let cursor = as_struct(caller, abi_arg(params, 0)?, "set iterator env")?;
-    let Val::I32(mut pos) = cursor.field(&mut *caller, 0)? else {
-        return Err(wasmtime::Error::msg("set iterator: position is not an i32"));
+    let stored = abi_arg(params, 0)?;
+    let mut cursor = LedgerCursor::from_val(caller, stored)?;
+    let bucket = cursor.next_bucket(caller, LEDGER)?;
+    cursor.store(caller, stored)?;
+    let Some(bucket) = bucket else {
+        *abi_result(results, 0)? = iter_done(caller)?;
+        return Ok(());
     };
-    let elements = cursor_array(caller, &cursor, 1)?;
-    let order = cursor_array(caller, &cursor, 2)?;
-    let Val::I32(order_len) = cursor.field(&mut *caller, 3)? else {
-        return Err(wasmtime::Error::msg(
-            "set iterator: order_len is not an i32",
-        ));
+    let elem = set_element(caller, &cursor, bucket)?;
+    let yielded = match kind {
+        IterKind::Keys | IterKind::Values => elem,
+        IterKind::Entries => {
+            let pair = write_submilli_array_struct(caller, &[elem, elem])?;
+            Val::AnyRef(Some(pair.to_anyref()))
+        }
     };
-    loop {
-        if pos >= order_len {
-            cursor.set_field(&mut *caller, 0, Val::I32(pos))?;
-            *abi_result(results, 0)? = iter_done(caller)?;
-            return Ok(());
-        }
-        let Val::I32(probe) = order.get(&mut *caller, pos as u32)? else {
-            return Err(wasmtime::Error::msg(
-                "set iterator: ledger slot is not an i32",
-            ));
-        };
-        pos += 1;
-        if probe != -1 {
-            let elem = elements.get(&mut *caller, probe as u32)?;
-            let elem = decode_key(caller, elem)?;
-            let yielded = match kind {
-                IterKind::Keys | IterKind::Values => elem,
-                IterKind::Entries => {
-                    let pair = write_submilli_array_struct(caller, &[elem, elem])?;
-                    Val::AnyRef(Some(pair.to_anyref()))
-                }
-            };
-            cursor.set_field(&mut *caller, 0, Val::I32(pos))?;
-            *abi_result(results, 0)? = iter_yield(caller, yielded)?;
-            return Ok(());
-        }
-    }
-}
-
-/// Read a captured `(ref any)` cursor field back as its array.
-fn cursor_array(
-    caller: &mut Caller<'_, StoreData>,
-    cursor: &Rooted<StructRef>,
-    idx: usize,
-) -> wasmtime::Result<Rooted<ArrayRef>> {
-    match cursor.field(&mut *caller, idx)? {
-        Val::AnyRef(Some(a)) => a.unwrap_array(&mut *caller),
-        other => Err(wasmtime::Error::msg(format!(
-            "set iterator: cursor field {idx} is not an array {other:?}"
-        ))),
-    }
+    *abi_result(results, 0)? = iter_yield(caller, yielded)?;
+    Ok(())
 }
 
 /// `keys`/`values`/`iterator` — sets have no separate keys, so all three yield

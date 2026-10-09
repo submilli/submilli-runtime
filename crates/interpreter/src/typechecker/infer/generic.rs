@@ -795,7 +795,12 @@ impl Inferer<'_> {
         {
             sub.insert(element.clone(), Type::Unknown);
         }
-        if array_from_mapper {
+        let array_like = if array_from {
+            self.array_like_source(&typed_args)?
+        } else {
+            None
+        };
+        if array_from_mapper && array_like.is_some() {
             self.reject_array_like_element_annotation(&typed_args, mapper_type.as_ref())?;
         }
         if array_from_mapper
@@ -843,6 +848,10 @@ impl Inferer<'_> {
 
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         self.check_inferred_void_arguments(&sig.params, &sig.ret, &sub, span);
+        if array_from && !array_from_mapper && array_like.is_some() {
+            let element = self.instantiate(&sub, &Type::TypeVar("T".into()), span)?;
+            self.reject_array_like_element_type(&element, span);
+        }
         let mut result_ty = self.instantiate(&sub, &sig.ret, span)?;
         if array_from_mapper && mapper_type.as_ref().is_some_and(|ty| {
             matches!(ty.peel(), Type::Union(members) if members.iter().any(|member| member.peel() == &Type::Null))
@@ -2035,6 +2044,101 @@ impl Inferer<'_> {
         )
     }
 
+    /// The source of an `Array.from` call when it is an array-like `{ length }`
+    /// rather than an array, iterator or iterable. Only an object type is an
+    /// array-like: TypeScript's `ArrayLike` has a number index signature,
+    /// which an object type has implicitly and an interface or class doesn't.
+    /// A source with a string index signature or an index-named field is
+    /// rejected too, since those entries would be its elements.
+    fn array_like_source(
+        &mut self,
+        typed_args: &[ExprId],
+    ) -> Result<Option<Type>, crate::compiler_error::CompilerFailure> {
+        let Some(source) = typed_args.first() else {
+            return Ok(None);
+        };
+        let source = self
+            .typed_ast
+            .try_expr(*source)
+            .map_err(crate::typechecker::arena_failure)?;
+        let (source_ty, source_span) = (source.ty.clone(), source.span);
+        if matches!(source_ty.peel(), Type::Error | Type::Unknown) {
+            return Ok(None);
+        }
+        let iterable = Type::union(vec![
+            Type::Readonly(Box::new(Type::Array(Box::new(Type::Unknown)))),
+            Type::prelude_interface("Iterator".to_string(), vec![Type::Unknown]),
+            Type::prelude_interface("Iterable".to_string(), vec![Type::Unknown]),
+        ]);
+        let has_length = crate::runtime::prelude::array::array_like_type();
+        // A source that is neither was already reported against the parameter.
+        if super::assignable(&source_ty, &iterable, self.resolver())
+            || !super::assignable(&source_ty, &has_length, self.resolver())
+        {
+            return Ok(None);
+        }
+        if self.has_keyed_entries(&source_ty) {
+            self.error_with_help(
+                source_span,
+                format!(
+                    "`Array.from` doesn't read the keyed entries of `{source_ty}`: Submilli \
+                     treats an array-like `{{ length }}` as having no elements"
+                ),
+                vec!["convert the entries to an array first, or pass an array".to_string()],
+            );
+            return Ok(None);
+        }
+        if !matches!(source_ty.peel(), Type::Object { .. }) {
+            self.error_with_help(
+                source_span,
+                format!(
+                    "`Array.from` takes an array-like only as an object type: `{source_ty}` \
+                     has no number index signature, so it isn't an `ArrayLike`"
+                ),
+                vec![
+                    "annotate the value with an object type such as `{ length: number }`, or \
+                     pass an array"
+                        .to_string(),
+                ],
+            );
+            return Ok(None);
+        }
+        Ok(Some(source_ty))
+    }
+
+    /// Whether an array-like source may hold entries JavaScript reads as its
+    /// elements: a string index signature, or a field named by an array index.
+    fn has_keyed_entries(&self, source: &Type) -> bool {
+        if self.resolver().index_signature(source).is_some() {
+            return true;
+        }
+        match source.peel() {
+            Type::Object { fields, .. } => fields.keys().any(|name| is_array_index(name)),
+            Type::Union(members) => members.iter().any(|member| self.has_keyed_entries(member)),
+            _ => false,
+        }
+    }
+
+    /// `Array.from` of an array-like with no callback makes an array of
+    /// `undefined`, which only an element type admitting `null` can hold.
+    fn reject_array_like_element_type(&mut self, element: &Type, span: Span) {
+        if admits_undefined(element) {
+            return;
+        }
+        self.error_with_help(
+            span,
+            format!(
+                "`Array.from` of an array-like `{{ length }}` has no elements, so it makes an \
+                 array of `undefined`, not of `{element}`"
+            ),
+            vec![
+                "give the array an element type that admits `null`, such as \
+                 `(number | null)[]`, or pass a callback that builds each element from its index"
+                    .to_string(),
+            ],
+        );
+    }
+
     /// `Array.from({ length }, mapFn)` calls `mapFn` with `undefined` for each
     /// element, which has no type here: the element arrives as `null`. A
     /// callback whose element type doesn't admit `null` would read that
@@ -2045,33 +2149,16 @@ impl Inferer<'_> {
         typed_args: &[ExprId],
         mapper_type: Option<&Type>,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let (Some(source), Some(mapper)) = (typed_args.first(), typed_args.get(1)) else {
+        let Some(mapper) = typed_args.get(1) else {
             return Ok(());
         };
-        let source_ty = self
-            .typed_ast
-            .try_expr(*source)
-            .map_err(crate::typechecker::arena_failure)?
-            .ty
-            .clone();
-        let Type::Object { fields, .. } = source_ty.peel() else {
-            return Ok(());
-        };
-        if !fields.contains_key("length") {
-            return Ok(());
-        }
         let Some(Type::Function { params, .. }) = mapper_type.map(Type::peel) else {
             return Ok(());
         };
         let Some(element) = params.first() else {
             return Ok(());
         };
-        let admits_null = match element.peel() {
-            Type::Unknown | Type::Error | Type::Null => true,
-            Type::Union(members) => members.iter().any(|m| m.peel() == &Type::Null),
-            _ => false,
-        };
-        if admits_null {
+        if admits_undefined(element) {
             return Ok(());
         }
         let span = self
@@ -2956,6 +3043,22 @@ fn is_or_has_type_var(ty: &Type, name: &str) -> bool {
     match ty.peel() {
         Type::Union(members) => members.iter().any(is_var),
         _ => is_var(ty),
+    }
+}
+
+/// Whether a property name is a canonical array index, such as `"0"` or `"12"`.
+fn is_array_index(name: &str) -> bool {
+    name.parse::<u32>()
+        .is_ok_and(|index| index != u32::MAX && index.to_string() == name)
+}
+
+/// Whether a slot of this type can hold JavaScript's `undefined`, which
+/// Submilli represents as `null`.
+fn admits_undefined(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Unknown | Type::Error | Type::Null => true,
+        Type::Union(members) => members.iter().any(|m| m.peel() == &Type::Null),
+        _ => false,
     }
 }
 

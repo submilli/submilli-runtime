@@ -1439,7 +1439,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Uint8Array,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Build a new `Uint8Array`. Given an array, converts each element to an unsigned 32-bit integer with saturation, then keeps the low byte. Use `v & 0xff` explicitly when wrapping negative or oversized values is intended. Given a number, allocates that many zero bytes (the same as `Uint8Array.alloc`, including its `RangeError` on a negative or too-large length).\n * @param values Numeric values to copy into the new array, or the length to allocate.\n */",
+                                "/**\n * Build a new `Uint8Array`. Given an array, truncates each element and reduces it modulo 256, as JavaScript does, so `-1` is 255. Given a number, allocates that many zero bytes (the same as `Uint8Array.alloc`, including its `RangeError` on a negative or too-large length).\n * @param values Numeric values to copy into the new array, or the length to allocate.\n */",
                             ),
                         },
                     ),

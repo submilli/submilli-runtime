@@ -4,10 +4,10 @@ Source: `test/built-ins/RegExp/**` (~1900 files) plus the regex-arm
 `String/prototype/{split,replaceAll}` vectors (the other regex-backed String
 methods were ported with the String area). The engine is the Rust `regex`
 crate behind `submilli:regex` (docs/regex.md), so this area carries the
-engine-divergence pins alongside the conformance port: 45 cases under
-`cases/RegExp/` (2 `expect-error` divergence pins, 12 `expect-fail` known
-gaps) + 7 regex-arm cases under `cases/String/prototype/{split,replaceAll}/`
-(1 `expect-fail`). Representative rejected originals under `rejected/RegExp/`.
+engine-divergence pins alongside the conformance port: 47 cases under
+`cases/RegExp/` (2 `expect-error` divergence pins, 9 `expect-fail` known
+gaps) + 7 regex-arm cases under `cases/String/prototype/{split,replaceAll}/`,
+all passing. Representative rejected originals under `rejected/RegExp/`.
 
 Blanket rules (SKIPS.md) cover `prop-desc.js`, `length.js`, `name.js`,
 `not-a-constructor.js`, `is-a-constructor.js`, `proto-from-ctor-realm.js`,
@@ -28,8 +28,9 @@ Porting adaptations used throughout (README rules):
   `RegExpMatch` field into locals immediately after the null check before the
   first shim assertion.
 - Control characters and non-ASCII code points in test strings are spelled
-  with `\uHHHH` escapes; lone-surrogate rows are dropped (host strings are
-  UTF-8 behind the scenes and cannot round-trip unpaired surrogates).
+  with `\uHHHH` escapes; lone-surrogate rows are dropped (the engine matches
+  over UTF-8, where an unpaired surrogate reads as U+FFFD; match results keep
+  the input's code units).
 - `new String(...)` receivers become plain strings; `__split.constructor`
   checks are dropped.
 
@@ -42,10 +43,8 @@ asserting the JS behavior would be a permanent failure by design):
 |:--|:--|
 | `lastindex-readonly` (`expect-error`) | `lastIndex` is read-only in v1 (RegExp builtin declaration documents it); JS honors user writes. Every test262 case that sets `lastIndex` (`exec/y-*-lastindex*`, `test/y-*`, `S15.10.6.2_A4_T*`, `A5_T2/T3`) is unportable until the writable follow-up lands; this pin flips when it does. |
 | `pattern-syntax-error-at-compile-time` (`expect-error`) | Regex literals are validated at codegen time (docs/regex.md), so `/0{2,1}/` is a compile diagnostic, not a catchable runtime SyntaxError (from `15.10.2.5-3-1.js`). |
-| `ascii-classes-without-u-flag` | Without `u`, `\d`/`\w`/`\s` are ASCII (docs/regex.md); JS's no-u `\s` still matches NBSP and friends. |
-| `dot-astral-without-u` | `.` always matches a whole code point; JS without `u` works on code units, so a single `.` never matches an astral character. (docs/regex.md describes the no-u fallback as byte-mode; observed behavior is code-point-mode — the doc's description of the mechanism is stale, the divergence-from-JS is real either way.) |
+| `dot-astral-without-u` | `.` always matches a whole code point; JS without `u` works on code units, so a single `.` never matches an astral character. The same holds for empty matches in `replace` and `split`: without `u`, JS steps one code unit past an empty match, splitting an astral character into its halves, while Submilli steps a whole code point. (docs/regex.md describes the no-u fallback as byte-mode; observed behavior is code-point-mode — the doc's description of the mechanism is stale, the divergence-from-JS is real either way.) |
 | `replaceall-nonglobal-no-typeerror` | `replaceAll` with a non-g regex replaces every match instead of throwing TypeError (prelude doc-comment documents the divergence; from `replaceAll/searchValue-flags-no-g-throws.js`). |
-| `split-no-capture-insertion` | Capture-group values are not spliced into `split` results (prelude doc-comment documents the divergence). |
 
 ## Known gaps (`expect-fail`)
 
@@ -53,7 +52,6 @@ asserting the JS behavior would be a permanent failure by design):
 |:--|:--|
 | `S15.10.2.7_A2_T1` | `RegExpMatch.index` (and `lastIndex`) are UTF-8 byte offsets; ECMA-262 specifies UTF-16 code-unit offsets. They agree on ASCII; any non-ASCII prefix shifts them (probed: `"éa".match(/a/).index` is 2, JS says 1). |
 | `S15.10.2.13_A1_T1`, `S15.10.2.13_A2_T2` | `[]` / `[^]` are valid ECMA-262 classes (match nothing / match anything); the engine rejects both at compile time ("unclosed character class"). A translator rewrite (`[^\s\S]` / `[\s\S]`) would close this. |
-| `S15.10.2.13_A3_T1` | `[\b]` (backspace in a class) is rejected ("invalid escape sequence found in character class"). |
 | `S15.10.2.10_A2.1_T1` | Control escapes `\cA`..`\cZ` are rejected ("unrecognized escape sequence"). |
 | `S15.10.2.10_A5.1_T1` | `\<` and `\>` should be identity escapes; the engine parses them as start/end word-boundary assertions, so they never match the literal character. All other punctuation identity escapes pass (probed). |
 | `S15.10.2.5_A1_T4` | Captures inside a quantified group are not cleared on iterations where they don't participate (ECMA RepeatMatcher zeroes them): capture 4 of `/(z)((a+)?(b+)?(c))*/` on `"zaacbbbcac"` is `"bbb"`, JS says undefined. |
@@ -61,8 +59,6 @@ asserting the JS behavior would be a permanent failure by design):
 | `dotall/with-dotall`, `dotall/without-dotall` | `.` excludes only LF, not CR/U+2028/U+2029, and matches whole astral code points (see the divergence pins; the LineTerminator exclusions are an unpinned, undocumented gap). |
 | `named-groups/non-unicode-match` | `(?<$>...)` — `$` is a valid ECMA GroupName character; the engine rejects it ("invalid capture group character"). The non-`$` rows are covered by the passing `unicode-match` port. |
 | `named-groups/groups-object-unmatched` | Reading `namedGroups` **traps** when any named capture is unmatched — the `Map<string, string>` builder can't represent the null value. Makes optional named groups (`/(?<a>a)|(?<x>x)/`) unusable with `namedGroups`. |
-| `named-groups/string-replace-missing` | The `$<name>` replacement token is not substituted at all (passes through literally). Probed alongside: regex-arm `replace`/`replaceAll` substitute `$$` and `$1`-`$9` but treat `$0` as the whole match (JS keeps `$0` literal), and leave `` $` ``/`$'`/`$&` literal (the `$&`/`` $` ``/`$'` gaps are pinned in the String area). |
-| `String/prototype/split/separator-regexp` | ECMA SplitMatch skips empty matches at the current position: `"x".split(/^/)`, `"x".split(/(?:)/)`, `"x".split(/.*?/)`, `"x".split(/$/)` are all `["x"]`; the engine's split yields leading/trailing empties (`["", "x"]`, `["", "x", ""]`, …). Related probe: a g-flag `exec` that matches empty never advances `lastIndex` (`/(?:)/g.exec("ab")` loops at 0 forever; JS AdvanceStringIndex steps to 1, 2, null) — no clean test262 vector outside the Symbol.* protocol dirs, recorded here instead. |
 
 ## Rejected (design decisions)
 
@@ -84,10 +80,10 @@ asserting the JS behavior would be a permanent failure by design):
 | Pattern | Reason |
 |:--|:--|
 | Remaining `S15.10.2.3_A1_T*`, `S15.10.2.6_A*`, `S15.10.2.7_A*`, `S15.10.2.8_A2/A3/A4_T*`, `S15.10.2.13_A*` rows | Same constructs as the ported representatives (alternation, anchors, `\b`/`\B`, quantifiers, classes, dot) over different inputs; the interpreter fixtures `regex_*.subm` and `conformance_regexp.subm` add more. The rows built on backreferences or `[^]`/`[\b]` fall under the rejected/gap entries above. |
-| `S15.10.2.10_A1.2-A1.5`, `S15.10.2.11_A1_T*` (`\0`, DecimalEscape), `S15.10.2.12_A*` and `CharacterClassEscapes/**` | Escape-table repetition; `\t`/`\x`/`\u` representatives ported; `\s`/`\d`/`\w` semantics pinned by `divergence/ascii-classes-without-u-flag` plus the interpreter fixtures. The 0x10000-code-point sweeps (`character-class-escape-non-whitespace.js`) are too heavy for the harness. |
+| `S15.10.2.10_A1.2-A1.5`, `S15.10.2.11_A1_T*` (`\0`, DecimalEscape), `S15.10.2.12_A*` and `CharacterClassEscapes/**` | Escape-table repetition; `\t`/`\x`/`\u` representatives ported; `\s`/`\d`/`\w` semantics are covered by the interpreter fixture `regexp_shorthand_classes_match_js.ts`. The 0x10000-code-point sweeps (`character-class-escape-non-whitespace.js`) are too heavy for the harness. |
 | `prototype/exec/S15.10.6.2_A1_T*` remainder, `prototype/test/S15.10.6.3_A1_T*` remainder | Receiver/argument coercion variants (`new String`, `new Object`, functions, `eval`) of the ported T1/T2 intent. |
 | `prototype/exec/u-lastindex-*`, `y-*`, `failure-*`, `success-*`, `prototype/test/y-*` | All require writing `lastIndex` or property-descriptor traps — blocked on the read-only divergence pin (`divergence/lastindex-readonly`). |
 | `prototype/{global,ignoreCase,multiline,dotAll,sticky,unicode,source,flags}/**` | Accessor prop-desc/this-coercion matrices; the flag-property reads themselves are covered by `valid-flags-y.ts` and the interpreter fixtures `regex_property_reads.subm` / `regex_flags_all.subm`. |
-| `named-groups/duplicate-names-*.js`, `groups-object*.js`, `string-replace-{get,escaped,unclosed,undefined,nocaptures}.js`, `functional-replace-*` | Duplicate names are engine-rejected (recorded above); groups-object shape and `Array.prototype.groups` pollution don't exist under `namedGroups`; function replacers are deferred by design (docs/regex.md); the expressible `$<name>`/`$N` token semantics are pinned by the two ported `string-replace-*` cases. |
+| `named-groups/duplicate-names-*.js`, `groups-object*.js`, `string-replace-get.js`, `functional-replace-*` | Duplicate names are engine-rejected (recorded above); groups-object shape and `Array.prototype.groups` pollution don't exist under `namedGroups`; function replacers are deferred by design (docs/regex.md); the expressible `$<name>`/`$N` token semantics are covered by the ported `string-replace-*` cases. |
 | `quantifier-integer-limit.js`, `regexp-class-chars.js`, `u180e.js`, `character-class-escape-non-whitespace-u180e.js` | Marginal single-row vectors (integer-limit quantifiers, U+180E membership churn across Unicode versions). |
 | `String/prototype/split/**` remaining regex-separator rows | Same split semantics as the five ported rows; the coercion/`undefined`-separator variants are type-rejected (recorded with the String area). |

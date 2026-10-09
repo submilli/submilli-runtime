@@ -1,5 +1,4 @@
 // test262: test/built-ins/Map/prototype/forEach/iterates-values-added-after-foreach-begins.js
-// expect-fail: entries added during a forEach are not visited — forEach walks a snapshot of the order ledger taken at call time, while the standard requires visiting entries appended mid-iteration
 
 function main(): void {
   const map = new Map<string, number>();

@@ -128,7 +128,7 @@ fn build_init_expr(
 ) -> Result<ConstExpr, CompilerFailure> {
     let mut instrs: Vec<Instruction<'_>> = Vec::new();
     for name in shape {
-        let code_units: Vec<u16> = name.name.encode_utf16().collect();
+        let code_units = crate::literal_units::literal_units(&name.name);
         instrs.push(Instruction::GlobalGet(string_vtable_global_idx));
         for unit in &code_units {
             instrs.push(Instruction::I32Const(i32::from(*unit)));

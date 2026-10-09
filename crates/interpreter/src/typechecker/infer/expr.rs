@@ -11919,9 +11919,9 @@ fn spelled_template(parts: &[String], substitutions: Vec<Option<String>>) -> Opt
     let mut substitutions = substitutions.into_iter();
     let mut text = String::new();
     for part in parts {
-        text.push_str(part);
+        crate::literal_units::push_literal_text(&mut text, part);
         if let Some(substitution) = substitutions.next() {
-            text.push_str(&substitution?);
+            crate::literal_units::push_literal_text(&mut text, &substitution?);
         }
     }
     Some(text)

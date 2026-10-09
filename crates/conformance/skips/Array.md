@@ -44,7 +44,6 @@ Porting adaptations used throughout (README rules):
 
 | Case | Gap |
 |:--|:--|
-| `prototype/includes/samevaluezero` | `includes` dispatches through the `equals` vtable (NaN !== NaN) instead of SameValueZero — `[NaN].includes(NaN)` returns `false`, standard says `true`. (`indexOf`'s StrictEquality NaN behavior is correct — `indexOf/15.4.4.14-9-10` passes.) |
 | `prototype/push/S15.4.4.7_A1_T2` | Standard `push` is variadic; ours is `push(elem: T)` — a multi-argument push is a compile-time arity error. (`unshift` *is* variadic.) |
 | `prototype/concat/S15.4.4.4_A1_T2` | Standard `concat` appends non-array arguments as elements; ours is `concat(...others: T[][])` — a scalar argument is a compile-time type error. |
 

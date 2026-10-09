@@ -888,6 +888,9 @@ pub struct TypedAst {
     pub functions: Vec<TypedFunction>,
     /// Source-order `_start` body — currently one `AssignGlobal` per global initializer.
     pub top_level_statements: Vec<StmtId>,
+    /// Where each top-level class is declared: the index into
+    /// `top_level_statements` of the first statement that runs after it.
+    pub class_declaration_points: std::collections::BTreeMap<MangledName, usize>,
     /// Type declarations (`interface`, `enum`) — no Wasm representation, no body.
     /// Stored here so post-inference passes see member spans/types without re-exposing
     /// the inferer's `TypeNamespace`.

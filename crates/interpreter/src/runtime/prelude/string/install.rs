@@ -20,8 +20,8 @@ use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use crate::runtime::host::{
     intrinsic_string_type, read_code_unit, read_code_units, read_code_units_range,
-    register_host_fn, register_host_fn_async, string_array_type, write_submilli_string_struct,
-    write_submilli_string_struct_units,
+    register_host_fn, register_host_fn_async, string_array_type, write_boxed_number_struct,
+    write_submilli_string_struct, write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::limits::TenantLimits;
@@ -50,8 +50,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     // instead of copying the whole string.
     reg_unit_to_str(linker, &engine, &abi, "charAt", unit_index)?;
     reg_unit_to_str_or_null(linker, &engine, &abi, "at", at_index)?;
-    reg_unit_to_num(linker, &engine, &abi, "charCodeAt", Decode::Unit)?;
-    reg_unit_to_num(linker, &engine, &abi, "codePointAt", Decode::CodePoint)?;
+    reg_char_code_at(linker, &engine, &abi)?;
+    reg_code_point_at(linker, &engine, &abi)?;
 
     reg_range_to_str(linker, &engine, &abi, "slice", slice_range)?;
     reg_range_to_str(linker, &engine, &abi, "substring", substring_range)?;
@@ -313,7 +313,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "codePointAt",
         vec![s(), Param::new("index", Type::Number)],
-        Type::Number,
+        Type::Union(vec![Type::Number, Type::Null]),
     );
     m(
         defs,
@@ -570,52 +570,69 @@ fn reg_unit_to_str_or_null(
     )
 }
 
-/// What `charCodeAt` and `codePointAt` make of the unit at the index.
-#[derive(Clone, Copy)]
-enum Decode {
-    /// The unit itself.
-    Unit,
-    /// The code point, joining a surrogate pair with the next unit.
-    CodePoint,
-}
-
-/// `(string, f64) -> f64`: `charCodeAt`, `codePointAt`; out of range is `NaN`.
-fn reg_unit_to_num(
+/// `charCodeAt`: the code unit at the index, or `NaN` out of range.
+fn reg_char_code_at(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
-    name: &'static str,
-    decode: Decode,
 ) -> wasmtime::Result<()> {
+    const NAME: &str = "charCodeAt";
     let s = abi.value_type();
     let abi = abi.clone();
     register_host_fn(
         linker,
         MODULE_NAME,
-        method_key(name),
+        method_key(NAME),
         FuncType::new(engine, [s, ValType::F64], [ValType::F64]),
         true,
         move |caller, params, results| {
-            let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
-            let arg = number(abi_arg(params, 1)?, name)?;
+            let recv = abi.payload(caller, abi_arg(params, 0)?, NAME)?;
+            let arg = number(abi_arg(params, 1)?, NAME)?;
             let value = match unit_index(recv.len, arg) {
-                Some(i) => {
-                    let unit = read_code_unit(&mut *caller, recv.array, i)?;
-                    match decode {
-                        Decode::Unit => f64::from(unit),
-                        Decode::CodePoint => {
-                            let next = if i + 1 < recv.len {
-                                Some(read_code_unit(&mut *caller, recv.array, i + 1)?)
-                            } else {
-                                None
-                            };
-                            code_point(unit, next)
-                        }
-                    }
-                }
+                Some(i) => f64::from(read_code_unit(&mut *caller, recv.array, i)?),
                 None => f64::NAN,
             };
             *abi_result(results, 0)? = Val::F64(value.to_bits());
+            Ok(())
+        },
+    )
+}
+
+/// `codePointAt`: the code point starting at the index, joining a surrogate
+/// pair, or `null` out of range, where JavaScript returns `undefined`.
+fn reg_code_point_at(
+    linker: &mut Linker<StoreData>,
+    engine: &wasmtime::Engine,
+    abi: &StringAbi,
+) -> wasmtime::Result<()> {
+    const NAME: &str = "codePointAt";
+    let s = abi.value_type();
+    let object = ValType::Ref(RefType::new(
+        true,
+        HeapType::ConcreteStruct(build_intrinsic_types(engine)?.object),
+    ));
+    let abi = abi.clone();
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key(NAME),
+        FuncType::new(engine, [s, ValType::F64], [object]),
+        true,
+        move |caller, params, results| {
+            let recv = abi.payload(caller, abi_arg(params, 0)?, NAME)?;
+            let arg = number(abi_arg(params, 1)?, NAME)?;
+            let Some(i) = unit_index(recv.len, arg) else {
+                *abi_result(results, 0)? = Val::AnyRef(None);
+                return Ok(());
+            };
+            let unit = read_code_unit(&mut *caller, recv.array, i)?;
+            let next = if i + 1 < recv.len {
+                Some(read_code_unit(&mut *caller, recv.array, i + 1)?)
+            } else {
+                None
+            };
+            let boxed = write_boxed_number_struct(caller, code_point(unit, next))?;
+            *abi_result(results, 0)? = Val::AnyRef(Some(boxed.to_anyref()));
             Ok(())
         },
     )
@@ -1450,10 +1467,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             generics: Vec::new(),
                             params: vec![Param::new("index", Type::Number)],
-                            ret: Type::Number,
+                            ret: Type::Union(vec![Type::Number, Type::Null]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the Unicode code point starting at `index`, decoding surrogate pairs into values up to 0x10FFFF.\n * Returns `NaN` if `index` is out of range.\n * @param index Zero-based index of the first code unit of the code point.\n */",
+                                "/**\n * Returns the Unicode code point starting at `index`, decoding surrogate pairs into values up to 0x10FFFF.\n * Returns `null` if `index` is out of range.\n * @param index Zero-based index of the first code unit of the code point.\n */",
                             ),
                         },
                     ),
@@ -1825,7 +1842,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Array(Box::new(Type::String)),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Split this string into pieces by matches of `separator`. For an empty string `separator`, returns each code unit as a separate part. For a `RegExp` `separator`, captured groups are NOT inserted between parts (JS divergence; documented).\n * @param separator Substring or pattern to split on.\n * @param limit Optional cap on the number of returned parts (default: no limit).\n */",
+                                "/**\n * Split this string into pieces by matches of `separator`. For an empty string `separator`, returns each code unit as a separate part. For a `RegExp` `separator`, each match's captured groups are inserted after the part before it, as in JavaScript (`null` for a group that didn't participate).\n * @param separator Substring or pattern to split on.\n * @param limit Optional cap on the number of returned parts (default: no limit).\n */",
                             ),
                         },
                     ),
@@ -1889,7 +1906,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::String,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Builds a string from UTF-16 code units — one unit per argument.\n * Values truncate to 16 bits (negatives saturate to 0, matching the `Uint8Array` constructor's divergence from JS's modulo wrap).\n * @param codes Zero or more UTF-16 code units (0–65535).\n */",
+                                "/**\n * Builds a string from UTF-16 code units — one unit per argument.\n * Each value is truncated and reduced modulo 65536, as JavaScript does, so `-1` is U+FFFF.\n * @param codes Zero or more UTF-16 code units (0–65535).\n */",
                             ),
                         },
                     ),

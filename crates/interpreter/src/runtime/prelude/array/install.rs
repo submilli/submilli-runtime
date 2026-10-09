@@ -802,7 +802,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
 /// `{ readonly length: number }`: an array-like source with no elements to
 /// read, each of which is `undefined` in JavaScript and `null` here.
-fn array_like_type() -> Type {
+pub(crate) fn array_like_type() -> Type {
     Type::Object {
         fields: std::collections::BTreeMap::from([(
             "length".to_string(),

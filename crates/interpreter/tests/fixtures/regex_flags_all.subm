@@ -14,7 +14,7 @@ function main(): void {
   assert(!no_s.test("a\nb"), "no s: . does not match newline");
 
   const u: RegExp = new RegExp("\\d+", "u");
-  assert(u.test("٠"), "u: Arabic-Indic digit matches \\d+");
+  assert(!u.test("٠"), "u: \\d stays ASCII, as in JavaScript");
   const no_u: RegExp = new RegExp("\\d+", "");
   assert(!no_u.test("٠"), "no u: ASCII \\d does not match Arabic digit");
 

@@ -425,7 +425,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     let regex_multiline_doc = "/** `true` if the regex was constructed with the `m` flag (`^` / `$` match line boundaries). */";
     let regex_dot_all_doc =
         "/** `true` if the regex was constructed with the `s` flag (`.` matches newlines). */";
-    let regex_unicode_doc = "/** `true` if the regex was constructed with the `u` flag (Unicode classes for `\\d` / `\\w` / `\\s`). */";
+    let regex_unicode_doc = "/** `true` if the regex was constructed with the `u` flag. */";
     let regex_sticky_doc = "/** `true` if the regex was constructed with the `y` flag (sticky / anchored at `lastIndex`). */";
     let regex_bool_prop = |doc_text: &'static str| PropertySig {
         ty: Type::Boolean,

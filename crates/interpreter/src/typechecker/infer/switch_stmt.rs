@@ -423,7 +423,11 @@ impl Inferer<'_> {
             });
         }
 
-        let covered = CaseCoverage::of(&typed_cases, saw_null.is_some(), disc_exclusions);
+        // An absent field is `undefined` in JavaScript, which `case null`
+        // doesn't match, though Submilli reads it as `null`.
+        let case_null_matches =
+            saw_null.is_some() && !self.discriminant_may_be_absent_field(typed_disc)?;
+        let covered = CaseCoverage::of(&typed_cases, case_null_matches, disc_exclusions);
         let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered)?;
 
         let typed_default = if let Some(d) = default {
@@ -432,7 +436,7 @@ impl Inferer<'_> {
                 .try_stmt(d.body)
                 .map_err(super::arena_failure)?
                 .span;
-            let default_residual = self.unmatched_residual(&residual, &site, saw_null.is_some());
+            let default_residual = self.unmatched_residual(&residual, &site, case_null_matches);
             let env = self.build_default_narrow_env(
                 &default_residual,
                 &site,
@@ -455,7 +459,7 @@ impl Inferer<'_> {
             any_arm_reachable_exit |= body_reachable;
             Some(typed_body)
         } else {
-            let unmatched = self.unmatched_residual(&residual, &site, saw_null.is_some());
+            let unmatched = self.unmatched_residual(&residual, &site, case_null_matches);
             let leaves_values_unmatched =
                 !matches!(unmatched, Type::Never) && !narrowing::is_ruled_out(&unmatched);
             if leaves_values_unmatched {
@@ -481,7 +485,7 @@ impl Inferer<'_> {
             // narrowing to the rest, as a `default` arm would.
             let mut natural = entry_env;
             natural.extend_env(self.build_default_narrow_env(
-                &self.unmatched_residual(&residual, &site, saw_null.is_some()),
+                &self.unmatched_residual(&residual, &site, case_null_matches),
                 &site,
                 covered.ruled_out(&site),
                 narrowed_before,
@@ -977,6 +981,30 @@ impl Inferer<'_> {
         })
     }
 
+    /// Whether the discriminant reads a field that may be absent, directly or
+    /// through an optional chain.
+    fn discriminant_may_be_absent_field(&self, typed: ExprId) -> Result<bool, CompilerFailure> {
+        let expr = self
+            .typed_ast
+            .try_expr(typed)
+            .map_err(crate::typechecker::arena_failure)?;
+        let (receiver, name) = match &expr.kind {
+            TypedExprKind::Narrowed { inner, .. } => {
+                return self.discriminant_may_be_absent_field(*inner);
+            }
+            TypedExprKind::OptionalChain { .. } => return Ok(true),
+            TypedExprKind::FieldAccess { receiver, name }
+            | TypedExprKind::InterfacePropertyAccess { receiver, name, .. } => (*receiver, name),
+            _ => return Ok(false),
+        };
+        let receiver_ty = &self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        Ok(self.field_may_be_absent(receiver_ty, &name.name))
+    }
+
     /// Whether a check before the switch narrowed the discriminant or the
     /// object it is read from.
     fn discriminant_narrowed(&self, typed_disc: ExprId) -> Result<bool, CompilerFailure> {
@@ -1012,9 +1040,14 @@ impl Inferer<'_> {
     }
 
     /// What the discriminant can be when no case matched: the residual, less
-    /// `null` when a `case null` matched it.
-    fn unmatched_residual(&self, residual: &Type, site: &ResidualSite, saw_null: bool) -> Type {
-        if saw_null && matches!(site, ResidualSite::Scrutinee { .. }) {
+    /// `null` when a `case null` matches every null it can be.
+    fn unmatched_residual(
+        &self,
+        residual: &Type,
+        site: &ResidualSite,
+        case_null_matches: bool,
+    ) -> Type {
+        if case_null_matches && matches!(site, ResidualSite::Scrutinee { .. }) {
             narrowing::strip_null(residual)
         } else {
             residual.clone()
@@ -1149,18 +1182,17 @@ fn format_residual_missing(residual: &Type) -> String {
 
 fn format_one_literal(ty: &Type) -> Option<String> {
     match ty.peel() {
-        Type::StringLiteral(s) => Some(format!("\"{s}\"")),
+        Type::StringLiteral(s) => Some(format!("\"{}\"", crate::types::escape_string_literal(s))),
         Type::NumberLiteral(n) => Some(format!("{}", n.0)),
         Type::BooleanLiteral(b) => Some(b.to_string()),
         Type::Object { fields, .. } => {
-            // Discriminated-union residuals are object variants; find the discriminant field's literal.
+            // Discriminated-union residuals are object variants; find the discriminant field's
+            // literal. Only a direct literal field can be the discriminant, so nested objects
+            // are skipped.
             for field in fields.values() {
-                if let Some(lit) = match field.ty.peel() {
-                    Type::StringLiteral(s) => Some(format!("\"{s}\"")),
-                    Type::NumberLiteral(n) => Some(format!("{}", n.0)),
-                    Type::BooleanLiteral(b) => Some(b.to_string()),
-                    _ => None,
-                } {
+                if !matches!(field.ty.peel(), Type::Object { .. })
+                    && let Some(lit) = format_one_literal(&field.ty)
+                {
                     return Some(lit);
                 }
             }

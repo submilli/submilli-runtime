@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1d9d81fe279a91540d8d637622b2ca26a7c2fb9af61e31cea1c7c546a521df92"
+  contentHash: "d7ff1574056104c95c6e4401be3814268de7657ffc2b6b51ca35ede10e1f28cb"
   confirmedAt: "2026-10-05T17:33:06.426Z"
 ---
 
@@ -292,13 +292,13 @@ A hash-backed key-value collection.
 | `clear(): void` | Removes every entry. |
 | `delete(key: K): boolean` | Removes `key` from the map. |
 | `entries(): Iterator<[K, V]>` | Returns a lazy `Iterator<[K, V]>` over the entries — the same cursor `for-of` uses. |
-| `forEach(callback: (arg0: V, arg1: K, arg2: Map<K, V>) => void): void` | Calls `callback(value, key, map)` once for each entry in insertion order. |
+| `forEach(callback: (arg0: V, arg1: K, arg2: Map<K, V>) => void): void` | Calls `callback(value, key, map)` once for each entry in insertion order, including entries the callback adds. |
 | `get(key: K): V \| null` | Returns the value associated with `key`, or `null` if the key is not present. |
 | `has(key: K): boolean` | Returns `true` when `key` is present. |
 | `iterator(): Iterator<[K, V]>` | Returns a fresh `Iterator<[K, V]>` over the entries. |
-| `keys(): Iterator<K>` | Returns a lazy `Iterator<K>` over the keys in insertion order (snapshots the buckets at creation). |
+| `keys(): Iterator<K>` | Returns a lazy `Iterator<K>` over the keys in insertion order. It walks the map live: keys added later are visited, keys deleted first are skipped. |
 | `set(key: K, value: V): Map<K, V>` | Associates `value` with `key`, overwriting any prior value. |
-| `values(): Iterator<V>` | Returns a lazy `Iterator<V>` over the values in insertion order (snapshots the buckets at creation). |
+| `values(): Iterator<V>` | Returns a lazy `Iterator<V>` over the values in insertion order. It walks the map live: entries added later are visited, entries deleted first are skipped. |
 
 | Constant | Description |
 | --- | --- |
@@ -419,7 +419,7 @@ Compiled regular expression.
 | `readonly multiline: boolean` | `true` if the regex was constructed with the `m` flag (`^` / `$` match line boundaries). |
 | `readonly source: string` | The original JS-source pattern (without the leading/trailing `/`). |
 | `readonly sticky: boolean` | `true` if the regex was constructed with the `y` flag (sticky / anchored at `lastIndex`). |
-| `readonly unicode: boolean` | `true` if the regex was constructed with the `u` flag (Unicode classes for `\d` / `\w` / `\s`). |
+| `readonly unicode: boolean` | `true` if the regex was constructed with the `u` flag. |
 | `exec(s: string): RegExpMatch \| null` | Find the next match in `s`. |
 | `test(s: string): boolean` | Returns `true` if the pattern matches anywhere in `s`. |
 
@@ -447,7 +447,7 @@ A hash-backed unique-value collection.
 | `delete(value: T): boolean` | Removes `value` from the set. |
 | `difference(other: Set<T>): Set<T>` | Returns a new set with this set's elements that are not in `other`. |
 | `entries(): Iterator<[T, T]>` | Returns a lazy `Iterator<[T, T]>` of `[value, value]` pairs (the element repeats, mirroring `Map#entries`). |
-| `forEach(callback: (arg0: T, arg1: T, arg2: Set<T>) => void): void` | Calls `callback(value, value, set)` once for each element in insertion order. |
+| `forEach(callback: (arg0: T, arg1: T, arg2: Set<T>) => void): void` | Calls `callback(value, value, set)` once for each element in insertion order, including elements the callback adds. |
 | `has(value: T): boolean` | Returns `true` when `value` is present. |
 | `intersection(other: Set<T>): Set<T>` | Returns a new set with the elements present in both this set and `other`. |
 | `isDisjointFrom(other: Set<T>): boolean` | Returns `true` when this set and `other` share no elements. |
@@ -481,7 +481,7 @@ The UTF-16 string type.
 | `at(index: number): string \| null` | Returns the code unit at `index` as a single-character string. |
 | `charAt(index: number): string` | Returns the UTF-16 code unit at `index` as a single-character string. |
 | `charCodeAt(index: number): number` | Returns the UTF-16 code unit at `index` as an integer (0..65535), or `NaN` if out of range. |
-| `codePointAt(index: number): number` | Returns the Unicode code point starting at `index`, decoding surrogate pairs into values up to 0x10FFFF. |
+| `codePointAt(index: number): number \| null` | Returns the Unicode code point starting at `index`, decoding surrogate pairs into values up to 0x10FFFF. |
 | `concat(other: string): string` | Returns a new string with `other` appended. |
 | `endsWith(search: string, endPosition?: number): boolean` | Returns `true` if the substring ending at `endPosition` ends with `search`. |
 | `equals(other: string): boolean` | Returns `true` when both strings have identical code units. |
