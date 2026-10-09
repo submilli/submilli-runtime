@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "55e3b91757ad4c0b8b51d0a1da57a017584d0e48ca857b87ae9ae6a747147747"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "b48aa29693521bbf1662f69e7466d6c0966a5ec6d3021e6fa148f56702a6fb4a"
+  confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
 This page describes the language of the `filter` in a permission rule.

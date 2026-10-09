@@ -649,61 +649,11 @@ impl Inferer<'_> {
                 Ok((TypedExprKind::Boolean(b), ty))
             }
             ExprKind::Null => Ok((TypedExprKind::Null, Type::Null)),
-            ExprKind::Void { operand } => {
-                let (effect, _) = self.infer_expr(operand, None)?;
-                let result = self
-                    .typed_ast
-                    .try_push_expr(TypedExpr {
-                        kind: TypedExprKind::Undefined,
-                        span,
-                        ty: Type::Undefined,
-                    })
-                    .map_err(super::arena_failure)?;
-                Ok((
-                    TypedExprKind::EffectThen { effect, result },
-                    Type::Undefined,
-                ))
-            }
+            ExprKind::Void { operand } => self.infer_void(operand, span),
             ExprKind::Identifier(_) if self.ast.synthetic_undefined.contains(&expr_id) => {
                 Ok((TypedExprKind::Undefined, Type::Undefined))
             }
-            ExprKind::Identifier(ident) => {
-                if let Some(index) = self
-                    .scopes
-                    .get(&ident.name)
-                    .and_then(|entry| entry.nested_function)
-                {
-                    self.check_nested_function_use(index, span)?;
-                }
-                let (kind, ty) = self.resolve_ident(ident, span)?;
-                let storage = if let TypedExprKind::LocalRef { ident, .. } = &kind {
-                    self.scopes
-                        .get(&ident.name)
-                        .map(|entry| entry.storage_type().clone())
-                } else {
-                    None
-                };
-                if let Some(storage) = storage.filter(|storage| *storage != ty) {
-                    let value = self
-                        .typed_ast
-                        .try_push_expr(TypedExpr {
-                            kind,
-                            span,
-                            ty: storage,
-                        })
-                        .map_err(super::arena_failure)?;
-                    Ok((
-                        TypedExprKind::Cast {
-                            value,
-                            target_ty: ty.clone(),
-                            check: None,
-                        },
-                        ty,
-                    ))
-                } else {
-                    Ok((kind, ty))
-                }
-            }
+            ExprKind::Identifier(ident) => self.infer_identifier(ident, span),
             ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
             ExprKind::Unary { op, operand } => {
                 self.infer_unary_keeping_literals(op, operand, expected, keeps_literal)
@@ -1752,6 +1702,76 @@ impl Inferer<'_> {
             },
             result_ty,
         ))
+    }
+
+    /// `void operand`: the operand runs for its effects, and the result is
+    /// `undefined`. Kept out of `infer_expr`, whose frame every nested
+    /// expression pays for.
+    #[inline(never)]
+    fn infer_void(
+        &mut self,
+        operand: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (effect, _) = self.infer_expr(operand, None)?;
+        let result = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Undefined,
+                span,
+                ty: Type::Undefined,
+            })
+            .map_err(super::arena_failure)?;
+        Ok((
+            TypedExprKind::EffectThen { effect, result },
+            Type::Undefined,
+        ))
+    }
+
+    /// A read of a name. A local whose storage type differs from its read type
+    /// (a parameter whose default was applied) is cast to the read type. Kept
+    /// out of `infer_expr`, whose frame every nested expression pays for.
+    #[inline(never)]
+    fn infer_identifier(
+        &mut self,
+        ident: Ident,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        if let Some(index) = self
+            .scopes
+            .get(&ident.name)
+            .and_then(|entry| entry.nested_function)
+        {
+            self.check_nested_function_use(index, span)?;
+        }
+        let (kind, ty) = self.resolve_ident(ident, span)?;
+        let storage = if let TypedExprKind::LocalRef { ident, .. } = &kind {
+            self.scopes
+                .get(&ident.name)
+                .map(|entry| entry.storage_type().clone())
+        } else {
+            None
+        };
+        if let Some(storage) = storage.filter(|storage| *storage != ty) {
+            let value = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind,
+                    span,
+                    ty: storage,
+                })
+                .map_err(super::arena_failure)?;
+            Ok((
+                TypedExprKind::Cast {
+                    value,
+                    target_ty: ty.clone(),
+                    check: None,
+                },
+                ty,
+            ))
+        } else {
+            Ok((kind, ty))
+        }
     }
 
     /// `delete` is rejected: an object can't record one of its fields as

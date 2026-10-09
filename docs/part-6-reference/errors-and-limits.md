@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3c6d79f45e933d9d35e0bfee8821b3b26616bd7c2c416541ab85f48daccc54c1"
-  confirmedAt: "2026-10-06T10:27:39.000Z"
+  contentHash: "883d4ec808dd774a3b21c57d30132ec77e917db6ce0ad76f107e9d3eaaa73c84"
+  confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
 This page lists the limits on a program's run, the fixed limits inside the
