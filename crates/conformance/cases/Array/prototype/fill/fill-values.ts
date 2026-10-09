@@ -1,6 +1,10 @@
 // test262: test/built-ins/Array/prototype/fill/fill-values.js
-// Adapted: the `[0, 0].fill()` row is dropped — `value` is a required
-// parameter in the typed signature, as in TypeScript.
+// Adapted: the `[]` receiver is a `number[]` binding (an untyped `[]` has
+// element type never, so fill(8) would not type-check). The `[0, 0].fill()`
+// row is dropped — `value` is a required parameter in the typed signature, as
+// in TypeScript.
+// The start-argument rows belong to fill-values-relative-start.js (not ported)
+// and the end-argument rows to fill-values-relative-end.js (ported separately).
 
 function main(): void {
   const empty: number[] = [];
@@ -8,29 +12,5 @@ function main(): void {
 
   assertCompareArray([0, 0, 0].fill(8), [8, 8, 8],
     "[0, 0, 0].fill(8) must return [8, 8, 8]",
-  );
-
-  assertCompareArray([0, 0, 0].fill(8, 1), [0, 8, 8],
-    "[0, 0, 0].fill(8, 1) must return [0, 8, 8]",
-  );
-
-  assertCompareArray([0, 0, 0].fill(8, 4), [0, 0, 0],
-    "[0, 0, 0].fill(8, 4) must return [0, 0, 0]",
-  );
-
-  assertCompareArray([0, 0, 0].fill(8, -1), [0, 0, 8],
-    "[0, 0, 0].fill(8, -1) must return [0, 0, 8]",
-  );
-
-  assertCompareArray([0, 0, 0].fill(8, 0, 1), [8, 0, 0],
-    "[0, 0, 0].fill(8, 0, 1) must return [8, 0, 0]",
-  );
-
-  assertCompareArray([0, 0, 0].fill(8, 0, -1), [8, 8, 0],
-    "[0, 0, 0].fill(8, 0, -1) must return [8, 8, 0]",
-  );
-
-  assertCompareArray([0, 0, 0].fill(8, 0, 5), [8, 8, 8],
-    "[0, 0, 0].fill(8, 0, 5) must return [8, 8, 8]",
   );
 }

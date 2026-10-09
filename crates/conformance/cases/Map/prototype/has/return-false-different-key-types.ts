@@ -1,20 +1,19 @@
 // test262: test/built-ins/Map/prototype/has/return-false-different-key-types.js
-// Adapted: Symbol keys dropped by design. The null key is also
-// dropped — null keys trap at runtime, a gap pinned by
-// cases/Map/prototype/set/append-new-values.ts.
+// Adapted: the map carries a union key type; the Symbol row is dropped
+// (Symbol is rejected by design).
 
-type Key = string | number | boolean | { x: number } | number[] | undefined;
+type Key = string | number | boolean | {} | unknown[] | null | undefined;
 
 function main(): void {
   const map = new Map<Key, number>();
-  const emptyArr: number[] = [];
 
-  assertSameValue(map.has(undefined), false);
   assertSameValue(map.has("str"), false);
   assertSameValue(map.has(1), false);
   assertSameValue(map.has(NaN), false);
   assertSameValue(map.has(true), false);
   assertSameValue(map.has(false), false);
-  assertSameValue(map.has({ x: 0 }), false);
-  assertSameValue(map.has(emptyArr), false);
+  assertSameValue(map.has({}), false);
+  assertSameValue(map.has([]), false);
+  assertSameValue(map.has(null), false);
+  assertSameValue(map.has(undefined), false);
 }

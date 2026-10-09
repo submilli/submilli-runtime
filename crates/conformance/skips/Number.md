@@ -2,8 +2,8 @@
 
 Sources: `test/built-ins/Number/**` (340 files), `test/built-ins/parseInt/**`
 (55), `test/built-ins/parseFloat/**` (54), `test/built-ins/isNaN/**` (15),
-`test/built-ins/isFinite/**` (15). 46 ported (42 passing, 2 `expect-fail`,
-2 `expect-error` pins), under `cases/Number/`, `cases/parseInt/`,
+`test/built-ins/isFinite/**` (15). 47 ported (42 passing, 2 `expect-fail`,
+3 `expect-error` pins), under `cases/Number/`, `cases/parseInt/`,
 `cases/parseFloat/`, `cases/isNaN/`, `cases/isFinite/`. Representative
 rejected originals under `rejected/Number/`, `rejected/parseInt/`,
 `rejected/parseFloat/`, `rejected/isNaN/`.
@@ -33,7 +33,8 @@ constant-descriptor write tests (`MAX_VALUE`/`MIN_VALUE` `S15.7.3.x_A2-A4`,
 
 | Case | Divergence |
 |:--|:--|
-| `Number/S9.3_A4.1_T1` | `Number(true)` — `Number(x)` takes `string \| bigint \| undefined`; ToNumber(boolean) does not exist (spec.md "Numeric globals"). |
+| `Number/S9.3_A3_T1` | `Number(true)` — `Number(x)` takes `string \| bigint \| undefined`; ToNumber(boolean) does not exist (spec.md "Numeric globals"). |
+| `Number/S9.3_A4.1_T1` | `Number(13)` — a number argument is rejected by the same `string \| bigint \| undefined` parameter. |
 | `parseInt/S15.1.2.2_A1_T1` | `parseInt(true)` — the argument is typed `string`; no ToString coercion. |
 
 ## Rejected (design decisions)
