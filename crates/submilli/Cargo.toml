@@ -27,7 +27,7 @@ url = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yml = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "net", "time", "process", "signal"] }
+tokio = { workspace = true, features = ["rt", "macros", "net", "time", "process", "signal", "sync"] }
 libc.workspace = true
 base64 = { workspace = true }
 sentry = { workspace = true }
@@ -47,6 +47,9 @@ aho-corasick = "1"
 # The playground's blueprint watcher: one coalesced "something changed" per burst of
 # filesystem events, which is all it needs, since it re-reads the file each time.
 notify-debouncer-mini = "0.7"
+futures = { workspace = true }
+# General categories, so control output escapes every format character by category.
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 
 [dev-dependencies]
 rcgen.workspace = true

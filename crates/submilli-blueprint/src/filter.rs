@@ -718,6 +718,27 @@ fn glob_token(pat: &[char], pi: usize) -> Option<(GlobToken, usize)> {
     }
 }
 
+/// `value` as a quoted string literal that parses back to exactly `value`, or
+/// `None` when no literal can: the tokenizer reads any `${vars.` inside quotes
+/// as a variable placeholder and has no escape for it.
+pub(crate) fn quote_literal(value: &str) -> Option<String> {
+    (!value.contains(VAR_PLACEHOLDER)).then(|| format!("\"{}\"", escape_str(value)))
+}
+
+/// True when `name` is written as a bare comparison field: one path segment
+/// the tokenizer reads as a field rather than a keyword or literal.
+pub(crate) fn is_field_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && matches!(
+            classify_word(name, (0, name.len())),
+            Ok(Token::Path(segments)) if segments.len() == 1
+        )
+}
+
 /// Re-escape a string operand for the canonical quoted form, the inverse of the
 /// tokenizer's string handling.
 fn escape_str(s: &str) -> String {
@@ -787,28 +808,30 @@ enum Token {
 }
 
 /// True for a syntactically valid `${vars.NAME}` variable name.
-fn is_valid_var_name(name: &str) -> bool {
+pub(crate) fn is_valid_var_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// What opens a variable placeholder inside a quoted string.
+const VAR_PLACEHOLDER: &str = "${vars.";
+
 /// Parse a (post-escape) string literal into a token: a plain [`Token::Str`] when
 /// it has no `${vars.NAME}` placeholder, else a [`Token::Interp`] of literal /
 /// variable segments. A malformed `${vars.…}` (bad/empty name, unterminated) is
 /// an error; any other `$`/`{` stays literal.
 fn string_token(value: String, span: Span) -> Result<Token, FilterParseError> {
-    const PREFIX: &str = "${vars.";
-    if !value.contains(PREFIX) {
+    if !value.contains(VAR_PLACEHOLDER) {
         return Ok(Token::Str(value));
     }
     let mut segments = Vec::new();
     let mut lit = String::new();
     let mut rest = value.as_str();
-    while let Some(idx) = rest.find(PREFIX) {
+    while let Some(idx) = rest.find(VAR_PLACEHOLDER) {
         lit.push_str(&rest[..idx]);
-        let after = &rest[idx + PREFIX.len()..];
+        let after = &rest[idx + VAR_PLACEHOLDER.len()..];
         let Some(end) = after.find('}') else {
             return Err(FilterParseError::new(
                 "unterminated `${vars.NAME}` in string literal",

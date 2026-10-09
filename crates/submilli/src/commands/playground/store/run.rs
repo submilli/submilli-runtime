@@ -6,7 +6,7 @@ use interpreter::runtime::limits::ExecutionUsage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use submilli_server::error::ErrorKind;
-use submilli_server::record::{FinishedRun, RecordedRun, RunEntry, RunStart};
+use submilli_server::record::{FinishedRun, RecordedRun, RunEntry, RunStart, TestReport};
 
 use super::FORMAT;
 
@@ -46,6 +46,89 @@ pub(crate) struct StoredRun {
     /// The session, variables, code, decisions, and calls: what a re-check and a test
     /// run read.
     pub(crate) recording: RecordedRun,
+    /// For a test run the playground started, what it took from the recording: kept with
+    /// the run once the test returns, after the run itself was stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) test_report: Option<StoredTestReport>,
+}
+
+/// A test run's report as the store keeps it: the server's [`TestReport`], read back.
+/// Keys, stop details, and the nearest recording come from inside the run.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct StoredTestReport {
+    /// `recorded`, `reads-live`, or `live`.
+    pub(crate) mode: String,
+    pub(crate) served: Vec<StoredServed>,
+    pub(crate) went_live: Vec<StoredLive>,
+    pub(crate) stopped: Option<StoredStop>,
+    pub(crate) variables: StoredVariables,
+    pub(crate) local_state: StoredLocalState,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct StoredServed {
+    pub(crate) source_call_index: u64,
+    pub(crate) test_call_index: Option<u64>,
+    pub(crate) capability: String,
+    pub(crate) key: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct StoredLive {
+    pub(crate) key: String,
+    pub(crate) reason: String,
+    pub(crate) test_call_index: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct StoredStop {
+    pub(crate) key: String,
+    pub(crate) reason: String,
+    pub(crate) detail: String,
+    pub(crate) nearest: Option<StoredNearest>,
+    pub(crate) test_call_index: Option<u64>,
+    pub(crate) caller: Option<String>,
+    pub(crate) capability: Option<String>,
+    pub(crate) line: Option<interpreter::runtime::SourceLine>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct StoredNearest {
+    pub(crate) call_index: u64,
+    pub(crate) capability: String,
+    pub(crate) used: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct StoredVariables {
+    pub(crate) kept: BTreeMap<String, String>,
+    pub(crate) filled: BTreeMap<String, String>,
+    pub(crate) dropped: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct StoredLocalState {
+    pub(crate) as_of_now: bool,
+    pub(crate) session_found: bool,
+    pub(crate) volumes_copied: Vec<String>,
+    pub(crate) bytes_copied: u64,
+}
+
+impl StoredTestReport {
+    /// The report as the store keeps it, read through its JSON form so the two stay
+    /// independent: a field the server adds is left out, one it drops reads as empty.
+    pub(crate) fn of(report: &TestReport) -> Option<Self> {
+        serde_json::to_value(report)
+            .ok()
+            .and_then(|value| serde_json::from_value(value).ok())
+    }
 }
 
 /// A link from one run to another: the store's id when that run is stored, and the
@@ -112,6 +195,7 @@ impl StoredRun {
             decisions_dropped: finished.log.dropped,
             calls_dropped: finished.log.calls_dropped,
             recording: RecordedRun::from_parts(start, finished),
+            test_report: None,
         }
     }
 
@@ -205,6 +289,13 @@ pub(crate) struct DecisionRef {
 impl std::fmt::Display for DecisionRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}", self.run, self.n)
+    }
+}
+
+/// Written as its text, `<run>.<n>`, which is how every result names a decision.
+impl Serialize for DecisionRef {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
     }
 }
 

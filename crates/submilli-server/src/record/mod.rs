@@ -2,8 +2,9 @@
 //!
 //! A [`RunRecorderFactory`] on [`ServerConfig`](crate::ServerConfig) is asked about each
 //! run as it starts, whoever sent it: REST, a session, MCP, an MCP file tool, or the
-//! [`run_program`](crate::record::run_program) entry point. The recorder it returns sees
-//! the run's decisions and calls, through the interpreter's
+//! [`run_program`](crate::record::run_program) and
+//! [`run_in_session`](crate::record::run_in_session) entry points. The recorder it
+//! returns sees the run's decisions and calls, through the interpreter's
 //! [`DecisionLog`](interpreter::runtime::DecisionLog), and is finished once, from the
 //! task that owns the run, so a run is recorded even when its client has gone.
 //!
@@ -24,6 +25,7 @@ pub mod events;
 mod program;
 pub mod recheck;
 pub mod replay;
+mod session;
 mod test_run;
 mod throwaway;
 pub use events::{EVENT_SCHEMA, EventKind, SessionEvent};
@@ -32,6 +34,10 @@ pub use recheck::{RecheckReport, RecordedRun, VariableReport, recheck};
 pub use replay::{
     Cassette, LiveReach, Miss, MissReason, RecordedEmbeddingProvider, RecordedHttpClient,
     RecordedLlmProvider, RecordedMcpTransport, ReplayReport, Served,
+};
+pub use session::{
+    SessionProgram, SessionRunError, SessionStart, SessionStartError, end_session, run_in_session,
+    session_variables, start_session,
 };
 pub use submilli_shared::mcp::McpCatalog;
 pub(crate) use test_run::TestWorld;
@@ -47,7 +53,8 @@ pub use throwaway::{
 pub enum RunEntry {
     /// `POST /v1/execute`.
     Http,
-    /// `POST /v1/sessions/{id}/execute`.
+    /// `POST /v1/sessions/{id}/execute`, or [`run_in_session`] with the label its caller
+    /// gave.
     Session,
     /// The MCP execute tool.
     Mcp,
@@ -65,10 +72,12 @@ pub enum RunEntry {
 /// What a run is, captured as it starts.
 #[derive(Clone)]
 pub struct RunStart {
-    /// The execution's audit id; a stored response carries it too.
+    /// The execution's audit id; a stored response carries it too. A recorded run is
+    /// stopped by it through [`AppState::cancel_run`](crate::AppState::cancel_run) while
+    /// it is in flight.
     pub execution_id: String,
-    /// Who started it: the API token's name, or the label given to [`run_program`].
-    /// Never the token itself.
+    /// Who started it: the API token's name, or the label given to [`run_program`],
+    /// [`run_in_session`], or [`test_program`]. Never the token itself.
     pub label: String,
     pub entry: RunEntry,
     /// The `execution_id` of the recorded run this run tests; `None` for any other run.
