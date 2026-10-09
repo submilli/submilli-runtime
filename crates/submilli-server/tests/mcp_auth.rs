@@ -63,7 +63,7 @@ impl Harness {
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(config).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
             store,
             _tmp: tmp,
         }

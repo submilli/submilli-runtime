@@ -28,10 +28,10 @@ use tower::ServiceExt;
 fn router_with_blueprint(config_base: ServerConfig, yaml: &str) -> Router {
     let blueprint = submilli_blueprint::parse(yaml).expect("valid blueprint");
     let store = Arc::new(InMemoryBlueprintStore::seed([blueprint]).expect("seed blueprints"));
-    app(AppState::new(ServerConfig {
+    app(futures::executor::block_on(AppState::new(ServerConfig {
         blueprints: Some(store),
         ..config_base
-    })
+    }))
     .expect("AppState"))
 }
 
@@ -195,7 +195,7 @@ async fn auth_proxy_injects_store_secret_to_real_server() {
         secret_store: Some(store),
         ..in_memory_config::config()
     };
-    let router = app(AppState::new(config).expect("AppState"));
+    let router = app(AppState::new(config).await.expect("AppState"));
 
     let blueprint = "name: auth-store-demo\nallow_insecure_http: true\nsecrets:\n  TOK:\n    store: api/token\nauth_proxy:\n  - host: 127.0.0.1\n    allow_insecure_http: true\n    headers:\n      Authorization: \"Bearer ${secrets.TOK}\"\npermissions:\n  main:\n    - capability: http.get\n      action: allow\n";
     let (status, body) = post(&router, "/v1/blueprints", json!({ "yaml": blueprint })).await;

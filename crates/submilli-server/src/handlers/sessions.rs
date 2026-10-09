@@ -21,9 +21,9 @@ use submilli_blueprint::{
 };
 
 use crate::app::{AppState, BlueprintForRun};
+use crate::domain::idempotent_request::RecordedOutcome;
 use crate::handlers::execute::{self, ExecuteInputs, SESSION_HEADER, blueprint_miss_message};
 use crate::idempotency::{Refusal, Reservation};
-use crate::idempotency_store::RecordedOutcome;
 
 /// Opt-in replay guard on the session execute endpoint. Named to match the
 /// harness, which already sends it.

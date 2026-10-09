@@ -289,7 +289,7 @@ async fn startup_migrates_sqlite_before_constructing_application_state() {
             ..Default::default()
         };
         config.blueprints = Some(prepare_blueprint_store(&config).await.unwrap());
-        let state = AppState::new(config).unwrap();
+        let state = AppState::new(config).await.unwrap();
         assert_eq!(state.blueprints().list().await.unwrap(), ["imported"]);
         assert!(!source.exists());
         assert!(directory.path().join("archive/blueprints").is_dir());
@@ -310,10 +310,32 @@ async fn sqlite_startup_does_not_create_legacy_blueprint_directory() {
             ..Default::default()
         };
         config.blueprints = Some(prepare_blueprint_store(&config).await.unwrap());
-        let state = AppState::new(config).unwrap();
+        let state = AppState::new(config).await.unwrap();
         assert!(state.blueprints().list().await.unwrap().is_empty());
         assert!(!source.exists());
         assert!(!directory.path().join("archive").exists());
         database.close().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn supplied_sqlite_blueprints_keep_their_database_owner() {
+    let database = Arc::new(
+        crate::database::ServerDatabase::open_ephemeral()
+            .await
+            .unwrap(),
+    );
+    let config = ServerConfig {
+        blueprints: Some(Arc::new(crate::blueprint::SqliteBlueprintStore::new(
+            database.clone(),
+            None,
+        ))),
+        ..Default::default()
+    };
+    assert!(Arc::ptr_eq(
+        &database,
+        &config.resolve_database().await.unwrap()
+    ));
+    let state = AppState::new(config).await.unwrap();
+    assert!(Arc::ptr_eq(&database, &state.database().unwrap()));
 }

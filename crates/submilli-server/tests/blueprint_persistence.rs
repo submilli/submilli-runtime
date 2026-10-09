@@ -209,13 +209,17 @@ async fn get_json(router: &Router, path: &str) -> (StatusCode, Value) {
 #[tokio::test]
 async fn http_add_survives_appstate_rebuild() {
     let dir = temp_dir();
+    let database = std::sync::Arc::new(
+        submilli_server::database::ServerDatabase::open(&dir.join("server.db"))
+            .await
+            .unwrap(),
+    );
     let router = app(AppState::new(ServerConfig {
-        blueprints: Some(std::sync::Arc::new(
-            FileBlueprintStore::new(dir.clone()).unwrap(),
-        )),
+        database: Some(database.clone()),
         ..in_memory_config::config()
     })
-    .expect("AppState"));
+    .await
+    .unwrap());
 
     let yaml = "\
 name: production
@@ -239,12 +243,13 @@ mcp:
         .unwrap();
     assert_eq!(router.oneshot(req).await.unwrap().status(), StatusCode::OK);
 
-    // Rebuild AppState over the same dir — the blueprint loads from disk.
+    database.close().await.unwrap();
     let router = app(AppState::new(ServerConfig {
-        blueprints: Some(std::sync::Arc::new(FileBlueprintStore::new(dir).unwrap())),
+        database_path: Some(dir.join("server.db")),
         ..in_memory_config::config()
     })
-    .expect("AppState reload"));
+    .await
+    .unwrap());
     let (status, body) = get_json(&router, "/v1/blueprints").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["blueprints"][0]["name"], json!("production"));
@@ -472,8 +477,10 @@ async fn sqlx_import_and_http_changes_survive_restart_without_reimport() {
         blueprints: Some(Arc::new(store)),
         database: Some(database.clone()),
         blueprint_dir: Some(source.clone()),
+        session_storage_root: Some(directory.path().join("sessions")),
         ..Default::default()
     })
+    .await
     .unwrap();
     state.boot().await.unwrap();
     let router = app(state);
@@ -531,8 +538,10 @@ async fn sqlx_import_and_http_changes_survive_restart_without_reimport() {
         blueprints: Some(Arc::new(store)),
         database: Some(database.clone()),
         blueprint_dir: Some(source.clone()),
+        session_storage_root: Some(directory.path().join("sessions")),
         ..Default::default()
     })
+    .await
     .unwrap();
     // The concrete store is migrated before the router can handle requests.
     let router = app(state);

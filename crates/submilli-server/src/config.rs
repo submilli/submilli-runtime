@@ -13,9 +13,7 @@ use submilli_shared::secret_store::SecretStore;
 
 use crate::auth::AuthConfig;
 use crate::blueprint::BlueprintStore;
-use crate::idempotency_store::IdempotencyStore;
 use crate::session::SessionStore;
-use crate::session_store::DurableSessionStore;
 
 #[derive(Clone, Default)]
 pub struct ServerConfig {
@@ -32,36 +30,19 @@ pub struct ServerConfig {
     pub network_policy: NetworkPolicy,
     /// When `None`, `AppState::new` installs an in-memory store.
     pub sessions: Option<Arc<dyn SessionStore>>,
-    /// Prepared blueprint store, required by `AppState::new`.
-    /// `serve` selects and migrates a store when this is unset.
-    /// An explicit store takes precedence over the database and source directory.
+    /// Optional startup blueprint source. Stores on the shared database are reused;
+    /// other sources are copied into SQLite before requests are admitted.
     pub blueprints: Option<Arc<dyn BlueprintStore>>,
-    /// Source directory for the SQLite migration performed by `serve`.
-    /// Without a database, startup selects a file store for this directory,
-    /// or an in-memory store when unset. Explicit blueprint stores take precedence.
+    /// Legacy blueprint directory to import into a persistent database.
     pub blueprint_dir: Option<PathBuf>,
-    /// Explicit durable session store. Takes precedence over `session_store_dir`;
-    /// mainly for tests and embedded callers that inject their own store.
-    pub session_store: Option<Arc<dyn DurableSessionStore>>,
-    /// JSON import source when a database is configured; its idempotency ledger
-    /// stays file-backed. Without a database, selects the compatibility file store.
-    /// Explicit stores take precedence; no database or directory selects memory.
+    /// Legacy session directory to import into a persistent database.
+    /// Idempotency files are not imported.
     pub session_store_dir: Option<PathBuf>,
-    /// SQLite database opened by `serve` before accepting requests. Embedded
-    /// callers leave this unset and may inject their own stores.
+    /// Persistent SQLite path. With neither path nor database supplied, startup
+    /// creates an in-memory SQLite database; directory imports require persistence.
     pub database_path: Option<PathBuf>,
-    /// Open database supplied by the serving boundary. Takes precedence over
-    /// `database_path` when both are set. Direct `AppState` callers must also
-    /// supply a migrated blueprint store; `serve` constructs and migrates it.
+    /// Shared database owner; takes precedence over database_path.
     pub database: Option<Arc<crate::database::ServerDatabase>>,
-    /// Explicit idempotency ledger, backing `Idempotency-Key` on the session
-    /// execute endpoint. When `None` and `session_store_dir` is set,
-    /// `AppState::new` derives a file-backed ledger in a subdirectory of it;
-    /// when both are `None`, an in-memory ledger. Deliberately has no CLI flag,
-    /// env var, or config-file key: both stores have identical durability
-    /// requirements and would share a volume in any deployment, so a separate
-    /// path is speculative — and a knob that ships cannot be withdrawn.
-    pub idempotency_store: Option<Arc<dyn IdempotencyStore>>,
     /// The secret store backing the blueprint `store:` secret source and the
     /// `submilli server secret` CLI. `None` (the default) disables it: `store:`
     /// secrets fail to resolve, while `env:`/`file:` are unaffected. Built at the
@@ -1249,5 +1230,24 @@ pub(crate) fn test_config() -> ServerConfig {
     ServerConfig {
         blueprints: Some(Arc::new(crate::blueprint::InMemoryBlueprintStore::default())),
         ..Default::default()
+    }
+}
+
+impl ServerConfig {
+    pub(crate) async fn resolve_database(
+        &self,
+    ) -> Result<Arc<crate::database::ServerDatabase>, crate::database::DatabaseError> {
+        if let Some(database) = self
+            .database
+            .clone()
+            .or_else(|| self.blueprints.as_ref().and_then(|store| store.database()))
+        {
+            return Ok(database);
+        }
+        let database = match self.database_path.as_deref() {
+            Some(path) => crate::database::ServerDatabase::open(path).await?,
+            None => crate::database::ServerDatabase::open_ephemeral().await?,
+        };
+        Ok(Arc::new(database))
     }
 }

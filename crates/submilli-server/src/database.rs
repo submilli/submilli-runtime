@@ -67,13 +67,32 @@ pub enum DatabaseError {
 /// cancelling a caller or shutting down its executor cannot release them early.
 pub struct ServerDatabase {
     path: PathBuf,
+    execution_owner: Mutex<Option<ExecutionOwner>>,
+    ephemeral_cipher: Option<Arc<submilli_shared::secret_store::SecretCipher>>,
     sender: Mutex<Option<mpsc::SyncSender<Job>>>,
     completion: watch::Receiver<CloseResult>,
+}
+
+struct ExecutionOwner {
+    runtime: tokio::runtime::Id,
+    generation: String,
+    lifetime: oneshot::Receiver<()>,
 }
 
 impl ServerDatabase {
     pub async fn open(path: &Path) -> Result<Self, DatabaseError> {
         let path = path.to_path_buf();
+        let ephemeral_cipher = if path == Path::new(":memory:") {
+            let mut key = [0u8; 32];
+            getrandom::getrandom(&mut key).map_err(|error| {
+                DatabaseError::Import(format!("ephemeral key generation failed: {error}"))
+            })?;
+            Some(Arc::new(
+                submilli_shared::secret_store::SecretCipher::from_key(key),
+            ))
+        } else {
+            None
+        };
         let (sender, receiver) = mpsc::sync_channel(MAX_WAITING);
         let (ready, startup) = oneshot::channel();
         let (finished, completion) = watch::channel(None);
@@ -84,9 +103,66 @@ impl ServerDatabase {
         let path = startup.await.map_err(|_| DatabaseError::WorkerStopped)??;
         Ok(Self {
             path,
+            execution_owner: Mutex::new(None),
+            ephemeral_cipher,
             sender: Mutex::new(Some(sender)),
             completion,
         })
+    }
+
+    pub async fn open_ephemeral() -> Result<Self, DatabaseError> {
+        Self::open(Path::new(":memory:")).await
+    }
+
+    /// Coordinators on one execution runtime share an identity. The database
+    /// worker outlives that runtime, so its own lifetime cannot identify live work.
+    pub(crate) fn generation(&self) -> Result<String, DatabaseError> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|error| {
+            DatabaseError::Import(format!("execution ownership requires a runtime: {error}"))
+        })?;
+        let mut owner = self
+            .execution_owner
+            .lock()
+            .map_err(|_| DatabaseError::Poisoned)?;
+        if let Some(current) = owner.as_mut() {
+            if current.runtime == runtime.id() {
+                return Ok(current.generation.clone());
+            }
+            if matches!(
+                current.lifetime.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ) {
+                return Err(DatabaseError::Import(
+                    "database already has a live execution runtime".into(),
+                ));
+            }
+        }
+        let mut identity = [0u8; 16];
+        getrandom::getrandom(&mut identity).map_err(|error| {
+            DatabaseError::Import(format!("owner identity generation failed: {error}"))
+        })?;
+        let generation = uuid::Uuid::from_bytes(identity).to_string();
+        let (lifetime, receiver) = oneshot::channel();
+        runtime.spawn(async move {
+            let _lifetime = lifetime;
+            std::future::pending::<()>().await;
+        });
+        *owner = Some(ExecutionOwner {
+            runtime: runtime.id(),
+            generation: generation.clone(),
+            lifetime: receiver,
+        });
+        Ok(generation)
+    }
+
+    pub(crate) fn ephemeral_cipher(
+        &self,
+    ) -> Option<Arc<submilli_shared::secret_store::SecretCipher>> {
+        self.ephemeral_cipher.clone()
+    }
+
+    pub fn is_ephemeral(&self) -> bool {
+        self.path == Path::new(":memory:")
     }
 
     pub fn path(&self) -> &Path {
@@ -254,8 +330,13 @@ struct OwnedDatabase {
 
 impl OwnedDatabase {
     async fn open(path: &Path) -> Result<Self, DatabaseError> {
-        let (lock, path) = lock_database(path)?;
-        let mut lock = DatabaseLock(Some(lock));
+        let ephemeral = path == Path::new(":memory:");
+        let (mut lock, path) = if ephemeral {
+            (DatabaseLock(None), path.to_path_buf())
+        } else {
+            let (lock, path) = lock_database(path)?;
+            (DatabaseLock(Some(lock)), path)
+        };
         let options = SqliteConnectOptions::new()
             .filename(&path)
             .create_if_missing(true)
@@ -267,7 +348,9 @@ impl OwnedDatabase {
             .optimize_on_close(false, None);
         let mut connection = SqliteConnection::connect_with(&options).await?;
         let initialized = async {
-            reject_multiple_links(&path)?;
+            if !ephemeral {
+                reject_multiple_links(&path)?;
+            }
             MIGRATOR.run(&mut connection).await?;
             Ok::<(), DatabaseError>(())
         }

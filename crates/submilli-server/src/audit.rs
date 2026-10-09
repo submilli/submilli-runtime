@@ -197,7 +197,6 @@ pub(crate) fn settings_hash(
         "max_embedding_tokens": config.max_embedding_tokens.unwrap_or(DEFAULT_MAX_ALL_EXECUTIONS_EMBEDDING_TOKENS),
         "max_embedding_concurrency": config.max_embedding_concurrency.unwrap_or(DEFAULT_MAX_EMBEDDING_CONCURRENCY),
         "custom_sessions": config.sessions.is_some(), "custom_blueprints": config.blueprints.is_some(),
-        "custom_session_store": config.session_store.is_some(), "custom_idempotency_store": config.idempotency_store.is_some(),
         "secret_store_enabled": config.secret_store.is_some(), "custom_llm_dispatch": config.llm_dispatch.is_some(),
         "custom_embedding_dispatch": config.embedding_dispatch.is_some(),
     });

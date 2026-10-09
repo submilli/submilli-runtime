@@ -42,7 +42,7 @@ use crate::blueprint::InMemoryBlueprintStore;
 use crate::config::{OAuthProvider, VolumeTable};
 use crate::graceful_shutdown::GracefulShutdownTracker;
 use crate::idempotency::Coordinator;
-use crate::idempotency_store::{FileIdempotencyStore, IdempotencyStore, InMemoryIdempotencyStore};
+
 use crate::mcp::{
     BlueprintServiceCache, McpCatalog, discover_all, discover_selected, new_service_cache,
 };
@@ -53,9 +53,7 @@ use crate::session_manager::{
     DEFAULT_TOTAL_SESSION_KV_BYTES, EmbeddingSettings, HttpClientFactory, LlmSettings,
     SessionKvSettings, SessionManager,
 };
-use crate::session_store::{
-    DurableSessionStore, FileDurableSessionStore, InMemoryDurableSessionStore,
-};
+use crate::session_store::DurableSessionStore;
 use submilli_shared::mcp::discovery::{DiscoveryAuth, DiscoveryError};
 
 #[cfg(test)]
@@ -65,9 +63,6 @@ use submilli_shared::mcp_token::OAuthTokenManager;
 
 /// How often the background reaper sweeps for expired sessions.
 const REAP_INTERVAL: Duration = Duration::from_secs(30);
-
-/// Subdirectory of the session-store directory holding the idempotency ledger.
-const IDEMPOTENCY_SUBDIR: &str = "idempotency";
 
 /// Long-lived engine amortises Cranelift init cost across requests.
 #[derive(Clone)]
@@ -197,18 +192,19 @@ impl Drop for RunRegistration {
 }
 
 impl AppState {
-    /// Construct application state with the blueprint store supplied in config.
-    /// Store selection and migration belong to server startup.
-    pub fn new(config: ServerConfig) -> Result<Self> {
+    /// Initialize shared SQLite state before constructing the application.
+    /// A supplied non-SQLite blueprint store is a startup source, not live storage.
+    pub async fn new(config: ServerConfig) -> Result<Self> {
         Self::with_dispatch_factories(
             config,
             Arc::new(HttpModelDispatch::new),
             Arc::new(HttpEmbeddingDispatch::new),
         )
+        .await
     }
 
     #[cfg(test)]
-    fn with_llm_dispatch_factory(
+    async fn with_llm_dispatch_factory(
         config: ServerConfig,
         llm_dispatch_factory: LlmDispatchFactory,
     ) -> Result<Self> {
@@ -217,10 +213,11 @@ impl AppState {
             llm_dispatch_factory,
             Arc::new(HttpEmbeddingDispatch::new),
         )
+        .await
     }
 
     #[cfg(test)]
-    fn with_embedding_dispatch_factory(
+    async fn with_embedding_dispatch_factory(
         config: ServerConfig,
         embedding_dispatch_factory: EmbeddingDispatchFactory,
     ) -> Result<Self> {
@@ -229,13 +226,55 @@ impl AppState {
             Arc::new(HttpModelDispatch::new),
             embedding_dispatch_factory,
         )
+        .await
     }
 
-    fn with_dispatch_factories(
-        config: ServerConfig,
+    async fn with_dispatch_factories(
+        mut config: ServerConfig,
         llm_dispatch_factory: LlmDispatchFactory,
         embedding_dispatch_factory: EmbeddingDispatchFactory,
     ) -> Result<Self> {
+        let database = config.resolve_database().await?;
+        if database.is_ephemeral()
+            && (config.blueprint_dir.is_some() || config.session_store_dir.is_some())
+        {
+            anyhow::bail!("directory import requires a persistent SQLite database");
+        }
+        config.session_cipher = config
+            .session_cipher
+            .or_else(|| database.ephemeral_cipher());
+        if let Some(source) = config.blueprints.take() {
+            if source
+                .database()
+                .is_some_and(|owner| Arc::ptr_eq(&owner, &database))
+            {
+                config.blueprints = Some(source);
+            } else {
+                let target = crate::blueprint::SqliteBlueprintStore::new(database.clone(), None);
+                for name in source.list().await? {
+                    let yaml = source
+                        .get_yaml(&name)
+                        .await?
+                        .context("blueprint disappeared during initialization")?;
+                    let blueprint = source
+                        .get(&name)
+                        .await?
+                        .context("cannot initialize an unusable blueprint")?;
+                    target
+                        .upsert_yaml(crate::blueprint::StoredBlueprint::new(blueprint, yaml))
+                        .await?;
+                }
+                config.blueprints = Some(Arc::new(target));
+            }
+        } else {
+            let target = crate::blueprint::SqliteBlueprintStore::new(
+                database.clone(),
+                config.blueprint_dir.clone(),
+            );
+            target.migrate().await?;
+            config.blueprints = Some(Arc::new(target));
+        }
+        config.database = Some(database.clone());
         submilli_shared::mcp::schema_registry::initialize_builtin_packs();
         let blueprints = config.blueprints.context(
             "AppState requires a prepared blueprint store; supply ServerConfig.blueprints",
@@ -286,30 +325,11 @@ impl AppState {
             .session_storage_root
             .unwrap_or_else(crate::config::default_session_storage_root);
         let session_store_dir = config.session_store_dir;
-        let session_store: Arc<dyn DurableSessionStore> =
-            match (config.session_store, &config.database, &session_store_dir) {
-                (Some(store), _, _) => store,
-                (None, Some(database), _) => {
-                    Arc::new(crate::session_store::SqliteSessionStore::new(
-                        database.clone(),
-                        session_store_dir.clone(),
-                        session_root.clone(),
-                    ))
-                }
-                (None, None, Some(dir)) => Arc::new(FileDurableSessionStore::new(dir.clone())?),
-                (None, None, None) => Arc::new(InMemoryDurableSessionStore::default()),
-            };
-        // The ledger rides the session store's directory rather than its own
-        // knob. `is_record_file` skips subdirectories, so the two never
-        // see each other's entries.
-        let idempotency_store: Arc<dyn IdempotencyStore> =
-            match (config.idempotency_store, &session_store_dir) {
-                (Some(store), _) => store,
-                (None, Some(dir)) => {
-                    Arc::new(FileIdempotencyStore::new(dir.join(IDEMPOTENCY_SUBDIR))?)
-                }
-                (None, None) => Arc::new(InMemoryIdempotencyStore::default()),
-            };
+        let session_store = Arc::new(crate::session_store::SqliteSessionStore::new(
+            database.clone(),
+            session_store_dir.clone(),
+            session_root.clone(),
+        ));
         let session_manager = Arc::new(
             SessionManager::new(
                 session_root.clone(),
@@ -322,7 +342,6 @@ impl AppState {
                 )),
                 http_client_factory,
                 Arc::clone(&session_store),
-                Arc::clone(&idempotency_store),
                 CapabilitySettings {
                     session_kv: SessionKvSettings::new(
                         config.session_kv_limits,
@@ -354,24 +373,14 @@ impl AppState {
             .with_audit(audit.clone()),
         );
 
+        let generation = database.generation()?;
         let unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory> =
-            match (blueprints.database(), session_store.database()) {
-                (Some(blueprint_database), Some(session_database))
-                    if Arc::ptr_eq(&blueprint_database, &session_database) =>
-                {
-                    Arc::new(crate::adapters::unit_of_work::SqliteUnitOfWorkFactory {
-                        database: blueprint_database,
-                        session_root: session_root.clone(),
-                        cipher: config.session_cipher.clone(),
-                    })
-                }
-                _ => Arc::new(crate::adapters::unit_of_work::StoreUnitOfWorkFactory {
-                    blueprints: blueprints.clone(),
-                    sessions: session_store.clone(),
-                    session_root: session_root.clone(),
-                    cipher: config.session_cipher.clone(),
-                }),
-            };
+            Arc::new(crate::adapters::unit_of_work::SqliteUnitOfWorkFactory {
+                database,
+                session_root: session_root.clone(),
+                cipher: config.session_cipher.clone(),
+            });
+        let idempotency = Arc::new(Coordinator::new(unit_of_work.clone(), generation));
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
@@ -393,7 +402,7 @@ impl AppState {
                 oauth_tokens,
                 session_manager,
                 session_store,
-                idempotency: Arc::new(Coordinator::new(idempotency_store)),
+                idempotency,
                 mcp_services: new_service_cache(),
                 mcp_allowed_hosts: config.mcp_allowed_hosts,
                 mcp_oauth_providers,
@@ -441,6 +450,11 @@ impl AppState {
             return Ok(());
         }
         self.inner.session_manager.boot().await?;
+        self.inner.idempotency.recover().await.map_err(|error| {
+            crate::session_manager::BootError::Idempotency(crate::blueprint::StoreError::Io(
+                error.to_string(),
+            ))
+        })?;
         self.inner.session_manager.volume_registry().prepare();
         self.start_reaper();
         self.inner.booted.store(true, Ordering::Release);
@@ -1401,6 +1415,7 @@ mod tests {
             )),
             ..crate::config::test_config()
         })
+        .await
         .unwrap();
         let before = state.mcp_catalog("test", &blueprint).await.unwrap();
         assert!(
@@ -1454,35 +1469,28 @@ mod tests {
         Vfs, dispatch_main_async, install_runtime_async, install_tenant_limits,
     };
 
-    #[test]
-    fn app_state_requires_a_prepared_blueprint_store() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("blueprints");
-        let result = AppState::new(ServerConfig {
-            blueprint_dir: Some(source.clone()),
-            ..Default::default()
-        });
-        assert!(
-            result
-                .err()
-                .unwrap()
-                .to_string()
-                .contains("prepared blueprint store")
-        );
-        assert!(!source.exists());
-    }
-
     #[tokio::test]
     async fn failed_boot_does_not_start_the_reaper() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join("sessions");
-        let store = Arc::new(FileDurableSessionStore::new(root.clone()).expect("session store"));
+        let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_store: Some(store),
+            session_storage_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
+        .await
         .expect("app state");
-        std::fs::remove_dir(&root).expect("make store unavailable");
+        state
+            .database()
+            .unwrap()
+            .transaction(|connection| {
+                Box::pin(async move {
+                    sqlx::query("ALTER TABLE sessions RENAME TO hidden_sessions")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
 
         assert!(matches!(
             state.boot().await,
@@ -1490,7 +1498,19 @@ mod tests {
         ));
         assert_eq!(Arc::strong_count(&state.inner.session_manager), 1);
 
-        std::fs::create_dir(&root).expect("restore store");
+        state
+            .database()
+            .unwrap()
+            .transaction(|connection| {
+                Box::pin(async move {
+                    sqlx::query("ALTER TABLE hidden_sessions RENAME TO sessions")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
         state.boot().await.expect("healthy boot");
         assert_eq!(Arc::weak_count(&state.inner.session_manager), 1);
         state.boot().await.expect("repeat boot");
@@ -1501,7 +1521,13 @@ mod tests {
     async fn direct_router_still_starts_the_reaper() {
         use tower::ServiceExt;
 
-        let state = AppState::new(crate::config::test_config()).expect("app state");
+        let root = tempfile::tempdir().unwrap();
+        let state = AppState::new(ServerConfig {
+            session_storage_root: Some(root.path().to_path_buf()),
+            ..crate::config::test_config()
+        })
+        .await
+        .expect("app state");
         assert_eq!(Arc::strong_count(&state.inner.session_manager), 1);
 
         let router = app(state.clone());
@@ -1523,16 +1549,27 @@ mod tests {
     async fn direct_router_refuses_requests_until_boot_succeeds() {
         use tower::ServiceExt;
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join("sessions");
-        let store = Arc::new(FileDurableSessionStore::new(root.clone()).expect("session store"));
+        let root = tempfile::tempdir().unwrap();
         let state = AppState::new(ServerConfig {
-            session_store: Some(store),
+            session_storage_root: Some(root.path().to_path_buf()),
             ..crate::config::test_config()
         })
+        .await
         .expect("app state");
         let router = app(state.clone());
-        std::fs::remove_dir(&root).expect("make store unavailable");
+        state
+            .database()
+            .unwrap()
+            .transaction(|connection| {
+                Box::pin(async move {
+                    sqlx::query("ALTER TABLE sessions RENAME TO hidden_sessions")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
 
         let request = || {
             axum::http::Request::builder()
@@ -1544,7 +1581,19 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(Arc::strong_count(&state.inner.session_manager), 1);
 
-        std::fs::create_dir(&root).expect("restore store");
+        state
+            .database()
+            .unwrap()
+            .transaction(|connection| {
+                Box::pin(async move {
+                    sqlx::query("ALTER TABLE hidden_sessions RENAME TO sessions")
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
         let response = router.oneshot(request()).await.expect("response");
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(Arc::weak_count(&state.inner.session_manager), 1);
@@ -1573,36 +1622,49 @@ mod tests {
         dispatch_main_async(&mut store, &inst).await
     }
 
-    /// The ledger has no operator knob of its own: it is derived from the
-    /// session-store directory, and an explicitly injected store wins over it.
     #[tokio::test]
-    async fn session_store_dir_derives_a_file_backed_ledger() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let _state = AppState::new(ServerConfig {
-            session_store_dir: Some(dir.path().to_path_buf()),
-            ..crate::config::test_config()
-        })
-        .expect("app state");
-
-        assert!(
-            dir.path().join(IDEMPOTENCY_SUBDIR).is_dir(),
-            "the ledger lands in a subdirectory of the session store dir"
-        );
+    async fn ephemeral_startup_refuses_directory_import_without_archiving_sources() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("canary"), "original").unwrap();
+        for blueprint in [false, true] {
+            let result = AppState::new(ServerConfig {
+                blueprint_dir: blueprint.then(|| source.clone()),
+                session_store_dir: (!blueprint).then(|| source.clone()),
+                ..Default::default()
+            })
+            .await;
+            assert!(
+                result
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("persistent SQLite")
+            );
+            assert_eq!(
+                std::fs::read_to_string(source.join("canary")).unwrap(),
+                "original"
+            );
+            assert!(!root.path().join("archive").exists());
+        }
     }
 
+    /// Request storage never creates or restores a file-backed ledger.
     #[tokio::test]
-    async fn an_explicit_ledger_wins_over_the_derived_directory() {
+    async fn session_store_dir_does_not_create_a_file_ledger() {
         let dir = tempfile::tempdir().expect("tempdir");
         let _state = AppState::new(ServerConfig {
-            session_store_dir: Some(dir.path().to_path_buf()),
-            idempotency_store: Some(Arc::new(InMemoryIdempotencyStore::default())),
+            database_path: Some(dir.path().join("server.db")),
+            session_store_dir: Some(dir.path().join("legacy")),
             ..crate::config::test_config()
         })
+        .await
         .expect("app state");
 
         assert!(
-            !dir.path().join(IDEMPOTENCY_SUBDIR).exists(),
-            "an explicit store must suppress the derived directory entirely"
+            !dir.path().join("idempotency").exists(),
+            "requests live in SQLite"
         );
     }
 

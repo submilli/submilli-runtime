@@ -16,7 +16,8 @@ mod execution_timeout;
 mod graceful_shutdown;
 pub mod handlers;
 pub mod idempotency;
-pub mod idempotency_store;
+#[cfg(test)]
+extern crate self as submilli_server;
 mod import_archive;
 pub mod local_apply;
 pub mod logging;
@@ -24,6 +25,9 @@ mod mcp;
 pub mod metrics;
 pub mod packages;
 pub mod record;
+#[cfg(test)]
+#[path = "../tests/support/request_records.rs"]
+mod request_records;
 pub mod runner;
 pub mod serve;
 pub mod session;

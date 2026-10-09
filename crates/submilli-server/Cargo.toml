@@ -17,6 +17,7 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
+getrandom = "0.2"
 interpreter = { path = "../interpreter" }
 submilli-blueprint = { path = "../submilli-blueprint" }
 submilli-build = { path = "../submilli-build" }

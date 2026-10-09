@@ -96,7 +96,7 @@ async fn run_against_loopback_host(policy: NetworkPolicy, host: &str) -> Value {
         network_policy: policy,
         ..in_memory_config::config()
     };
-    let router = app(AppState::new(config).expect("AppState"));
+    let router = app(AppState::new(config).await.expect("AppState"));
 
     let (status, body) = post(&router, "/v1/blueprints", json!({ "yaml": BLUEPRINT })).await;
     assert_eq!(status, StatusCode::OK, "blueprint add failed: {body}");

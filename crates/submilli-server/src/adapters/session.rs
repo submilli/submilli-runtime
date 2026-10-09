@@ -488,5 +488,4 @@ mod tests {
 
 pub(crate) mod audit_log;
 pub(crate) mod cleanup_queue;
-pub(crate) mod idempotency_records;
 pub(crate) mod workspaces;

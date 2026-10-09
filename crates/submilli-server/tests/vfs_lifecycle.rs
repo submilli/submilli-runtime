@@ -63,7 +63,7 @@ impl Harness {
             ..in_memory_config::config()
         };
         Self {
-            state: AppState::new(config).expect("AppState"),
+            state: futures::executor::block_on(AppState::new(config)).expect("AppState"),
             _vfs_root: vfs_root,
         }
     }
@@ -264,10 +264,10 @@ fn restartable_state(vfs_root: &Path, store_dir: &Path) -> AppState {
     let config = ServerConfig {
         blueprints: Some(blueprints),
         session_storage_root: Some(vfs_root.to_path_buf()),
-        session_store_dir: Some(store_dir.to_path_buf()),
+        database_path: Some(store_dir.join("server.db")),
         ..in_memory_config::config()
     };
-    AppState::new(config).expect("AppState")
+    futures::executor::block_on(AppState::new(config)).expect("AppState")
 }
 
 async fn send_to(state: &AppState, req: Request<Body>) -> (StatusCode, Value) {
@@ -321,6 +321,7 @@ async fn per_session_resumes_after_restart() {
     let session = created["session_id"].as_str().unwrap().to_string();
     let w = execute_on(&state, WRITE, &session).await;
     assert!(w["error"].is_null(), "write failed: {w}");
+    state.database().unwrap().close().await.unwrap();
     drop(state);
 
     // Restart: a brand-new server over the same durable dirs, empty cache.
