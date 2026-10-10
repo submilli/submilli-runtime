@@ -1,0 +1,17 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  let p: { x: number; y: number } = { x: 1, y: 2 };\\n  let z = p.z;\")"
+---
+error: field `z` does not exist on `{ x: number; y: number }`
+ --> test.subm:3:13
+  |
+2 |   let p: { x: number; y: number } = { x: 1, y: 2 };
+3 |   let z = p.z;
+  |             ^
+4 | }
+  |
+help: {
+  x: number;
+  y: number;
+}
+---

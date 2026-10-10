@@ -1,0 +1,19 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  let xs: number[] = [1, 2, 3];\\n  xs.push();\")"
+---
+error: method `push` expects 1 argument(s), got 0
+ --> test.subm:3:3
+  |
+2 |   let xs: number[] = [1, 2, 3];
+3 |   xs.push();
+  |   ^^^^^^^^^
+4 | }
+  |
+help: /**
+ * Appends `elem` to the end of the array.
+ * @param elem The value to add.
+ * @returns The new length of the array.
+ */
+number[].push(elem: number): number
+---

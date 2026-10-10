@@ -1,0 +1,12 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: render_all(source)
+---
+error: expected `string`, got `number`
+ --> test.subm:3:12
+  |
+2 |   let p: { name: string; age: number } = { name: "a", age: 1 };
+3 |   p.name = 42;
+  |            ^^
+4 | }
+---

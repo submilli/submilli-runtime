@@ -17,7 +17,7 @@ path = "src/main.rs"
 path = "src/lib.rs"
 
 [dependencies]
-interpreter = { package = "submilli-engine", path = "../submilli-engine" }
+interpreter = { package = "submilli-engine", path = "../interpreter" }
 submilli-blueprint = { path = "../submilli-blueprint" }
 submilli-build = { path = "../submilli-build" }
 submilli-shared = { path = "../submilli-shared" }

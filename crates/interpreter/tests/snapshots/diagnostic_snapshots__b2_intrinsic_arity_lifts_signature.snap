@@ -1,0 +1,19 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  parseInt();\")"
+---
+error: expected 1-2 argument(s), got 0
+ --> test.subm:2:3
+  |
+1 | function main(): void {
+2 |   parseInt();
+  |   ^^^^^^^^^^
+3 | }
+  |
+help: /**
+ * Parses `string` as an integer in the given `radix`. Stops at the first non-digit character. Returns `NaN` if no digits are found.
+ * @param string The text to parse.
+ * @param radix The base (2-36). Omitted or `undefined`, a `0x` prefix reads as base 16 and anything else as base 10.
+ */
+function parseInt(string: string, radix: number = 0): number
+---

@@ -1,9 +1,0 @@
----
-source: crates/submilli-engine/src/lexer.rs
-expression: rendered
----
-error: missing digits in exponent
- --> script.subm:1:2
-  |
-1 | 1e
-  |  ^

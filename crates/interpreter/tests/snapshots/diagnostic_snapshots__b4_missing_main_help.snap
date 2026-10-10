@@ -1,0 +1,13 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_all(\" \\n\")"
+---
+error: missing `main` function
+ --> test.subm:1:1
+  |
+1 |  
+  | ^
+2 | 
+  |
+help: add an entry point: `function main(): void { … }`
+---

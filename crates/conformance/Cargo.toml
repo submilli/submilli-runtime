@@ -10,6 +10,6 @@ publish.workspace = true
 workspace = true
 
 [dev-dependencies]
-interpreter = { package = "submilli-engine", path = "../submilli-engine" }
+interpreter = { package = "submilli-engine", path = "../interpreter" }
 tokio = { workspace = true, features = ["rt"] }
 wasmtime = { workspace = true }

@@ -1,0 +1,8 @@
+---
+source: crates/interpreter/src/codegen/mod.rs
+expression: dump
+---
+error: Error: oops
+  at main (script.subm:1:39)  [thrown here]
+1 | function main(): void { assert(false, "oops"); }
+  |                                       ^

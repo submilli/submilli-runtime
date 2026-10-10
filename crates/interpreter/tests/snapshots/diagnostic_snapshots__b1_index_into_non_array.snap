@@ -1,0 +1,39 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+assertion_line: 69
+expression: "render_inside_main(\"  let n: number = 42;\\n  let r = n[0];\")"
+---
+error: cannot index into non-array type `number`
+ --> test.subm:3:11
+  |
+2 |   let n: number = 42;
+3 |   let r = n[0];
+  |           ^^^^
+4 | }
+  |
+help: /** The IEEE-754 double-precision number type. */
+interface Number {
+  /**
+   * Exponential notation — `(1234.5).toExponential(2)` is `"1.23e+3"`.
+   * @param fractionDigits 0–100 fraction digits. Omitted uses as many digits as the value needs.
+   */
+  toExponential(fractionDigits: number = NaN): string;
+  /**
+   * Fixed-point notation with exactly `digits` fraction digits — `(3.14159).toFixed(2)` is `"3.14"`.
+   * @param digits 0–100 (out of range throws a `RangeError`). Defaults to `0`.
+   */
+  toFixed(digits: number = 0): string;
+  /** Returns the JSON representation of this number. NaN and ±Infinity become `"null"` (JSON has no literal for either). */
+  toJson(): string;
+  /**
+   * Formats to `precision` significant digits, switching to exponential form for very large or small values.
+   * @param precision 1–100 (out of range throws a `RangeError`). Omitted behaves like `toString()`.
+   */
+  toPrecision(precision: number = NaN): string;
+  /**
+   * Returns this number formatted in the given base.
+   * @param radix Base 2–36 (out of range throws a `RangeError`). Defaults to `10`.
+   */
+  toString(radix: number = 10): string;
+}
+---

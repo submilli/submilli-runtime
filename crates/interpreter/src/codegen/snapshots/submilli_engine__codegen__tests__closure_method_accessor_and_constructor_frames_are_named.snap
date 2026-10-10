@@ -1,0 +1,35 @@
+---
+source: crates/interpreter/src/codegen/mod.rs
+assertion_line: 5147
+expression: dump
+---
+error: Error: x
+  at new Refused (script.subm:1:47)  [thrown here]
+ 1 | class Refused { constructor() { assert(false, "x"); } }
+   |                                               ^
+ 2 | class Holder {
+  at get Holder.refused (script.subm:3:35)  [caller]
+ 2 | class Holder {
+ 3 |   get refused(): Refused { return new Refused(); }
+   |                                   ^
+ 4 |   read(): Refused { return this.refused; }
+  at Holder.read (script.subm:4:28)  [caller]
+ 3 |   get refused(): Refused { return new Refused(); }
+ 4 |   read(): Refused { return this.refused; }
+   |                            ^
+ 5 | }
+  at <anonymous> (script.subm:8:40)  [caller]
+ 7 |   const named = function outer(): void {
+ 8 |     [1].forEach((n: number): void => { new Holder().read(); });
+   |                                        ^
+ 9 |   };
+  at outer (script.subm:8:17)  [caller]
+ 7 |   const named = function outer(): void {
+ 8 |     [1].forEach((n: number): void => { new Holder().read(); });
+   |                 ^
+ 9 |   };
+  at main (script.subm:10:3)  [entry]
+ 9 |   };
+10 |   named();
+   |   ^
+11 | }

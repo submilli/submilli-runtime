@@ -1,0 +1,13 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_all(\"function main() { }\\n\")"
+---
+error: expected `:` and return type
+ --> test.subm:1:17
+  |
+1 | function main() { }
+  |                 ^
+2 | 
+  |
+help: function name(): T { … }
+---

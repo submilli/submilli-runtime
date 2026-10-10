@@ -419,7 +419,7 @@ from the retained program.
 
 These are typechecker comparisons, not runtime tests: declaration placeholders
 are intentionally not executed. The executable Record regressions live in the
-[interpreter fixtures](../../submilli-engine/tests/fixtures/records/).
+[interpreter fixtures](../../interpreter/tests/fixtures/records/).
 The generic dictionary local uses `{}` instead of the usual placeholder cast,
 because casting to an erased generic parameter is unsupported. Both compilers
 retain its declared index value type `T`.

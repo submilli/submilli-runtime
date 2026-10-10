@@ -1,0 +1,22 @@
+---
+source: crates/interpreter/tests/package_diagnostic_snapshots.rs
+expression: "render_package(\"\n/**\n * Approves the send.\n * @param channelId Conversation to post in.\n * @capability test.com/send { channelId: string }\n */\nfunction guard(channelId: string): void {\n  check(\\\"test.com/send\\\", { channelId: channelId });\n}\n\n/**\n * Sends the message.\n * @param channelId Conversation to post in.\n * @param text Message text.\n */\nexport function send(channelId: string, text: string): void {\n  guard(channelId);\n  post(channelId, text);\n}\n\")"
+---
+warning: `check()` is called in `guard`, which is not part of the package's public API
+  --> lib.ts:19:9
+   |
+18 | function guard(channelId: string): void {
+19 |   check("test.com/send", { channelId: channelId });
+   |         ^^^^^^^^^^^^^^^
+20 | }
+   |
+help: Move the `check()` into each exported function that reaches `guard`, or export `guard` from the package root
+   |
+note: `guard` is not exported from the package root
+  --> lib.ts:18:10
+   |
+17 |  */
+18 | function guard(channelId: string): void {
+   |          ^^^^^
+19 |   check("test.com/send", { channelId: channelId });
+---

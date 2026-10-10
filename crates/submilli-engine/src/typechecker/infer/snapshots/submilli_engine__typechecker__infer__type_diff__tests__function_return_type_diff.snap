@@ -1,5 +1,0 @@
----
-source: crates/submilli-engine/src/typechecker/infer/type_diff.rs
-expression: out.unwrap()
----
-return: expected `number`, got `string`

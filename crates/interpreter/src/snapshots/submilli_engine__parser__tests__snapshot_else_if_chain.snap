@@ -1,0 +1,146 @@
+---
+source: crates/interpreter/src/parser.rs
+expression: ast
+---
+Ast {
+    exprs: [
+        Expr {
+            kind: Identifier(
+                Ident {
+                    name: "a",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 4,
+                        end: 5,
+                    },
+                },
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 4,
+                end: 5,
+            },
+        },
+        Expr {
+            kind: Identifier(
+                Ident {
+                    name: "b",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 20,
+                        end: 21,
+                    },
+                },
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 20,
+                end: 21,
+            },
+        },
+    ],
+    stmts: [
+        Stmt {
+            kind: Block(
+                [],
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 7,
+                end: 10,
+            },
+        },
+        Stmt {
+            kind: Block(
+                [],
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 23,
+                end: 26,
+            },
+        },
+        Stmt {
+            kind: Block(
+                [],
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 32,
+                end: 35,
+            },
+        },
+        Stmt {
+            kind: If {
+                condition: ExprId(
+                    1,
+                ),
+                then_block: StmtId(
+                    1,
+                ),
+                else_block: Some(
+                    StmtId(
+                        2,
+                    ),
+                ),
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 16,
+                end: 35,
+            },
+        },
+        Stmt {
+            kind: If {
+                condition: ExprId(
+                    0,
+                ),
+                then_block: StmtId(
+                    0,
+                ),
+                else_block: Some(
+                    StmtId(
+                        3,
+                    ),
+                ),
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 0,
+                end: 35,
+            },
+        },
+    ],
+    top_level: [
+        StmtId(
+            4,
+        ),
+    ],
+    pattern_origins: {},
+    tuple_pattern_sources: {},
+    parameter_bindings: {},
+    for_of_pattern_bindings: {},
+    for_pattern_init_bindings: {},
+    exported_decls: [],
+    implicit_initializers: {},
+    synthetic_undefined: {},
+    binding_defaults: {},
+}

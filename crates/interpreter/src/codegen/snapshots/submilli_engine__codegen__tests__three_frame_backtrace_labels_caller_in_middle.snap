@@ -1,0 +1,19 @@
+---
+source: crates/interpreter/src/codegen/mod.rs
+expression: dump
+---
+error: Error: x
+  at deepest (script.subm:1:42)  [thrown here]
+1 | function deepest(): void { assert(false, "x"); }
+  |                                          ^
+2 | function middle(): void { deepest(); }
+  at middle (script.subm:2:27)  [caller]
+1 | function deepest(): void { assert(false, "x"); }
+2 | function middle(): void { deepest(); }
+  |                           ^
+3 | function main(): void { middle(); }
+  at main (script.subm:3:25)  [entry]
+2 | function middle(): void { deepest(); }
+3 | function main(): void { middle(); }
+  |                         ^
+4 |

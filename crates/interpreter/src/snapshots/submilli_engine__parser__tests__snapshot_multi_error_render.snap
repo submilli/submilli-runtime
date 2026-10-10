@@ -1,0 +1,25 @@
+---
+source: crates/interpreter/src/parser.rs
+expression: rendered
+---
+error: expected `;` after expression
+ --> script.subm:1:5
+  |
+1 | foo bar;
+  |     ^^^
+2 | baz qux;
+
+error: expected `;` after expression
+ --> script.subm:2:5
+  |
+1 | foo bar;
+2 | baz qux;
+  |     ^^^
+3 | hello world;
+
+error: expected `;` after expression
+ --> script.subm:3:7
+  |
+2 | baz qux;
+3 | hello world;
+  |       ^^^^^
