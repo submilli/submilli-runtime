@@ -501,7 +501,10 @@ fn execute_on_this_thread(
     data.install_type_info(compiled.type_info.clone());
     if let Some(bp) = &blueprint {
         data.git = submilli_shared::resolve_git(bp, &variables)?;
-        data.security_check = Arc::new(PolicyCheck::with_variables(bp.clone(), variables));
+        data.security_check = Arc::new(PolicyCheck::with_variables(
+            Arc::new(bp.policy()),
+            variables,
+        ));
         data.auth_proxy = Arc::new(BlueprintAuthProxy::new(bp.clone(), secret_store.clone()));
         data.secret_provider = Arc::new(BlueprintSecretProvider::new(
             bp.clone(),

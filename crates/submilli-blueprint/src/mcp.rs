@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::auth_proxy::secret_refs;
 use crate::{Blueprint, BlueprintError, Fault, yaml_path};
+use submilli_policy::secret_refs;
 
 const CAPABILITY_PREFIX: &str = "mcp.";
 const DEFAULT_TRANSPORT: &str = "streamable_http";

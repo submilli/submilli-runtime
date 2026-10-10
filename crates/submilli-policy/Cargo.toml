@@ -1,5 +1,5 @@
 [package]
-name = "submilli-blueprint"
+name = "submilli-policy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,16 +13,18 @@ workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-submilli-policy = { path = "../submilli-policy" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_path_to_error = { workspace = true }
-serde_yml = { workspace = true }
-saphyr-parser = { workspace = true }
 regex = { workspace = true }
 async-trait = { workspace = true }
-url = { workspace = true }
 base64 = { workspace = true }
+interpreter = { path = "../interpreter", optional = true }
+url = { workspace = true, optional = true }
+
+[features]
+# Adapters from the policy types to the engine's host-service traits.
+engine = ["dep:interpreter", "dep:url"]
 
 [dev-dependencies]
+interpreter = { path = "../interpreter" }
 tokio = { workspace = true, features = ["rt", "macros"] }

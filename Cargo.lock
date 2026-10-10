@@ -5473,6 +5473,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_yml",
+ "submilli-policy",
  "tokio",
  "url",
 ]
@@ -5488,6 +5489,20 @@ dependencies = [
  "submilli-blueprint",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "submilli-policy"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "interpreter",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -5561,6 +5576,7 @@ dependencies = [
  "sse-stream",
  "submilli-blueprint",
  "submilli-build",
+ "submilli-policy",
  "tar",
  "tempfile",
  "tokio",

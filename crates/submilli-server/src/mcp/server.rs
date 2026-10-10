@@ -761,8 +761,10 @@ impl SubmilliMcp {
             .map_err(|error| FileToolError::file(path, error.into()))?;
         let recording = self.file_tool_recording(parts, &blueprint, &variables, tool.name);
         let log = recording.as_ref().map(crate::record::Recording::log);
-        let policy: Arc<dyn SecurityCheck> =
-            Arc::new(PolicyCheck::with_variables(blueprint.clone(), variables));
+        let policy: Arc<dyn SecurityCheck> = Arc::new(PolicyCheck::with_variables(
+            Arc::new(blueprint.policy()),
+            variables,
+        ));
         let policy = log.as_ref().map_or(policy.clone(), |log| log.wrap(policy));
         let call = policy.recorder().map(|recorder| {
             let marker = recorder.enter_host_call();

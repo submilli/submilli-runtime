@@ -43,8 +43,9 @@ These rules govern `crates/submilli-server/src/domain/` and
   not make them domain concepts. Existing exceptions are not precedents.
 - **Domain is pure.** It owns business rules and state transitions, with no I/O,
   clock reads, or dependencies on server modules outside `domain`. It may depend
-  on the shared kernel, currently `submilli-blueprint`. Reuse its `Blueprint`
-  type rather than introducing a wrapper solely for storage concerns.
+  on the shared kernel, currently `submilli-blueprint` and the `submilli-policy`
+  types it is built on. Reuse its `Blueprint` type rather than introducing a
+  wrapper solely for storage concerns.
 - Aggregates protect their invariants through meaningful operations such as
   `close`, `expire`, `recover`, and `replace_credentials`. Application code calls
   those operations rather than changing fields directly. Names must describe
