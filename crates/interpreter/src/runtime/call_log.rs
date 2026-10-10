@@ -563,7 +563,7 @@ mod tests {
 
     #[test]
     fn every_capability_has_a_recording_class() {
-        for group in crate::stdlib::capabilities::catalog() {
+        for group in crate::stdlib::capabilities::all_groups() {
             for capability in group.capabilities {
                 let classes = [REQUEST_AND_RESPONSE, RESPONSE_ONLY, TIMING_ONLY]
                     .iter()
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn every_gating_module_ends_the_calls_it_begins() {
-        for group in crate::stdlib::capabilities::catalog() {
+        for group in crate::stdlib::capabilities::all_groups() {
             // The catalog names `@mcp/<server>` imports; their calls dispatch through the
             // internal MCP module.
             let module = match group.module {

@@ -193,7 +193,7 @@ fn normalized_string(
 }
 
 fn field_normalization(capability: &str, field: &str) -> FieldNormalization {
-    capabilities::find(capability)
+    capabilities::find_any(capability)
         .and_then(|entry| entry.filter_fields.iter().find(|f| f.name == field))
         .map_or(FieldNormalization::Verbatim, |f| f.normalization)
 }

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use crate::compile_capabilities;
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
 use crate::runtime::prelude;
+use crate::stdlib::Stdlib;
 use crate::typechecker::rules::check_script;
 use crate::typed_ast::TypedAst;
 use crate::{
@@ -75,7 +76,12 @@ impl ParsedScript {
             }
             if let Some(server) = module.strip_prefix("@mcp/") {
                 imports.mcp_servers.insert(server.to_string());
-            } else if stdlib_names.contains(module) {
+            } else if stdlib_names.contains(module)
+                || crate::stdlib::OptionalPackage::from_module_name(module).is_some()
+            {
+                // An optional package counts as stdlib whether or not the embedder
+                // enables it: a disabled one is reported as unavailable, never
+                // looked up as a registry package.
                 imports.stdlib.insert(module.clone());
             } else {
                 imports.registry_packages.insert(module.clone());
@@ -256,7 +262,29 @@ pub fn typecheck_checked(source: &str, file: FileId) -> Result<Vec<Diagnostic>, 
 fn typecheck_script(source: &str, file: FileId) -> Result<Vec<Diagnostic>, CompileError> {
     let parsed = parse_script(source, file);
     let stdlib_defs = runtime::stdlib_package_declarations();
-    let (ta, diags, _timings) = front_end(source, &parsed, &stdlib_defs, &[])?;
+    typecheck_parsed_script(source, &parsed, &stdlib_defs)
+}
+
+/// [`typecheck_checked`] for an already parsed script, against `stdlib_defs`
+/// (see [`Stdlib::package_declarations`](crate::stdlib::Stdlib::package_declarations)).
+pub fn typecheck_parsed_checked(
+    source: &str,
+    parsed: &ParsedScript,
+    stdlib_defs: &[PackageDeclaration],
+) -> Result<Vec<Diagnostic>, CompileError> {
+    let file = parsed.file;
+    typecheck_parsed_script(source, parsed, stdlib_defs).map_err(|error| {
+        error.with_limit_span_cut(|span_file| (span_file == file).then_some(source))
+    })
+}
+
+fn typecheck_parsed_script(
+    source: &str,
+    parsed: &ParsedScript,
+    stdlib_defs: &[PackageDeclaration],
+) -> Result<Vec<Diagnostic>, CompileError> {
+    let file = parsed.file;
+    let (ta, diags, _timings) = front_end(source, parsed, stdlib_defs, &[])?;
     if has_errors(&diags) {
         return Err(diags.into());
     }
@@ -500,9 +528,31 @@ pub fn compile_package_with_transitive_checked(
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
 ) -> Result<CompiledPackage, CompileError> {
+    compile_package_with_transitive_in_checked(
+        Stdlib::core(),
+        package_name,
+        root_module,
+        modules,
+        dependencies,
+        transitive,
+    )
+}
+
+/// [`compile_package_with_transitive_checked`] for an embedder that offers
+/// `stdlib`, so the package may import its optional packages.
+pub fn compile_package_with_transitive_in_checked(
+    stdlib: Stdlib,
+    package_name: &str,
+    root_module: ModulePath,
+    modules: &[PackageSourceModule<'_>],
+    dependencies: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
+) -> Result<CompiledPackage, CompileError> {
     let mut sources = Sources::new();
+    let stdlib_defs = stdlib.package_declarations();
     compile_package_sources(
         &mut sources,
+        &stdlib_defs,
         package_name,
         root_module,
         modules,
@@ -516,6 +566,7 @@ pub fn compile_package_with_transitive_checked(
 
 fn compile_package_sources(
     sources: &mut Sources,
+    stdlib_defs: &[PackageDeclaration],
     package_name: &str,
     root_module: ModulePath,
     modules: &[PackageSourceModule<'_>],
@@ -552,7 +603,6 @@ fn compile_package_sources(
         .iter()
         .map(|(path, file, ast)| (path.clone(), *file, ast))
         .collect();
-    let stdlib_defs = runtime::stdlib_package_declarations();
     let mut external_packages: BTreeMap<String, PackageDeclaration> = stdlib_defs
         .iter()
         .map(|defs| (defs.package_name.clone(), defs.clone()))
@@ -593,7 +643,7 @@ fn compile_package_sources(
         compile_capabilities::derive_package_requirements(
             &declaration,
             &ta,
-            &stdlib_defs,
+            stdlib_defs,
             dependencies,
             transitive,
         )
@@ -633,7 +683,6 @@ fn compile_package_sources(
         fatal: Some(fatal),
     })?;
 
-    let stdlib_defs = runtime::stdlib_package_declarations();
     let mut codegen_deps: Vec<&PackageDeclaration> = prelude_defs.iter().collect();
     codegen_deps.extend(host_defs.iter());
     codegen_deps.extend(internal_defs.iter());

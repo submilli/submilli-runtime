@@ -203,7 +203,7 @@ pub(crate) fn authorize_capability(
     // existing, and the default check allows everything.
     if caller == crate::mangle::USER_PACKAGE
         && let Some(reason) =
-            crate::stdlib::capabilities::find(capability).and_then(|entry| entry.main_denial)
+            crate::stdlib::capabilities::find_any(capability).and_then(|entry| entry.main_denial)
     {
         audit_denial_at(
             security_check,

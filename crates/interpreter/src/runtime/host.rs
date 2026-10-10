@@ -16,6 +16,7 @@ pub(crate) use crate::runtime::intrinsic_types::{
 };
 use crate::runtime::number::{parse_float_js, parse_int_with_radix, string_to_number_js};
 use crate::runtime::{StoreData, read_submilli_string};
+use crate::stdlib::Stdlib;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const NUMBER_MODULE_NAME: &str = "submilli:number";
@@ -31,13 +32,30 @@ pub async fn install_async(
     linker: &mut Linker<StoreData>,
     store: &mut Store<StoreData>,
 ) -> wasmtime::Result<()> {
-    install_host_functions(linker)?;
+    install_async_for(linker, store, Stdlib::core()).await
+}
+
+/// [`install_async`] for an embedder that offers `stdlib`.
+pub async fn install_async_for(
+    linker: &mut Linker<StoreData>,
+    store: &mut Store<StoreData>,
+    stdlib: Stdlib,
+) -> wasmtime::Result<()> {
+    install_host_functions_for(linker, stdlib)?;
     install_store_bound(linker, store)
 }
 
 pub fn install_host_functions(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    install_host_functions_for(linker, Stdlib::core())
+}
+
+/// [`install_host_functions`] for an embedder that offers `stdlib`.
+pub fn install_host_functions_for(
+    linker: &mut Linker<StoreData>,
+    stdlib: Stdlib,
+) -> wasmtime::Result<()> {
     install_core_host_functions(linker)?;
-    crate::stdlib::install_host_functions(linker)?;
+    stdlib.install_host_functions(linker)?;
     super::mcp::install_mcp_async(linker)?;
     Ok(())
 }

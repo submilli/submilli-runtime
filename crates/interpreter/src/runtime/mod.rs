@@ -44,8 +44,9 @@ pub use embedding::{
 pub use exec::{RunResult, dispatch_main_async, instantiate_program_async};
 pub use host::{
     INTERNAL_MODULE_NAME, NUMBER_MODULE_NAME, host_package_declarations,
-    install_async as install_runtime_async,
+    install_async as install_runtime_async, install_async_for as install_runtime_async_for,
     install_host_functions as install_runtime_host_functions,
+    install_host_functions_for as install_runtime_host_functions_for,
     install_store_bound as install_runtime_store_bound, internal_host_package_declarations,
     stdlib_package_declarations,
 };
