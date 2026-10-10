@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8b2e285130d62bdc705ab4f93500a9b8576133777739e04cec5e209f79462dd3"
+  contentHash: "3793fac8286c446ca61433ddc6b5f69445e64bf9b2ec0d36fb2c3e98b517179e"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -198,6 +198,32 @@ whether the Package's caller may perform `capability` with the fields in
 `label(description)` from `submilli:test` starts a named test, and
 `expectException(fn, errorType?)` checks that `fn` throws
 ([Write tests](/docs/packages/write-tests)).
+
+## Modules a harness provides
+
+Two modules exist only where the harness running the program provides them.
+The `submilli` CLI and server provide neither: importing one there fails with
+``package `submilli:agents` is not available in this harness``, and neither is
+listed by `submilli search` or in the sections below.
+
+| Module | What it does | Gated by |
+| --- | --- | --- |
+| `submilli:agents` | Sub-agents: `run<T>(agent, input)`, `list()` | `agent.run`, on the field `agent` |
+| `submilli:skills` | Skills: `list()`, `load(name)`, `readFile(name, path)` | `skill.load`, on the field `name` |
+
+- `run(agent, input)` returns the agent's final answer as text. With a type
+  argument it works like `llm.call<T>`: the schema for `T` is sent with the
+  task, and an answer that is not JSON or does not match `T` throws
+  `TypeError`.
+- The harness decides how long a run may take and what it may spend. The
+  execution timeout does not stop a run in progress.
+- `list()` in either module leaves out what the policy denies the caller,
+  without saying how many were left out.
+- `readFile(name, path)` takes a path relative to the skill, with `/`
+  separators. An absolute path, or one with an empty, `.`, or `..` segment,
+  throws `RangeError`. Reading a file is gated by `skill.load` on the skill's
+  name.
+- With no provider configured, every function throws an `Error` saying so.
 
 <!-- generated:stdlib -->
 

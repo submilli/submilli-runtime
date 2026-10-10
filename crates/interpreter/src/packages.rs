@@ -835,6 +835,9 @@ fn user_modules(stdlib: Stdlib) -> Vec<PackageDeclaration> {
 /// `packages.search`/`docs` and (manually mirrored) MVP.md §I.
 fn module_description(name: &str) -> &'static str {
     match name {
+        "submilli:agents" => {
+            "Harness sub-agents: run<T>(agent, input), and list() to discover them."
+        }
         "submilli:crypto" => "Hashing, HMAC, and random bytes.",
         "submilli:code" => {
             "Workspace tools: numbered reads, search, glob, tree, anchored edits and unified diffs."
@@ -850,6 +853,7 @@ fn module_description(name: &str) -> &'static str {
         "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
         "submilli:secrets" => "Policy-gated access to Blueprint-declared secrets.",
         "submilli:session" => "Session-scoped key-value state: get/has/set/remove/list.",
+        "submilli:skills" => "Harness skills: list(), load(name) and readFile(name, path).",
         "submilli:url" => "URL parse/build and query-string handling. Pure compute.",
         "submilli:uuid" => "UUID v4/v7 generation and validation.",
         _ => "",

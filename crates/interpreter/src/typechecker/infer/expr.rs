@@ -3529,16 +3529,26 @@ impl Inferer<'_> {
     /// means a diagnostic was reported (or deliberately suppressed) and the
     /// call is an error.
     ///
-    /// Call only for a [`crate::stdlib::llm::declaration::is_checked_call`]
-    /// mangled name. `type_args_written` separates an explicit `call<unknown>`
-    /// from a bare `call(...)`, whose result is the `Completion` envelope and
-    /// needs no check.
+    /// `checked` describes the call, from [`crate::stdlib::schema_checked_call`].
+    /// `type_args_written` separates an explicit `call<unknown>` from a bare
+    /// `call(...)`, whose result is the untyped default and needs no check.
     pub(super) fn llm_call_schema(
         &mut self,
+        checked: &crate::stdlib::SchemaCheckedCall,
         result_ty: &Type,
         type_args_written: bool,
         span: Span,
     ) -> Result<Option<String>, ()> {
+        let crate::stdlib::SchemaCheckedCall {
+            callee,
+            example,
+            checks,
+            answerer,
+            untyped_read,
+            untyped_unknown,
+            untyped_parse,
+            ..
+        } = checked;
         // No type argument: the call keeps its pre-generic meaning and returns
         // the `Completion` envelope, which the declaration already typed. There
         // is nothing to check and no schema to send.
@@ -3552,16 +3562,15 @@ impl Inferer<'_> {
         if matches!(result_ty.peel(), Type::Unknown) {
             self.error_with_help(
                 span,
-                "`llm.call<unknown>` would not verify anything: `unknown` admits every \
-                 value, so no runtime check is possible and its JSON Schema could only \
-                 be `{}`, which constrains the model to nothing"
-                    .to_string(),
-                vec![
-                    "name the shape you expect — `llm.call<Severity>(model, prompt)` — \
-                     or drop the type argument and read the `Completion` envelope's \
-                     `ok` and `text` yourself."
-                        .to_string(),
-                ],
+                format!(
+                    "`{callee}<unknown>` would not verify anything: `unknown` admits every \
+                     value, so no runtime check is possible and its JSON Schema could only \
+                     be `{{}}`, which constrains {answerer} to nothing"
+                ),
+                vec![format!(
+                    "name the shape you expect — `{example}` — or drop the type argument \
+                     and {untyped_unknown}."
+                )],
             );
             return Err(());
         }
@@ -3580,14 +3589,13 @@ impl Inferer<'_> {
         {
             self.error_with_help(
                 span,
-                format!("`llm.call<{result_ty}>` cannot be verified at runtime: {reason}"),
+                format!("`{callee}<{result_ty}>` cannot be verified at runtime: {reason}"),
                 vec![format!(
-                    "`llm.call` checks the model's response against its type argument, so \
+                    "`{callee}` checks {checks} against its type argument, so \
                      that argument must be one the runtime can test, and the schema is \
                      emitted at compile time where `{result_ty}` is not yet known. Call it \
-                     at a concrete type — `llm.call<Severity>(model, prompt)` — inside the \
-                     generic function, or drop the type argument and read the `Completion` \
-                     envelope yourself."
+                     at a concrete type — `{example}` — inside the \
+                     generic function, or drop the type argument and {untyped_read}."
                 )],
             );
             return Err(());
@@ -3607,14 +3615,14 @@ impl Inferer<'_> {
                 {
                     self.error_with_help(
                         span,
-                        format!("`llm.call<{result_ty}>` cannot be verified at runtime: {reason}"),
+                        format!("`{callee}<{result_ty}>` cannot be verified at runtime: {reason}"),
                         vec![format!(
-                            "`llm.call` checks the model's response against its type \
+                            "`{callee}` checks {checks} against its type \
                              argument, so that argument must be one the runtime can test: \
                              an object, array, tuple, union, or primitive shape. Call it \
                              at a concrete type instead of `{result_ty}` — \
-                             `llm.call<Severity>(model, prompt)` — or drop the type \
-                             argument and read the `Completion` envelope yourself."
+                             `{example}` — or drop the type \
+                             argument and {untyped_read}."
                         )],
                     );
                     return Err(());
@@ -3628,18 +3636,16 @@ impl Inferer<'_> {
                     self.error_with_help(
                         span,
                         format!(
-                            "`llm.call<{result_ty}>` has no JSON Schema: {}",
+                            "`{callee}<{result_ty}>` has no JSON Schema: {}",
                             reject.describe()
                         ),
-                        vec![
-                            "the schema sent to the model is fully inlined and carries no \
+                        vec![format!(
+                            "the schema sent to {answerer} is fully inlined and carries no \
                              `$ref`, so every field must be an object, array, tuple, union, \
                              enum, or primitive shape. Replace that field with one — a \
                              `string` for bytes or a big number, a named shape in place of \
-                             `unknown` — or drop the type argument and parse the \
-                             `Completion` text yourself."
-                                .to_string(),
-                        ],
+                             `unknown` — or drop the type argument and {untyped_parse}."
+                        )],
                     );
                 }
                 Err(())
@@ -3663,7 +3669,7 @@ impl Inferer<'_> {
                 Ok(checked) => checked,
                 Err(reason) => {
                     return Err(super::inference_failure(&format!(
-                        "LLM result cast rejected a previously validated schema: {reason}"
+                        "schema-checked result cast rejected a previously validated schema: {reason}"
                     ))
                     .with_span(span));
                 }

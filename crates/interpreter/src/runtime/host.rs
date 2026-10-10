@@ -1674,6 +1674,8 @@ pub(crate) const CALL_MODULES: &[&str] = &[
     crate::stdlib::git::MODULE_NAME,
     crate::stdlib::code::MODULE_NAME,
     crate::stdlib::security::MODULE_NAME,
+    crate::stdlib::agents::MODULE_NAME,
+    crate::stdlib::skills::MODULE_NAME,
     super::mcp::MCP_MODULE_NAME,
 ];
 

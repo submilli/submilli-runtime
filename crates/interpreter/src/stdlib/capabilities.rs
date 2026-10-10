@@ -523,9 +523,46 @@ const CORE_CATALOG: &[CapabilityGroup] = &[
     },
 ];
 
+const AGENT: FilterField = field(
+    "agent",
+    "string",
+    "The sub-agent's name, as `submilli:agents` list() names it",
+);
+
+const AGENTS: CapabilityGroup = CapabilityGroup {
+    module: "submilli:agents",
+    capabilities: &[Capability {
+        name: "agent.run",
+        main_denial: None,
+        summary: "Hand work to a harness sub-agent, or list the agents",
+        filter_fields: &[AGENT],
+        example_filter: "agent == \"researcher\"",
+    }],
+};
+
+const SKILL: FilterField = field(
+    "name",
+    "string",
+    "The skill's name, as `submilli:skills` list() names it",
+);
+
+const SKILLS: CapabilityGroup = CapabilityGroup {
+    module: "submilli:skills",
+    capabilities: &[Capability {
+        name: "skill.load",
+        main_denial: None,
+        summary: "Load a harness skill, read its files, or list the skills",
+        filter_fields: &[SKILL],
+        example_filter: "name == \"code-review\"",
+    }],
+};
+
 /// The capabilities of one optional package.
 fn optional_group(package: OptionalPackage) -> &'static CapabilityGroup {
-    match package {}
+    match package {
+        OptionalPackage::Agents => &AGENTS,
+        OptionalPackage::Skills => &SKILLS,
+    }
 }
 
 /// Every capability the core packages gate, grouped by source module. An

@@ -536,6 +536,8 @@ mod tests {
         "llm.call",
         "embedding.embed",
         "mcp.<server>",
+        "agent.run",
+        "skill.load",
     ];
     /// The request is the decision's context; the response is kept for whole reads and
     /// session reads.
@@ -614,6 +616,14 @@ mod tests {
     /// host functions run it. `None` marks the shared helpers: they run inside whichever
     /// module calls them.
     const CALLING_FILES: &[(&str, Option<&str>)] = &[
+        (
+            "src/stdlib/agents/mod.rs",
+            Some(crate::stdlib::agents::MODULE_NAME),
+        ),
+        (
+            "src/stdlib/skills/mod.rs",
+            Some(crate::stdlib::skills::MODULE_NAME),
+        ),
         (
             "src/stdlib/code/mod.rs",
             Some(crate::stdlib::code::MODULE_NAME),

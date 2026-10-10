@@ -9,6 +9,7 @@
 //! vtables separately for each store.
 
 pub(crate) mod abi;
+pub mod agents;
 pub mod capabilities;
 pub mod code;
 pub mod crypto;
@@ -22,6 +23,7 @@ pub mod secrets;
 pub mod security;
 pub mod session;
 pub mod shared;
+pub mod skills;
 /// Test-authoring package. Deliberately absent from
 /// [`stdlib_package_declarations`] and [`install_host_functions`]: only
 /// `submilli build test` makes it importable (by passing its declaration into
@@ -33,8 +35,8 @@ pub mod uuid;
 
 use wasmtime::Linker;
 
-use crate::PackageDeclaration;
 use crate::runtime::StoreData;
+use crate::{MangledName, PackageDeclaration, Type};
 
 /// A standard-library package that exists only when the embedder provides it.
 ///
@@ -44,13 +46,21 @@ use crate::runtime::StoreData;
 /// functions are not installed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
-pub enum OptionalPackage {}
+pub enum OptionalPackage {
+    /// `submilli:agents`, backed by [`AgentProvider`](crate::runtime::AgentProvider).
+    Agents,
+    /// `submilli:skills`, backed by [`SkillProvider`](crate::runtime::SkillProvider).
+    Skills,
+}
 
 impl OptionalPackage {
-    pub const ALL: &'static [OptionalPackage] = &[];
+    pub const ALL: &'static [OptionalPackage] = &[Self::Agents, Self::Skills];
 
     pub const fn module_name(self) -> &'static str {
-        match self {}
+        match self {
+            Self::Agents => agents::MODULE_NAME,
+            Self::Skills => skills::MODULE_NAME,
+        }
     }
 
     pub fn from_module_name(name: &str) -> Option<Self> {
@@ -61,16 +71,86 @@ impl OptionalPackage {
     }
 
     fn package_declaration(self) -> PackageDeclaration {
-        match self {}
+        match self {
+            Self::Agents => agents::package_declaration(),
+            Self::Skills => skills::package_declaration(),
+        }
     }
 
-    fn install(self, _linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
-        match self {}
+    fn install(self, linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+        match self {
+            Self::Agents => agents::install(linker),
+            Self::Skills => skills::install(linker),
+        }
     }
 
     const fn bit(self) -> u8 {
-        match self {}
+        match self {
+            Self::Agents => 1,
+            Self::Skills => 1 << 1,
+        }
     }
+}
+
+/// A host call the typechecker types from its type argument: the compiler emits
+/// a JSON Schema for `T` into the call's trailing `schema` parameter and wraps
+/// the result in a structural check against `T`. What differs between such
+/// calls is what a bare call returns and how diagnostics name it.
+pub(crate) struct SchemaCheckedCall {
+    /// The call as diagnostics name it, e.g. `llm.call`.
+    pub callee: &'static str,
+    /// A typed call to show in a diagnostic.
+    pub example: &'static str,
+    /// What the structural check is applied to.
+    pub checks: &'static str,
+    /// Who the schema is sent to.
+    pub answerer: &'static str,
+    /// The arguments a program writes, in prose.
+    pub written: &'static str,
+    pub written_count: usize,
+    /// The ordinal of the schema argument, in prose.
+    pub extra_argument: &'static str,
+    /// How to do without a type argument, in three phrasings.
+    pub untyped_read: &'static str,
+    pub untyped_unknown: &'static str,
+    pub untyped_parse: &'static str,
+    /// What `T` binds to when the program wrote no type argument.
+    pub untyped_result: Type,
+}
+
+/// The schema-checked call `mangled` names, if it is one.
+pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaCheckedCall> {
+    if llm::declaration::is_checked_call(mangled) {
+        return Some(SchemaCheckedCall {
+            callee: "llm.call",
+            example: "llm.call<Severity>(model, prompt)",
+            checks: "the model's response",
+            answerer: "the model",
+            written: "the model and the prompt",
+            written_count: 2,
+            extra_argument: "third",
+            untyped_read: "read the `Completion` envelope yourself",
+            untyped_unknown: "read the `Completion` envelope's `ok` and `text` yourself",
+            untyped_parse: "parse the `Completion` text yourself",
+            untyped_result: llm::declaration::untyped_result_type(mangled),
+        });
+    }
+    if agents::declaration::is_checked_run(mangled) {
+        return Some(SchemaCheckedCall {
+            callee: "agents.run",
+            example: "agents.run<Report>(agent, input)",
+            checks: "the agent's result",
+            answerer: "the agent",
+            written: "the agent and the input",
+            written_count: 2,
+            extra_argument: "third",
+            untyped_read: "read the returned text yourself",
+            untyped_unknown: "read the returned text yourself",
+            untyped_parse: "parse the returned text yourself",
+            untyped_result: Type::String,
+        });
+    }
+    None
 }
 
 /// The standard library an embedder offers its programs: the core packages
@@ -215,6 +295,9 @@ pub(crate) fn install_store_bound(
 ) -> wasmtime::Result<()> {
     git::class::install(linker, store)
 }
+
+#[cfg(test)]
+mod optional_tests;
 
 #[cfg(test)]
 mod tests {

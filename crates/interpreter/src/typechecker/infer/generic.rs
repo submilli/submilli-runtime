@@ -2256,7 +2256,7 @@ impl Inferer<'_> {
         // reason. They differ from `session.get` only in what a bare call means
         // — the `Completion` envelope rather than an unchecked `unknown` — and
         // in carrying a compile-time schema into the trailing argument.
-        let checked_llm = crate::stdlib::llm::declaration::is_checked_call(&mangled);
+        let checked_llm = crate::stdlib::schema_checked_call(&mangled);
 
         if let Some(targs) = &type_args {
             if targs.len() != generics.len() {
@@ -2371,11 +2371,13 @@ impl Inferer<'_> {
         // is not an unchecked read, it is a different fully-typed result. `T`
         // appears only in the return type, so it is never inferable from an
         // argument and would otherwise always trip the unbound-parameter error.
-        if checked_llm && !type_args_written {
+        if let Some(checked) = &checked_llm
+            && !type_args_written
+        {
             bind_remaining(
                 &mut sub,
                 &generics,
-                crate::stdlib::llm::declaration::untyped_result_type(&mangled),
+                checked.untyped_result.clone(),
                 &self.type_limits,
             )
             .map_err(type_limit_at(span))?;
@@ -2431,16 +2433,20 @@ impl Inferer<'_> {
         // unaffected in behavior — `substitute_schema_argument` overwrites the
         // slot — but a written argument there is equally meaningless, so both
         // forms are refused and no working program changes.
-        if checked_llm && args.len() > 2 {
+        if let Some(checked) = &checked_llm
+            && args.len() > checked.written_count
+        {
             let name = &callee_ident.name;
+            let written = checked.written;
+            let extra = checked.extra_argument;
             self.error_with_help(
                 span,
                 format!(
-                    "`{name}` takes the model and the prompt; the schema argument is filled by \
+                    "`{name}` takes {written}; the schema argument is filled by \
                      the compiler from the type argument"
                 ),
                 vec![format!(
-                    "drop the third argument — write `{name}<T>(...)` to send a schema for `T`, \
+                    "drop the {extra} argument — write `{name}<T>(...)` to send a schema for `T`, \
                      or `{name}(...)` for an untyped call"
                 )],
             );
@@ -2448,8 +2454,8 @@ impl Inferer<'_> {
         }
 
         let mut llm_schema = None;
-        if checked_llm {
-            match self.llm_call_schema(&result_ty, type_args_written, span) {
+        if let Some(checked) = &checked_llm {
+            match self.llm_call_schema(checked, &result_ty, type_args_written, span) {
                 Ok(schema) => llm_schema = schema,
                 Err(()) => return Ok((TypedExprKind::Null, Type::Error)),
             }
@@ -2497,7 +2503,7 @@ impl Inferer<'_> {
             mangled,
             type_args: runtime_args,
             args: generic_args,
-            return_cast: if checked_get || checked_llm {
+            return_cast: if checked_get || checked_llm.is_some() {
                 None
             } else {
                 return_cast
@@ -2509,7 +2515,7 @@ impl Inferer<'_> {
         }
         // An untyped `llm.call` emitted no schema and needs no check: it returns
         // the `Completion` envelope the declaration already typed.
-        if checked_llm && llm_schema.is_some() {
+        if checked_llm.is_some() && llm_schema.is_some() {
             return self.checked_llm_cast(call, &result_ty, span);
         }
         Ok((call, result_ty))

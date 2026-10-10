@@ -1816,6 +1816,32 @@ The result holds its vectors as little-endian `f32` bytes in a hidden packed-`i8
 | `submilli:embedding#Embeddings#bytes` | Copy one row out of the hidden array into a new `Uint8Array` (`read_row`, `write_submilli_uint8array_struct`) | `CALL + COPY(d x 4) + COPY(d x 4)` | before | One `COPY` for the read out of the result and one for the new array, charged by `write_uint8_array`. |
 | `submilli:embedding#Embeddings#count`, `#dimensions`, `#identity`, `#model`, `#inputTokens`; `EmbeddingModel` fields | Field read | `CALL` | before | Through `install_field_getters`. |
 
+### submilli:agents
+
+Optional: installed only for an embedder that enables it. Variables: `I` = input bytes; `S` = schema bytes; `T` = bytes of the agent's answer; `m` = agents offered.
+
+| Function | What the host does | Formula | Charge point | Notes |
+|---|---|---|---|---|
+| `submilli:agents#run` | Read the agent, input and schema, gate, one provider run, then build a string or, typed, parse the answer and allocate the value tree (`stdlib/agents/mod.rs` `run`) | `CALL + GATE + IO(I + S) + IO(T)`; untyped adds the answer string through `write_submilli_string_struct`, typed adds `PARSE(T) + ELEM(nodes)` | `IO(I + S)` before `provider.run(...).await`; `IO(T)` and the result after it | The run is the effect, so everything after it uses `settle` or `settle_result` and never refuses. Waiting on the run costs nothing; the provider bounds its time and tokens. |
+| `submilli:agents#list` | Gate, list the agents, run the policy check once per agent, sanitize each description, build `AgentInfo` structs and an array (`stdlib/agents/mod.rs` `list`) | `CALL + (1 + m) x GATE + ELEM(m)` plus the strings through `write_submilli_string_struct` | before + output | `m` is known after `provider.agents().await`. |
+| `submilli:agents#AgentInfo#description` | Field read | `CALL` | before | |
+| `submilli:agents#AgentInfo#name` | Field read | `CALL` | before | |
+
+### submilli:skills
+
+Optional: installed only for an embedder that enables it. Variables: `T` = bytes of the skill's content or the file read; `m` = skills offered.
+
+| Function | What the host does | Formula | Charge point | Notes |
+|---|---|---|---|---|
+| `submilli:skills#list` | Gate, list the skills, run the policy check once per skill, sanitize each description, build `SkillInfo` structs and an array (`stdlib/skills/mod.rs` `list`) | `CALL + (1 + m) x GATE + ELEM(m)` plus the strings through `write_submilli_string_struct` | before + output | `m` is known after `provider.list().await`. |
+| `submilli:skills#load` | Gate, one provider read, build the `Skill` struct (`stdlib/skills/mod.rs` `load`) | `CALL + GATE + IO(T)` plus the strings through `write_submilli_string_struct` | `IO(T)` and the result after the read | The read is the effect, so the result is built under `settle_result`. |
+| `submilli:skills#readFile` | Gate, check the path, one provider read, build the string (`stdlib/skills/mod.rs` `read_file`) | `CALL + GATE + IO(T)` plus the string through `write_submilli_string_struct` | `IO(T)` and the result after the read | A path outside the skill is refused before the provider is asked. |
+| `submilli:skills#Skill#content` | Field read | `CALL` | before | |
+| `submilli:skills#Skill#description` | Field read | `CALL` | before | |
+| `submilli:skills#Skill#name` | Field read | `CALL` | before | |
+| `submilli:skills#SkillInfo#description` | Field read | `CALL` | before | |
+| `submilli:skills#SkillInfo#name` | Field read | `CALL` | before | |
+
 ### submilli:mcp
 
 | Function | What the host does | Formula | Charge point | Notes |

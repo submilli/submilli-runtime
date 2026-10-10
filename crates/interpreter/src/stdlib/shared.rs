@@ -584,6 +584,20 @@ pub(crate) fn preflight_models(
     capability: &str,
     count_field: &str,
 ) -> wasmtime::Result<()> {
+    preflight_listing(
+        caller,
+        capability,
+        &serde_json::json!({ "model": "", count_field: 0 }),
+    )
+}
+
+/// [`preflight_models`] for any listing filtered per candidate: `context` is what
+/// an invariant denial is audited with, the context of an empty candidate.
+pub(crate) fn preflight_listing(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    capability: &str,
+    context: &serde_json::Value,
+) -> wasmtime::Result<()> {
     fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
     running_package(caller).map(|_| ()).map_err(|error| {
         if let PrincipalError::Unknown(ref unknown) = error {
@@ -591,7 +605,7 @@ pub(crate) fn preflight_models(
                 &*caller,
                 unknown.label,
                 capability,
-                &serde_json::json!({ "model": "", count_field: 0 }),
+                context,
                 "invariant",
                 unknown.reason,
             );
