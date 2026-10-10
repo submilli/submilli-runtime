@@ -81,6 +81,7 @@ pub use runtime::{RunResult, RuntimeConfig, dispatch_main_async, instantiate_pro
 pub use shape::Shape;
 pub use source::{ModulePath, SourceFile, Sources};
 pub use span::{FileId, LineIndex, Span};
+pub use stdlib::{OptionalPackage, Stdlib};
 pub use token::{Token, TokenKind};
 pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoIndex, TypeInfoKind, TypeInfoTable};
 pub use typechecker::{capability_binding_type, capture, check, desugar, infer, infer_package};

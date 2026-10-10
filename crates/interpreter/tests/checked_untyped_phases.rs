@@ -1,23 +1,23 @@
 //! Injected arena corruption is an internal failure, not a language diagnostic.
 use std::collections::BTreeMap;
 
-use interpreter::{
+use submilli_engine::{
     Ast, ExprId, FileId, ModulePath, Sources, StmtId, StmtKind,
     compiler_error::{CompileError, CompilerFailure, CompilerStage},
 };
 
 fn parse(source: &str, file: FileId) -> Ast {
-    let mut lexer = interpreter::Asi::new(source, file);
+    let mut lexer = submilli_engine::Asi::new(source, file);
     let mut tokens = Vec::new();
     loop {
         let token = lexer.next_token();
-        let eof = matches!(token.kind, interpreter::TokenKind::Eof);
+        let eof = matches!(token.kind, submilli_engine::TokenKind::Eof);
         tokens.push(token);
         if eof {
             break;
         }
     }
-    interpreter::parser::parse_checked(source, tokens, file)
+    submilli_engine::parser::parse_checked(source, tokens, file)
         .unwrap()
         .0
 }
@@ -25,10 +25,11 @@ fn parse(source: &str, file: FileId) -> Ast {
 fn infer(
     source: &str,
     ast: &Ast,
-) -> Result<(interpreter::TypedAst, Vec<interpreter::Diagnostic>), CompileError> {
-    let (prelude, host, _) = interpreter::runtime::prelude::cached_runtime_package_declarations();
+) -> Result<(submilli_engine::TypedAst, Vec<submilli_engine::Diagnostic>), CompileError> {
+    let (prelude, host, _) =
+        submilli_engine::runtime::prelude::cached_runtime_package_declarations();
     let packages: Vec<_> = prelude.iter().chain(host).collect();
-    interpreter::typechecker::infer::infer_with_transitive_checked(
+    submilli_engine::typechecker::infer::infer_with_transitive_checked(
         source,
         "main",
         ast,
@@ -55,7 +56,7 @@ fn assert_internal(error: &CompileError) {
 #[test]
 fn inference_rejects_invalid_statement_and_expression_ids() {
     let source = "function main(): number { return 1; }";
-    let original = interpreter::lower_patterns(parse(source, FileId(0))).unwrap();
+    let original = submilli_engine::lower_patterns(parse(source, FileId(0))).unwrap();
     for corrupt_expression in [false, true] {
         let mut ast = original.clone();
         if corrupt_expression {
@@ -76,7 +77,7 @@ fn inference_rejects_invalid_statement_and_expression_ids() {
 #[test]
 fn binding_failure_retains_earlier_language_diagnostics() {
     let source = "function main(): number { let value = value; return 1; }";
-    let mut ast = interpreter::lower_patterns(parse(source, FileId(0))).unwrap();
+    let mut ast = submilli_engine::lower_patterns(parse(source, FileId(0))).unwrap();
     ast.top_level.push(StmtId(u32::MAX));
     let error = infer(source, &ast).unwrap_err();
     assert_internal(&error);
@@ -94,7 +95,7 @@ fn binding_failure_retains_earlier_language_diagnostics() {
 fn lowering_rejects_bad_top_level_and_pattern_body_ids() {
     let mut ast = Ast::new();
     ast.top_level.push(StmtId(u32::MAX));
-    let error = interpreter::lower_patterns(ast).unwrap_err();
+    let error = submilli_engine::lower_patterns(ast).unwrap_err();
     assert_internal(&error.into());
 
     let source = "function main([x]: number[]): number { return x; }";
@@ -104,14 +105,14 @@ fn lowering_rejects_bad_top_level_and_pattern_body_ids() {
         panic!("function")
     };
     *body = StmtId(u32::MAX);
-    assert_internal(&interpreter::lower_patterns(ast).unwrap_err().into());
-    interpreter::lower_patterns(parse(source, FileId(0))).unwrap();
+    assert_internal(&submilli_engine::lower_patterns(ast).unwrap_err().into());
+    submilli_engine::lower_patterns(parse(source, FileId(0))).unwrap();
 }
 
 #[test]
 fn export_metadata_reads_are_checked_after_binding_analysis() {
     let source = "export function value(): number { return 1; }";
-    let mut ast = interpreter::lower_patterns(parse(source, FileId(0))).unwrap();
+    let mut ast = submilli_engine::lower_patterns(parse(source, FileId(0))).unwrap();
     ast.exported_decls[0].stmt = StmtId(u32::MAX);
     assert_internal(&infer(source, &ast).unwrap_err());
 }
@@ -122,9 +123,9 @@ fn package_graph_failure_preserves_earlier_import_diagnostic() {
     let source =
         "import { value } from './missing'; export function read(): number { return value(); }";
     let file = sources.add("lib.ts", source).unwrap();
-    let mut ast = interpreter::lower_patterns(parse(source, file)).unwrap();
+    let mut ast = submilli_engine::lower_patterns(parse(source, file)).unwrap();
     ast.top_level.push(StmtId(u32::MAX));
-    let error = interpreter::typechecker::infer::infer_package_checked(
+    let error = submilli_engine::typechecker::infer::infer_package_checked(
         "test",
         ModulePath::from("lib"),
         vec![(ModulePath::from("lib"), file, &ast)],
@@ -150,21 +151,22 @@ fn later_module_arena_failure_preserves_earlier_module_diagnostics() {
     let last = "export function read(): number { return 1; }";
     let first_file = sources.add("a.ts", first).unwrap();
     let last_file = sources.add("lib.ts", last).unwrap();
-    let first_ast = interpreter::lower_patterns(parse(first, first_file)).unwrap();
-    let mut last_ast = interpreter::lower_patterns(parse(last, last_file)).unwrap();
+    let first_ast = submilli_engine::lower_patterns(parse(first, first_file)).unwrap();
+    let mut last_ast = submilli_engine::lower_patterns(parse(last, last_file)).unwrap();
     let root = last_ast.top_level[0];
     let StmtKind::Function { body, .. } = &mut last_ast.try_stmt_mut(root).unwrap().kind else {
         panic!("function")
     };
     *body = StmtId(u32::MAX);
-    let (prelude, host, _) = interpreter::runtime::prelude::cached_runtime_package_declarations();
+    let (prelude, host, _) =
+        submilli_engine::runtime::prelude::cached_runtime_package_declarations();
     let packages = prelude
         .iter()
         .chain(host)
         .cloned()
         .map(|p| (p.package_name.clone(), p))
         .collect();
-    let error = interpreter::typechecker::infer::infer_package_checked(
+    let error = submilli_engine::typechecker::infer::infer_package_checked(
         "test",
         ModulePath::from("lib"),
         vec![
@@ -186,9 +188,9 @@ fn later_module_arena_failure_preserves_earlier_module_diagnostics() {
 
 #[test]
 fn inference_rejects_wrong_node_kinds_without_losing_prior_diagnostics() {
-    use interpreter::ExprKind;
+    use submilli_engine::ExprKind;
     let source = "function main(): number { let early = early; let x = 0; return (x = 1); }";
-    let mut ast = interpreter::lower_patterns(parse(source, FileId(0))).unwrap();
+    let mut ast = submilli_engine::lower_patterns(parse(source, FileId(0))).unwrap();
     let target = ast
         .expr_ids()
         .unwrap()
@@ -214,13 +216,13 @@ fn inference_rejects_wrong_node_kinds_without_losing_prior_diagnostics() {
 
 #[test]
 fn inference_rejects_wrong_function_and_loop_body_kinds() {
-    use interpreter::ExprKind;
+    use submilli_engine::ExprKind;
     for source in [
         "function main(): number { const f = function(): number { return 1; }; return f(); }",
         "function main(): number { while (false) { return 1; } return 0; }",
         "function main(): number { return 1; }",
     ] {
-        let mut ast = interpreter::lower_patterns(parse(source, FileId(0))).unwrap();
+        let mut ast = submilli_engine::lower_patterns(parse(source, FileId(0))).unwrap();
         if source.contains("const f") {
             let function = ast
                 .expr_ids()
@@ -292,7 +294,7 @@ fn inference_fits_production_worker_stack() {
                         &equality_chain,
                         "function main(): number { return 42; }",
                     ] {
-                        let compiled = interpreter::compile::compile_script_checked(
+                        let compiled = submilli_engine::compile::compile_script_checked(
                             source,
                             "stack.ts",
                             FileId(0),

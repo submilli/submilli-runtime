@@ -44,10 +44,10 @@ fn check_alias_limits() {
             source.push_str(&format!("type Alias{index} = Alias{};\n", index + 1));
         }
         source.push_str(&format!("type Alias{depth} = ZBase;\ninterface ZBase {{ [key: string]: number; }}\nfunction main(): void {{}}"));
-        let result = interpreter::compile_script(
+        let result = submilli_engine::compile_script(
             &source,
             "record-limit.ts",
-            interpreter::FileId(0),
+            submilli_engine::FileId(0),
             &[],
             &[],
         );
@@ -62,10 +62,10 @@ fn check_alias_limits() {
                 "{diagnostics:?}"
             );
         }
-        interpreter::compile_script(
+        submilli_engine::compile_script(
             "function main(): number { return 42; }",
             "healthy.ts",
-            interpreter::FileId(0),
+            submilli_engine::FileId(0),
             &[],
             &[],
         )

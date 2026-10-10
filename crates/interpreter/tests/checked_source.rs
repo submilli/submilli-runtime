@@ -1,4 +1,4 @@
-use interpreter::{
+use submilli_engine::{
     Ast, Expr, ExprKind, FileId, LineIndex, Sources, Span, StmtKind, Type, TypeAnnotationKind,
     TypedAst, TypedExpr, TypedExprKind,
     compiler_error::{CompileError, CompilerFailure, CompilerStage},
@@ -68,7 +68,7 @@ fn checked_source_errors_preserve_classification_and_have_no_false_location() {
     let diagnostics = CompileError::from(failure).into_diagnostics(FileId(0));
     assert_eq!(diagnostics[0].span, Span::at(FileId::COMPILER));
     let (sources, _) = Sources::single("script.ts", "first line").unwrap();
-    let rendered = interpreter::diagnostics::render(&diagnostics[0], &sources);
+    let rendered = submilli_engine::diagnostics::render(&diagnostics[0], &sources);
     assert!(rendered.contains("internal compiler failure"));
     assert!(!rendered.contains("first line"));
     assert!(!rendered.contains("script.ts:1:1"));
@@ -95,14 +95,14 @@ fn checked_source_diagnostics_preserve_original_error_on_bad_metadata() {
         },
         Span::at(FileId(999)),
     ] {
-        let diagnostic = interpreter::Diagnostic {
-            severity: interpreter::Severity::Error,
+        let diagnostic = submilli_engine::Diagnostic {
+            severity: submilli_engine::Severity::Error,
             span,
             message: "original failure".into(),
             help: vec![],
             notes: vec![],
         };
-        let rendered = interpreter::diagnostics::render(&diagnostic, &sources);
+        let rendered = submilli_engine::diagnostics::render(&diagnostic, &sources);
         assert!(rendered.contains("original failure"));
         assert!(rendered.contains("source context unavailable"));
         assert!(!rendered.contains("script.ts:"));
@@ -134,20 +134,21 @@ fn checked_source_registration_keeps_text_and_file_identity_together() {
 fn checked_source_inference_rejects_corrupt_type_metadata_before_resolution() {
     let source = "function main(x: number): number { return x; }";
     for corrupt in 0..3 {
-        let parsed = interpreter::parse_script(source, FileId(0));
+        let parsed = submilli_engine::parse_script(source, FileId(0));
         assert!(!parsed.has_errors());
         // Parse separately because ParsedScript intentionally encapsulates its AST.
-        let mut lexer = interpreter::Asi::new(source, FileId(0));
+        let mut lexer = submilli_engine::Asi::new(source, FileId(0));
         let mut tokens = Vec::new();
         loop {
             let token = lexer.next_token();
-            let eof = matches!(token.kind, interpreter::TokenKind::Eof);
+            let eof = matches!(token.kind, submilli_engine::TokenKind::Eof);
             tokens.push(token);
             if eof {
                 break;
             }
         }
-        let (mut ast, _) = interpreter::parser::parse_checked(source, tokens, FileId(0)).unwrap();
+        let (mut ast, _) =
+            submilli_engine::parser::parse_checked(source, tokens, FileId(0)).unwrap();
         let root = ast.top_level[0];
         let StmtKind::Function { params, .. } = &mut ast.try_stmt_mut(root).unwrap().kind else {
             panic!("function");
@@ -167,7 +168,7 @@ fn checked_source_inference_rejects_corrupt_type_metadata_before_resolution() {
                 }
             }
         }
-        let error = interpreter::typechecker::infer::infer_with_transitive_checked(
+        let error = submilli_engine::typechecker::infer::infer_with_transitive_checked(
             source,
             "main",
             &ast,
@@ -185,7 +186,7 @@ fn checked_source_inference_rejects_corrupt_type_metadata_before_resolution() {
         ));
         assert!(error.to_string().contains("invalid source span"));
     }
-    interpreter::compile::typecheck_checked("function main(): number { return 1; }", FileId(0))
+    submilli_engine::compile::typecheck_checked("function main(): number { return 1; }", FileId(0))
         .unwrap();
 }
 
@@ -198,8 +199,9 @@ fn checked_source_codegen_rejects_invalid_spans_before_emission() {
         span: Span::new(FileId(9), 0, 0).unwrap(),
     })
     .unwrap();
-    let error = interpreter::codegen::codegen_with_type_info("", "script.ts", FileId(0), &ast, &[])
-        .unwrap_err();
+    let error =
+        submilli_engine::codegen::codegen_with_type_info("", "script.ts", FileId(0), &ast, &[])
+            .unwrap_err();
     assert!(matches!(
         error,
         CompilerFailure::Internal {
@@ -229,11 +231,11 @@ fn checked_source_direct_ast_validation_checks_unreachable_nodes_too() {
 fn checked_source_multiline_unicode_docs_keep_original_positions() {
     let source = "/**\n * @param {string} text description\n * @capability x/op { label: \"x\",\n * other: \"é😀é😀é😀\" }\n */\nfunction main(): number { return 1; }";
     let file = FileId(0);
-    let raw = interpreter::doc_comment::RawDoc {
+    let raw = submilli_engine::doc_comment::RawDoc {
         text: source.split("\nfunction").next().unwrap().into(),
         span: Span::new(file, 0, source.find("\nfunction").unwrap() as u32).unwrap(),
     };
-    let doc = interpreter::doc_comment::parse_doc_comment(&raw).unwrap();
+    let doc = submilli_engine::doc_comment::parse_doc_comment(&raw).unwrap();
     assert_eq!(doc.params[0].name_span.text(source, file).unwrap(), "text");
     let capability = &doc.capabilities[0];
     assert_eq!(
@@ -243,12 +245,13 @@ fn checked_source_multiline_unicode_docs_keep_original_positions() {
             .unwrap(),
         "other"
     );
-    let interpreter::DocCapabilityBindingKind::Literal { span, .. } = capability.bindings[1].kind
+    let submilli_engine::DocCapabilityBindingKind::Literal { span, .. } =
+        capability.bindings[1].kind
     else {
         panic!("literal");
     };
     assert_eq!(span.text(source, file).unwrap(), "\"é😀é😀é😀\"");
-    let parsed = interpreter::parse_script(source, file);
+    let parsed = submilli_engine::parse_script(source, file);
     assert!(!parsed.has_errors(), "{parsed:?}");
 }
 
@@ -266,7 +269,7 @@ fn checked_source_doc_unicode_errors_and_empty_first_lines_keep_valid_spans() {
 
 #[test]
 fn checked_source_auxiliary_spans_are_validated() {
-    use interpreter::ast::{
+    use submilli_engine::ast::{
         ArrayLiteralElement, ExportedDecl, Ident, ObjectLiteralMember, PatternOrigin,
     };
     let file = FileId(0);
@@ -284,7 +287,7 @@ fn checked_source_auxiliary_spans_are_validated() {
             })
             .unwrap();
         let statement = ast
-            .try_push_stmt(interpreter::Stmt {
+            .try_push_stmt(submilli_engine::Stmt {
                 kind: StmtKind::Block(vec![]),
                 span: Span::at(file),
             })
@@ -349,7 +352,7 @@ fn checked_source_package_validates_before_import_graph_errors() {
         start: 5,
         end: 1,
     };
-    let error = interpreter::typechecker::infer::infer_package_checked(
+    let error = submilli_engine::typechecker::infer::infer_package_checked(
         "test",
         "index".into(),
         vec![("index".into(), file, &ast)],
@@ -365,7 +368,7 @@ fn checked_source_package_validates_before_import_graph_errors() {
             ..
         })
     ));
-    let error = interpreter::typechecker::infer::infer_package_checked(
+    let error = submilli_engine::typechecker::infer::infer_package_checked(
         "test",
         "index".into(),
         vec![("index".into(), file, &ast)],
@@ -399,17 +402,17 @@ fn checked_source_validates_predicate_outer_span() {
 }
 
 fn parse_ast(source: &str, file: FileId) -> Ast {
-    let mut lexer = interpreter::Asi::new(source, file);
+    let mut lexer = submilli_engine::Asi::new(source, file);
     let mut tokens = Vec::new();
     loop {
         let token = lexer.next_token();
-        let eof = matches!(token.kind, interpreter::TokenKind::Eof);
+        let eof = matches!(token.kind, submilli_engine::TokenKind::Eof);
         tokens.push(token);
         if eof {
             break;
         }
     }
-    interpreter::parser::parse_checked(source, tokens, file)
+    submilli_engine::parser::parse_checked(source, tokens, file)
         .unwrap()
         .0
 }

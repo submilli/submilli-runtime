@@ -4,8 +4,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use interpreter::runtime::security::AuditDecision;
-use interpreter::runtime::{
+use serde_json::{Value, json};
+use submilli_engine::runtime::security::AuditDecision;
+use submilli_engine::runtime::{
     Access, BodyCopy, CallOutcome, CallRecord, CheckOutcome, DecisionAction, DecisionCause,
     DecisionExplanation, DecisionLog, DecisionLogConfig, DecisionLogOutput, DecisionRecord,
     EmbeddingBatch, EmbeddingError, EmbeddingLimits, EmbeddingModel, EmbeddingProvider,
@@ -16,15 +17,14 @@ use interpreter::runtime::{
     install_package_modules_async, install_runtime_host_functions, install_runtime_store_bound,
     install_tenant_limits, limits::ExecutionUsage,
 };
-use interpreter::stdlib::git::GitConfig;
-use interpreter::stdlib::http::transport::{
+use submilli_engine::stdlib::git::GitConfig;
+use submilli_engine::stdlib::http::transport::{
     DownloadMeta, EgressAt, HttpClient, HttpError, HttpRequest, HttpResponse, RedirectHop,
 };
-use interpreter::{
+use submilli_engine::{
     CompiledPackage, FileId, ModulePath, PackageSourceModule, RuntimeConfig,
     compile_package_with_transitive, compile_script, dispatch_main_async,
 };
-use serde_json::{Value, json};
 use wasmtime::{Linker, Module};
 
 // ---- fixtures -------------------------------------------------------------------------
@@ -502,7 +502,7 @@ impl EmbeddingProvider for FakeEmbedding {
         &'a self,
         alias: &'a str,
         texts: &'a [String],
-        _purpose: interpreter::runtime::Purpose,
+        _purpose: submilli_engine::runtime::Purpose,
         budget: &'a EmbeddingTokenBudget,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Result<EmbeddingBatch, EmbeddingError>> + Send + 'a>,
@@ -514,14 +514,14 @@ impl EmbeddingProvider for FakeEmbedding {
             // or after none reported usage (`dark`).
             let failed_after = |reported| EmbeddingError::Provider {
                 alias: alias.to_string(),
-                reason: interpreter::runtime::EmbeddingFailureReason::Transport,
+                reason: submilli_engine::runtime::EmbeddingFailureReason::Transport,
                 settlements: vec![
-                    interpreter::runtime::SubBatchSettlement {
+                    submilli_engine::runtime::SubBatchSettlement {
                         estimate: 4,
                         reported,
                         indeterminate: 4 - reported,
                     },
-                    interpreter::runtime::SubBatchSettlement {
+                    submilli_engine::runtime::SubBatchSettlement {
                         estimate: 3,
                         reported: 0,
                         indeterminate: 3,
@@ -542,7 +542,7 @@ impl EmbeddingProvider for FakeEmbedding {
             )
             .expect("shape")
             .with_input_tokens(Some(7))
-            .with_settlements(vec![interpreter::runtime::SubBatchSettlement {
+            .with_settlements(vec![submilli_engine::runtime::SubBatchSettlement {
                 estimate,
                 reported: 7,
                 indeterminate: 0,
@@ -1519,7 +1519,7 @@ function main(): string { get("https://example.test/a"); return "done"; }
 
 // ---- throwaway cost measurement ---------------------------------------------------------------
 
-/// Run with `cargo test --release -p interpreter --test decision_records -- --ignored
+/// Run with `cargo test --release -p submilli-engine --test decision_records -- --ignored
 /// --nocapture line_lookup_cost`; prints per-call costs, asserts nothing about time.
 #[tokio::test]
 #[ignore = "timing measurement, not a check"]
@@ -1731,7 +1731,7 @@ function main(): string { return llm.call("open", "what is two plus two").text ?
     assert!(body_text(response.body.as_ref()).is_some_and(|t| t.contains("answer")));
     assert_eq!(
         call.usage,
-        Some(interpreter::runtime::ModelUsage {
+        Some(submilli_engine::runtime::ModelUsage {
             input_tokens: Some(10),
             output_tokens: Some(10),
         })
@@ -1783,7 +1783,7 @@ function main(): string {
     assert_eq!(response.bytes, 2 * 4 * 4);
     assert_eq!(
         call.usage,
-        Some(interpreter::runtime::ModelUsage {
+        Some(submilli_engine::runtime::ModelUsage {
             input_tokens: Some(7),
             output_tokens: None,
         })
@@ -1795,7 +1795,7 @@ async fn a_failed_embed_call_keeps_the_usage_its_sent_batches_reported() {
     for (alias, usage) in [
         (
             "open-embed-flaky",
-            Some(interpreter::runtime::ModelUsage {
+            Some(submilli_engine::runtime::ModelUsage {
                 input_tokens: Some(4),
                 output_tokens: None,
             }),
@@ -1872,7 +1872,7 @@ function main(): string {
     // The call's own usage stays the sum, absent where any prompt left a count out.
     assert_eq!(
         call.usage,
-        Some(interpreter::runtime::ModelUsage {
+        Some(submilli_engine::runtime::ModelUsage {
             input_tokens: Some(13),
             output_tokens: None,
         })

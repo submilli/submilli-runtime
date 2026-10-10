@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use interpreter::{
+use submilli_engine::{
     compile_script, dispatch_main_async,
     runtime::{
         MemoryExhausted, RuntimeConfig, StoreData, Vfs, install_runtime_async,
@@ -21,7 +21,7 @@ fn cap_run_with_host_bytes(
     src: &str,
     max_store_bytes: u64,
 ) -> wasmtime::Result<(wasmtime::Result<()>, u64)> {
-    let compiled = compile_script(src, "test.subm", interpreter::FileId(0), &[], &[])
+    let compiled = compile_script(src, "test.subm", submilli_engine::FileId(0), &[], &[])
         .map_err(|d| wasmtime::Error::msg(format!("compile failed: {d:#?}")))?;
     // One engine may serve tenants with smaller caps than its own defaults.
     let cfg = RuntimeConfig::default();
@@ -236,7 +236,7 @@ function main(): void {
 
     let cfg = RuntimeConfig::default();
     let compiled =
-        compile_script(src, "test.subm", interpreter::FileId(0), &[], &[]).expect("compile");
+        compile_script(src, "test.subm", submilli_engine::FileId(0), &[], &[]).expect("compile");
     let engine = cfg.engine().expect("engine");
     let data = StoreData::with_vfs(Vfs::tempdir().expect("tempdir"));
     let mut store = cfg.store(&engine, data).expect("store");
@@ -377,8 +377,14 @@ function main(): void {
 }
 "#;
 
-    let compiled = compile_script(src, "memory_caps.subm", interpreter::FileId(0), &[], &[])
-        .expect("compile clean");
+    let compiled = compile_script(
+        src,
+        "memory_caps.subm",
+        submilli_engine::FileId(0),
+        &[],
+        &[],
+    )
+    .expect("compile clean");
     let cfg = RuntimeConfig {
         max_store_bytes: CAP_BYTES,
         ..RuntimeConfig::default()
@@ -520,7 +526,7 @@ function main(): void {
 }
 "#;
 
-    let compiled = compile_script(src, "size_limit.subm", interpreter::FileId(0), &[], &[])
+    let compiled = compile_script(src, "size_limit.subm", submilli_engine::FileId(0), &[], &[])
         .expect("compile clean");
     let cfg = RuntimeConfig::default();
     let engine = cfg.engine().expect("engine");
@@ -558,7 +564,7 @@ function main(): void {
 }
 "#;
 
-    let compiled = compile_script(src, "overwrite.subm", interpreter::FileId(0), &[], &[])
+    let compiled = compile_script(src, "overwrite.subm", submilli_engine::FileId(0), &[], &[])
         .expect("compile clean");
     let cfg = RuntimeConfig::default();
     let engine = cfg.engine().expect("engine");
@@ -604,7 +610,7 @@ fn string_builders_refuse_native_output_and_refund_inputs() {
         assert!(err.is::<MemoryExhausted>(), "{expression}: {err:#}");
         assert_eq!(host_bytes, 0, "{expression}: all native buffers refunded");
         assert!(
-            err.is::<interpreter::runtime::limits::MemoryCapExceeded>(),
+            err.is::<submilli_engine::runtime::limits::MemoryCapExceeded>(),
             "{expression}: native admission refused before GC: {err:#}"
         );
     }

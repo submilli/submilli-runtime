@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use crate::runtime::prelude::declaration::prelude_package_declaration;
-use crate::stdlib::stdlib_package_declarations;
+use crate::stdlib::Stdlib;
 use crate::types::escape_string_literal;
 use crate::{
     ClassExtends, DocCapabilityBindingKind, DocCapabilityLiteral, DocComment, FileId,
@@ -41,28 +41,199 @@ pub struct ModuleSummary {
 /// handle `@mcp/*` and unknown names). Every module resolves, opt-in ones such
 /// as `submilli:git` included; what a caller's scope shows is its own decision.
 pub fn docs(name: &str) -> Option<ModuleDoc> {
-    user_modules()
-        .into_iter()
-        .find(|d| d.package_name == name)
-        .map(|defs| ModuleDoc {
-            name: defs.package_name.clone(),
-            description: module_description(&defs.package_name).to_string(),
-            declarations: render_declarations(&defs),
-        })
+    Stdlib::core().docs(name)
 }
 
 /// Modules whose name, description, or an exported symbol contains `query`
 /// (case-insensitive). An empty query lists every module.
 pub fn search(query: &str) -> Vec<ModuleSummary> {
-    let q = query.trim().to_lowercase();
-    user_modules()
-        .iter()
-        .filter(|defs| matches_query(defs, &q))
-        .map(|defs| ModuleSummary {
-            name: defs.package_name.clone(),
-            description: module_description(&defs.package_name).to_string(),
-        })
-        .collect()
+    Stdlib::core().search(query)
+}
+
+/// Discovery over the modules of a [`Stdlib`]: what the free functions above do
+/// for [`Stdlib::core`], for any set.
+impl Stdlib {
+    /// [`docs`] over the modules of this set.
+    pub fn docs(self, name: &str) -> Option<ModuleDoc> {
+        user_modules(self)
+            .into_iter()
+            .find(|d| d.package_name == name)
+            .map(|defs| ModuleDoc {
+                name: defs.package_name.clone(),
+                description: module_description(&defs.package_name).to_string(),
+                declarations: render_declarations(&defs),
+            })
+    }
+
+    /// [`search`] over the modules of this set.
+    pub fn search(self, query: &str) -> Vec<ModuleSummary> {
+        let q = query.trim().to_lowercase();
+        user_modules(self)
+            .iter()
+            .filter(|defs| matches_query(defs, &q))
+            .map(|defs| ModuleSummary {
+                name: defs.package_name.clone(),
+                description: module_description(&defs.package_name).to_string(),
+            })
+            .collect()
+    }
+
+    /// [`resolve`] over the modules of this set.
+    pub fn resolve(self, name: &str) -> Resolution {
+        if let Some(doc) = self.docs(name) {
+            return Resolution::Module(doc);
+        }
+        match builtin_lookup(name) {
+            BuiltinLookup::Found(declarations) => Resolution::Builtin {
+                name: name.to_string(),
+                declarations,
+            },
+            BuiltinLookup::UnknownMember {
+                path,
+                member,
+                members,
+            } => Resolution::UnknownMember {
+                path,
+                member,
+                members,
+            },
+            BuiltinLookup::Unknown => Resolution::Unknown,
+        }
+    }
+
+    /// [`suggest_filtered`] over the modules of this set.
+    pub fn suggest_filtered(
+        self,
+        name: &str,
+        extra: &[String],
+        visible: impl Fn(&str) -> bool,
+    ) -> Option<String> {
+        let mut candidates: Vec<String> = self.search("").into_iter().map(|m| m.name).collect();
+        let builtins = builtins();
+        candidates.extend(builtins.types);
+        candidates.extend(builtins.namespaces);
+        candidates.extend(extra.iter().cloned());
+        candidates.retain(|candidate| visible(candidate));
+
+        // Only the head segment is in question: `Temporel.Instant` misses because
+        // of `Temporel`, and the tail only inflates the distance past threshold.
+        let query = name.split('.').find(|s| !s.is_empty()).unwrap_or(name);
+        // `closest_match` floors its threshold at 2 edits, so a one- or two-character
+        // query sits within reach of an unrelated name. Below that length there is no
+        // signal to match on.
+        if query.len() < 3 {
+            return None;
+        }
+
+        if let Some((_, replacement)) = OMITTED_GLOBALS
+            .iter()
+            .find(|(omitted, _)| omitted.eq_ignore_ascii_case(name))
+        {
+            return Some((*replacement).to_string());
+        }
+
+        // Never offer the query back to the caller: a name that resolved nowhere is
+        // not its own repair, however it was spelled.
+        let is_self = |c: &String| c.eq_ignore_ascii_case(name);
+        if let Some(hit) = candidates
+            .iter()
+            .find(|c| !is_self(c) && name_tail(c).eq_ignore_ascii_case(query))
+        {
+            return Some(hit.clone());
+        }
+        // Match full names and scheme-stripped tails in one pass, so the globally
+        // closest key wins: `htp` should reach `submilli:http` (one edit from its
+        // tail) rather than whichever unrelated full name lands inside threshold.
+        let mut keys: Vec<(&str, &str)> = Vec::new();
+        for c in candidates.iter().filter(|c| !is_self(c)) {
+            keys.push((c.as_str(), c.as_str()));
+            let tail = name_tail(c);
+            if tail != c.as_str() {
+                keys.push((tail, c.as_str()));
+            }
+        }
+        let hit = crate::did_you_mean::closest_match(query, keys.iter().map(|(k, _)| *k))?;
+        keys.iter()
+            .find(|(k, _)| *k == hit)
+            .map(|(_, owner)| (*owner).to_string())
+    }
+
+    /// [`catalog_filtered`] over the modules of this set.
+    pub fn catalog_filtered(
+        self,
+        extra: Vec<CatalogEntry>,
+        visible: impl Fn(&str) -> bool,
+    ) -> Catalog {
+        let mut entries: Vec<CatalogEntry> = self
+            .search("")
+            .into_iter()
+            .map(|m| CatalogEntry {
+                name: m.name,
+                source: SOURCE_STDLIB.to_string(),
+                description: m.description,
+            })
+            .collect();
+        entries.extend(extra);
+        entries.retain(|entry| visible(&entry.name));
+        let remaining = entries.len().saturating_sub(CATALOG_LIMIT);
+        entries.truncate(CATALOG_LIMIT);
+        Catalog { entries, remaining }
+    }
+
+    /// [`render_stdlib_d_ts`] for the modules of this set.
+    pub fn render_stdlib_d_ts(self) -> String {
+        let mut out = String::new();
+        for defs in &editor_stdlib_modules(self) {
+            render_declare_module(&mut out, defs);
+        }
+        out.trim_end().to_string()
+    }
+
+    /// [`render_packages_d_ts`] against the modules of this set.
+    pub fn render_packages_d_ts(
+        self,
+        packages: &[&PackageDeclaration],
+        context: &[&PackageDeclaration],
+    ) -> String {
+        let stdlib = editor_stdlib_modules(self);
+        let exporters = TypeExporters::new(
+            stdlib
+                .iter()
+                .chain(packages.iter().copied())
+                .chain(context.iter().copied()),
+        );
+        let globals = global_classes();
+        let mut out = String::new();
+        for defs in packages {
+            let _ = writeln!(out, "declare module \"{}\" {{", defs.package_name);
+            let imports = block_imports(defs, &exporters);
+            for (local, (public, module)) in &imports.types {
+                if local == public {
+                    let _ = writeln!(out, "  import type {{ {local} }} from \"{module}\";");
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "  import type {{ {public} as {local} }} from \"{module}\";"
+                    );
+                }
+            }
+            let parent = |extends: &ClassExtends| {
+                if let Some(local) = imports.parents.get(extends.parent.as_str()) {
+                    return Some(ts_named_type(local, &extends.args));
+                }
+                // A package value of the global's name would hide it; the class
+                // then renders without its parent rather than extend the value.
+                let global = globals.get(extends.parent.as_str())?;
+                if declares(defs, global, true) {
+                    return None;
+                }
+                Some(ts_named_type(global, &extends.args))
+            };
+            render_ts_declarations(&mut out, defs, "  ", "export ", &parent);
+            let _ = writeln!(out, "}}\n");
+        }
+        out.trim_end().to_string()
+    }
 }
 
 /// The language built-ins always in scope without an `import`: headline prelude
@@ -548,25 +719,7 @@ pub enum Resolution {
 /// Try `name` as a stdlib module, then as a built-in. Every discovery surface
 /// runs this same ladder so MCP, REST, and the CLI reach the same answer.
 pub fn resolve(name: &str) -> Resolution {
-    if let Some(doc) = docs(name) {
-        return Resolution::Module(doc);
-    }
-    match builtin_lookup(name) {
-        BuiltinLookup::Found(declarations) => Resolution::Builtin {
-            name: name.to_string(),
-            declarations,
-        },
-        BuiltinLookup::UnknownMember {
-            path,
-            member,
-            members,
-        } => Resolution::UnknownMember {
-            path,
-            member,
-            members,
-        },
-        BuiltinLookup::Unknown => Resolution::Unknown,
-    }
+    Stdlib::core().resolve(name)
 }
 
 /// A did-you-mean candidate for a name that resolved nowhere, drawn from the
@@ -592,54 +745,7 @@ pub fn suggest_filtered(
     extra: &[String],
     visible: impl Fn(&str) -> bool,
 ) -> Option<String> {
-    let mut candidates: Vec<String> = search("").into_iter().map(|m| m.name).collect();
-    let builtins = builtins();
-    candidates.extend(builtins.types);
-    candidates.extend(builtins.namespaces);
-    candidates.extend(extra.iter().cloned());
-    candidates.retain(|candidate| visible(candidate));
-
-    // Only the head segment is in question: `Temporel.Instant` misses because
-    // of `Temporel`, and the tail only inflates the distance past threshold.
-    let query = name.split('.').find(|s| !s.is_empty()).unwrap_or(name);
-    // `closest_match` floors its threshold at 2 edits, so a one- or two-character
-    // query sits within reach of an unrelated name. Below that length there is no
-    // signal to match on.
-    if query.len() < 3 {
-        return None;
-    }
-
-    if let Some((_, replacement)) = OMITTED_GLOBALS
-        .iter()
-        .find(|(omitted, _)| omitted.eq_ignore_ascii_case(name))
-    {
-        return Some((*replacement).to_string());
-    }
-
-    // Never offer the query back to the caller: a name that resolved nowhere is
-    // not its own repair, however it was spelled.
-    let is_self = |c: &String| c.eq_ignore_ascii_case(name);
-    if let Some(hit) = candidates
-        .iter()
-        .find(|c| !is_self(c) && name_tail(c).eq_ignore_ascii_case(query))
-    {
-        return Some(hit.clone());
-    }
-    // Match full names and scheme-stripped tails in one pass, so the globally
-    // closest key wins: `htp` should reach `submilli:http` (one edit from its
-    // tail) rather than whichever unrelated full name lands inside threshold.
-    let mut keys: Vec<(&str, &str)> = Vec::new();
-    for c in candidates.iter().filter(|c| !is_self(c)) {
-        keys.push((c.as_str(), c.as_str()));
-        let tail = name_tail(c);
-        if tail != c.as_str() {
-            keys.push((tail, c.as_str()));
-        }
-    }
-    let hit = crate::did_you_mean::closest_match(query, keys.iter().map(|(k, _)| *k))?;
-    keys.iter()
-        .find(|(k, _)| *k == hit)
-        .map(|(_, owner)| (*owner).to_string())
+    Stdlib::core().suggest_filtered(name, extra, visible)
 }
 
 /// The part of a package name after its scheme or scope: `submilli:http` and
@@ -709,19 +815,7 @@ pub fn catalog(extra: Vec<CatalogEntry>) -> Catalog {
 
 /// Filter before applying the catalog limit so omitted counts reflect visibility.
 pub fn catalog_filtered(extra: Vec<CatalogEntry>, visible: impl Fn(&str) -> bool) -> Catalog {
-    let mut entries: Vec<CatalogEntry> = search("")
-        .into_iter()
-        .map(|m| CatalogEntry {
-            name: m.name,
-            source: SOURCE_STDLIB.to_string(),
-            description: m.description,
-        })
-        .collect();
-    entries.extend(extra);
-    entries.retain(|entry| visible(&entry.name));
-    let remaining = entries.len().saturating_sub(CATALOG_LIMIT);
-    entries.truncate(CATALOG_LIMIT);
-    Catalog { entries, remaining }
+    Stdlib::core().catalog_filtered(extra, visible)
 }
 
 /// Name the head, then list what it actually has, so the repair is one edit.
@@ -780,8 +874,9 @@ fn resolve_ignore_case<'a>(keys: impl Iterator<Item = &'a String>, name: &str) -
 }
 
 /// The stdlib modules an agent may import, minus internal plumbing.
-fn user_modules() -> Vec<PackageDeclaration> {
-    stdlib_package_declarations()
+fn user_modules(stdlib: Stdlib) -> Vec<PackageDeclaration> {
+    stdlib
+        .package_declarations()
         .into_iter()
         .filter(|d| d.package_name != INTERNAL_MODULE)
         .collect()
@@ -791,6 +886,9 @@ fn user_modules() -> Vec<PackageDeclaration> {
 /// `packages.search`/`docs` and (manually mirrored) MVP.md §I.
 fn module_description(name: &str) -> &'static str {
     match name {
+        "submilli:agents" => {
+            "Harness sub-agents: run<T>(agent, input), and list() to discover them."
+        }
         "submilli:crypto" => "Hashing, HMAC, and random bytes.",
         "submilli:code" => {
             "Workspace tools: numbered reads, search, glob, tree, anchored edits and unified diffs."
@@ -806,6 +904,7 @@ fn module_description(name: &str) -> &'static str {
         "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
         "submilli:secrets" => "Policy-gated access to Blueprint-declared secrets.",
         "submilli:session" => "Session-scoped key-value state: get/has/set/remove/list.",
+        "submilli:skills" => "Harness skills: list(), load(name) and readFile(name, path).",
         "submilli:url" => "URL parse/build and query-string handling. Pure compute.",
         "submilli:uuid" => "UUID v4/v7 generation and validation.",
         _ => "",
@@ -851,11 +950,7 @@ pub fn render_declarations(defs: &PackageDeclaration) -> String {
 /// it — the editor should complete both; `build check` remains the gate
 /// against importing them elsewhere.
 pub fn render_stdlib_d_ts() -> String {
-    let mut out = String::new();
-    for defs in &editor_stdlib_modules() {
-        render_declare_module(&mut out, defs);
-    }
-    out.trim_end().to_string()
+    Stdlib::core().render_stdlib_d_ts()
 }
 
 /// Render editor-facing TypeScript declarations for `packages`, one
@@ -871,44 +966,7 @@ pub fn render_packages_d_ts(
     packages: &[&PackageDeclaration],
     context: &[&PackageDeclaration],
 ) -> String {
-    let stdlib = editor_stdlib_modules();
-    let exporters = TypeExporters::new(
-        stdlib
-            .iter()
-            .chain(packages.iter().copied())
-            .chain(context.iter().copied()),
-    );
-    let globals = global_classes();
-    let mut out = String::new();
-    for defs in packages {
-        let _ = writeln!(out, "declare module \"{}\" {{", defs.package_name);
-        let imports = block_imports(defs, &exporters);
-        for (local, (public, module)) in &imports.types {
-            if local == public {
-                let _ = writeln!(out, "  import type {{ {local} }} from \"{module}\";");
-            } else {
-                let _ = writeln!(
-                    out,
-                    "  import type {{ {public} as {local} }} from \"{module}\";"
-                );
-            }
-        }
-        let parent = |extends: &ClassExtends| {
-            if let Some(local) = imports.parents.get(extends.parent.as_str()) {
-                return Some(ts_named_type(local, &extends.args));
-            }
-            // A package value of the global's name would hide it; the class
-            // then renders without its parent rather than extend the value.
-            let global = globals.get(extends.parent.as_str())?;
-            if declares(defs, global, true) {
-                return None;
-            }
-            Some(ts_named_type(global, &extends.args))
-        };
-        render_ts_declarations(&mut out, defs, "  ", "export ", &parent);
-        let _ = writeln!(out, "}}\n");
-    }
-    out.trim_end().to_string()
+    Stdlib::core().render_packages_d_ts(packages, context)
 }
 
 /// The built-in classes a package's class may extend, such as `Error`, by
@@ -925,8 +983,8 @@ fn global_classes() -> BTreeMap<String, String> {
         .collect()
 }
 
-fn editor_stdlib_modules() -> Vec<PackageDeclaration> {
-    let mut modules = user_modules();
+fn editor_stdlib_modules(stdlib: Stdlib) -> Vec<PackageDeclaration> {
+    let mut modules = user_modules(stdlib);
     modules.push(crate::stdlib::test::package_declaration());
     modules.push(crate::stdlib::security::package_declaration());
     modules.sort_by(|a, b| a.package_name.cmp(&b.package_name));
@@ -2746,9 +2804,17 @@ mod tests {
         assert!(builtin_no_import_note("Temporal").contains("import"));
     }
 
+    /// Every package any embedder can enable, so the declaration checks below
+    /// cover the optional packages too.
+    fn every_package() -> Stdlib {
+        crate::stdlib::OptionalPackage::ALL
+            .iter()
+            .fold(Stdlib::core(), |set, package| set.with(*package))
+    }
+
     #[test]
     fn stdlib_capability_tags_parse_cleanly() {
-        for module in user_modules() {
+        for module in user_modules(every_package()) {
             for symbol in module.values.values() {
                 let Some(doc) = value_doc(&symbol.kind) else {
                     continue;
@@ -2768,7 +2834,7 @@ mod tests {
 
     #[test]
     fn every_importable_stdlib_symbol_has_docs() {
-        for module in user_modules() {
+        for module in user_modules(every_package()) {
             for symbol in module.values.values() {
                 assert!(
                     value_doc(&symbol.kind).is_some(),
@@ -3348,8 +3414,8 @@ mod tests {
 
     #[test]
     fn stdlib_d_ts_declares_each_user_module() {
-        let docs = render_stdlib_d_ts();
-        for module in user_modules() {
+        let docs = every_package().render_stdlib_d_ts();
+        for module in user_modules(every_package()) {
             assert!(
                 docs.contains(&format!("declare module \"{}\" {{", module.package_name)),
                 "missing declare module for {}",

@@ -2,7 +2,7 @@
 //! Each test drives a small .subm program through the full pipeline and
 //! renders every emitted diagnostic; this file is the integration guarantee.
 
-use interpreter::{
+use submilli_engine::{
     Asi, FileId, Severity, Sources, Token, TokenKind, check, diagnostics, infer, parse,
 };
 
@@ -26,7 +26,7 @@ fn render_all(source: &str) -> String {
     // a partial AST would just produce cascading noise.
     if !diags.iter().any(|d| d.severity == Severity::Error) {
         let (prelude_defs, host_defs, _) =
-            interpreter::runtime::prelude::cached_runtime_package_declarations();
+            submilli_engine::runtime::prelude::cached_runtime_package_declarations();
         let mut package_refs = Vec::with_capacity(prelude_defs.len() + host_defs.len());
         package_refs.extend(prelude_defs.iter());
         package_refs.extend(host_defs.iter());

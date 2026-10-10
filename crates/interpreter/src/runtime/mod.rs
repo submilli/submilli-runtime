@@ -1,5 +1,6 @@
 //! Wasmtime engine configuration for Submilli.
 
+pub mod agents;
 pub(crate) mod array_storage;
 pub mod blocking;
 pub mod call_log;
@@ -23,10 +24,15 @@ pub mod prelude;
 pub mod secrets;
 pub mod security;
 pub mod session_kv;
+pub mod skills;
 pub mod token_ledger;
 pub mod vfs;
 pub mod watchdog;
 
+pub use agents::{
+    AGENTS_MODULE_NAME, AgentCallError, AgentInfo, AgentOutcome, AgentProvider, AgentRequest,
+    AgentUsage,
+};
 pub use call_log::{BodyCopy, CallOutcome, CallRecord, ModelUsage, PayloadRecord};
 pub use decision::{
     CallSite, CallTicket, DecisionAction, DecisionCause, DecisionExplanation, DecisionLog,
@@ -44,8 +50,9 @@ pub use embedding::{
 pub use exec::{RunResult, dispatch_main_async, instantiate_program_async};
 pub use host::{
     INTERNAL_MODULE_NAME, NUMBER_MODULE_NAME, host_package_declarations,
-    install_async as install_runtime_async,
+    install_async as install_runtime_async, install_async_for as install_runtime_async_for,
     install_host_functions as install_runtime_host_functions,
+    install_host_functions_for as install_runtime_host_functions_for,
     install_store_bound as install_runtime_store_bound, internal_host_package_declarations,
     stdlib_package_declarations,
 };
@@ -72,6 +79,7 @@ pub use session_kv::{
     InMemorySessionKv, SessionKvEntry, SessionKvError, SessionKvLimitKind, SessionKvLimits,
     SessionKvPage, SessionKvStore, SharedKvBudget,
 };
+pub use skills::{SKILLS_MODULE_NAME, Skill, SkillError, SkillInfo, SkillProvider};
 pub use vfs::{
     Access, CopyDirError, MAX_MEASURED_DEPTH, MountError, MountSpec, Vfs, VfsMode, copy_host_dir,
     copy_host_subdir, measure_dir, measure_host_dir, measure_host_dir_skipping_vanished,
@@ -153,6 +161,14 @@ pub struct StoreData {
     /// becoming per-execution scratch state that no later `execute` can read —
     /// the guest surface reports that as a configuration error.
     pub session_kv: Option<Arc<dyn SessionKvStore>>,
+    /// The harness `submilli:agents` runs sub-agents through, present only when
+    /// the embedder wires one. `None` makes every call a catchable
+    /// [`AgentCallError::NotConfigured`].
+    pub agent_provider: Option<Arc<dyn AgentProvider>>,
+    /// The harness `submilli:skills` reads skills through, present only when the
+    /// embedder wires one. `None` makes every call a catchable
+    /// [`SkillError::NotConfigured`].
+    pub skill_provider: Option<Arc<dyn SkillProvider>>,
     /// Embedder sink for host-operation metrics (HTTP transport latencies).
     /// Defaults to [`NoopMetricsSink`]; the server installs a Sentry-backed one.
     pub metrics: Arc<dyn metrics::MetricsSink>,
@@ -269,6 +285,8 @@ impl StoreData {
             embedding_provider: None,
             embedding_budget: None,
             session_kv: None,
+            agent_provider: None,
+            skill_provider: None,
             metrics: Arc::new(metrics::NoopMetricsSink),
             tenant_limits: TenantLimits::new(max_store_bytes),
             host_fuel: 0,

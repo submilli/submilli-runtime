@@ -1,5 +1,5 @@
 //! Corrupt IDs below are injected internal state, not guest-input reproducers.
-use interpreter::{
+use submilli_engine::{
     ExprId, FileId, StmtId, TypedAst, TypedExprKind, TypedStmtKind,
     compiler_error::{CompilerFailure, CompilerStage},
 };
@@ -7,7 +7,7 @@ use interpreter::{
 const SOURCE: &str = "function main(): number { return 1; }";
 
 fn typed(source: &str) -> TypedAst {
-    let (ast, diagnostics) = interpreter::compile::typecheck_to_typed_ast(source, FileId(0));
+    let (ast, diagnostics) = submilli_engine::compile::typecheck_to_typed_ast(source, FileId(0));
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     ast
 }
@@ -41,11 +41,11 @@ fn rules_and_capture_propagate_invalid_expression_and_statement_ids() {
         } else {
             ast.functions[0].body = StmtId(u32::MAX);
         }
-        assert_invalid_id(interpreter::check(&ast).unwrap_err().fatal.unwrap());
-        assert_invalid_id(interpreter::capture(ast).unwrap_err());
+        assert_invalid_id(submilli_engine::check(&ast).unwrap_err().fatal.unwrap());
+        assert_invalid_id(submilli_engine::capture(ast).unwrap_err());
     }
-    assert!(interpreter::check(&original).unwrap().is_empty());
-    interpreter::capture(original).unwrap();
+    assert!(submilli_engine::check(&original).unwrap().is_empty());
+    submilli_engine::capture(original).unwrap();
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn rules_keep_diagnostics_collected_before_a_fatal_failure() {
     let first = ast.functions[0].body;
     ast.try_stmt_mut(first).unwrap().kind = TypedStmtKind::Block(Vec::new());
     ast.functions[1].body = StmtId(u32::MAX);
-    let error = interpreter::check(&ast).unwrap_err();
+    let error = submilli_engine::check(&ast).unwrap_err();
     assert_invalid_id(error.fatal.unwrap());
     assert!(
         error
@@ -80,8 +80,8 @@ fn desugaring_rejects_an_invalid_loop_body() {
         }
     }
     assert!(replaced);
-    assert_invalid_id(interpreter::desugar(ast, FileId(0)).unwrap_err());
-    interpreter::desugar(original, FileId(0)).unwrap();
+    assert_invalid_id(submilli_engine::desugar(ast, FileId(0)).unwrap_err());
+    submilli_engine::desugar(original, FileId(0)).unwrap();
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn indirect_arena_reads_validate_ids_even_when_metadata_exists() {
     let mut ast = typed(SOURCE);
     let id = ExprId(u32::MAX);
     ast.runtime_source_types
-        .insert(id, interpreter::Type::Number);
+        .insert(id, submilli_engine::Type::Number);
     assert!(ast.source_type(id).is_err());
     assert!(ast.is_effect_free(id).is_err());
     let literal = ast
@@ -100,16 +100,17 @@ fn indirect_arena_reads_validate_ids_even_when_metadata_exists() {
     assert!(ast.is_effect_free(literal).unwrap());
     assert_eq!(
         ast.source_type(literal).unwrap(),
-        &interpreter::Type::Number
+        &submilli_engine::Type::Number
     );
 }
 
 #[test]
 fn codegen_returns_failure_instead_of_partial_wasm() {
     let original =
-        interpreter::desugar(interpreter::capture(typed(SOURCE)).unwrap(), FileId(0)).unwrap();
+        submilli_engine::desugar(submilli_engine::capture(typed(SOURCE)).unwrap(), FileId(0))
+            .unwrap();
     let (prelude, host, internal) =
-        interpreter::runtime::prelude::cached_runtime_package_declarations();
+        submilli_engine::runtime::prelude::cached_runtime_package_declarations();
     let dependencies: Vec<_> = prelude.iter().chain(host).chain(internal).collect();
     for corrupt_expression in [false, true] {
         let mut ast = original.clone();
@@ -119,7 +120,7 @@ fn codegen_returns_failure_instead_of_partial_wasm() {
             ast.functions[0].body = StmtId(u32::MAX);
         }
         let failure =
-            interpreter::codegen::codegen(SOURCE, "typed.ts", FileId(0), &ast, &dependencies)
+            submilli_engine::codegen::codegen(SOURCE, "typed.ts", FileId(0), &ast, &dependencies)
                 .unwrap_err();
         assert!(matches!(
             failure,
@@ -131,7 +132,7 @@ fn codegen_returns_failure_instead_of_partial_wasm() {
         assert_invalid_id(failure);
     }
     assert!(
-        !interpreter::codegen::codegen(SOURCE, "typed.ts", FileId(0), &original, &dependencies)
+        !submilli_engine::codegen::codegen(SOURCE, "typed.ts", FileId(0), &original, &dependencies)
             .unwrap()
             .is_empty()
     );
@@ -145,13 +146,13 @@ fn invalid_postfix_kind_is_a_typed_failure() {
     let mut replaced = false;
     for id in ast.expr_ids().unwrap() {
         if let TypedExprKind::PostfixUnary { op, .. } = &mut ast.try_expr_mut(id).unwrap().kind {
-            *op = interpreter::PostfixOp::NonNullAssert;
+            *op = submilli_engine::PostfixOp::NonNullAssert;
             replaced = true;
         }
     }
     assert!(replaced);
     assert!(matches!(
-        interpreter::desugar(ast, FileId(0)).unwrap_err(),
+        submilli_engine::desugar(ast, FileId(0)).unwrap_err(),
         CompilerFailure::Internal {
             stage: CompilerStage::Infer,
             ..
@@ -161,7 +162,7 @@ fn invalid_postfix_kind_is_a_typed_failure() {
 
 #[test]
 fn capability_failure_retains_prior_warnings_and_does_not_return_a_filter() {
-    use interpreter::{
+    use submilli_engine::{
         DocCapability, DocCapabilityBinding, DocCapabilityBindingKind, Param, Span, Type,
     };
     let span = Span::at(FileId(0));
@@ -184,8 +185,9 @@ fn capability_failure_retains_prior_warnings_and_does_not_return_a_filter() {
     };
     let params = [Param::new("value", Type::Number)];
     let ast = typed(SOURCE);
-    let error = interpreter::derive_call_site_capability(&tag, &params, &ast, &[ExprId(u32::MAX)])
-        .unwrap_err();
+    let error =
+        submilli_engine::derive_call_site_capability(&tag, &params, &ast, &[ExprId(u32::MAX)])
+            .unwrap_err();
     assert_invalid_id(error.fatal.unwrap());
     assert_eq!(error.diagnostics.len(), 1);
     assert!(error.diagnostics[0].message.contains("unknown parameter"));
@@ -195,7 +197,7 @@ fn capability_failure_retains_prior_warnings_and_does_not_return_a_filter() {
         .find(|id| matches!(ast.try_expr(*id).unwrap().kind, TypedExprKind::Number(_)))
         .unwrap();
     assert!(
-        interpreter::derive_call_site_capability(&tag, &params, &ast, &[value])
+        submilli_engine::derive_call_site_capability(&tag, &params, &ast, &[value])
             .unwrap()
             .filter
             .is_some()
@@ -250,15 +252,15 @@ fn desugaring_validates_rewritten_loop_references() {
                 }
             }
             assert!(replaced);
-            assert_invalid_id(interpreter::desugar(ast, FileId(0)).unwrap_err());
+            assert_invalid_id(submilli_engine::desugar(ast, FileId(0)).unwrap_err());
         }
-        interpreter::desugar(original, FileId(0)).unwrap();
+        submilli_engine::desugar(original, FileId(0)).unwrap();
     }
 }
 
 #[test]
 fn desugaring_validates_postfix_operands() {
-    use interpreter::PostfixTarget;
+    use submilli_engine::PostfixTarget;
     for source in [
         "function main(): void { const obj = { value: 1 }; obj.value++; }",
         "function main(): void { const arr = [1]; arr[0]++; }",
@@ -289,15 +291,15 @@ fn desugaring_validates_postfix_operands() {
                 }
             }
             assert!(replaced);
-            assert_invalid_id(interpreter::desugar(ast, FileId(0)).unwrap_err());
+            assert_invalid_id(submilli_engine::desugar(ast, FileId(0)).unwrap_err());
         }
-        interpreter::desugar(original, FileId(0)).unwrap();
+        submilli_engine::desugar(original, FileId(0)).unwrap();
     }
 }
 
 #[test]
 fn capability_failure_retains_deferred_http_warning() {
-    use interpreter::{
+    use submilli_engine::{
         DocCapability, DocCapabilityBinding, DocCapabilityBindingKind, Ident, Param, Span, Type,
         TypedExpr,
     };
@@ -340,9 +342,13 @@ fn capability_failure_retains_deferred_http_warning() {
         Param::new("url", Type::String),
         Param::new("other", Type::String),
     ];
-    let error =
-        interpreter::derive_call_site_capability(&tag, &params, &ast, &[dynamic, ExprId(u32::MAX)])
-            .unwrap_err();
+    let error = submilli_engine::derive_call_site_capability(
+        &tag,
+        &params,
+        &ast,
+        &[dynamic, ExprId(u32::MAX)],
+    )
+    .unwrap_err();
     assert_invalid_id(error.fatal.unwrap());
     assert_eq!(error.diagnostics.len(), 1);
     assert!(
@@ -351,6 +357,7 @@ fn capability_failure_retains_deferred_http_warning() {
             .contains("cannot statically resolve the host")
     );
     let healthy =
-        interpreter::derive_call_site_capability(&tag, &params, &ast, &[dynamic, dynamic]).unwrap();
+        submilli_engine::derive_call_site_capability(&tag, &params, &ast, &[dynamic, dynamic])
+            .unwrap();
     assert_eq!(healthy.warnings.last(), error.diagnostics.first());
 }

@@ -12,11 +12,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use interpreter::stdlib::git::GitConfig;
-use interpreter::stdlib::http::transport::{
+use submilli_engine::stdlib::git::GitConfig;
+use submilli_engine::stdlib::http::transport::{
     DownloadMeta, HttpClient, HttpError, HttpRequest, HttpResponse,
 };
-use interpreter::{
+use submilli_engine::{
     compile_script, dispatch_main_async,
     runtime::{RuntimeConfig, StoreData, Vfs, install_runtime_async, install_tenant_limits},
 };
@@ -247,7 +247,7 @@ fn measure(
     seed: impl FnOnce(&Path),
     configure: impl FnOnce(&mut StoreData),
 ) -> Result<Measured, String> {
-    let compiled = compile_script(src, "git_memory.ts", interpreter::FileId(0), &[], &[])
+    let compiled = compile_script(src, "git_memory.ts", submilli_engine::FileId(0), &[], &[])
         .unwrap_or_else(|error| panic!("{error:#?}"));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -470,7 +470,7 @@ fn measure_operation(operation: &Operation, shape: Shape, cap: u64) -> Result<Me
 
 /// Prints each operation's peak native memory against repository size.
 /// Calibration for the per-operation estimates: run with
-/// `SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p interpreter --test git_memory -- --ignored --nocapture`.
+/// `SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p submilli-engine --test git_memory -- --ignored --nocapture`.
 #[test]
 #[ignore = "calibration report; slow"]
 fn report_peak_memory_per_operation() {
@@ -524,7 +524,7 @@ fn report_peak_memory_per_operation() {
 }
 
 /// The memory limit a run gets unless the blueprint sets one.
-const DEFAULT_CAP: u64 = interpreter::runtime::limits::DEFAULT_MAX_STORE_BYTES;
+const DEFAULT_CAP: u64 = submilli_engine::runtime::limits::DEFAULT_MAX_STORE_BYTES;
 
 /// A repository at `dir` holding `files`, each `(path, bytes)`, committed on
 /// `main`.

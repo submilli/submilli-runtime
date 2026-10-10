@@ -203,7 +203,7 @@ pub(crate) fn authorize_capability(
     // existing, and the default check allows everything.
     if caller == crate::mangle::USER_PACKAGE
         && let Some(reason) =
-            crate::stdlib::capabilities::find(capability).and_then(|entry| entry.main_denial)
+            crate::stdlib::capabilities::find_any(capability).and_then(|entry| entry.main_denial)
     {
         audit_denial_at(
             security_check,
@@ -556,6 +556,38 @@ pub(crate) fn filters_candidate(checked: wasmtime::Result<()>) -> wasmtime::Resu
     }
 }
 
+/// The candidates of a listing the caller may use. `gate` runs the capability
+/// check one candidate's use would; a policy denial leaves the candidate out and
+/// marks the recorded decision filtered, and any other refusal propagates, the
+/// [`filters_candidate`] rule.
+pub(crate) fn permitted_candidates<T>(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    candidates: Vec<T>,
+    name_of: impl Fn(&T) -> &str,
+    mut gate: impl FnMut(&mut wasmtime::Caller<'_, StoreData>, &str) -> wasmtime::Result<()>,
+) -> wasmtime::Result<Vec<T>> {
+    let mut permitted = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if filters_candidate(gate(caller, name_of(&candidate)))? {
+            permitted.push(candidate);
+        } else {
+            mark_filtered(&*caller);
+        }
+    }
+    Ok(permitted)
+}
+
+/// At most the first 200 bytes of a program-supplied value, for an error that
+/// echoes it: a refused value may be refused for its size.
+pub(crate) fn truncated(value: &str) -> std::borrow::Cow<'_, str> {
+    const MAX_ECHO_BYTES: usize = 200;
+    if value.len() <= MAX_ECHO_BYTES {
+        return std::borrow::Cow::Borrowed(value);
+    }
+    let end = value.floor_char_boundary(MAX_ECHO_BYTES);
+    std::borrow::Cow::Owned(format!("{}…", value.get(..end).unwrap_or_default()))
+}
+
 /// Reduce an operator-authored `description` to inert single-line data.
 ///
 /// This is sanitization, not merely a bound. The text flows verbatim into a
@@ -584,6 +616,20 @@ pub(crate) fn preflight_models(
     capability: &str,
     count_field: &str,
 ) -> wasmtime::Result<()> {
+    preflight_listing(
+        caller,
+        capability,
+        &serde_json::json!({ "model": "", count_field: 0 }),
+    )
+}
+
+/// [`preflight_models`] for any listing filtered per candidate: `context` is what
+/// an invariant denial is audited with, the context of an empty candidate.
+pub(crate) fn preflight_listing(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    capability: &str,
+    context: &serde_json::Value,
+) -> wasmtime::Result<()> {
     fuel::charge_host_fuel(&mut *caller, fuel::GATE)?;
     running_package(caller).map(|_| ()).map_err(|error| {
         if let PrincipalError::Unknown(ref unknown) = error {
@@ -591,7 +637,7 @@ pub(crate) fn preflight_models(
                 &*caller,
                 unknown.label,
                 capability,
-                &serde_json::json!({ "model": "", count_field: 0 }),
+                context,
                 "invariant",
                 unknown.reason,
             );

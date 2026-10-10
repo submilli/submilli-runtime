@@ -26,10 +26,10 @@
 
 use std::path::{Path, PathBuf};
 
-use interpreter::runtime::{
+use submilli_engine::runtime::{
     RuntimeConfig, StoreData, Vfs, install_runtime_async, install_tenant_limits,
 };
-use interpreter::{FileId, compile_script, dispatch_main_async};
+use submilli_engine::{FileId, compile_script, dispatch_main_async};
 use wasmtime::{Linker, Module};
 
 const ESCAPE_DIAGNOSTIC: &str = "path escapes the VFS root";

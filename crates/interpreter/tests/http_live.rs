@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use httpmock::Method::{HEAD, PATCH};
 use httpmock::prelude::*;
-use interpreter::{
+use submilli_engine::{
     BacktraceMode, Diagnostic, RuntimeConfig, Sources, compile_script, diagnostics,
     render_backtrace,
 };
@@ -49,7 +49,7 @@ fn run_one(path: &Path, base: &str) -> Result<(), String> {
     let filename = rel(path);
     let src = raw.replace("{{BASE}}", base);
 
-    let compiled = compile_script(&src, &filename, interpreter::FileId(0), &[], &[])
+    let compiled = compile_script(&src, &filename, submilli_engine::FileId(0), &[], &[])
         .map_err(|diags| format!("compile failed:\n{}", render_diags(&diags, &filename, &src)))?;
 
     // `run` is async (and this fixture hits a real server via reqwest, so a tokio
