@@ -1,0 +1,20 @@
+---
+source: crates/submilli-engine/tests/diagnostic_snapshots.rs
+expression: render_all(source)
+---
+warning: `@param wrong` does not match any parameter of this function
+ --> test.subm:3:11
+  |
+2 |  * Sum two numbers.
+3 |  * @param wrong The first operand.
+  |           ^^^^^
+4 |  * @param b The second operand.
+---
+warning: parameter `a` is undocumented (missing `@param a`)
+ --> test.subm:7:14
+  |
+6 |  */
+7 | function add(a: number, b: number): number { return a + b; }
+  |              ^
+8 | function main(): void { }
+---

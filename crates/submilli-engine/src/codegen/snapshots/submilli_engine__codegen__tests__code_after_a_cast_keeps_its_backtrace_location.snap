@@ -1,0 +1,15 @@
+---
+source: crates/submilli-engine/src/codegen/mod.rs
+expression: dump
+---
+error: Error: x
+  at g (script.subm:2:53)  [thrown here]
+1 | interface P { a: number }
+2 | function g(n: number, p: P): number { assert(false, "x"); return n; }
+  |                                                     ^
+3 | function main(): void {
+  at main (script.subm:4:29)  [entry]
+3 | function main(): void {
+4 |   const r = g(1, JSON.parse("{\"a\": 1}") as P);
+  |                             ^
+5 | }

@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "crates/conformance",
-    "crates/interpreter",
+    "crates/submilli-engine",
     "crates/submilli",
     "crates/submilli-build",
     "crates/submilli-blueprint",

@@ -1,5 +1,0 @@
----
-source: crates/interpreter/src/typechecker/infer/type_diff.rs
-expression: out.unwrap()
----
-extra field(s): `y`

@@ -174,10 +174,6 @@ impl Blueprint {
         self.default_action.is_some() || !self.permissions.is_empty()
     }
 
-    /// Resolve a capability `check()` for `caller` against this blueprint's
-    /// permission rules. Pure — no parsing happens here (filter ASTs are parsed
-    /// at registration), so it is cheap to call per check. The fall-through is
-    /// `default:` when set, else `deny`.
     /// Resolve a permission and its zero-based index within the caller's rules.
     /// `None` identifies the blueprint's fall-through default.
     pub fn resolve_permission_with_rule(
@@ -218,6 +214,10 @@ impl Blueprint {
         )
     }
 
+    /// Resolve a capability `check()` for `caller` against this blueprint's
+    /// permission rules. Pure — no parsing happens here (filter ASTs are parsed
+    /// at registration), so it is cheap to call per check. The fall-through is
+    /// `default:` when set, else `deny`.
     pub fn resolve_permission(
         &self,
         caller: &str,

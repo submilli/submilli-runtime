@@ -1,0 +1,6 @@
+---
+source: crates/submilli-engine/src/typechecker/infer/type_diff.rs
+expression: out.unwrap()
+---
+field type mismatches:
+  `name`: expected `string`, got `number`

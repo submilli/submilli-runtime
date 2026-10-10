@@ -1,0 +1,12 @@
+---
+source: crates/submilli-engine/tests/diagnostic_snapshots.rs
+expression: render_all(source)
+---
+warning: `@returns` on a `void`-returning function
+ --> test.subm:3:4
+  |
+2 |  * Does nothing.
+3 |  * @returns Nothing.
+  |    ^^^^^^^^
+4 |  */
+---

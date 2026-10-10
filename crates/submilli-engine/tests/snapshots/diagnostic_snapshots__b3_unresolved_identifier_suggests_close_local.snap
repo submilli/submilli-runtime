@@ -1,0 +1,14 @@
+---
+source: crates/submilli-engine/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  let pi: number = 3;\\n  let q = pi2;\")"
+---
+error: unresolved identifier `pi2`
+ --> test.subm:3:11
+  |
+2 |   let pi: number = 3;
+3 |   let q = pi2;
+  |           ^^^
+4 | }
+  |
+help: did you mean `pi`?
+---

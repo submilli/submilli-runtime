@@ -1,0 +1,12 @@
+---
+source: crates/submilli-engine/tests/diagnostic_snapshots.rs
+expression: render_all(source)
+---
+warning: `@param wrong` on a property — properties have no parameters
+ --> test.subm:4:6
+  |
+3 |    * The boxed value.
+4 |    * @param wrong This shouldn't be here.
+  |      ^^^^^^
+5 |    */
+---

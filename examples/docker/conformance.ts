@@ -2,7 +2,7 @@
 // against a running container by scripts/docker-conformance.sh.
 //
 // It deliberately does *not* re-prove language semantics. The fixture suite in
-// crates/interpreter/tests/fixtures/ already does that, and those results cannot
+// crates/submilli-engine/tests/fixtures/ already does that, and those results cannot
 // vary by environment: same WasmGC module, same Rust host functions, same answer
 // on a laptop and in distroless. What can vary is the boundary where the runtime
 // reaches out to the operating system — TLS trust, DNS, the timezone database,

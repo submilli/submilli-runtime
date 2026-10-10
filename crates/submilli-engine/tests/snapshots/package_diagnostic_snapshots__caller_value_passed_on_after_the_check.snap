@@ -1,0 +1,30 @@
+---
+source: crates/submilli-engine/tests/package_diagnostic_snapshots.rs
+expression: "render_package(\"\nfunction deliver(input: Input): void {}\n\n/**\n * Sends the message.\n * @param input Message and where to send it.\n * @capability test.com/send { channelId: string }\n */\nexport function send(input: Input): void {\n  const channelId = input.channelId;\n  check(\\\"test.com/send\\\", { channelId: channelId });\n  deliver(input);\n  deliver(input);\n}\n\")"
+---
+warning: caller-supplied `input` is passed to `deliver` in `send`, which calls `check()` (and 1 more)
+  --> lib.ts:23:11
+   |
+22 |   check("test.com/send", { channelId: channelId });
+23 |   deliver(input);
+   |           ^^^^^
+24 |   deliver(input);
+   |
+help: Read what the callee needs into `const`s and pass those; a value the caller supplies can change after `check()` approves it
+   |
+note: `input` is a parameter of `send`
+  --> lib.ts:20:22
+   |
+19 |  */
+20 | export function send(input: Input): void {
+   |                      ^^^^^
+21 |   const channelId = input.channelId;
+   |
+note: `input.channelId` reaches `check()` here
+  --> lib.ts:22:26
+   |
+21 |   const channelId = input.channelId;
+22 |   check("test.com/send", { channelId: channelId });
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^
+23 |   deliver(input);
+---

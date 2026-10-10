@@ -1,0 +1,7 @@
+---
+source: crates/submilli-engine/src/typechecker/infer/format_definition.rs
+expression: out
+---
+interface Box {
+  label?: string;
+}

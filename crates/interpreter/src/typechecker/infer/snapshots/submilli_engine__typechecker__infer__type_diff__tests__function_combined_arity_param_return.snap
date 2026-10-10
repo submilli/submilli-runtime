@@ -1,7 +1,0 @@
----
-source: crates/interpreter/src/typechecker/infer/type_diff.rs
-expression: out.unwrap()
----
-arity: expected at most 2 param(s), got 3
-param 1: expected `number`, got `string`
-return: expected `boolean`, got `void`

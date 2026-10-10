@@ -1,0 +1,14 @@
+---
+source: crates/submilli-engine/src/codegen/mod.rs
+expression: dump
+---
+error: Error: x
+  at inner (script.subm:1:40)  [thrown here]
+1 | function inner(): void { assert(false, "x"); }
+  |                                        ^
+2 | function main(): void { inner(); }
+  at main (script.subm:2:25)  [entry]
+1 | function inner(): void { assert(false, "x"); }
+2 | function main(): void { inner(); }
+  |                         ^
+3 |

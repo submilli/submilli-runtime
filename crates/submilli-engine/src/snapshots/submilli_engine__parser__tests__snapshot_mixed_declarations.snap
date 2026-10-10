@@ -1,0 +1,220 @@
+---
+source: crates/submilli-engine/src/parser.rs
+expression: ast
+---
+Ast {
+    exprs: [
+        Expr {
+            kind: Number(
+                1.0,
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 8,
+                end: 9,
+            },
+        },
+        Expr {
+            kind: String(
+                "hi",
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 29,
+                end: 33,
+            },
+        },
+        Expr {
+            kind: Number(
+                1.0,
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 51,
+                end: 52,
+            },
+        },
+        Expr {
+            kind: Number(
+                2.0,
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 55,
+                end: 56,
+            },
+        },
+        Expr {
+            kind: Binary {
+                op: Add,
+                lhs: ExprId(
+                    2,
+                ),
+                rhs: ExprId(
+                    3,
+                ),
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 51,
+                end: 56,
+            },
+        },
+    ],
+    stmts: [
+        Stmt {
+            kind: Let {
+                name: Ident {
+                    name: "x",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 4,
+                        end: 5,
+                    },
+                },
+                ty: None,
+                value: ExprId(
+                    0,
+                ),
+                doc: None,
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 0,
+                end: 10,
+            },
+        },
+        Stmt {
+            kind: Const {
+                name: Ident {
+                    name: "y",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 17,
+                        end: 18,
+                    },
+                },
+                ty: Some(
+                    TypeAnnotation {
+                        kind: Name {
+                            name: Ident {
+                                name: "string",
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 20,
+                                    end: 26,
+                                },
+                            },
+                            args: [],
+                        },
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 20,
+                            end: 26,
+                        },
+                    },
+                ),
+                value: ExprId(
+                    1,
+                ),
+                doc: None,
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 11,
+                end: 34,
+            },
+        },
+        Stmt {
+            kind: Let {
+                name: Ident {
+                    name: "z",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 39,
+                        end: 40,
+                    },
+                },
+                ty: Some(
+                    TypeAnnotation {
+                        kind: Name {
+                            name: Ident {
+                                name: "number",
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 42,
+                                    end: 48,
+                                },
+                            },
+                            args: [],
+                        },
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 42,
+                            end: 48,
+                        },
+                    },
+                ),
+                value: ExprId(
+                    4,
+                ),
+                doc: None,
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 35,
+                end: 57,
+            },
+        },
+    ],
+    top_level: [
+        StmtId(
+            0,
+        ),
+        StmtId(
+            1,
+        ),
+        StmtId(
+            2,
+        ),
+    ],
+    pattern_origins: {},
+    tuple_pattern_sources: {},
+    parameter_bindings: {},
+    for_of_pattern_bindings: {},
+    for_pattern_init_bindings: {},
+    exported_decls: [],
+    implicit_initializers: {},
+    synthetic_undefined: {},
+    binding_defaults: {},
+}

@@ -22,7 +22,7 @@ serde_json = { workspace = true }
 regex = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
-submilli-engine = { version = "0.3.0", path = "../interpreter", optional = true }
+submilli-engine = { version = "0.3.0", path = "../submilli-engine", optional = true }
 url = { workspace = true, optional = true }
 
 [features]
@@ -30,5 +30,5 @@ url = { workspace = true, optional = true }
 engine = ["dep:submilli-engine", "dep:url"]
 
 [dev-dependencies]
-submilli-engine = { path = "../interpreter" }
+submilli-engine = { path = "../submilli-engine" }
 tokio = { workspace = true, features = ["rt", "macros"] }

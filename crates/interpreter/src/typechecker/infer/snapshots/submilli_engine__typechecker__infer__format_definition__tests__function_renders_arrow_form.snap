@@ -1,5 +1,0 @@
----
-source: crates/interpreter/src/typechecker/infer/format_definition.rs
-expression: out
----
-(arg0: number, arg1: string) => boolean

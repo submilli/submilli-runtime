@@ -1,0 +1,10 @@
+---
+source: crates/submilli-engine/src/diagnostics.rs
+expression: "render(&diag, \"script.subm\", source, &line_index)"
+---
+error: boom
+ --> script.subm:1:1
+  |
+1 | first
+  | ^^^^^
+2 | second

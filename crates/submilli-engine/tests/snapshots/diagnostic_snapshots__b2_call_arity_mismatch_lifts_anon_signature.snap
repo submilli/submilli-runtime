@@ -1,0 +1,14 @@
+---
+source: crates/submilli-engine/tests/diagnostic_snapshots.rs
+expression: render_all(source)
+---
+error: expected 2 argument(s), got 1
+ --> test.subm:3:3
+  |
+2 | function main(): void {
+3 |   add(1);
+  |   ^^^^^^
+4 | }
+  |
+help: function add(a: number, b: number): number
+---

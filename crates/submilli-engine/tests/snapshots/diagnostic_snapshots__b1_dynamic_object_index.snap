@@ -1,0 +1,15 @@
+---
+source: crates/submilli-engine/tests/diagnostic_snapshots.rs
+assertion_line: 74
+expression: "render_inside_main(\"  let o = { a: 1 };\\n  let k = \\\"a\\\";\\n  let r = o[k];\")"
+---
+error: objects can only be indexed by a string literal or a finite union of their keys
+ --> test.subm:4:13
+  |
+3 |   let k = "a";
+4 |   let r = o[k];
+  |             ^
+5 | }
+  |
+help: add a `Record<string, V>` annotation for arbitrary string keys
+---

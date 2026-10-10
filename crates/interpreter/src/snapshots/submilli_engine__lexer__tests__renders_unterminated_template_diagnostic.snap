@@ -1,9 +1,0 @@
----
-source: crates/interpreter/src/lexer.rs
-expression: rendered
----
-error: unterminated template literal
- --> script.subm:1:9
-  |
-1 | let s = `hello
-  |         ^^^^^^

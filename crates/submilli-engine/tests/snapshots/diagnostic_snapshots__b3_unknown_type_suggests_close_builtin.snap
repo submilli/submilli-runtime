@@ -1,0 +1,14 @@
+---
+source: crates/submilli-engine/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  let n: numbre = 1;\")"
+---
+error: unknown type `numbre`
+ --> test.subm:2:10
+  |
+1 | function main(): void {
+2 |   let n: numbre = 1;
+  |          ^^^^^^
+3 | }
+  |
+help: did you mean `number`?
+---

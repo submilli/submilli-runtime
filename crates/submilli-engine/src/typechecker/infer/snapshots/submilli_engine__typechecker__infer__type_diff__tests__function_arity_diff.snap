@@ -1,0 +1,5 @@
+---
+source: crates/submilli-engine/src/typechecker/infer/type_diff.rs
+expression: out.unwrap()
+---
+arity: expected at most 1 param(s), got 2

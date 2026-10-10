@@ -1,0 +1,14 @@
+---
+source: crates/submilli-engine/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  let s = \\\"hi\\\\q\\\";\")"
+---
+error: unknown escape sequence `\q`
+ --> test.subm:2:14
+  |
+1 | function main(): void {
+2 |   let s = "hi\q";
+  |              ^^
+3 | }
+  |
+help: valid escapes: \", \', \\, \/, \n, \t, \r, \b, \f, \v, \0, \u{HHHH}
+---

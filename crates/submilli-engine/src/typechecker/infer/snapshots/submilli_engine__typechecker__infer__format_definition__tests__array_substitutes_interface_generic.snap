@@ -1,0 +1,8 @@
+---
+source: crates/submilli-engine/src/typechecker/infer/format_definition.rs
+expression: out
+---
+interface Array<number> {
+  map<U>(fn: (arg0: number) => U): U[];
+  toString(): string;
+}

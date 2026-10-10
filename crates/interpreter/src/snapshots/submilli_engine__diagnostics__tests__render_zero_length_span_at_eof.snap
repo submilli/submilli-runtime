@@ -1,9 +1,0 @@
----
-source: crates/interpreter/src/diagnostics.rs
-expression: "render(&diag, \"script.subm\", source, &line_index)"
----
-error: expected `;`
- --> script.subm:1:6
-  |
-1 | hello
-  |      ^

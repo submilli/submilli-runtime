@@ -1,0 +1,225 @@
+---
+source: crates/submilli-engine/src/parser.rs
+expression: ast
+---
+Ast {
+    exprs: [
+        Expr {
+            kind: Number(
+                42.0,
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 0,
+                end: 2,
+            },
+        },
+        Expr {
+            kind: String(
+                "hi",
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 4,
+                end: 8,
+            },
+        },
+        Expr {
+            kind: Boolean(
+                true,
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 10,
+                end: 14,
+            },
+        },
+        Expr {
+            kind: Null,
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 16,
+                end: 20,
+            },
+        },
+        Expr {
+            kind: Identifier(
+                Ident {
+                    name: "x",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 22,
+                        end: 23,
+                    },
+                },
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 22,
+                end: 23,
+            },
+        },
+        Expr {
+            kind: Identifier(
+                Ident {
+                    name: "x",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 26,
+                        end: 27,
+                    },
+                },
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 26,
+                end: 27,
+            },
+        },
+        Expr {
+            kind: Paren(
+                ExprId(
+                    5,
+                ),
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 25,
+                end: 28,
+            },
+        },
+    ],
+    stmts: [
+        Stmt {
+            kind: Expr(
+                ExprId(
+                    0,
+                ),
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 0,
+                end: 3,
+            },
+        },
+        Stmt {
+            kind: Expr(
+                ExprId(
+                    1,
+                ),
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 4,
+                end: 9,
+            },
+        },
+        Stmt {
+            kind: Expr(
+                ExprId(
+                    2,
+                ),
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 10,
+                end: 15,
+            },
+        },
+        Stmt {
+            kind: Expr(
+                ExprId(
+                    3,
+                ),
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 16,
+                end: 21,
+            },
+        },
+        Stmt {
+            kind: Expr(
+                ExprId(
+                    4,
+                ),
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 22,
+                end: 24,
+            },
+        },
+        Stmt {
+            kind: Expr(
+                ExprId(
+                    6,
+                ),
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 25,
+                end: 29,
+            },
+        },
+    ],
+    top_level: [
+        StmtId(
+            0,
+        ),
+        StmtId(
+            1,
+        ),
+        StmtId(
+            2,
+        ),
+        StmtId(
+            3,
+        ),
+        StmtId(
+            4,
+        ),
+        StmtId(
+            5,
+        ),
+    ],
+    pattern_origins: {},
+    tuple_pattern_sources: {},
+    parameter_bindings: {},
+    for_of_pattern_bindings: {},
+    for_pattern_init_bindings: {},
+    exported_decls: [],
+    implicit_initializers: {},
+    synthetic_undefined: {},
+    binding_defaults: {},
+}

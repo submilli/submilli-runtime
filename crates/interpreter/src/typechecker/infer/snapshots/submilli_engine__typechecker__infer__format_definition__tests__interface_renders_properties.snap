@@ -1,8 +1,0 @@
----
-source: crates/interpreter/src/typechecker/infer/format_definition.rs
-expression: out
----
-interface Item {
-  key: number;
-  tag: string;
-}

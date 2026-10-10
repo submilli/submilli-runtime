@@ -84,7 +84,7 @@ Compile errors should include source context, a caret, relevant type or function
 signatures, and an actionable fix. Thread source spans through every compiler phase.
 
 When adding or removing a gated capability, update
-[the capability catalog](crates/interpreter/src/stdlib/capabilities.rs) in the same
+[the capability catalog](crates/submilli-engine/src/stdlib/capabilities.rs) in the same
 change, including its summary, filter fields, and example filter. Blueprint
 scaffolding reads this catalog.
 
@@ -154,7 +154,7 @@ violations. Apply these exceptions when following review and no-panic workflows.
 Fuel bounds the CPU a program spends, wherever it spends it. Wasm instructions
 burn fuel by themselves. A host function (a standard-library or prelude function
 implemented in Rust) must charge for its own work from the same budget, through
-`crates/interpreter/src/runtime/fuel.rs`. A host function that charges nothing
+`crates/submilli-engine/src/runtime/fuel.rs`. A host function that charges nothing
 is a free loop for any program.
 
 **Host work is discounted.** One fuel is about 2.5 ns, the cost of one
@@ -297,7 +297,7 @@ final release candidate before publication. Enable the flag during development
 only for focused verification of changes to these tests or their selection,
 and for the Git standard-library checks below.
 
-Whenever modifying the Git standard library (`crates/interpreter/src/stdlib/git/`),
+Whenever modifying the Git standard library (`crates/submilli-engine/src/stdlib/git/`),
 run the Git memory-limit tests in addition to other affected checks:
 
 ```sh

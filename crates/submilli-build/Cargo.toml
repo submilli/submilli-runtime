@@ -10,7 +10,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-interpreter = { package = "submilli-engine", path = "../interpreter" }
+interpreter = { package = "submilli-engine", path = "../submilli-engine" }
 submilli-blueprint = { path = "../submilli-blueprint" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

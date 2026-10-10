@@ -1,0 +1,21 @@
+---
+source: crates/submilli-engine/tests/diagnostic_snapshots.rs
+expression: "render_all(\"const k: number = 1;\\nfunction main(): void { k = 2; }\\n\")"
+---
+error: cannot assign to const binding `k`
+ --> test.subm:2:25
+  |
+1 | const k: number = 1;
+2 | function main(): void { k = 2; }
+  |                         ^
+3 | 
+  |
+help: declare with `let` if reassignment is required: `let k = …;`
+  |
+note: declared as `const` here
+ --> test.subm:1:7
+  |
+1 | const k: number = 1;
+  |       ^
+2 | function main(): void { k = 2; }
+---

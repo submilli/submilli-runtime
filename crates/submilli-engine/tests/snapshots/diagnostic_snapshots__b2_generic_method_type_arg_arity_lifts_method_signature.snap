@@ -1,0 +1,19 @@
+---
+source: crates/submilli-engine/tests/diagnostic_snapshots.rs
+expression: "render_inside_main(\"  let xs: number[] = [1, 2, 3];\\n  let ys = xs.map<string, number>((x: number) => x.toString());\")"
+---
+error: method `map` expects 1 type argument(s), got 2
+ --> test.subm:3:12
+  |
+2 |   let xs: number[] = [1, 2, 3];
+3 |   let ys = xs.map<string, number>((x: number) => x.toString());
+  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+4 | }
+  |
+help: /**
+ * Returns a new array produced by applying `callback` to each element.
+ * @param callback Function called with `(value, index, array)` for each element.
+ * @returns A new array of length equal to this array.
+ */
+number[].map<U>(callback: (arg0: number, arg1: number, arg2: number[]) => U): U[]
+---
