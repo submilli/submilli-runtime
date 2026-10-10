@@ -4,9 +4,9 @@
 //! field name the engine's capability catalog offers can be written in a
 //! filter.
 
-use interpreter::capability_derivation::filter_string_literal;
-use interpreter::stdlib::capabilities;
-use interpreter::{OptionalPackage, Stdlib};
+use submilli_engine::capability_derivation::filter_string_literal;
+use submilli_engine::stdlib::capabilities;
+use submilli_engine::{OptionalPackage, Stdlib};
 use submilli_policy::filter_syntax::{is_field_name, parse, quote_literal};
 
 const CORPUS: &[&str] = &[

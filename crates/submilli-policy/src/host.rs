@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use interpreter::runtime::{
+use submilli_engine::runtime::{
     AuthProxy, AuthProxyError, CheckOutcome, DecisionAction, DecisionCause, DecisionExplanation,
     FailureReasonRecord, FailureRecord, HttpRequest, NearMissRecord, RuleCitation, SecretProvider,
     SecurityCheck,
 };
-use interpreter::stdlib::http::HttpTransportPolicy;
+use submilli_engine::stdlib::http::HttpTransportPolicy;
 use url::Url;
 
 use crate::{
@@ -231,7 +231,7 @@ fn filesystem_policy_context<'a>(
             .ok_or_else(|| {
                 format!("invalid {capability} context: {field} must be a VFS path string")
             })?;
-        let normalized = interpreter::runtime::fs::guest_normalize(cwd, path)
+        let normalized = submilli_engine::runtime::fs::guest_normalize(cwd, path)
             .map_err(|error| format!("invalid {capability} {field}: {error}"))?;
         if normalized != path {
             normalized_context.to_mut()[field] = serde_json::Value::String(normalized);
@@ -448,7 +448,7 @@ mod tests {
 
     #[test]
     fn normalized_policy_paths_are_vfs_path_fields_in_the_catalog() {
-        use interpreter::stdlib::capabilities::{FieldNormalization, catalog};
+        use submilli_engine::stdlib::capabilities::{FieldNormalization, catalog};
         for capability in catalog().iter().flat_map(|group| group.capabilities) {
             for field in filesystem_path_fields(capability.name) {
                 let normalization = capability

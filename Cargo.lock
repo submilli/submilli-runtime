@@ -998,7 +998,7 @@ dependencies = [
 name = "conformance"
 version = "0.3.0"
 dependencies = [
- "interpreter",
+ "submilli-engine",
  "submilli-wasm",
  "tokio",
 ]
@@ -3240,57 +3240,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "interpreter"
-version = "0.3.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "cap-fs-ext",
- "cap-primitives",
- "cap-std",
- "filetime",
- "flate2",
- "futures",
- "getrandom 0.2.17",
- "gimli 0.33.0",
- "gix",
- "globset",
- "hmac 0.12.1",
- "httpmock",
- "ignore",
- "insta",
- "ipnet",
- "jiff",
- "jiff-tzdb",
- "libc",
- "num-bigint",
- "num-traits",
- "percent-encoding",
- "pollster",
- "regex",
- "regex-syntax",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "similar",
- "submilli-wasm",
- "tempfile",
- "tokio",
- "tokio-rustls",
- "unicode-ident",
- "unicode-normalization",
- "unicode-width",
- "ureq",
- "url",
- "uuid",
- "wasm-encoder 0.248.0",
- "wasmparser 0.248.0",
- "wast",
- "zstd",
-]
-
-[[package]]
 name = "io-extras"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5436,7 +5385,6 @@ dependencies = [
  "futures",
  "getrandom 0.2.17",
  "hmac 0.12.1",
- "interpreter",
  "ipnet",
  "libc",
  "notify-debouncer-mini",
@@ -5450,6 +5398,7 @@ dependencies = [
  "sha2 0.10.9",
  "submilli-blueprint",
  "submilli-build",
+ "submilli-engine",
  "submilli-server",
  "submilli-shared",
  "submilli-wasm",
@@ -5482,13 +5431,64 @@ dependencies = [
 name = "submilli-build"
 version = "0.3.0"
 dependencies = [
- "interpreter",
  "serde",
  "serde_json",
  "serde_yml",
  "submilli-blueprint",
+ "submilli-engine",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "submilli-engine"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "cap-fs-ext",
+ "cap-primitives",
+ "cap-std",
+ "filetime",
+ "flate2",
+ "futures",
+ "getrandom 0.2.17",
+ "gimli 0.33.0",
+ "gix",
+ "globset",
+ "hmac 0.12.1",
+ "httpmock",
+ "ignore",
+ "insta",
+ "ipnet",
+ "jiff",
+ "jiff-tzdb",
+ "libc",
+ "num-bigint",
+ "num-traits",
+ "percent-encoding",
+ "pollster",
+ "regex",
+ "regex-syntax",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "similar",
+ "submilli-wasm",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "unicode-ident",
+ "unicode-normalization",
+ "unicode-width",
+ "ureq",
+ "url",
+ "uuid",
+ "wasm-encoder 0.248.0",
+ "wasmparser 0.248.0",
+ "wast",
+ "zstd",
 ]
 
 [[package]]
@@ -5497,10 +5497,10 @@ version = "0.3.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "interpreter",
  "regex",
  "serde",
  "serde_json",
+ "submilli-engine",
  "tokio",
  "url",
 ]
@@ -5518,7 +5518,6 @@ dependencies = [
  "http-body-util",
  "httpmock",
  "insta",
- "interpreter",
  "ipnet",
  "jiff",
  "libc",
@@ -5535,6 +5534,7 @@ dependencies = [
  "sqlx",
  "submilli-blueprint",
  "submilli-build",
+ "submilli-engine",
  "submilli-shared",
  "submilli-wasm",
  "subtle",
@@ -5565,7 +5565,6 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "httpmock",
- "interpreter",
  "rcgen",
  "reqwest",
  "rmcp",
@@ -5576,6 +5575,7 @@ dependencies = [
  "sse-stream",
  "submilli-blueprint",
  "submilli-build",
+ "submilli-engine",
  "submilli-policy",
  "tar",
  "tempfile",

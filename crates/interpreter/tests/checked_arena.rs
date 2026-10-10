@@ -1,4 +1,4 @@
-use interpreter::{
+use submilli_engine::{
     Ast, Expr, ExprId, ExprKind, FileId, Span, Stmt, StmtId, StmtKind, Type, TypedAst, TypedExpr,
     TypedExprKind, TypedStmt, TypedStmtKind,
     arena::{ArenaError, ArenaKind, ArenaOperation},

@@ -301,7 +301,7 @@ Whenever modifying the Git standard library (`crates/interpreter/src/stdlib/git/
 run the Git memory-limit tests in addition to other affected checks:
 
 ```sh
-SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=0 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test --locked -p interpreter --test git_memory -- --nocapture
+SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=0 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test --locked -p submilli-engine --test git_memory -- --nocapture
 ```
 
 These tests use an in-process HTTP transport backed by local `git upload-pack`,
@@ -372,7 +372,7 @@ modes with synthetic package tests and a focused localhost test; contact real
 APIs only when their integration behavior is affected.
 
 Select the affected crate/test or package rather than all network integrations,
-for example `SUBMILLI_SKIP_HTTP_TESTS=0 cargo test -p interpreter --test http_live`
+for example `SUBMILLI_SKIP_HTTP_TESTS=0 cargo test -p submilli-engine --test http_live`
 or `cargo run -p submilli -- build test -p @submilli/jina --env-var JINA_API_KEY`.
 These tests may require execution outside the sandbox, even for local listeners.
 Request network access only for selected checks that require it. Record why HTTP

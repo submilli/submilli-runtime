@@ -1,8 +1,8 @@
-use interpreter::Type;
-use interpreter::type_size::{TypeLimits, TypeTooLarge};
-use interpreter::typechecker::type_param_substitution::TypeParamSubstitution;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use submilli_engine::Type;
+use submilli_engine::type_size::{TypeLimits, TypeTooLarge};
+use submilli_engine::typechecker::type_param_substitution::TypeParamSubstitution;
 
 #[test]
 fn binding_chains_on_small_stack() {

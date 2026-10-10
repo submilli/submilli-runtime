@@ -1,6 +1,6 @@
 //! Malformed renderer inputs are injected internal state, not guest exploits.
-use interpreter::rendering::{RenderError, RenderLimits, TRUNCATED};
-use interpreter::{Diagnostic, FileId, Severity, Sources, Span, Type};
+use submilli_engine::rendering::{RenderError, RenderLimits, TRUNCATED};
+use submilli_engine::{Diagnostic, FileId, Severity, Sources, Span, Type};
 
 fn diagnostic(span: Span, message: String) -> Diagnostic {
     Diagnostic {
@@ -30,16 +30,16 @@ fn invalid_metadata_preserves_original_failure_and_next_render_succeeds() {
     ] {
         let diag = diagnostic(span, "original failure".into());
         assert!(matches!(
-            interpreter::diagnostics::render_checked(&diag, &sources),
+            submilli_engine::diagnostics::render_checked(&diag, &sources),
             Err(RenderError::Source(_))
         ));
-        let fallback = interpreter::diagnostics::render(&diag, &sources);
+        let fallback = submilli_engine::diagnostics::render(&diag, &sources);
         assert!(fallback.contains("original failure"));
         assert!(fallback.contains("internal reporting failure"));
         assert!(!fallback.contains("test.ts:"));
     }
     let good = diagnostic(Span::new(file, 0, 2).unwrap(), "healthy error".into());
-    let rendered = interpreter::diagnostics::render_checked(&good, &sources).unwrap();
+    let rendered = submilli_engine::diagnostics::render_checked(&good, &sources).unwrap();
     assert!(rendered.text.contains("test.ts:1:1"));
     assert!(!rendered.truncated);
 }
@@ -52,7 +52,7 @@ fn huge_source_context_and_many_diagnostics_share_limits() {
         Span::new(file, 0, source.len() as u32).unwrap(),
         "original failure".into(),
     );
-    let rendered = interpreter::diagnostics::render_checked(&diag, &sources).unwrap();
+    let rendered = submilli_engine::diagnostics::render_checked(&diag, &sources).unwrap();
     assert!(rendered.truncated);
     assert!(rendered.text.len() <= RenderLimits::default().bytes);
     assert!(rendered.text.contains("original failure"));
@@ -60,10 +60,11 @@ fn huge_source_context_and_many_diagnostics_share_limits() {
     diag.span = Span::at(FileId::COMPILER);
     diag.message = "large error ".repeat(10_000);
     let diagnostics = vec![diag; 100];
-    let collection = interpreter::diagnostics::render_collection(&diagnostics, &sources).unwrap();
+    let collection =
+        submilli_engine::diagnostics::render_collection(&diagnostics, &sources).unwrap();
     assert!(collection.truncated);
     assert!(collection.text.len() <= RenderLimits::collection().bytes);
-    let list = interpreter::diagnostics::render_list(&diagnostics, &sources).unwrap();
+    let list = submilli_engine::diagnostics::render_list(&diagnostics, &sources).unwrap();
     assert!(list.iter().map(String::len).sum::<usize>() <= RenderLimits::collection().bytes);
     assert!(list.last().unwrap().contains(TRUNCATED));
 }
@@ -102,7 +103,7 @@ fn type_depth_boundary_and_wide_types_abbreviate() {
             .unwrap()
             .truncated
     );
-    let wide = Type::Tuple(interpreter::TupleType {
+    let wide = Type::Tuple(submilli_engine::TupleType {
         elements: vec![Type::Number; 100_000],
         optional: 0,
     });
@@ -173,11 +174,11 @@ fn oversized_message_does_not_hide_an_invalid_note() {
     diag.notes
         .push((Span::at(FileId(999)), "invalid note".into()));
     assert!(matches!(
-        interpreter::diagnostics::render_checked(&diag, &sources),
+        submilli_engine::diagnostics::render_checked(&diag, &sources),
         Err(RenderError::Source(_))
     ));
     diag.notes = vec![(Span::at(file), "valid note".into()); 100_000];
-    let rendered = interpreter::diagnostics::render_checked(&diag, &sources).unwrap();
+    let rendered = submilli_engine::diagnostics::render_checked(&diag, &sources).unwrap();
     assert!(rendered.truncated);
     assert!(rendered.text.contains("primary error"));
 }

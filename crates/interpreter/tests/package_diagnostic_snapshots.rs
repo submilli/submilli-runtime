@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use interpreter::{
+use submilli_engine::{
     Asi, FileId, ModulePath, PackageDeclaration, Sources, Token, TokenKind, diagnostics,
     infer_package, lower_patterns, parse,
 };
@@ -45,7 +45,7 @@ fn render_package(body: &str) -> String {
     out
 }
 
-fn parse_source(source: &str, file: FileId) -> interpreter::Ast {
+fn parse_source(source: &str, file: FileId) -> submilli_engine::Ast {
     let mut asi = Asi::new(source, file);
     let mut tokens: Vec<Token> = Vec::new();
     loop {
@@ -64,12 +64,13 @@ fn parse_source(source: &str, file: FileId) -> interpreter::Ast {
 }
 
 fn runtime_declarations() -> BTreeMap<String, PackageDeclaration> {
-    let (prelude, host, _) = interpreter::runtime::prelude::cached_runtime_package_declarations();
+    let (prelude, host, _) =
+        submilli_engine::runtime::prelude::cached_runtime_package_declarations();
     prelude
         .iter()
         .chain(host)
         .cloned()
-        .chain(interpreter::stdlib::stdlib_package_declarations())
+        .chain(submilli_engine::stdlib::stdlib_package_declarations())
         .map(|declaration| (declaration.package_name.clone(), declaration))
         .collect()
 }

@@ -1,5 +1,5 @@
-use interpreter::FileId;
-use interpreter::compile::compile_script_checked;
+use submilli_engine::FileId;
+use submilli_engine::compile::compile_script_checked;
 
 #[test]
 fn invalid_source_has_a_bounded_diagnostic_set_and_recovery_is_healthy() {

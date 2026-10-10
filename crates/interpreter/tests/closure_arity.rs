@@ -1,11 +1,11 @@
 //! Supported closure ABI boundaries; rejection cases live in closure_arity_diagnostics.
 
-use interpreter::compiler_limits::MAX_CLOSURE_ARITY;
-use interpreter::runtime::{
+use submilli_engine::compiler_limits::MAX_CLOSURE_ARITY;
+use submilli_engine::runtime::{
     LinkedPackageModule, StoreData, Vfs, install_package_modules_async, install_runtime_async,
     install_tenant_limits,
 };
-use interpreter::{
+use submilli_engine::{
     CompiledPackage, FileId, ModulePath, PackageSourceModule, RuntimeConfig, compile_package,
     compile_script, dispatch_main_async,
 };

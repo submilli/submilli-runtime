@@ -4,9 +4,9 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use interpreter::compiler_error::CompilerFailure;
-use interpreter::compiler_limits::COMPILER_STACK_BYTES;
-use interpreter::{
+use submilli_engine::compiler_error::CompilerFailure;
+use submilli_engine::compiler_limits::COMPILER_STACK_BYTES;
+use submilli_engine::{
     FileId,
     compile::{compile_script_checked, typecheck_checked},
 };

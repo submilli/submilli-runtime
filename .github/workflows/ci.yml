@@ -38,6 +38,12 @@ jobs:
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # The engine and the policy crate are published to crates.io. Packaging
+      # builds them from the packaged files alone, so a source file left out of
+      # the package fails here rather than at release.
+      - name: Package for crates.io
+        run: cargo publish --dry-run --locked -p submilli-engine -p submilli-policy
+
       # The fixture harness defaults to a smoke subset (196 of 1054) for fast local
       # iteration. CI has no such constraint — the full sweep is a few seconds — and
       # the subset keeps one fixture per top-level directory, so whole trees never run.
@@ -87,7 +93,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: VFS containment suite
-        run: cargo test -p interpreter --test vfs_containment
+        run: cargo test -p submilli-engine --test vfs_containment
 
       - name: Skill installation across platforms
         run: cargo test -p submilli --test skill --test upgrade
@@ -108,7 +114,7 @@ jobs:
       # Unicode aliases, and identity read through a handle on Windows.
       - name: VFS mounts
         run: >-
-          cargo test -p interpreter --lib --
+          cargo test -p submilli-engine --lib --
           stdlib::fs::tests::mount stdlib::git::integration_tests::mount
 
       # The size limit keys files by device and inode, which Windows reports only
@@ -118,7 +124,7 @@ jobs:
       # writers hold open.
       - name: VFS size limit
         run: >-
-          cargo test -p interpreter --lib --
+          cargo test -p submilli-engine --lib --
           runtime::vfs::tests::size_limit runtime::vfs::tests::measuring runtime::vfs::tests::a_tree
           stdlib::fs::tests::size_limit stdlib::fs::tests::a_ stdlib::fs::tests::copying_
           stdlib::fs::tests::rewriting_ stdlib::code::tests::edits_are_counted
