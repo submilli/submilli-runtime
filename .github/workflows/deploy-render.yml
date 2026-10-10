@@ -110,6 +110,14 @@ jobs:
             install -m 755 "target/$TARGET/release/$BIN" "dist/amd64/$BIN"
           done
 
+      # Into `dist/packages/`, which the Dockerfile's `render` stage bakes into the
+      # image, so the server starts with every package in this repository.
+      - name: Compile the repository's packages
+        run: |
+          SUBMILLI_HOME="$RUNNER_TEMP/submilli-home" \
+            "target/$TARGET/release/submilli" build publish-local
+          cp -R "$RUNNER_TEMP/submilli-home/packages" dist/packages
+
       - uses: docker/setup-buildx-action@v3
 
       # `context: .` and `provenance: false` for the reasons given in release.yml.
@@ -118,6 +126,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          target: render
           load: true
           provenance: false
           tags: ${{ steps.ref.outputs.image }}
@@ -148,6 +157,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          target: render
           push: true
           provenance: false
           tags: ${{ steps.ref.outputs.image }}
