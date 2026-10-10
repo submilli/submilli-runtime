@@ -38,11 +38,11 @@ jobs:
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # The engine and the policy crate are published to crates.io. Packaging
-      # builds them from the packaged files alone, so a source file left out of
-      # the package fails here rather than at release.
+      # The engine is published to crates.io. Packaging builds it from the
+      # packaged files alone, so a source file left out of the package fails
+      # here rather than at release.
       - name: Package for crates.io
-        run: cargo publish --dry-run --locked -p submilli-engine -p submilli-policy
+        run: cargo publish --dry-run --locked -p submilli-engine
 
       # The fixture harness defaults to a smoke subset (196 of 1054) for fast local
       # iteration. CI has no such constraint — the full sweep is a few seconds — and

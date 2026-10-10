@@ -25,12 +25,9 @@ use std::ops::RangeInclusive;
 
 use serde_json::Value;
 
-use submilli_policy::filter_syntax as filter;
-
-use crate::{
-    Action, Blueprint, BlueprintError, PermissionRule, ResolutionCause, RuleRef, VarBindings,
-    VariableDecl,
-};
+use crate::filter::{self, VarBindings};
+use crate::permissions::{Action, PermissionRule, ResolutionCause, RuleRef};
+use crate::{Blueprint, BlueprintError, VariableDecl};
 
 /// The refused call a rule is drafted from.
 #[derive(Debug, Clone, Copy)]

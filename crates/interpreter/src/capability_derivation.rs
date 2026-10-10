@@ -452,7 +452,8 @@ const VAR_PLACEHOLDER: &str = "${vars.";
 /// reads back as exactly `value`. `None` when no quoted string can spell it: the
 /// parser reads `${vars.` inside quotes as a variable reference.
 ///
-/// Must agree with the policy crate's own quoting; a test there compares the two.
+/// Must agree with `submilli-blueprint`'s `quote_literal`, which the engine
+/// cannot depend on.
 #[doc(hidden)]
 pub fn filter_string_literal(value: &str) -> Option<String> {
     (!value.contains(VAR_PLACEHOLDER)).then(|| format!("\"{}\"", escape(value)))
