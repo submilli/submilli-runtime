@@ -33,18 +33,18 @@ interface Bag {
   area?: number;
 }
 
-function optArea(s: Sized | null): number | null {
+function optArea(s: Sized | null): number | undefined {
   return s?.area;
 }
 
-function bagArea(b: Bag | null): number | null {
+function bagArea(b: Bag | null): number | undefined {
   return b?.area;
 }
 
 function main(): void {
   assert(optArea(new ByField(9)) === 9, "field-backed interface receiver");
   assert(optArea(new ByAccessor(3)) === 9, "accessor-backed interface receiver");
-  assert(optArea(null) === null, "short-circuit");
+  assert(optArea(null) === undefined, "short-circuit");
 
   const lit: Sized = { area: 4 };
   assert(optArea(lit) === 4, "object-literal receiver");
@@ -55,6 +55,6 @@ function main(): void {
   // reaches `Bag` by width subtyping, so no `area` slot exists on the value
   const raw = { tag: "b" };
   const absent: Bag = raw;
-  assert(bagArea(absent) === null, "optional property absent reads null");
-  assert(bagArea(null) === null, "short-circuit on the optional-property shape");
+  assert(bagArea(absent) === undefined, "optional property absent reads undefined");
+  assert(bagArea(null) === undefined, "short-circuit on the optional-property shape");
 }

@@ -1,0 +1,93 @@
+=== compoundAdditionAssignmentLHSCannotBeAssigned.ts ===
+// string can add every type, and result string cannot be assigned to below types
+enum E { a, b, c }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+>c : E.c
+>  : ^^^
+
+
+let x1: boolean = null as unknown as (boolean);
+>x1 : boolean
+>   : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+x1 += '';
+>x1 += '' : string
+>         : ^^^^^^
+>x1 : boolean
+>   : ^^^^^^^
+>'' : ""
+>   : ^^
+
+
+let x2: number = null as unknown as (number);
+>x2 : number
+>   : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+x2 += '';
+>x2 += '' : string
+>         : ^^^^^^
+>x2 : number
+>   : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+/*pruned*/;
+/**/;
+
+let x4: {a: string} = null as unknown as ({a: string});
+>x4 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>null as unknown as ({a: string}) : { a: string; }
+>                                 : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>a : string
+>  : ^^^^^^
+
+x4 += '';
+>x4 += '' : string
+>         : ^^^^^^
+>x4 : { a: string; }
+>   : ^^^^^^^^^^^^^^
+>'' : ""
+>   : ^^
+
+
+let x5: void = null as unknown as (void);
+>x5 : void
+>   : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+x5 += '';
+>x5 += '' : string
+>         : ^^^^^^
+>x5 : void
+>   : ^^^^
+>'' : ""
+>   : ^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

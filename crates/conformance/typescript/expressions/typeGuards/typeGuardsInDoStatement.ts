@@ -4,7 +4,7 @@ function a(x: string | number | boolean): void {
     x = true;
     do {
         x; // boolean | string
-        x = null;
+        x = undefined;
     } while (typeof x === "string")
     x; // number | boolean
 }
@@ -13,7 +13,7 @@ function b(x: string | number | boolean): void {
     do {
         x; // boolean | string
         if (cond) continue;
-        x = null;
+        x = undefined;
     } while (typeof x === "string")
     x; // number | boolean
 }
@@ -22,7 +22,7 @@ function c(x: string | number): void {
     do {
         x; // string
         if (cond) break;
-        x = null;
+        x = undefined;
     } while (typeof x === "string")
     x; // string | number
 }

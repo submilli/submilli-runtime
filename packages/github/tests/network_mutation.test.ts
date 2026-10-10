@@ -18,12 +18,12 @@ import {
 } from "@submilli/github";
 
 function main(): void {
-    if (secrets.get("GITHUB_TOKEN") === null || secrets.get("GITHUB_LIVE_MUTATIONS") !== "true") {
+    if (secrets.get("GITHUB_TOKEN") === undefined || secrets.get("GITHUB_LIVE_MUTATIONS") !== "true") {
         label("skip: GitHub live mutations are disabled");
         return;
     }
     const configured = secrets.get("GITHUB_TEST_REPOSITORY");
-    if (configured === null) {
+    if (configured === undefined) {
         label("skip: GITHUB_TEST_REPOSITORY is not bound");
         return;
     }

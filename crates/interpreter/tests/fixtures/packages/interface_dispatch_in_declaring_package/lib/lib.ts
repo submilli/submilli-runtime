@@ -8,7 +8,7 @@ export function invoke(h: Handler): void {
 }
 
 /** Same dispatch through an optional chain, whose receiver is nullable. */
-export function maybe(h: Handler | null): string | null {
+export function maybe(h: Handler | null): string | undefined {
   return h?.fetch("1", "2", "3", "4", "5");
 }
 

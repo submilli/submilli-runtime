@@ -1,0 +1,18 @@
+types: 68 of 197 tsc entries compared, 0 differ
+
+errors:
+line 12: ours: expected `(...arg0: number[]) => number`, got `() => number` (tsc accepts)
+line 15: ours: expected `(...arg0: number[]) => number`, got `(arg0?: number) => number` (tsc accepts)
+line 16: ours: expected `(...arg0: number[]) => number`, got `(arg0?: number, arg1?: number, arg2?: number) => number` (tsc accepts)
+line 17: ours: expected `(...arg0: number[]) => number`, got `(arg0: number) => number` (tsc accepts)
+line 22: ours: expected `(arg0: number, ...arg1: number[]) => number`, got `() => number` (tsc accepts)
+line 23: ours: expected `(arg0: number, ...arg1: number[]) => number`, got `(...arg0: number[]) => number` (tsc accepts)
+line 24: ours: expected `(arg0: number, ...arg1: number[]) => number`, got `(arg0?: number) => number` (tsc accepts)
+line 25: ours: expected `(arg0: number, ...arg1: number[]) => number`, got `(arg0: number) => number` (tsc accepts)
+line 28: ours: expected `(arg0: number, ...arg1: number[]) => number`, got `(arg0: number, arg1: number) => number` (tsc accepts)
+line 29: ours: expected `(arg0: number, ...arg1: number[]) => number`, got `(arg0: number, arg1?: number) => number` (tsc accepts)
+line 32: ours: expected `(arg0: number, arg1?: string, ...arg2: number[]) => number`, got `() => number` (tsc accepts)
+line 33: ours: expected `(arg0: number, arg1?: string, ...arg2: number[]) => number`, got `(arg0?: number) => number` (tsc accepts)
+line 34: ours: expected `(arg0: number, arg1?: string, ...arg2: number[]) => number`, got `(arg0: number) => number` (tsc accepts)
+line 41: ours: expected `(arg0?: number, arg1?: string, ...arg2: number[]) => number`, got `() => number` (tsc accepts)
+line 45: ours: expected `(arg0?: number, arg1?: string, ...arg2: number[]) => number`, got `(arg0?: number, arg1?: string) => number` (tsc accepts)

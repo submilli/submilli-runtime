@@ -66,6 +66,12 @@ impl ReferencePath {
                         LiteralValue::BigInt(digits) => {
                             let _ = write!(out, "[{digits}n]");
                         }
+                        LiteralValue::Null => {
+                            let _ = write!(out, "[null]");
+                        }
+                        LiteralValue::Undefined => {
+                            let _ = write!(out, "[undefined]");
+                        }
                     }
                 }
             }
@@ -136,6 +142,10 @@ pub enum LiteralValue {
     Boolean(bool),
     /// A bigint's canonical decimal digits, as [`Type::BigIntLiteral`] holds them.
     BigInt(String),
+    /// Discriminant values only: a member may name its variant with `null` or
+    /// `undefined`, and an optional discriminant is `undefined` when absent.
+    Null,
+    Undefined,
 }
 
 impl LiteralValue {
@@ -164,6 +174,10 @@ impl TypeFacts {
     pub const IS_OBJECT: Self = Self(1 << 7);
     pub const IS_FUNCTION: Self = Self(1 << 8);
     pub const IS_ARRAY: Self = Self(1 << 9);
+    pub const EQ_UNDEFINED: Self = Self(1 << 10);
+    pub const NE_UNDEFINED: Self = Self(1 << 11);
+    pub const IS_BIGINT: Self = Self(1 << 12);
+    pub const IS_UNDEFINED: Self = Self(1 << 13);
 
     pub fn contains(self, other: Self) -> bool {
         (self.0 & other.0) == other.0
@@ -197,7 +211,7 @@ impl std::ops::BitAnd for TypeFacts {
 impl std::ops::Not for TypeFacts {
     type Output = Self;
     fn not(self) -> Self {
-        const ALL: u16 = (1 << 10) - 1;
+        const ALL: u16 = (1 << 14) - 1;
         Self((!self.0) & ALL)
     }
 }
@@ -340,8 +354,139 @@ impl InvalidationReason {
 }
 
 /// A union's discriminant: the property every member types with a distinct
-/// literal, and the map from that literal to the member it identifies.
-pub type Discriminant = (String, BTreeMap<LiteralValue, VariantIdx>);
+/// literal, and which literal names which member.
+pub type Discriminant = (String, DiscriminantTable);
+
+/// The literals that name a union's members. Each literal names one member,
+/// except `undefined`: every member whose discriminant is optional reads it
+/// when the field is absent, so it may name several.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DiscriminantTable {
+    entries: Vec<(LiteralValue, VariantIdx)>,
+}
+
+/// How many members `undefined` may name in a [`DiscriminantTable`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UndefinedNames {
+    /// An object field: every member with an optional discriminant reads it.
+    Several,
+    /// A tuple position, which is always present: like any literal, one.
+    One,
+}
+
+impl DiscriminantTable {
+    pub fn iter(&self) -> impl Iterator<Item = (&LiteralValue, &VariantIdx)> {
+        self.entries.iter().map(|(value, variant)| (value, variant))
+    }
+
+    /// The member `value` names, when it names exactly one.
+    pub fn get(&self, value: &LiteralValue) -> Option<VariantIdx> {
+        let mut variants = self.variants_for(value);
+        let variant = variants.next()?;
+        variants.next().is_none().then_some(variant)
+    }
+
+    /// Every member `value` names.
+    pub fn variants_for<'a>(
+        &'a self,
+        value: &'a LiteralValue,
+    ) -> impl Iterator<Item = VariantIdx> + 'a {
+        self.entries
+            .iter()
+            .filter(move |(entry, _)| entry == value)
+            .map(|(_, variant)| *variant)
+    }
+
+    /// Whether some literal other than `value` also names `variant`, so a
+    /// test against `value` alone can't rule it out.
+    pub fn has_other_values(&self, variant: VariantIdx, value: &LiteralValue) -> bool {
+        self.entries
+            .iter()
+            .any(|(entry, named)| *named == variant && entry != value)
+    }
+
+    /// Whether a `switch` covering `covered` handles `variant`: every value
+    /// that names it is a case.
+    pub fn is_covered(&self, variant: VariantIdx, covered: &BTreeSet<LiteralValue>) -> bool {
+        self.entries
+            .iter()
+            .filter(|(_, named)| *named == variant)
+            .all(|(value, _)| covered.contains(value))
+    }
+
+    /// The `members` a `switch` covering `covered` still leaves possible.
+    pub fn uncovered_members(
+        &self,
+        members: &[Type],
+        covered: &BTreeSet<LiteralValue>,
+    ) -> Vec<Type> {
+        members
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                u32::try_from(*index)
+                    .map_or(true, |index| !self.is_covered(VariantIdx(index), covered))
+            })
+            .map(|(_, member)| member.clone())
+            .collect()
+    }
+
+    /// The values `covered` leaves out, each once, in table order.
+    pub fn uncovered(&self, covered: &BTreeSet<LiteralValue>) -> Vec<LiteralValue> {
+        let mut missing: Vec<LiteralValue> = Vec::new();
+        for (value, _) in &self.entries {
+            if !covered.contains(value) && !missing.contains(value) {
+                missing.push(value.clone());
+            }
+        }
+        missing
+    }
+
+    /// `members` split by a test against `literal`: the members it names,
+    /// and the ones still possible when the test fails. A named member stays
+    /// on both sides when another value also names it, as an optional
+    /// `kind?: "a"` does with `undefined`. `None` when `literal` names none.
+    pub fn partition(
+        &self,
+        members: &[Type],
+        literal: &LiteralValue,
+    ) -> Option<(Vec<Type>, Vec<Type>)> {
+        let named: Vec<VariantIdx> = self.variants_for(literal).collect();
+        if named.is_empty() {
+            return None;
+        }
+        let mut matched = Vec::with_capacity(named.len());
+        let mut remaining = Vec::new();
+        for (index, member) in members.iter().enumerate() {
+            let variant = VariantIdx(u32::try_from(index).ok()?);
+            if !named.contains(&variant) {
+                remaining.push(member.clone());
+                continue;
+            }
+            matched.push(member.clone());
+            if self.has_other_values(variant, literal) {
+                remaining.push(member.clone());
+            }
+        }
+        Some((matched, remaining))
+    }
+
+    /// Add `value` for `variant`, unless it already names a member: then the
+    /// key or position is no discriminant, and this returns `None`.
+    fn insert(
+        &mut self,
+        value: LiteralValue,
+        variant: VariantIdx,
+        undefined: UndefinedNames,
+    ) -> Option<()> {
+        let shareable = undefined == UndefinedNames::Several && value == LiteralValue::Undefined;
+        if !shareable && self.entries.iter().any(|(entry, _)| *entry == value) {
+            return None;
+        }
+        self.entries.push((value, variant));
+        Some(())
+    }
+}
 
 /// Variant index in a `Type::Union`'s canonical member list.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -366,79 +511,128 @@ pub fn union_discriminant(members: &[Type]) -> Option<Discriminant> {
     // through [`discriminant_from_shapes`].
     //
     // Peel aliases so `type Shape = Circle | Rectangle` finds its discriminant.
-    let shapes: Vec<BTreeMap<String, crate::types::ObjectField>> = members
+    let shapes = inline_member_shapes(members)?;
+    discriminant_from_shapes(&shapes)
+}
+
+/// Each member's fields, when every member is an inline object type.
+/// Nominal members need the type registry; see `union_member_shapes`.
+fn inline_member_shapes(
+    members: &[Type],
+) -> Option<Vec<BTreeMap<String, crate::types::ObjectField>>> {
+    members
         .iter()
         .map(|m| match m.peel() {
             Type::Object { fields, .. } => Some(fields.clone()),
             _ => None,
         })
-        .collect::<Option<_>>()?;
-    discriminant_from_shapes(&shapes)
+        .collect()
+}
+
+/// [`union_discriminant`] for the field a test names, rather than the one
+/// the union would pick on its own. Inline object members only; the
+/// typechecker's `Inferer::union_discriminant_for_key` also expands nominal ones.
+pub fn inline_union_discriminant_for_key(members: &[Type], key: &str) -> Option<DiscriminantTable> {
+    let shapes = inline_member_shapes(members)?;
+    discriminant_table_for_key(&shapes, key)
 }
 
 /// [`union_discriminant`] over already-expanded member shapes — one map per
-/// union member, in member order.
+/// union member, in member order. A key every member requires wins over one
+/// a member may omit, so an optional `code?: 1` beside `kind` doesn't hide
+/// the tag; ties go to the first key in order.
 pub fn discriminant_from_shapes(
     shapes: &[BTreeMap<String, crate::types::ObjectField>],
 ) -> Option<Discriminant> {
+    let first = shapes.first()?;
+    let may_be_omitted = |key: &String| {
+        shapes
+            .iter()
+            .any(|shape| shape.get(key).is_some_and(|f| f.optional))
+    };
+    let (required, omittable): (Vec<&String>, Vec<&String>) =
+        first.keys().partition(|key| !may_be_omitted(key));
+    required
+        .into_iter()
+        .chain(omittable)
+        .find_map(|key| Some((key.clone(), discriminant_table_for_key(shapes, key)?)))
+}
+
+/// The table `key` makes a discriminant of, when every member types it with a
+/// literal and no explicit literal names two members.
+pub fn discriminant_table_for_key(
+    shapes: &[BTreeMap<String, crate::types::ObjectField>],
+    key: &str,
+) -> Option<DiscriminantTable> {
     if shapes.len() < 2 {
         return None;
     }
-    'next_key: for key in shapes[0].keys() {
-        let mut map: BTreeMap<LiteralValue, VariantIdx> = BTreeMap::new();
-        for (idx, shape) in shapes.iter().enumerate() {
-            let Some(field) = shape.get(key) else {
-                continue 'next_key;
-            };
-            // optional fields can't serve as discriminants —
-            // an optional `kind?: "circle"` could be absent at
-            // runtime, so the literal-equality predicate doesn't
-            // uniquely identify the variant.
-            if field.optional {
-                continue 'next_key;
-            }
-            let Some(lit) = unit_literal_value(&field.ty) else {
-                continue 'next_key;
-            };
-            if map.insert(lit, VariantIdx(idx as u32)).is_some() {
-                continue 'next_key;
-            }
+    let mut table = DiscriminantTable::default();
+    for (idx, shape) in shapes.iter().enumerate() {
+        let field = shape.get(key)?;
+        let lit = unit_value(&field.ty)?;
+        // An optional `kind?: "err"` reads `undefined` when absent, so it
+        // names its variant by both values, as TypeScript narrows it.
+        let absent =
+            (field.optional && lit != LiteralValue::Undefined).then_some(LiteralValue::Undefined);
+        let variant = VariantIdx(u32::try_from(idx).ok()?);
+        for value in std::iter::once(lit).chain(absent) {
+            table.insert(value, variant, UndefinedNames::Several)?;
         }
-        return Some((key.clone(), map));
     }
-    None
+    Some(table)
 }
 
 /// Tuple-union analog of [`union_discriminant`]: find a position whose element
 /// type is a literal and pairwise distinct across variants.
 /// Positions are tried only up to the smallest variant's arity.
-pub fn tuple_union_discriminant(
-    members: &[Type],
-) -> Option<(usize, BTreeMap<LiteralValue, VariantIdx>)> {
+pub fn tuple_union_discriminant(members: &[Type]) -> Option<(usize, DiscriminantTable)> {
     if members.len() < 2 {
         return None;
     }
-    let tuples: Vec<&Vec<Type>> = members
+    let tuples: Vec<&crate::types::TupleType> = members
         .iter()
         .map(|m| match m.peel() {
             Type::Tuple(elements) => Some(elements),
             _ => None,
         })
         .collect::<Option<_>>()?;
-    let min_arity = tuples.iter().map(|t| t.len()).min().unwrap_or(0);
-    'next_position: for position in 0..min_arity {
-        let mut map: BTreeMap<LiteralValue, VariantIdx> = BTreeMap::new();
+    let min_arity = tuples.iter().map(|t| t.required_len()).min().unwrap_or(0);
+    (0..min_arity).find_map(|position| {
+        let mut table = DiscriminantTable::default();
         for (idx, tuple) in tuples.iter().enumerate() {
-            let Some(lit) = unit_literal_value(&tuple[position]) else {
-                continue 'next_position;
-            };
-            if map.insert(lit, VariantIdx(idx as u32)).is_some() {
-                continue 'next_position;
-            }
+            let lit = tuple.get(position).and_then(unit_value)?;
+            // Positions are required, so each one names one member, `undefined`
+            // included.
+            table.insert(
+                lit,
+                VariantIdx(u32::try_from(idx).ok()?),
+                UndefinedNames::One,
+            )?;
         }
-        return Some((position, map));
-    }
-    None
+        Some((position, table))
+    })
+}
+
+/// The literal a `case` label compares against: `None` for an expression
+/// label whose type is no single literal.
+pub fn switch_value_literal(value: &crate::TypedSwitchValue) -> Option<LiteralValue> {
+    Some(match value {
+        crate::TypedSwitchValue::String { value, .. } => LiteralValue::String(value.clone()),
+        crate::TypedSwitchValue::Number { value, .. } => {
+            LiteralValue::Number(crate::types::LiteralF64(*value))
+        }
+        crate::TypedSwitchValue::Boolean { value, .. } => LiteralValue::Boolean(*value),
+        crate::TypedSwitchValue::Null { .. } => LiteralValue::Null,
+        crate::TypedSwitchValue::Undefined { .. } => LiteralValue::Undefined,
+        crate::TypedSwitchValue::Expr { literal, .. } => return literal.clone(),
+        crate::TypedSwitchValue::Enum { value, .. } => match value {
+            crate::EnumVariantPayload::Number(n) => {
+                LiteralValue::Number(crate::types::LiteralF64(*n))
+            }
+            crate::EnumVariantPayload::String(s) => LiteralValue::String(s.clone()),
+        },
+    })
 }
 
 /// The literal type a compared literal value has.
@@ -448,37 +642,34 @@ pub fn literal_type(literal: &LiteralValue) -> Type {
         LiteralValue::Number(n) => Type::NumberLiteral(*n),
         LiteralValue::Boolean(b) => Type::BooleanLiteral(*b),
         LiteralValue::BigInt(digits) => Type::BigIntLiteral(digits.clone()),
+        LiteralValue::Null => Type::Null,
+        LiteralValue::Undefined => Type::Undefined,
     }
 }
 
-/// Whether `ty` is, or has a member that is, a literal or `null`: what makes
-/// a property a discriminant in TypeScript. An enum is the union of its
-/// members' literals.
+/// Whether `ty` is, or has a member that is, a literal, `null` or
+/// `undefined`: what makes a property a discriminant in TypeScript. An enum
+/// is the union of its members' literals.
 pub fn has_unit_member(ty: &Type) -> bool {
     match ty.peel() {
         Type::Union(members) => members.iter().any(has_unit_member),
-        Type::Null | Type::NumberEnum { .. } | Type::StringEnum { .. } => true,
+        Type::Null | Type::Undefined | Type::NumberEnum { .. } | Type::StringEnum { .. } => true,
         other => unit_literal_value(other).is_some(),
     }
 }
 
-/// Whether `case` labels for the `covered` literals, and for `null` when
-/// `covers_null`, match every value of `ty`.
-pub fn is_covered_by_literals(
-    ty: &Type,
-    covered: &BTreeSet<LiteralValue>,
-    covers_null: bool,
-) -> bool {
+/// Whether `case` labels for the `covered` literals, `null` and `undefined`
+/// included, match every value of `ty`.
+pub fn is_covered_by_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> bool {
     match ty.peel() {
         Type::Union(members) => members
             .iter()
-            .all(|member| is_covered_by_literals(member, covered, covers_null)),
-        Type::Null => covers_null,
+            .all(|member| is_covered_by_literals(member, covered)),
         // `boolean` is `true | false`.
         Type::Boolean => [true, false]
             .into_iter()
             .all(|value| covered.contains(&LiteralValue::Boolean(value))),
-        other => unit_literal_value(other).is_some_and(|value| covered.contains(&value)),
+        other => unit_value(other).is_some_and(|value| covered.contains(&value)),
     }
 }
 
@@ -497,6 +688,16 @@ pub(super) fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
         Type::BooleanLiteral(b) => Some(LiteralValue::Boolean(*b)),
         Type::BigIntLiteral(digits) => Some(LiteralValue::BigInt(digits.clone())),
         other => LiteralValue::of_enum_member(other),
+    }
+}
+
+/// [`unit_literal_value`], with `null` and `undefined` as values too: what a
+/// discriminant or a `case` label may name.
+pub(super) fn unit_value(ty: &Type) -> Option<LiteralValue> {
+    match ty.peel() {
+        Type::Null => Some(LiteralValue::Null),
+        Type::Undefined | Type::Void => Some(LiteralValue::Undefined),
+        other => unit_literal_value(other),
     }
 }
 
@@ -530,9 +731,38 @@ pub fn strip_null(ty: &Type) -> Type {
     }
 }
 
+/// Remove only `undefined`, preserving strict equality's distinction from null.
+/// A `void` member stays: a `void` result may hold any value, so only a
+/// `typeof` test narrows it.
+pub fn strip_undefined(ty: &Type) -> Type {
+    if let Type::Refined {
+        original,
+        ty: shape,
+    } = ty.without_aliases()
+    {
+        return preserve_refinement(original, strip_undefined(shape));
+    }
+    match ty.peel() {
+        Type::Undefined => Type::Error,
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .filter(|member| !matches!(member.peel(), Type::Undefined))
+                .cloned()
+                .collect(),
+        ),
+        _ => ty.clone(),
+    }
+}
+
+/// Remove both nullish alternatives for optional access and non-null assertions.
+pub fn strip_nullish(ty: &Type) -> Type {
+    strip_undefined(&strip_null(ty))
+}
+
 /// `in` retains optional members in both branches: declaring a property does
-/// not prove that its value is present. The true branch removes optionality,
-/// preserving any null explicitly included in the declared field type.
+/// not prove that its value is defined. A present optional property can still
+/// hold `undefined`, so its read type retains optionality.
 pub fn narrow_field_presence(
     receiver_ty: &Type,
     field: &str,
@@ -565,10 +795,9 @@ pub fn narrow_field_presence(
         }
         Type::Object { fields, .. } => {
             let mut present = fields.clone();
-            let entry = present
+            present
                 .entry(field.to_string())
                 .or_insert_with(|| crate::ObjectField::required(Type::Unknown));
-            entry.optional = false;
             let absent = match fields.get(field) {
                 Some(f) if !f.optional => Type::Error,
                 _ => receiver_ty.clone(),
@@ -730,7 +959,7 @@ pub enum TruthinessClass {
 pub fn truthiness_class(member: &Type) -> TruthinessClass {
     use TruthinessClass::*;
     match member.peel() {
-        Type::Null => AlwaysFalsy,
+        Type::Null | Type::Undefined => AlwaysFalsy,
         Type::Boolean => BooleanLike,
         Type::BooleanLiteral(true) => AlwaysTruthy,
         Type::BooleanLiteral(false) => AlwaysFalsy,
@@ -913,11 +1142,23 @@ pub fn type_matches_facts(ty: &Type, facts: TypeFacts) -> bool {
     if facts.contains(TypeFacts::FALSY) {
         return truthiness_class(ty) != TruthinessClass::AlwaysTruthy;
     }
-    if facts.contains(TypeFacts::NE_NULL) {
-        return !matches!(ty, Type::Null);
+    if facts.contains(TypeFacts::NE_NULL) || facts.contains(TypeFacts::NE_UNDEFINED) {
+        return !(facts.contains(TypeFacts::NE_NULL) && matches!(ty, Type::Null)
+            || facts.contains(TypeFacts::NE_UNDEFINED) && matches!(ty, Type::Undefined));
+    }
+    // `void` is not `undefined` here: `intersect_with` narrows it on a
+    // `typeof` test, and `subtract` never rules it out.
+    if facts.contains(TypeFacts::IS_UNDEFINED) {
+        return matches!(ty, Type::Undefined);
+    }
+    if facts.contains(TypeFacts::EQ_UNDEFINED) {
+        return matches!(ty, Type::Undefined);
     }
     if facts.contains(TypeFacts::EQ_NULL) {
         return matches!(ty, Type::Null);
+    }
+    if facts.contains(TypeFacts::IS_BIGINT) {
+        return matches!(ty, Type::BigInt);
     }
     if facts.contains(TypeFacts::IS_NUMBER) {
         // An enum member's `typeof` is its underlying primitive, as in TypeScript.
@@ -969,7 +1210,8 @@ fn is_typeof_object(ty: &Type) -> bool {
         // `typeof null === "object"` — the JS quirk.
         | Type::Null => true,
 
-        Type::Number
+        Type::Undefined
+        | Type::Number
         | Type::NumberLiteral(_)
         | Type::NumberEnum { .. }
         | Type::String
@@ -1031,6 +1273,9 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
                 .filter(|ty| !matches!(ty, Type::Error))
                 .collect(),
         ),
+        // An explicit typeof test supplies the runtime fact that a void
+        // value's static type alone cannot establish.
+        Type::Void if facts.contains(TypeFacts::IS_UNDEFINED) => Type::Undefined,
         // `boolean` is `true | false`, and truthiness splits it.
         Type::Boolean if facts == TypeFacts::TRUTHY => Type::BooleanLiteral(true),
         Type::Boolean if facts == TypeFacts::FALSY => Type::BooleanLiteral(false),
@@ -1054,16 +1299,17 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
     if matches!(peeled, Type::Unknown) {
         return Type::Unknown;
     }
+    // A `void` result may hold any value, so no test rules it out: `typeof
+    // v !== "undefined"` keeps it, though `typeof v === "undefined"` may
+    // narrow it to `undefined`.
+    let ruled_out =
+        |member: &Type| !matches!(member.peel(), Type::Void) && type_matches_facts(member, facts);
     match peeled {
         Type::Union(members) => {
-            let kept: Vec<Type> = members
-                .iter()
-                .filter(|m| !type_matches_facts(m, facts))
-                .cloned()
-                .collect();
+            let kept: Vec<Type> = members.iter().filter(|m| !ruled_out(m)).cloned().collect();
             Type::union(kept)
         }
-        _ if !type_matches_facts(peeled, facts) => ty.clone(),
+        _ if !ruled_out(peeled) => ty.clone(),
         _ => Type::Error,
     }
 }
@@ -1120,7 +1366,9 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
         single @ (Type::StringLiteral(_)
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
-        | Type::BigIntLiteral(_)) => match unit_literal_value(single) {
+        | Type::BigIntLiteral(_)
+        | Type::Null
+        | Type::Undefined) => match unit_value(single) {
             Some(lit) if covered.contains(&lit) => Type::Never,
             _ => ty.clone(),
         },
@@ -1132,6 +1380,9 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
 /// `unknown`. Returns `None` when facts don't pin a single type (TRUTHY,
 /// IS_OBJECT span multiple types).
 fn asserted_type_for_facts(facts: TypeFacts) -> Option<Type> {
+    if facts.contains(TypeFacts::IS_BIGINT) {
+        return Some(Type::BigInt);
+    }
     if facts.contains(TypeFacts::IS_NUMBER) {
         return Some(Type::Number);
     }
@@ -1146,6 +1397,9 @@ fn asserted_type_for_facts(facts: TypeFacts) -> Option<Type> {
     }
     if facts.contains(TypeFacts::EQ_NULL) {
         return Some(Type::Null);
+    }
+    if facts.contains(TypeFacts::EQ_UNDEFINED) || facts.contains(TypeFacts::IS_UNDEFINED) {
+        return Some(Type::Undefined);
     }
     // IS_OBJECT admits arrays, objects, and null (the JS typeof-null quirk);
     // no single concrete type, so caller keeps `Unknown`.
@@ -1295,15 +1549,14 @@ pub fn has_erased_member(ty: &Type) -> bool {
 }
 
 /// Every type is condition-compatible under JS truthiness except `unknown`
-/// (requires explicit narrowing first, spec §2.11) and the value-less `void`.
-/// `never` counts, as in TypeScript: either no value reaches the test (a call
-/// that throws, a local after an exhausted `else if` chain), or the value is
-/// one a `never[]` an alias filled holds, which tests as it would anywhere.
-/// `Error` is accepted to silence cascades.
+/// (requires explicit narrowing first, spec §2.11) and the value-less bare
+/// `void`. A union with another value-bearing alternative is legal; its void
+/// member remains dynamic. `never` counts, as in TypeScript: either no value
+/// reaches the test (a call that throws, a local after an exhausted `else if`
+/// chain), or the value is one a `never[]` an alias filled holds, which tests
+/// as it would anywhere. `Error` is accepted to silence cascades.
 pub fn condition_compatible(ty: &Type) -> bool {
-    // `carries_void` rather than a bare `Void` match: a union with a `void`
-    // member has no more of a runtime value than bare `void` does.
-    !ty.carries_void() && !matches!(ty.peel(), Type::Unknown)
+    !matches!(ty.peel(), Type::Unknown | Type::Void)
 }
 
 pub fn facts_for_target_type(target: &Type) -> TypeFacts {
@@ -1312,6 +1565,8 @@ pub fn facts_for_target_type(target: &Type) -> TypeFacts {
         Type::String | Type::StringLiteral(_) => TypeFacts::IS_STRING,
         Type::Boolean | Type::BooleanLiteral(_) => TypeFacts::IS_BOOLEAN,
         Type::Null => TypeFacts::EQ_NULL,
+        Type::Undefined => TypeFacts::EQ_UNDEFINED,
+        Type::BigInt => TypeFacts::IS_BIGINT,
         Type::Array(_) => TypeFacts::IS_ARRAY,
         _ => TypeFacts::EMPTY,
     }
@@ -1320,6 +1575,61 @@ pub fn facts_for_target_type(target: &Type) -> TypeFacts {
 #[cfg(test)]
 mod analyzer_tests {
     use super::*;
+
+    #[test]
+    fn typeof_undefined_splits_void_without_assuming_its_truthiness() {
+        let ty = Type::union(vec![Type::Boolean, Type::Void]);
+        assert_eq!(
+            intersect_with(&ty, TypeFacts::IS_UNDEFINED),
+            Type::Undefined
+        );
+        assert_eq!(subtract(&ty, TypeFacts::IS_UNDEFINED), ty);
+        assert_eq!(truthiness_class(&Type::Void), TruthinessClass::Dynamic);
+        assert!(!type_matches_facts(&Type::Void, TypeFacts::EQ_UNDEFINED));
+    }
+
+    #[test]
+    fn undefined_facts_are_distinct_from_null() {
+        let ty = Type::union(vec![Type::String, Type::Null, Type::Undefined]);
+        assert_eq!(
+            strip_null(&ty),
+            Type::union(vec![Type::String, Type::Undefined])
+        );
+        assert_eq!(
+            strip_undefined(&ty),
+            Type::union(vec![Type::String, Type::Null])
+        );
+        assert_eq!(strip_nullish(&ty), Type::String);
+        assert_eq!(
+            intersect_with(&ty, TypeFacts::EQ_UNDEFINED),
+            Type::Undefined
+        );
+        assert_eq!(
+            intersect_with(&Type::Unknown, TypeFacts::EQ_UNDEFINED),
+            Type::Undefined
+        );
+        assert_eq!(
+            intersect_with(&ty, TypeFacts::NE_NULL | TypeFacts::NE_UNDEFINED),
+            Type::String
+        );
+        assert_eq!(truthy_part(&ty), Type::String);
+        assert_eq!(
+            truthiness_class(&Type::Undefined),
+            TruthinessClass::AlwaysFalsy
+        );
+        assert!(!type_matches_facts(&Type::Undefined, TypeFacts::IS_OBJECT));
+    }
+
+    #[test]
+    fn presence_keeps_optional_read_undefined() {
+        let ty = Type::Object {
+            fields: BTreeMap::from([("value".into(), crate::ObjectField::optional(Type::Number))]),
+            index: None,
+        };
+        let (present, absent) = narrow_field_presence(&ty, "value", &|_, _| None);
+        assert_eq!(present, ty);
+        assert_eq!(absent, ty);
+    }
 
     #[test]
     fn refined_literal_residual_retains_generic_identity() {
@@ -1605,6 +1915,7 @@ mod tests {
             Type::Null,
             Type::Array(Box::new(Type::Number)),
             Type::union(vec![Type::String, Type::Null]),
+            Type::union(vec![Type::Number, Type::Void]),
         ] {
             assert!(condition_compatible(&ty), "{ty:?}");
         }

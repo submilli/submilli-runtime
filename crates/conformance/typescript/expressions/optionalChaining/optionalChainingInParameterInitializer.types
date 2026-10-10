@@ -1,0 +1,37 @@
+=== optionalChainingInParameterInitializer.ts ===
+
+// https://github.com/microsoft/TypeScript/issues/36295
+const a = (): { d: string } | undefined => undefined;
+>a : () => { d: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(): { d: string } | undefined => undefined : () => { d: string; } | undefined
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>d : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+((b: string | undefined = a()?.d) => {})();
+>((b: string | undefined = a()?.d) => {})() : void
+>                                           : ^^^^
+>((b: string | undefined = a()?.d) => {}) : (b?: string | undefined) => void
+>                                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(b: string | undefined = a()?.d) => {} : (b?: string | undefined) => void
+>                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>a()?.d : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>a() : { d: string; } | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : () => { d: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>d : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

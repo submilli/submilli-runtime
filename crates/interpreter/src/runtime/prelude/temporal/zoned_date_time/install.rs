@@ -278,7 +278,7 @@ fn install_arithmetic(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
 
     let options = ValType::Ref(RefType::new(
         true,
-        HeapType::ConcreteStruct(types.intr.object_shape.clone()),
+        HeapType::ConcreteStruct(types.intr.object.clone()),
     ));
     for (method, until) in [("until", true), ("since", false)] {
         let label = if until {
@@ -628,7 +628,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
             ]),
         )
     };
-    let nullable_options = || Type::Union(vec![shared::object_shape_type(&[]), Type::Null]);
+    let optional_options = || Type::Union(vec![shared::object_shape_type(&[]), Type::Undefined]);
 
     shared::declare_direct_fn(
         defs,
@@ -661,7 +661,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
             vec![
                 receiver(),
                 Param::new("other", zoned()),
-                Param::with_default("options", nullable_options(), DefaultValue::Null),
+                Param::with_default("options", optional_options(), DefaultValue::Undefined),
             ],
             shared::temporal_type("Duration"),
         );

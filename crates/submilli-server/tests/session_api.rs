@@ -66,7 +66,7 @@ import { get } from "submilli:secrets";
 /** True when the bound TOKEN resolves to exactly `expected`. */
 export function tokenMatches(expected: string): boolean {
     const value = get("TOKEN");
-    return value !== null && value === expected;
+    return value !== undefined && value === expected;
 }
 "#;
 
@@ -118,7 +118,7 @@ fn write_to(path: &str) -> String {
 
 fn read_from(path: &str) -> String {
     format!(
-        r#"import {{ readText }} from "submilli:fs"; function main(): string | null {{ return readText("{path}"); }}"#
+        r#"import {{ readText }} from "submilli:fs"; function main(): string | undefined {{ return readText("{path}"); }}"#
     )
 }
 

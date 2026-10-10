@@ -56,7 +56,7 @@ function f1(): void {
 >otherCodes : (0 | 1 | 2)[]
 >           : ^^^^^^^^^^^^^
 
-        if (code2 === 0) {        
+        if (code2 === 0) {
 >code2 === 0 : boolean
 >            : ^^^^^^^
 >code2 : 0 | 1 | 2

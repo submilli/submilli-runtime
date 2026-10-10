@@ -6,14 +6,14 @@ function main(): void {
   const u: URL = parse("https://example.com/some/path");
   assert(u.protocol === "https", "protocol");
   assert(u.host === "example.com", "host");
-  assert(u.port === null, "port is null when omitted");
+  assert(u.port === undefined, "port is null when omitted");
   assert(u.path === "/some/path", "path");
-  assert(u.fragment === null, "fragment is null when omitted");
+  assert(u.fragment === undefined, "fragment is null when omitted");
   assert(u.query.size === 0, "query is empty when omitted");
 
   const v: URL = parse("https://example.com:1234/");
-  assert(v.port !== null, "explicit port surfaces");
-  if (v.port !== null) {
+  assert(v.port !== undefined, "explicit port surfaces");
+  if (v.port !== undefined) {
     assert(v.port === 1234, "explicit port value");
   }
 }

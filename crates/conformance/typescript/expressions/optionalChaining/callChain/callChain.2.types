@@ -1,27 +1,27 @@
 === callChain.2.ts ===
 
-const o1: null | (() => number) = null as unknown as (null | (() => number));
->o1 : (() => number) | null
->   : ^^^^^^^^^^^^^^^^^^^^^
->null as unknown as (null | (() => number)) : (() => number) | null
->                                           : ^^^^^^^^^^^^^^^^^^^^^
+const o1: undefined | (() => number) = null as unknown as (undefined | (() => number));
+>o1 : (() => number) | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (undefined | (() => number)) : (() => number) | undefined
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
 o1?.();
 >o1?.() : number | undefined
 >       : ^^^^^^^^^^^^^^^^^^
->o1 : (() => number) | null
->   : ^^^^^^^^^^^^^^^^^^^^^
+>o1 : (() => number) | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-const o2: null | { b: () => number } = null as unknown as (null | { b: () => number });
->o2 : { b: () => number; } | null
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+const o2: undefined | { b: () => number } = null as unknown as (undefined | { b: () => number });
+>o2 : { b: () => number; } | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >b : () => number
 >  : ^^^^^^^^^^^^
->null as unknown as (null | { b: () => number }) : { b: () => number; } | null
->                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (undefined | { b: () => number }) : { b: () => number; } | undefined
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 >b : () => number
@@ -32,25 +32,25 @@ o2?.b();
 >        : ^^^^^^^^^^^^^^^^^^
 >o2?.b : (() => number) | undefined
 >      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
->o2 : { b: () => number; } | null
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>o2 : { b: () => number; } | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >b : (() => number) | undefined
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-const o3: { b: (() => { c: string }) | null } = null as unknown as ({ b: (() => { c: string }) | null });
->o3 : { b: (() => { c: string; }) | null; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->b : (() => { c: string; }) | null
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+const o3: { b: (() => { c: string }) | undefined } = null as unknown as ({ b: (() => { c: string }) | undefined });
+>o3 : { b: (() => { c: string; }) | undefined; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : (() => { c: string; }) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >c : string
 >  : ^^^^^^
->null as unknown as ({ b: (() => { c: string }) | null }) : { b: (() => { c: string; }) | null; }
->                                                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ b: (() => { c: string }) | undefined }) : { b: (() => { c: string; }) | undefined; }
+>                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
->b : (() => { c: string; }) | null
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : (() => { c: string; }) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >c : string
 >  : ^^^^^^
 
@@ -59,12 +59,12 @@ o3.b?.().c;
 >           : ^^^^^^^^^^^^^^^^^^
 >o3.b?.() : { c: string; } | undefined
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
->o3.b : (() => { c: string; }) | null
->     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->o3 : { b: (() => { c: string; }) | null; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->b : (() => { c: string; }) | null
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>o3.b : (() => { c: string; }) | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>o3 : { b: (() => { c: string; }) | undefined; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : (() => { c: string; }) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >c : string | undefined
 >  : ^^^^^^^^^^^^^^^^^^
 

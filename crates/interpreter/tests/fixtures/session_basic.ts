@@ -7,8 +7,8 @@ interface Progress {
 }
 
 function main(): void {
-  // A missing key reads as null and reports absent.
-  assert(session.get("triage/progress") === null, "missing key reads null");
+  // A missing key reads as undefined and reports absent.
+  assert(session.get("triage/progress") === undefined, "missing key reads undefined");
   assert(!session.has("triage/progress"), "missing key is absent");
 
   session.set("triage/progress", { step: 1, note: "start", done: false });
@@ -30,7 +30,7 @@ function main(): void {
   assert(updated.step === 2, "set replaces the entry");
   assert(updated.done, "boolean survives replacement");
 
-  // A stored null is a present entry; only `has` separates it from absent.
+  // A stored null is a present entry, distinct from an absent key.
   session.set("triage/empty", null);
   assert(session.get("triage/empty") === null, "stored null reads as null");
   assert(session.has("triage/empty"), "stored null is still present");

@@ -55,7 +55,7 @@ function checkSandboxFilesystem(): void {
   assert(fs.readText("/conformance/note.txt") === "durable", "readText did not round-trip");
 
   const stat = fs.stat("/conformance/note.txt");
-  assert(stat !== null, "stat returned null for a file just written");
+  assert(stat !== undefined, "stat returned undefined for a file just written");
   assert(stat!.kind === "file", `stat reported kind ${stat!.kind}`);
   assert(stat!.size === 7, `stat reported size ${stat!.size}`);
 

@@ -1,6 +1,6 @@
 === typeGuardsInFunction.ts ===
-// Note that type guards affect types of variables and parameters only and 
-// have no effect on members of objects such as properties. 
+// Note that type guards affect types of variables and parameters only and
+// have no effect on members of objects such as properties.
 
 // variables in global
 let num: number = null as unknown as (number);
@@ -121,21 +121,21 @@ function f1(param: string | number): void {
 >null as unknown : unknown
 >                : ^^^^^^^
 
-    /*pruned*/;                                 
-                                              
-                                                                
+    /*pruned*/;
 
-                                                    
-                                                                
 
-                                          
-                                                                  
 
-                
-                                                                         
-                                                                
-                                                                    
-     
+
+
+
+
+
+
+
+
+
+
+
 }
 // Function expression
 function f2(param: string | number): void {
@@ -154,21 +154,21 @@ function f2(param: string | number): void {
 >                : ^^^^^^^
 
     // variables in function expressions
-    /*pruned*/;                                 
-                                              
-                                                                
+    /*pruned*/;
 
-                                                    
-                                                                
 
-                                          
-                                                                  
 
-                
-                                                                         
-                                                                
-                                                                    
-              
+
+
+
+
+
+
+
+
+
+
+
 }
 // Arrow expression
 function f3(param: string | number): void {
@@ -187,21 +187,21 @@ function f3(param: string | number): void {
 >                : ^^^^^^^
 
     // variables in function expressions
-    /*pruned*/;                            
-                                              
-                                                                
+    /*pruned*/;
 
-                                                    
-                                                                
 
-                                          
-                                                                  
 
-                
-                                                                         
-                                                                
-                                                                    
-              
+
+
+
+
+
+
+
+
+
+
+
 }
 // Return type of function
 // Inside function declaration
@@ -228,7 +228,7 @@ function f4(): string | number {
 >     : ^^^^^^^^^^^^^^^
 
 }
-strOrNum = typeof f4() === "string" && f4(); // string | number 
+strOrNum = typeof f4() === "string" && f4(); // string | number
 >strOrNum = typeof f4() === "string" && f4() : string | number | false
 >                                            : ^^^^^^^^^^^^^^^^^^^^^^^
 >strOrNum : string | number

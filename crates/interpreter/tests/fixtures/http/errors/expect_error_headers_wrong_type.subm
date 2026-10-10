@@ -1,4 +1,4 @@
-// expect-error: expected `Headers | null`, got `number`
+// expect-error: expected `Headers | undefined`, got `number`
 
 import { get } from "submilli:http";
 

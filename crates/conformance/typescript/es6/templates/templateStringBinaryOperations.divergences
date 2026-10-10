@@ -1,0 +1,99 @@
+types: 84 of 345 tsc entries compared, 12 differ
+
+line 41: `${ 3 & 4 }`
+  tsc:  "0"
+  ours: string
+
+line 42: `2${ 3 & 4 }`
+  tsc:  "20"
+  ours: string
+
+line 43: `${ 3 & 4 }5`
+  tsc:  "05"
+  ours: string
+
+line 44: `2${ 3 & 4 }5`
+  tsc:  "205"
+  ours: string
+
+line 45: `${ 3 & 4 }`
+  tsc:  "0"
+  ours: string
+
+line 46: `2${ 3 & 4 }`
+  tsc:  "20"
+  ours: string
+
+line 47: `${ 3 & 4 }5`
+  tsc:  "05"
+  ours: string
+
+line 48: `2${ 3 & 4 }5`
+  tsc:  "205"
+  ours: string
+
+line 49: `${ 3 & 4 }`
+  tsc:  "0"
+  ours: string
+
+line 50: `2${ 3 & 4 }`
+  tsc:  "20"
+  ours: string
+
+line 51: `${ 3 & 4 }5`
+  tsc:  "05"
+  ours: string
+
+line 52: `2${ 3 & 4 }5`
+  tsc:  "205"
+  ours: string
+
+errors:
+line 2: ours: `+` not defined for `number` and `"3"` (tsc accepts)
+line 3: ours: `+` not defined for `number` and `"23"` (tsc accepts)
+line 4: ours: `+` not defined for `number` and `"34"` (tsc accepts)
+line 5: ours: `+` not defined for `number` and `"234"` (tsc accepts)
+line 6: ours: `+` not defined for `"3"` and `number` (tsc accepts)
+line 7: ours: `+` not defined for `"23"` and `number` (tsc accepts)
+line 8: ours: `+` not defined for `"34"` and `number` (tsc accepts)
+line 9: ours: `+` not defined for `"234"` and `number` (tsc accepts)
+line 10: ours: `+` not defined for `number` and `"3"` (tsc accepts)
+line 11: ours: `+` not defined for `number` and `"23"` (tsc accepts)
+line 12: ours: `+` not defined for `number` and `"34"` (tsc accepts)
+line 13: ours: `+` not defined for `number` and `"234"` (tsc accepts)
+line 15: ours: `+` not defined for `number` and `"-1"` (tsc accepts)
+line 16: ours: `+` not defined for `number` and `"2-1"` (tsc accepts)
+line 17: ours: `+` not defined for `number` and `"-15"` (tsc accepts)
+line 18: ours: `+` not defined for `number` and `"2-15"` (tsc accepts)
+line 19: ours: `+` not defined for `"-1"` and `number` (tsc accepts)
+line 20: ours: `+` not defined for `"2-1"` and `number` (tsc accepts)
+line 21: ours: `+` not defined for `"-15"` and `number` (tsc accepts)
+line 22: ours: `+` not defined for `"2-15"` and `number` (tsc accepts)
+line 23: ours: `+` not defined for `number` and `"-1"` (tsc accepts)
+line 24: ours: `+` not defined for `number` and `"2-1"` (tsc accepts)
+line 25: ours: `+` not defined for `number` and `"-15"` (tsc accepts)
+line 26: ours: `+` not defined for `number` and `"2-15"` (tsc accepts)
+line 28: ours: `+` not defined for `number` and `"12"` (tsc accepts)
+line 29: ours: `+` not defined for `number` and `"212"` (tsc accepts)
+line 30: ours: `+` not defined for `number` and `"125"` (tsc accepts)
+line 31: ours: `+` not defined for `number` and `"2125"` (tsc accepts)
+line 32: ours: `+` not defined for `"12"` and `number` (tsc accepts)
+line 33: ours: `+` not defined for `"212"` and `number` (tsc accepts)
+line 34: ours: `+` not defined for `"125"` and `number` (tsc accepts)
+line 35: ours: `+` not defined for `"2125"` and `number` (tsc accepts)
+line 36: ours: `+` not defined for `number` and `"12"` (tsc accepts)
+line 37: ours: `+` not defined for `number` and `"212"` (tsc accepts)
+line 38: ours: `+` not defined for `number` and `"125"` (tsc accepts)
+line 39: ours: `+` not defined for `number` and `"2125"` (tsc accepts)
+line 41: ours: `+` not defined for `number` and `string` (tsc accepts)
+line 42: ours: `+` not defined for `number` and `string` (tsc accepts)
+line 43: ours: `+` not defined for `number` and `string` (tsc accepts)
+line 44: ours: `+` not defined for `number` and `string` (tsc accepts)
+line 45: ours: `+` not defined for `string` and `number` (tsc accepts)
+line 46: ours: `+` not defined for `string` and `number` (tsc accepts)
+line 47: ours: `+` not defined for `string` and `number` (tsc accepts)
+line 48: ours: `+` not defined for `string` and `number` (tsc accepts)
+line 49: ours: `+` not defined for `number` and `string` (tsc accepts)
+line 50: ours: `+` not defined for `number` and `string` (tsc accepts)
+line 51: ours: `+` not defined for `number` and `string` (tsc accepts)
+line 52: ours: `+` not defined for `number` and `string` (tsc accepts)

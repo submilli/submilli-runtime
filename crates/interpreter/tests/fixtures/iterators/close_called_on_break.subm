@@ -1,7 +1,7 @@
 let closed: boolean = false;
 
 function tick(i: number, n: number): IteratorResult<number> {
-  if (i >= n) { const r: IteratorResult<number> = { done: true }; return r; }
+  if (i >= n) { const r: IteratorResult<number> = { done: true, value: undefined }; return r; }
   const y: IteratorResult<number> = { done: false, value: i }; return y;
 }
 

@@ -184,6 +184,8 @@ pub struct StoreData {
     /// This store's intrinsic types, built on first use; see
     /// [`crate::runtime::intrinsic_types::intrinsic_types`].
     pub(crate) intrinsic_types: Option<Arc<crate::runtime::intrinsic_types::IntrinsicTypes>>,
+    /// An immutable global keeps the store's undefined value rooted across calls.
+    pub(crate) undefined_value: Option<wasmtime::Global>,
     /// The bound-receiver closure environment type, built on first use for the
     /// same reason as [`Self::intrinsic_types`].
     pub(crate) closure_receiver_type: Option<wasmtime::StructType>,
@@ -280,6 +282,7 @@ impl StoreData {
             test_labels: RefCell::new(Vec::new()),
             host_abi: None,
             intrinsic_types: None,
+            undefined_value: None,
             closure_receiver_type: None,
             call_metadata_type: None,
             iterator_functions: [None; 10],

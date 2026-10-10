@@ -697,6 +697,21 @@ async fn void_main_empty_stdio() {
 }
 
 #[tokio::test]
+async fn undefined_main_uses_no_result_while_null_is_serialized() {
+    for source in [
+        "function main(): undefined { return undefined; }",
+        "function main(): unknown { return undefined; }",
+    ] {
+        let (status, body) = execute(source).await;
+        assert_eq!(status, StatusCode::OK, "{body:#}");
+        assert_eq!(body["result"], Value::Null, "{body:#}");
+    }
+    let (status, body) = execute("function main(): null { return null; }").await;
+    assert_eq!(status, StatusCode::OK, "{body:#}");
+    assert_eq!(body["result"], json!("null"), "{body:#}");
+}
+
+#[tokio::test]
 async fn console_suppressed_on_success_nonvoid() {
     let (status, body) =
         execute(r#"function main(): number { console.log("debug"); return 7; }"#).await;

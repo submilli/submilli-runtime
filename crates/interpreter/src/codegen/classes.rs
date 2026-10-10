@@ -462,7 +462,6 @@ impl ClassPlan {
         types: &mut TypeSection,
         next_type_idx: &mut u32,
         symbols: &mut SymbolTable,
-        _ta: &TypedAst,
         intrinsics: IntrinsicTypeIndices,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if self.classes.is_empty() {
@@ -595,6 +594,10 @@ impl ClassPlan {
             // methods) + its sig, for every slot in the chain so a parent-typed
             // receiver resolves too.
             for (i, slot) in class.methods.iter().enumerate() {
+                if !slot.generic && !slot.name.starts_with("get ") && !slot.name.starts_with("set ")
+                {
+                    symbols.record_class_payload_method(class.mangled.clone(), slot.name.clone());
+                }
                 symbols.record_class_method_slot(
                     class.mangled.clone(),
                     slot.name.clone(),
@@ -1017,15 +1020,7 @@ impl ClassPlan {
                         .methods
                         .iter()
                         .find(|s| s.name == name)
-                        .map(|slot| {
-                            let idx = ctx
-                                .symbols
-                                .class_method_func_idx(&slot.owner, &slot.name)
-                                .ok_or_else(|| {
-                                    internal_failure("a class method body was not allocated")
-                                })?;
-                            emit_universal_slot_thunk(ctx, idx)
-                        })
+                        .map(|slot| emit_universal_slot_thunk(ctx, &slot.name))
                         .transpose()
                 };
             let extends_error = ctx
@@ -1245,6 +1240,7 @@ impl ClassPlan {
         wasm_params.extend(slot_params(ctx, &method.params, &abi.params)?);
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
         let param_slots = rebind_erased_params(&mut emitter, ctx, &method.params, &abi.params)?;
+        emitter.prepare_parameter_initialization(Some(method.body))?;
         // Param prologue boxes captured-mutated method params.
         emitter.emit_boxed_param_prologue(&method.params, &param_slots)?;
 
@@ -1258,7 +1254,7 @@ impl ClassPlan {
         emitter.set_this_local(this_slot)?;
         super::field_guards::bind_receiver(&mut emitter, ctx, this_slot, &class.mangled)?;
 
-        if !method.return_type.is_void() {
+        {
             emitter.set_return_target(ReturnTarget::Slot(match abi.ret {
                 Some(ty) => ty,
                 None => ctx.symbols.slot_value_type(&method.return_type)?,
@@ -1339,9 +1335,12 @@ impl ClassPlan {
         let payload_len = named_len
             .checked_add(guard_slots)
             .ok_or_else(|| internal_failure("a class instance payload is too large"))?;
-        for _ in 0..payload_len {
-            let default = default_object_value_instr(intrinsics.object);
-            emitter.instruction(default);
+        for slot in 0..payload_len {
+            if slot < named_len {
+                super::function_emitter::expr::emit_undefined(&mut emitter, ctx)?;
+            } else {
+                emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.object)));
+            }
         }
         emitter.instruction(Instruction::ArrayNewFixed {
             array_type_index: intrinsics.object_fields,
@@ -1456,6 +1455,7 @@ impl ClassPlan {
         wasm_params.extend(slot_params(ctx, &class.ctor_params, &ctor_slots)?);
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
         let param_slots = rebind_erased_params(&mut emitter, ctx, &class.ctor_params, &ctor_slots)?;
+        emitter.prepare_parameter_initialization(class.ctor_body)?;
         // Box captured-mutated ctor params.
         emitter.emit_boxed_param_prologue(&class.ctor_params, &param_slots)?;
 
@@ -1471,16 +1471,58 @@ impl ClassPlan {
         emitter.set_ctor_class(class.mangled.clone());
 
         if let Some(body) = class.ctor_body {
-            // Base class: no `super(...)`, so the field setup runs at the top.
-            // Derived class: the `super(...)` call inside the body emits it.
             if class.parent.is_none() {
-                crate::codegen::function_emitter::expr::emit_class_field_setup(
+                super::function_emitter::expr::emit_class_field_setup_phase(
                     &mut emitter,
                     ctx,
                     &class.mangled,
+                    super::function_emitter::expr::FieldSetupPhase::Initializers,
                 )?;
             }
-            stmt::emit_statement(&mut emitter, ctx, body)?;
+            let defaults = ctx
+                .ta
+                .parameter_default_prologues
+                .get(&body)
+                .copied()
+                .unwrap_or(0);
+            if class.parent.is_none() && defaults > 0 {
+                let body = ctx.ta.try_stmt(body).map_err(super::arena_failure)?;
+                let crate::TypedStmtKind::Block(statements) = &body.kind else {
+                    return Err(internal_failure(
+                        "constructor default prologue is not a block",
+                    ));
+                };
+                let prologue = statements.get(..defaults).ok_or_else(|| {
+                    internal_failure("constructor default prologue is incomplete")
+                })?;
+                let body = statements.get(defaults..).ok_or_else(|| {
+                    internal_failure("constructor body is missing after defaults")
+                })?;
+                emitter.push_scope();
+                for &statement in prologue {
+                    stmt::emit_statement(&mut emitter, ctx, statement)?;
+                }
+                super::function_emitter::expr::emit_class_field_setup_phase(
+                    &mut emitter,
+                    ctx,
+                    &class.mangled,
+                    super::function_emitter::expr::FieldSetupPhase::ParameterProperties,
+                )?;
+                for &statement in body {
+                    stmt::emit_statement(&mut emitter, ctx, statement)?;
+                }
+                emitter.pop_scope()?;
+            } else {
+                if class.parent.is_none() {
+                    super::function_emitter::expr::emit_class_field_setup_phase(
+                        &mut emitter,
+                        ctx,
+                        &class.mangled,
+                        super::function_emitter::expr::FieldSetupPhase::ParameterProperties,
+                    )?;
+                }
+                stmt::emit_statement(&mut emitter, ctx, body)?;
+            }
         } else {
             // Implicit constructor: forward all params to the parent init (if
             // any), then run this class's field setup.
@@ -1631,16 +1673,10 @@ fn field_setup_steps(
     let mut steps = Vec::new();
     if let Some(ctor) = &decl.constructor {
         for field in decl.fields.iter().filter(|f| f.auto_assigned) {
-            if let Some((pos, param)) = ctor
-                .params
-                .iter()
-                .enumerate()
-                .find(|(_, p)| p.name.name == field.name.name)
-            {
+            if let Some(param) = ctor.params.iter().find(|p| p.name.name == field.name.name) {
                 steps.push(FieldSetup::ParamCopy {
                     field: field.name.name.clone(),
-                    param_local: parameter_local(pos)?,
-                    ty: param.ty.clone(),
+                    param: Box::new(param.clone()),
                 });
             }
         }
@@ -1812,6 +1848,7 @@ fn slot_closure_sig(
         params: slot.param_tys.clone(),
         ret: Box::new(slot.ret_ty.clone()),
         predicate: None,
+        optional: 0,
         has_rest: false,
     };
     crate::codegen::closures::classify(&sig)
@@ -2187,10 +2224,11 @@ fn emit_payload_slot_equals(f: &mut Function, slot: u32, intrinsics: IntrinsicTy
 }
 
 /// Bridge an authored conversion method to the universal string-returning slot.
-/// Direct user calls still preserve the method's actual return value.
+/// Read its current payload so writes through structural aliases also affect
+/// implicit conversions, including inherited methods with a different layout.
 fn emit_universal_slot_thunk(
     ctx: &CodegenCtx,
-    method_func_idx: u32,
+    method: &str,
 ) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let mut emitter = super::function_emitter::FunctionEmitter::new(
         ctx,
@@ -2203,12 +2241,13 @@ fn emit_universal_slot_thunk(
         )],
     )?;
     emitter.instruction(Instruction::LocalGet(0));
-    emitter.instruction(Instruction::Call(method_func_idx));
-    super::cast_check::emit_operation_cast_on_stack(
+    super::function_emitter::expr::emit_interface_method_via_shape_with_receiver_on_stack(
         &mut emitter,
         ctx,
-        &crate::Type::Unknown,
+        method,
+        &[],
         &crate::Type::String,
+        None,
     )?;
     emitter.build()
 }
@@ -2354,15 +2393,105 @@ fn emit_class_hash_body(n_fields: u32, intrinsics: IntrinsicTypeIndices) -> Func
     f
 }
 
+/// Member names this module may write through a structural alias. A method is
+/// fixed on its class, but a `{ m: () => T }` view of the instance, or a record
+/// holding functions, writes the payload slot the method's closure lives in.
+///
+/// The rule is by name, so it covers imported classes too: this module's write
+/// reaches an imported instance as easily as a local one.
+#[derive(Clone, Debug)]
+pub(crate) enum RewritableMembers {
+    Named(std::collections::BTreeSet<String>),
+    /// A computed-key write of a function-capable value may reach any member.
+    Every,
+}
+
+impl Default for RewritableMembers {
+    fn default() -> Self {
+        Self::Named(std::collections::BTreeSet::new())
+    }
+}
+
+impl RewritableMembers {
+    pub(crate) fn of(ta: &TypedAst) -> Result<Self, crate::compiler_error::CompilerFailure> {
+        let mut members = Self::default();
+        for id in ta.stmt_ids().map_err(super::arena_failure)? {
+            match &ta.try_stmt(id).map_err(super::arena_failure)?.kind {
+                crate::TypedStmtKind::AssignField { name, .. } => {
+                    members.note_name(&name.name);
+                }
+                crate::TypedStmtKind::AssignIndex { index, elem_ty, .. } => {
+                    members.note_index(ta, *index, elem_ty)?;
+                }
+                _ => {}
+            }
+        }
+        for id in ta.expr_ids().map_err(super::arena_failure)? {
+            let crate::TypedExprKind::PostfixUnary { target, .. } =
+                &ta.try_expr(id).map_err(super::arena_failure)?.kind
+            else {
+                continue;
+            };
+            match target {
+                crate::PostfixTarget::Field { name, .. } => {
+                    members.note_name(&name.name);
+                }
+                crate::PostfixTarget::Index { index, elem_ty, .. } => {
+                    members.note_index(ta, *index, elem_ty)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(members)
+    }
+
+    fn note_index(
+        &mut self,
+        ta: &TypedAst,
+        index: crate::ExprId,
+        elem_ty: &crate::Type,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        if !may_hold_function(elem_ty) {
+            return Ok(());
+        }
+        match &ta.try_expr(index).map_err(super::arena_failure)?.kind {
+            crate::TypedExprKind::String(name) => self.note_name(name),
+            _ => *self = Self::Every,
+        }
+        Ok(())
+    }
+
+    fn note_name(&mut self, name: &str) {
+        if let Self::Named(names) = self {
+            names.insert(name.to_string());
+        }
+    }
+
+    pub(crate) fn includes(&self, name: &str) -> bool {
+        match self {
+            Self::Named(names) => names.contains(name),
+            Self::Every => true,
+        }
+    }
+}
+
+fn may_hold_function(ty: &crate::Type) -> bool {
+    match ty.peel() {
+        crate::Type::Union(members) => members.iter().any(may_hold_function),
+        crate::Type::Function { .. }
+        | crate::Type::Unknown
+        | crate::Type::TypeVar(_)
+        | crate::Type::GenericParam { .. }
+        | crate::Type::Error => true,
+        _ => false,
+    }
+}
+
 fn ref_to(idx: u32) -> ValType {
     ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(idx),
     })
-}
-
-fn default_object_value_instr(object_type_idx: u32) -> Instruction<'static> {
-    Instruction::RefNull(HeapType::Concrete(object_type_idx))
 }
 
 fn fieldtype_ref(idx: u32) -> FieldType {

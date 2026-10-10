@@ -1,7 +1,7 @@
 === typeGuardsInIfStatement.ts ===
-// In the true branch statement of an 'if' statement, 
+// In the true branch statement of an 'if' statement,
 // the type of a variable or parameter is narrowed by any type guard in the 'if' condition when true.
-// In the false branch statement of an 'if' statement, 
+// In the false branch statement of an 'if' statement,
 // the type of a variable or parameter is narrowed by any type guard in the 'if' condition when false.
 function foo(x: number | string): number {
 >foo : (x: number | string) => number
@@ -358,7 +358,7 @@ function foo9(x: number | string): boolean {
 >         : ^^^^^^^^
 
         // usage of x or assignment to separate variable shouldn't cause narrowing of type to stop
-        y = x.length; 
+        y = x.length;
 >y = x.length : number
 >             : ^^^^^^
 >y : number
@@ -559,20 +559,20 @@ function foo11(x: number | string | boolean): string | false {
             );
     }
 }
-/*pruned*/;                                        
-                                                                                       
-                                                                                           
-                                
-                                                                                    
-     
-          
-               
-                                               
-                                    
-                                    
-                                               
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 function main(): void {}
 >main : () => void

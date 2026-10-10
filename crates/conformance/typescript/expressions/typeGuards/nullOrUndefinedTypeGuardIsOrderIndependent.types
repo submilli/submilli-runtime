@@ -1,11 +1,11 @@
 === nullOrUndefinedTypeGuardIsOrderIndependent.ts ===
-function test(strOrNull: string | null, strOrUndefined: string | null): void {
->test : (strOrNull: string | null, strOrUndefined: string | null) => void
->     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+function test(strOrNull: string | null, strOrUndefined: string | undefined): void {
+>test : (strOrNull: string | null, strOrUndefined: string | undefined) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >strOrNull : string | null
 >          : ^^^^^^^^^^^^^
->strOrUndefined : string | null
->               : ^^^^^^^^^^^^^
+>strOrUndefined : string | undefined
+>               : ^^^^^^^^^^^^^^^^^^
 
     let str: string = "original";
 >str : string
@@ -46,11 +46,13 @@ function test(strOrNull: string | null, strOrUndefined: string | null): void {
 >          : ^^^^^^
 
     }
-    if (null !== strOrUndefined) {
->null !== strOrUndefined : boolean
->                        : ^^^^^^^
->strOrUndefined : string | null
->               : ^^^^^^^^^^^^^
+    if (undefined !== strOrUndefined) {
+>undefined !== strOrUndefined : boolean
+>                             : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>strOrUndefined : string | undefined
+>               : ^^^^^^^^^^^^^^^^^^
 
         str = strOrUndefined;
 >str = strOrUndefined : string

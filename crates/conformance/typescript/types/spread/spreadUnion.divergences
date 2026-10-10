@@ -1,6 +1,6 @@
 types: 22 of 47 tsc entries compared, 6 differ
 
-line 5: o3
+line 5: o3_2
   tsc:  { a: number; } | { b: string; }
   ours: { a?: number; b?: string }
 
@@ -8,7 +8,7 @@ line 5: { ...union }
   tsc:  { a: number; } | { b: string; }
   ours: { a?: number; b?: string }
 
-line 8: o4
+line 8: o4_2
   tsc:  { a: boolean; } | { a: boolean; b: string; }
   ours: { a: boolean; b?: string }
 
@@ -16,15 +16,10 @@ line 8: { ...union, a: false }
   tsc:  { a: boolean; } | { a: boolean; b: string; }
   ours: { a: boolean; b?: string }
 
-line 11: o5
+line 11: o5_2
   tsc:  { a: number; } | { b: string; a: number; } | { a: number; b: string; } | { b: string; }
   ours: { a?: number; b?: string }
 
 line 11: { ...union, ...union }
   tsc:  { a: number; } | { b: string; a: number; } | { a: number; b: string; } | { b: string; }
   ours: { a?: number; b?: string }
-
-errors:
-line 4: tsc TS2451: Cannot redeclare block-scoped variable 'o3'. (we accept)
-line 7: tsc TS2451: Cannot redeclare block-scoped variable 'o4'. (we accept)
-line 10: tsc TS2451: Cannot redeclare block-scoped variable 'o5'. (we accept)

@@ -38,14 +38,14 @@ let aOrB: "A" | "B" = null as unknown as ("A" | "B");
 >                : ^^^^^^^
 
 
-/*pruned*/;                              
-                      
-                   
-     
-          
-                   
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
 
 const g = (arg: WeakTypes) => {
 >g : (arg: WeakTypes) => WeakTypes

@@ -36,15 +36,14 @@ function main(): void {
   assert(s.detail.service === "billing", "a nested string field round-trips");
   assert(s.detail.restarts === 3, "a nested number field round-trips as a number");
 
-  // An explicit null satisfies a nullable field — absent and null are the same
-  // answer here, and both are legal.
+  // An explicit null satisfies a required nullable field; an absent field does not.
   assert(s.owner === null, "a nullable field accepts an explicit null");
 
   // The typed form has no `ok` to branch on: that is the trade. A caller who
   // needs the envelope uses the untyped form instead, which still works.
   const untyped = llm.call("claude-haiku-4-5", "Classify this ticket.");
   assert(untyped.ok, "the untyped form still returns the envelope");
-  assert(untyped.text !== null, "carrying the raw text for a caller that wants it");
+  assert(untyped.text !== undefined, "carrying the raw text for a caller that wants it");
 
   // `batch<T>` names the shape of the *whole result*, not of one element, so
   // the type argument is an array type.

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3c6d79f45e933d9d35e0bfee8821b3b26616bd7c2c416541ab85f48daccc54c1"
-  confirmedAt: "2026-10-06T10:27:39.000Z"
+  contentHash: "883d4ec808dd774a3b21c57d30132ec77e917db6ce0ad76f107e9d3eaaa73c84"
+  confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
 This page lists the limits on a program's run, the fixed limits inside the
@@ -124,7 +124,7 @@ lookaround. A pattern with either throws `SyntaxError`.
 
 | Limit | Value | When passed |
 | --- | --- | --- |
-| A whole-file read, `fs.read` or `fs.readText` | 52,428,800 bytes, reported by `fs.maxReadSize()` | Returns `null` |
+| A whole-file read, `fs.read` or `fs.readText` | 52,428,800 bytes, reported by `fs.maxReadSize()` | Returns `undefined` |
 | `fs.readBytes` length | `fs.maxReadSize()` | `RangeError` |
 | Entries a recursive `fs.remove` scans | 10,000 | `Error` |
 | Directory depth `fs.list` walks in depth-first order | 32 | Deeper directories follow the rest of their parent's entries |

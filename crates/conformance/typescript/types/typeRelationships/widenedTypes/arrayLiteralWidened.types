@@ -7,7 +7,7 @@ let a = []; // any[]
 >[] : never[]
 >   : ^^^^^^^
 
-/*pruned*/;    
+/*pruned*/;
 
 let a_3 = [null, null];
 >a_3 : null[]
@@ -15,11 +15,15 @@ let a_3 = [null, null];
 >[null, null] : null[]
 >             : ^^^^^^
 
-let a_4 = [null, null];
->a_4 : null[]
->    : ^^^^^^
->[null, null] : null[]
->             : ^^^^^^
+let a_4 = [undefined, undefined];
+>a_4 : undefined[]
+>    : ^^^^^^^^^^^
+>[undefined, undefined] : undefined[]
+>                       : ^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 let b = [[], [null, null]]; // any[][]
@@ -42,13 +46,17 @@ let b_2 = [[], []];
 >[] : never[]
 >   : ^^^^^^^
 
-let b_3 = [[null, null]];
->b_3 : null[][]
->    : ^^^^^^^^
->[[null, null]] : null[][]
->               : ^^^^^^^^
->[null, null] : null[]
->             : ^^^^^^
+let b_3 = [[undefined, undefined]];
+>b_3 : undefined[][]
+>    : ^^^^^^^^^^^^^
+>[[undefined, undefined]] : undefined[][]
+>                         : ^^^^^^^^^^^^^
+>[undefined, undefined] : undefined[]
+>                       : ^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 let c = [[[]]]; // any[][][]
@@ -61,42 +69,48 @@ let c = [[[]]]; // any[][][]
 >[] : never[]
 >   : ^^^^^^^
 
-let c_2 = [[[null]],[null]]
->c_2 : (null[] | null[][])[]
->    : ^^^^^^^^^^^^^^^^^^^^^
->[[[null]],[null]] : (null[] | null[][])[]
->                  : ^^^^^^^^^^^^^^^^^^^^^
+let c_2 = [[[null]],[undefined]]
+>c_2 : (undefined[] | null[][])[]
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[[[null]],[undefined]] : (undefined[] | null[][])[]
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >[[null]] : null[][]
 >         : ^^^^^^^^
 >[null] : null[]
 >       : ^^^^^^
->[null] : null[]
->       : ^^^^^^
+>[undefined] : undefined[]
+>            : ^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // no widening when one or more elements are non-widening
 
-let x: null = null;
->x : null
->  : ^^^^
+let x: undefined = undefined;
+>x : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 let d = [x];
->d : null[]
->  : ^^^^^^
->[x] : null[]
->    : ^^^^^^
->x : null
->  : ^^^^
+>d : undefined[]
+>  : ^^^^^^^^^^^
+>[x] : undefined[]
+>    : ^^^^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
-/*pruned*/;     
-let d_3 = [null, x];
->d_3 : null[]
->    : ^^^^^^
->[null, x] : null[]
->          : ^^^^^^
->x : null
->  : ^^^^
+/*pruned*/;
+let d_3 = [undefined, x];
+>d_3 : undefined[]
+>    : ^^^^^^^^^^^
+>[undefined, x] : undefined[]
+>               : ^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
 
 

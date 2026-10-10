@@ -1,6 +1,6 @@
 // @target: es2015
 let as = 43;
-let x = null as number;
+let x = undefined as number;
 let y = (null as string).length;
 /*pruned*/;                   
 

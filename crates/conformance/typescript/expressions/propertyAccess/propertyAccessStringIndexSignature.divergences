@@ -2,16 +2,16 @@ types: 16 of 28 tsc entries compared, 4 differ
 
 line 5: flags.b
   tsc:  boolean
-  ours: boolean | null
+  ours: boolean | undefined
 
 line 6: flags.f
   tsc:  boolean
-  ours: boolean | null
+  ours: boolean | undefined
 
 line 7: flags.isNotNecessarilyNeverFalse
   tsc:  boolean
-  ours: boolean | null
+  ours: boolean | undefined
 
 line 8: flags['this is fine']
   tsc:  boolean
-  ours: boolean | null
+  ours: boolean | undefined

@@ -884,9 +884,12 @@ fn accessors_do_not_pay_for_the_whole_receiver() {
     // One case per accessor path.
     let cases = [
         ("usage-char-at", "sum += s.charAt(i).length;"),
-        ("usage-string-at", "if (s.at(i) !== null) { sum += 1; }"),
+        (
+            "usage-string-at",
+            "if (s.at(i) !== undefined) { sum += 1; }",
+        ),
         ("usage-char-code-at", "sum += s.charCodeAt(i);"),
-        ("usage-code-point-at", "sum += s.codePointAt(i);"),
+        ("usage-code-point-at", "sum += s.codePointAt(i) ?? 0;"),
         ("usage-string-slice", "sum += s.slice(i, i + 1).length;"),
         ("usage-substring", "sum += s.substring(i, i + 1).length;"),
         (
@@ -899,17 +902,17 @@ fn accessors_do_not_pay_for_the_whole_receiver() {
         ),
         (
             "usage-array-at",
-            "const v = a.at(i); if (v !== null) { sum += v; }",
+            "const v = a.at(i); if (v !== undefined) { sum += v; }",
         ),
         (
             "usage-array-pop",
-            "const v = a.pop(); if (v !== null) { sum += v; }",
+            "const v = a.pop(); if (v !== undefined) { sum += v; }",
         ),
         ("usage-array-slice", "sum += a.slice(i, i + 1).length;"),
         ("usage-bytes-length", "sum += b.length;"),
         (
             "usage-bytes-at",
-            "const v = b.at(i); if (v !== null) { sum += v; }",
+            "const v = b.at(i); if (v !== undefined) { sum += v; }",
         ),
         ("usage-bytes-slice", "sum += b.slice(i, i + 1).length;"),
     ];
@@ -1170,7 +1173,7 @@ fn operations_charge_for_the_input_they_process() {
     }
     assert!(iterator_costs[1] < iterator_costs[0] * 5 / 2);
 
-    let mut metadata_costs = Vec::new();
+    let mut callback_default_costs = Vec::new();
     for count in [128, 256] {
         let padding = "x".repeat(count * 32);
         let declaration =
@@ -1178,25 +1181,27 @@ fn operations_charge_for_the_input_they_process() {
         let setup =
             format!("const values:number[]=[]; for(let i=0;i<{count};i++){{ values.push(i); }}");
         let baseline = host_fuel(
-            "metadata-baseline",
+            "callback-default-baseline",
             &format!("{declaration} function main(): number {{ {setup} return 0; }}"),
         );
         let actual = host_fuel(
-            "metadata",
+            "callback-default",
             &format!(
                 "{declaration} function main(): number {{ {setup} values.forEach(work); return 0; }}"
             ),
         ) - baseline;
-        eprintln!("metadata {count}: {actual}");
+        eprintln!("callback default {count}: {actual}");
+        // A default is compiled into the callee itself, so dispatching `work`
+        // as a callback never parses its long default from metadata.
         assert!(
-            actual > PARSE.cost((count * 32) as u64),
-            "metadata fixture must exercise the cache miss"
+            actual < PARSE.cost((count * 32) as u64),
+            "a callback's default must not be parsed: {actual}"
         );
-        metadata_costs.push(actual);
+        callback_default_costs.push(actual);
         let old = if count == 128 { 593_152 } else { 2_365_952 };
         assert!(actual < old / 2);
     }
-    assert!(metadata_costs[1] < metadata_costs[0] * 5 / 2);
+    assert!(callback_default_costs[1] < callback_default_costs[0] * 5 / 2);
 
     let mut options_costs = Vec::new();
     for count in [128, 256] {

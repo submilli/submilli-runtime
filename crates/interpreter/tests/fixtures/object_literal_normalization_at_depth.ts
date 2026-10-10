@@ -7,7 +7,7 @@ function main(): void {
   assert(read.join(",") === "1-,none,-s", "objects beside null normalize");
 
   const deep = [{ a: { b: { c: 1 } } }, { a: { b: { d: "x" } } }];
-  assert(deep[0].a.b.d == null && deep[1].a.b.c == null, "two levels down normalize");
+  assert(deep[0].a.b.d === undefined && deep[1].a.b.c === undefined, "two levels down normalize");
   assert(deep[0].a.b.c === 1 && deep[1].a.b.d === "x", "declared fields keep their values");
 
   const mixed = [{ p: { x: 1 } }, { p: 5 }, { p: { y: 2 } }];
@@ -26,8 +26,8 @@ function main(): void {
   assert(found === 3, "null elements and branches stay beside normalized literals");
   const negative = [{ a: { b: 1 } }, { a: -1 }, { a: { c: 2 } }];
   const first = negative[0].a;
-  assert(typeof first !== "number" && first.b === 1 && first.c == null, "a signed literal is no sibling");
+  assert(typeof first !== "number" && first.b === 1 && first.c === undefined, "a signed literal is no sibling");
 
   const shapes = [{ a: { x: 1, y: 2 } }, { a: { x: 1 } }];
-  assert(shapes[1].a.y == null, "a missing nested field reads as missing");
+  assert(shapes[1].a.y === undefined, "a missing nested field reads as missing");
 }

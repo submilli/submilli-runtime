@@ -35,7 +35,10 @@ fn collect_parameters(ty: &Type, names: &mut BTreeSet<String>) {
             names.insert(name.clone());
         }
         Type::Array(element) => collect_parameters(element, names),
-        Type::Tuple(types) | Type::Union(types) => {
+        Type::Tuple(crate::types::TupleType {
+            elements: types, ..
+        })
+        | Type::Union(types) => {
             for ty in types {
                 collect_parameters(ty, names);
             }

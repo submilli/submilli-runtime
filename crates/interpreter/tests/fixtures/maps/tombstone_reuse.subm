@@ -14,12 +14,12 @@ function main(): void {
   m.set("gamma", 30);
   assert(m.size === 4, "re-insert reuses tombstones, size returns to 4");
 
-  const a: number | null = m.get("alpha");
-  const b: number | null = m.get("beta");
-  const g: number | null = m.get("gamma");
-  const d: number | null = m.get("delta");
-  assert(a !== null && a === 1, "alpha unchanged");
-  assert(b !== null && b === 20, "beta has new value");
-  assert(g !== null && g === 30, "gamma has new value");
-  assert(d !== null && d === 4, "delta unchanged");
+  const a: number | undefined = m.get("alpha");
+  const b: number | undefined = m.get("beta");
+  const g: number | undefined = m.get("gamma");
+  const d: number | undefined = m.get("delta");
+  assert(a !== undefined && a === 1, "alpha unchanged");
+  assert(b !== undefined && b === 20, "beta has new value");
+  assert(g !== undefined && g === 30, "gamma has new value");
+  assert(d !== undefined && d === 4, "delta unchanged");
 }

@@ -478,6 +478,26 @@ impl SyntaxChildren {
         for param in params {
             self.annotations(&param.ty);
             self.nodes.extend(param.default.map(Node::Expr));
+            if let Some(pattern) = &param.pattern {
+                self.binding(pattern);
+            }
+        }
+    }
+
+    fn binding(&mut self, binding: &crate::Binding) {
+        match binding {
+            crate::Binding::Object { fields, .. } => {
+                self.nodes.extend(
+                    fields
+                        .iter()
+                        .filter_map(|field| field.default)
+                        .map(Node::Expr),
+                );
+            }
+            crate::Binding::Array { defaults, .. } => {
+                self.nodes
+                    .extend(defaults.iter().flatten().copied().map(Node::Expr));
+            }
         }
     }
 
@@ -528,6 +548,7 @@ impl SyntaxChildren {
             ExprKind::Unary { operand, .. }
             | ExprKind::Paren(operand)
             | ExprKind::Typeof { operand }
+            | ExprKind::Void { operand }
             | ExprKind::Delete { operand }
             | ExprKind::PostfixUnary { operand, .. } => self.expr(*operand),
             ExprKind::Call {
@@ -599,13 +620,21 @@ impl SyntaxChildren {
         match kind {
             StmtKind::Let { ty, value, .. }
             | StmtKind::Const { ty, value, .. }
-            | StmtKind::LetPattern { ty, value, .. }
-            | StmtKind::ConstPattern { ty, value, .. }
             | StmtKind::ObjectRest {
                 ty, source: value, ..
             } => {
                 self.annotations(ty);
                 self.expr(*value);
+            }
+            StmtKind::LetPattern {
+                ty, value, binding, ..
+            }
+            | StmtKind::ConstPattern {
+                ty, value, binding, ..
+            } => {
+                self.annotations(ty);
+                self.expr(*value);
+                self.binding(binding);
             }
             StmtKind::Function {
                 params,
@@ -643,11 +672,22 @@ impl SyntaxChildren {
                 self.nodes.extend(update.map(Node::Stmt));
                 self.stmt(*body);
             }
-            StmtKind::ForOf { ty, iter, body, .. }
-            | StmtKind::ForOfPattern { ty, iter, body, .. } => {
+            StmtKind::ForOf { ty, iter, body, .. } => {
                 self.annotations(ty);
                 self.expr(*iter);
                 self.stmt(*body);
+            }
+            StmtKind::ForOfPattern {
+                ty,
+                iter,
+                body,
+                binding,
+                ..
+            } => {
+                self.annotations(ty);
+                self.expr(*iter);
+                self.stmt(*body);
+                self.binding(binding);
             }
             StmtKind::Switch {
                 discriminant,
@@ -829,6 +869,7 @@ impl<'a> AnnotationChildren<'a> {
             | TypeAnnotationKind::BooleanLiteral(_)
             | TypeAnnotationKind::TypeOf { .. } => {}
             TypeAnnotationKind::Array(inner)
+            | TypeAnnotationKind::Optional(inner)
             | TypeAnnotationKind::Readonly(inner)
             | TypeAnnotationKind::KeyOf(inner) => children.trailing = Some(inner),
             TypeAnnotationKind::Object { fields, index } => {
@@ -972,6 +1013,7 @@ impl TypedChildren {
             | TypedExprKind::String(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
+            | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
             | TypedExprKind::LocalRef { .. }

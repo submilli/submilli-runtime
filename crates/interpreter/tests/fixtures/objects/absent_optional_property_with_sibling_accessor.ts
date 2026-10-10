@@ -27,7 +27,7 @@ function main(): void {
 
   const raw = { tag: "b" };
   const absent: Bag = raw;
-  assert(absent.note === null, "absent optional property reads null");
+  assert(absent.note === undefined, "absent optional property reads undefined");
 
   // The write creates a data property without dispatching the sibling's setter.
   absent.note = "inserted";

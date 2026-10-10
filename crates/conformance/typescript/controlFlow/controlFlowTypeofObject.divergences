@@ -1,4 +1,4 @@
-types: 38 of 60 tsc entries compared, 7 differ
+types: 39 of 61 tsc entries compared, 7 differ
 
 line 11: x
   tsc:  {}
@@ -30,4 +30,6 @@ line 65: x
 
 errors:
 line 8: ours: cannot use `unknown` in a boolean context (tsc accepts)
+line 26: ours: `x == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 35: ours: `x == undefined` does not also match `null`: `==` compares like `===` (tsc accepts)
 line 45: ours: cannot use `unknown` in a boolean context (tsc accepts)

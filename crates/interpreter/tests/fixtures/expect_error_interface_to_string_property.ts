@@ -1,6 +1,6 @@
 // expect-error: interface property `toString` must have type `() => string` (got `() => number`)
 // expect-error: interface property `toString` must have type `() => string` (got `() => T`)
-// expect-error: interface property `toString` must have type `() => string` (got `null | (() => string)`)
+// expect-error: interface property `toString` must have type `() => string` (got `(() => string) | null`)
 // expect-error: interface property `toJson` must have type `() => string` (got `(...arg0: number[]) => string`)
 // expect-error-count: 4
 // An interface property named `toString` or `toJson` is called by the same

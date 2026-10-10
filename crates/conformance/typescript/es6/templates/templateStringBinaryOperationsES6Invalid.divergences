@@ -1,0 +1,97 @@
+types: 168 of 625 tsc entries compared, 24 differ
+
+line 47: `${ 3 & 4 }`
+  tsc:  "0"
+  ours: string
+
+line 48: `2${ 3 & 4 }`
+  tsc:  "20"
+  ours: string
+
+line 49: `${ 3 & 4 }5`
+  tsc:  "05"
+  ours: string
+
+line 50: `2${ 3 & 4 }5`
+  tsc:  "205"
+  ours: string
+
+line 51: `${ 3 & 4 }`
+  tsc:  "0"
+  ours: string
+
+line 52: `2${ 3 & 4 }`
+  tsc:  "20"
+  ours: string
+
+line 53: `${ 3 & 4 }5`
+  tsc:  "05"
+  ours: string
+
+line 54: `2${ 3 & 4 }5`
+  tsc:  "205"
+  ours: string
+
+line 74: `${ 3 & 4 }`
+  tsc:  "0"
+  ours: string
+
+line 75: `2${ 3 & 4 }`
+  tsc:  "20"
+  ours: string
+
+line 76: `${ 3 & 4 }5`
+  tsc:  "05"
+  ours: string
+
+line 77: `2${ 3 & 4 }5`
+  tsc:  "205"
+  ours: string
+
+line 78: `${ 3 & 4 }`
+  tsc:  "0"
+  ours: string
+
+line 79: `2${ 3 & 4 }`
+  tsc:  "20"
+  ours: string
+
+line 80: `${ 3 & 4 }5`
+  tsc:  "05"
+  ours: string
+
+line 81: `2${ 3 & 4 }5`
+  tsc:  "205"
+  ours: string
+
+line 101: `${ 3 & 4 }`
+  tsc:  "0"
+  ours: string
+
+line 102: `2${ 3 & 4 }`
+  tsc:  "20"
+  ours: string
+
+line 103: `${ 3 & 4 }5`
+  tsc:  "05"
+  ours: string
+
+line 104: `2${ 3 & 4 }5`
+  tsc:  "205"
+  ours: string
+
+line 105: `${ 3 & 4 }`
+  tsc:  "0"
+  ours: string
+
+line 106: `2${ 3 & 4 }`
+  tsc:  "20"
+  ours: string
+
+line 107: `${ 3 & 4 }5`
+  tsc:  "05"
+  ours: string
+
+line 108: `2${ 3 & 4 }5`
+  tsc:  "205"
+  ours: string

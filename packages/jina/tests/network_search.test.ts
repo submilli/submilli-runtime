@@ -9,7 +9,7 @@ import secrets from "submilli:secrets";
 import { searchJson } from "@submilli/jina";
 
 function main(): void {
-    if (secrets.get("JINA_API_KEY") === null) {
+    if (secrets.get("JINA_API_KEY") === undefined) {
         return;
     }
 

@@ -548,6 +548,7 @@ impl<'a> Validator<'a> {
                 }
                 TypeAnnotationKind::TypeOf { path } => self.path(path, 1, annotation.span)?,
                 TypeAnnotationKind::Array(inner)
+                | TypeAnnotationKind::Optional(inner)
                 | TypeAnnotationKind::Readonly(inner)
                 | TypeAnnotationKind::KeyOf(inner) => self.annotation(inner)?,
                 TypeAnnotationKind::Tuple(members) | TypeAnnotationKind::Union(members) => {

@@ -1,0 +1,41 @@
+=== exponentiationOperatorWithOnlyNullValueOrUndefinedValue.ts ===
+// operator **
+let r1 = null ** null;
+>r1 : number
+>   : ^^^^^^
+>null ** null : number
+>             : ^^^^^^
+
+let r2 = null ** undefined;
+>r2 : number
+>   : ^^^^^^
+>null ** undefined : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r3 = undefined ** null;
+>r3 : number
+>   : ^^^^^^
+>undefined ** null : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r4 = undefined ** undefined;
+>r4 : number
+>   : ^^^^^^
+>undefined ** undefined : number
+>                       : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

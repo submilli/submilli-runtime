@@ -24,7 +24,7 @@
 //! `llm_no_provider` deliberately gets none, which is the unconfigured runtime.
 //!
 //! The default run is a smoke subset. Set `SUBMILLI_FULL_TEST=1` for
-//! nightly/CI coverage, or `SUBMILLI_FIXTURE_FILTER=<substring>` for targeted
+//! nightly/CI coverage, or `SUBMILLI_FIXTURE_FILTER=<substring[,substring...]>` for targeted
 //! local runs.
 
 use std::fs;
@@ -281,7 +281,7 @@ fn is_false(value: &str) -> bool {
 
 fn select_fixture_suite(paths: &mut Vec<PathBuf>) {
     if let Ok(filter) = std::env::var("SUBMILLI_FIXTURE_FILTER") {
-        paths.retain(|path| fixture_rel(path).contains(&filter));
+        paths.retain(|path| matches_fixture_filter(&fixture_rel(path), &filter));
         return;
     }
 
@@ -300,6 +300,31 @@ fn select_fixture_suite(paths: &mut Vec<PathBuf>) {
         };
         seen_dirs.insert(dir.to_string())
     });
+}
+
+fn matches_fixture_filter(path: &str, filter: &str) -> bool {
+    filter
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .any(|part| path.contains(part))
+}
+
+#[test]
+fn fixture_filter_selects_only_requested_groups() {
+    assert!(matches_fixture_filter(
+        "undefined/primitives.ts",
+        "undefined,tuples/optional"
+    ));
+    assert!(matches_fixture_filter(
+        "tuples/optional_elements.ts",
+        "undefined, tuples/optional"
+    ));
+    assert!(!matches_fixture_filter(
+        "objects/ordinary.ts",
+        "undefined,tuples/optional,"
+    ));
+    assert!(!matches_fixture_filter("objects/ordinary.ts", " , "));
 }
 
 fn run_full_fixture_suite() -> bool {

@@ -78,7 +78,7 @@ const CATCH: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
         const t = llm.call("test-model", "hi").text;
-        return "OK:" + (t === null ? "NULL" : (t as string));
+        return "OK:" + (t === undefined ? "UNDEFINED" : (t as string));
     } catch (e: Error) {
         return e.message;
     }
@@ -90,7 +90,7 @@ const UNDECLARED: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
         const t = llm.call("ghost-model", "hi").text;
-        return "OK:" + (t === null ? "NULL" : (t as string));
+        return "OK:" + (t === undefined ? "UNDEFINED" : (t as string));
     } catch (e: Error) {
         return e.message;
     }
@@ -99,7 +99,7 @@ function main(): string {
 /// Reports the branch the outcome actually took.
 ///
 /// Deliberately **not** `CATCH`: that script reads `.text` without consulting
-/// `ok`, so a failed element — whose `text` is `null` — prints `OK:NULL` and
+/// `ok`, so a failed element — whose `text` is `undefined` — prints `OK:UNDEFINED` and
 /// reads as a success. That is KTD1's silent-bug class reproduced in a test, and
 /// it is why this file needs a script that branches on `ok` first.
 const REPORT: &str = r#"import llm from "submilli:llm";
@@ -108,7 +108,7 @@ function main(): string {
         const c = llm.call("test-model", "hi");
         if (c.ok) { return "OK"; }
         const r = c.reason;
-        return "FAIL:" + (r === null ? "NULL" : (r as string));
+        return "FAIL:" + (r === undefined ? "UNDEFINED" : (r as string));
     } catch (e: Error) {
         return e.message;
     }

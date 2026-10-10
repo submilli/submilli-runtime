@@ -1,0 +1,356 @@
+=== undefinedSemantics.ts ===
+// Written: distinct null/undefined values, optional presence, default parameters,
+// optional tuples and methods, and void completion in one comparison case.
+
+function optionalField(value: { a?: string }): string | undefined {
+>optionalField : (value: { a?: string; }) => string | undefined
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : { a?: string; }
+>      : ^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    const read = value.a;
+>read : string | undefined
+>     : ^^^^^^^^^^^^^^^^^^
+>value.a : string | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>value : { a?: string; }
+>      : ^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    if ("a" in value) {
+>"a" in value : boolean
+>             : ^^^^^^^
+>"a" : "a"
+>    : ^^^
+>value : { a?: string; }
+>      : ^^^^^^^^^^^^^^^
+
+        const present = value.a;
+>present : string | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>value.a : string | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>value : { a?: string; }
+>      : ^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    }
+    return read;
+>read : string | undefined
+>     : ^^^^^^^^^^^^^^^^^^
+
+}
+
+function requiredField(value: { a: string | undefined }): string | undefined {
+>requiredField : (value: { a: string | undefined; }) => string | undefined
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : { a: string | undefined; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    return value.a;
+>value.a : string | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>value : { a: string | undefined; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+}
+
+optionalField({});
+>optionalField({}) : string | undefined
+>                  : ^^^^^^^^^^^^^^^^^^
+>optionalField : (value: { a?: string; }) => string | undefined
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+optionalField({ a: undefined });
+>optionalField({ a: undefined }) : string | undefined
+>                                : ^^^^^^^^^^^^^^^^^^
+>optionalField : (value: { a?: string; }) => string | undefined
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: undefined } : { a: undefined; }
+>                 : ^^^^^^^^^^^^^^^^^
+>a : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+requiredField({ a: undefined });
+>requiredField({ a: undefined }) : string | undefined
+>                                : ^^^^^^^^^^^^^^^^^^
+>requiredField : (value: { a: string | undefined; }) => string | undefined
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: undefined } : { a: undefined; }
+>                 : ^^^^^^^^^^^^^^^^^
+>a : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+requiredField({});
+>requiredField({}) : string | undefined
+>                  : ^^^^^^^^^^^^^^^^^^
+>requiredField : (value: { a: string | undefined; }) => string | undefined
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+optionalField({ a: null });
+>optionalField({ a: null }) : string | undefined
+>                           : ^^^^^^^^^^^^^^^^^^
+>optionalField : (value: { a?: string; }) => string | undefined
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: null } : { a: null; }
+>            : ^^^^^^^^^^^^
+>a : null
+>  : ^^^^
+
+
+function defaulted(value: number | null = 7): number | null {
+>defaulted : (value?: number | null) => number | null
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : number | null
+>      : ^^^^^^^^^^^^^
+>7 : 7
+>  : ^
+
+    return value;
+>value : number | null
+>      : ^^^^^^^^^^^^^
+
+}
+defaulted();
+>defaulted() : number | null
+>            : ^^^^^^^^^^^^^
+>defaulted : (value?: number | null) => number | null
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+defaulted(undefined);
+>defaulted(undefined) : number | null
+>                     : ^^^^^^^^^^^^^
+>defaulted : (value?: number | null) => number | null
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+defaulted(null);
+>defaulted(null) : number | null
+>                : ^^^^^^^^^^^^^
+>defaulted : (value?: number | null) => number | null
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+function optionalArgument(value?: number): number | undefined {
+>optionalArgument : (value?: number) => number | undefined
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : number | undefined
+>      : ^^^^^^^^^^^^^^^^^^
+
+    return value;
+>value : number | undefined
+>      : ^^^^^^^^^^^^^^^^^^
+
+}
+optionalArgument();
+>optionalArgument() : number | undefined
+>                   : ^^^^^^^^^^^^^^^^^^
+>optionalArgument : (value?: number) => number | undefined
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+optionalArgument(undefined);
+>optionalArgument(undefined) : number | undefined
+>                            : ^^^^^^^^^^^^^^^^^^
+>optionalArgument : (value?: number) => number | undefined
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+function tuple(value: [first: number, second?: string]): string | undefined {
+>tuple : (value: [first: number, second?: string]) => string | undefined
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : [first: number, second?: string | undefined]
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    const length = value.length;
+>length : 1 | 2
+>       : ^^^^^
+>value.length : 1 | 2
+>             : ^^^^^
+>value : [first: number, second?: string | undefined]
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>length : 1 | 2
+>       : ^^^^^
+
+    return value[1];
+>value[1] : string | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+>value : [first: number, second?: string | undefined]
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+}
+tuple([1]);
+>tuple([1]) : string | undefined
+>           : ^^^^^^^^^^^^^^^^^^
+>tuple : (value: [first: number, second?: string]) => string | undefined
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[1] : [number]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+
+tuple([1, undefined]);
+>tuple([1, undefined]) : string | undefined
+>                      : ^^^^^^^^^^^^^^^^^^
+>tuple : (value: [first: number, second?: string]) => string | undefined
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[1, undefined] : [number, undefined]
+>               : ^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+tuple([1, "two"]);
+>tuple([1, "two"]) : string | undefined
+>                  : ^^^^^^^^^^^^^^^^^^
+>tuple : (value: [first: number, second?: string]) => string | undefined
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[1, "two"] : [number, string]
+>           : ^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>"two" : "two"
+>      : ^^^^^
+
+
+interface OptionalMethod {
+>OptionalMethod : OptionalMethod
+>               : ^^^^^^^^^^^^^^
+
+    run?(value: number): string;
+>run : ((value: number) => string) | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : number
+>      : ^^^^^^
+
+}
+function callOptional(value: OptionalMethod): string | undefined {
+>callOptional : (value: OptionalMethod) => string | undefined
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : OptionalMethod
+>      : ^^^^^^^^^^^^^^
+
+    return value.run?.(1);
+>value.run?.(1) : string | undefined
+>               : ^^^^^^^^^^^^^^^^^^
+>value.run : ((value: number) => string) | undefined
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : OptionalMethod
+>      : ^^^^^^^^^^^^^^
+>run : ((value: number) => string) | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+function distinguish(value: string | null | undefined): string {
+>distinguish : (value: string | null | undefined) => string
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : string | null | undefined
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    if (value === undefined) return "undefined";
+>value === undefined : boolean
+>                    : ^^^^^^^
+>value : string | null | undefined
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>"undefined" : "undefined"
+>            : ^^^^^^^^^^^
+
+    if (value === null) return "null";
+>value === null : boolean
+>               : ^^^^^^^
+>value : string | null
+>      : ^^^^^^^^^^^^^
+>"null" : "null"
+>       : ^^^^^^
+
+    return value;
+>value : string
+>      : ^^^^^^
+
+}
+
+function destructured(value: { a?: number }): number {
+>destructured : (value: { a?: number; }) => number
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : { a?: number; }
+>      : ^^^^^^^^^^^^^^^
+>a : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    const { a = 1 } = value;
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>value : { a?: number; }
+>      : ^^^^^^^^^^^^^^^
+
+    return a;
+>a : number
+>  : ^^^^^^
+
+}
+
+function completion(): void {}
+>completion : () => void
+>           : ^^^^^^^^^^
+
+const result = completion();
+>result : void
+>       : ^^^^
+>completion() : void
+>             : ^^^^
+>completion : () => void
+>           : ^^^^^^^^^^
+
+const discarded = void defaulted();
+>discarded : undefined
+>          : ^^^^^^^^^
+>void defaulted() : undefined
+>                 : ^^^^^^^^^
+>defaulted() : number | null
+>            : ^^^^^^^^^^^^^
+>defaulted : (value?: number | null) => number | null
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+const missing: undefined = undefined;
+>missing : undefined
+>        : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+const explicitNull: null = null;
+>explicitNull : null
+>             : ^^^^
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,8 +1,12 @@
-types: 60 of 85 tsc entries compared, 1 differ
+types: 61 of 86 tsc entries compared, 2 differ
 
 line 19: s
   tsc:  "foo" | "bar" | "baz"
   ours: "baz"
+
+line 27: undefined
+  tsc:  undefined
+  ours: string
 
 errors:
 line 15: ours: `switch` case body must end with `break` or `return` — no fallthrough (tsc accepts)

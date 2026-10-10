@@ -52,7 +52,7 @@ function main(): string {
     for (const entry of result.events) {
         const event = entry.event;
         const start = event.start.dateTime;
-        const when = start !== null
+        const when = start !== undefined
             ? Temporal.Instant.from(start).toZonedDateTimeISO(zone).toPlainTime().toString()
             : "all day";
         lines.push(when + "  " + event.summary);

@@ -9,13 +9,13 @@ function mutuallyEnabledPair(): {
     value: string,
   } | {
     discriminator: false,
-    value: null | null,
+    value: null | undefined,
   } { return null as unknown as ({
     discriminator: true,
     value: string,
   } | {
     discriminator: false,
-    value: null | null,
+    value: null | undefined,
   }); }
 
 const { discriminator: discriminator1, value: value1 } = mutuallyEnabledPair()

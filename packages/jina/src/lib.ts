@@ -93,28 +93,12 @@ export interface SearchResult {
 /**
  * Read a URL through the Reader, returning Jina's LLM-friendly markdown.
  * @param url Absolute URL of the page to read.
- * @param options Optional Reader settings; `null` uses Jina's defaults.
+ * @param options Optional Reader settings; omit it to use Jina's defaults.
  * @returns The page content as markdown text.
  * @capability jina.ai/read { host: string }
  */
-export function read(url: string, options: ReaderOptions | null = null): string {
-    const engine = options === null ? null : options.engine;
-    const targetSelector = options === null ? null : options.targetSelector;
-    const removeSelector = options === null ? null : options.removeSelector;
-    const waitForSelector = options === null ? null : options.waitForSelector;
-    const withLinksSummary = options === null ? null : options.withLinksSummary;
-    const withImagesSummary = options === null ? null : options.withImagesSummary;
-    const withGeneratedAlt = options === null ? null : options.withGeneratedAlt;
-    const noCache = options === null ? null : options.noCache;
-    const timeout = options === null ? null : options.timeout;
-    const locale = options === null ? null : options.locale;
-    const tokenBudget = options === null ? null : options.tokenBudget;
-    const headers = readerHeadersFrom({
-        engine: engine, targetSelector: targetSelector, removeSelector: removeSelector,
-        waitForSelector: waitForSelector, withLinksSummary: withLinksSummary,
-        withImagesSummary: withImagesSummary, withGeneratedAlt: withGeneratedAlt, noCache: noCache,
-        timeout: timeout, locale: locale, tokenBudget: tokenBudget,
-    });
+export function read(url: string, options: ReaderOptions = {}): string {
+    const headers = readerHeaders(options);
     check("jina.ai/read", { host: parse(url).host });
     return readerResponse(url, headers, false).body;
 }
@@ -124,51 +108,25 @@ export function read(url: string, options: ReaderOptions | null = null): string 
  * arbitrary-key `links`/`images` maps are not representable here; use `read`
  * with `withLinksSummary`/`withImagesSummary` to get them appended to the text.
  * @param url Absolute URL of the page to read.
- * @param options Optional Reader settings; `null` uses Jina's defaults.
+ * @param options Optional Reader settings; omit it to use Jina's defaults.
  * @returns The page title, description, resolved URL, markdown content and billed token count.
  * @capability jina.ai/read { host: string }
  */
-export function readJson(url: string, options: ReaderOptions | null = null): ReaderResult {
-    const engine = options === null ? null : options.engine;
-    const targetSelector = options === null ? null : options.targetSelector;
-    const removeSelector = options === null ? null : options.removeSelector;
-    const waitForSelector = options === null ? null : options.waitForSelector;
-    const withLinksSummary = options === null ? null : options.withLinksSummary;
-    const withImagesSummary = options === null ? null : options.withImagesSummary;
-    const withGeneratedAlt = options === null ? null : options.withGeneratedAlt;
-    const noCache = options === null ? null : options.noCache;
-    const timeout = options === null ? null : options.timeout;
-    const locale = options === null ? null : options.locale;
-    const tokenBudget = options === null ? null : options.tokenBudget;
-    const headers = readerHeadersFrom({
-        engine: engine, targetSelector: targetSelector, removeSelector: removeSelector,
-        waitForSelector: waitForSelector, withLinksSummary: withLinksSummary,
-        withImagesSummary: withImagesSummary, withGeneratedAlt: withGeneratedAlt, noCache: noCache,
-        timeout: timeout, locale: locale, tokenBudget: tokenBudget,
-    });
+export function readJson(url: string, options: ReaderOptions = {}): ReaderResult {
+    const headers = readerHeaders(options);
     check("jina.ai/read", { host: parse(url).host });
-    const envelope = readerResponse(url, headers, true).json() as ReaderEnvelope;
-    return readerResultFrom(envelope);
+    return normalizeReaderJson(readerResponse(url, headers, true).body);
 }
 
 /**
  * Search the web, returning the top results concatenated as markdown.
  * @param query Search query text.
- * @param options Optional search settings; `null` uses Jina's defaults.
+ * @param options Optional search settings; omit it to use Jina's defaults.
  * @returns The top results concatenated as markdown text.
  * @capability jina.ai/search {}
  */
-export function search(query: string, options: SearchOptions | null = null): string {
-    const site = options === null ? null : options.site;
-    const engine = options === null ? null : options.engine;
-    const withLinksSummary = options === null ? null : options.withLinksSummary;
-    const noCache = options === null ? null : options.noCache;
-    const timeout = options === null ? null : options.timeout;
-    const locale = options === null ? null : options.locale;
-    const headers = searchHeadersFrom({
-        site: site, engine: engine, withLinksSummary: withLinksSummary,
-        noCache: noCache, timeout: timeout, locale: locale,
-    });
+export function search(query: string, options: SearchOptions = {}): string {
+    const headers = searchHeaders(options);
     check("jina.ai/search", {});
     return searchResponse(query, headers, false).body;
 }
@@ -176,24 +134,14 @@ export function search(query: string, options: SearchOptions | null = null): str
 /**
  * Search the web, returning the top results as structured objects.
  * @param query Search query text.
- * @param options Optional search settings; `null` uses Jina's defaults.
+ * @param options Optional search settings; omit it to use Jina's defaults.
  * @returns One entry per search hit, in Jina's ranking order; empty when there are no hits.
  * @capability jina.ai/search {}
  */
-export function searchJson(query: string, options: SearchOptions | null = null): SearchResult[] {
-    const site = options === null ? null : options.site;
-    const engine = options === null ? null : options.engine;
-    const withLinksSummary = options === null ? null : options.withLinksSummary;
-    const noCache = options === null ? null : options.noCache;
-    const timeout = options === null ? null : options.timeout;
-    const locale = options === null ? null : options.locale;
-    const headers = searchHeadersFrom({
-        site: site, engine: engine, withLinksSummary: withLinksSummary,
-        noCache: noCache, timeout: timeout, locale: locale,
-    });
+export function searchJson(query: string, options: SearchOptions = {}): SearchResult[] {
+    const headers = searchHeaders(options);
     check("jina.ai/search", {});
-    const envelope = searchResponse(query, headers, true).json() as SearchEnvelope;
-    return searchResultsFrom(envelope);
+    return normalizeSearchJson(searchResponse(query, headers, true).body);
 }
 
 /**
@@ -205,7 +153,7 @@ export function searchJson(query: string, options: SearchOptions | null = null):
  * A response over 20 MB is refused.
  * @param url Absolute URL of the page to read.
  * @param path VFS path the markdown is written to.
- * @param options Optional Reader settings; `null` uses Jina's defaults.
+ * @param options Optional Reader settings; omit it to use Jina's defaults.
  * @returns The download result for the file written to `path`.
  * @capability jina.ai/read { host: string }
  * @capability fs.write { path: string, max_bytes: number }
@@ -213,25 +161,9 @@ export function searchJson(query: string, options: SearchOptions | null = null):
 export function downloadRead(
     url: string,
     path: string,
-    options: ReaderOptions | null = null,
+    options: ReaderOptions = {},
 ): DownloadResult {
-    const engine = options === null ? null : options.engine;
-    const targetSelector = options === null ? null : options.targetSelector;
-    const removeSelector = options === null ? null : options.removeSelector;
-    const waitForSelector = options === null ? null : options.waitForSelector;
-    const withLinksSummary = options === null ? null : options.withLinksSummary;
-    const withImagesSummary = options === null ? null : options.withImagesSummary;
-    const withGeneratedAlt = options === null ? null : options.withGeneratedAlt;
-    const noCache = options === null ? null : options.noCache;
-    const timeout = options === null ? null : options.timeout;
-    const locale = options === null ? null : options.locale;
-    const tokenBudget = options === null ? null : options.tokenBudget;
-    const headers = readerHeadersFrom({
-        engine: engine, targetSelector: targetSelector, removeSelector: removeSelector,
-        waitForSelector: waitForSelector, withLinksSummary: withLinksSummary,
-        withImagesSummary: withImagesSummary, withGeneratedAlt: withGeneratedAlt, noCache: noCache,
-        timeout: timeout, locale: locale, tokenBudget: tokenBudget,
-    });
+    const headers = readerHeaders(options);
     check("jina.ai/read", { host: parse(url).host });
     check("fs.write", { path: path, max_bytes: DOWNLOAD_MAX_BYTES });
     authorize(headers);
@@ -247,7 +179,7 @@ export function downloadRead(
  * set is large.
  * @param query Search query text.
  * @param path VFS path the markdown results are written to.
- * @param options Optional search settings; `null` uses Jina's defaults.
+ * @param options Optional search settings; omit it to use Jina's defaults.
  * @returns The download result for the file written to `path`.
  * @capability jina.ai/search {}
  * @capability fs.write { path: string, max_bytes: number }
@@ -255,18 +187,9 @@ export function downloadRead(
 export function downloadSearch(
     query: string,
     path: string,
-    options: SearchOptions | null = null,
+    options: SearchOptions = {},
 ): DownloadResult {
-    const site = options === null ? null : options.site;
-    const engine = options === null ? null : options.engine;
-    const withLinksSummary = options === null ? null : options.withLinksSummary;
-    const noCache = options === null ? null : options.noCache;
-    const timeout = options === null ? null : options.timeout;
-    const locale = options === null ? null : options.locale;
-    const headers = searchHeadersFrom({
-        site: site, engine: engine, withLinksSummary: withLinksSummary,
-        noCache: noCache, timeout: timeout, locale: locale,
-    });
+    const headers = searchHeaders(options);
     check("jina.ai/search", {});
     check("fs.write", { path: path, max_bytes: DOWNLOAD_MAX_BYTES });
     authorize(headers);
@@ -278,130 +201,117 @@ export function downloadSearch(
  * Encode reader options as request headers — the `x-*` option surface only.
  * Authorization is added later, in the request path, from the JINA_API_KEY
  * secret. Pure (no secrets, no network), so it is safe to unit-test directly.
- *
- * Each option is read from `options` exactly once, into a local, and the
- * headers are encoded from those locals by `readerHeadersFrom`.
- * @param options Reader options to encode; `null` yields no headers.
+ * Each option is read from `options` exactly once.
+ * @param options Reader options to encode; omit it for no headers.
  * @returns Map of `x-*` request header names to values; only options that are set appear.
  */
-export function readerHeaders(options: ReaderOptions | null = null): Map<string, string> {
-    if (options === null) return new Map<string, string>();
-    const engine = options.engine;
-    const targetSelector = options.targetSelector;
-    const removeSelector = options.removeSelector;
-    const waitForSelector = options.waitForSelector;
-    const withLinksSummary = options.withLinksSummary;
-    const withImagesSummary = options.withImagesSummary;
-    const withGeneratedAlt = options.withGeneratedAlt;
-    const noCache = options.noCache;
-    const timeout = options.timeout;
-    const locale = options.locale;
-    const tokenBudget = options.tokenBudget;
-    return readerHeadersFrom({
-        engine: engine, targetSelector: targetSelector, removeSelector: removeSelector,
-        waitForSelector: waitForSelector, withLinksSummary: withLinksSummary,
-        withImagesSummary: withImagesSummary, withGeneratedAlt: withGeneratedAlt, noCache: noCache,
-        timeout: timeout, locale: locale, tokenBudget: tokenBudget,
-    });
+export function readerHeaders(options: ReaderOptions = {}): Map<string, string> {
+    const headers = new Map<string, string>();
+    put(headers, "x-engine", options.engine);
+    put(headers, "x-target-selector", options.targetSelector);
+    put(headers, "x-remove-selector", options.removeSelector);
+    put(headers, "x-wait-for-selector", options.waitForSelector);
+    put(headers, "x-with-links-summary", flag(options.withLinksSummary));
+    put(headers, "x-with-images-summary", flag(options.withImagesSummary));
+    put(headers, "x-with-generated-alt", flag(options.withGeneratedAlt));
+    put(headers, "x-no-cache", flag(options.noCache));
+    put(headers, "x-timeout", options.timeout?.toString());
+    put(headers, "x-locale", options.locale);
+    put(headers, "x-token-budget", options.tokenBudget?.toString());
+    return headers;
 }
 
 /**
  * Encode search options as request headers. Pure, as with `readerHeaders`.
- * @param options Search options to encode; `null` yields no headers.
+ * @param options Search options to encode; omit it for no headers.
  * @returns Map of `x-*` request header names to values; only options that are set appear.
  */
-export function searchHeaders(options: SearchOptions | null = null): Map<string, string> {
-    if (options === null) return new Map<string, string>();
-    const site = options.site;
-    const engine = options.engine;
-    const withLinksSummary = options.withLinksSummary;
-    const noCache = options.noCache;
-    const timeout = options.timeout;
-    const locale = options.locale;
-    return searchHeadersFrom({
-        site: site, engine: engine, withLinksSummary: withLinksSummary,
-        noCache: noCache, timeout: timeout, locale: locale,
-    });
+export function searchHeaders(options: SearchOptions = {}): Map<string, string> {
+    const headers = new Map<string, string>();
+    put(headers, "x-site", options.site);
+    put(headers, "x-engine", options.engine);
+    put(headers, "x-with-links-summary", flag(options.withLinksSummary));
+    put(headers, "x-no-cache", flag(options.noCache));
+    put(headers, "x-timeout", options.timeout?.toString());
+    put(headers, "x-locale", options.locale);
+    return headers;
+}
+
+/**
+ * Decode a Reader JSON response (`readJson`) without network access. Fields Jina
+ * omits or reports as `null` become empty strings and zero tokens.
+ * @param body Raw JSON response body from the Reader endpoint.
+ * @returns The normalized page; throws `Error` if the body is not a Reader envelope.
+ */
+export function normalizeReaderJson(body: string): ReaderResult {
+    try {
+        const data = (JSON.parse(body) as ReaderEnvelope).data;
+        return {
+            title: data.title ?? "",
+            description: data.description ?? "",
+            url: data.url,
+            content: data.content ?? "",
+            tokens: data.usage?.tokens ?? 0,
+        };
+    } catch (cause) {
+        throw invalidResponse();
+    }
+}
+
+/**
+ * Decode a Search JSON response (`searchJson`) without network access. A `null`
+ * result list means no hits; per-result fields Jina omits or reports as `null`
+ * become empty strings and zero tokens.
+ * @param body Raw JSON response body from the Search endpoint.
+ * @returns One entry per hit, in Jina's order; throws `Error` if the body is not a Search envelope.
+ */
+export function normalizeSearchJson(body: string): SearchResult[] {
+    try {
+        const envelope = JSON.parse(body) as SearchEnvelope;
+        const results: SearchResult[] = [];
+        const data = envelope.data;
+        if (data === null) return results;
+        for (const item of data) {
+            results.push({
+                title: item.title ?? "",
+                description: item.description ?? "",
+                url: item.url,
+                content: item.content ?? "",
+                tokens: item.usage?.tokens ?? 0,
+            });
+        }
+        return results;
+    } catch (cause) {
+        throw invalidResponse();
+    }
 }
 
 interface ReaderEnvelope {
-    code: number;
     data: ReaderData;
 }
 
 interface ReaderData {
-    title?: string;
-    description?: string;
+    title?: string | null;
+    description?: string | null;
     url: string;
-    content: string;
-    usage?: Usage;
+    content?: string | null;
+    usage?: Usage | null;
 }
 
 interface SearchEnvelope {
-    code: number;
-    data: SearchData[];
+    data: SearchData[] | null;
 }
 
 interface SearchData {
-    title?: string;
-    description?: string;
+    title?: string | null;
+    description?: string | null;
     url: string;
-    content?: string;
-    usage?: Usage;
+    content?: string | null;
+    usage?: Usage | null;
 }
 
 interface Usage {
-    tokens: number;
-}
-
-interface ReaderFields {
-    engine: string | null;
-    targetSelector: string | null;
-    removeSelector: string | null;
-    waitForSelector: string | null;
-    withLinksSummary: boolean | null;
-    withImagesSummary: boolean | null;
-    withGeneratedAlt: boolean | null;
-    noCache: boolean | null;
-    timeout: number | null;
-    locale: string | null;
-    tokenBudget: number | null;
-}
-
-interface SearchFields {
-    site: string | null;
-    engine: string | null;
-    withLinksSummary: boolean | null;
-    noCache: boolean | null;
-    timeout: number | null;
-    locale: string | null;
-}
-
-function readerHeadersFrom(fields: ReaderFields): Map<string, string> {
-    const headers = new Map<string, string>();
-    put(headers, "x-engine", fields.engine);
-    put(headers, "x-target-selector", fields.targetSelector);
-    put(headers, "x-remove-selector", fields.removeSelector);
-    put(headers, "x-wait-for-selector", fields.waitForSelector);
-    put(headers, "x-with-links-summary", flag(fields.withLinksSummary));
-    put(headers, "x-with-images-summary", flag(fields.withImagesSummary));
-    put(headers, "x-with-generated-alt", flag(fields.withGeneratedAlt));
-    put(headers, "x-no-cache", flag(fields.noCache));
-    put(headers, "x-timeout", numStr(fields.timeout));
-    put(headers, "x-locale", fields.locale);
-    put(headers, "x-token-budget", numStr(fields.tokenBudget));
-    return headers;
-}
-
-function searchHeadersFrom(fields: SearchFields): Map<string, string> {
-    const headers = new Map<string, string>();
-    put(headers, "x-site", fields.site);
-    put(headers, "x-engine", fields.engine);
-    put(headers, "x-with-links-summary", flag(fields.withLinksSummary));
-    put(headers, "x-no-cache", flag(fields.noCache));
-    put(headers, "x-timeout", numStr(fields.timeout));
-    put(headers, "x-locale", fields.locale);
-    return headers;
+    tokens?: number | null;
 }
 
 function readerResponse(url: string, optionHeaders: Map<string, string>, json: boolean): Response {
@@ -434,54 +344,21 @@ function prepare(headers: Map<string, string>, json: boolean): Map<string, strin
 // the request keyless when the secret is absent.
 function authorize(headers: Map<string, string>): void {
     const token = secrets.get("JINA_API_KEY");
-    if (token !== null) {
+    if (token !== undefined) {
         headers.set("Authorization", `Bearer ${token}`);
     }
 }
 
-function put(headers: Map<string, string>, key: string, value: string | null): void {
-    if (value !== null) {
+function put(headers: Map<string, string>, key: string, value: string | undefined): void {
+    if (value !== undefined) {
         headers.set(key, value);
     }
 }
 
-function flag(value: boolean | null): string | null {
-    return value === true ? "true" : null;
+function flag(value: boolean | undefined): string | undefined {
+    return value === true ? "true" : undefined;
 }
 
-function numStr(value: number | null): string | null {
-    return value !== null ? value.toString() : null;
-}
-
-function readerResultFrom(envelope: ReaderEnvelope): ReaderResult {
-    const data = envelope.data;
-    return {
-        title: orEmpty(data.title),
-        description: orEmpty(data.description),
-        url: data.url,
-        content: data.content,
-        tokens: tokensOf(data.usage),
-    };
-}
-
-function searchResultsFrom(envelope: SearchEnvelope): SearchResult[] {
-    const results: SearchResult[] = [];
-    for (const item of envelope.data) {
-        results.push({
-            title: orEmpty(item.title),
-            description: orEmpty(item.description),
-            url: item.url,
-            content: orEmpty(item.content),
-            tokens: tokensOf(item.usage),
-        });
-    }
-    return results;
-}
-
-function orEmpty(value: string | null): string {
-    return value !== null ? value : "";
-}
-
-function tokensOf(usage: Usage | null): number {
-    return usage !== null ? usage.tokens : 0;
+function invalidResponse(): Error {
+    return new Error("Jina returned an invalid response");
 }

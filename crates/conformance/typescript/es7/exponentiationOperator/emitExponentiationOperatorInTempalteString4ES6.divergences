@@ -1,0 +1,17 @@
+types: 94 of 117 tsc entries compared, 4 differ
+
+line 13: typeof (t1 ** t2 ** t1)
+  tsc:  "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+  ours: string
+
+line 21: typeof (t1 ** t2 ** t1)
+  tsc:  "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+  ours: string
+
+line 21: typeof (t1 ** t2 ** t1)
+  tsc:  "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+  ours: string
+
+line 28: typeof (t1 ** t2 ** t1)
+  tsc:  "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+  ours: string

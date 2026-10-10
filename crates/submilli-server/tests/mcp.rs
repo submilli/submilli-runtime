@@ -369,7 +369,7 @@ fn tools_call(id: u32, code: &str) -> Value {
 
 const SUM: &str = "function main(): number { return 1 + 1; }";
 const WRITE: &str = r#"import { writeText } from "submilli:fs"; function main(): void { writeText("/a.txt", "hi"); }"#;
-const READ: &str = r#"import { readText } from "submilli:fs"; function main(): string | null { return readText("/a.txt"); }"#;
+const READ: &str = r#"import { readText } from "submilli:fs"; function main(): string | undefined { return readText("/a.txt"); }"#;
 
 /// The `{ result, console, error }` payload our tool puts in `structuredContent`.
 fn output(rpc: &Value) -> &Value {
@@ -446,6 +446,25 @@ fn tool_desc<'a>(rpc: &'a Value, name: &str) -> &'a str {
 }
 
 const EXECUTE: &str = "submilli__typescript__execute";
+
+#[tokio::test]
+async fn execute_distinguishes_undefined_from_null_result() {
+    let h = Harness::new();
+    let session = h.handshake(EPH).await;
+    for (id, source, expected) in [
+        (
+            2,
+            "function main(): unknown { return undefined; }",
+            Value::Null,
+        ),
+        (3, "function main(): null { return null; }", json!("null")),
+    ] {
+        let (status, _, rpc) = h.post(EPH, tools_call(id, source), Some(&session)).await;
+        assert_eq!(status, StatusCode::OK, "{rpc}");
+        assert!(output(&rpc)["error"].is_null(), "{rpc}");
+        assert_eq!(output(&rpc)["result"], expected, "{rpc}");
+    }
+}
 
 #[tokio::test]
 async fn execute_returns_result() {
@@ -3097,7 +3116,7 @@ permissions:
         "/grace/../ada/secret.txt",
     ] {
         let code = format!(
-            "import {{ readText }} from 'submilli:fs'; function main(): string | null {{ return readText('{path}'); }}"
+            "import {{ readText }} from 'submilli:fs'; function main(): string | undefined {{ return readText('{path}'); }}"
         );
         let (_, _, rpc) = h.post(VOL, tools_call(4, &code), Some(&session)).await;
         assert_eq!(output(&rpc)["result"], "ada", "{rpc}");

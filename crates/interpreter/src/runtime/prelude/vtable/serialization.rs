@@ -52,7 +52,9 @@ fn append_value<'a>(
     json: bool,
 ) -> Pin<Box<dyn Future<Output = wasmtime::Result<()>> + Send + 'a>> {
     Box::pin(async move {
-        if matches!(value, Val::AnyRef(None)) || (json && is_function(caller, &value)?) {
+        if super::super::undefined::is_nullish(caller, &value)?
+            || (json && is_function(caller, &value)?)
+        {
             if json {
                 output.append(caller, &[110, 117, 108, 108])?;
             }
@@ -170,7 +172,7 @@ async fn append_object(
                 .await?;
         }
         kept.set(caller, child)?;
-        if is_function(caller, &child)? {
+        if super::super::undefined::is_undefined(caller, &child)? || is_function(caller, &child)? {
             continue;
         }
         if !first {

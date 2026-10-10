@@ -35,9 +35,9 @@ class PublicX {
 >   : ^^
 
 }
-/*pruned*/;                                         
-/*pruned*/;                                                                    
-/*pruned*/;                                  
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 /*pruned*/;            // error, x is private
 let optionalString: { sn?: string } = null as unknown as ({ sn?: string });
 >optionalString : { sn?: string; }
@@ -140,7 +140,7 @@ spread = b; // error, missing 's'
 
 
 // literal repeats are not allowed, but spread repeats are fine
-/*pruned*/;                                                   
+/*pruned*/;
 let duplicatedSpread = { ...o, ...o }
 >duplicatedSpread : { a: number; b: string; }
 >                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -307,8 +307,8 @@ let changeTypeBefore: { a: number, b: string } =
 >o3 : { a: number; b: string; }
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;                                                                        
-                                                        
+/*pruned*/;
+
 
 // primitives are not allowed, except for falsy ones
 let spreadNum = { ...12 };
@@ -412,18 +412,18 @@ spreadFunc(); // error, no call signature
 
 
 // write-only properties get skipped
-/*pruned*/;                                         
+/*pruned*/;
 /*pruned*/;        // error, 'b' does not exist
 
 // methods are skipped because they aren't enumerable
-/*pruned*/;                     
-/*pruned*/;       
-/*pruned*/;           
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 /*pruned*/;  // error 'm' is not in '{ ... c }'
 
 // non primitive
-/*pruned*/;                  
-/*pruned*/;                
+/*pruned*/;
+/*pruned*/;
 /*pruned*/;  // error 'a' is not in {}
 
 

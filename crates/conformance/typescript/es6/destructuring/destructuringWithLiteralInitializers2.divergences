@@ -1,0 +1,156 @@
+types: 57 of 103 tsc entries compared, 36 differ
+
+line 5: x
+  tsc:  any
+  ours: never
+
+line 5: y
+  tsc:  any
+  ours: never
+
+line 5: []
+  tsc:  []
+  ours: never[]
+
+line 6: y
+  tsc:  any
+  ours: number
+
+line 6: [1]
+  tsc:  [number]
+  ours: number[]
+
+line 7: y
+  tsc:  string
+  ours: number
+
+line 7: [1, 'foo']
+  tsc:  [number, string]
+  ours: number[]
+
+line 10: x
+  tsc:  number
+  ours: 0
+
+line 10: y
+  tsc:  any
+  ours: never
+
+line 10: []
+  tsc:  []
+  ours: never[]
+
+line 11: y
+  tsc:  any
+  ours: number
+
+line 11: [1]
+  tsc:  [number]
+  ours: number[]
+
+line 12: y
+  tsc:  string
+  ours: number
+
+line 12: [1, 'foo']
+  tsc:  [number, string]
+  ours: number[]
+
+line 15: x
+  tsc:  number
+  ours: 0
+
+line 15: y
+  tsc:  string
+  ours: "bar"
+
+line 15: []
+  tsc:  []
+  ours: never[]
+
+line 16: y
+  tsc:  string
+  ours: number | "bar"
+
+line 16: [1]
+  tsc:  [number]
+  ours: number[]
+
+line 17: y
+  tsc:  string
+  ours: number | "bar"
+
+line 17: [1, 'foo']
+  tsc:  [number, string]
+  ours: number[]
+
+line 23: x
+  tsc:  number
+  ours: 0
+
+line 23: y
+  tsc:  string
+  ours: "bar"
+
+line 23: []
+  tsc:  []
+  ours: never[]
+
+line 24: y
+  tsc:  string
+  ours: number | "bar"
+
+line 24: [nx]
+  tsc:  [number | undefined]
+  ours: (number | undefined)[]
+
+line 25: y
+  tsc:  string
+  ours: number | "bar"
+
+line 25: [nx, sx]
+  tsc:  [number | undefined, string | undefined]
+  ours: (number | undefined)[]
+
+line 28: x
+  tsc:  number
+  ours: 0
+
+line 28: y
+  tsc:  string
+  ours: "bar"
+
+line 28: []
+  tsc:  []
+  ours: never[]
+
+line 29: x
+  tsc:  string | number
+  ours: 0 | string
+
+line 29: [sx]
+  tsc:  [string | undefined]
+  ours: (string | undefined)[]
+
+line 30: x
+  tsc:  string | number
+  ours: 0 | string
+
+line 30: y
+  tsc:  string | number
+  ours: string
+
+line 30: [sx, nx]
+  tsc:  [string | undefined, number | undefined]
+  ours: (string | undefined)[]
+
+errors:
+line 5: tsc TS7031: Binding element 'x' implicitly has an 'any' type. (we accept)
+line 6: tsc TS7031: Binding element 'y' implicitly has an 'any' type. (we accept)
+line 10: tsc TS7031: Binding element 'y' implicitly has an 'any' type. (we accept)
+line 11: tsc TS7031: Binding element 'y' implicitly has an 'any' type. (we accept)
+line 7: ours: expected `number` (matching first element), got `string` (tsc accepts)
+line 12: ours: expected `number` (matching first element), got `string` (tsc accepts)
+line 17: ours: expected `number` (matching first element), got `string` (tsc accepts)
+line 25: ours: expected `number | undefined` (matching first element), got `string | undefined` (tsc accepts)
+line 30: ours: expected `string | undefined` (matching first element), got `number | undefined` (tsc accepts)

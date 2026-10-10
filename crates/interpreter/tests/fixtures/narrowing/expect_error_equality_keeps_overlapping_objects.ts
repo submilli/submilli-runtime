@@ -1,6 +1,6 @@
 // Where two values are equal, an object member stays though the other side's
 // object type is unrelated, since one object can have both shapes.
-// expect-error: expected `null`, got `null | P`
+// expect-error: expected `null`, got `P | null`
 // expect-error-count: 1
 type P = { a: number };
 type Q = { b: number };

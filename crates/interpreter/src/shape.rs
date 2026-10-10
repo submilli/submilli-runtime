@@ -14,7 +14,7 @@ pub enum Shape {
     },
     Array(Box<Type>),
     /// Lowers to `$Array`; no distinct Wasm type is emitted.
-    Tuple(Vec<Type>),
+    Tuple(crate::types::TupleType),
     Union(Vec<Type>),
 }
 
@@ -52,16 +52,7 @@ impl fmt::Display for Shape {
                 Type::Union(_) | Type::Function { .. } => write!(f, "({elem})[]"),
                 _ => write!(f, "{elem}[]"),
             },
-            Shape::Tuple(elements) => {
-                f.write_str("[")?;
-                for (i, t) in elements.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "{t}")?;
-                }
-                f.write_str("]")
-            }
+            Shape::Tuple(elements) => Type::Tuple(elements.clone()).fmt(f),
             Shape::Union(members) => {
                 for (i, m) in members.iter().enumerate() {
                     if i > 0 {
@@ -133,9 +124,9 @@ mod tests {
 
     #[test]
     fn tuple_shape_round_trip() {
-        let ty = Type::Tuple(vec![Type::String, Type::Number]);
+        let ty = Type::Tuple(vec![Type::String, Type::Number].into());
         let shape = Shape::from_type(&ty).expect("Tuple is a shape");
-        assert_eq!(shape, Shape::Tuple(vec![Type::String, Type::Number]));
+        assert_eq!(shape, Shape::Tuple(vec![Type::String, Type::Number].into()));
         assert_eq!(shape.canonical_display(), "[string, number]");
     }
 
@@ -202,6 +193,7 @@ mod tests {
                 ret: Box::new(Type::Number),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             })
             .is_none()
         );

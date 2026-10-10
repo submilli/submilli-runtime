@@ -123,12 +123,12 @@ function fn2<T, U/* extends T*/, V/* extends T*/>(t: T, u: U, v: V): void {
     //var r7: T = u || v;
 }
 
-/*pruned*/;                                                                                             
-                    
-                        
-                            
-                                   
- 
+/*pruned*/;
+
+
+
+
+
 
 function main(): void {}
 >main : () => void

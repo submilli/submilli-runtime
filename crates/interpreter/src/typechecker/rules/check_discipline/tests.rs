@@ -104,13 +104,14 @@ fn a_type_the_caller_can_change_or_run_code_behind_is_not_primitive() {
             ret: Box::new(Type::String),
             predicate: None,
             has_rest: false,
+            optional: 0,
         },
         Type::Object {
             fields: std::collections::BTreeMap::new(),
             index: None,
         },
         Type::Array(Box::new(Type::String)),
-        Type::Tuple(vec![Type::String, Type::Number]),
+        Type::Tuple(vec![Type::String, Type::Number].into()),
         Type::TypeVar("T".to_string()),
         Type::GenericParam {
             id: 0,
@@ -651,7 +652,11 @@ fn escape(params: &str, reached: &str, body: &str) -> String {
              }}\n"
         ),
     )]);
-    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(
+        found.len(),
+        1,
+        "params={params}; reached={reached}; body={body}; findings={found:#?}"
+    );
     assert_eq!(found[0].notes.len(), 2, "{found:#?}");
     let why = &found[0].notes[1].1;
     assert!(
@@ -1809,8 +1814,58 @@ fn a_value_checked_by_its_identity_may_be_handed_on_once_read() {
         "const none: string[] = [];\n\
          const body = { scrapeOptions, formats: scrapeOptions?.formats ?? none };\n\
          const schema = JSON.stringify(scrapeOptions?.schema ?? null);\n\
-         post(schema, body.formats.join(\",\"));",
+         post(schema ?? \"\", body.formats.join(\",\"));",
     ));
+}
+
+#[test]
+fn defaulted_options_keep_snapshotted_primitive_checks_independent_of_schema() {
+    for default in ["", " = null"] {
+        let source = format!(
+            "export interface Request {{ limit?: number; schema?: unknown }}\n\
+             export function search(options: Request | null{default}): void {{\n\
+               const requested: Request = options === null ? {{}} : options;\n\
+               const {{ limit, schema }} = requested;\n\
+               const encoded = JSON.stringify(schema);\n\
+               check(\"example/search\", {{ limit: limit ?? 10 }});\n\
+               post(encoded ?? \"\", \"\");\n\
+             }}"
+        );
+        let found = messages(&source);
+        assert!(found.is_empty(), "{source}\n{found:#?}");
+    }
+}
+
+#[test]
+fn defaulted_options_still_report_repeated_reads_and_serialization_of_checked_values() {
+    for default in ["", " = null"] {
+        for (body, expected) in [
+            (
+                "check(\"example/search\", { limit: requested.limit ?? 10 });\n\
+                 post(String(requested.limit), \"\");",
+                "is read more than once",
+            ),
+            (
+                "const encoded = JSON.stringify(requested);\n\
+                 check(\"example/search\", { limit: requested.limit ?? 10 });\n\
+                 post(encoded, \"\");",
+                "is passed to `JSON.stringify`",
+            ),
+        ] {
+            let source = format!(
+                "export interface Request {{ limit?: number; schema?: unknown }}\n\
+                 export function search(options: Request | null{default}): void {{\n\
+                   const requested: Request = options === null ? {{}} : options;\n\
+                   {body}\n\
+                 }}"
+            );
+            let found = messages(&source);
+            assert!(
+                found.iter().any(|message| message.contains(expected)),
+                "{source}\n{found:#?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -2899,13 +2954,13 @@ fn a_local_made_from_the_callers_object_is_not_the_bodys_own() {
     for (body, reason) in [
         (
             "const l = input.lists.find((x: string[]): boolean => x.length > 0);\n\
-             if (l !== null) l.push(\"x\");\n\
+             if (l !== undefined) l.push(\"x\");\n\
              check(\"x/run\", { id: input.id });",
             "`run` changes the receiver of `push` before `check()`",
         ),
         (
             "const s = input.byId.get(\"k\");\n\
-             if (s !== null) s.id = \"x\";\n\
+             if (s !== undefined) s.id = \"x\";\n\
              check(\"x/run\", { id: input.id });",
             "`run` changes a value the body does not own before `check()`",
         ),

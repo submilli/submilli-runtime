@@ -1,10 +1,10 @@
-function pick(use_real: boolean, u: { name: string } | null): string | null {
+function pick(use_real: boolean, u: { name: string } | null): string | undefined {
   return use_real ? u?.name : "default";
 }
 
 function main(): void {
   const u: { name: string } = { name: "alice" };
   assert(pick(true, u) === "alice", "true branch reads name");
-  assert(pick(true, null) === null, "true branch short-circuits on null");
+  assert(pick(true, null) === undefined, "true branch short-circuits on null");
   assert(pick(false, u) === "default", "false branch picks default");
 }

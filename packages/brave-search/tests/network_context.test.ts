@@ -4,7 +4,7 @@ import { context } from "@submilli/brave-search";
 
 function main(): void {
     const key = secrets.get("BRAVE_SEARCH_API_KEY");
-    if (key === null || key.trim().length === 0) {
+    if (key === undefined || key.trim().length === 0) {
         label("skip: BRAVE_SEARCH_API_KEY is not bound");
         return;
     }

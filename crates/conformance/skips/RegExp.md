@@ -22,7 +22,7 @@ Porting adaptations used throughout (README rules):
 
 - `RegExpExecArray` (array with `.index`/`.input`/`.groups` properties)
   becomes the `RegExpMatch` interface: `m[0]` → `m.match`, `m[i]` →
-  `m.groups[i-1]` (`(string | null)[]`, unmatched = `null`), `m.length` →
+  `m.groups[i-1]` (`(string | undefined)[]`, unmatched = `undefined`), `m.length` →
   `m.groups.length + 1`, `result.groups.name` → `m.namedGroups.get("name")`.
 - Narrowing is invalidated by any call, so ported cases copy every
   `RegExpMatch` field into locals immediately after the null check before the
@@ -50,7 +50,6 @@ asserting the JS behavior would be a permanent failure by design):
 
 | Case | Gap |
 |:--|:--|
-| `S15.10.2.7_A2_T1` | `RegExpMatch.index` (and `lastIndex`) are UTF-8 byte offsets; ECMA-262 specifies UTF-16 code-unit offsets. They agree on ASCII; any non-ASCII prefix shifts them (probed: `"éa".match(/a/).index` is 2, JS says 1). |
 | `S15.10.2.13_A1_T1`, `S15.10.2.13_A2_T2` | `[]` / `[^]` are valid ECMA-262 classes (match nothing / match anything); the engine rejects both at compile time ("unclosed character class"). A translator rewrite (`[^\s\S]` / `[\s\S]`) would close this. |
 | `S15.10.2.10_A2.1_T1` | Control escapes `\cA`..`\cZ` are rejected ("unrecognized escape sequence"). |
 | `S15.10.2.10_A5.1_T1` | `\<` and `\>` should be identity escapes; the engine parses them as start/end word-boundary assertions, so they never match the literal character. All other punctuation identity escapes pass (probed). |
@@ -58,7 +57,6 @@ asserting the JS behavior would be a permanent failure by design):
 | `nullable-quantifier` | `/(a?b??)*/` on `"ab"` matches only `"a"`; ECMA's RepeatMatcher empty-iteration rule lets JS match `"ab"`. |
 | `dotall/with-dotall`, `dotall/without-dotall` | `.` excludes only LF, not CR/U+2028/U+2029, and matches whole astral code points (see the divergence pins; the LineTerminator exclusions are an unpinned, undocumented gap). |
 | `named-groups/non-unicode-match` | `(?<$>...)` — `$` is a valid ECMA GroupName character; the engine rejects it ("invalid capture group character"). The non-`$` rows are covered by the passing `unicode-match` port. |
-| `named-groups/groups-object-unmatched` | Reading `namedGroups` **traps** when any named capture is unmatched — the `Map<string, string>` builder can't represent the null value. Makes optional named groups (`/(?<a>a)|(?<x>x)/`) unusable with `namedGroups`. |
 
 ## Rejected (design decisions)
 

@@ -1,8 +1,8 @@
-function upper(s: string | null): string | null {
+function upper(s: string | null): string | undefined {
   return s?.toUpperCase();
 }
 
 function main(): void {
   assert(upper("hi") === "HI", "non-null method call");
-  assert(upper(null) === null, "null short-circuits method call");
+  assert(upper(null) === undefined, "null short-circuits method call");
 }

@@ -8,3 +8,6 @@ line 183 type: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to 
 line 191 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`; also by-design spec §1.6 `&&` keeps a type parameter in its falsy part, since a `T` can be falsy
 line 194 type: bug SUB-1196 (narrowing a type parameter) narrowing a `T` keeps `T`, where tsc gives `NonNullable<T>` or `T & object`
 line 366, 375 type: by-design spec §1.6 `==` is an alias for `===`, so `x == y` narrows `x` to the values it shares with `y`, where tsc keeps members `==` could coerce
+
+line 86, 92, 119, 125, 173, 176 extra: by-design spec §1.6 `==` and `!=` against `null` or `undefined` are rejected, since they compare like `===` and would miss the other nullish value
+line 90, 96 type: by-design spec §1.6 `!=` against `null` or `undefined` is rejected and checked as `!==`, so the equality branch contains only the tested nullish value

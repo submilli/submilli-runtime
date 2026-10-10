@@ -20,7 +20,7 @@ use super::format_signature::SignatureKind;
 use super::namespace_symbol;
 use super::reserved::{is_reserved_object_field, override_field_signature, reserved_field_message};
 use super::stmt::StaticWrite;
-use super::void_value::{ValueOperand, ValuePosition};
+use super::value_operand::ValueOperand;
 use crate::did_you_mean;
 use crate::type_size::{TypeBudget, TypeTooLarge, map_children};
 use crate::types::{EnumValue, LiteralF64};
@@ -149,19 +149,13 @@ fn variant_matches(
     required_satisfied && no_excess
 }
 
-/// A field value an object literal spells as a literal. tsc uses such values
-/// to pick the union members a literal could be constructing.
-enum TagValue {
-    Null,
-    Literal(narrowing::LiteralValue),
-}
-
 /// Whether `ty` is a primitive or a unit type: it has no fields an object
 /// literal could provide.
 fn is_primitive(ty: &Type) -> bool {
     matches!(
         ty.peel(),
         Type::Null
+            | Type::Undefined
             | Type::String
             | Type::Number
             | Type::Boolean
@@ -174,8 +168,8 @@ fn is_primitive(ty: &Type) -> bool {
 }
 
 /// Whether a field typed `ty` can tell union members apart. As in tsc, it
-/// must be a unit type (a literal, `boolean` or `null`) or a union made only
-/// of them: `"a" | "b"` is a tag, `string | null` isn't.
+/// must be a unit type (a literal, `boolean`, `null` or `undefined`) or a
+/// union made only of them: `"a" | "b"` is a tag, `string | null` isn't.
 fn is_tag_type(ty: &Type) -> bool {
     fn is_unit(ty: &Type) -> bool {
         let ty = ty.peel();
@@ -186,6 +180,7 @@ fn is_tag_type(ty: &Type) -> bool {
                 | Type::BooleanLiteral(_)
                 | Type::Boolean
                 | Type::Null
+                | Type::Undefined
         ) || ty.is_enum_member()
     }
     match ty.peel() {
@@ -196,19 +191,20 @@ fn is_tag_type(ty: &Type) -> bool {
 
 /// Whether a field typed `ty` can hold `value`. A type this doesn't decide
 /// holds it, so a member is ruled out only when it certainly can't.
-fn tag_fits(ty: &Type, value: &TagValue) -> bool {
+fn tag_fits(ty: &Type, value: &narrowing::LiteralValue) -> bool {
     use narrowing::LiteralValue;
     match (ty.peel(), value) {
         (Type::Union(members), _) => members.iter().any(|m| tag_fits(m, value)),
-        (Type::Null, TagValue::Null)
-        | (Type::String, TagValue::Literal(LiteralValue::String(_)))
-        | (Type::Number, TagValue::Literal(LiteralValue::Number(_)))
-        | (Type::Boolean, TagValue::Literal(LiteralValue::Boolean(_))) => true,
-        (Type::StringLiteral(s), TagValue::Literal(LiteralValue::String(v))) => s == v,
-        (Type::NumberLiteral(n), TagValue::Literal(LiteralValue::Number(v))) => n == v,
-        (Type::BooleanLiteral(b), TagValue::Literal(LiteralValue::Boolean(v))) => b == v,
+        (Type::Null, LiteralValue::Null)
+        | (Type::Undefined, LiteralValue::Undefined)
+        | (Type::String, LiteralValue::String(_))
+        | (Type::Number, LiteralValue::Number(_))
+        | (Type::Boolean, LiteralValue::Boolean(_)) => true,
+        (Type::StringLiteral(s), LiteralValue::String(v)) => s == v,
+        (Type::NumberLiteral(n), LiteralValue::Number(v)) => n == v,
+        (Type::BooleanLiteral(b), LiteralValue::Boolean(v)) => b == v,
         (member, _) if member.is_enum_member() => {
-            matches!(value, TagValue::Literal(v) if LiteralValue::of_enum_member(member).as_ref() == Some(v))
+            LiteralValue::of_enum_member(member).as_ref() == Some(value)
         }
         (other, _) => !is_primitive(other),
     }
@@ -269,10 +265,47 @@ fn non_mutating_alternative(name: &str) -> Option<&'static str> {
 /// back-edge counts once resolved — see [`alias_ref_body`] for why the name
 /// alone cannot answer.
 pub(super) fn type_admits_null(ty: &Type, types: TypeResolver<'_>) -> bool {
-    fn walk(ty: &Type, types: TypeResolver<'_>, open: &mut BTreeSet<MangledName>) -> bool {
+    any_resolved_member(ty, types, &|member| {
+        matches!(member, Type::Null | Type::Unknown)
+    })
+}
+
+/// Whether a value may be null or undefined, including an erased void result
+/// and a type parameter, which a caller may instantiate with either.
+pub(super) fn type_admits_nullish(ty: &Type, types: TypeResolver<'_>) -> bool {
+    type_admits_null(ty, types) || type_admits_undefined(ty, types)
+}
+
+/// Whether `undefined` is one of the values `ty` can hold: `void` results,
+/// `unknown`, and type parameters, which a caller may instantiate with it, count.
+fn type_admits_undefined(ty: &Type, types: TypeResolver<'_>) -> bool {
+    any_resolved_member(ty, types, &admits_undefined_leaf)
+}
+
+fn admits_undefined_leaf(member: &Type) -> bool {
+    matches!(
+        member,
+        Type::Undefined | Type::Void | Type::Unknown | Type::GenericParam { .. } | Type::TypeVar(_)
+    )
+}
+
+/// Whether `JSON.stringify` of a `ty` may return `undefined`.
+fn json_stringify_may_return_undefined(ty: &Type, types: TypeResolver<'_>) -> bool {
+    any_resolved_member(ty, types, &Type::stringifies_to_undefined)
+}
+
+/// Whether any member of `ty`, through unions and alias bodies, satisfies
+/// `leaf`. Leaves see peeled types. Unlike the syntactic [`Type::any_member`],
+/// this expands alias references through the resolver.
+fn any_resolved_member(ty: &Type, types: TypeResolver<'_>, leaf: &dyn Fn(&Type) -> bool) -> bool {
+    fn walk(
+        ty: &Type,
+        types: TypeResolver<'_>,
+        leaf: &dyn Fn(&Type) -> bool,
+        open: &mut BTreeSet<MangledName>,
+    ) -> bool {
         match ty.peel() {
-            Type::Null | Type::Unknown => true,
-            Type::Union(members) => members.iter().any(|m| walk(m, types, open)),
+            Type::Union(members) => members.iter().any(|m| walk(m, types, leaf, open)),
             // Cycle guard: an alias already on this path adds nothing new, and
             // following it again would not terminate.
             Type::AliasRef {
@@ -285,27 +318,14 @@ pub(super) fn type_admits_null(ty: &Type, types: TypeResolver<'_>) -> bool {
                     return false;
                 }
                 let body = alias_ref_body(mangled, name, args, types);
-                let admits = walk(&body, types, open);
+                let found = walk(&body, types, leaf, open);
                 open.remove(mangled);
-                admits
+                found
             }
-            _ => false,
+            member => leaf(member),
         }
     }
-    walk(ty, types, &mut BTreeSet::new())
-}
-
-/// Whether a value of `ty` may be `null`. Unlike `type_admits_null`, a type
-/// parameter counts, since a caller may instantiate it with `null`.
-fn may_hold_null(ty: &Type, types: TypeResolver<'_>) -> bool {
-    fn has_type_param(ty: &Type) -> bool {
-        match ty.peel() {
-            Type::TypeVar(_) | Type::GenericParam { .. } => true,
-            Type::Union(members) => members.iter().any(has_type_param),
-            _ => false,
-        }
-    }
-    type_admits_null(ty, types) || has_type_param(ty)
+    walk(ty, types, leaf, &mut BTreeSet::new())
 }
 
 /// What to tell someone who wrote `?.` on a namespace when there is no fix to
@@ -420,7 +440,7 @@ fn sole_array_like_member(hint: &Type) -> Option<&Type> {
 pub(super) fn spread_element_type(peeled_source: &Type) -> Option<Type> {
     match peeled_source {
         Type::Array(elem) => Some((**elem).clone()),
-        Type::Tuple(elements) => Some(Type::union(elements.clone())),
+        Type::Tuple(elements) => Some(Type::union(elements.to_vec())),
         Type::Union(_) => peeled_source.array_like_union_element(),
         _ => None,
     }
@@ -629,16 +649,11 @@ impl Inferer<'_> {
                 Ok((TypedExprKind::Boolean(b), ty))
             }
             ExprKind::Null => Ok((TypedExprKind::Null, Type::Null)),
-            ExprKind::Identifier(ident) => {
-                if let Some(index) = self
-                    .scopes
-                    .get(&ident.name)
-                    .and_then(|entry| entry.nested_function)
-                {
-                    self.check_nested_function_use(index, span)?;
-                }
-                self.resolve_ident(ident, span)
+            ExprKind::Void { operand } => self.infer_void(operand, span),
+            ExprKind::Identifier(_) if self.ast.synthetic_undefined.contains(&expr_id) => {
+                Ok((TypedExprKind::Undefined, Type::Undefined))
             }
+            ExprKind::Identifier(ident) => self.infer_identifier(ident, span),
             ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
             ExprKind::Unary { op, operand } => {
                 self.infer_unary_keeping_literals(op, operand, expected, keeps_literal)
@@ -664,6 +679,7 @@ impl Inferer<'_> {
                 self.infer_array_literal(expr_id, elements, expected, span)
             }
             ExprKind::FieldAccess { receiver, name } => {
+                self.note_uninitialized_member_read(receiver, &name, span)?;
                 self.infer_field_access(receiver, name, span)
             }
             ExprKind::IndexAccess { receiver, index } => {
@@ -692,37 +708,8 @@ impl Inferer<'_> {
                 arrow_reported = reported;
                 Ok((kind, ty))
             }
-            ExprKind::Delete { operand } => {
-                // An object can't record one of its fields as absent unless it
-                // was built with that field optional: other objects share one
-                // immutable names array per shape (SUB-971). The operand is still
-                // inferred, so its own errors surface.
-                self.infer_expr(operand, None)?;
-                self.error_with_help(
-                    span,
-                    "the `delete` operator is not supported".into(),
-                    vec!["type the field `T | null` and assign `null` to clear it".into()],
-                );
-                Ok((TypedExprKind::Null, Type::Error))
-            }
-            ExprKind::Typeof { operand: _ } => {
-                // Reaching `Typeof` here means it didn't get folded by
-                // `try_typeof_fold` in `infer_binary` — i.e. it's used
-                // outside the narrowing-guard shape. Spec §921 rejects
-                // `typeof` as a value-producing expression.
-                self.error_with_help(
-                    span,
-                    "`typeof` is only valid in the narrowing-guard form \
-                     `typeof x === \"T\"`"
-                        .into(),
-                    vec![
-                        "use `x is T` directly — `is` is the canonical \
-                         narrowing predicate"
-                            .into(),
-                    ],
-                );
-                Ok((TypedExprKind::Null, Type::Error))
-            }
+            ExprKind::Delete { operand } => self.reject_delete(operand, span),
+            ExprKind::Typeof { operand } => self.infer_typeof_value(operand, span),
             ExprKind::New {
                 callee,
                 type_args,
@@ -835,7 +822,11 @@ impl Inferer<'_> {
                 help.extend(narrow_help);
             }
             let shown = self.reported_result_type(&kind, &ty, want)?;
-            self.error_with_help(span, format!("expected `{want}`, got `{shown}`"), help);
+            self.error_with_help(
+                span,
+                super::diagnostics::mismatch_message(&want, &shown),
+                help,
+            );
         }
         self.check_expression_arity(&kind, &ty, span);
         let id = self
@@ -893,6 +884,13 @@ impl Inferer<'_> {
         keeps_literal && expected.is_none_or(|want| assignable(literal, want, self.resolver()))
     }
 
+    /// Whether `name` reads the global `undefined`, which no binding shadows.
+    fn names_global_undefined(&self, name: &str) -> bool {
+        name == "undefined"
+            && self.scopes.get("undefined").is_none()
+            && !self.top_symbols.contains_key("undefined")
+    }
+
     fn resolve_ident(
         &mut self,
         ident: Ident,
@@ -906,6 +904,9 @@ impl Inferer<'_> {
         {
             self.report_unresolved_identifier(&ident.name, span);
             return Ok(unresolved_ref(ident));
+        }
+        if self.names_global_undefined(&ident.name) {
+            return Ok((TypedExprKind::Undefined, Type::Undefined));
         }
         if let Some(entry) = self.scopes.get(&ident.name) {
             // Plan 75.8: consult the active narrow-scope stack. If
@@ -1004,7 +1005,7 @@ impl Inferer<'_> {
                         name: ident,
                     },
                     Type::Function {
-                        params: params.iter().map(|p| p.ty.clone()).collect(),
+                        params: params.iter().map(callable_parameter_type).collect(),
                         ret: Box::new(ret.clone()),
                         predicate: type_predicate.clone().map(Box::new),
                         // lift the rest flag from the resolved
@@ -1012,6 +1013,7 @@ impl Inferer<'_> {
                         // (`const f = sum;`) carries the variadic shape
                         // through to its callers.
                         has_rest: params.last().is_some_and(|p| p.rest),
+                        optional: crate::package_declaration::optional_parameter_count(params),
                     },
                 ),
                 ValueKind::Let { ty, .. } | ValueKind::Const { ty, .. } => (
@@ -1213,7 +1215,7 @@ impl Inferer<'_> {
         }
         // `??` is lifted out of the generic Binary arm into
         // its own typed-AST node so codegen and the type-result rule
-        // (`union(strip_null(lhs), rhs)`) can be specialised cleanly.
+        // (`union(strip_nullish(lhs), rhs)`) can be specialised cleanly.
         if matches!(op, BinOp::NullishCoalesce) {
             return self.infer_nullish_coalesce(lhs, rhs, span);
         }
@@ -1399,12 +1401,11 @@ impl Inferer<'_> {
                     return Ok(folded);
                 }
                 let (typed_lhs, lt) = self.infer_expr(lhs, None)?;
-                let lhs_void = lt.carries_void().then(|| lt.clone());
                 // Contextual types help literals and callbacks, but an equality
                 // operand is not an assignment into the other operand's type.
-                let contextual_rhs = equality_operand_needs_context(self.ast, rhs)?;
+                let contextual_rhs = is_context_typed_literal(self.ast, rhs)?;
                 let rhs_hint = contextual_rhs.then_some(&lt);
-                let (typed_rhs, rt) = self.infer_expr(rhs, rhs_hint)?;
+                let (typed_rhs, _) = self.infer_expr(rhs, rhs_hint)?;
                 let lhs_operand = self.comparison_operand(lhs, typed_lhs)?;
                 let rhs_operand = self.comparison_operand(rhs, typed_rhs)?;
                 if !super::comparison_operand::operands_comparable(
@@ -1414,31 +1415,14 @@ impl Inferer<'_> {
                 ) {
                     self.error(
                         self.ast.try_expr(rhs).map_err(super::arena_failure)?.span,
-                        format!(
-                            "expected `{}`, got `{}`",
-                            lhs_operand.label, rhs_operand.label
+                        super::diagnostics::mismatch_message(
+                            &lhs_operand.label,
+                            &rhs_operand.label,
                         ),
                     );
                 }
                 if self.is_global_nan(typed_lhs)? || self.is_global_nan(typed_rhs)? {
                     self.error_nan_comparison(op, span);
-                }
-                // `void` has no runtime value to compare, and the comparison
-                // otherwise typechecks clean and panics in codegen.
-                let rhs_void = rt.carries_void().then(|| rt.clone());
-                for (operand, void_ty) in [(lhs, lhs_void), (rhs, rhs_void)] {
-                    if let Some(void_ty) = void_ty {
-                        let operand_span = self
-                            .ast
-                            .try_expr(operand)
-                            .map_err(super::arena_failure)?
-                            .span;
-                        self.error_non_comparable_type(
-                            operand_span,
-                            &void_ty,
-                            super::diagnostics::ComparisonPosition::EqualityOperand,
-                        );
-                    }
                 }
                 Ok((
                     TypedExprKind::Binary {
@@ -1499,11 +1483,6 @@ impl Inferer<'_> {
                 };
                 let (typed_rhs, rhs_ty) =
                     self.infer_conditional_operand(rhs, &rhs_env, rhs_expected)?;
-                if matches!(rhs_ty.peel(), Type::Void) {
-                    condition_error = true;
-                    let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
-                    self.error_non_condition_type(rhs_span, &rhs_ty);
-                }
                 let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
                 let wrapped_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
                 let lhs_kept = match op {
@@ -1703,7 +1682,7 @@ impl Inferer<'_> {
                                 .to_string(),
                         );
                     }
-                    let culprit = self.nullable_culprit(&[(id, &operand_ty)], |t| {
+                    let culprit = self.nullish_culprit(&[(id, &operand_ty)], |t| {
                         unary_arith_result(op, t).is_some()
                     });
                     self.error_with_narrowing_hint(
@@ -1722,6 +1701,178 @@ impl Inferer<'_> {
                 operand: operand_id,
             },
             result_ty,
+        ))
+    }
+
+    /// `void operand`: the operand runs for its effects, and the result is
+    /// `undefined`. Kept out of `infer_expr`, whose frame every nested
+    /// expression pays for.
+    #[inline(never)]
+    fn infer_void(
+        &mut self,
+        operand: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (effect, _) = self.infer_expr(operand, None)?;
+        let result = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Undefined,
+                span,
+                ty: Type::Undefined,
+            })
+            .map_err(super::arena_failure)?;
+        Ok((
+            TypedExprKind::EffectThen { effect, result },
+            Type::Undefined,
+        ))
+    }
+
+    /// A read of a name. A local whose storage type differs from its read type
+    /// (a parameter whose default was applied) is cast to the read type. Kept
+    /// out of `infer_expr`, whose frame every nested expression pays for.
+    #[inline(never)]
+    fn infer_identifier(
+        &mut self,
+        ident: Ident,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        if let Some(index) = self
+            .scopes
+            .get(&ident.name)
+            .and_then(|entry| entry.nested_function)
+        {
+            self.check_nested_function_use(index, span)?;
+        }
+        let (kind, ty) = self.resolve_ident(ident, span)?;
+        let storage = if let TypedExprKind::LocalRef { ident, .. } = &kind {
+            self.scopes
+                .get(&ident.name)
+                .map(|entry| entry.storage_type().clone())
+        } else {
+            None
+        };
+        if let Some(storage) = storage.filter(|storage| *storage != ty) {
+            let value = self
+                .typed_ast
+                .try_push_expr(TypedExpr {
+                    kind,
+                    span,
+                    ty: storage,
+                })
+                .map_err(super::arena_failure)?;
+            Ok((
+                TypedExprKind::Cast {
+                    value,
+                    target_ty: ty.clone(),
+                    check: None,
+                },
+                ty,
+            ))
+        } else {
+            Ok((kind, ty))
+        }
+    }
+
+    /// `delete` is rejected: an object can't record one of its fields as
+    /// absent unless it was built with that field optional, since other
+    /// objects share one immutable names array per shape (SUB-971). The
+    /// operand is still inferred, so its own errors surface.
+    fn reject_delete(
+        &mut self,
+        operand: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        self.infer_expr(operand, None)?;
+        // A runtime key can't be made optional in a declaration, so a
+        // keyed collection is the fix there.
+        let deletes_a_key = matches!(
+            self.ast
+                .try_expr(operand)
+                .map_err(super::arena_failure)?
+                .kind,
+            ExprKind::IndexAccess { .. }
+        );
+        let help = if deletes_a_key {
+            "keep runtime keys in a `Map` and remove one with `map.delete(key)`"
+        } else {
+            "declare the field optional (`x?: T`) and assign `undefined` to clear it"
+        };
+        self.error_with_help(
+            span,
+            "the `delete` operator is not supported".into(),
+            vec![help.into()],
+        );
+        Ok((TypedExprKind::Null, Type::Error))
+    }
+
+    /// Store the operand once so a dynamic typeof decision never repeats effects.
+    fn infer_typeof_value(
+        &mut self,
+        operand: ExprId,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (value, value_ty) = self.infer_expr(operand, None)?;
+        let name = Ident {
+            name: format!("#typeof_{}", self.typed_ast.exprs_len()),
+            span,
+        };
+        let binding = self
+            .typed_ast
+            .try_push_stmt(crate::TypedStmt {
+                kind: crate::TypedStmtKind::Const {
+                    name: name.clone(),
+                    ty: value_ty.clone(),
+                    value,
+                    doc: None,
+                },
+                span,
+            })
+            .map_err(super::arena_failure)?;
+        let mut result =
+            self.push_synthetic_expr(TypedExprKind::String("object".into()), Type::String, span)?;
+        for (tag, label) in [
+            (crate::TypeofTagKind::Function, "function"),
+            (crate::TypeofTagKind::Boolean, "boolean"),
+            (crate::TypeofTagKind::String, "string"),
+            (crate::TypeofTagKind::Number, "number"),
+            (crate::TypeofTagKind::BigInt, "bigint"),
+            (crate::TypeofTagKind::Undefined, "undefined"),
+        ] {
+            let reference = self.push_synthetic_expr(
+                TypedExprKind::LocalRef {
+                    ident: name.clone(),
+                    boxed: false,
+                },
+                value_ty.clone(),
+                span,
+            )?;
+            let condition = self.push_synthetic_expr(
+                TypedExprKind::TypeofTag {
+                    value: reference,
+                    tag,
+                },
+                Type::Boolean,
+                span,
+            )?;
+            let matched =
+                self.push_synthetic_expr(TypedExprKind::String(label.into()), Type::String, span)?;
+            result = self.push_synthetic_expr(
+                TypedExprKind::Ternary {
+                    cond: condition,
+                    then_: matched,
+                    else_: result,
+                },
+                Type::String,
+                span,
+            )?;
+        }
+        Ok((
+            TypedExprKind::Sequence {
+                stmts: vec![binding],
+                result,
+            },
+            Type::String,
         ))
     }
 
@@ -1768,6 +1919,8 @@ impl Inferer<'_> {
             "boolean" => crate::TypeofTagKind::Boolean,
             "object" => crate::TypeofTagKind::Object,
             "function" => crate::TypeofTagKind::Function,
+            "undefined" => crate::TypeofTagKind::Undefined,
+            "bigint" => crate::TypeofTagKind::BigInt,
             _ => {
                 self.error_with_help(
                     tag_span,
@@ -2232,10 +2385,7 @@ impl Inferer<'_> {
                     .try_expr(typed_receiver)
                     .map_err(crate::typechecker::arena_failure)?
                     .span;
-                let help = self.nullable_string_fix_help(
-                    recv_span,
-                    super::diagnostics::NullableStringContext::ToStringCall,
-                );
+                let help = self.nullish_string_fix_help(recv_span, &recv_ty);
                 self.error_with_help(
                     name.span,
                     "cannot call `.toString()` on a `null` value; \
@@ -2363,6 +2513,10 @@ impl Inferer<'_> {
         // shape. Top-level named functions go through `named_params`
         // below; this path covers everything else.
         let callee_has_rest = matches!(callee_ty.peel(), Type::Function { has_rest: true, .. },);
+        let callee_optional = match callee_ty.peel() {
+            Type::Function { optional, .. } => *optional,
+            _ => 0,
+        };
         let (param_types, ret_ty) = match callee_ty.peel() {
             Type::Function { params, ret, .. } => (Some(params.clone()), (**ret).clone()),
             Type::Error => (None, Type::Error),
@@ -2384,10 +2538,22 @@ impl Inferer<'_> {
                 (None, Type::Error)
             }
             _ => {
-                let help = self.definition_help(&callee_ty);
-                let culprit = self.nullable_culprit(&[(typed_callee, &callee_ty)], |t| {
+                let culprit = self.nullish_culprit(&[(typed_callee, &callee_ty)], |t| {
                     matches!(t.peel(), Type::Function { .. })
                 });
+                let help = if culprit.is_some() {
+                    let callee_span = self
+                        .typed_ast
+                        .try_expr(typed_callee)
+                        .map_err(super::arena_failure)?
+                        .span;
+                    let callee = self.rewritable_snippet(callee_span);
+                    vec![format!(
+                        "call it only when present with `{callee}?.(…)`, or assert it with `{callee}!(…)`"
+                    )]
+                } else {
+                    self.definition_help(&callee_ty)
+                };
                 self.error_with_narrowing_hint(
                     span,
                     format!("cannot call value of type `{callee_ty}`"),
@@ -2400,11 +2566,8 @@ impl Inferer<'_> {
 
         // if the callee is a top-level non-generic
         // identifier, fetch the full `Vec<Param>` so we can see
-        // per-parameter defaults. `Type::Function` is structural and
-        // doesn't carry defaults, so calls *through* a function-typed
-        // value (variable, callback param) require all args — only
-        // bare-identifier static calls participate in default
-        // fill-in.
+        // per-parameter defaults. Structural function types retain optional
+        // arity; omitted arguments use undefined and the callee runs defaults.
         let named_params: Option<Vec<crate::Param>> =
             if let ExprKind::Identifier(ident) = &callee_kind {
                 self.lookup_top_function(&ident.name)
@@ -2439,44 +2602,28 @@ impl Inferer<'_> {
         let (min_args, max_args) = match (&named_params, &param_types) {
             (Some(ps), _) => {
                 let max = if has_rest { usize::MAX } else { ps.len() };
-                let min = ps
-                    .iter()
-                    .take_while(|p| !p.rest && p.default.is_none())
-                    .count();
+                let min = required_parameter_count(ps);
                 (min, max)
             }
             (None, Some(ts)) => {
                 if callee_has_rest {
                     // Trailing rest in the function type: callsite
                     // accepts `(ts.len() - 1)+` args.
-                    (ts.len().saturating_sub(1), usize::MAX)
+                    (
+                        ts.len().saturating_sub(1).saturating_sub(callee_optional),
+                        usize::MAX,
+                    )
                 } else {
-                    (ts.len(), ts.len())
+                    (ts.len().saturating_sub(callee_optional), ts.len())
                 }
             }
             (None, None) => (0, 0),
         };
 
-        // `parseInt(s)` is sugar for `parseInt(s, 10)`. The host fn
-        // is registered as arity-2 (string, number) without a
-        // default for now (cleanup deferred to a follow-up); the
-        // typechecker accepts the arity-1 form and synthesises a
-        // `Number(10)` typed expression below so codegen always sees
-        // a uniform 2-arg call. Only the resolved host function receives
-        // this default; a same-named local keeps its own signature.
-        let arity1_parse_int = matches!(
-            &callee_kind,
-            ExprKind::Identifier(ident) if self.lookup_top_function(&ident.name).is_some_and(|entry| {
-                entry.package_name == "submilli:number" && entry.symbol_name == "parseInt"
-            }),
-        ) && args.len() == 1
-            && param_types.as_ref().is_some_and(|p| p.len() == 2);
-
         let arity_ok = param_types.is_some() && args.len() >= min_args && args.len() <= max_args;
 
         if let Some(ref params) = param_types
             && !arity_ok
-            && !arity1_parse_int
         {
             // When the callee is a bare identifier resolving to a
             // top-level non-generic function, lift the `Function` form
@@ -2508,6 +2655,7 @@ impl Inferer<'_> {
                     params,
                     ret: &ret_ty,
                     has_rest,
+                    optional: callee_optional,
                 }),
             };
             let msg = if has_rest {
@@ -2544,33 +2692,41 @@ impl Inferer<'_> {
         } else {
             None
         };
-        let extra = usize::from(arity1_parse_int)
-            + named_params
-                .as_ref()
-                .map_or(0, |ps| ps.len().saturating_sub(args.len()));
+        let extra = named_params
+            .as_ref()
+            .map_or(0, |ps| ps.len().saturating_sub(args.len()));
         let mut typed_args = Vec::with_capacity(args.len() + extra);
         for (i, &arg_id) in args.iter().enumerate() {
             let hint = if i < fixed_count {
-                param_types.as_ref().and_then(|p| p.get(i)).cloned()
+                param_types
+                    .as_ref()
+                    .and_then(|p| p.get(i))
+                    .cloned()
+                    .map(|ty| {
+                        let optional = named_params
+                            .as_ref()
+                            .and_then(|ps| ps.get(i))
+                            .is_some_and(crate::Param::is_omittable);
+                        crate::ObjectField::widen_optional(optional, ty)
+                    })
             } else {
                 rest_elem_ty.clone()
             };
             let (typed_id, _) = self.infer_expr(arg_id, hint.as_ref())?;
             typed_args.push(typed_id);
         }
-        if arity1_parse_int {
-            let radix_id = self
-                .typed_ast
-                .try_push_expr(TypedExpr {
-                    kind: TypedExprKind::Number(10.0),
-                    span,
-                    ty: Type::Number,
-                })
-                .map_err(crate::typechecker::arena_failure)?;
-            typed_args.push(radix_id);
-        }
-        if arity_ok && let Some(ps) = &named_params {
-            self.fill_omitted_defaults(ps, args.len(), span, &mut typed_args)?;
+        if arity_ok {
+            if let Some(ps) = &named_params {
+                self.fill_omitted_defaults(ps, args.len(), span, &mut typed_args)?;
+            } else {
+                for _ in typed_args.len()..fixed_count {
+                    typed_args.push(self.synthesize_default_arg(
+                        &crate::DefaultValue::Undefined,
+                        &Type::Undefined,
+                        span,
+                    )?);
+                }
+            }
         }
         if arity_ok && let Some(elem_ty) = rest_elem_ty {
             self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args)?;
@@ -2611,7 +2767,7 @@ impl Inferer<'_> {
     }
 
     /// `filter`, `find` and `findLast` on an array, given a type guard
-    /// `(x) => x is S`, return `S[]` or `S | null`, as tsc's overloads do. The
+    /// `(x) => x is S`, return `S[]` or `S | undefined`, as tsc's overloads do. The
     /// call keeps its declared result type and is wrapped in the cast `as`
     /// would build, so a guard that lies traps instead of reading a wrong type.
     fn narrow_by_callback_predicate(
@@ -2647,7 +2803,7 @@ impl Inferer<'_> {
         let guarded = predicate.asserted_type.clone();
         let target_ty = match method {
             "filter" => Type::Array(Box::new(guarded)),
-            "find" | "findLast" => Type::union(vec![guarded, Type::Null]),
+            "find" | "findLast" => Type::union(vec![guarded, Type::Undefined]),
             _ => return Ok((kind, ty)),
         };
         let shape = self.reduce_interfaces_to_shapes(&target_ty);
@@ -2861,10 +3017,14 @@ impl Inferer<'_> {
         // callee sees a primitive in a ref slot. The remaining arms already
         // synthesize a reference value, so they keep the parameter's type.
         let (kind, ty) = match default {
-            crate::DefaultValue::Number(n) => (TypedExprKind::Number(*n), Type::Number),
+            crate::DefaultValue::Number(n)
+            | crate::DefaultValue::OmittedNumber { omitted: n, .. } => {
+                (TypedExprKind::Number(*n), Type::Number)
+            }
             crate::DefaultValue::String(s) => (TypedExprKind::String(s.clone()), Type::String),
             crate::DefaultValue::Boolean(b) => (TypedExprKind::Boolean(*b), Type::Boolean),
             crate::DefaultValue::Null => (TypedExprKind::Null, Type::Null),
+            crate::DefaultValue::Undefined => (TypedExprKind::Undefined, Type::Undefined),
             crate::DefaultValue::EmptyArray => {
                 let element_ty = match param_ty {
                     Type::Array(t) => (**t).clone(),
@@ -2948,14 +3108,15 @@ impl Inferer<'_> {
         for p in &params[supplied..fixed_count] {
             let id = match &p.default {
                 Some(default) => self.synthesize_default_arg(default, &p.ty, span)?,
-                None => self
-                    .typed_ast
-                    .try_push_expr(TypedExpr {
-                        kind: TypedExprKind::Null,
-                        span,
-                        ty: Type::Error,
-                    })
-                    .map_err(crate::typechecker::arena_failure)?,
+                None if p.optional => {
+                    self.synthesize_default_arg(&crate::DefaultValue::Undefined, &p.ty, span)?
+                }
+                None => {
+                    return Err(super::inference_failure(
+                        "required argument omitted after arity validation",
+                    )
+                    .with_span(span));
+                }
             };
             typed_args.push(id);
         }
@@ -3083,12 +3244,12 @@ impl Inferer<'_> {
                     super::generic::GenericCallee::Constructor,
                 )?;
                 // Written type arguments are screened in `resolve_type`;
-                // inferred ones arrive here, and a `void` argument has no value
+                // inferred ones arrive here, and a `never` argument has no value
                 // representation to erase into.
                 if let Type::ClassRef { args: solved, .. } = ty.peel()
-                    && let Some(offender) = solved.iter().find_map(|arg| {
-                        super::void_type_arguments::invalid_argument(arg, false, self.resolver())
-                    })
+                    && let Some(offender) = solved
+                        .iter()
+                        .find_map(super::value_operand::valueless_within_type_argument)
                 {
                     let offender = offender.clone();
                     self.error_with_help(
@@ -3319,7 +3480,7 @@ impl Inferer<'_> {
                         "name the shape you expect — `session.get<Progress>(key)` — or drop \
                      the type argument and narrow the result yourself with a \
                      runtime-checked `as`: `session.get(key) as Progress`. Use \
-                     `session.get<Progress | null>(key)` when the key may be absent."
+                     `session.get<Progress>(key)` returns undefined when the key is absent."
                             .to_string(),
                     ],
                 );
@@ -3790,7 +3951,7 @@ impl Inferer<'_> {
                         &params,
                         &ret,
                         has_rest,
-                        CallLift::Function { name: &display },
+                        CallLift::Anon { ty: &field.ty },
                         &args,
                         span,
                     )?;
@@ -3838,10 +3999,11 @@ impl Inferer<'_> {
                 }
                 let mangled = crate::mangle::static_member(&owner, &member.name);
                 let ty = Type::Function {
-                    params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+                    params: sig.params.iter().map(callable_parameter_type).collect(),
                     ret: Box::new(sig.ret.clone()),
                     predicate: None,
                     has_rest: sig.params.last().is_some_and(|p| p.rest),
+                    optional: crate::package_declaration::optional_parameter_count(&sig.params),
                 };
                 (
                     TypedExprKind::FunctionRef {
@@ -4030,10 +4192,7 @@ impl Inferer<'_> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
         let max_args = if has_rest { usize::MAX } else { params.len() };
-        let min_args = params
-            .iter()
-            .take_while(|p| !p.rest && p.default.is_none())
-            .count();
+        let min_args = required_parameter_count(params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
         if !arity_ok {
             let help = match lift {
@@ -4057,6 +4216,7 @@ impl Inferer<'_> {
                         params: &tys,
                         ret,
                         has_rest: params.last().is_some_and(|p| p.rest),
+                        optional: crate::package_declaration::optional_parameter_count(params),
                     })
                 }
                 CallLift::Method {
@@ -4107,7 +4267,7 @@ impl Inferer<'_> {
         let mut typed_args: Vec<ExprId> = Vec::with_capacity(args.len().max(params.len()));
         for (i, &arg_id) in args.iter().enumerate() {
             let hint = if i < fixed_count {
-                params.get(i).map(|p| p.ty.clone())
+                params.get(i).map(callable_parameter_type)
             } else {
                 rest_elem_ty.clone()
             };
@@ -4130,8 +4290,8 @@ impl Inferer<'_> {
 
     /// [`Self::bind_param_call_args`] for a callee known only by its
     /// structural [`Type::Function`]. That form carries no parameter names
-    /// and no defaults, so the synthesized list is positional and every
-    /// slot is required; only the trailing `has_rest` flag survives.
+    /// and no default expressions. Its optional count and rest flag determine
+    /// which positional arguments may be omitted.
     fn bind_fn_type_call_args(
         &mut self,
         param_types: &[Type],
@@ -4147,6 +4307,21 @@ impl Inferer<'_> {
             .enumerate()
             .map(|(i, ty)| crate::Param::new(format!("arg{i}"), ty.clone()))
             .collect();
+        let optional = match lift {
+            CallLift::Anon { ty } => match ty.peel() {
+                Type::Function { optional, .. } => *optional,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        let fixed = params.len().saturating_sub(usize::from(has_rest));
+        for param in params
+            .iter_mut()
+            .take(fixed)
+            .skip(fixed.saturating_sub(optional))
+        {
+            param.optional = true;
+        }
         if has_rest && let Some(last) = params.last_mut() {
             last.rest = true;
         }
@@ -4276,7 +4451,7 @@ impl Inferer<'_> {
         })
     }
 
-    /// `JSON.stringify(x, null?, space?)`. Arg can be any non-`void` type;
+    /// `JSON.stringify(x, null?, space?)`. Arguments may have any value type;
     /// type arguments are rejected (stringify is non-generic at the
     /// source level — the value's static type already drives codegen
     /// dispatch).
@@ -4330,11 +4505,17 @@ impl Inferer<'_> {
         let mut typed_args = vec![typed_arg];
 
         if let Some(&replacer) = args.get(1) {
-            let (typed_replacer, replacer_ty) = self.infer_expr(replacer, Some(&Type::Null))?;
-            if !matches!(replacer_ty.peel(), Type::Null | Type::Error) {
+            let (typed_replacer, replacer_ty) = self.infer_expr(
+                replacer,
+                Some(&Type::union(vec![Type::Null, Type::Undefined])),
+            )?;
+            if !matches!(
+                replacer_ty.peel(),
+                Type::Null | Type::Undefined | Type::Error
+            ) {
                 self.error_with_help(
                     self.ast.try_expr(replacer).map_err(super::arena_failure)?.span,
-                    "`JSON.stringify` only accepts `null` as its replacer argument".to_string(),
+                    "`JSON.stringify` only accepts `null` or `undefined` as its replacer argument".to_string(),
                     vec![
                         "use `JSON.stringify(value, null, space)`; replacer functions are not supported"
                             .to_string(),
@@ -4353,11 +4534,12 @@ impl Inferer<'_> {
                     | Type::String
                     | Type::StringLiteral(_)
                     | Type::Null
+                    | Type::Undefined
                     | Type::Error
             ) {
                 self.error_with_help(
                     self.ast.try_expr(space).map_err(super::arena_failure)?.span,
-                    "`JSON.stringify` space argument must be `number`, `string`, or `null`"
+                    "`JSON.stringify` space argument must be `number`, `string`, `null`, or `undefined`"
                         .to_string(),
                     vec![
                         "use a number of spaces or an indent string, for example `JSON.stringify(value, null, 2)`"
@@ -4368,25 +4550,17 @@ impl Inferer<'_> {
             typed_args.push(typed_space);
         }
 
-        // `void` is the only rejected arg type — a `void`-typed
-        // expression has no value to serialize. `carries_void` rather than
-        // `is_void`: a union listing `void` has no more of a value than bare
-        // `f()` does.
-        if arg_ty.carries_void() {
-            self.error(
-                self.ast
-                    .try_expr(args[0])
-                    .map_err(super::arena_failure)?
-                    .span,
-                "`JSON.stringify(x)` requires a non-`void` argument".to_string(),
-            );
-        }
+        let result_ty = if json_stringify_may_return_undefined(&arg_ty, self.resolver()) {
+            Type::union(vec![Type::String, Type::Undefined])
+        } else {
+            Type::String
+        };
         Ok((
             TypedExprKind::IntrinsicCall {
                 kind: Intrinsic::JsonStringify,
                 args: typed_args,
             },
-            Type::String,
+            result_ty,
         ))
     }
 
@@ -4766,14 +4940,12 @@ impl Inferer<'_> {
 
     /// Wrap an already-typed interpolation expression in a
     /// `MethodCall { name: "toString" }` unless its type is already
-    /// `Type::String`; a `never` value converts as `"" + value`, and a generic or
-    /// `unknown` one as `String(value)`, so null reads as "null". Uses the exact valid-types allowlist /
-    /// diagnostic shape as the `String(x)` coercion call, so `String(x)` and
-    /// `${x}` route through the same dispatch path at codegen time.
-    ///
-    /// The allowlist is shared with the nullable-narrowing hint below: the hint may
-    /// only claim narrowing is the fix when the non-null form is a receiver this
-    /// accepts, or it advises a guard that leaves the same error behind.
+    /// `Type::String`; a `never` value converts as `"" + value`, `undefined` as
+    /// the text `"undefined"`, and a value that may be nullish or whose type is
+    /// known only at run time through [`Intrinsic::ToString`], as `String(x)`
+    /// converts it. Uses the exact valid-types allowlist / diagnostic shape as
+    /// the `String(x)` coercion call, so `String(x)` and `${x}` route through
+    /// the same dispatch path at codegen time.
     ///
     /// Diagnostics point at the interpolated expression. The conversion node
     /// spans the whole `${…}`: it is not the source expression, and sharing that
@@ -4794,55 +4966,43 @@ impl Inferer<'_> {
         if matches!(peeled, Type::Never) {
             return self.concatenated_onto_empty_string(expr_id, substitution_span);
         }
-        // A generic or `unknown` value may hold null, which `toString` can't be
-        // called on but converts to "null"; `String(x)` converts it as JS does.
-        if matches!(peeled, Type::GenericParam { .. } | Type::Unknown)
-            && let Some(converted) = self.string_constructor_call(expr_id, substitution_span)?
-        {
-            return Ok(converted);
+        if matches!(peeled, Type::Undefined) {
+            let result = self.push_synthetic_expr(
+                TypedExprKind::String("undefined".into()),
+                Type::String,
+                substitution_span,
+            )?;
+            return self.push_synthetic_expr(
+                TypedExprKind::EffectThen {
+                    effect: expr_id,
+                    result,
+                },
+                Type::String,
+                substitution_span,
+            );
+        }
+        if interpolates_at_run_time(peeled) {
+            return self.push_synthetic_expr(
+                TypedExprKind::IntrinsicCall {
+                    kind: Intrinsic::ToString,
+                    args: vec![expr_id],
+                },
+                Type::String,
+                substitution_span,
+            );
         }
         let method_name = crate::Ident {
             name: "toString".to_string(),
             span: expr_span,
         };
-        // A union of arrays answers `toString` as an array, through its joined view.
-        let converts = has_to_string(peeled) || peeled.is_array_like_union();
-        if !converts {
-            let nullable = matches!(peeled, Type::Null)
-                || matches!(
-                    peeled,
-                    Type::Union(members)
-                        if members.iter().any(|m| matches!(m.peel(), Type::Null))
-                );
-            if nullable {
-                let help = self.nullable_string_fix_help(
-                    expr_span,
-                    super::diagnostics::NullableStringContext::Interpolation,
-                );
-                // "narrow first" is the standing advice here, so a reader who
-                // already wrote the guard needs to be told why it didn't reach —
-                // otherwise the help tells them to do what they just did.
-                // `null` is the whole problem here — the non-null form always has a
-                // `toString`, or the outer allowlist would have rejected it too.
-                let culprit = self.nullable_culprit(&[(expr_id, ty)], |t| has_to_string(t.peel()));
-                self.error_with_narrowing_hint(
-                    expr_span,
-                    format!(
-                        "template-literal interpolation: receiver `{ty}` \
-                         may be `null`; narrow to a non-null type first"
-                    ),
-                    help,
-                    culprit,
-                )?;
-            } else {
-                self.error(
-                    expr_span,
-                    format!(
-                        "template-literal interpolation: `.toString()` \
-                         not supported on `{ty}`"
-                    ),
-                );
-            }
+        if !has_to_string(peeled) {
+            self.error(
+                expr_span,
+                format!(
+                    "template-literal interpolation: `.toString()` \
+                     not supported on `{ty}`"
+                ),
+            );
             return self
                 .typed_ast
                 .try_push_expr(TypedExpr {
@@ -4898,41 +5058,6 @@ impl Inferer<'_> {
             .map_err(crate::typechecker::arena_failure)
     }
 
-    /// `String(value)`, through the prelude's `String` binding.
-    fn string_constructor_call(
-        &mut self,
-        value: ExprId,
-        span: Span,
-    ) -> Result<Option<ExprId>, crate::compiler_error::CompilerFailure> {
-        let Some(entry) = self.top_symbols.get("String") else {
-            return Ok(None);
-        };
-        let ValueKind::Const { ty, .. } = &entry.kind else {
-            return Ok(None);
-        };
-        let (mangled, ty) = (entry.mangled_name.clone(), ty.clone());
-        let Some((_, _, iface, _)) = self.find_method(&ty, "@call") else {
-            return Ok(None);
-        };
-        let name = crate::Ident {
-            name: "String".to_string(),
-            span,
-        };
-        let receiver =
-            self.push_synthetic_expr(TypedExprKind::GlobalRef { mangled, name }, ty, span)?;
-        let call = TypedExprKind::MethodCall {
-            receiver,
-            iface,
-            name: crate::Ident {
-                name: "@call".to_string(),
-                span,
-            },
-            args: vec![value],
-            type_predicate: None,
-        };
-        self.push_synthetic_expr(call, Type::String, span).map(Some)
-    }
-
     /// `"" + value`, the string `value` converts to.
     fn concatenated_onto_empty_string(
         &mut self,
@@ -4950,21 +5075,25 @@ impl Inferer<'_> {
     }
 
     /// The value of an object literal's field when it is spelled as a literal.
-    fn literal_tag_value(&self, value: crate::ExprId) -> Result<Option<TagValue>, CompilerFailure> {
+    /// tsc uses such values to pick the union members a literal could be
+    /// constructing.
+    fn literal_tag_value(
+        &self,
+        value: crate::ExprId,
+    ) -> Result<Option<narrowing::LiteralValue>, CompilerFailure> {
         let expr = self.ast.try_expr(value).map_err(super::arena_failure)?;
         Ok(match &expr.kind {
-            crate::ExprKind::Null => Some(TagValue::Null),
-            crate::ExprKind::String(s) => Some(TagValue::Literal(narrowing::LiteralValue::String(
-                s.clone(),
-            ))),
-            crate::ExprKind::Boolean(b) => {
-                Some(TagValue::Literal(narrowing::LiteralValue::Boolean(*b)))
+            crate::ExprKind::Null => Some(narrowing::LiteralValue::Null),
+            crate::ExprKind::Identifier(ident) if self.names_global_undefined(&ident.name) => {
+                Some(narrowing::LiteralValue::Undefined)
             }
+            crate::ExprKind::String(s) => Some(narrowing::LiteralValue::String(s.clone())),
+            crate::ExprKind::Boolean(b) => Some(narrowing::LiteralValue::Boolean(*b)),
             crate::ExprKind::Number(n) => {
                 // Mirror the number-literal inference's -0.0 → 0.0.
                 let canonical = if *n == 0.0 { 0.0 } else { *n };
-                Some(TagValue::Literal(narrowing::LiteralValue::Number(
-                    crate::types::LiteralF64(canonical),
+                Some(narrowing::LiteralValue::Number(crate::types::LiteralF64(
+                    canonical,
                 )))
             }
             _ => None,
@@ -5167,7 +5296,11 @@ impl Inferer<'_> {
             let Some(value) = self.literal_tag_value(field.value)? else {
                 continue;
             };
-            candidates.retain(|shape| shape.get(name).is_none_or(|f| tag_fits(&f.ty, &value)));
+            candidates.retain(|shape| {
+                shape
+                    .get(name)
+                    .is_none_or(|f| tag_fits(&f.read_ty(), &value))
+            });
             if candidates.is_empty() {
                 return Ok(None);
             }
@@ -5211,11 +5344,11 @@ impl Inferer<'_> {
             .iter()
             .any(|m| matches!(m, crate::ObjectLiteralMember::Spread { .. }));
 
-        // A `null` member has no tag, so the tag is looked for among the
-        // others: `{ k: "a", … }` picks `A` from `A | B | null`.
+        // A `null` or `undefined` member has no tag, so the tag is looked for
+        // among the others: `{ k: "a", … }` picks `A` from `A | B | null`.
         let tagged: Vec<&Type> = members
             .iter()
-            .filter(|member| !matches!(member.peel(), Type::Null))
+            .filter(|member| !matches!(member.peel(), Type::Null | Type::Undefined))
             .collect();
         let tagged_types: Vec<Type> = tagged.iter().map(|member| (*member).clone()).collect();
         if let Some((key, table)) = self.union_discriminant_with_nominals(&tagged_types) {
@@ -5225,10 +5358,7 @@ impl Inferer<'_> {
                 .map(|m| {
                     Ok::<_, CompilerFailure>(match m {
                         crate::ObjectLiteralMember::Field(f) if f.name.name == key => {
-                            match self.literal_tag_value(f.value)? {
-                                Some(TagValue::Literal(value)) => Some(value),
-                                Some(TagValue::Null) | None => None,
-                            }
+                            self.literal_tag_value(f.value)?
                         }
                         _ => None,
                     })
@@ -5498,7 +5628,6 @@ impl Inferer<'_> {
                         typed_expr: typed_value,
                         ty: value_ty,
                         already_errored,
-                        rejected_void,
                     } = self.infer_argument_slot_value(
                         literal,
                         &field.name.name,
@@ -5507,7 +5636,6 @@ impl Inferer<'_> {
                             this.infer_value_operand(
                                 field.value,
                                 hint.as_ref(),
-                                ValuePosition::FieldValue,
                                 inferred_fields.remove(&field.value),
                             )
                         },
@@ -5532,22 +5660,6 @@ impl Inferer<'_> {
                         .try_expr(field.value)
                         .map_err(super::arena_failure)?
                         .span;
-                    if rejected_void {
-                        // Record the field at `Error` rather than dropping it —
-                        // a missing field cascades into every later use of the
-                        // object's shape — and skip the per-field checks below,
-                        // which would refuse the same `void` a second time.
-                        if !is_reserved_object_field(&field.name.name) {
-                            merged.insert(
-                                field.name.name.clone(),
-                                (
-                                    crate::ObjectField::required(Type::Error),
-                                    crate::TypedObjectFieldSource::Literal(typed_value),
-                                ),
-                            );
-                        }
-                        continue;
-                    }
                     // when the surrounding hint is an
                     // InterfaceRef, the outer assignability check
                     // returns the interface trivially below — do
@@ -5556,7 +5668,7 @@ impl Inferer<'_> {
                         && let Some(expected_field) = expected_fields
                             .as_ref()
                             .and_then(|m| m.get(&field.name.name))
-                        && !assignable(&value_ty, &expected_field.ty, self.resolver())
+                        && !assignable(&value_ty, &expected_field.read_ty(), self.resolver())
                     {
                         self.report_contextual_mismatch(
                             value_span,
@@ -5790,7 +5902,7 @@ impl Inferer<'_> {
                         );
                     } else if from_spread
                         && interface_target.is_some()
-                        && !assignable(&existing_field.ty, &want_field.ty, self.resolver())
+                        && !assignable(&existing_field.ty, &want_field.read_ty(), self.resolver())
                     {
                         let message = format!(
                             "spread field `{name}`: expected `{}`, got `{}`",
@@ -5805,30 +5917,24 @@ impl Inferer<'_> {
                         existing_field.ty = want_field.ty.clone();
                     }
                 } else if want_field.optional {
-                    // Optional field declared but not provided —
-                    // codegen will fill it with `ref.null`. We don't
-                    // have a source for the value, so synthesize a
-                    // `Literal` origin pointing at a fresh `Null`
-                    // typed expression. The lowering produces a
-                    // `ref.null $Object` in codegen (
-                    // null-fill rule), matching the original
-                    // behavior of the non-spread path.
-                    let null_id = self
+                    // An optional field the literal doesn't provide reads
+                    // back as absent: its origin is a synthesized `undefined`.
+                    let absent_id = self
                         .typed_ast
                         .try_push_expr(TypedExpr {
-                            kind: TypedExprKind::Null,
+                            kind: TypedExprKind::Undefined,
                             span,
-                            ty: Type::Null,
+                            ty: Type::Undefined,
                         })
                         .map_err(crate::typechecker::arena_failure)?;
                     if !has_spread {
-                        object_members.push(crate::TypedObjectMember::Value(null_id));
+                        object_members.push(crate::TypedObjectMember::Value(absent_id));
                     }
                     merged.insert(
                         name.clone(),
                         (
                             want_field.clone(),
-                            crate::TypedObjectFieldSource::Absent(null_id),
+                            crate::TypedObjectFieldSource::Absent(absent_id),
                         ),
                     );
                 }
@@ -5955,7 +6061,7 @@ impl Inferer<'_> {
         }
         let shapes: Vec<(ObjectFields, Option<Type>)> = members
             .iter()
-            .filter(|member| !matches!(member.peel(), Type::Null))
+            .filter(|member| !matches!(member.peel(), Type::Null | Type::Undefined))
             .map(|member| {
                 let index = self
                     .resolver()
@@ -5976,7 +6082,7 @@ impl Inferer<'_> {
                     .filter_map(|(fields, index)| {
                         fields
                             .get(name)
-                            .map(|field| field.ty.clone())
+                            .map(crate::ObjectField::read_ty)
                             .or_else(|| index.clone())
                     })
                     .collect();
@@ -6093,7 +6199,8 @@ impl Inferer<'_> {
             let fields = match alternative {
                 Type::Object { fields, .. } => fields,
                 // A spread copies nothing from a value that is always falsy, as
-                // `c && { a: 1 }` is when `c` is false, or from `null`, when
+                // `c && { a: 1 }` is when `c` is false, or from `null` or
+                // `undefined`, when
                 // another alternative is an object (as in tsc).
                 ref falsy if is_definitely_falsy(falsy) => ObjectFields::new(),
                 Type::InterfaceRef {
@@ -6442,8 +6549,12 @@ impl Inferer<'_> {
                     // reaches here when it holds an unbound type parameter: its empty
                     // arrays and callbacks need that context, as in tsc.
                     // An empty array's `never[]` says nothing of what later elements
-                    // hold, so it hints none: `[[], [1]]` holds `number[]`.
-                    let running_hint = element_ty.as_ref().filter(|t| !holds_no_element(t));
+                    // hold, so it hints none: `[[], [1]]` holds `number[]`. Nor does
+                    // a running type of only `null`/`undefined`, unless a hint pins
+                    // it: the element widens the type instead (`[undefined, { a: 1 }]`).
+                    let running_hint = element_ty.as_ref().filter(|t| {
+                        !holds_no_element(t) && (hint_pins_element_ty || !is_nullish_only(t))
+                    });
                     let hint = if open_element_type && (types_itself || arrays_of_object_literals) {
                         None
                     } else if open_element_type && lacks_running_shape {
@@ -6455,13 +6566,7 @@ impl Inferer<'_> {
                         typed_expr: typed_id,
                         ty: elem_ty,
                         already_errored,
-                        rejected_void,
-                    } =
-                        self.infer_value_operand(elem_id, hint, ValuePosition::ArrayElement, None)?;
-                    if rejected_void {
-                        typed_elements.push(crate::TypedArrayElement::Value(typed_id));
-                        continue;
-                    }
+                    } = self.infer_value_operand(elem_id, hint, None)?;
                     // A `never` element holds no value (it is read in code no value
                     // reaches), so it neither seeds nor narrows the element type.
                     if matches!(elem_ty.peel(), Type::Never) {
@@ -6512,8 +6617,18 @@ impl Inferer<'_> {
                     span: spread_span,
                 } => {
                     // A spread only reads its source, so a readonly one qualifies.
+                    // Only `null`/`undefined` so far is no context for a source
+                    // that types itself: the spread widens the element type
+                    // instead (`[undefined, ...xs]`). An annotation, or a source
+                    // like `[]` that needs one, still takes it.
+                    let source_needs_context = cannot_be_typed_alone(self.ast, value)?;
                     let source_hint = element_ty
                         .as_ref()
+                        .filter(|running| {
+                            hint_pins_element_ty
+                                || source_needs_context
+                                || !is_nullish_only(running)
+                        })
                         .map(|t| Type::Readonly(Box::new(Type::Array(Box::new(t.clone())))));
                     let errors_before = self.error_count();
                     let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref())?;
@@ -6541,6 +6656,13 @@ impl Inferer<'_> {
                         Some(elem_t) => match &element_ty {
                             // Widens for the same reason as the value seed above.
                             None => element_ty = Some(elem_t.widen_literal()),
+                            Some(running)
+                                if !hint_pins_element_ty
+                                    && let Some(widened) =
+                                        Self::widen_nullish_seed(running, &elem_t) =>
+                            {
+                                element_ty = Some(widened);
+                            }
                             Some(running) if !assignable(&elem_t, running, self.resolver()) => {
                                 if !hint_pins_element_ty {
                                     self.report_contextual_mismatch(
@@ -6559,7 +6681,7 @@ impl Inferer<'_> {
                                 } else if !already_errored {
                                     self.error(
                                         spread_span,
-                                        format!("expected `{running}`, got `{elem_t}`"),
+                                        super::diagnostics::mismatch_message(&running, &elem_t),
                                     );
                                 }
                             }
@@ -6705,6 +6827,57 @@ impl Inferer<'_> {
         Ok(types)
     }
 
+    /// The element type of an array literal that so far held only `null` or
+    /// `undefined`, once a value with a type of its own arrives. A spread
+    /// widens only this way: its source's elements are already one type.
+    fn widen_nullish_seed(running: &Type, elem: &Type) -> Option<Type> {
+        if is_nullish_only(running) && !is_nullish_only(elem) {
+            let undefined_as_value = |ty: &Type| match ty.peel() {
+                Type::Void => Type::Undefined,
+                Type::Union(members) => Type::union(
+                    members
+                        .iter()
+                        .map(|m| match m.peel() {
+                            Type::Void => Type::Undefined,
+                            _ => m.clone(),
+                        })
+                        .collect(),
+                ),
+                _ => ty.clone(),
+            };
+            Some(Type::union(vec![
+                undefined_as_value(running),
+                elem.widen_literal(),
+            ]))
+        } else {
+            None
+        }
+    }
+
+    /// The running element type widened by `null`/`undefined`: an element that
+    /// is the running type plus a nullish member, or a nullish seed followed by
+    /// a value. Arrays stay homogeneous otherwise.
+    fn widen_by_nullish(&self, running: &Type, elem: &Type) -> Option<Type> {
+        if let Some(widened) = Self::widen_nullish_seed(running, elem) {
+            return Some(widened);
+        }
+        if assignable(elem, running, self.resolver()) {
+            return None;
+        }
+        let present = super::narrowing::strip_nullish(elem);
+        if present == *elem || !assignable(&present, running, self.resolver()) {
+            return None;
+        }
+        let mut members = vec![running.clone()];
+        if elem.spells_null() {
+            members.push(Type::Null);
+        }
+        if elem.spells_undefined() {
+            members.push(Type::Undefined);
+        }
+        Some(Type::union(members))
+    }
+
     fn report_array_element_mismatch(
         &mut self,
         span: Span,
@@ -6734,6 +6907,13 @@ impl Inferer<'_> {
         elem_ty: &Type,
         join: ElementJoin,
     ) -> Option<Type> {
+        // `[o.x, o.y]` with an optional `y` is `(number | undefined)[]`, as in
+        // TypeScript.
+        if join.widens
+            && let Some(widened) = self.widen_by_nullish(running, elem_ty)
+        {
+            return Some(widened);
+        }
         if assignable(elem_ty, running, self.resolver()) {
             return Some(running.clone());
         }
@@ -6757,13 +6937,17 @@ impl Inferer<'_> {
     }
 
     /// Whether an array element is typed on its own rather than against the
-    /// elements before it: an identifier or field read, a fully annotated
-    /// function, or an object literal none of whose fields needs a hint.
+    /// elements before it: an identifier or field read, `null`, a fully
+    /// annotated function, or an object literal none of whose fields needs a
+    /// hint.
     fn types_itself(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         let id = peel_parens(self.ast, expr)?;
         Ok(
             match &self.ast.try_expr(id).map_err(super::arena_failure)?.kind {
-                ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::This => true,
+                ExprKind::Identifier(_)
+                | ExprKind::FieldAccess { .. }
+                | ExprKind::This
+                | ExprKind::Null => true,
                 ExprKind::Arrow { .. } | ExprKind::FunctionExpression { .. } => {
                     self.is_fully_annotated_function(id)?
                 }
@@ -6811,6 +6995,7 @@ impl Inferer<'_> {
                 | ExprKind::TemplateLiteral { .. }
                 | ExprKind::Unary { .. }
                 | ExprKind::Typeof { .. }
+                | ExprKind::Void { .. }
                 | ExprKind::IndexAccess { .. }
                 | ExprKind::As { .. }
                 | ExprKind::InstanceOf { .. } => false,
@@ -6860,9 +7045,9 @@ impl Inferer<'_> {
             .span;
         let _: () = if let Some(diagnostic) = self.diagnostics.last_mut()
             && diagnostic.span == span
-            && diagnostic.message == format!("expected `{hint}`, got `{actual}`")
+            && diagnostic.message == super::diagnostics::mismatch_message(&hint, &actual)
         {
-            diagnostic.message = format!("expected `{}`, got `{actual}`", hint.peel());
+            diagnostic.message = super::diagnostics::mismatch_message(hint.peel(), &actual);
         };
         Ok(())
     }
@@ -6882,7 +7067,7 @@ impl Inferer<'_> {
         // Keep the inner diagnostic's help and location while adding slot context.
         if let Some(diagnostic) = self.diagnostics.last_mut()
             && diagnostic.span == span
-            && diagnostic.message == format!("expected `{expected}`, got `{actual}`")
+            && diagnostic.message == super::diagnostics::mismatch_message(&expected, &actual)
         {
             diagnostic.message = message;
         }
@@ -6891,25 +7076,42 @@ impl Inferer<'_> {
     fn infer_spread_tuple_literal(
         &mut self,
         elements: Vec<crate::ArrayLiteralElement>,
-        expected: &[Type],
+        expected: &crate::types::TupleType,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let mut typed = Vec::with_capacity(elements.len());
-        let mut slots = Vec::new();
+        let mut slots = crate::types::TupleType::from(Vec::new());
         let mut diagnosed = Vec::new();
         for element in &elements {
             match element {
                 crate::ArrayLiteralElement::Value(value) => {
                     let errors_before = self.error_count();
-                    let (id, ty) = self.infer_expr(*value, expected.get(slots.len()))?;
-                    diagnosed.push(self.error_count() > errors_before);
-                    slots.push(ty);
+                    let first_position = slots.required_len();
+                    let last_position = slots.len();
+                    let hint = tuple_position_hint(expected, first_position, last_position);
+                    let (id, ty) = self.infer_expr(*value, hint.as_ref())?;
+                    slots = append_tuple_literal_types(slots, &vec![ty].into(), &self.type_limits)
+                        .map_err(super::type_limit_at(span))?;
+                    diagnosed.resize(slots.len(), false);
+                    if self.error_count() > errors_before {
+                        for diagnosed in diagnosed
+                            .iter_mut()
+                            .take(last_position.saturating_add(1))
+                            .skip(first_position)
+                        {
+                            *diagnosed = true;
+                        }
+                    }
                     typed.push(crate::TypedArrayElement::Value(id));
                 }
                 crate::ArrayLiteralElement::Spread { value, span } => {
                     let (id, ty) = self.infer_expr(*value, None)?;
                     match ty.peel() {
-                        Type::Tuple(types) => { slots.extend(types.iter().cloned()); diagnosed.extend(std::iter::repeat_n(false, types.len())); },
+                        Type::Tuple(types) => {
+                            slots = append_tuple_literal_types(slots, types, &self.type_limits)
+                                .map_err(super::type_limit_at(*span))?;
+                            diagnosed.resize(slots.len(), false);
+                        },
                         Type::Error => {},
                         _ => self.error_with_help(*span,
                             format!("tuple literal spread requires a fixed-length tuple, got `{ty}`"),
@@ -6919,22 +7121,29 @@ impl Inferer<'_> {
                 }
             }
         }
-        if slots.len() != expected.len() {
+        if slots.required_len() < expected.required_len() || slots.len() > expected.len() {
+            let actual_count = if slots.optional == 0 {
+                slots.len().to_string()
+            } else {
+                format!("{} to {}", slots.required_len(), slots.len())
+            };
             self.error(
                 span,
                 format!(
-                    "tuple literal has {} elements, but type expects {}",
-                    slots.len(),
+                    "tuple literal has {actual_count} elements, but type expects {} to {}",
+                    expected.required_len(),
                     expected.len()
                 ),
             );
         }
-        for ((actual, want), already_errored) in slots.iter_mut().zip(expected).zip(diagnosed) {
+        for ((actual, want), already_errored) in
+            slots.elements.iter_mut().zip(expected).zip(diagnosed)
+        {
             if matches!(want, Type::TypeVar(_) | Type::GenericParam { .. }) {
                 continue;
             }
             if !already_errored && !assignable(actual, want, self.resolver()) {
-                self.error(span, format!("expected `{want}`, got `{actual}`"));
+                self.error(span, super::diagnostics::mismatch_message(&want, &actual));
             }
             *actual = want.clone();
         }
@@ -6963,7 +7172,9 @@ impl Inferer<'_> {
             let matching: Vec<_> = candidates
                 .iter()
                 .filter(|candidate| match candidate {
-                    Type::Tuple(slots) => slots.len() == elements.len(),
+                    Type::Tuple(slots) => {
+                        elements.len() >= slots.required_len() && elements.len() <= slots.len()
+                    }
                     _ => true,
                 })
                 .cloned()
@@ -6973,7 +7184,7 @@ impl Inferer<'_> {
             }
         }
         let mut typed = Vec::with_capacity(elements.len());
-        let mut slots = Vec::new();
+        let mut slots = crate::types::TupleType::from(Vec::new());
         let allows_array = candidates.iter().any(|ty| matches!(ty, Type::Array(_)));
         let mut has_array_spread = false;
         for element in elements {
@@ -6983,7 +7194,7 @@ impl Inferer<'_> {
                         .iter()
                         .filter_map(|candidate| match candidate {
                             Type::Tuple(tuple) if !has_array_spread => {
-                                tuple.get(slots.len()).cloned()
+                                tuple_position_hint(tuple, slots.required_len(), slots.len())
                             }
                             Type::Array(element) => Some((**element).clone()),
                             _ => None,
@@ -6991,16 +7202,22 @@ impl Inferer<'_> {
                         .collect();
                     let hint = (!hints.is_empty()).then(|| Type::union(hints));
                     let (id, ty) = self.infer_expr(value, hint.as_ref())?;
-                    slots.push(ty);
+                    let span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
+                    slots = append_tuple_literal_types(slots, &vec![ty].into(), &self.type_limits)
+                        .map_err(super::type_limit_at(span))?;
                     typed.push(crate::TypedArrayElement::Value(id));
                 }
                 crate::ArrayLiteralElement::Spread { value, span } => {
                     let (id, ty) = self.infer_expr(value, None)?;
                     match ty.peel() {
-                        Type::Tuple(types) => slots.extend(types.iter().cloned()),
+                        Type::Tuple(types) => {
+                            slots = append_tuple_literal_types(slots, types, &self.type_limits)
+                                .map_err(super::type_limit_at(span))?;
+                        },
                         Type::Array(element) if allows_array => {
                             has_array_spread = true;
-                            slots.push((**element).clone());
+                            slots = append_tuple_literal_types(slots, &vec![(**element).clone()].into(), &self.type_limits)
+                                .map_err(super::type_limit_at(span))?;
                         }
                         Type::Error => {},
                         _ => self.error_with_help(span,
@@ -7037,7 +7254,7 @@ impl Inferer<'_> {
                 element_ty: Type::Unknown,
             },
             if has_array_spread {
-                Type::Array(Box::new(Type::union(slots)))
+                Type::Array(Box::new(Type::union(slots.elements)))
             } else {
                 Type::Tuple(slots)
             },
@@ -7067,7 +7284,7 @@ impl Inferer<'_> {
                 elements: typed_elements,
                 element_types: element_types.clone(),
             },
-            Type::Tuple(element_types),
+            Type::Tuple(element_types.into()),
         ))
     }
 
@@ -7081,10 +7298,10 @@ impl Inferer<'_> {
         &mut self,
         literal: ExprId,
         elements: Vec<ExprId>,
-        expected_elems: Vec<Type>,
+        expected_elems: crate::types::TupleType,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        if elements.len() != expected_elems.len() {
+        if elements.len() < expected_elems.required_len() || elements.len() > expected_elems.len() {
             self.error(
                 span,
                 format!(
@@ -7107,7 +7324,7 @@ impl Inferer<'_> {
             return Ok((
                 TypedExprKind::TupleLiteral {
                     elements: typed_elements,
-                    element_types: expected_elems.clone(),
+                    element_types: expected_elems.to_vec(),
                 },
                 Type::Tuple(expected_elems),
             ));
@@ -7148,7 +7365,7 @@ impl Inferer<'_> {
                 elements: typed_elements,
                 element_types: slot_types.clone(),
             },
-            Type::Tuple(slot_types),
+            Type::Tuple(slot_types.into()),
         ))
     }
 
@@ -7191,7 +7408,7 @@ impl Inferer<'_> {
             if self.error_count() == errors_before {
                 self.error(
                     elem_span,
-                    format!("expected `{expected_ty}`, got `{elem_ty}`"),
+                    super::diagnostics::mismatch_message(&expected_ty, &elem_ty),
                 );
             }
             expected_ty.clone()
@@ -7281,7 +7498,10 @@ impl Inferer<'_> {
             .kind
         {
             let recv_name = recv_ident.name.clone();
-            if let Some(sym) = self.lookup_named_type(&recv_name) {
+            if self.scopes.get(&recv_name).is_none()
+                && !self.top_symbols.contains_key(&recv_name)
+                && let Some(sym) = self.lookup_named_type(&recv_name)
+            {
                 let enum_mangled = sym.mangled_name.clone();
                 let enum_package = self.type_package(&recv_name);
                 match &sym.kind {
@@ -7414,6 +7634,18 @@ impl Inferer<'_> {
         {
             return self.string_or_array_length(typed_receiver, arrays, name, span);
         }
+        if name.name == "length"
+            && let Some(length_ty) = tuple_receiver_length_type(&receiver_ty)
+        {
+            return Ok((
+                TypedExprKind::InterfacePropertyAccess {
+                    receiver: typed_receiver,
+                    iface: crate::mangle::prelude("Array"),
+                    name,
+                },
+                length_ty,
+            ));
+        }
         // interface-property dispatch lands here BEFORE the
         // user-object field path. `lookup_interface_property` returns `None`
         // for `Object` so user-object reads aren't shadowed by a hypothetical
@@ -7430,11 +7662,11 @@ impl Inferer<'_> {
             // VTable interfaces (every user-declared interface) have no
             // getter import — read through shape-based field dispatch, the
             // same path object fields and the for-of desugar use. The getter
-            // funcref returns null for an absent optional field, so an
-            // optional read widens to `T | null` like the Object arm below.
+            // funcref returns undefined for an absent optional field, so an
+            // optional read widens to `T | undefined` like the Object arm below.
             if dispatch == crate::Dispatch::VTable {
                 let read_ty = if prop_sig.optional {
-                    Type::union(vec![resolved_ty, Type::Null])
+                    Type::union(vec![resolved_ty, Type::Undefined])
                 } else {
                     resolved_ty
                 };
@@ -7643,6 +7875,18 @@ impl Inferer<'_> {
             span,
         } = call;
         let (mut sig, interface_bindings, iface_mangled, _dispatch) = method;
+        if sig.optional {
+            self.error_with_help(
+                name.span,
+                format!("method `{}` may be undefined", name.name),
+                vec![format!(
+                    "call it with `?.()`: `receiver.{}?.(…)`",
+                    name.name
+                )],
+            );
+            self.walk_rejected_call_args(&args)?;
+            return Ok((TypedExprKind::Undefined, Type::Error));
+        }
         // `flat` un-nests `depth` array levels — a return type the
         // generic machinery can't express. Validate the literal depth
         // and override the resolved return type before dispatch.
@@ -7841,7 +8085,7 @@ impl Inferer<'_> {
         )
     }
 
-    fn push_synthetic_expr(
+    pub(super) fn push_synthetic_expr(
         &mut self,
         kind: TypedExprKind,
         ty: Type,
@@ -7903,16 +8147,22 @@ impl Inferer<'_> {
                     Some(idx) if idx < elements.len() => elements[idx].clone(),
                     Some(idx) => {
                         if let Some(origin) = &pattern_origin {
-                            self.error(
-                                origin.pattern_span,
-                                format!(
-                                    "destructuring pattern has {} element{}, but right-hand side tuple has {} element{}",
-                                    origin.slot_arity,
-                                    if origin.slot_arity == 1 { "" } else { "s" },
-                                    elements.len(),
-                                    if elements.len() == 1 { "" } else { "s" },
-                                ),
+                            let message = format!(
+                                "destructuring pattern has {} element{}, but right-hand side tuple has {} element{}",
+                                origin.slot_arity,
+                                if origin.slot_arity == 1 { "" } else { "s" },
+                                elements.len(),
+                                if elements.len() == 1 { "" } else { "s" },
                             );
+                            // Every slot past the end reads out of range; the
+                            // pattern is reported once.
+                            let reported = self.diagnostics.iter().any(|diagnostic| {
+                                diagnostic.span == origin.pattern_span
+                                    && diagnostic.message == message
+                            });
+                            if !reported {
+                                self.error(origin.pattern_span, message);
+                            }
                         } else {
                             self.error(
                                 index_expr.span,
@@ -8015,7 +8265,7 @@ impl Inferer<'_> {
                 } else {
                     let help = self.definition_help(&receiver_ty);
                     // Only an indexable non-null form makes the narrowing the fix.
-                    let culprit = self.nullable_culprit(&[(typed_receiver, &receiver_ty)], |t| {
+                    let culprit = self.nullish_culprit(&[(typed_receiver, &receiver_ty)], |t| {
                         matches!(
                             t.peel(),
                             Type::Array(_) | Type::Tuple(_) | Type::String | Type::Uint8Array
@@ -8496,15 +8746,17 @@ impl Inferer<'_> {
             .iter()
             .enumerate()
             .map(|(index, param)| {
-                Ok::<_, CompilerFailure>(
-                    param
-                        .ty
-                        .as_ref()
-                        .map(|ty| self.resolve_type(ty))
-                        .transpose()?
-                        .or_else(|| hint.and_then(|(params, _)| params.get(index).cloned()))
-                        .unwrap_or(Type::Error),
-                )
+                let resolved = param
+                    .ty
+                    .as_ref()
+                    .map(|ty| self.resolve_type(ty))
+                    .transpose()?
+                    .or_else(|| hint.and_then(|(params, _)| params.get(index).cloned()))
+                    .unwrap_or(Type::Error);
+                Ok::<_, CompilerFailure>(crate::ObjectField::widen_optional(
+                    param.is_omittable(),
+                    resolved,
+                ))
             })
             .collect::<Result<_, _>>()?;
         let predicate = type_predicate
@@ -8533,6 +8785,12 @@ impl Inferer<'_> {
             }),
             predicate: predicate.map(Box::new),
             has_rest: params.last().is_some_and(|param| param.rest),
+            optional: params
+                .iter()
+                .rev()
+                .skip_while(|p| p.rest)
+                .take_while(|p| p.is_omittable())
+                .count(),
         })
     }
 
@@ -8625,13 +8883,11 @@ impl Inferer<'_> {
             _ => None,
         };
 
+        self.scopes.push();
         let mut typed_params: Vec<TypedParam> = Vec::with_capacity(params.len());
         let mut params_reported = false;
         for (i, p) in params.iter().enumerate() {
-            let ann_ty =
-                p.ty.as_ref()
-                    .map(|t| self.resolve_value_type(t, ValuePosition::Parameter))
-                    .transpose()?;
+            let ann_ty = p.ty.as_ref().map(|t| self.resolve_type(t)).transpose()?;
             let ty = match (&ann_ty, hint_owned.as_ref()) {
                 (Some(t), Some((hp, _))) => {
                     // Parameters are **contravariant**: the call site
@@ -8649,13 +8905,14 @@ impl Inferer<'_> {
                     // source of truth for the closure body, and the
                     // call site's `TypeParamSubstitution::unify`
                     // walks the resulting closure type to bind T/U.
+                    let own_ty = crate::ObjectField::widen_optional(p.is_omittable(), t.clone());
                     let (hint_param, own_param) = if p.rest {
                         (
                             hp.get(i).map(Type::rest_array_ignoring_readonly),
                             t.rest_array_ignoring_readonly(),
                         )
                     } else {
-                        (hp.get(i), t)
+                        (hp.get(i), &own_ty)
                     };
                     if let Some(h) = hint_param
                         && !assignable(h, own_param, self.resolver())
@@ -8685,6 +8942,12 @@ impl Inferer<'_> {
                         Type::Error
                     }
                 }
+                (None, None) if p.default.is_some() => {
+                    let default = p.default.ok_or_else(|| {
+                        super::inference_failure("default parameter lost its initializer")
+                    })?;
+                    self.infer_expr(default, None)?.1.widen_literal()
+                }
                 (None, None) => {
                     self.error_with_help(
                         p.name.span,
@@ -8694,18 +8957,25 @@ impl Inferer<'_> {
                     Type::Error
                 }
             };
+            self.record_authored_parameter_type(
+                p.name.span,
+                &crate::ObjectField::widen_optional(p.optional, ty.clone()),
+            );
+            self.scopes
+                .insert(p.name.name.clone(), ty.clone(), false, p.name.span);
             typed_params.push(TypedParam {
                 name: p.name.clone(),
-                ty,
+                optional: p.is_omittable(),
+                ty: crate::ObjectField::widen_optional(p.is_omittable(), ty),
                 boxed: false,
                 // arrow rest flag rides from ParamDecl.rest
                 // (set by `parse_arrow_param_list` once that arm lands).
                 rest: p.rest,
-                // Arrow/function-typed params don't accept defaults.
-                default: None,
+                default: p.is_omittable().then_some(crate::DefaultValue::Undefined),
             });
         }
 
+        self.scopes.pop();
         // Decide the return-type hint. With an annotation: it always
         // wins (and must be assignable to the contextual hint when
         // present). Without an annotation but with a hint: use the
@@ -8771,19 +9041,11 @@ impl Inferer<'_> {
 
         // Push scope, bind params.
         self.scopes.push();
-        for (p, decl) in typed_params.iter().zip(params) {
-            // A parameter typed only by the expected function type takes
-            // whatever literals that type was inferred with, so its literal
-            // types count as fresh.
-            let body_ty = self.local_storage_ty(&p.name, p.ty.clone());
-            if decl.ty.is_some() {
-                self.scopes
-                    .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
-            } else {
-                self.scopes
-                    .insert(p.name.name.clone(), body_ty, false, p.name.span);
-            }
-        }
+        let input_types = typed_params
+            .iter()
+            .map(|p| p.ty.clone())
+            .collect::<Vec<_>>();
+        let default_prologue = self.infer_parameter_defaults(&params, &input_types)?;
         // Fresh narrowing stack for the body, seeded with the `const`-rooted
         // narrowings that legally cross the boundary. Params must already be in
         // scope so a shadowed root is rejected. `pending_joins` is deliberately
@@ -8849,7 +9111,16 @@ impl Inferer<'_> {
                     super::inference_failure("arrow block body is a Block, never a type-only decl")
                 })?;
                 let id = self.wrap_narrow_regions(id, &narrow_seed, span)?;
-                let collected = self.inferred_returns.take().unwrap_or_default();
+                let mut collected = self.inferred_returns.take().unwrap_or_default();
+                // Falling off the end returns `undefined`, as a bare `return;` does.
+                if self.reachable && !collected.is_empty() {
+                    collected.push((Type::Undefined, span));
+                }
+                let context_takes_undefined = ret_hint.as_ref().is_some_and(|hint| {
+                    !hint.is_void()
+                        && assignable(&Type::Undefined, hint, self.resolver())
+                        && !matches!(hint.peel(), Type::Unknown)
+                });
                 let returns_into_unknown = ret_hint
                     .as_ref()
                     .is_some_and(|hint| matches!(hint.peel(), Type::Unknown));
@@ -8865,6 +9136,9 @@ impl Inferer<'_> {
                     // No `return`, and the end of the body can't be reached: the
                     // closure only throws, so it never returns, as tsc infers.
                     Type::Never
+                } else if collected.is_empty() && context_takes_undefined {
+                    // `const done: () => undefined = () => {}`, as in TypeScript 5.1.
+                    Type::Undefined
                 } else {
                     self.unify_returns(&self.returned_types(collected))
                 };
@@ -8875,6 +9149,21 @@ impl Inferer<'_> {
         if immediately_invoked {
             self.invoked_body_exit = Some(self.capture_invoked_body_exit(returns_before_end));
         }
+        let typed_body = if default_prologue.is_empty() {
+            typed_body
+        } else {
+            let body = match typed_body {
+                ClosureBody::Block(body) => body,
+                ClosureBody::Expr(value) => self
+                    .typed_ast
+                    .try_push_stmt(crate::TypedStmt {
+                        kind: crate::TypedStmtKind::Return(Some(value)),
+                        span,
+                    })
+                    .map_err(super::arena_failure)?,
+            };
+            ClosureBody::Block(self.prepend_parameter_defaults(default_prologue, body)?)
+        };
         // Restore frames.
         self.exit_closure_narrow_boundary()?;
         self.restore_reachability(prev_reachable);
@@ -8922,6 +9211,12 @@ impl Inferer<'_> {
             // `(...xs: T[]) => …`; the parser lowers that into a
             // `TypedParam` with `rest: true` at the trailing slot.
             has_rest: typed_params.last().is_some_and(|p| p.rest),
+            optional: typed_params
+                .iter()
+                .rev()
+                .skip_while(|p| p.rest)
+                .take_while(|p| p.optional)
+                .count(),
         };
         Ok((
             TypedExprKind::Closure {
@@ -8985,6 +9280,9 @@ impl Inferer<'_> {
         if collected.is_empty() {
             return Type::Void;
         }
+        if let Some(joined) = self.join_nullish_returns(collected) {
+            return joined;
+        }
         let widest = collected.iter().find(|(candidate, _)| {
             collected
                 .iter()
@@ -8995,6 +9293,37 @@ impl Inferer<'_> {
         }
         self.report_conflicting_return(collected);
         Type::Error
+    }
+
+    /// `return 1; … return;` infers `number | undefined`, as in TypeScript: the
+    /// nullish returns join the one type the others agree on. A bare `return;`
+    /// returns `undefined`. `None` when no nullish return mixes with a value.
+    fn join_nullish_returns(&mut self, collected: &[(Type, Span)]) -> Option<Type> {
+        let (nullish, values): (Vec<_>, Vec<_>) = collected
+            .iter()
+            .partition(|(ty, _)| matches!(ty.peel(), Type::Undefined | Type::Void | Type::Null));
+        if nullish.is_empty() {
+            return None;
+        }
+        let absent = nullish.iter().map(|(ty, _)| match ty.peel() {
+            Type::Null => Type::Null,
+            _ => Type::Undefined,
+        });
+        if values.is_empty() {
+            // `return;` with `return null;` is `null | undefined`; one kind alone
+            // keeps its own spelling (a body of bare returns stays `void`).
+            let kinds: BTreeSet<_> = absent.map(|ty| matches!(ty, Type::Null)).collect();
+            return (kinds.len() > 1).then(|| Type::union(vec![Type::Null, Type::Undefined]));
+        }
+        let absent: Vec<Type> = absent.collect();
+        let values: Vec<(Type, Span)> = values.into_iter().cloned().collect();
+        let value = self.unify_returns(&values);
+        if matches!(value, Type::Error) {
+            return Some(Type::Error);
+        }
+        let mut members = vec![value];
+        members.extend(absent);
+        Some(Type::union(members))
     }
 
     /// Report the first return that fits neither way with the widest of the
@@ -9112,11 +9441,6 @@ impl Inferer<'_> {
         &mut self,
         operand: ExprId,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let operand_span = self
-            .ast
-            .try_expr(operand)
-            .map_err(super::arena_failure)?
-            .span;
         let (mut value, mut value_ty) = self.infer_expr(operand, None)?;
         // Only a reference right under the `!` reads at its declared type, as
         // in TypeScript: `(x)!` keeps the narrowing.
@@ -9127,26 +9451,27 @@ impl Inferer<'_> {
                 .kind,
             ExprKind::Paren(_)
         );
-        if !parenthesized && let Some(path) = self.null_narrowed_path(value, &value_ty)? {
-            // As in TypeScript: a reference narrowed to `null` reads at its
-            // declared type under `!`, which then throws at run time.
+        if !parenthesized && let Some(path) = self.nullish_narrowed_path(value, &value_ty)? {
+            // As in TypeScript: a reference narrowed to `null` or `undefined`
+            // reads at its declared type under `!`, which then throws at run
+            // time.
             let outer = self.declared_read.replace(path);
             let reread = self.infer_expr(operand, None);
             self.declared_read = outer;
             (value, value_ty) = reread?;
         }
-        let result_ty = self.check_non_null_assert(&value_ty, operand_span);
+        let result_ty = non_null_assert_type(&value_ty);
         Ok((TypedExprKind::NonNullAssert { value }, result_ty))
     }
 
-    /// The path of `value` when a narrowing left it only `null` and its
-    /// declared type holds more.
-    fn null_narrowed_path(
+    /// The path of `value` when a narrowing left it only `null` or
+    /// `undefined` and its declared type holds more.
+    fn nullish_narrowed_path(
         &self,
         value: ExprId,
         value_ty: &Type,
     ) -> Result<Option<narrowing::ReferencePath>, CompilerFailure> {
-        if !matches!(value_ty.peel(), Type::Null) {
+        if !is_nullish_only(value_ty) {
             return Ok(None);
         }
         let typed = self
@@ -9158,34 +9483,8 @@ impl Inferer<'_> {
         };
         let declared_holds_more = self
             .declared_path_ty(&path)
-            .is_some_and(|declared| !matches!(declared.peel(), Type::Null));
+            .is_some_and(|declared| !is_nullish_only(&declared));
         Ok(declared_holds_more.then_some(path))
-    }
-
-    /// The type `!` yields for an operand of `value_ty`. An operand that is
-    /// *only* `null` never survives the assertion, so the result is `never`
-    /// rather than `strip_null`'s poisoned `Error`. Rejects a `void` operand
-    /// and returns `Error`.
-    fn check_non_null_assert(&mut self, value_ty: &Type, span: Span) -> Type {
-        match value_ty.peel() {
-            Type::Null => Type::Never,
-            // `void` is a return type, not a value — there is nothing to test
-            // for null, and admitting it reaches `emit_box`, which has no
-            // lowering for it.
-            Type::Void => {
-                self.error_with_help(
-                    span,
-                    "cannot assert non-null on a value of type `void`".to_string(),
-                    vec![
-                        "drop the `!` — a `void` call produces no value, so there is \
-                         no null to rule out"
-                            .to_string(),
-                    ],
-                );
-                Type::Error
-            }
-            _ => super::narrowing::strip_null(value_ty),
-        }
     }
 
     /// Whether `++`/`--` may write its result back to a slot of `target`. A
@@ -9234,7 +9533,7 @@ impl Inferer<'_> {
             if !matches!(entry.ty, Type::Error) && !fits {
                 self.error(
                     span,
-                    format!("expected `{}`, got `{}`", entry.ty, result_ty),
+                    super::diagnostics::mismatch_message(&entry.ty, &result_ty),
                 );
             }
             // A rejected write leaves the declared type, as in TypeScript, and
@@ -9455,7 +9754,7 @@ impl Inferer<'_> {
         if !matches!(target_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &target_ty) {
             self.error(
                 name.span,
-                format!("expected `{target_ty}`, got `{result_ty}`"),
+                super::diagnostics::mismatch_message(&target_ty, &result_ty),
             );
         }
         if let Some(mut path) = self.expr_to_reference_path(
@@ -9509,7 +9808,7 @@ impl Inferer<'_> {
         }
         let result_ty = postfix_result_ty(&operand_ty);
         if !matches!(ty, Type::Error) && !self.postfix_write_fits(&result_ty, &ty) {
-            self.error(span, format!("expected `{ty}`, got `{result_ty}`"));
+            self.error(span, super::diagnostics::mismatch_message(&ty, &result_ty));
         }
         self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone())?;
         Ok((
@@ -9611,7 +9910,10 @@ impl Inferer<'_> {
         }
         let result_ty = postfix_result_ty(&read_ty);
         if !matches!(elem_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &elem_ty) {
-            self.error(span, format!("expected `{elem_ty}`, got `{result_ty}`"));
+            self.error(
+                span,
+                super::diagnostics::mismatch_message(&elem_ty, &result_ty),
+            );
         }
         self.invalidate_index_write(typed_receiver, typed_index, span)?;
         Ok((
@@ -9696,7 +9998,7 @@ impl Inferer<'_> {
         assignable(rhs_ty, &lhs_ty.widen_literal(), self.resolver()).then(|| lhs_ty.clone())
     }
 
-    /// `a ?? b`. Result type is `union(strip_null(lhs), rhs)`.
+    /// `a ?? b`. Result type is `union(strip_nullish(lhs), rhs)`.
     /// Emits a `Severity::Warning` when `lhs` is statically
     /// non-nullable (the `??` clause is unreachable).
     fn infer_nullish_coalesce(
@@ -9706,35 +10008,25 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
-        // The right side runs only where the left is `null`.
-        let rhs_env = self.null_operand_env(typed_lhs)?;
-        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, None)?;
+        // The right side runs only where the left is `null` or `undefined`.
+        let rhs_env = self.nullish_operand_env(typed_lhs)?;
+        // `tags ?? []` and `onDone ?? (() => {})` take their type from the
+        // left operand, as in TypeScript; other operands keep their own.
+        let fallback_hint = (cannot_be_typed_alone(self.ast, rhs)?
+            && !matches!(
+                lhs_ty.peel(),
+                Type::Error | Type::Null | Type::Undefined | Type::Void
+            ))
+        .then(|| super::narrowing::strip_nullish(&lhs_ty));
+        let (typed_rhs, rhs_ty) =
+            self.infer_conditional_operand(rhs, &rhs_env, fallback_hint.as_ref())?;
         let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
         let typed_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
-
-        // `void` has no value to test for null. JavaScript would always take
-        // the right side, which a left side that is `void` on only some paths
-        // cannot be compiled to.
-        if lhs_ty.carries_void() {
-            let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
-            self.error_non_comparable_type(
-                lhs_span,
-                &lhs_ty,
-                super::diagnostics::ComparisonPosition::NullishLeftOperand,
-            );
-            return Ok((
-                TypedExprKind::NullishCoalesce {
-                    lhs: typed_lhs,
-                    rhs: typed_rhs,
-                },
-                Type::Error,
-            ));
-        }
 
         // A poisoned operand has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
         let lhs_decides =
-            !type_admits_null(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error);
+            !type_admits_nullish(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error);
         if lhs_decides {
             self.diagnostics.push(crate::Diagnostic {
                 severity: Severity::Warning,
@@ -9747,11 +10039,12 @@ impl Inferer<'_> {
             });
         }
 
-        // A left side that is *only* `null` always takes the right, so the
-        // result is the right's type. Running it through `strip_null` instead
-        // would yield `Error` — a poison type with no diagnostic behind it,
-        // which reaches codegen and panics in `value_type`.
-        let result_ty = if matches!(lhs_ty.peel(), Type::Null) {
+        // A left side that is *only* `null` or `undefined` always takes the
+        // right, so the result is the right's type. Running it through
+        // `strip_nullish` instead would yield `Error` — a poison type with no
+        // diagnostic behind it, which reaches codegen and panics in
+        // `value_type`.
+        let result_ty = if matches!(lhs_ty.peel(), Type::Null | Type::Undefined) {
             rhs_ty
         } else if let Some(decided) = lhs_decides
             .then(|| self.deciding_left_type(&lhs_ty, &rhs_ty))
@@ -9759,7 +10052,7 @@ impl Inferer<'_> {
         {
             decided
         } else {
-            let present = super::narrowing::strip_null(&lhs_ty);
+            let present = super::narrowing::strip_nullish(&lhs_ty);
             match empty_literal_join(self.ast, (lhs, &present), (rhs, &rhs_ty))? {
                 Some(joined) => joined,
                 None => conditional_result_type(present, rhs_ty, self.resolver()),
@@ -9784,11 +10077,30 @@ impl Inferer<'_> {
     /// `a?.b!`.
     fn infer_optional_chain(
         &mut self,
-        base: ExprId,
+        mut base: ExprId,
         mut parts: Vec<ChainPart>,
         _expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        // Keep a method's receiver attached when `?.()` starts after its name.
+        // Method values cannot be extracted, but the field/call pair can use
+        // ordinary method dispatch and preserve its receiver.
+        if matches!(parts.first(), Some(ChainPart::Call { optional: true, .. })) {
+            let base_span = self.ast.try_expr(base).map_err(super::arena_failure)?.span;
+            if let ExprKind::FieldAccess { receiver, name } =
+                string_key_callee_as_field(self.ast, base)?
+            {
+                parts.insert(
+                    0,
+                    ChainPart::Field {
+                        name,
+                        optional: false,
+                        span: base_span,
+                    },
+                );
+                base = receiver;
+            }
+        }
         // `parts[0]` is the `?.` that opened the chain, so it is never a
         // `NonNull`; the bound only keeps the remaining walk non-empty.
         let mut asserts_chain = false;
@@ -9808,14 +10120,15 @@ impl Inferer<'_> {
                 ty: ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        let result_ty = self.check_non_null_assert(&ty, span);
+        let result_ty = non_null_assert_type(&ty);
         Ok((TypedExprKind::NonNullAssert { value }, result_ty))
     }
 
     /// Walk the chain left-to-right: each step's receiver is the previous step's
-    /// result, and only a `?.` step sees that receiver with null stripped — a
-    /// plain step on a nullable receiver is rejected, as it would be outside a
-    /// chain. Produces `tail_ty | null` overall.
+    /// result, and only a `?.` step sees that receiver with `null` and
+    /// `undefined` stripped — a plain step on a nullish receiver is rejected, as
+    /// it would be outside a chain. Produces `tail_ty | undefined` overall when
+    /// a step can short-circuit.
     ///
     /// For v1, supported part shapes: `Field` on `Type::Object` /
     /// `Type::InterfaceRef`; `Index` on `Type::Array`; `Call` on a
@@ -9867,9 +10180,20 @@ impl Inferer<'_> {
             })
             .collect();
         for (part, asserted) in parts.into_iter().zip(asserted) {
-            // A `?.` whose receiver can't be `null` never short-circuits, so it
-            // is the plain step and adds no `| null`, as in tsc.
-            let part = if part.is_optional() && !may_hold_null(&receiver_ty, self.resolver()) {
+            // A `?.` whose receiver can't be `null` or `undefined` never
+            // short-circuits, so it is the plain step and adds no
+            // `| undefined`, as in tsc. A method's `?.()` can short-circuit
+            // although its function type isn't nullish: the method may be
+            // optional, or an interface alias may clear it.
+            let may_skip_method_call = matches!(part, ChainPart::Call { .. })
+                && pending_method.as_ref().is_some_and(|method| {
+                    method.sig.optional
+                        || self.class_method_has_mutable_payload(&method.receiver_ty, &method.name)
+                });
+            let part = if part.is_optional()
+                && !may_skip_method_call
+                && !type_admits_nullish(&receiver_ty, self.resolver())
+            {
                 part.as_plain_step()
             } else {
                 part
@@ -9892,26 +10216,29 @@ impl Inferer<'_> {
             // so it accepts the `null` and `unknown` receivers they reject —
             // exactly as the non-chain postfix `!` does.
             if let ChainPart::NonNull { span } = part {
-                let result_ty = self.check_non_null_assert(&receiver_ty, span);
+                let result_ty = non_null_assert_type(&receiver_ty);
                 receiver_ty = result_ty.clone();
                 typed_parts.push(TypedChainPart::NonNull { result_ty, span });
                 continue;
             }
-            // `null` and `unknown` carry no member to dispatch on and no Wasm
-            // lowering: `strip_null` on `null` yields `Error`, and every member
-            // of `unknown` resolves to `unknown`. Reject here, while the member
-            // name is still in hand.
-            if matches!(receiver_ty.peel(), Type::Null | Type::Unknown) {
+            // `null`, `undefined` and `unknown` carry no member to dispatch on
+            // and no Wasm lowering: `strip_nullish` of a nullish type yields
+            // `Error`, and every member of `unknown` resolves to `unknown`.
+            // Reject here, while the member name is still in hand.
+            if matches!(
+                receiver_ty.peel(),
+                Type::Null | Type::Undefined | Type::Unknown
+            ) {
                 self.reject_undispatchable_chain_receiver(&receiver_ty, &part)?;
                 break;
             }
             // Only `?.` short-circuits, so only `?.` may see the receiver with
-            // null removed.
-            if !part.is_optional() && type_admits_null(&receiver_ty, self.resolver()) {
+            // `null` and `undefined` removed.
+            if !part.is_optional() && type_admits_nullish(&receiver_ty, self.resolver()) {
                 self.reject_nullable_chain_step(&receiver_ty, step_path.as_ref(), &part)?;
                 break;
             }
-            let effective_recv = super::narrowing::strip_null(&receiver_ty);
+            let effective_recv = super::narrowing::strip_nullish(&receiver_ty);
             // `infer_chain_part` may rewrite the previous part
             // (InterfaceProperty + Call → MethodCall), so it gets
             // `&mut typed_parts` rather than a borrow of the last
@@ -9943,15 +10270,12 @@ impl Inferer<'_> {
             receiver_ty = self.reject_chain_method_reference(&dangling);
         }
 
-        // A void-tailed chain has no value on either branch, so it stays
-        // `void` rather than widening to `void | null` (void is a return
-        // type only — see `reject_void_binding`). A chain with no step left
-        // that can short-circuit has no `null` branch to add.
-        let can_short_circuit = short_circuit_span.is_some();
-        let final_ty = if matches!(receiver_ty.peel(), Type::Void) || !can_short_circuit {
-            receiver_ty
+        // A chain with no step left that can short-circuit has no `undefined`
+        // branch to add.
+        let final_ty = if short_circuit_span.is_some() {
+            Type::union(vec![receiver_ty, Type::Undefined])
         } else {
-            Type::union(vec![receiver_ty, Type::Null])
+            receiver_ty
         };
         Ok((
             TypedExprKind::OptionalChain {
@@ -10106,6 +10430,19 @@ impl Inferer<'_> {
                 span,
             } => {
                 let resolved_method = pending_method.take();
+                if let Some(method) = &resolved_method
+                    && method.sig.optional
+                    && !optional
+                {
+                    self.error_with_help(
+                        method.span,
+                        format!("method `{}` may be undefined", method.name),
+                        vec![format!(
+                            "call it with `?.()`: `receiver.{}?.(…)`",
+                            method.name
+                        )],
+                    );
+                }
                 // The call form of a method-level-generic method: genuinely
                 // unimplemented, unlike the bare reference `chain_method_field`
                 // defers to us. Falls through rather than returning so the
@@ -10164,20 +10501,12 @@ impl Inferer<'_> {
                     };
                     let (param_tys, ret_ty, has_rest) =
                         (params.clone(), (**ret).clone(), *has_rest);
-                    // The lifted `MethodCall`'s `optional` is the
-                    // property step's `?.` bit; the call's own
-                    // `optional` is the trailing-`()` chaining bit
-                    // (`?.()` shape) which, for the lifted form, is
-                    // absorbed since the call is part of the same
-                    // step. The combined span covers
-                    // property-start..call-end so diagnostics point
-                    // at the whole `o?.m(args)` form.
+                    // Keep the full property/call span for method diagnostics.
                     let combined_span = Span {
                         file: prop_span.file,
                         start: prop_span.start.min(span.start),
                         end: prop_span.end.max(span.end),
                     };
-                    let _ = optional;
                     // A method resolved through `find_method` binds against its
                     // full signature; a function-typed *property* has only the
                     // structural type to bind against.
@@ -10202,6 +10531,32 @@ impl Inferer<'_> {
                             combined_span,
                         )?,
                     };
+                    if optional
+                        && let Some(method) = &resolved_method
+                        && self.class_method_has_mutable_payload(&method.receiver_ty, &method.name)
+                    {
+                        // An interface alias can replace a class method with
+                        // undefined. Read the method value before the optional
+                        // call so arguments are skipped, retaining its receiver.
+                        typed_parts.push(TypedChainPart::Field {
+                            name,
+                            optional: prop_optional,
+                            result_ty: crate::ObjectField::widen_optional(
+                                method.sig.optional,
+                                fn_ty,
+                            ),
+                            span: prop_span,
+                        });
+                        return Ok((
+                            TypedChainPart::Call {
+                                args: typed_args,
+                                optional: true,
+                                result_ty: ret_ty.clone(),
+                                span,
+                            },
+                            ret_ty,
+                        ));
+                    }
                     return Ok((
                         TypedChainPart::MethodCall {
                             iface,
@@ -10364,7 +10719,7 @@ impl Inferer<'_> {
         }
         // A poisoned receiver has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
-        if may_hold_null(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
+        if type_admits_nullish(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
             return;
         }
         self.diagnostics.push(crate::Diagnostic {
@@ -10399,11 +10754,15 @@ impl Inferer<'_> {
             );
             return Ok(());
         }
+        let shown = match receiver_ty.peel() {
+            Type::Undefined | Type::Void => "undefined",
+            _ => "null",
+        };
         self.error(
             span,
             format!(
-                "cannot {action} a value of type `null` — the receiver is always \
-                 null, so give it a type that can hold a value"
+                "cannot {action} a value of type `{shown}` — the receiver is always \
+                 {shown}, so give it a type that can hold a value"
             ),
         );
         Ok(())
@@ -10509,6 +10868,11 @@ impl Inferer<'_> {
         name: &Ident,
         span: Span,
     ) -> ChainField {
+        if name.name == "length"
+            && let Some(length_ty) = tuple_receiver_length_type(receiver_ty)
+        {
+            return ChainField::property(length_ty, crate::mangle::prelude("Array"));
+        }
         match receiver_ty.peel() {
             // An object literal carries the prelude `Object` interface's members
             // (`toJson`, …) beside its own fields, so a miss on the field map is
@@ -10516,7 +10880,7 @@ impl Inferer<'_> {
             Type::Object { fields, index } => {
                 if let Some(f) = fields.get(&name.name) {
                     let ty = if f.optional {
-                        Type::union(vec![f.ty.clone(), Type::Null])
+                        Type::union(vec![f.ty.clone(), Type::Undefined])
                     } else {
                         f.ty.clone()
                     };
@@ -10586,7 +10950,7 @@ impl Inferer<'_> {
                     };
                     if dispatch == crate::Dispatch::VTable {
                         let read_ty = if prop_sig.optional {
-                            Type::union(vec![resolved_ty, Type::Null])
+                            Type::union(vec![resolved_ty, Type::Undefined])
                         } else {
                             resolved_ty
                         };
@@ -10644,7 +11008,8 @@ impl Inferer<'_> {
     /// reads. Computed indices have no reference path and remain conservative.
     ///
     /// A step a `!` follows (`asserted`) keeps its declared type where a guard
-    /// left it only `null`, as a reference under `!` does outside a chain.
+    /// left it only `null` or `undefined`, as a reference under `!` does
+    /// outside a chain.
     fn narrow_step_result(
         &self,
         result_path: Option<&super::narrowing::ReferencePath>,
@@ -10659,7 +11024,7 @@ impl Inferer<'_> {
         let Some(view) = result_path.and_then(|p| self.lookup_narrowed_view(p)) else {
             return step_ty;
         };
-        if asserted && matches!(view.narrowed_ty.peel(), Type::Null) {
+        if asserted && is_nullish_only(&view.narrowed_ty) {
             return step_ty;
         }
         let narrowed = view.narrowed_ty.clone();
@@ -10740,10 +11105,11 @@ impl Inferer<'_> {
                 super::generic::substitute_or_record(&method_sig.ret, bindings, &self.type_limits);
             let has_rest = params.last().is_some_and(|p| p.rest);
             let fn_ty = Type::Function {
-                params: params.iter().map(|p| p.ty.clone()).collect(),
+                params: params.iter().map(callable_parameter_type).collect(),
                 ret: Box::new(ret),
                 predicate: None,
                 has_rest,
+                optional: crate::package_declaration::optional_parameter_count(&params),
             };
             (fn_ty, Some(owner_mangled))
         } else {
@@ -10824,25 +11190,6 @@ impl Inferer<'_> {
         }
         // `assignable` is nominal for `InterfaceRef`; relate (and later check) against the
         // interface's structural data shape so `unknown`/structurally-compatible sources pass.
-        // A `void`-carrying source has no value for the cast to check.
-        if inner_ty.carries_void() {
-            self.error_with_help(
-                self.ast.try_expr(inner).map_err(super::arena_failure)?.span,
-                format!("cannot cast `{inner_ty}`: it has no value"),
-                vec![
-                    "`void` carries nothing to cast. Call the expression as its own                      statement, and cast a value produced separately."
-                        .to_string(),
-                ],
-            );
-            return Ok((
-                TypedExprKind::Cast {
-                    value: inner_id,
-                    target_ty: target_ty.clone(),
-                    check: None,
-                },
-                Type::Error,
-            ));
-        }
         let shape = self.reduce_interfaces_to_shapes(&target_ty);
         let inner_to_target = assignable(&inner_ty, &shape, self.resolver());
         let target_to_inner = assignable(&shape, &inner_ty, self.resolver());
@@ -11586,6 +11933,8 @@ fn unsupported_cast_target_reason(
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::Null
+        | Type::Undefined
+        | Type::Void
         | Type::Uint8Array
         | Type::Function { .. }
         | Type::Unknown => None,
@@ -11639,7 +11988,6 @@ fn unsupported_cast_target_reason(
             Some("generic type parameters are erased at runtime")
         }
         Type::Never => Some("`never` has no runtime values"),
-        Type::Void => Some("`void` is not a value type"),
         Type::Error => None,
         Type::Alias { ty: underlying, .. }
         | Type::Refined { ty: underlying, .. }
@@ -11727,9 +12075,6 @@ fn conditional_result_type(
     right: Type,
     types: super::assignable::TypeResolver<'_>,
 ) -> Type {
-    if left.carries_void() || right.carries_void() {
-        return Type::Void;
-    }
     branch_result_type(left, right, types)
 }
 
@@ -11820,7 +12165,8 @@ fn matched_elements(running_is_first: bool) -> &'static str {
 
 #[derive(Clone, Copy)]
 struct ElementJoin {
-    /// Whether a later element may widen the element type to its own.
+    /// Whether a later element may widen the element type to its own, or by
+    /// the `null`/`undefined` it adds.
     widens: bool,
     /// Whether elements that don't fit one another join as a union, which
     /// the literal reduces and normalizes once every element is typed.
@@ -11895,10 +12241,42 @@ fn holds_empty_array_literal(ast: &crate::Ast, expr: ExprId) -> Result<bool, Com
     )
 }
 
-fn equality_operand_needs_context(ast: &crate::Ast, id: ExprId) -> Result<bool, CompilerFailure> {
+/// The type `!` yields for an operand of `value_ty`. An operand that is only
+/// `null` or `undefined` never survives the assertion, so the result is
+/// `never` rather than `strip_nullish`'s poisoned `Error`.
+fn non_null_assert_type(value_ty: &Type) -> Type {
+    if is_nullish_only(value_ty) {
+        Type::Never
+    } else {
+        super::narrowing::strip_nullish(value_ty)
+    }
+}
+
+/// Whether every value of `ty` is `null` or `undefined`, so it gives an array
+/// literal's element type no shape of its own.
+fn is_nullish_only(ty: &Type) -> bool {
+    ty.all_members(&|member| matches!(member, Type::Null | Type::Undefined | Type::Void))
+}
+
+/// Whether `id` has no type of its own without context: an arrow, whose
+/// parameters need one, or `[]`, whose elements do.
+pub(super) fn cannot_be_typed_alone(ast: &crate::Ast, id: ExprId) -> Result<bool, CompilerFailure> {
     Ok(
         match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
-            ExprKind::Paren(inner) => equality_operand_needs_context(ast, *inner)?,
+            ExprKind::Paren(inner) => cannot_be_typed_alone(ast, *inner)?,
+            ExprKind::Arrow { .. } => true,
+            ExprKind::ArrayLiteral { elements } => elements.is_empty(),
+            _ => false,
+        },
+    )
+}
+
+/// Whether `id` is a literal form that takes its type from context when it
+/// has one: an arrow, an object literal or an array literal.
+fn is_context_typed_literal(ast: &crate::Ast, id: ExprId) -> Result<bool, CompilerFailure> {
+    Ok(
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::Paren(inner) => is_context_typed_literal(ast, *inner)?,
             ExprKind::Arrow { .. }
             | ExprKind::ObjectLiteral { .. }
             | ExprKind::ArrayLiteral { .. } => true,
@@ -11957,6 +12335,98 @@ pub(super) fn literal_comparison_type(
         }
         _ => expr.ty.clone(),
     })
+}
+
+fn tuple_receiver_length_type(receiver: &Type) -> Option<Type> {
+    match receiver.peel() {
+        Type::Tuple(tuple) => Some(tuple_length_type(tuple)),
+        Type::Union(members) => members
+            .iter()
+            .map(|member| match member.peel() {
+                Type::Tuple(tuple) => Some(tuple_length_type(tuple)),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(Type::union),
+        _ => None,
+    }
+}
+
+fn tuple_length_type(tuple: &crate::types::TupleType) -> Type {
+    Type::union(
+        (tuple.required_len()..=tuple.len())
+            .map(|length| Type::NumberLiteral(crate::types::LiteralF64(length as f64)))
+            .collect(),
+    )
+}
+
+fn tuple_position_hint(tuple: &crate::types::TupleType, first: usize, last: usize) -> Option<Type> {
+    let hints: Vec<_> = tuple
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index >= first && *index <= last)
+        .map(|(_, ty)| ty.clone())
+        .collect();
+    (!hints.is_empty()).then(|| Type::union(hints))
+}
+
+/// Optional elements in an earlier spread shift each following element left.
+/// Keep the possible types at each position and the minimum/maximum lengths.
+fn append_tuple_literal_types(
+    prefix: crate::types::TupleType,
+    suffix: &crate::types::TupleType,
+    limits: &crate::type_size::TypeLimits,
+) -> Result<crate::types::TupleType, TypeTooLarge> {
+    let length = prefix
+        .len()
+        .checked_add(suffix.len())
+        .ok_or(TypeTooLarge::Nodes)?;
+    if u64::try_from(length).map_err(|_| TypeTooLarge::Nodes)?
+        >= crate::compiler_limits::MAX_TYPE_NODES
+    {
+        return Err(TypeTooLarge::Nodes);
+    }
+    let required = prefix
+        .required_len()
+        .checked_add(suffix.required_len())
+        .ok_or(TypeTooLarge::Nodes)?;
+    let mut budget = limits.budget();
+    budget.charge(1)?;
+    let mut elements = Vec::with_capacity(length);
+    for index in 0..length {
+        let mut candidates = Vec::new();
+        if let Some(ty) = prefix.get(index) {
+            budget.charge_copy(ty, 3)?;
+            candidates.push(ty.clone());
+        }
+        for offset in prefix.required_len()..=prefix.len() {
+            if !limits.spend_work(1) {
+                return Err(TypeTooLarge::Work);
+            }
+            if let Some(ty) = index.checked_sub(offset).and_then(|i| suffix.get(i)) {
+                budget.charge_copy(ty, 3)?;
+                candidates.push(ty.clone());
+            }
+        }
+        budget.charge(2)?;
+        let ty = Type::union(candidates);
+        elements.push(crate::ObjectField::widen_optional(index >= required, ty));
+    }
+    Ok(crate::types::TupleType {
+        elements,
+        optional: length.saturating_sub(required),
+    })
+}
+
+pub(super) fn callable_parameter_type(param: &crate::Param) -> Type {
+    crate::ObjectField::widen_optional(param.is_omittable(), param.ty.clone())
+}
+
+pub(super) fn required_parameter_count(params: &[crate::Param]) -> usize {
+    params
+        .iter()
+        .rposition(|p| !p.rest && !p.is_omittable())
+        .map_or(0, |index| index + 1)
 }
 
 /// The pairs `+` is defined for, and the result. The single source of truth for both
@@ -12084,7 +12554,7 @@ fn never_operand_result(lt: &Type, rt: &Type, partners: NeverPartners) -> NeverO
 
 fn bitnot_result(ty: &Type) -> Option<Type> {
     match ty.peel() {
-        Type::Unknown | Type::Null | Type::Void => None,
+        Type::Unknown | Type::Null | Type::Undefined | Type::Void => None,
         Type::BigInt | Type::BigIntLiteral(_) => Some(Type::BigInt),
         Type::Never => Some(Type::Number),
         Type::Union(members) => {
@@ -12095,22 +12565,41 @@ fn bitnot_result(ty: &Type) -> Option<Type> {
     }
 }
 
-/// Whether every value of `ty` is falsy: `null`, `false`, `0`, `""`. tsc
-/// spreads such a value as `{}`, as JavaScript copies nothing from it.
+/// Whether every value of `ty` is falsy: `null`, `undefined`, `false`, `0`,
+/// `""`. tsc spreads such a value as `{}`, as JavaScript copies nothing from it.
 fn is_definitely_falsy(ty: &Type) -> bool {
     match ty.peel() {
-        Type::Null | Type::BooleanLiteral(false) => true,
+        Type::Null | Type::Undefined | Type::BooleanLiteral(false) => true,
         Type::NumberLiteral(value) => value.0 == 0.0,
         Type::StringLiteral(value) => value.is_empty(),
         _ => false,
     }
 }
 
+/// Interpolations that convert at run time, as JavaScript's ToString does: a
+/// value that may be `null` or `undefined`, or whose type is known only then.
+/// A `toString` call would throw on the nullish ones.
+fn interpolates_at_run_time(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Null | Type::Unknown | Type::TypeVar(_) | Type::GenericParam { .. } => true,
+        Type::Union(members) => members.iter().any(|member| {
+            matches!(member.peel(), Type::Undefined | Type::Void)
+                || interpolates_at_run_time(member)
+        }),
+        _ => false,
+    }
+}
+
 /// Types whose values reach a `toString` — the receivers `String(x)` and `${x}` accept.
 fn has_to_string(ty: &Type) -> bool {
+    if let Type::Union(members) = ty.peel() {
+        return members.iter().all(has_to_string);
+    }
     matches!(
         ty,
         Type::String
+            | Type::Undefined
+            | Type::Void
             | Type::StringLiteral(_)
             | Type::Number
             | Type::NumberLiteral(_)
@@ -12300,6 +12789,78 @@ mod tests {
         nth_decl_value_ty, nth_expr_stmt_ty, run, run_clean, run_with_packages,
     };
     use crate::{ClosureBody, Type, TypedAst, TypedExprKind, TypedParam, TypedStmtKind};
+
+    #[test]
+    fn optional_class_method_calls_keep_receiver_and_call_guards() {
+        for method_optional in [false, true] {
+            for receiver_optional in [false, true] {
+                let method_mark = if method_optional { "?" } else { "" };
+                let receiver_mark = if receiver_optional { "?" } else { "" };
+                let receiver_type = if receiver_optional {
+                    "Box | null"
+                } else {
+                    "Box"
+                };
+                let source = format!(
+                    "class Box {{ read{method_mark}(): number {{ return 8; }} }}
+                     function invoke(box: {receiver_type}): number | undefined {{
+                       return box{receiver_mark}.read?.();
+                     }}"
+                );
+                let (typed, diagnostics) = run(&source);
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+                let parts = typed
+                    .expr_ids()
+                    .unwrap()
+                    .find_map(|id| match &typed.try_expr(id).unwrap().kind {
+                        TypedExprKind::OptionalChain { parts, .. } => Some(parts),
+                        _ => None,
+                    })
+                    .expect("optional class method chain");
+                let [
+                    crate::TypedChainPart::Field {
+                        optional,
+                        result_ty,
+                        ..
+                    },
+                    crate::TypedChainPart::Call { optional: true, .. },
+                ] = parts.as_slice()
+                else {
+                    panic!("expected field read followed by optional call: {parts:?}");
+                };
+                assert_eq!(*optional, receiver_optional);
+                let includes_undefined = matches!(result_ty, Type::Union(members)
+                    if members.contains(&Type::Undefined));
+                assert_eq!(includes_undefined, method_optional);
+            }
+        }
+    }
+
+    #[test]
+    fn optional_universal_methods_keep_vtable_dispatch() {
+        for receiver_type in ["Error", "Empty"] {
+            let source = format!(
+                "class Empty {{}}
+                 function invoke(value: {receiver_type} | null): string | undefined {{
+                   return value?.toString?.();
+                 }}"
+            );
+            let (typed, diagnostics) = run(&source);
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            let parts = typed
+                .expr_ids()
+                .unwrap()
+                .find_map(|id| match &typed.try_expr(id).unwrap().kind {
+                    TypedExprKind::OptionalChain { parts, .. } => Some(parts),
+                    _ => None,
+                })
+                .expect("optional universal method chain");
+            assert!(matches!(
+                parts.as_slice(),
+                [crate::TypedChainPart::MethodCall { optional: true, .. }]
+            ));
+        }
+    }
 
     #[test]
     fn this_outside_class_reports_once_per_occurrence() {
@@ -13792,14 +14353,25 @@ function main(): void { if (result < 10) { } }
     }
 
     #[test]
-    fn template_literal_null_interpolation_emits_narrow_diagnostic() {
-        let (_, diags) = run(
-            r#"function main(): void { const n: string | null = null; const s: string = `${n}`; }"#,
+    fn template_literal_nullish_interpolation_converts_at_run_time() {
+        let (typed, diags) = run(
+            r#"function show(n: string | null, u: number | undefined): string { return `${n} ${u}`; }"#,
         );
-        assert!(
-            diags.iter().any(|d| d.message.contains("narrow")),
-            "expected narrow-first diagnostic, got: {diags:?}",
-        );
+        assert!(diags.is_empty(), "{diags:?}");
+        let conversions = typed
+            .expr_ids()
+            .unwrap()
+            .filter(|id| {
+                matches!(
+                    typed.try_expr(*id).unwrap().kind,
+                    TypedExprKind::IntrinsicCall {
+                        kind: crate::Intrinsic::ToString,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(conversions, 2);
     }
 
     // ----------------------- namespace-member calls -----------------------
@@ -14352,7 +14924,8 @@ fn has_error_component(ty: &Type) -> bool {
     match ty.peel() {
         Type::Error => true,
         Type::Array(inner) => has_error_component(inner),
-        Type::Tuple(members) | Type::Union(members) => members.iter().any(has_error_component),
+        Type::Tuple(members) => members.iter().any(has_error_component),
+        Type::Union(members) => members.iter().any(has_error_component),
         _ => false,
     }
 }

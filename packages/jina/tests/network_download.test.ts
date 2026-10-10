@@ -10,7 +10,7 @@ import { downloadRead, downloadSearch } from "@submilli/jina";
 import { readText, size } from "submilli:fs";
 
 function main(): void {
-    if (secrets.get("JINA_API_KEY") === null) {
+    if (secrets.get("JINA_API_KEY") === undefined) {
         return;
     }
 
@@ -19,7 +19,7 @@ function main(): void {
     assert(read.bytesWritten > 0, "downloadRead reports bytes written");
     assert(read.path === "/example.md", "result echoes the destination path");
     const body = readText("/example.md");
-    assert(body !== null && body.length > 0, "the reader file has readable content");
+    assert(body !== undefined && body.length > 0, "the reader file has readable content");
 
     label("downloadSearch streams search markdown to the VFS");
     const found = downloadSearch("Jina AI Reader API", "/search.md");

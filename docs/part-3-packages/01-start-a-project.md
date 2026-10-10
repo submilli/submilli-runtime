@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "fb4166e58d31788571a955d63c16168815c1e076eae4e183c1f924e2ba08939f"
+  contentHash: "939582366bba28d8df2b805e6b855166c1759169bf9c24270310278072c27d25"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -177,9 +177,9 @@ server.
 The editor helps you write, but `submilli build check` decides what
 compiles. Where they differ, the compiler is right. The types are
 Submilli's, not Node's or the browser's, so `fetch`, `process`, and `Date`
-are missing and `Temporal` is there. Null checking is off in the editor on purpose, because
-TypeScript reads an absent optional field as `undefined` and Submilli
-reads it as `null`. The editor accepts `any`, `undefined`, and `async`,
+are missing and `Temporal` is there. Strict null checking is on, because
+TypeScript and Submilli both read an absent optional field as `undefined`,
+distinct from `null`. The editor accepts `any` and `async`,
 which the compiler refuses, and only the compiler sees a `@capability` tag
 that disagrees with its `check`.
 

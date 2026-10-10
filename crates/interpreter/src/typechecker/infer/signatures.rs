@@ -9,36 +9,7 @@ use crate::{
     StmtKind, Type, TypeKind, TypeSymbol, ValueKind,
 };
 
-use super::void_value::ValuePosition;
 use super::{Inferer, ValueEntry};
-use crate::runtime::prelude::number::global_constant_value;
-
-/// What an identifier in default position denotes. One classification for every
-/// arm that can meet one, so no two arms can reach different messages for the
-/// same identifier — `x = Infinity` and `x = -Infinity` under a parameter named
-/// `Infinity` must both name the parameter.
-enum DefaultIdent {
-    /// A sibling parameter. Defaults are evaluated in the function's own scope,
-    /// so this wins over any outer binding of the same name.
-    Parameter,
-    /// `Infinity` / `NaN` — the two prelude globals whose value is known at
-    /// signature time, so they can fold to the literal the host signatures
-    /// already carry. That fold is what makes a lifted `end: number = Infinity`
-    /// paste back. The value comes from the prelude's own table.
-    Global(f64),
-    Unresolved,
-}
-
-fn classify_default_ident(ident: &Ident, param_names: &BTreeSet<&str>) -> DefaultIdent {
-    if param_names.contains(ident.name.as_str()) {
-        return DefaultIdent::Parameter;
-    }
-    match global_constant_value(&ident.name) {
-        Some(v) => DefaultIdent::Global(v),
-        None => DefaultIdent::Unresolved,
-    }
-}
-
 impl<'a> Inferer<'a> {
     pub(super) fn signatures(&mut self) -> Result<bool, CompilerFailure> {
         self.pending_index_checks = Some(Vec::new());
@@ -427,6 +398,7 @@ impl<'a> Inferer<'a> {
                 InterfaceMember::Method {
                     name: m_name,
                     generics: m_generics,
+                    optional,
                     params,
                     return_type,
                     span: _,
@@ -496,6 +468,7 @@ impl<'a> Inferer<'a> {
                             ty: rp.ty.clone(),
                             boxed: false,
                             rest: rp.rest,
+                            optional: rp.optional,
                             default: rp.default.clone(),
                         })
                         .collect();
@@ -510,6 +483,7 @@ impl<'a> Inferer<'a> {
                     method_sigs.insert(
                         m_name.name,
                         MethodSig {
+                            optional,
                             generics: m_generic_names,
                             params: resolved_params,
                             ret: resolved_ret,
@@ -539,7 +513,7 @@ impl<'a> Inferer<'a> {
                         });
                         continue;
                     }
-                    let resolved_ty = self.resolve_value_type(&ty, ValuePosition::FieldType)?;
+                    let resolved_ty = self.resolve_type(&ty)?;
                     self.check_conversion_property(&p_name, &resolved_ty);
                     typed_members.push(crate::TypedInterfaceMember::Property {
                         name: p_name.clone(),
@@ -627,11 +601,225 @@ impl<'a> Inferer<'a> {
         params: &[crate::ParamDecl],
     ) -> Result<Vec<Param>, CompilerFailure> {
         self.report_duplicate_params(params.iter().map(|p| &p.name));
-        let names: BTreeSet<&str> = params.iter().map(|p| p.name.name.as_str()).collect();
-        params
+        // Symbols seeded for an unannotated default are temporary: they are
+        // removed here whether resolving succeeds or fails.
+        let mut seeded = Vec::new();
+        let needs_seeding = params
             .iter()
-            .map(|p| self.resolve_param(p, &names))
-            .collect::<Result<_, _>>()
+            .any(|param| param.ty.is_none() && param.default.is_some());
+        let result = if needs_seeding {
+            self.seed_default_signature_symbols(&mut seeded)
+        } else {
+            Ok(())
+        }
+        .and_then(|()| self.resolve_params_in_scope(params));
+        for name in seeded {
+            self.top_symbols.remove(&name);
+        }
+        result
+    }
+
+    fn resolve_params_in_scope(
+        &mut self,
+        params: &[crate::ParamDecl],
+    ) -> Result<Vec<Param>, CompilerFailure> {
+        self.scopes.push();
+        let result = (|| {
+            let mut resolved = Vec::new();
+            for param in params {
+                let slot = self.resolve_param(param)?;
+                self.scopes.insert(
+                    param.name.name.clone(),
+                    slot.ty.clone(),
+                    false,
+                    param.name.span,
+                );
+                resolved.push(slot);
+            }
+            Ok(resolved)
+        })();
+        self.scopes.pop();
+        result
+    }
+
+    /// Default inference precedes global initializer inference. Make declared
+    /// value types available temporarily, recording each name in `seeded`;
+    /// runtime defaults still resolve and execute in the later callee-body pass.
+    fn seed_default_signature_symbols(
+        &mut self,
+        seeded: &mut Vec<String>,
+    ) -> Result<(), CompilerFailure> {
+        let statements = self
+            .ast
+            .top_level
+            .iter()
+            .map(|id| {
+                self.ast
+                    .try_stmt(*id)
+                    .cloned()
+                    .map_err(super::arena_failure)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // Function return annotations are independent of declaration order,
+        // and annotated globals can be forward references from an initializer.
+        self.seed_function_signatures(&statements, seeded)?;
+        self.seed_annotated_globals(&statements, seeded)?;
+        self.seed_inferred_globals(&statements, seeded)
+    }
+
+    fn seed_function_signatures(
+        &mut self,
+        statements: &[crate::Stmt],
+        seeded: &mut Vec<String>,
+    ) -> Result<(), CompilerFailure> {
+        for statement in statements {
+            let StmtKind::Function {
+                name,
+                generics,
+                params,
+                return_type,
+                type_predicate,
+                doc,
+                ..
+            } = &statement.kind
+            else {
+                continue;
+            };
+            if self.top_symbols.contains_key(&name.name) {
+                continue;
+            }
+            let names = generics
+                .iter()
+                .map(|generic| generic.name.clone())
+                .collect::<Vec<_>>();
+            self.push_signature_generics(names.clone());
+            let signature = self
+                .seed_signature_parts(params, return_type.as_ref(), type_predicate.is_some())
+                .map(|(params, ret)| ValueKind::Function {
+                    generics: names,
+                    params,
+                    ret,
+                    type_predicate: None,
+                    doc: doc.clone(),
+                });
+            self.pop_signature_generics();
+            self.bind_top(name, signature?)?;
+            seeded.push(name.name.clone());
+        }
+        Ok(())
+    }
+
+    /// A seeded function's parameters and return type, from its annotations
+    /// alone: an unannotated parameter is `unknown`, and an unannotated return
+    /// is `Error`, so nothing is inferred from a body that hasn't been checked.
+    fn seed_signature_parts(
+        &mut self,
+        params: &[crate::ParamDecl],
+        return_type: Option<&crate::TypeAnnotation>,
+        has_type_predicate: bool,
+    ) -> Result<(Vec<Param>, Type), CompilerFailure> {
+        let params = params
+            .iter()
+            .map(|param| {
+                let ty = param
+                    .ty
+                    .as_ref()
+                    .map(|ty| self.resolve_type(ty))
+                    .transpose()?
+                    .unwrap_or(Type::Unknown);
+                let seeded = Param {
+                    name: param.name.name.clone(),
+                    ty,
+                    optional: param.is_omittable(),
+                    rest: param.rest,
+                    default: param.default.map(|_| crate::DefaultValue::Undefined),
+                };
+                Ok(Param {
+                    ty: super::expr::callable_parameter_type(&seeded),
+                    ..seeded
+                })
+            })
+            .collect::<Result<Vec<_>, CompilerFailure>>()?;
+        let ret = match return_type {
+            Some(ret) => self.resolve_type(ret)?,
+            None if has_type_predicate => Type::Boolean,
+            None => Type::Error,
+        };
+        Ok((params, ret))
+    }
+
+    fn seed_annotated_globals(
+        &mut self,
+        statements: &[crate::Stmt],
+        seeded: &mut Vec<String>,
+    ) -> Result<(), CompilerFailure> {
+        for statement in statements {
+            let (StmtKind::Let {
+                name,
+                ty: Some(ty),
+                doc,
+                ..
+            }
+            | StmtKind::Const {
+                name,
+                ty: Some(ty),
+                doc,
+                ..
+            }) = &statement.kind
+            else {
+                continue;
+            };
+            if self.top_symbols.contains_key(&name.name) {
+                continue;
+            }
+            let ty = self.resolve_type(ty)?;
+            self.bind_top(
+                name,
+                ValueKind::Const {
+                    ty,
+                    doc: doc.clone(),
+                },
+            )?;
+            seeded.push(name.name.clone());
+        }
+        Ok(())
+    }
+
+    fn seed_inferred_globals(
+        &mut self,
+        statements: &[crate::Stmt],
+        seeded: &mut Vec<String>,
+    ) -> Result<(), CompilerFailure> {
+        for statement in statements {
+            let (StmtKind::Let {
+                name,
+                ty: None,
+                value,
+                doc,
+            }
+            | StmtKind::Const {
+                name,
+                ty: None,
+                value,
+                doc,
+            }) = &statement.kind
+            else {
+                continue;
+            };
+            if self.top_symbols.contains_key(&name.name) {
+                continue;
+            }
+            let (_, ty) = self.infer_expr(*value, None)?;
+            self.bind_top(
+                name,
+                ValueKind::Const {
+                    ty: ty.widen_literal(),
+                    doc: doc.clone(),
+                },
+            )?;
+            seeded.push(name.name.clone());
+        }
+        Ok(())
     }
 
     /// Reject a parameter name declared twice in one list, anchored at the
@@ -667,16 +855,20 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    fn resolve_param(
-        &mut self,
-        p: &crate::ParamDecl,
-        param_names: &BTreeSet<&str>,
-    ) -> Result<Param, CompilerFailure> {
-        let ty =
-            p.ty.as_ref()
-                .map(|t| self.resolve_value_type(t, ValuePosition::Parameter))
-                .transpose()?
-                .unwrap_or(Type::Error);
+    fn resolve_param(&mut self, p: &crate::ParamDecl) -> Result<Param, CompilerFailure> {
+        let ty = if let Some(annotation) = &p.ty {
+            self.resolve_type(annotation)?
+        } else if let Some(default) = p.default {
+            self.infer_expr(default, None)?.1.widen_literal()
+        } else {
+            Type::Error
+        };
+        // Parameter properties keep the initializer's type before omission widens
+        // the callable input to include undefined.
+        self.record_authored_parameter_type(
+            p.name.span,
+            &crate::ObjectField::widen_optional(p.optional, ty.clone()),
+        );
         // Parser already rejects rest + default and non-trailing rest; here we check the
         // annotation is present and resolves to an array.
         if p.rest {
@@ -702,250 +894,19 @@ impl<'a> Inferer<'a> {
             }
             return Ok(Param::rest(p.name.name.clone(), ty));
         }
-        let default = p
-            .default
-            .map(|expr_id| self.resolve_default(expr_id, &ty, &p.name.name, param_names))
-            .transpose()?
-            .flatten();
-        Ok(match default {
-            Some(d) => Param::with_default(p.name.name.clone(), ty, d),
-            None => Param::new(p.name.name.clone(), ty),
+        let optional = p.is_omittable();
+        let ty = if optional {
+            Type::union(vec![ty, Type::Undefined])
+        } else {
+            ty
+        };
+        Ok(Param {
+            name: p.name.name.clone(),
+            ty,
+            rest: false,
+            optional,
+            default: p.default.map(|_| crate::DefaultValue::Undefined),
         })
-    }
-
-    fn resolve_default(
-        &mut self,
-        expr_id: crate::ExprId,
-        param_ty: &Type,
-        param_name: &str,
-        param_names: &BTreeSet<&str>,
-    ) -> Result<Option<crate::DefaultValue>, CompilerFailure> {
-        use crate::{DefaultValue, EnumVariantValue, ExprKind};
-        let expr = self
-            .ast
-            .try_expr(expr_id)
-            .map_err(super::arena_failure)?
-            .clone();
-        let span = expr.span;
-        let (value, value_ty): (DefaultValue, Type) = match expr.kind {
-            ExprKind::Number(n) => (DefaultValue::Number(n), Type::Number),
-            ExprKind::String(s) => (DefaultValue::String(s), Type::String),
-            ExprKind::Boolean(b) => (DefaultValue::Boolean(b), Type::Boolean),
-            ExprKind::Null => (DefaultValue::Null, Type::Null),
-            // Parser lowers `-N` into `Unary { Neg, Number(n) }` rather than a plain Number.
-            ExprKind::Unary {
-                op: crate::ast::UnOp::Neg,
-                operand,
-            } => {
-                let folded = match &self
-                    .ast
-                    .try_expr(operand)
-                    .map_err(super::arena_failure)?
-                    .kind
-                {
-                    ExprKind::Number(n) => Some(*n),
-                    ExprKind::Identifier(ident) => {
-                        match classify_default_ident(ident, param_names) {
-                            DefaultIdent::Parameter => {
-                                let name = ident.name.clone();
-                                return Ok(self.reject_parameter_default(span, &name));
-                            }
-                            DefaultIdent::Global(v) => Some(v),
-                            DefaultIdent::Unresolved => None,
-                        }
-                    }
-                    _ => None,
-                };
-                let Some(v) = folded else {
-                    return Ok(self.reject_non_literal_default(span));
-                };
-                (DefaultValue::Number(-v), Type::Number)
-            }
-            ExprKind::ArrayLiteral { ref elements } if elements.is_empty() => {
-                if !matches!(param_ty.peel(), Type::Array(_)) {
-                    self.error_with_help(
-                        span,
-                        format!(
-                            "default value `[]` is only valid for array \
-                             parameters; parameter `{param_name}` is `{param_ty}`",
-                        ),
-                        Vec::new(),
-                    );
-                    return Ok(None);
-                }
-                return Ok(Some(DefaultValue::EmptyArray));
-            }
-            ExprKind::FieldAccess { receiver, ref name } => {
-                let recv_kind = self
-                    .ast
-                    .try_expr(receiver)
-                    .map_err(super::arena_failure)?
-                    .kind
-                    .clone();
-                if let ExprKind::Identifier(recv_ident) = recv_kind {
-                    // A sibling parameter of the enum's name shadows it, the same
-                    // way it shadows a global constant.
-                    if param_names.contains(recv_ident.name.as_str()) {
-                        return Ok(self.reject_parameter_default(span, &recv_ident.name));
-                    }
-                    if let Some(sym) = self.lookup_named_type(&recv_ident.name) {
-                        let enum_name = recv_ident.name.clone();
-                        let variant_name = name.name.clone();
-                        let enum_mangled = sym.mangled_name.clone();
-                        let enum_package = self.type_package(&recv_ident.name);
-                        match &sym.kind {
-                            crate::TypeKind::NumberEnum { variants, .. } => {
-                                if let Some((_, value)) =
-                                    variants.iter().find(|(v, _)| v == &variant_name)
-                                {
-                                    (
-                                        DefaultValue::EnumVariant {
-                                            enum_mangled: enum_mangled.clone(),
-                                            variant: variant_name,
-                                            value: EnumVariantValue::Number(*value),
-                                        },
-                                        Type::number_enum(enum_package, enum_name, enum_mangled),
-                                    )
-                                } else {
-                                    self.error(
-                                        name.span,
-                                        format!(
-                                            "no variant `{variant_name}` on enum `{enum_name}`",
-                                        ),
-                                    );
-                                    return Ok(None);
-                                }
-                            }
-                            crate::TypeKind::StringEnum { variants, .. } => {
-                                if let Some((_, value)) =
-                                    variants.iter().find(|(v, _)| v == &variant_name)
-                                {
-                                    (
-                                        DefaultValue::EnumVariant {
-                                            enum_mangled: enum_mangled.clone(),
-                                            variant: variant_name,
-                                            value: EnumVariantValue::String(value.clone()),
-                                        },
-                                        Type::string_enum(enum_package, enum_name, enum_mangled),
-                                    )
-                                } else {
-                                    self.error(
-                                        name.span,
-                                        format!(
-                                            "no variant `{variant_name}` on enum `{enum_name}`",
-                                        ),
-                                    );
-                                    return Ok(None);
-                                }
-                            }
-                            _ => return Ok(self.reject_non_literal_default(span)),
-                        }
-                    } else {
-                        return Ok(self.reject_non_literal_default(span));
-                    }
-                } else {
-                    return Ok(self.reject_non_literal_default(span));
-                }
-            }
-            ExprKind::Identifier(ref ident) => {
-                let folded = match classify_default_ident(ident, param_names) {
-                    DefaultIdent::Parameter => {
-                        return Ok(self.reject_parameter_default(span, &ident.name));
-                    }
-                    DefaultIdent::Global(v) => Some(v),
-                    DefaultIdent::Unresolved => None,
-                };
-                let Some(v) = folded else {
-                    // Global inference runs after signatures, so top-level const references
-                    // can't be resolved here yet.
-                    self.error_with_help(
-                        span,
-                        "top-level `const` references as defaults are not yet supported"
-                            .to_string(),
-                        vec![
-                            "use a literal (number, string, boolean, null, `[]`, \
-                             `Infinity`, `NaN`) or an enum variant (`EnumName.Variant`)"
-                                .to_string(),
-                        ],
-                    );
-                    return Ok(None);
-                };
-                (DefaultValue::Number(v), Type::Number)
-            }
-            _ => return Ok(self.reject_non_literal_default(span)),
-        };
-        // `assignable` treats a type variable as a wildcard, so the check below
-        // would accept any literal a type variable could stand for and let the
-        // caller pick the type argument — `f<T>(v: T = 5)` called as
-        // `f<string>()` would reach the body holding a number. The literal has
-        // to be accepted by something the caller can't choose.
-        let Some(concrete_ty) = without_type_vars(param_ty) else {
-            self.error_with_help(
-                span,
-                format!(
-                    "parameter `{param_name}` cannot have a default value: its type \
-                     `{param_ty}` is chosen by the caller"
-                ),
-                vec![
-                    "drop the default, or give the parameter a type that doesn't depend on \
-                     a type parameter"
-                        .to_string(),
-                ],
-            );
-            return Ok(None);
-        };
-        if !super::assignable::assignable(&value_ty, &concrete_ty, self.resolver()) {
-            // Narrowing the type variable out of a union makes the plain
-            // "not assignable" message read as false — `5` obviously fits
-            // `T | null` — so name the part that has to accept the value.
-            let help = if concrete_ty == *param_ty {
-                Vec::new()
-            } else {
-                vec![format!(
-                    "the caller picks what a type parameter stands for, so the default has to \
-                     fit `{concrete_ty}` — the rest of `{param_ty}`"
-                )]
-            };
-            self.error_with_help(
-                span,
-                format!(
-                    "default value of type `{value_ty}` is not assignable to \
-                     parameter type `{param_ty}`",
-                ),
-                help,
-            );
-            return Ok(None);
-        }
-        Ok(Some(value))
-    }
-
-    /// A default that names another parameter. Reported apart from the
-    /// const-reference gate because this is a permanent rule, not a missing
-    /// feature: spec.md says a default may not reference another parameter, and
-    /// "not yet supported" would tell a reader to wait for a release.
-    fn reject_parameter_default(&mut self, span: Span, name: &str) -> Option<crate::DefaultValue> {
-        self.error_with_help(
-            span,
-            format!("a default value cannot reference the parameter `{name}`"),
-            vec![format!(
-                "defaults are evaluated in the function's own scope, so `{name}` here is the \
-                 parameter, not an outer binding; use a literal or an enum variant instead"
-            )],
-        );
-        None
-    }
-
-    fn reject_non_literal_default(&mut self, span: Span) -> Option<crate::DefaultValue> {
-        self.error_with_help(
-            span,
-            "default value must be a literal or enum variant".to_string(),
-            vec![
-                "accepted forms: number / string / boolean / null literal, \
-                 `[]`, `Infinity`, `NaN`, or `EnumName.Variant`"
-                    .to_string(),
-            ],
-        );
-        None
     }
 
     pub(super) fn bind_top(
@@ -986,7 +947,7 @@ impl<'a> Inferer<'a> {
 ///
 /// Returns `ty` unchanged when it holds no type variable, so a caller can read
 /// "something was stripped" off the result differing from what it passed in.
-fn without_type_vars(ty: &Type) -> Option<Type> {
+pub(super) fn without_type_vars(ty: &Type) -> Option<Type> {
     fn is_type_var(ty: &Type) -> bool {
         matches!(ty.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
     }
@@ -1156,7 +1117,7 @@ mod tests {
         let (_, diags) = run("function f<T>(v: T | null = 5): void { }");
         assert_eq!(
             diags[0].message,
-            "default value of type `number` is not assignable to parameter type `null | T`",
+            "default value of type `number` is not assignable to parameter type `T | null`",
         );
         assert_eq!(diags[0].help.len(), 1);
         assert!(

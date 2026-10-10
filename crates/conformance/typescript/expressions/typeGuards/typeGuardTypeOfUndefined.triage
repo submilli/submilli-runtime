@@ -1,0 +1,1 @@
+line 51, 55, 73, 78, 82, 87, 91, 143, 147, 165, 170, 174, 179, 183 type: by-design spec §1.1 a `void` result may hold any value, since a value-returning function stored as a `void` one returns it, so `typeof x !== "undefined"` keeps a `void` member where tsc drops it

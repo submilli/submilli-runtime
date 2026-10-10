@@ -146,6 +146,7 @@ fn imported_signatures_are_checked_on_use_and_unused_surface_is_allowed() {
 
 fn oversized_type() -> Type {
     Type::Function {
+        optional: 0,
         params: vec![Type::Number; 256],
         ret: Box::new(Type::Number),
         has_rest: false,

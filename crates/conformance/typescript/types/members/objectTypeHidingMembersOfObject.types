@@ -11,8 +11,8 @@ class C {
 
 }
 
-/*pruned*/;                       
-/*pruned*/;                
+/*pruned*/;
+/*pruned*/;
 
 interface I {
 >I : I
@@ -24,8 +24,8 @@ interface I {
 
 }
 
-/*pruned*/;                       
-/*pruned*/;                
+/*pruned*/;
+/*pruned*/;
 
 let a = {
 >a : { valueOf: () => void; }

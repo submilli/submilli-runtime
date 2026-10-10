@@ -491,25 +491,32 @@ pub(super) fn match_index(
     }
 }
 
-/// `RegExpMatch#groups` — a fresh `(string | null)[]` wrapping each numbered
+/// `RegExpMatch#groups` — a fresh `(string | undefined)[]` wrapping each numbered
 /// capture.
 pub(super) fn groups(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
     let st = as_struct(caller, abi_arg(params, 0)?, "RegExpMatch#groups")?;
     let raw = read_capture_array(caller, &st, 4)?;
-    let mut elements = Vec::with_capacity(raw.len());
+    let mut elements = Vec::new();
+    elements
+        .try_reserve_exact(raw.len())
+        .map_err(crate::runtime::host::fatal_host_error)?;
     for elem in raw {
         elements.push(match elem {
             Val::AnyRef(Some(any)) => wrap_raw_string(caller, any)?,
-            _ => Val::null_any_ref(),
+            Val::AnyRef(None) => super::undefined::value(caller)?,
+            _ => {
+                return Err(crate::runtime::host::fatal_host_error(
+                    "invalid capture value",
+                ));
+            }
         });
     }
     let arr = write_submilli_array_struct(caller, &elements)?;
     Ok(Val::AnyRef(Some(arr.to_anyref())))
 }
 
-/// `RegExpMatch#namedGroups` — a `Map<string, string>` from the alternating
-/// name/value capture array. Unmatched named captures (null value) are skipped
-/// (the fix the Wasm body deferred).
+/// `RegExpMatch#namedGroups` includes every named capture, with `undefined`
+/// for groups that did not participate.
 pub(super) async fn named_groups(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
@@ -517,14 +524,29 @@ pub(super) async fn named_groups(
     let st = as_struct(caller, abi_arg(params, 0)?, "RegExpMatch#namedGroups")?;
     let raw = read_capture_array(caller, &st, 5)?;
     let map = super::map::construct(caller, &Val::null_any_ref()).await?;
-    let mut i = 0;
-    while i + 1 < raw.len() {
-        if let (Val::AnyRef(Some(name)), Val::AnyRef(Some(value))) = (raw[i], raw[i + 1]) {
-            let key = wrap_raw_string(caller, name)?;
-            let val = wrap_raw_string(caller, value)?;
-            super::map::set(caller, &map, &key, &val).await?;
-        }
-        i += 2;
+    let (pairs, remainder) = raw.as_chunks::<2>();
+    if !remainder.is_empty() {
+        return Err(crate::runtime::host::fatal_host_error(
+            "invalid named capture array length",
+        ));
+    }
+    for [name, value] in pairs {
+        let Val::AnyRef(Some(name)) = name else {
+            return Err(crate::runtime::host::fatal_host_error(
+                "invalid named capture name",
+            ));
+        };
+        let key = wrap_raw_string(caller, *name)?;
+        let value = match value {
+            Val::AnyRef(Some(value)) => wrap_raw_string(caller, *value)?,
+            Val::AnyRef(None) => super::undefined::value(caller)?,
+            _ => {
+                return Err(crate::runtime::host::fatal_host_error(
+                    "invalid capture value",
+                ));
+            }
+        };
+        super::map::set(caller, &map, &key, &value).await?;
     }
     Ok(map)
 }
@@ -951,7 +973,7 @@ fn named_substitution(pattern: &[u16], hit: &ExecSnapshot) -> Substitution {
 
 /// The regex arm of `split` (ECMA-262 `RegExp.prototype[@@split]`): an empty
 /// match where the previous part ended doesn't split, and each split adds the
-/// match's captures, `null` for a group that didn't participate.
+/// match's captures, `undefined` for a group that didn't participate.
 fn split_regex_bounded(
     caller: &mut Caller<'_, StoreData>,
     elements: &mut output::Buffer<Val>,
@@ -991,7 +1013,7 @@ fn split_regex_bounded(
                     let string = write_submilli_string_struct_units(caller, &units)?;
                     Val::AnyRef(Some(string.to_anyref()))
                 }
-                None => Val::null_any_ref(),
+                None => super::undefined::value(caller)?,
             };
             elements.push(caller, value)?;
         }

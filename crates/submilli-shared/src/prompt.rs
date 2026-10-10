@@ -170,10 +170,10 @@ const LLM_GUIDANCE: &str = r#"Model calls (`submilli:llm`): `call(model, prompt)
 `Completion`; `call<T>` returns a checked `T`. `ok` is not "nothing
 threw" — a truncated or filtered completion is `ok: false` **and still
 carries `text`**, so `if (!r.ok) continue` drops usable output. Token
-counts may be `null`: indeterminate, not free. `batch` is
+counts may be `undefined`: indeterminate, not free. `batch` is
 bounded-concurrent, one result per prompt, positionally. Models are
 operator-declared — `models()` lists them, and `contextWindow` /
-`description` are `null` when undeclared, so filtering drops those."#;
+`description` are `undefined` when undeclared, so filtering drops those."#;
 
 const EMBEDDING_GUIDANCE: &str = r#"
 
@@ -191,8 +191,8 @@ against `T` (throws a catchable `TypeError` on a shape mismatch),
 `has`/`remove`/`list` round it out. There is no `set<T>`; the value's
 type is inferred. It is **memory-only**: it does not survive a server
 restart, so a key you wrote on an earlier call may legitimately be
-missing. Read a key that may be absent as `get<T | null>(key)` and
-handle the `null`."#;
+missing. `get<T>(key)` returns `T | undefined`, so handle the
+`undefined`."#;
 
 impl PromptSurface {
     fn discovery_tools(self) -> [&'static str; 3] {
@@ -237,12 +237,12 @@ fn stdlib_modules_phrase(visibility: LibraryVisibility) -> String {
 /// Lives apart from the format string so the braces and quotes stay readable.
 const MCP_PACKAGES_EXAMPLE: &str = r#"  import github from "@mcp/github";
   // list_commits is already typed — no cast. `commit` is optional, so narrow
-  // it against null before reading a field.
+  // it against undefined before reading a field.
   function main(): string {
     const commits = github.list_commits({ owner: "o", repo: "r" });
     let last = "";
     for (const c of commits) {
-      if (c.commit !== null) last = c.commit.message;
+      if (c.commit !== undefined) last = c.commit.message;
     }
     return last;
   }"#;
@@ -262,7 +262,7 @@ fn mcp_packages_phrase(blueprint: &Blueprint) -> String {
          Call `{{t_docs}}` with an available package \
          name for its tools and signatures, then `import` it. Most tools are \
          typed — read the signature and use the result directly, narrowing \
-         optional (`foo?`) fields against `null` before access; do not cast a \
+         optional (`foo?`) fields against `undefined` before access; do not cast a \
          typed result to a hand-written type. Cast (`as T`) only when a tool's \
          return type is literally `unknown` (its server published no output \
          schema): make a test call to see the shape, then declare a type alias \

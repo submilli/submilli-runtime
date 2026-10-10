@@ -1,4 +1,4 @@
-function inner(outer: { mid: { val: number } | null } | null): number | null {
+function inner(outer: { mid: { val: number } | null } | null): number | undefined {
   return outer?.mid?.val;
 }
 
@@ -7,7 +7,7 @@ function main(): void {
   assert(inner(full) === 42, "two non-null hops");
 
   const mid_null: { mid: { val: number } | null } = { mid: null };
-  assert(inner(mid_null) === null, "middle null short-circuits");
+  assert(inner(mid_null) === undefined, "middle null short-circuits");
 
-  assert(inner(null) === null, "outer null short-circuits");
+  assert(inner(null) === undefined, "outer null short-circuits");
 }

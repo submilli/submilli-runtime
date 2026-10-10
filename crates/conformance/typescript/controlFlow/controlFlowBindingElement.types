@@ -11,11 +11,11 @@
 >        : ^^^^^^^
 
 
-    /**/;  
-                                                                      
-             
-    
-    /*pruned*/;         // should not trigger 'Unreachable code detected.'    
+    /**/;
+
+
+
+    /*pruned*/;         // should not trigger 'Unreachable code detected.'
 }
 
 
@@ -31,17 +31,17 @@
 >        : ^^^^^^^
 
 
-    let foo: string | null = "";
->foo : string | null
->    : ^^^^^^^^^^^^^
+    let foo: string | undefined = "";
+>foo : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
 >"" : ""
 >   : ^^
 
-    /**/;  
-                                                                      
-             
-    
-    foo;  // should be string  
+    /**/;
+
+
+
+    foo;  // should be string
 >foo : string
 >    : ^^^^^^
 
@@ -59,16 +59,16 @@
 >        : ^^^^^^^
 
 
-    let foo: string | null = "";
->foo : string | null
->    : ^^^^^^^^^^^^^
+    let foo: string | undefined = "";
+>foo : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
 >"" : ""
 >   : ^^
 
-    /**/;  
-                                         
-             
-    
+    /**/;
+
+
+
     foo;  // should be string | undefined
 >foo : string
 >    : ^^^^^^
@@ -87,16 +87,34 @@
 >        : ^^^^^^^
 
 
-    let foo: string | null = "";
->foo : string | null
->    : ^^^^^^^^^^^^^
+    let foo: string | undefined = "";
+>foo : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
 >"" : ""
 >   : ^^
 
-    /**/;  
-                                            
-             
-    
+    const {
+        param = (() => { return "" + 1 })(),
+>param : string
+>      : ^^^^^^
+>(() => { return "" + 1 })() : string
+>                            : ^^^^^^
+>(() => { return "" + 1 }) : () => string
+>                          : ^^^^^^^^^^^^
+>() => { return "" + 1 } : () => string
+>                        : ^^^^^^^^^^^^
+>"" + 1 : string
+>       : ^^^^^^
+>"" : ""
+>   : ^^
+>1 : 1
+>  : ^
+
+    } = data;
+>data : { param: string; }
+>     : ^^^^^^^^^^^^^^^^^^
+
+
     foo;  // should be string
 >foo : string
 >    : ^^^^^^
@@ -114,15 +132,15 @@
 
     }
 
-    let foo: string | null = null as unknown as (string | null);
->foo : string | null
->    : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+    let foo: string | undefined = null as unknown as (string | undefined);
+>foo : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-    /*pruned*/;               
+    /*pruned*/;
     window.window = window;
 >window.window = window : globalThis.Window & typeof globalThis
 >                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -136,12 +154,12 @@
 >       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-    /*pruned*/;                                                
-                                                                     
+    /*pruned*/;
+
 
     foo;  // should be string
->foo : string | null
->    : ^^^^^^^^^^^^^
+>foo : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
 
 }
 
@@ -156,15 +174,15 @@
 
     }
 
-    let foo: string | null = null as unknown as (string | null);
->foo : string | null
->    : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+    let foo: string | undefined = null as unknown as (string | undefined);
+>foo : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-    /*pruned*/;               
+    /*pruned*/;
     window.window = window;
 >window.window = window : globalThis.Window & typeof globalThis
 >                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -178,12 +196,12 @@
 >       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-    /*pruned*/;                                       
-                                                                               
+    /*pruned*/;
+
 
     foo;  // should be string
->foo : string | null
->    : ^^^^^^^^^^^^^
+>foo : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
 
 }
 
@@ -198,15 +216,15 @@
 
     }
 
-    let foo: string | null = null as unknown as (string | null);
->foo : string | null
->    : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+    let foo: string | undefined = null as unknown as (string | undefined);
+>foo : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-    /*pruned*/;               
+    /*pruned*/;
     window.window = window;
 >window.window = window : globalThis.Window & typeof globalThis
 >                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -220,12 +238,12 @@
 >       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-    /*pruned*/;                                      
-                                                                                                              
+    /*pruned*/;
+
 
     foo;  // should be string | undefined
->foo : string | null
->    : ^^^^^^^^^^^^^
+>foo : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
 
 }
 

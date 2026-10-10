@@ -1,2 +1,2 @@
-nullishCoalescingOperator4.ts(5,19): error TS18047: 'a1' is possibly 'null'.
-nullishCoalescingOperator4.ts(6,19): error TS18047: 'a1' is possibly 'null'.
+nullishCoalescingOperator4.ts(5,19): error TS18049: 'a1' is possibly 'null' or 'undefined'.
+nullishCoalescingOperator4.ts(6,19): error TS18049: 'a1' is possibly 'null' or 'undefined'.

@@ -177,12 +177,12 @@ fn dispatch(reported_tokens: f64) -> (Arc<dyn ModelDispatch>, Arc<AtomicUsize>) 
     )
 }
 
-/// `text` is `string | null` — a completion cut off at the output cap is `ok:
+/// `text` is `string | undefined` — a completion cut off at the output cap is `ok:
 /// false` and still carries partial text — so every script narrows it.
 const CALL: &str = r#"import llm from "submilli:llm";
 function main(): string {
     const t = llm.call("test-model", "hi").text;
-    return t === null ? "NULL" : (t as string);
+    return t === undefined ? "NULL" : (t as string);
 }"#;
 
 /// Catches, so a refusal is readable as a value rather than as a trap.
@@ -190,7 +190,7 @@ const CATCH: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
         const t = llm.call("test-model", "hi").text;
-        return "OK:" + (t === null ? "NULL" : (t as string));
+        return "OK:" + (t === undefined ? "NULL" : (t as string));
     } catch (e: Error) {
         return e.message;
     }
@@ -203,7 +203,7 @@ const CATCH_GHOST: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
         const t = llm.call("ghost-model", "hi").text;
-        return "OK:" + (t === null ? "NULL" : (t as string));
+        return "OK:" + (t === undefined ? "NULL" : (t as string));
     } catch (e: Error) {
         return e.message;
     }

@@ -42,21 +42,21 @@ const a1: ValueOrArray<number> = [1, [2, 3], [4, [5, [6, 7]]]];
 >  : ^
 
 
-/*pruned*/;                                                                            
+/*pruned*/;
 
-/*pruned*/;                         
-                             
-                                                              
-                                                               
-      
+/*pruned*/;
 
-/*pruned*/;                                                                     
 
-/*pruned*/;       
-                    
-                               
-                                  
-  
+
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+
+
+
 
 interface Box<T> { value: T };
 >Box : Box<T>
@@ -227,9 +227,9 @@ type RecArray<T> = Array<T | RecArray<T>>;
 >  : ^
 
 
-/*pruned*/;                                                                         
-/*pruned*/;                                                                                  
-/*pruned*/;                                                                                             
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 /*pruned*/;           // number[]
 /*pruned*/;     // number[]
@@ -266,8 +266,8 @@ type T13 = T13[] | string;
 >T13 : T13
 >    : ^^^
 
-/*pruned*/;                      
-/*pruned*/;                                       
+/*pruned*/;
+/*pruned*/;
 
 type ValueOrArray1<T> = T | ValueOrArray1<T>[];
 >ValueOrArray1 : ValueOrArray1<T>
@@ -282,7 +282,7 @@ type ValueOrArray2<T> = T | ValueOrArray2<T>[];
 >  : ^
 
 
-/*pruned*/;                                                                
+/*pruned*/;
 let ra1: ValueOrArray2<string> = null as unknown as (ValueOrArray2<string>);
 >ra1 : ValueOrArray2<string>
 >    : ^^^^^^^^^^^^^^^^^^^^^
@@ -307,7 +307,7 @@ type NumberOrArray2<T> = T | ValueOrArray2<T>[];
 >  : ^
 
 
-/*pruned*/;                                                                
+/*pruned*/;
 let ra2: ValueOrArray2<string> = null as unknown as (ValueOrArray2<string>);
 >ra2 : ValueOrArray2<string>
 >    : ^^^^^^^^^^^^^^^^^^^^^
@@ -321,37 +321,37 @@ let ra2: ValueOrArray2<string> = null as unknown as (ValueOrArray2<string>);
 
 // Repro from #33617 (errors are expected)
 
-/*pruned*/;                              
+/*pruned*/;
 
-/*pruned*/;                                                         
-                                                     
-                                  
-                       
-                                                                                                      
-                                                         
-       
-      
- 
+/*pruned*/;
 
-/*pruned*/;                                    
-           
-                                                 
-                            
-                                                       
-                                        
-                                 
-            
-                               
-                     
-              
-                                                               
-          
- 
 
-/*pruned*/;                                    
-                                  
-                       
- 
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
 
 
 function main(): void {}

@@ -9,6 +9,7 @@ use interpreter::{FileId, ModulePath, PackageSourceModule, Type};
 
 fn signature(arity: usize, ret: Type) -> Type {
     Type::Function {
+        optional: 0,
         params: vec![Type::Number; arity],
         ret: Box::new(ret),
         has_rest: false,

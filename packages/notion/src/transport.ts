@@ -47,16 +47,16 @@ const API = "https://api.notion.com/v1";
 const VERSION = "2026-03-11";
 
 interface ApiErrorEnvelope {
-    code?: string;
-    message?: string;
-    request_id?: string;
+    code?: string | null;
+    message?: string | null;
+    request_id?: string | null;
 }
 
 interface ApiList {
     results: unknown[];
     has_more: boolean;
     next_cursor: string | null;
-    request_status?: ApiRequestStatus;
+    request_status?: ApiRequestStatus | null;
 }
 
 interface ApiRequestStatus {
@@ -65,109 +65,109 @@ interface ApiRequestStatus {
 
 interface ApiParent {
     type: string;
-    page_id?: string;
-    database_id?: string;
-    data_source_id?: string;
-    block_id?: string;
-    agent_id?: string;
-    workspace?: boolean;
+    page_id?: string | null;
+    database_id?: string | null;
+    data_source_id?: string | null;
+    block_id?: string | null;
+    agent_id?: string | null;
+    workspace?: boolean | null;
 }
 
 interface ApiPage {
     id: string;
-    url?: string;
-    created_time?: string;
-    last_edited_time?: string;
-    in_trash?: boolean;
-    parent?: ApiParent;
+    url?: string | null;
+    created_time?: string | null;
+    last_edited_time?: string | null;
+    in_trash?: boolean | null;
+    parent?: ApiParent | null;
     properties?: unknown;
 }
 
 interface ApiDatabase {
     id: string;
-    url?: string;
-    title?: unknown[];
-    description?: unknown[];
-    created_time?: string;
-    last_edited_time?: string;
-    in_trash?: boolean;
-    data_sources?: ApiDataSourceReference[];
+    url?: string | null;
+    title?: unknown[] | null;
+    description?: unknown[] | null;
+    created_time?: string | null;
+    last_edited_time?: string | null;
+    in_trash?: boolean | null;
+    data_sources?: ApiDataSourceReference[] | null;
 }
 
 interface ApiDataSourceReference {
     id: string;
-    name?: string;
+    name?: string | null;
 }
 
 interface ApiDataSource {
     id: string;
-    url?: string;
-    title?: unknown[];
-    created_time?: string;
-    last_edited_time?: string;
-    in_trash?: boolean;
-    parent?: ApiParent;
+    url?: string | null;
+    title?: unknown[] | null;
+    created_time?: string | null;
+    last_edited_time?: string | null;
+    in_trash?: boolean | null;
+    parent?: ApiParent | null;
     properties?: unknown;
 }
 
 interface ApiBlock {
     id: string;
-    type?: string;
-    created_time?: string;
-    last_edited_time?: string;
-    has_children?: boolean;
-    in_trash?: boolean;
-    parent?: ApiParent;
+    type?: string | null;
+    created_time?: string | null;
+    last_edited_time?: string | null;
+    has_children?: boolean | null;
+    in_trash?: boolean | null;
+    parent?: ApiParent | null;
 }
 
 interface ApiUser {
     id: string;
-    type?: string;
-    name?: string;
-    avatar_url?: string;
-    person?: ApiPerson;
+    type?: string | null;
+    name?: string | null;
+    avatar_url?: string | null;
+    person?: ApiPerson | null;
 }
 
 interface ApiPerson {
-    email?: string;
+    email?: string | null;
 }
 
 interface ApiView {
     id: string;
-    type?: string;
-    name?: string;
-    parent?: ApiParent;
+    type?: string | null;
+    name?: string | null;
+    parent?: ApiParent | null;
 }
 
 interface ApiMarkdown {
     id: string;
     markdown: string;
-    truncated: boolean;
-    unknown_block_ids: string[];
+    truncated?: boolean | null;
+    unknown_block_ids?: string[] | null;
 }
 
 interface ApiComment {
     id: string;
-    discussion_id?: string;
-    created_time?: string;
-    last_edited_time?: string;
-    markdown?: string;
-    rich_text?: ApiRichText[];
+    discussion_id?: string | null;
+    created_time?: string | null;
+    last_edited_time?: string | null;
+    markdown?: string | null;
+    rich_text?: ApiRichText[] | null;
 }
 
 interface ApiRichText {
-    plain_text?: string;
+    plain_text?: string | null;
 }
 
 interface ApiViewQuery {
     id: string;
     view_id: string;
-    expires_at: string;
-    total_count: number;
+    expires_at?: string | null;
+    total_count?: number | null;
     results: ApiResourceReference[];
     next_cursor: string | null;
     has_more: boolean;
-    request_status?: ApiRequestStatus;
+    request_status?: ApiRequestStatus | null;
 }
 
 interface ApiResourceReference {
@@ -178,12 +178,12 @@ interface ApiResourceReference {
 interface ApiFileUpload {
     id: string;
     status: string;
-    filename: string | null;
-    content_type: string | null;
-    content_length: number | null;
-    expiry_time: string | null;
-    upload_url?: string;
-    complete_url?: string;
+    filename?: string | null;
+    content_type?: string | null;
+    content_length?: number | null;
+    expiry_time?: string | null;
+    upload_url?: string | null;
+    complete_url?: string | null;
 }
 
 /** A Notion API or package validation error with retry and request metadata. */
@@ -229,16 +229,17 @@ export class PageContext {
     }
 }
 
-export function notionGet(path: string, query: Map<string, string> | null = null): Response {
-    const suffix = query === null ? "" : querySuffix(query);
+export function notionGet(path: string, query?: Map<string, string>): Response {
+    const suffix = query === undefined ? "" : querySuffix(query);
     return requireOk(get(API + path + suffix, authHeaders()));
 }
 
-export function notionPost(path: string, body: string | Uint8Array | {} | unknown[] | null): Response {
+// An omitted body sends an empty request body.
+export function notionPost(path: string, body?: string | Uint8Array | {} | unknown[]): Response {
     return requireOk(post(API + path, body, authHeaders()));
 }
 
-export function notionPatch(path: string, body: string | Uint8Array | {} | unknown[] | null): Response {
+export function notionPatch(path: string, body: string | Uint8Array | {} | unknown[]): Response {
     return requireOk(patch(API + path, body, authHeaders()));
 }
 
@@ -269,7 +270,7 @@ export function resolvePageContext(ref: string): PageContext {
         }
 
         const parent = block.parent;
-        if (parent === null) {
+        if (!parent) {
             throw validationError("missing_parent", "Notion block does not include parent metadata");
         }
         if (parent.type === "page_id") {
@@ -288,7 +289,7 @@ export function resolvePageContext(ref: string): PageContext {
 
 export function authHeaders(): Map<string, string> {
     const token = secrets.get("NOTION_ACCESS_TOKEN");
-    if (token === null) throw validationError("missing_token", "NOTION_ACCESS_TOKEN is not bound");
+    if (token === undefined) throw validationError("missing_token", "NOTION_ACCESS_TOKEN is not bound");
     const headers = new Map<string, string>();
     headers.set("Authorization", "Bearer " + token);
     headers.set("Notion-Version", VERSION);
@@ -303,12 +304,9 @@ export function requireOk(response: Response): Response {
     let requestId = header(response, "x-request-id");
     if (response.body.startsWith("{")) {
         const envelope = response.json() as ApiErrorEnvelope;
-        const apiCode = envelope.code;
-        const apiMessage = envelope.message;
-        const apiRequestId = envelope.request_id;
-        if (apiCode !== null) code = apiCode;
-        if (apiMessage !== null) message = apiMessage;
-        if (apiRequestId !== null) requestId = apiRequestId;
+        code = envelope.code ?? code;
+        message = envelope.message ?? message;
+        requestId = envelope.request_id ?? requestId;
     }
     throw new NotionError(code, message, response.status, requestId, header(response, "retry-after"));
 }
@@ -322,14 +320,14 @@ export function validationError(code: string, message: string): NotionError {
  * A collection:// reference is rejected when a kind other than "data_source" is expected.
  *
  * @param ref Notion ID (dashed or undashed), Notion URL, or `collection://` data source reference; surrounding whitespace is ignored.
- * @param expected Resource kind the caller expects; `null` skips the kind check, and only `"data_source"` accepts a `collection://` reference.
+ * @param expected Resource kind the caller expects; omit it to skip the kind check. Only `"data_source"` accepts a `collection://` reference.
  * @returns The validated Notion ID extracted from the reference.
  */
-export function idFromRef(ref: string, expected: string | null = null): string {
+export function idFromRef(ref: string, expected?: string): string {
     const trimmed = ref.trim();
     if (trimmed.length === 0) throw validationError("invalid_reference", "Notion reference cannot be empty");
     if (trimmed.startsWith("collection://")) {
-        if (expected !== null && expected !== "data_source") {
+        if (expected !== undefined && expected !== "data_source") {
             throw validationError("invalid_reference_kind", "collection:// references identify data sources");
         }
         return validateId(trimmed.slice("collection://".length));
@@ -338,20 +336,20 @@ export function idFromRef(ref: string, expected: string | null = null): string {
     return validateId(trimmed);
 }
 
-export function pathId(ref: string, expected: string | null = null): string {
+export function pathId(ref: string, expected?: string): string {
     return encodeComponent(idFromRef(ref, expected));
 }
 
-export function pageSize(value: number | null, fallback: number = 100, max: number = 100): number {
-    const actual = value === null ? fallback : value;
+export function pageSize(value: number | undefined, fallback: number = 100, max: number = 100): number {
+    const actual = value ?? fallback;
     if (actual < 1 || actual > max) {
         throw validationError("invalid_page_size", "page size must be between 1 and " + max.toString());
     }
     return actual;
 }
 
-export function putQuery(query: Map<string, string>, key: string, value: string | null): void {
-    if (value !== null && value.length > 0) query.set(key, value);
+export function putQuery(query: Map<string, string>, key: string, value: string | undefined): void {
+    if (value !== undefined && value.length > 0) query.set(key, value);
 }
 
 export function listFrom(response: Response): PageResult<unknown> {
@@ -360,7 +358,7 @@ export function listFrom(response: Response): PageResult<unknown> {
         results: data.results,
         hasMore: data.has_more,
         nextCursor: str(data.next_cursor),
-        isComplete: data.request_status === null || data.request_status.type !== "incomplete",
+        isComplete: data.request_status?.type !== "incomplete",
     };
 }
 
@@ -381,7 +379,7 @@ export function pageFrom(raw: unknown): NotionPage {
 export function databaseFrom(raw: unknown): NotionDatabase {
     const data = raw as ApiDatabase;
     const dataSources: DataSourceReference[] = [];
-    if (data.data_sources !== null) {
+    if (data.data_sources) {
         for (const item of data.data_sources) dataSources.push({ id: item.id, name: str(item.name) });
     }
     return {
@@ -429,7 +427,7 @@ export function blockFrom(raw: unknown): NotionBlock {
 export function userFrom(raw: unknown): NotionUser {
     const data = raw as ApiUser;
     let email = "";
-    if (data.person !== null) email = str(data.person.email);
+    if (data.person) email = str(data.person.email);
     return {
         id: data.id,
         type: str(data.type),
@@ -453,18 +451,20 @@ export function viewFrom(raw: unknown): NotionView {
 
 export function markdownFrom(raw: unknown): PageMarkdown {
     const data = raw as ApiMarkdown;
+    let unknownBlockIds: string[] = [];
+    if (data.unknown_block_ids) unknownBlockIds = data.unknown_block_ids;
     return {
         id: data.id,
         markdown: data.markdown,
-        truncated: data.truncated,
-        unknownBlockIds: data.unknown_block_ids,
+        truncated: data.truncated === true,
+        unknownBlockIds: unknownBlockIds,
     };
 }
 
 export function commentFrom(raw: unknown): NotionComment {
     const data = raw as ApiComment;
     let markdown = str(data.markdown);
-    if (markdown.length === 0 && data.rich_text !== null) {
+    if (markdown.length === 0 && data.rich_text) {
         const parts: string[] = [];
         for (const item of data.rich_text) parts.push(str(item.plain_text));
         markdown = parts.join("");
@@ -486,12 +486,12 @@ export function viewQueryFrom(raw: unknown): ViewQuery {
     return {
         id: data.id,
         viewId: data.view_id,
-        expiresAt: data.expires_at,
-        totalCount: data.total_count,
+        expiresAt: str(data.expires_at),
+        totalCount: data.total_count ?? 0,
         results: results,
         nextCursor: str(data.next_cursor),
         hasMore: data.has_more,
-        isComplete: data.request_status === null || data.request_status.type !== "incomplete",
+        isComplete: data.request_status?.type !== "incomplete",
     };
 }
 
@@ -502,7 +502,7 @@ export function fileUploadFrom(raw: unknown): FileUpload {
         status: data.status,
         filename: str(data.filename),
         contentType: str(data.content_type),
-        contentLength: data.content_length === null ? 0 : data.content_length,
+        contentLength: data.content_length ?? 0,
         expiryTime: str(data.expiry_time),
         uploadUrl: str(data.upload_url),
         completeUrl: str(data.complete_url),
@@ -510,16 +510,15 @@ export function fileUploadFrom(raw: unknown): FileUpload {
     };
 }
 
-export function propertyObject(properties: PropertyBag | null): Map<string, unknown> {
+export function propertyObject(properties: PropertyBag): Map<string, unknown> {
     const result = new Map<string, unknown>();
-    if (properties === null) return result;
-    if (properties.values !== null) {
+    if (properties.values !== undefined) {
         for (const property of properties.values) {
             if (result.has(property.name)) throw validationError("duplicate_property", "duplicate property: " + property.name);
             result.set(property.name, propertyValue(property));
         }
     }
-    if (properties.custom !== null) {
+    if (properties.custom !== undefined) {
         for (const entry of properties.custom) {
             if (result.has(entry[0])) throw validationError("duplicate_property", "duplicate property: " + entry[0]);
             result.set(entry[0], entry[1]);
@@ -528,9 +527,11 @@ export function propertyObject(properties: PropertyBag | null): Map<string, unkn
     return result;
 }
 
+// Like `fieldJson`, every entry must have a JSON value: an `undefined` value throws
+// rather than silently dropping the key.
 export function mapJson(map: Map<string, unknown>): string {
     const fields: string[] = [];
-    for (const entry of map) fields.push(JSON.stringify(entry[0]) + ":" + JSON.stringify(entry[1]));
+    for (const entry of map) fields.push(fieldJson(entry[0], entry[1]));
     return "{" + fields.join(",") + "}";
 }
 
@@ -539,7 +540,9 @@ export function objectJson(fields: string[]): string {
 }
 
 export function fieldJson(name: string, value: unknown): string {
-    return JSON.stringify(name) + ":" + JSON.stringify(value);
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw validationError("invalid_body", name + " must have a JSON value");
+    return JSON.stringify(name) + ":" + encoded;
 }
 
 export function mapFieldJson(name: string, value: Map<string, unknown>): string {
@@ -548,18 +551,18 @@ export function mapFieldJson(name: string, value: Map<string, unknown>): string 
 
 export function fileReferenceJson(file: FileReference): string {
     if (file.type === "external") {
-        if (file.url === null || !file.url.startsWith("https://")) {
+        if (file.url === undefined || !file.url.startsWith("https://")) {
             throw validationError("invalid_file_reference", "external files require an HTTPS URL");
         }
         return "{\"type\":\"external\",\"external\":{\"url\":" + JSON.stringify(file.url) + "}}";
     }
-    if (file.uploadId === null) throw validationError("invalid_file_reference", "file_upload references require uploadId");
+    if (file.uploadId === undefined) throw validationError("invalid_file_reference", "file_upload references require uploadId");
     return "{\"type\":\"file_upload\",\"file_upload\":{\"id\":" + JSON.stringify(idFromRef(file.uploadId)) + "}}";
 }
 
 export function trustedUploadPath(url: string): string {
     const parsed = parse(url);
-    if (parsed.protocol !== "https" || parsed.host !== "api.notion.com" || parsed.port !== null || !url.startsWith(API + "/")) {
+    if (parsed.protocol !== "https" || parsed.host !== "api.notion.com" || parsed.port !== undefined || !url.startsWith(API + "/")) {
         throw validationError("invalid_upload_url", "Notion returned an untrusted upload URL");
     }
     return url.slice(API.length);
@@ -621,70 +624,67 @@ function propertyValue(property: PropertyValue): unknown {
     const propertyType = property.type as string;
     if (property.type === "title" || property.type === "rich_text") {
         const text = property.text;
-        if (text === null) throw validationError("invalid_property", propertyType + " property requires text");
+        if (text === undefined) throw validationError("invalid_property", propertyType + " property requires text");
         return JSON.parse("{\"" + propertyType + "\":[{\"type\":\"text\",\"text\":{\"content\":" + JSON.stringify(text) + "}}]}");
     }
     if (property.type === "number") {
-        const number = property.number;
-        if (number === null) return JSON.parse("{\"number\":null}");
-        return JSON.parse("{\"number\":" + JSON.stringify(number) + "}");
+        // An omitted number clears the property, as an explicit null does.
+        return JSON.parse("{\"number\":" + JSON.stringify(property.number ?? null) + "}");
     }
     if (property.type === "checkbox") {
         const checked = property.checked;
-        if (checked === null) throw validationError("invalid_property", "checkbox property requires checked");
+        if (checked === undefined) throw validationError("invalid_property", "checkbox property requires checked");
         return { checkbox: checked };
     }
     if (property.type === "select" || property.type === "status") {
-        const selection = property.value === null ? "null" : "{\"name\":" + JSON.stringify(property.value) + "}";
+        const value = property.value ?? null;
+        const selection = value === null ? "null" : "{\"name\":" + JSON.stringify(value) + "}";
         return JSON.parse("{\"" + propertyType + "\":" + selection + "}");
     }
     if (property.type === "multi_select") {
-        if (property.values === null) throw validationError("invalid_property", "multi_select property requires values");
+        if (property.values === undefined) throw validationError("invalid_property", "multi_select property requires values");
         const selections: string[] = [];
         for (const value of property.values) selections.push("{\"name\":" + JSON.stringify(value) + "}");
         return JSON.parse("{\"multi_select\":[" + selections.join(",") + "]}");
     }
     if (property.type === "date") {
-        if (property.start === null) return JSON.parse("{\"date\":null}");
-        const fields: string[] = [fieldJson("start", property.start)];
-        if (property.end !== null) fields.push(fieldJson("end", property.end));
-        if (property.timeZone !== null) fields.push(fieldJson("time_zone", property.timeZone));
+        const start = property.start ?? null;
+        if (start === null) return JSON.parse("{\"date\":null}");
+        const fields: string[] = [fieldJson("start", start)];
+        if (property.end !== undefined) fields.push(fieldJson("end", property.end));
+        if (property.timeZone !== undefined) fields.push(fieldJson("time_zone", property.timeZone));
         return JSON.parse("{\"date\":" + objectJson(fields) + "}");
     }
     if (property.type === "people" || property.type === "relation") {
-        if (property.ids === null) throw validationError("invalid_property", propertyType + " property requires ids");
+        if (property.ids === undefined) throw validationError("invalid_property", propertyType + " property requires ids");
         const ids: string[] = [];
         for (const id of property.ids) ids.push("{\"id\":" + JSON.stringify(idFromRef(id)) + "}");
         return JSON.parse("{\"" + propertyType + "\":[" + ids.join(",") + "]}");
     }
     if (property.type === "files") {
-        if (property.files === null) throw validationError("invalid_property", "files property requires files");
+        if (property.files === undefined) throw validationError("invalid_property", "files property requires files");
         const files: string[] = [];
         for (const file of property.files) {
-            const name = file.name === null ? "" : ",\"name\":" + JSON.stringify(file.name);
+            const name = file.name === undefined ? "" : ",\"name\":" + JSON.stringify(file.name);
             const encoded = fileReferenceJson(file);
             files.push(encoded.slice(0, encoded.length - 1) + name + "}");
         }
         return JSON.parse("{\"files\":[" + files.join(",") + "]}");
     }
-    return JSON.parse("{\"" + propertyType + "\":" + JSON.stringify(property.value) + "}");
+    return JSON.parse("{\"" + propertyType + "\":" + JSON.stringify(property.value ?? null) + "}");
 }
 
 function unknownMap(value: unknown): Map<string, unknown> {
     const result = new Map<string, unknown>();
-    if (value === null) return result;
+    if (value === null || value === undefined) return result;
     for (const entry of Object.entries(value)) result.set(entry[0], entry[1]);
     return result;
 }
 
-function parentFrom(parent: ApiParent | null): NotionParent {
-    if (parent === null) return { type: "", id: "" };
-    const actual = parent as ApiParent;
-    if (actual.page_id !== null) return { type: actual.type, id: actual.page_id };
-    if (actual.database_id !== null) return { type: actual.type, id: actual.database_id };
-    if (actual.data_source_id !== null) return { type: actual.type, id: actual.data_source_id };
-    if (actual.block_id !== null) return { type: actual.type, id: actual.block_id };
-    return { type: actual.type, id: "" };
+function parentFrom(parent: ApiParent | null | undefined): NotionParent {
+    if (!parent) return { type: "", id: "" };
+    const id = parent.page_id ?? parent.database_id ?? parent.data_source_id ?? parent.block_id ?? "";
+    return { type: parent.type, id: id };
 }
 
 function kindFromObject(value: string): ResourceKind {
@@ -703,18 +703,19 @@ function querySuffix(query: Map<string, string>): string {
 
 function header(response: Response, name: string): string {
     const value = response.headers.get(name);
-    return value === null ? "" : value;
+    return value === undefined ? "" : value;
 }
 
-function str(value: string | null): string {
-    return value === null ? "" : value;
+function str(value: string | null | undefined): string {
+    return value ?? "";
 }
 
-function requiredParentId(value: string | null, parentType: string): string {
-    if (value === null) throw validationError("missing_parent_id", "Notion " + parentType + " parent does not include its ID");
+function requiredParentId(value: string | null | undefined, parentType: string): string {
+    if (value === undefined || value === null) throw validationError("missing_parent_id", "Notion " + parentType + " parent does not include its ID");
     return validateId(value);
 }
 
-function array(value: unknown[] | null): unknown[] {
-    return value === null ? [] : value;
+function array(value: unknown[] | null | undefined): unknown[] {
+    if (!value) return [];
+    return value;
 }

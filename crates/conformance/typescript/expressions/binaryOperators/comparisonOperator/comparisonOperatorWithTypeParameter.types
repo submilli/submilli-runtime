@@ -7,7 +7,7 @@ let a: {} = null as unknown as ({});
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                 
+/*pruned*/;
 
 function foo<T, U/* extends T*/, V/* extends U*/>(t: T, u: U, v: V): void {
 >foo : <T, U, V>(t: T, u: U, v: V) => void
@@ -513,23 +513,23 @@ function foo<T, U/* extends T*/, V/* extends U*/>(t: T, u: U, v: V): void {
 >  : ^
 
 
-    /*pruned*/;     
-    /*pruned*/;     
-    /*pruned*/;      
-    /*pruned*/;      
-    /*pruned*/;      
-    /*pruned*/;      
-    /*pruned*/;       
-    /*pruned*/;       
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
 
-    /*pruned*/;     
-    /*pruned*/;     
-    /*pruned*/;      
-    /*pruned*/;      
-    /*pruned*/;      
-    /*pruned*/;      
-    /*pruned*/;       
-    /*pruned*/;       
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
 }
 
 function main(): void {}

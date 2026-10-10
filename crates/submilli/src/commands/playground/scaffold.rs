@@ -230,7 +230,7 @@ export function listCharges(customerId: string): Charge[] {
 
     // In production, this would call the billing service.
     const text = readText(LEDGER_PATH);
-    if (text === null) {
+    if (text === undefined) {
         throw new Error(`${LEDGER_PATH} is too large to read`);
     }
     const ledger = JSON.parse(text) as Charge[];

@@ -6,7 +6,7 @@ let b: boolean = null as unknown as (boolean);
 let c: number = null as unknown as (number);
 let d: string = null as unknown as (string);
 /*pruned*/;                                 
-/*pruned*/;                             
+let f: void = null as unknown as (void);
 /*pruned*/;                       
 
 let x: string = null as unknown as (string);
@@ -18,7 +18,7 @@ let r2 = x + b;
 let r3 = x + c;
 let r4 = x + d;
 /*pruned*/;    
-/*pruned*/;    
+let r6 = x + f;
 /*pruned*/;    
 
 // string as right operand

@@ -3,10 +3,10 @@ import secrets from "submilli:secrets";
 import { sendDirectMessage, sendGroupDirectMessage } from "@submilli/slack-bot";
 
 function main(): void {
-    if (secrets.get("SLACK_BOT_TOKEN") === null) return;
+    if (secrets.get("SLACK_BOT_TOKEN") === undefined) return;
 
     const recipientId = secrets.get("SLACK_TEST_DM_USER_ID");
-    if (recipientId !== null) {
+    if (recipientId !== undefined) {
         label("bot direct message");
         const message = sendDirectMessage(
             recipientId,
@@ -17,7 +17,7 @@ function main(): void {
     }
 
     const groupRecipientIds = secrets.get("SLACK_TEST_GROUP_DM_USER_IDS");
-    if (groupRecipientIds !== null) {
+    if (groupRecipientIds !== undefined) {
         label("bot group direct message");
         const userIds = groupRecipientIds.split(",");
         assert(userIds.length >= 2, "group DM test requires at least two approved user IDs");

@@ -1,8 +1,8 @@
 === objectSpreadStrictNull.ts ===
 
 function f(
->f : (definiteBoolean: { sn: boolean; }, definiteString: { sn: string; }, optionalString: { sn?: string; }, optionalNumber: { sn?: number; }, undefinedString: { sn: string | null; }, undefinedNumber: { sn: number | null; }) => void
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : (definiteBoolean: { sn: boolean; }, definiteString: { sn: string; }, optionalString: { sn?: string; }, optionalNumber: { sn?: number; }, undefinedString: { sn: string | undefined; }, undefinedNumber: { sn: number | undefined; }) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     definiteBoolean: { sn: boolean },
 >definiteBoolean : { sn: boolean; }
@@ -28,17 +28,17 @@ function f(
 >sn : number | undefined
 >   : ^^^^^^^^^^^^^^^^^^
 
-    undefinedString: { sn: string | null },
->undefinedString : { sn: string | null; }
->                : ^^^^^^^^^^^^^^^^^^^^^^
->sn : string | null
->   : ^^^^^^^^^^^^^
+    undefinedString: { sn: string | undefined },
+>undefinedString : { sn: string | undefined; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>sn : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
 
-    undefinedNumber: { sn: number | null }): void {
->undefinedNumber : { sn: number | null; }
->                : ^^^^^^^^^^^^^^^^^^^^^^
->sn : number | null
->   : ^^^^^^^^^^^^^
+    undefinedNumber: { sn: number | undefined }): void {
+>undefinedNumber : { sn: number | undefined; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>sn : number | undefined
+>   : ^^^^^^^^^^^^^^^^^^
 
     // optional
     let optionalUnionStops: { sn: string | number } = { ...definiteBoolean, ...definiteString, ...optionalNumber };
@@ -90,42 +90,42 @@ function f(
 >                    : ^^^^^^^^^^^^^^^^^^^^^^^^
 >sn : string | number
 >   : ^^^^^^^^^^^^^^^
->{ ...definiteBoolean, ...definiteString, ...undefinedNumber } : { sn: number | null; }
->                                                              : ^^^^^^^^^^^^^^^^^^^^^^
+>{ ...definiteBoolean, ...definiteString, ...undefinedNumber } : { sn: number | undefined; }
+>                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >definiteBoolean : { sn: boolean; }
 >                : ^^^^^^^^^^^^^^^^
 >definiteString : { sn: string; }
 >               : ^^^^^^^^^^^^^^^
->undefinedNumber : { sn: number | null; }
->                : ^^^^^^^^^^^^^^^^^^^^^^
+>undefinedNumber : { sn: number | undefined; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     let undefinedUnionDuplicates: { sn: string | number } = { ...definiteBoolean, ...definiteString, ...undefinedString, ...undefinedNumber };
 >undefinedUnionDuplicates : { sn: string | number; }
 >                         : ^^^^^^^^^^^^^^^^^^^^^^^^
 >sn : string | number
 >   : ^^^^^^^^^^^^^^^
->{ ...definiteBoolean, ...definiteString, ...undefinedString, ...undefinedNumber } : { sn: number | null; }
->                                                                                  : ^^^^^^^^^^^^^^^^^^^^^^
+>{ ...definiteBoolean, ...definiteString, ...undefinedString, ...undefinedNumber } : { sn: number | undefined; }
+>                                                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >definiteBoolean : { sn: boolean; }
 >                : ^^^^^^^^^^^^^^^^
 >definiteString : { sn: string; }
 >               : ^^^^^^^^^^^^^^^
->undefinedString : { sn: string | null; }
->                : ^^^^^^^^^^^^^^^^^^^^^^
->undefinedNumber : { sn: number | null; }
->                : ^^^^^^^^^^^^^^^^^^^^^^
+>undefinedString : { sn: string | undefined; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefinedNumber : { sn: number | undefined; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    let allUndefined: { sn: string | number | null } = { ...undefinedString, ...undefinedNumber };
->allUndefined : { sn: string | number | null; }
->             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->sn : string | number | null
->   : ^^^^^^^^^^^^^^^^^^^^^^
->{ ...undefinedString, ...undefinedNumber } : { sn: number | null; }
->                                           : ^^^^^^^^^^^^^^^^^^^^^^
->undefinedString : { sn: string | null; }
->                : ^^^^^^^^^^^^^^^^^^^^^^
->undefinedNumber : { sn: number | null; }
->                : ^^^^^^^^^^^^^^^^^^^^^^
+    let allUndefined: { sn: string | number | undefined } = { ...undefinedString, ...undefinedNumber };
+>allUndefined : { sn: string | number | undefined; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>sn : string | number | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...undefinedString, ...undefinedNumber } : { sn: number | undefined; }
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefinedString : { sn: string | undefined; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefinedNumber : { sn: number | undefined; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
     let undefinedWithOptionalContinues: { sn: string | number | boolean } = { ...definiteBoolean, ...undefinedString, ...optionalNumber };
@@ -133,12 +133,12 @@ function f(
 >                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >sn : string | number | boolean
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^
->{ ...definiteBoolean, ...undefinedString, ...optionalNumber } : { sn: string | number | null; }
->                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...definiteBoolean, ...undefinedString, ...optionalNumber } : { sn: string | number | undefined; }
+>                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >definiteBoolean : { sn: boolean; }
 >                : ^^^^^^^^^^^^^^^^
->undefinedString : { sn: string | null; }
->                : ^^^^^^^^^^^^^^^^^^^^^^
+>undefinedString : { sn: string | undefined; }
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >optionalNumber : { sn?: number; }
 >               : ^^^^^^^^^^^^^^^^
 
@@ -173,15 +173,17 @@ const m = { title: "The Matrix", yearReleased: 1999 };
 >     : ^^^^
 
 // should error here because title: undefined is not assignable to string
-const x: Movie = { ...m, title: null };
+const x: Movie = { ...m, title: undefined };
 >x : Movie
 >  : ^^^^^
->{ ...m, title: null } : { title: null; yearReleased: number; }
->                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ ...m, title: undefined } : { title: undefined; yearReleased: number; }
+>                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >m : { title: string; yearReleased: number; }
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->title : null
->      : ^^^^
+>title : undefined
+>      : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 interface Fields {
@@ -201,21 +203,21 @@ interface NearlyPartialFields {
 >NearlyPartialFields : NearlyPartialFields
 >                    : ^^^^^^^^^^^^^^^^^^^
 
-    foo: number | null;
->foo : number | null
->    : ^^^^^^^^^^^^^
+    foo: number | undefined;
+>foo : number | undefined
+>    : ^^^^^^^^^^^^^^^^^^
 
-    bar: string | null;
->bar : string | null
->    : ^^^^^^^^^^^^^
+    bar: string | undefined;
+>bar : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
 
 }
-/*pruned*/;                                                                                                 
-                                                                     
-                                             
-                                             
-                                                   
- 
+/*pruned*/;
+
+
+
+
+
 
 
 function main(): void {}

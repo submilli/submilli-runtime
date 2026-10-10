@@ -335,11 +335,14 @@ pub(crate) fn emit_optional_presence(
             struct_type_index: optional_name_type,
             field_index: 3,
         },
-        Instruction::LocalGet(value),
-        Instruction::RefIsNull,
-        Instruction::I32Eqz,
-        Instruction::I32Or,
-    ] {
+    ]
+    .into_iter()
+    .chain(super::nullish::is_nullish(
+        &[Instruction::LocalGet(value)],
+        intrinsics,
+    ))
+    .chain([Instruction::I32Eqz, Instruction::I32Or])
+    {
         function.instruction(&instruction);
     }
 }

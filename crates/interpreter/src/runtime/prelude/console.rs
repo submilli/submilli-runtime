@@ -145,6 +145,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "log".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: Vec::new(),
                         params: vec![
                             Param::new("first", Type::Unknown),

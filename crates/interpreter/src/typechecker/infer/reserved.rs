@@ -13,6 +13,7 @@ pub(super) fn override_field_signature(name: &str) -> Option<crate::Type> {
             ret: Box::new(crate::Type::String),
             predicate: None,
             has_rest: false,
+            optional: 0,
         }),
         _ => None,
     }

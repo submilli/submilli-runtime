@@ -13,11 +13,11 @@ function ff(): void {
 >ff : () => void
 >   : ^^^^^^^^^^
 
-    let x: string | null = null as unknown as (string | null);
->x : string | null
->  : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+    let x: string | undefined = null as unknown as (string | undefined);
+>x : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
@@ -32,16 +32,16 @@ function ff(): void {
             x = "";
 >x = "" : ""
 >       : ^^
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >"" : ""
 >   : ^^
 
         }
         else {
             if (x) {
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
                 x.length;
 >x.length : number
@@ -53,8 +53,8 @@ function ff(): void {
 
             }
             if (x) {
->x : string | null
->  : ^^^^^^^^^^^^^
+>x : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
                 x.length;
 >x.length : number

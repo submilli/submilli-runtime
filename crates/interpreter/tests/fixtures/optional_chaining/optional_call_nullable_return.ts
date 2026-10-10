@@ -11,12 +11,12 @@ function positive(x: number): number | null {
   return null;
 }
 
-function callIt(f: Fn | null, x: number): number | null {
+function callIt(f: Fn | null, x: number): number | null | undefined {
   return f?.(x);
 }
 
 function main(): void {
   assert(callIt(positive, 1) === 3, "non-null result flows through");
   assert(callIt(positive, -1) === null, "the closure's own null flows through");
-  assert(callIt(null, 1) === null, "null callee short-circuits");
+  assert(callIt(null, 1) === undefined, "null callee short-circuits");
 }

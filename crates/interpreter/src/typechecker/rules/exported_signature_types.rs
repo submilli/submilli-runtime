@@ -301,7 +301,7 @@ fn collect_signature_named_types(
         Type::Array(elem) | Type::Readonly(elem) => {
             collect_signature_named_types(package_name, elem, out);
         }
-        Type::Tuple(elements) | Type::Union(elements) => {
+        Type::Tuple(crate::types::TupleType { elements, .. }) | Type::Union(elements) => {
             for element in elements {
                 collect_signature_named_types(package_name, element, out);
             }
@@ -316,6 +316,7 @@ fn collect_signature_named_types(
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::Null
+        | Type::Undefined
         | Type::Void
         | Type::Unknown
         | Type::Error

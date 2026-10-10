@@ -360,7 +360,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     let arr = write_submilli_uint8array_struct(caller, &bytes)?;
                     Val::AnyRef(Some(arr.to_anyref()))
                 }
-                None => Val::AnyRef(None),
+                None => crate::runtime::prelude::undefined::value(caller)?,
             };
             Ok(())
         },
@@ -384,7 +384,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     let st = write_submilli_string_struct(caller, &text)?;
                     Val::AnyRef(Some(st.to_anyref()))
                 }
-                None => Val::AnyRef(None),
+                None => crate::runtime::prelude::undefined::value(caller)?,
             };
             Ok(())
         },
@@ -908,20 +908,24 @@ fn size_limit_number(limit: Option<u64>) -> f64 {
     limit.map_or(-1.0, |v| v as f64)
 }
 
-/// `stat(path)`: a `$StatBacking`, or null when the path does not exist.
+/// `stat(path)`: a `$StatBacking`, or `undefined` when the path does not exist.
 fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<Val> {
-    // `stat` is declared `Stat | null` so a program can probe for absence. Resolution now
+    // `stat` is declared `Stat | undefined` so a program can probe for absence. Resolution now
     // opens the parent, so a missing *ancestor* fails here rather than at the metadata call
     // below — and answering that with a trap would break the contract every caller branches
     // on. Escapes still trap: unreachable-because-outside is not the same as absent.
     let resolved = match resolve_link(&caller.data().vfs, caller.data().vfs.cwd(), path) {
         Ok(resolved) => resolved,
-        Err(ContainError::Io(e)) if is_absent(&e) => return Ok(Val::AnyRef(None)),
+        Err(ContainError::Io(e)) if is_absent(&e) => {
+            return crate::runtime::prelude::undefined::value(caller);
+        }
         Err(e) => return Err(contain_trap("fs.stat", path, &e)),
     };
     let meta = match resolved.symlink_metadata() {
         Ok(m) => m,
-        Err(ContainError::Io(e)) if is_absent(&e) => return Ok(Val::AnyRef(None)),
+        Err(ContainError::Io(e)) if is_absent(&e) => {
+            return crate::runtime::prelude::undefined::value(caller);
+        }
         Err(e) => return Err(contain_trap("fs.stat", path, &e)),
     };
     let ft = meta.file_type();
@@ -1285,7 +1289,7 @@ fn list_next(
 fn close_handle_of<T: handles::Closable + 'static>(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
-    _results: &mut [Val],
+    results: &mut [Val],
 ) -> wasmtime::Result<()> {
     if let Some(handle) = env_handle(caller, abi_arg(params, 0)?)?
         && let Some(payload) = handle
@@ -1294,6 +1298,7 @@ fn close_handle_of<T: handles::Closable + 'static>(
     {
         payload.close();
     }
+    *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
     Ok(())
 }
 

@@ -21,7 +21,13 @@ pub(super) fn run(
     };
     for f in &ta.functions {
         let subject = format!("function `{}`", f.name.name);
-        rule.check(f.body, &f.return_type, f.name.span, &subject)?;
+        rule.check(
+            f.body,
+            &f.return_type,
+            f.name.span,
+            &subject,
+            Body::Function,
+        )?;
     }
     for decl in &ta.types {
         if let TypedTypeDecl::Class(class) = decl {
@@ -37,13 +43,27 @@ struct MissingReturn<'a, 'd> {
     diags: &'a mut Vec<Diagnostic>,
 }
 
+/// What a checked body belongs to: a getter must return a value whatever its
+/// type, while a function's rule depends on its return type.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Body {
+    Function,
+    Getter,
+}
+
 impl MissingReturn<'_, '_> {
     /// Methods and getters; a constructor or setter returns no value.
     fn check_class_members(&mut self, class: &TypedClassDecl) -> Result<(), CompilerFailure> {
         let class_name = &class.name.name;
         for method in &class.methods {
             let subject = format!("method `{class_name}.{}`", method.name.name);
-            self.check(method.body, &method.return_type, method.name.span, &subject)?;
+            self.check(
+                method.body,
+                &method.return_type,
+                method.name.span,
+                &subject,
+                Body::Function,
+            )?;
         }
         for accessor in &class.accessors {
             let TypedClassAccessor::Getter {
@@ -53,7 +73,7 @@ impl MissingReturn<'_, '_> {
                 continue;
             };
             let subject = format!("getter `{class_name}.{}`", name.name);
-            self.check(*body, ret_ty, name.span, &subject)?;
+            self.check(*body, ret_ty, name.span, &subject, Body::Getter)?;
         }
         Ok(())
     }
@@ -66,26 +86,44 @@ impl MissingReturn<'_, '_> {
         return_type: &Type,
         span: Span,
         subject: &str,
+        body_kind: Body,
     ) -> Result<(), CompilerFailure> {
         let return_type = return_type.peel();
-        if matches!(return_type, Type::Void | Type::Error) {
+        if matches!(return_type, Type::Error) {
             return Ok(());
         }
         if control_flow(self.ta, self.declarations, body)? != ControlFlow::Falls {
             return Ok(());
         }
-        // `unknown` admits the `undefined` that falling off the end returns
-        // (`null` here), so as in TypeScript only a body that never returns
-        // is a mistake.
-        let returns_unknown = matches!(return_type, Type::Unknown);
-        if returns_unknown && contains_return(self.ta, body)? {
+        // A getter must return something whatever its type, as TypeScript
+        // requires (TS2378); `return undefined;` says so explicitly.
+        if body_kind == Body::Getter && !contains_return(self.ta, body)? {
+            self.diags.push(Diagnostic {
+                severity: Severity::Error,
+                span,
+                message: format!("{subject} has no `return`; a getter must return a value"),
+                help: vec!["add a `return` with the value the getter reads".to_string()],
+                notes: vec![],
+            });
             return Ok(());
         }
-        let (message, help) = if returns_unknown {
+        // `undefined` needs no value, and neither does a `void` return type,
+        // alone or in a union.
+        if matches!(return_type, Type::Undefined) || return_type.carries_void() {
+            return Ok(());
+        }
+        // A type that admits `undefined` lets a body that returns somewhere fall
+        // off the end, but one with no `return` of its own is a mistake, as
+        // TypeScript reports (TS2355); a `return` in a nested closure does not count.
+        let admits_undefined = permits_implicit_undefined(return_type);
+        if admits_undefined && contains_return(self.ta, body)? {
+            return Ok(());
+        }
+        let (message, help) = if admits_undefined {
             (
-                format!("{subject} returns `unknown` but has no `return`"),
+                format!("{subject} returns `{return_type}` but has no `return`"),
                 vec![
-                    "add a `return` with a value, or a bare `return;`, which yields `null`"
+                    "add a `return` with a value, or a bare `return;`, which yields `undefined`"
                         .to_string(),
                 ],
             )
@@ -129,8 +167,19 @@ impl Visitor for MissingReturn<'_, '_> {
                 "arrow function".to_string(),
             ),
         };
-        self.check(*body, return_type, span, &subject)
+        self.check(*body, return_type, span, &subject, Body::Function)
     }
+}
+
+/// Whether a body of return type `ty` may yield `undefined` by ending without
+/// a value. `Error` counts so an already-reported type adds no second error.
+fn permits_implicit_undefined(ty: &Type) -> bool {
+    ty.any_member(&|member| {
+        matches!(
+            member,
+            Type::Void | Type::Undefined | Type::Unknown | Type::Error
+        )
+    })
 }
 
 /// Whether `stmt_id` holds a `return` of its own body; one inside a nested
@@ -471,10 +520,15 @@ class C {
         assert_eq!(
             run_lines(source),
             [
+                // The field's arrow is contextually typed, so its fall-off end
+                // adds `undefined` to the inferred return, as in TypeScript.
+                reported(
+                    "field `f` initializer is `() => number | undefined`, expected `() => number`",
+                    4
+                ),
                 reported("method `C.pick` does not return a value on all paths", 9),
                 reported("getter `C.sign` does not return a value on all paths", 19),
                 reported("arrow function does not return a value on all paths", 10),
-                reported("arrow function does not return a value on all paths", 4),
             ]
         );
     }
@@ -490,7 +544,7 @@ class C {
     }
 
     #[test]
-    fn an_unknown_body_that_never_returns_diagnoses() {
+    fn an_unknown_body_that_never_returns_is_rejected() {
         let messages: Vec<String> = run(
             "function f(): unknown { const g = (): number => { return 1; }; g(); }\n\
              class C { get v(): unknown { console.log(\"x\"); } }\n",
@@ -502,7 +556,7 @@ class C {
             messages,
             [
                 "function `f` returns `unknown` but has no `return`",
-                "getter `C.v` returns `unknown` but has no `return`",
+                "getter `C.v` has no `return`; a getter must return a value",
             ]
         );
     }

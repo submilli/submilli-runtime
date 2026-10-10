@@ -2,7 +2,7 @@
 enum E { a, b }
 
 /*pruned*/;                           
-/*pruned*/;                             
+let b: void = null as unknown as (void);
 
 /*pruned*/;                            
 /**/;   
@@ -24,14 +24,14 @@ x2 += '';
 x2 += E.a;
 x2 += {};
 x2 += null;
-x2 += null;
+x2 += undefined;
 
 let x3: number = null as unknown as (number);
 /**/;   
 x3 += 0;
 x3 += E.a;
 x3 += null;
-x3 += null;
+x3 += undefined;
 
 /*pruned*/;                        
 /**/;   
@@ -47,7 +47,7 @@ let x6: {} = null as unknown as ({});
 /**/;   
 x6 += '';
 
-/*pruned*/;                              
+let x7: void = null as unknown as (void);
 /**/;   
 
 function main(): void {}

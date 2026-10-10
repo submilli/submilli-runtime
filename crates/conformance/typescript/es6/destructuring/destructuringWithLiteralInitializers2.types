@@ -1,0 +1,257 @@
+=== destructuringWithLiteralInitializers2.ts ===
+
+/*pruned*/;
+function f01([x, y] = []): void {}
+>f01 : ([x, y]?: [any?, any?]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : any
+>  : ^^^
+>y : any
+>  : ^^^
+>[] : []
+>   : ^^
+
+function f02([x, y] = [1]): void {}
+>f02 : ([x, y]?: [number, any?]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : any
+>  : ^^^
+>[1] : [number]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+
+function f03([x, y] = [1, 'foo']): void {}
+>f03 : ([x, y]?: [number, string]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>y : string
+>  : ^^^^^^
+>[1, 'foo'] : [number, string]
+>           : ^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>'foo' : "foo"
+>      : ^^^^^
+
+
+/*pruned*/;
+function f11([x = 0, y] = []): void {}
+>f11 : ([x, y]?: [(number | undefined)?, any?]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : any
+>  : ^^^
+>[] : []
+>   : ^^
+
+function f12([x = 0, y] = [1]): void {}
+>f12 : ([x, y]?: [number, any?]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : any
+>  : ^^^
+>[1] : [number]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+
+function f13([x = 0, y] = [1, 'foo']): void {}
+>f13 : ([x, y]?: [number, string]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : string
+>  : ^^^^^^
+>[1, 'foo'] : [number, string]
+>           : ^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>'foo' : "foo"
+>      : ^^^^^
+
+
+/*pruned*/;
+function f21([x = 0, y = 'bar'] = []): void {}
+>f21 : ([x, y]?: [(number | undefined)?, (string | undefined)?]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : string
+>  : ^^^^^^
+>'bar' : "bar"
+>      : ^^^^^
+>[] : []
+>   : ^^
+
+function f22([x = 0, y = 'bar'] = [1]): void {}
+>f22 : ([x, y]?: [number, (string | undefined)?]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : string
+>  : ^^^^^^
+>'bar' : "bar"
+>      : ^^^^^
+>[1] : [number]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+
+function f23([x = 0, y = 'bar'] = [1, 'foo']): void {}
+>f23 : ([x, y]?: [number, string]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : string
+>  : ^^^^^^
+>'bar' : "bar"
+>      : ^^^^^
+>[1, 'foo'] : [number, string]
+>           : ^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+>'foo' : "foo"
+>      : ^^^^^
+
+
+const nx: number | undefined = null as unknown as (number | undefined);
+>nx : number | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (number | undefined) : number | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const sx: string | undefined = null as unknown as (string | undefined);
+>sx : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;
+function f31([x = 0, y = 'bar'] = []): void {}
+>f31 : ([x, y]?: [(number | undefined)?, (string | undefined)?]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : string
+>  : ^^^^^^
+>'bar' : "bar"
+>      : ^^^^^
+>[] : []
+>   : ^^
+
+function f32([x = 0, y = 'bar'] = [nx]): void {}
+>f32 : ([x, y]?: [number | undefined, (string | undefined)?]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : string
+>  : ^^^^^^
+>'bar' : "bar"
+>      : ^^^^^
+>[nx] : [number | undefined]
+>     : ^^^^^^^^^^^^^^^^^^^^
+>nx : number | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+
+function f33([x = 0, y = 'bar'] = [nx, sx]): void {}
+>f33 : ([x, y]?: [number | undefined, string | undefined]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : string
+>  : ^^^^^^
+>'bar' : "bar"
+>      : ^^^^^
+>[nx, sx] : [number | undefined, string | undefined]
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>nx : number | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+>sx : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+
+
+/*pruned*/;
+function f41([x = 0, y = 'bar'] = []): void {}
+>f41 : ([x, y]?: [(number | undefined)?, (string | undefined)?]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>y : string
+>  : ^^^^^^
+>'bar' : "bar"
+>      : ^^^^^
+>[] : []
+>   : ^^
+
+function f42([x = 0, y = 'bar'] = [sx]): void {}
+>f42 : ([x, y]?: [string | undefined, (string | undefined)?]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+>y : string
+>  : ^^^^^^
+>'bar' : "bar"
+>      : ^^^^^
+>[sx] : [string | undefined]
+>     : ^^^^^^^^^^^^^^^^^^^^
+>sx : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+
+function f43([x = 0, y = 'bar'] = [sx, nx]): void {}
+>f43 : ([x, y]?: [string | undefined, number | undefined]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+>y : string | number
+>  : ^^^^^^^^^^^^^^^
+>'bar' : "bar"
+>      : ^^^^^
+>[sx, nx] : [string | undefined, number | undefined]
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>sx : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+>nx : number | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

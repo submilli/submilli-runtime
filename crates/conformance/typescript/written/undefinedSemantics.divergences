@@ -1,0 +1,5 @@
+types: 85 of 122 tsc entries compared, 1 differ
+
+line 21: { a: null }
+  tsc:  { a: null; }
+  ours: { a?: null }

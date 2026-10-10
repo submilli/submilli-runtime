@@ -38,9 +38,9 @@ function f4(): void {
 
 // Repro from #31770
 
-/*pruned*/;                       
-/*pruned*/;                          
-/*pruned*/;           // Error
+type KeyValue = [string, string?];
+let [key, value]: KeyValue = ["foo"];
+value.toUpperCase();  // Error
 
 
 function main(): void {}

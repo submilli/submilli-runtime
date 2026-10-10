@@ -1,0 +1,321 @@
+types: 256 of 277 tsc entries compared, 80 differ
+
+line 22: s1
+  tsc:  ""
+  ours: "" | number[]
+
+line 22: s && a
+  tsc:  ""
+  ours: "" | number[]
+
+line 24: s3
+  tsc:  ""
+  ours: 0 | ""
+
+line 24: s && x
+  tsc:  ""
+  ours: 0 | ""
+
+line 25: s4
+  tsc:  ""
+  ours: "" | false
+
+line 25: s && b
+  tsc:  ""
+  ours: "" | false
+
+line 26: s5
+  tsc:  ""
+  ours: "" | void
+
+line 26: s && v
+  tsc:  ""
+  ours: "" | void
+
+line 27: s6
+  tsc:  ""
+  ours: "" | undefined
+
+line 27: s && u
+  tsc:  ""
+  ours: "" | undefined
+
+line 28: s7
+  tsc:  ""
+  ours: "" | null
+
+line 28: s && n
+  tsc:  ""
+  ours: "" | null
+
+line 29: s8
+  tsc:  ""
+  ours: "" | undefined
+
+line 29: s && z
+  tsc:  ""
+  ours: "" | undefined
+
+line 31: x1
+  tsc:  0
+  ours: 0 | number[]
+
+line 31: x && a
+  tsc:  0
+  ours: 0 | number[]
+
+line 32: x2
+  tsc:  0
+  ours: 0 | ""
+
+line 32: x && s
+  tsc:  0
+  ours: 0 | ""
+
+line 34: x4
+  tsc:  0
+  ours: 0 | false
+
+line 34: x && b
+  tsc:  0
+  ours: 0 | false
+
+line 35: x5
+  tsc:  0
+  ours: 0 | void
+
+line 35: x && v
+  tsc:  0
+  ours: 0 | void
+
+line 36: x6
+  tsc:  0
+  ours: 0 | undefined
+
+line 36: x && u
+  tsc:  0
+  ours: 0 | undefined
+
+line 37: x7
+  tsc:  0
+  ours: 0 | null
+
+line 37: x && n
+  tsc:  0
+  ours: 0 | null
+
+line 38: x8
+  tsc:  0
+  ours: 0 | undefined
+
+line 38: x && z
+  tsc:  0
+  ours: 0 | undefined
+
+line 40: b1
+  tsc:  false
+  ours: false | number[]
+
+line 40: b && a
+  tsc:  false
+  ours: false | number[]
+
+line 41: b2
+  tsc:  false
+  ours: "" | false
+
+line 41: b && s
+  tsc:  false
+  ours: "" | false
+
+line 42: b3
+  tsc:  false
+  ours: 0 | false
+
+line 42: b && x
+  tsc:  false
+  ours: 0 | false
+
+line 44: b5
+  tsc:  false
+  ours: false | void
+
+line 44: b && v
+  tsc:  false
+  ours: false | void
+
+line 45: b6
+  tsc:  false
+  ours: false | undefined
+
+line 45: b && u
+  tsc:  false
+  ours: false | undefined
+
+line 46: b7
+  tsc:  false
+  ours: false | null
+
+line 46: b && n
+  tsc:  false
+  ours: false | null
+
+line 47: b8
+  tsc:  false
+  ours: false | undefined
+
+line 47: b && z
+  tsc:  false
+  ours: false | undefined
+
+line 53: v
+  tsc:  never
+  ours: void
+
+line 58: u1
+  tsc:  undefined
+  ours: number[] | undefined
+
+line 58: u && a
+  tsc:  undefined
+  ours: number[] | undefined
+
+line 59: u2
+  tsc:  undefined
+  ours: "" | undefined
+
+line 59: u && s
+  tsc:  undefined
+  ours: "" | undefined
+
+line 60: u3
+  tsc:  undefined
+  ours: 0 | undefined
+
+line 60: u && x
+  tsc:  undefined
+  ours: 0 | undefined
+
+line 61: u4
+  tsc:  undefined
+  ours: false | undefined
+
+line 61: u && b
+  tsc:  undefined
+  ours: false | undefined
+
+line 62: u5
+  tsc:  undefined
+  ours: void
+
+line 62: u && v
+  tsc:  undefined
+  ours: void
+
+line 64: u7
+  tsc:  undefined
+  ours: null | undefined
+
+line 64: u && n
+  tsc:  undefined
+  ours: null | undefined
+
+line 67: n1
+  tsc:  null
+  ours: number[] | null
+
+line 67: n && a
+  tsc:  null
+  ours: number[] | null
+
+line 68: n2
+  tsc:  null
+  ours: "" | null
+
+line 68: n && s
+  tsc:  null
+  ours: "" | null
+
+line 69: n3
+  tsc:  null
+  ours: 0 | null
+
+line 69: n && x
+  tsc:  null
+  ours: 0 | null
+
+line 70: n4
+  tsc:  null
+  ours: false | null
+
+line 70: n && b
+  tsc:  null
+  ours: false | null
+
+line 71: n5
+  tsc:  null
+  ours: void | null
+
+line 71: n && v
+  tsc:  null
+  ours: void | null
+
+line 72: n6
+  tsc:  null
+  ours: null | undefined
+
+line 72: n && u
+  tsc:  null
+  ours: null | undefined
+
+line 74: n8
+  tsc:  null
+  ours: null | undefined
+
+line 74: n && z
+  tsc:  null
+  ours: null | undefined
+
+line 76: z1
+  tsc:  undefined
+  ours: number[] | undefined
+
+line 76: z && a
+  tsc:  undefined
+  ours: number[] | undefined
+
+line 77: s
+  tsc:  ""
+  ours: never
+
+line 78: z3
+  tsc:  undefined
+  ours: 0 | undefined
+
+line 78: z && x
+  tsc:  undefined
+  ours: 0 | undefined
+
+line 79: z4
+  tsc:  undefined
+  ours: false | undefined
+
+line 79: z && b
+  tsc:  undefined
+  ours: false | undefined
+
+line 80: z5
+  tsc:  undefined
+  ours: void
+
+line 80: z && v
+  tsc:  undefined
+  ours: void
+
+line 82: z7
+  tsc:  undefined
+  ours: null | undefined
+
+line 82: z && n
+  tsc:  undefined
+  ours: null | undefined

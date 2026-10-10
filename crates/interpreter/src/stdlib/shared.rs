@@ -623,7 +623,7 @@ pub(crate) fn audit_quota_denial(
     Ok(())
 }
 
-/// A boxed number, or `null` when absent.
+/// A boxed number, or `undefined` when absent.
 pub(crate) fn optional_number(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     number: Option<f64>,
@@ -632,6 +632,6 @@ pub(crate) fn optional_number(
         Some(number) => Ok(wasmtime::Val::AnyRef(Some(
             write_boxed_number_struct(caller, number)?.to_anyref(),
         ))),
-        None => Ok(wasmtime::Val::AnyRef(None)),
+        None => crate::runtime::prelude::undefined::value(caller),
     }
 }

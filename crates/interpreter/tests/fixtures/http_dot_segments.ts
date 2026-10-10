@@ -94,15 +94,15 @@ function main(): void {
   // `build` would remove the segment itself, leaving `get` nothing to refuse.
   for (const spelling of SPELLINGS) {
     const path = "/customers/" + spelling + "/orders";
-    const built = outcome(() => { build("https", "example.com", null, path, new Map<string, string>(), null); });
+    const built = outcome(() => { build("https", "example.com", undefined, path, new Map<string, string>(), undefined); });
     assert(built.startsWith("refused: url.build: "), path + " must be refused by build, got " + built);
   }
-  const throughHost = outcome(() => { build("https", "example.com/customers/../admin", null, "", new Map<string, string>(), null); });
+  const throughHost = outcome(() => { build("https", "example.com/customers/../admin", undefined, "", new Map<string, string>(), undefined); });
   assert(throughHost.startsWith("refused: url.build: "), "a path inside host is refused too, got " + throughHost);
-  const ipv6 = build("https", "[::1]:8080", null, "/a.b", new Map<string, string>(), null);
+  const ipv6 = build("https", "[::1]:8080", undefined, "/a.b", new Map<string, string>(), undefined);
   assert(ipv6 === "https://[::1]:8080/a.b", "build accepts a host with a port: " + ipv6);
-  const userinfo = build("https", "user:pa..ss@example.com", null, "/x", new Map<string, string>(), null);
+  const userinfo = build("https", "user:pa..ss@example.com", undefined, "/x", new Map<string, string>(), undefined);
   assert(userinfo === "https://user:pa..ss@example.com/x", "build accepts userinfo: " + userinfo);
-  const named = build("https", "example.com", null, "/repo.js/...", new Map<string, string>(), null);
+  const named = build("https", "example.com", undefined, "/repo.js/...", new Map<string, string>(), undefined);
   assert(named === "https://example.com/repo.js/...", "build keeps dots in names: " + named);
 }

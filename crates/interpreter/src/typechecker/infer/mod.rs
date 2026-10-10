@@ -31,6 +31,7 @@ mod narrow_scopes;
 pub mod narrowing;
 mod nested_functions;
 mod object_normalization;
+mod param_defaults;
 mod predicate_envs;
 mod records;
 mod reserved;
@@ -45,9 +46,8 @@ mod type_diff;
 mod type_namespace;
 mod type_predicate;
 mod type_registry;
+mod value_operand;
 pub(crate) mod variance;
-mod void_type_arguments;
-mod void_value;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -135,6 +135,7 @@ pub fn infer_with_transitive_checked<'a>(
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         invoked_body_exit: None,
+        prebinding_parameter_types: false,
         captured_mutators: bindings.mutators,
         function_written_globals: bindings.function_written_globals,
         arithmetic_targets: bindings.arithmetic_targets,
@@ -160,6 +161,7 @@ pub fn infer_with_transitive_checked<'a>(
         in_nested_function: false,
         later_globals: BTreeMap::new(),
         switch_frames: Vec::new(),
+        uninitialized_members: None,
         super_call_is_statement: false,
         in_super_arguments: false,
         in_super_handler: false,
@@ -413,6 +415,7 @@ pub fn infer_package_checked<'a>(
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         invoked_body_exit: None,
+        prebinding_parameter_types: false,
         captured_mutators: Default::default(),
         function_written_globals: Default::default(),
         arithmetic_targets: Default::default(),
@@ -438,6 +441,7 @@ pub fn infer_package_checked<'a>(
         in_nested_function: false,
         later_globals: BTreeMap::new(),
         switch_frames: Vec::new(),
+        uninitialized_members: None,
         super_call_is_statement: false,
         in_super_arguments: false,
         in_super_handler: false,
@@ -753,6 +757,8 @@ pub(super) struct Inferer<'a> {
     /// What the immediately-invoked body just inferred leaves for the code
     /// after its call.
     invoked_body_exit: Option<iife::InvokedBodyExit>,
+    /// A preliminary initializer pass does not recursively start more trials.
+    prebinding_parameter_types: bool,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,
@@ -848,6 +854,10 @@ pub(super) struct Inferer<'a> {
     /// The `let`/`const` declared directly in the clauses of each enclosing
     /// `switch`, innermost last.
     pub(super) switch_frames: Vec<switch_stmt::SwitchFrame>,
+    /// While a field initializer is inferred: the instance members it would
+    /// read before they are set — parameter properties, which the constructor
+    /// assigns afterwards, and fields declared at or after it (TS2729).
+    pub(super) uninitialized_members: Option<std::collections::BTreeSet<String>>,
     /// Set by an expression statement that is a bare `super(...)` call, for
     /// `infer_super_call` to take. A call inside an expression can be skipped
     /// (`c ? super(1) : f()`), which the super-call rule can't see.

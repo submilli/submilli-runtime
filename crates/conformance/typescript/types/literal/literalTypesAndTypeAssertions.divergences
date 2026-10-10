@@ -1,1 +1,17 @@
-types: 7 of 16 tsc entries compared, 0 differ
+types: 15 of 40 tsc entries compared, 4 differ
+
+line 11: { a: "foo" }
+  tsc:  { a?: string; }
+  ours: { a: string }
+
+line 12: { b: "bar" }
+  tsc:  { b?: "bar"; }
+  ours: { b: string }
+
+line 13: { c: "bar" as "bar" }
+  tsc:  { c?: "bar"; }
+  ours: { c: "bar" }
+
+line 14: { d: "bar" as "bar" }
+  tsc:  { d?: "bar"; }
+  ours: { d: "bar" }

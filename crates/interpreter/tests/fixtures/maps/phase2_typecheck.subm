@@ -6,8 +6,8 @@ function main(): void {
   if (false) {
     const m = new Map<string, number>();
     m.set("a", 1);
-    const v: number | null = m.get("a");
-    if (v !== null) {
+    const v: number | undefined = m.get("a");
+    if (v !== undefined) {
       assert(v === 1, "Map#get value matches");
     }
     const present: boolean = m.has("a");

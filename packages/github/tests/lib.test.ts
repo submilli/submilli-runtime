@@ -1,4 +1,5 @@
 import { label } from "submilli:test";
+import secrets from "submilli:secrets";
 import {
     CommitFileChange,
     GitHubError,
@@ -9,7 +10,10 @@ import {
     getBranch,
     getCommit,
     getTree,
+    getViewer,
+    listBranches,
     listCommits,
+    listIssues,
     readFile,
     searchCode,
     updateIssue,
@@ -58,6 +62,19 @@ function main(): void {
     for (const separator of [" ", "\t", "\n", "\r", "\u000b", "\u000c", "\u0085", "\u00a0", "\u2003", "\u2028", "\u3000", "\ufeff"]) {
         assertError("unsafe_search_query", () => searchCode(repository, "needle" + separator + "repo:other/repo"));
         assertError("unsafe_search_query", () => searchCode(repository, "needle" + separator + "OR" + separator + "other"));
+    }
+
+    label("omitted options use the defaults and a bad page option is refused");
+    assertError("invalid_page_size", () => listBranches(repository, { limit: 0 }));
+    assertError("invalid_page_token", () => listBranches(repository, { pageToken: "next" }));
+    assertError("invalid_page_size", () => listIssues(repository, { limit: 101 }));
+    if (secrets.get("GITHUB_TOKEN") === undefined) {
+        label("an unbound GITHUB_TOKEN is refused before any request");
+        assertError("missing_token", () => getViewer());
+        assertError("missing_token", () => listBranches(repository));
+        assertError("missing_token", () => listBranches(repository, undefined));
+        assertError("missing_token", () => getCommit(repository, "main"));
+        assertError("missing_token", () => readFile(repository, "README.md"));
     }
 
     label("GitHubError preserves operational metadata");

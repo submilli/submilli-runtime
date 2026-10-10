@@ -2,7 +2,7 @@ types: 16 of 54 tsc entries compared, 12 differ
 
 line 5: result
   tsc:  RegExpExecArray | null
-  ours: null | RegExpMatch
+  ours: RegExpMatch | null
 
 line 5: re.exec("2015-01-02")
   tsc:  RegExpExecArray | null
@@ -10,35 +10,35 @@ line 5: re.exec("2015-01-02")
 
 line 7: result
   tsc:  RegExpExecArray | null
-  ours: null | RegExpMatch
+  ours: RegExpMatch | null
 
 line 9: result
   tsc:  RegExpExecArray | null
-  ours: null | RegExpMatch
+  ours: RegExpMatch | null
 
 line 10: result
   tsc:  RegExpExecArray | null
-  ours: null | RegExpMatch
+  ours: RegExpMatch | null
 
 line 12: result
   tsc:  RegExpExecArray | null
-  ours: null | RegExpMatch
+  ours: RegExpMatch | null
 
 line 13: result
   tsc:  RegExpExecArray | null
-  ours: null | RegExpMatch
+  ours: RegExpMatch | null
 
 line 15: result
   tsc:  RegExpExecArray | null
-  ours: null | RegExpMatch
+  ours: RegExpMatch | null
 
 line 16: result
   tsc:  RegExpExecArray | null
-  ours: null | RegExpMatch
+  ours: RegExpMatch | null
 
 line 18: "foo".match(/(?<bar>foo)/)!.groups
   tsc:  { [key: string]: string; } | undefined
-  ours: (string | null)[]
+  ours: (string | undefined)[]
 
 line 18: "foo".match(/(?<bar>foo)/)!
   tsc:  RegExpMatchArray

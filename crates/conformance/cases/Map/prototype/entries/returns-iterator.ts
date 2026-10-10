@@ -1,7 +1,8 @@
 // test262: test/built-ins/Map/prototype/entries/returns-iterator.js
-// Adapted: an exhausted result carries no `value` field here (no undefined);
-// yield results are narrowed via `"value" in result` and copied to a local
-// (calls invalidate narrowing).
+// Adapted: `result.value[i]` is read through an `as
+// IteratorYieldResult<[string, number]>` cast — indexing needs the yield
+// variant, and `done` is typed boolean (not a literal), so the IteratorResult
+// union is not narrowed by the type alone.
 
 function main(): void {
   const map = new Map<string, number>();
@@ -11,44 +12,33 @@ function main(): void {
 
   const iterator = map.entries();
 
-  const r1 = iterator.next();
-  assertSameValue(r1.done, false, "First result `done` flag");
-  if ("value" in r1) {
-    const entry = r1.value;
-    assertSameValue(entry[0], "a", "First result `value` (key)");
-    assertSameValue(entry[1], 1, "First result `value` (value)");
-    assertSameValue(entry.length, 2, "First result `value` (length)");
-  } else {
-    assert(false, "first result should yield a value");
-  }
+  let result = iterator.next();
+  assertSameValue((result as IteratorYieldResult<[string, number]>).value[0], "a", "First result `value` (\"key\")");
+  assertSameValue((result as IteratorYieldResult<[string, number]>).value[1], 1, "First result `value` (\"value\")");
+  assertSameValue((result as IteratorYieldResult<[string, number]>).value.length, 2, "First result `value` (length)");
+  assertSameValue(result.done, false, "First result `done` flag");
 
-  const r2 = iterator.next();
-  assertSameValue(r2.done, false, "Second result `done` flag");
-  if ("value" in r2) {
-    const entry = r2.value;
-    assertSameValue(entry[0], "b", "Second result `value` (key)");
-    assertSameValue(entry[1], 2, "Second result `value` (value)");
-    assertSameValue(entry.length, 2, "Second result `value` (length)");
-  } else {
-    assert(false, "second result should yield a value");
-  }
+  result = iterator.next();
+  assertSameValue((result as IteratorYieldResult<[string, number]>).value[0], "b", "Second result `value` (\"key\")");
+  assertSameValue((result as IteratorYieldResult<[string, number]>).value[1], 2, "Second result `value` (\"value\")");
+  assertSameValue((result as IteratorYieldResult<[string, number]>).value.length, 2, "Second result `value` (length)");
+  assertSameValue(result.done, false, "Second result `done` flag");
 
-  const r3 = iterator.next();
-  assertSameValue(r3.done, false, "Third result `done` flag");
-  if ("value" in r3) {
-    const entry = r3.value;
-    assertSameValue(entry[0], "c", "Third result `value` (key)");
-    assertSameValue(entry[1], 3, "Third result `value` (value)");
-    assertSameValue(entry.length, 2, "Third result `value` (length)");
-  } else {
-    assert(false, "third result should yield a value");
-  }
+  result = iterator.next();
+  assertSameValue((result as IteratorYieldResult<[string, number]>).value[0], "c", "Third result `value` (\"key\")");
+  assertSameValue((result as IteratorYieldResult<[string, number]>).value[1], 3, "Third result `value` (\"value\")");
+  assertSameValue((result as IteratorYieldResult<[string, number]>).value.length, 2, "Third result `value` (length)");
+  assertSameValue(result.done, false, "Third result `done` flag");
 
-  const r4 = iterator.next();
-  assert(!("value" in r4), "Exhausted result carries no value");
-  assertSameValue(r4.done, true, "Exhausted result `done` flag");
+  result = iterator.next();
+  assertSameValue(result.value, undefined, "Exhausted result `value`");
+  assertSameValue(result.done, true, "Exhausted result `done` flag");
 
-  const r5 = iterator.next();
-  assert(!("value" in r5), "Exhausted result carries no value (repeated request)");
-  assertSameValue(r5.done, true, "Exhausted result `done` flag (repeated request)");
+  result = iterator.next();
+  assertSameValue(
+    result.value, undefined, "Exhausted result `value` (repeated request)",
+  );
+  assertSameValue(
+    result.done, true, "Exhausted result `done` flag (repeated request)",
+  );
 }

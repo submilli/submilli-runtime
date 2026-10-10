@@ -1,13 +1,29 @@
 ---
 source: crates/interpreter/src/typechecker/infer/expr.rs
+assertion_line: 11231
 expression: ta
 ---
 TypedAst {
+    parameter_default_prologues: {},
     closure_this: {},
     closure_names: {},
     nested_function_names: {},
     placeholder_closures: {},
     authored_arguments: {},
+    authored_parameter_types: {
+        (
+            0,
+            14,
+            15,
+        ): Number,
+        (
+            0,
+            25,
+            26,
+        ): Number,
+    },
+    parameter_inputs: {},
+    parameter_initializations: {},
     runtime_source_types: {},
     runtime_chain_types: {},
     spread_mask_fields: {},
@@ -43,6 +59,7 @@ TypedAst {
                     Number,
                     Number,
                 ],
+                optional: 0,
                 ret: Number,
                 predicate: None,
                 has_rest: false,
@@ -389,6 +406,7 @@ TypedAst {
                             end: 15,
                         },
                     },
+                    optional: false,
                     ty: Number,
                     boxed: false,
                     rest: false,
@@ -405,6 +423,7 @@ TypedAst {
                             end: 26,
                         },
                     },
+                    optional: false,
                     ty: Number,
                     boxed: false,
                     rest: false,
@@ -478,6 +497,7 @@ TypedAst {
                 Number,
                 Number,
             ],
+            optional: 0,
             ret: Number,
             predicate: None,
             has_rest: false,
@@ -487,6 +507,7 @@ TypedAst {
                     Number,
                     Number,
                 ],
+                optional: 0,
                 ret: Number,
                 predicate: None,
                 has_rest: false,

@@ -85,7 +85,7 @@ globalThis.Infinity // ok
 /*pruned*/;                                                                          // ok
 /*pruned*/;                                                                          // error
 /*pruned*/;                                                                          // error
-/*pruned*/;                                                                         
+/*pruned*/;
 
 
 function main(): void {}

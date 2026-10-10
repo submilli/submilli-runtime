@@ -1,1 +1,24 @@
-types: 304 of 311 tsc entries compared, 0 differ
+types: 259 of 362 tsc entries compared, 0 differ
+
+errors:
+line 1: ours: missing `main` function (tsc accepts)
+line 9: ours: `t == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 10: ours: `t != null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 18: ours: `null == t` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 19: ours: `null != t` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 101: ours: `null == a` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 102: ours: `null == b` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 103: ours: `null == c` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 104: ours: `null == d` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 106: ours: `null == f` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 107: ours: `null == g` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 109: ours: `a == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 110: ours: `b == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 111: ours: `c == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 112: ours: `d == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 114: ours: `f == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 115: ours: `g == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 118: ours: `null != a` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 119: ours: `null != b` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 120: ours: `null != c` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 121: ours: `null != d` does not also match `undefined`: `==` compares like `===` (tsc accepts)

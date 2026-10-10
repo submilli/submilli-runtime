@@ -5,11 +5,13 @@ let as = 43;
 >43 : 43
 >   : ^^
 
-let x = null as number;
+let x = undefined as number;
 >x : number
 >  : ^^^^^^
->null as number : number
->               : ^^^^^^
+>undefined as number : number
+>                    : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 let y = (null as string).length;
 >y : number
@@ -23,7 +25,7 @@ let y = (null as string).length;
 >length : number
 >       : ^^^^^^
 
-/*pruned*/;                   
+/*pruned*/;
 
 // Should parse as a union type, not a bitwise 'or' of (32 as number) and 'string'
 let j = 32 as number|string;

@@ -16,13 +16,13 @@ function main(): void {
   assert(values[("x")] === 7);
   const computed: Record<"x", number> = { [("x")]: 8 };
   assert(computed.x === 8);
-  assert(optional(computed) === 8 && optional(null) === null);
+  assert(optional(computed) === 8 && optional(null) === undefined);
   const unknown: { x: unknown } = { x: null };
   unknown["x"] = "ok";
   assert(unknown.x === "ok");
 }
 
-function optional(values: Record<"x", number> | null): number | null { return values?.[("x")]; }
+function optional(values: Record<"x", number> | null): number | undefined { return values?.[("x")]; }
 
 function alternatives(flag: boolean, key: "y" | null): void {
   const values: Record<"x" | "y", number> = { x: 1, y: 2 };

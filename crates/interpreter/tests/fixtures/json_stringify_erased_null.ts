@@ -11,15 +11,15 @@ interface Named {
   name: string;
 }
 
-function ofUnknown(x: unknown): string {
+function ofUnknown(x: unknown): string | undefined {
   return JSON.stringify(x);
 }
 
-function ofTypeVar<T>(x: T): string {
+function ofTypeVar<T>(x: T): string | undefined {
   return JSON.stringify(x);
 }
 
-function ofErasedUnion<T>(x: T, y: number): string {
+function ofErasedUnion<T>(x: T, y: number): string | undefined {
   let cell: T | number = y;
   cell = x;
   return JSON.stringify(cell);

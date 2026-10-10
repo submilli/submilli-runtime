@@ -4,8 +4,8 @@
 
 type T = string | "foo" | "bar" | "baz";
 
-let x: "foo" | "bar" | "baz" | string = null;
-let y: T = null;
+let x: "foo" | "bar" | "baz" | string = undefined;
+let y: T = undefined;
 
 if (x === "foo") {
     let a = x;

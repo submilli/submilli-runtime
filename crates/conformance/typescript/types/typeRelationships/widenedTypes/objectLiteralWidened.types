@@ -2,53 +2,59 @@
 // object literal properties are widened to any
 
 let x1 = {
->x1 : { foo: null; bar: null; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^
->{     foo: null,     bar: null } : { foo: null; bar: null; }
->                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x1 : { foo: null; bar: undefined; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     foo: null,     bar: undefined } : { foo: null; bar: undefined; }
+>                                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     foo: null,
 >foo : null
 >    : ^^^^
 
-    bar: null
->bar : null
->    : ^^^^
+    bar: undefined
+>bar : undefined
+>    : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 }
 
 let y1 = {
->y1 : { foo: null; bar: { baz: null; boo: null; }; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->{     foo: null,     bar: {         baz: null,         boo: null     } } : { foo: null; bar: { baz: null; boo: null; }; }
->                                                                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>y1 : { foo: null; bar: { baz: null; boo: undefined; }; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     foo: null,     bar: {         baz: null,         boo: undefined     } } : { foo: null; bar: { baz: null; boo: undefined; }; }
+>                                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     foo: null,
 >foo : null
 >    : ^^^^
 
     bar: {
->bar : { baz: null; boo: null; }
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^
->{         baz: null,         boo: null     } : { baz: null; boo: null; }
->                                             : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>bar : { baz: null; boo: undefined; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         baz: null,         boo: undefined     } : { baz: null; boo: undefined; }
+>                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
         baz: null,
 >baz : null
 >    : ^^^^
 
-        boo: null
->boo : null
->    : ^^^^
+        boo: undefined
+>boo : undefined
+>    : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     }
 }
 
 // these are not widened
 
-let u: null = null;
->u : null
->  : ^^^^
+let u: undefined = undefined;
+>u : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 let n: null = null;
 >n : null
@@ -56,10 +62,10 @@ let n: null = null;
 
 
 let x2 = {
->x2 : { foo: null; bar: null; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^
->{     foo: n,     bar: u } : { foo: null; bar: null; }
->                           : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x2 : { foo: null; bar: undefined; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     foo: n,     bar: u } : { foo: null; bar: undefined; }
+>                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     foo: n,
 >foo : null
@@ -68,18 +74,18 @@ let x2 = {
 >  : ^^^^
 
     bar: u
->bar : null
->    : ^^^^
->u : null
->  : ^^^^
+>bar : undefined
+>    : ^^^^^^^^^
+>u : undefined
+>  : ^^^^^^^^^
 
 }
 
 let y2 = {
->y2 : { foo: null; bar: { baz: null; boo: null; }; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->{     foo: n,     bar: {         baz: n,         boo: u     } } : { foo: null; bar: { baz: null; boo: null; }; }
->                                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>y2 : { foo: null; bar: { baz: null; boo: undefined; }; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     foo: n,     bar: {         baz: n,         boo: u     } } : { foo: null; bar: { baz: null; boo: undefined; }; }
+>                                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     foo: n,
 >foo : null
@@ -88,10 +94,10 @@ let y2 = {
 >  : ^^^^
 
     bar: {
->bar : { baz: null; boo: null; }
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^
->{         baz: n,         boo: u     } : { baz: null; boo: null; }
->                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>bar : { baz: null; boo: undefined; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         baz: n,         boo: u     } : { baz: null; boo: undefined; }
+>                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
         baz: n,
 >baz : null
@@ -100,10 +106,10 @@ let y2 = {
 >  : ^^^^
 
         boo: u
->boo : null
->    : ^^^^
->u : null
->  : ^^^^
+>boo : undefined
+>    : ^^^^^^^^^
+>u : undefined
+>  : ^^^^^^^^^
 
     }
 }

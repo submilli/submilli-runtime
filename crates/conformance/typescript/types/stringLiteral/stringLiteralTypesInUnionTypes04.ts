@@ -4,8 +4,8 @@
 
 type T = "" | "foo";
 
-let x: T = null;
-let y: T = null;
+let x: T = undefined;
+let y: T = undefined;
 
 if (x === "") {
     let a = x;

@@ -1,0 +1,129 @@
+=== additionOperatorWithUndefinedValueAndInvalidOperands.ts ===
+// If one operand is the null or undefined value, it is treated as having the type of the other operand.
+
+function foo(): void { return undefined }
+>foo : () => void
+>    : ^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+let a: boolean = null as unknown as (boolean);
+>a : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let c: void = null as unknown as (void);
+>c : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+
+// undefined + boolean/Object
+let r1 = undefined + a;
+>r1 : any
+>   : ^^^
+>undefined + a : any
+>              : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+/*pruned*/;
+let r3 = undefined + c;
+>r3 : any
+>   : ^^^
+>undefined + c : any
+>              : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>c : void
+>  : ^^^^
+
+let r4 = a + undefined;
+>r4 : any
+>   : ^^^
+>a + undefined : any
+>              : ^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+let r6 = undefined + c;
+>r6 : any
+>   : ^^^
+>undefined + c : any
+>              : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>c : void
+>  : ^^^^
+
+
+// other cases
+/*pruned*/;
+let r8 = undefined + true;
+>r8 : any
+>   : ^^^
+>undefined + true : any
+>                 : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r9 = undefined + { a: '' };
+>r9 : any
+>   : ^^^
+>undefined + { a: '' } : any
+>                      : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{ a: '' } : { a: string; }
+>          : ^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r10 = undefined + foo();
+>r10 : any
+>    : ^^^
+>undefined + foo() : any
+>                  : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>foo() : void
+>      : ^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+let r11 = undefined + (() => { });
+>r11 : any
+>    : ^^^
+>undefined + (() => { }) : any
+>                        : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>(() => { }) : () => void
+>            : ^^^^^^^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

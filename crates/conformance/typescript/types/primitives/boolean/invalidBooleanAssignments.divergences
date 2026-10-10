@@ -1,0 +1,4 @@
+types: 21 of 36 tsc entries compared, 0 differ
+
+errors:
+line 19: ours: expected `{ toString: () => string }`, got `true` (tsc accepts)

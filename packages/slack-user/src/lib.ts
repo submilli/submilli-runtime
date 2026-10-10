@@ -82,15 +82,15 @@ export interface SlackFile {
 
 interface ApiFile {
     id: string;
-    name?: string;
-    title?: string;
-    mimetype?: string;
-    filetype?: string;
-    size?: number;
-    user?: string;
-    permalink?: string;
-    url_private?: string;
-    url_private_download?: string;
+    name?: string | null;
+    title?: string | null;
+    mimetype?: string | null;
+    filetype?: string | null;
+    size?: number | null;
+    user?: string | null;
+    permalink?: string | null;
+    url_private?: string | null;
+    url_private_download?: string | null;
 }
 
 /** Curated Slack message data. */
@@ -115,13 +115,13 @@ export interface SlackMessage {
 
 interface ApiMessage {
     ts: string;
-    text?: string;
-    user?: string;
-    bot_id?: string;
-    thread_ts?: string;
-    reply_count?: number;
-    files?: ApiFile[];
-    reactions?: SlackReaction[];
+    text?: string | null;
+    user?: string | null;
+    bot_id?: string | null;
+    thread_ts?: string | null;
+    reply_count?: number | null;
+    files?: ApiFile[] | null;
+    reactions?: SlackReaction[] | null;
 }
 
 /** Curated conversation metadata. */
@@ -144,12 +144,12 @@ export interface SlackChannel {
 
 interface ApiChannel {
     id: string;
-    name?: string;
-    is_private?: boolean;
-    is_member?: boolean;
-    is_archived?: boolean;
-    topic?: { value: string };
-    purpose?: { value: string };
+    name?: string | null;
+    is_private?: boolean | null;
+    is_member?: boolean | null;
+    is_archived?: boolean | null;
+    topic?: { value: string } | null;
+    purpose?: { value: string } | null;
 }
 
 /** Curated workspace user data. */
@@ -172,11 +172,11 @@ export interface SlackUser {
 
 interface ApiUser {
     id: string;
-    name?: string;
-    real_name?: string;
-    deleted?: boolean;
-    is_bot?: boolean;
-    profile?: { display_name?: string; real_name?: string; email?: string };
+    name?: string | null;
+    real_name?: string | null;
+    deleted?: boolean | null;
+    is_bot?: boolean | null;
+    profile?: { display_name?: string | null; real_name?: string | null; email?: string | null } | null;
 }
 
 /** Cursor pagination accepted by Slack list methods. */
@@ -380,31 +380,31 @@ interface SearchResults {
     files?: ApiSearchFile[];
     channels?: ApiSearchChannel[];
     users?: ApiSearchUser[];
-    response_metadata?: Metadata;
 }
-interface SearchResponse { ok: boolean; error?: string; results: SearchResults; }
+// Slack returns the cursor beside `results`, as on its other paginated methods.
+interface SearchResponse { ok: boolean; error?: string; results: SearchResults; response_metadata?: Metadata; }
 
 interface ApiSearchMessage {
     channel_id: string;
-    channel_name?: string;
+    channel_name?: string | null;
     message_ts: string;
-    author_user_id?: string;
-    author_name?: string;
-    content?: string;
-    permalink?: string;
-    is_author_bot?: boolean;
+    author_user_id?: string | null;
+    author_name?: string | null;
+    content?: string | null;
+    permalink?: string | null;
+    is_author_bot?: boolean | null;
 }
 
 interface ApiSearchFile {
     file_id: string;
-    title?: string;
-    file_type?: string;
-    content?: string;
-    permalink?: string;
+    title?: string | null;
+    file_type?: string | null;
+    content?: string | null;
+    permalink?: string | null;
 }
 
-interface ApiSearchChannel { name: string; topic?: string; purpose?: string; permalink?: string; }
-interface ApiSearchUser { user_id: string; name?: string; display_name?: string; }
+interface ApiSearchChannel { name: string; topic?: string | null; purpose?: string | null; permalink?: string | null; }
+interface ApiSearchUser { user_id: string; name?: string | null; display_name?: string | null; }
 
 /**
  * Return the Slack user and workspace represented by `SLACK_USER_TOKEN`.
@@ -424,47 +424,49 @@ export function getIdentity(): SlackIdentity {
  * and user results. Availability and visible results follow the workspace's Slack
  * search features, the token's search scopes, and the user's own access.
  * @param query Natural-language or keyword search query.
- * @param options Optional result types, context channel, time bounds, sort, and cursor.
+ * @param options Optional result types, context channel, time bounds, sort, and cursor; omit it for Slack's defaults.
   * @returns One page of results grouped by type (messages, files, channels, users); a type with no matches is an empty array, and `nextCursor` is empty on the last page.
  * @capability slack.com/user/search {}
  */
-export function search(query: string, options: SearchOptions | null = null): SearchPage {
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.cursor;
-    const requestedContentTypes = options === null ? null : options.contentTypes;
-    const requestedChannelTypes = options === null ? null : options.channelTypes;
-    const contextChannelId = options === null ? null : options.contextChannelId;
-    const includeBots = options === null ? null : options.includeBots;
-    const includeContext = options === null ? null : options.includeContextMessages;
-    const before = options === null ? null : options.before;
-    const after = options === null ? null : options.after;
-    const sort = options === null ? null : options.sort;
-    const sortDir = options === null ? null : options.sortDir;
-    let contentTypes: string[] | null = null;
-    if (requestedContentTypes !== null) {
-        const copied: string[] = [];
-        for (const contentType of requestedContentTypes) copied.push(contentType);
-        contentTypes = copied;
+export function search(query: string, options: SearchOptions = {}): SearchPage {
+    const {
+        limit,
+        cursor,
+        contentTypes: requestedContentTypes,
+        channelTypes: requestedChannelTypes,
+        contextChannelId,
+        includeBots,
+        includeContextMessages,
+        before,
+        after,
+        sort,
+        sortDir,
+    } = options;
+    let contentTypes: string[] | undefined;
+    if (requestedContentTypes !== undefined) {
+        contentTypes = [];
+        for (const contentType of requestedContentTypes) contentTypes.push(contentType);
     }
-    let channelTypes: string[] | null = null;
-    if (requestedChannelTypes !== null) {
-        const copied: string[] = [];
-        for (const channelType of requestedChannelTypes) copied.push(channelType);
-        channelTypes = copied;
+    let channelTypes: string[] | undefined;
+    if (requestedChannelTypes !== undefined) {
+        channelTypes = [];
+        for (const channelType of requestedChannelTypes) channelTypes.push(channelType);
     }
     check("slack.com/user/search", {});
-    const body: SearchRequest = { query: query };
-    if (contentTypes !== null) body.content_types = contentTypes;
-    if (channelTypes !== null) body.channel_types = channelTypes;
-    if (limit !== null) body.limit = limit;
-    if (cursor !== null) body.cursor = cursor;
-    if (contextChannelId !== null) body.context_channel_id = contextChannelId;
-    if (includeBots !== null) body.include_bots = includeBots;
-    if (includeContext !== null) body.include_context_messages = includeContext;
-    if (before !== null) body.before = before;
-    if (after !== null) body.after = after;
-    if (sort !== null) body.sort = sort;
-    if (sortDir !== null) body.sort_dir = sortDir;
+    const body: SearchRequest = {
+        query: query,
+        content_types: contentTypes,
+        channel_types: channelTypes,
+        limit: limit,
+        cursor: cursor,
+        context_channel_id: contextChannelId,
+        include_bots: includeBots,
+        include_context_messages: includeContextMessages,
+        before: before,
+        after: after,
+        sort: sort,
+        sort_dir: sortDir,
+    };
     const data = slackPost("assistant.search.context", body).json() as SearchResponse;
     requireOk(data, 200);
     const results = data.results;
@@ -472,36 +474,40 @@ export function search(query: string, options: SearchOptions | null = null): Sea
     const foundFiles: SearchFile[] = [];
     const foundChannels: SearchChannel[] = [];
     const foundUsers: SearchUser[] = [];
-    if (results.messages !== null) {
-        for (const item of results.messages) {
+    const messageResults = results.messages;
+    if (messageResults !== undefined) {
+        for (const item of messageResults) {
             foundMessages.push({
-                channelId: item.channel_id, channelName: str(item.channel_name),
-                messageTs: item.message_ts, authorUserId: str(item.author_user_id),
-                authorName: str(item.author_name), content: str(item.content),
-                permalink: str(item.permalink), isAuthorBot: bool(item.is_author_bot),
+                channelId: item.channel_id, channelName: item.channel_name ?? "",
+                messageTs: item.message_ts, authorUserId: item.author_user_id ?? "",
+                authorName: item.author_name ?? "", content: item.content ?? "",
+                permalink: item.permalink ?? "", isAuthorBot: item.is_author_bot === true,
             });
         }
     }
-    if (results.files !== null) {
-        for (const item of results.files) {
+    const fileResults = results.files;
+    if (fileResults !== undefined) {
+        for (const item of fileResults) {
             foundFiles.push({
-                fileId: item.file_id, title: str(item.title), fileType: str(item.file_type),
-                content: str(item.content), permalink: str(item.permalink),
+                fileId: item.file_id, title: item.title ?? "", fileType: item.file_type ?? "",
+                content: item.content ?? "", permalink: item.permalink ?? "",
             });
         }
     }
-    if (results.channels !== null) {
-        for (const item of results.channels) {
+    const channelResults = results.channels;
+    if (channelResults !== undefined) {
+        for (const item of channelResults) {
             foundChannels.push({
-                name: item.name, topic: str(item.topic), purpose: str(item.purpose),
-                permalink: str(item.permalink),
+                name: item.name, topic: item.topic ?? "", purpose: item.purpose ?? "",
+                permalink: item.permalink ?? "",
             });
         }
     }
-    if (results.users !== null) {
-        for (const item of results.users) {
+    const userResults = results.users;
+    if (userResults !== undefined) {
+        for (const item of userResults) {
             foundUsers.push({
-                userId: item.user_id, name: str(item.name), displayName: str(item.display_name),
+                userId: item.user_id, name: item.name ?? "", displayName: item.display_name ?? "",
             });
         }
     }
@@ -510,7 +516,7 @@ export function search(query: string, options: SearchOptions | null = null): Sea
         files: foundFiles,
         channels: foundChannels,
         users: foundUsers,
-        nextCursor: cursorOf(results.response_metadata),
+        nextCursor: cursorOf(data.response_metadata),
     };
 }
 
@@ -540,7 +546,7 @@ export function getMessage(ref: MessageRef): SlackMessage | null {
     const { channelId, ts, threadTs } = ref;
     check("slack.com/user/getMessage", { channelId: channelId });
     let rootTs = ts;
-    if (threadTs !== null) rootTs = threadTs;
+    if (threadTs !== undefined) rootTs = threadTs;
     const data = messages("conversations.replies", { channel: channelId, ts: rootTs, limit: 100 });
     for (const item of data.messages) {
         if (item.ts === ts) return messageFrom(item);
@@ -552,25 +558,21 @@ export function getMessage(ref: MessageRef): SlackMessage | null {
  * Return one cursor page of messages visible to the authenticated user.
  * Public-channel and private-conversation access follows the user's Slack access.
  * @param channelId Conversation whose history should be read.
- * @param options Optional page size, cursor, and Slack timestamp bounds.
+ * @param options Optional page size, cursor, and Slack timestamp bounds; omit it for Slack's defaults.
   * @returns One page of messages and a `nextCursor` that is empty on the last page.
  * @capability slack.com/user/listMessages { channelId: string }
  */
-export function listMessages(channelId: string, options: MessageListOptions | null = null): MessagePage {
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.cursor;
-    const oldest = options === null ? null : options.oldest;
-    const latest = options === null ? null : options.latest;
-    const inclusive = options === null ? null : options.inclusive;
+export function listMessages(channelId: string, options: MessageListOptions = {}): MessagePage {
+    const { limit, cursor, oldest, latest, inclusive } = options;
     check("slack.com/user/listMessages", { channelId: channelId });
-    const body: HistoryRequest = { channel: channelId };
-    applyMessageOptions(body, {
+    const body: HistoryRequest = {
+        channel: channelId,
         limit: limit,
         cursor: cursor,
         oldest: oldest,
         latest: latest,
         inclusive: inclusive,
-    });
+    };
     return messagePage(messages("conversations.history", body));
 }
 
@@ -578,16 +580,14 @@ export function listMessages(channelId: string, options: MessageListOptions | nu
  * Return one cursor page containing a thread root and its replies.
  * @param channelId Conversation containing the thread.
  * @param threadTs Timestamp of the thread's root message.
- * @param page Optional page size and continuation cursor.
+ * @param page Optional page size and continuation cursor; omit it for Slack's defaults.
   * @returns The thread root and replies on this page, with a `nextCursor` that is empty on the last page.
  * @capability slack.com/user/getThread { channelId: string }
  */
-export function getThread(channelId: string, threadTs: string, page: PageOptions | null = null): MessagePage {
-    const limit = page === null ? null : page.limit;
-    const cursor = page === null ? null : page.cursor;
+export function getThread(channelId: string, threadTs: string, page: PageOptions = {}): MessagePage {
+    const { limit, cursor } = page;
     check("slack.com/user/getThread", { channelId: channelId });
-    const body: HistoryRequest = { channel: channelId, ts: threadTs };
-    applyPage(body, limit, cursor);
+    const body: HistoryRequest = { channel: channelId, ts: threadTs, limit: limit, cursor: cursor };
     return messagePage(messages("conversations.replies", body));
 }
 
@@ -603,9 +603,9 @@ export function sendMessage(input: SendMessageInput): SlackMessage {
     const { channelId, text, threadTs, unfurlLinks, unfurlMedia } = input;
     check("slack.com/user/sendMessage", { channelId: channelId });
     const body: SendRequest = { channel: channelId, text: text };
-    if (threadTs !== null) body.thread_ts = threadTs;
-    if (unfurlLinks !== null) body.unfurl_links = unfurlLinks;
-    if (unfurlMedia !== null) body.unfurl_media = unfurlMedia;
+    if (threadTs !== undefined) body.thread_ts = threadTs;
+    if (unfurlLinks !== undefined) body.unfurl_links = unfurlLinks;
+    if (unfurlMedia !== undefined) body.unfurl_media = unfurlMedia;
     const data = slackPost("chat.postMessage", body).json() as MessageResponse;
     requireOk(data, 200);
     return messageFrom(data.message);
@@ -684,16 +684,14 @@ export function getChannel(channelId: string): SlackChannel {
 
 /**
  * List channels, private groups, DMs, and group DMs visible to the user.
- * @param page Optional page size and continuation cursor.
+ * @param page Optional page size and continuation cursor; omit it for Slack's defaults.
   * @returns One page of conversations and a `nextCursor` that is empty on the last page.
  * @capability slack.com/user/listChannels {}
  */
-export function listChannels(page: PageOptions | null = null): ChannelPage {
-    const limit = page === null ? null : page.limit;
-    const cursor = page === null ? null : page.cursor;
+export function listChannels(page: PageOptions = {}): ChannelPage {
+    const { limit, cursor } = page;
     check("slack.com/user/listChannels", {});
-    const body: PageRequest = { types: "public_channel,private_channel,mpim,im" };
-    applyPage(body, limit, cursor);
+    const body: PageRequest = { types: "public_channel,private_channel,mpim,im", limit: limit, cursor: cursor };
     const data = slackGet("conversations.list", pageQuery(body)).json() as ChannelsResponse;
     requireOk(data, 200);
     const channels: SlackChannel[] = [];
@@ -719,17 +717,14 @@ export function getUser(userId: string): SlackUser {
 /**
  * List workspace users visible to the authenticated user, including bots and
  * deactivated accounts.
- * @param page Optional page size and continuation cursor.
+ * @param page Optional page size and continuation cursor; omit it for Slack's defaults.
   * @returns One page of users and a `nextCursor` that is empty on the last page.
  * @capability slack.com/user/listUsers {}
  */
-export function listUsers(page: PageOptions | null = null): UserPage {
-    const limit = page === null ? null : page.limit;
-    const cursor = page === null ? null : page.cursor;
+export function listUsers(page: PageOptions = {}): UserPage {
+    const { limit, cursor } = page;
     check("slack.com/user/listUsers", {});
-    const body: PageRequest = {};
-    applyPage(body, limit, cursor);
-    const data = slackGet("users.list", pageQuery(body)).json() as UsersResponse;
+    const data = slackGet("users.list", pageQuery({ limit: limit, cursor: cursor })).json() as UsersResponse;
     requireOk(data, 200);
     const users: SlackUser[] = [];
     for (const item of data.members) users.push(userFrom(item));
@@ -798,27 +793,6 @@ function fetchFile(fileId: string): SlackFile {
 interface PageRequest { limit?: number; cursor?: string; types?: string; }
 interface HistoryRequest { channel: string; ts?: string; limit?: number; cursor?: string; oldest?: string; latest?: string; inclusive?: boolean; }
 
-function applyPage(body: PageRequest, limit: number | null, cursor: string | null): void {
-    if (limit !== null) body.limit = limit;
-    if (cursor !== null) body.cursor = cursor;
-}
-
-interface MessageListFields {
-    limit: number | null;
-    cursor: string | null;
-    oldest: string | null;
-    latest: string | null;
-    inclusive: boolean | null;
-}
-
-function applyMessageOptions(body: HistoryRequest, fields: MessageListFields): void {
-    const { limit, cursor, oldest, latest, inclusive } = fields;
-    applyPage(body, limit, cursor);
-    if (oldest !== null) body.oldest = oldest;
-    if (latest !== null) body.latest = latest;
-    if (inclusive !== null) body.inclusive = inclusive;
-}
-
 function messages(method: string, body: HistoryRequest): MessagesResponse {
     const query = pageQuery(body);
     query.set("channel", body.channel);
@@ -826,10 +800,10 @@ function messages(method: string, body: HistoryRequest): MessagesResponse {
     const oldest = body.oldest;
     const latest = body.latest;
     const inclusive = body.inclusive;
-    if (ts !== null) query.set("ts", ts);
-    if (oldest !== null) query.set("oldest", oldest);
-    if (latest !== null) query.set("latest", latest);
-    if (inclusive !== null) query.set("inclusive", inclusive.toString());
+    if (ts !== undefined) query.set("ts", ts);
+    if (oldest !== undefined) query.set("oldest", oldest);
+    if (latest !== undefined) query.set("latest", latest);
+    if (inclusive !== undefined) query.set("inclusive", inclusive.toString());
     const data = slackGet(method, query).json() as MessagesResponse;
     requireOk(data, 200);
     return data;
@@ -866,15 +840,15 @@ function pageQuery(page: PageRequest): Map<string, string> {
     const limit = page.limit;
     const cursor = page.cursor;
     const types = page.types;
-    if (limit !== null) query.set("limit", limit.toString());
-    if (cursor !== null) query.set("cursor", cursor);
-    if (types !== null) query.set("types", types);
+    if (limit !== undefined) query.set("limit", limit.toString());
+    if (cursor !== undefined) query.set("cursor", cursor);
+    if (types !== undefined) query.set("types", types);
     return query;
 }
 
 function authHeaders(): Map<string, string> {
     const token = secrets.get("SLACK_USER_TOKEN");
-    if (token === null) throw new SlackError("missing_token", "SLACK_USER_TOKEN is not bound", 200);
+    if (token === undefined) throw new SlackError("missing_token", "SLACK_USER_TOKEN is not bound", 200);
     const headers = new Map<string, string>();
     headers.set("Authorization", `Bearer ${token}`);
     return headers;
@@ -891,57 +865,56 @@ function singleUserId(value: string): string {
 
 function requireOk(envelope: SlackEnvelope, status: number): void {
     if (!envelope.ok) {
-        const code = envelope.error !== null ? envelope.error : "unknown_error";
+        const code = envelope.error ?? "unknown_error";
         throw new SlackError(code, `Slack API error: ${code}`, status);
     }
 }
 
 function messageFrom(item: ApiMessage): SlackMessage {
     const files: SlackFile[] = [];
-    if (item.files !== null) for (const file of item.files) files.push(fileFrom(file));
+    const attached = item.files;
+    if (attached) for (const file of attached) files.push(fileFrom(file));
+    let reactions: SlackReaction[] = [];
+    if (item.reactions) reactions = item.reactions;
     return {
         ts: item.ts,
-        text: str(item.text),
-        user: str(item.user),
-        botId: str(item.bot_id),
-        threadTs: str(item.thread_ts),
-        replyCount: num(item.reply_count),
+        text: item.text ?? "",
+        user: item.user ?? "",
+        botId: item.bot_id ?? "",
+        threadTs: item.thread_ts ?? "",
+        replyCount: item.reply_count ?? 0,
         files: files,
-        reactions: item.reactions !== null ? item.reactions : [],
+        reactions: reactions,
     };
 }
 
 function fileFrom(file: ApiFile): SlackFile {
     return {
-        id: file.id, name: str(file.name), title: str(file.title), mimetype: str(file.mimetype),
-        filetype: str(file.filetype), size: num(file.size), user: str(file.user),
-        permalink: str(file.permalink), urlPrivate: str(file.url_private),
-        urlPrivateDownload: str(file.url_private_download),
+        id: file.id, name: file.name ?? "", title: file.title ?? "", mimetype: file.mimetype ?? "",
+        filetype: file.filetype ?? "", size: file.size ?? 0, user: file.user ?? "",
+        permalink: file.permalink ?? "", urlPrivate: file.url_private ?? "",
+        urlPrivateDownload: file.url_private_download ?? "",
     };
 }
 
 function channelFrom(channel: ApiChannel): SlackChannel {
     return {
-        id: channel.id, name: str(channel.name), isPrivate: bool(channel.is_private),
-        isMember: bool(channel.is_member), isArchived: bool(channel.is_archived),
-        topic: channel.topic !== null ? channel.topic.value : "",
-        purpose: channel.purpose !== null ? channel.purpose.value : "",
+        id: channel.id, name: channel.name ?? "", isPrivate: channel.is_private === true,
+        isMember: channel.is_member === true, isArchived: channel.is_archived === true,
+        topic: channel.topic?.value ?? "",
+        purpose: channel.purpose?.value ?? "",
     };
 }
 
 function userFrom(user: ApiUser): SlackUser {
     const profile = user.profile;
     return {
-        id: user.id, name: str(user.name), realName: str(user.real_name),
-        displayName: profile !== null ? str(profile.display_name) : "",
-        email: profile !== null ? str(profile.email) : "", deleted: bool(user.deleted), isBot: bool(user.is_bot),
+        id: user.id, name: user.name ?? "", realName: user.real_name ?? "",
+        displayName: profile?.display_name ?? "",
+        email: profile?.email ?? "", deleted: user.deleted === true, isBot: user.is_bot === true,
     };
 }
 
-function cursorOf(metadata: Metadata | null): string {
-    return metadata !== null ? str(metadata.next_cursor) : "";
+function cursorOf(metadata: Metadata | undefined): string {
+    return metadata?.next_cursor ?? "";
 }
-
-function str(value: string | null): string { return value !== null ? value : ""; }
-function num(value: number | null): number { return value !== null ? value : 0; }
-function bool(value: boolean | null): boolean { return value === true; }

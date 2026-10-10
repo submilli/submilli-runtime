@@ -59,7 +59,7 @@ export class Broken {
 
 }
 
-/*pruned*/;           
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

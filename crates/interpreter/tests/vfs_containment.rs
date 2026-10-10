@@ -198,7 +198,7 @@ fn read_through_filesystem_root_link_refuses() {
 fn read_through_relative_escaping_link_refuses_and_leaks_nothing() {
     let s = seed();
     let src = r#"import { readText } from "submilli:fs";
-                 function main(): string { const t = readText("/esc_rel/secret.txt"); return t === null ? "null" : t; }"#;
+                 function main(): string { const t = readText("/esc_rel/secret.txt"); return t === undefined ? "null" : t; }"#;
     let err = run_on(&s.root(), src).expect_err("must be refused");
     let msg = format!("{err:#}");
     assert!(msg.contains(ESCAPE_DIAGNOSTIC), "got: {msg}");
@@ -475,10 +475,10 @@ fn stat_and_remove_work_on_an_escaping_link_without_traversing_it() {
         &s,
         r#"import { stat, Stat } from "submilli:fs";
            function main(): void {
-             const a: Stat | null = stat("/esc_abs");
-             assert(a !== null && a.kind === "symlink", "stat reports the link, not its target");
-             const b: Stat | null = stat("/pkgs/a/sibling");
-             assert(b !== null && b.kind === "symlink", "an ordinary internal link still stats");
+             const a: Stat | undefined = stat("/esc_abs");
+             assert(a !== undefined && a.kind === "symlink", "stat reports the link, not its target");
+             const b: Stat | undefined = stat("/pkgs/a/sibling");
+             assert(b !== undefined && b.kind === "symlink", "an ordinary internal link still stats");
            }"#,
         "stat on links",
     );

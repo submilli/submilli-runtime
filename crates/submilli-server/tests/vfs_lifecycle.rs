@@ -135,7 +135,7 @@ fn per_session() -> VfsConfig {
 }
 
 const WRITE: &str = r#"import { writeText } from "submilli:fs"; function main(): void { writeText("/a.txt", "hi"); }"#;
-const READ: &str = r#"import { readText } from "submilli:fs"; function main(): string | null { return readText("/a.txt"); }"#;
+const READ: &str = r#"import { readText } from "submilli:fs"; function main(): string | undefined { return readText("/a.txt"); }"#;
 
 #[tokio::test]
 async fn per_session_persists_across_executes() {

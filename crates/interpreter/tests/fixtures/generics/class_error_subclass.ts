@@ -10,7 +10,7 @@ class Wrapped<T> extends Error {
   }
 
   describe(): string {
-    return this.message + ":" + JSON.stringify(this.payload);
+    return this.message + ":" + (JSON.stringify(this.payload) ?? "");
   }
 }
 

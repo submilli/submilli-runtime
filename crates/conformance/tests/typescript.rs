@@ -23,6 +23,9 @@
 #[path = "support/conformance_gate.rs"]
 mod conformance_gate;
 
+#[path = "support/case_selection.rs"]
+mod case_selection;
+
 #[path = "support/case_errors.rs"]
 mod case_errors;
 #[path = "support/triage.rs"]
@@ -118,6 +121,9 @@ fn find_cases(root: &Path) -> Vec<PathBuf> {
         &mut cases,
     );
     cases.sort();
+    if let Some(selected) = case_selection::read("TYPESCRIPT_CASES").expect("read selected cases") {
+        case_selection::retain(&mut cases, root, &selected).expect("select cases");
+    }
     if let Ok(filter) = std::env::var("CONFORMANCE_FILTER") {
         cases.retain(|p| rel(p).contains(&filter));
         assert!(
@@ -243,11 +249,16 @@ fn orphaned_case_files(root: &Path, update: bool) -> Vec<String> {
     let mut files = Vec::new();
     collect_files(root, &mut |p| case_of(p).is_some(), &mut files);
     let mut failures = Vec::new();
+    let selected = case_selection::read("TYPESCRIPT_CASES").expect("read selected cases");
     for file in files {
         let Some(case) = case_of(&file) else {
             continue;
         };
-        if case.exists() {
+        if case.exists()
+            || selected
+                .as_ref()
+                .is_some_and(|selected| !selected.contains(&suite_path(root, &case)))
+        {
             continue;
         }
         let generated = !file.extension().is_some_and(|e| e == "triage");
@@ -433,8 +444,13 @@ fn compare_case(case: &Path) -> Result<Report, String> {
     let tsc_errors = read_baseline_errors(case);
     let agreed_lines = agreed_lines(&tsc_errors, &our_errors);
     let our_error_lines: BTreeSet<usize> = our_errors.keys().copied().collect();
-    let (compared, type_divergences) =
-        compare_types(&baseline, &ours, &our_error_lines, &agreed_lines);
+    let (compared, type_divergences) = compare_types(
+        &baseline,
+        &ours,
+        &our_error_lines,
+        &agreed_lines,
+        exact_optional_properties(&source),
+    );
     let error_lines = tsc_errors
         .iter()
         .map(|e| e.line)
@@ -467,6 +483,7 @@ fn compare_types(
     ours: &EntriesByLine,
     our_error_lines: &BTreeSet<usize>,
     agreed_lines: &BTreeSet<usize>,
+    exact_optional: bool,
 ) -> (Vec<ComparedEntry>, Vec<TypeDivergence>) {
     let error_type = Type::Error.to_string();
     let is_recovery = |line: &usize, tsc_ty: &str, our_ty: &str| {
@@ -501,7 +518,7 @@ fn compare_types(
                     text: text.to_string(),
                     tsc: tsc_ty.to_string(),
                 });
-                if !same_type(text, tsc_ty, our_ty) {
+                if !same_type_with_options(text, tsc_ty, our_ty, exact_optional) {
                     divergences.push(TypeDivergence {
                         line: *line,
                         text: text.to_string(),
@@ -564,14 +581,19 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
     let reachable = typed_reachability::Reachable::collect(typed);
     let expressions = (0..typed.exprs_len()).filter_map(|i| {
         let id = ExprId(i as u32);
+        // Incoming ABI reads initialize parameters; they are not authored reads.
+        if typed.parameter_inputs.contains(&id) {
+            return None;
+        }
         let e = typed.try_expr(id).unwrap();
         let text = span_text(source, e.span)?;
-        Some((
-            e.span,
-            text,
-            Claim::of(&e.kind, i, text, reachable.expressions.contains(&id)),
-            e.ty.clone(),
-        ))
+        let retained = reachable.expressions.contains(&id);
+        let claim = if retained && is_semantic_reference_cast(typed, e, text) {
+            Claim::SemanticReference(i)
+        } else {
+            Claim::of(&e.kind, i, text, retained)
+        };
+        Some((e.span, text, claim, e.ty.clone()))
     });
     let names = bindings(typed, &reachable)
         .into_iter()
@@ -595,6 +617,45 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
     by_line
 }
 
+/// A source identifier may lower to a cast around its wider ABI storage read.
+/// The outer type is the source-level type; the inner LocalRef only loads the slot.
+fn is_semantic_reference_cast(
+    typed: &TypedAst,
+    expression: &interpreter::TypedExpr,
+    text: &str,
+) -> bool {
+    if !is_identifier(text) {
+        return false;
+    }
+    let TypedExprKind::Cast {
+        value, check: None, ..
+    } = &expression.kind
+    else {
+        return false;
+    };
+    let mut value = *value;
+    for _ in 0..typed.exprs_len() {
+        let Ok(inner) = typed.try_expr(value) else {
+            return false;
+        };
+        if inner.span != expression.span {
+            return false;
+        }
+        match &inner.kind {
+            TypedExprKind::LocalRef { .. } | TypedExprKind::LocalNarrowRef { .. } => return true,
+            TypedExprKind::Cast {
+                value: next,
+                check: None,
+                ..
+            } => {
+                value = *next;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Which of the nodes sharing a span is the one the source wrote; the greatest
 /// wins. The typechecker gives each node it synthesizes (a default argument, a
 /// rest parameter's array, the comparisons a `switch` expands to, a narrowed or
@@ -611,6 +672,9 @@ enum Claim {
     /// A variable reference at a name. The first one created is the read the
     /// source wrote; a narrowed copy comes after it.
     Reference(bool, Reverse<usize>),
+    /// A retained source read that narrows the storage slot through a same-span cast.
+    /// Prefer its outermost semantic type over the synthesized raw storage reference.
+    SemanticReference(usize),
     /// A declared or assigned name, typed by what the binding holds.
     Binding(bool),
 }
@@ -655,7 +719,22 @@ fn bindings(
     for i in 0..typed.stmts_len() {
         let id = StmtId(i as u32);
         let retained = reachable.statements.contains(&id);
+        if typed.parameter_initializations.contains(&id)
+            && matches!(
+                &typed.try_stmt(id).unwrap().kind,
+                TypedStmtKind::AssignLocal { value, .. }
+                    if typed.parameter_inputs.contains(value)
+            )
+        {
+            // A required/optional parameter's identity copy only establishes its
+            // runtime initialization state. Keep real defaults and pattern bindings.
+            continue;
+        }
         match &typed.try_stmt(id).unwrap().kind {
+            // A `#` name is one the compiler made up, such as the operand
+            // `typeof` stores once; it binds nothing the source wrote.
+            TypedStmtKind::Let { name, .. } | TypedStmtKind::Const { name, .. }
+                if name.name.starts_with('#') => {}
             TypedStmtKind::Let { name, ty, .. } | TypedStmtKind::Const { name, ty, .. } => {
                 out.push((name.span, ty.clone(), retained));
             }
@@ -669,6 +748,15 @@ fn bindings(
                 ident, target_ty, ..
             } => out.push((ident.span, target_ty.clone(), retained)),
             _ => {}
+        }
+    }
+    for (span, ty, _) in &mut out {
+        if let Some(authored) =
+            typed
+                .authored_parameter_types
+                .get(&(span.file.0, span.start, span.end))
+        {
+            *ty = authored.clone();
         }
     }
     out
@@ -957,10 +1045,15 @@ fn is_identifier(text: &str) -> bool {
 /// on the expression. Ours must still be a class's name: `unknown`, a union or
 /// an error there is a real difference.
 fn same_type(text: &str, tsc_ty: &str, our_ty: &str) -> bool {
+    same_type_with_options(text, tsc_ty, our_ty, false)
+}
+
+fn same_type_with_options(text: &str, tsc_ty: &str, our_ty: &str, exact_optional: bool) -> bool {
     if text == "this" && tsc_ty == "this" && names_a_class(our_ty) {
         return true;
     }
-    normalize_type(tsc_ty) == normalize_type(our_ty)
+    normalize_type_with_options(tsc_ty, exact_optional)
+        == normalize_type_with_options(our_ty, exact_optional)
 }
 
 /// Whether `ty` is a single named type, `Name` or `Name<…>`, that isn't a
@@ -1018,13 +1111,18 @@ fn closes_at_end(arguments: &str) -> bool {
 /// method signatures read as function-typed fields, and no `;` before an
 /// object's `}`. A few spellings only `tsc` uses read as ours; each is noted
 /// where it is read (`canonical_generic`, `drop_literals_beside_their_base`,
-/// `optional_field_type`).
+/// `optional_type`).
 /// Text the reader does not understand is compared as written.
 fn normalize_type(ty: &str) -> String {
+    normalize_type_with_options(ty, false)
+}
+
+fn normalize_type_with_options(ty: &str, exact_optional: bool) -> String {
     let text = collapse_whitespace(ty);
     let mut reader = TypeText {
         text: &text,
         pos: 0,
+        exact_optional,
     };
     match reader.union() {
         Some(canonical) if reader.pos == text.len() => canonical.text,
@@ -1037,6 +1135,7 @@ fn normalize_type(ty: &str) -> String {
 struct TypeText<'a> {
     text: &'a str,
     pos: usize,
+    exact_optional: bool,
 }
 
 /// A type as `TypeText` reads it, in canonical text. A function type is marked,
@@ -1067,7 +1166,10 @@ impl TypeText<'_> {
 
     /// An optional field's type, without the `undefined` its `?` already implies:
     /// `a?: T | undefined` is `a?: T` without `exactOptionalPropertyTypes`.
-    fn optional_field_type(&mut self) -> Option<FieldType> {
+    fn optional_type(&mut self, strip_undefined: bool) -> Option<String> {
+        if !strip_undefined {
+            return self.union_text();
+        }
         let mut members = Vec::new();
         loop {
             if !self.eat_word("undefined") {
@@ -1078,9 +1180,9 @@ impl TypeText<'_> {
             }
         }
         if members.is_empty() {
-            return Some(FieldType::Absent);
+            return Some("undefined".to_string());
         }
-        Some(FieldType::Typed(Self::join_members(members)?.text))
+        Some(Self::join_members(members)?.text)
     }
 
     fn join_members(mut members: Vec<CanonicalType>) -> Option<CanonicalType> {
@@ -1132,7 +1234,14 @@ impl TypeText<'_> {
                 ""
             }
         };
-        Some(format!("{}{optional}", self.union_text()?))
+        let ty = self.union_text()?;
+        let optional = if self.eat("?") { "?" } else { optional };
+        let ty = if optional.is_empty() {
+            ty
+        } else {
+            canonical_optional_type(&ty, self.exact_optional)?
+        };
+        Some(format!("{ty}{optional}"))
     }
 
     fn primary(&mut self) -> Option<CanonicalType> {
@@ -1150,10 +1259,6 @@ impl TypeText<'_> {
             return self.string_literal().map(CanonicalType::plain);
         }
         let name = self.word()?;
-        // The port spells `undefined` as `null`, so `tsc`'s `undefined` is ours.
-        if name == "undefined" {
-            return Some(CanonicalType::plain("null".to_string()));
-        }
         if self.eat("<") {
             let args = self.list(">", Self::union_text)?;
             return Some(CanonicalType::plain(canonical_generic(&name, &args)));
@@ -1191,7 +1296,8 @@ impl TypeText<'_> {
         if !self.eat(": ") {
             return None;
         }
-        Some(format!("{rest}{}{optional}", self.union_text()?))
+        let ty = self.optional_type(!optional.is_empty())?;
+        Some(format!("{rest}{ty}{optional}"))
     }
 
     fn object(&mut self) -> Option<String> {
@@ -1205,9 +1311,8 @@ impl TypeText<'_> {
             };
             let name = self.object_member_name()?;
             let optional = if self.eat("?") { "?" } else { "" };
-            if let FieldType::Typed(ty) = self.field_type(!optional.is_empty())? {
-                fields.push(format!("{readonly}{name}{optional}: {ty}"));
-            }
+            let ty = self.field_type(!optional.is_empty())?;
+            fields.push(format!("{readonly}{name}{optional}: {ty}"));
             let separated = self.eat(";") || self.eat(",");
             self.eat(" ");
             if !separated && !self.rest().starts_with('}') {
@@ -1224,25 +1329,22 @@ impl TypeText<'_> {
 
     /// A member's type after its name: `: T`, or a method signature's `(a: T): R`,
     /// which is the field `m: (a: T) => R`.
-    fn field_type(&mut self, is_optional: bool) -> Option<FieldType> {
+    fn field_type(&mut self, is_optional: bool) -> Option<String> {
         if self.eat("(") {
             let params = self.list(")", Self::parameter)?;
             if !self.eat(": ") {
                 return None;
             }
             let ret = self.union_text()?;
-            return Some(FieldType::Typed(format!(
-                "({}) => {ret}",
-                params.join(", ")
-            )));
+            return Some(format!("({}) => {ret}", params.join(", ")));
         }
         if !self.eat(": ") {
             return None;
         }
         if is_optional {
-            return self.optional_field_type();
+            return self.optional_type(!self.exact_optional);
         }
-        self.union_text().map(FieldType::Typed)
+        self.union_text()
     }
 
     /// Index parameter names are labels; their key types remain significant. A
@@ -1352,13 +1454,16 @@ impl TypeText<'_> {
     }
 }
 
-/// What an object member's type reads as.
-enum FieldType {
-    Typed(String),
-    /// An optional field typed only `undefined`: `tsc`'s `b?: undefined`, for a
-    /// field only some members of a normalized union have. It adds nothing to
-    /// the object, so it is dropped.
-    Absent,
+/// An optional tuple slot drops a redundant `| undefined` the way an optional
+/// property does: under `exactOptionalPropertyTypes` tsc keeps the two apart.
+fn canonical_optional_type(text: &str, exact_optional: bool) -> Option<String> {
+    let mut reader = TypeText {
+        text,
+        pos: 0,
+        exact_optional,
+    };
+    let canonical = reader.optional_type(!exact_optional)?;
+    (reader.pos == text.len()).then_some(canonical)
 }
 
 /// A generic type's canonical text. Three spellings only `tsc` uses read as ours:
@@ -1525,11 +1630,6 @@ const TSC_ONLY_SPELLINGS: &[(&str, &str, &str)] = &[
         "{ sn?: number | string }",
     ),
     (
-        "b?: undefined",
-        "{ a: number; b?: undefined; } | { a: number; b: string; }",
-        "{ a: number } | { a: number; b: string }",
-    ),
-    (
         "binding pattern",
         "([a, { b }, ...c]: number[]) => void",
         "(arg0: number[]) => void",
@@ -1539,15 +1639,22 @@ const TSC_ONLY_SPELLINGS: &[(&str, &str, &str)] = &[
         r#"string | "bar" | number | 1 | -2 | 1_000 | .5 | boolean | true | bigint | -1n"#,
         "bigint | boolean | number | string",
     ),
-    (
-        "readonly b?: undefined",
-        "{ readonly b?: undefined; a: number }",
-        "{ a: number }",
-    ),
 ];
 
 /// `(rule, tsc's text, ours)`, which must stay different after normalizing.
 const DISTINCT_SPELLINGS: &[(&str, &str, &str)] = &[
+    ("null and undefined", "null", "undefined"),
+    (
+        "nullable and optional values",
+        "number | null",
+        "number | undefined",
+    ),
+    ("undefined-only optional field", "{ a?: undefined }", "{}"),
+    (
+        "readonly undefined-only field",
+        "{ readonly a?: undefined }",
+        "{}",
+    ),
     (
         "Record with a number key",
         "Record<number, string>",
@@ -1820,4 +1927,198 @@ fn entries_prefer_retained_loop_reads_and_keep_erased_source_nodes() {
         );
         assert!(report.type_divergences.is_empty(), "{}", report.render());
     }
+}
+
+#[test]
+fn exact_optional_property_types_preserve_explicit_undefined() {
+    assert!(same_type(
+        "x",
+        "{ a?: number }",
+        "{ a?: number | undefined }"
+    ));
+    assert!(!same_type_with_options(
+        "x",
+        "{ a?: number }",
+        "{ a?: number | undefined }",
+        true
+    ));
+    assert!(exact_optional_properties(
+        "// @exactOptionalPropertyTypes: true, false\n"
+    ));
+    assert!(!exact_optional_properties(
+        "// @exactOptionalPropertyTypes: false\n"
+    ));
+}
+
+fn exact_optional_properties(source: &str) -> bool {
+    source
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("//"))
+        .filter_map(|line| line.trim().strip_prefix('@'))
+        .filter_map(|line| line.split_once(':'))
+        .rfind(|(name, _)| name.eq_ignore_ascii_case("exactOptionalPropertyTypes"))
+        .is_some_and(|(_, value)| {
+            value
+                .split(',')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case("true")
+        })
+}
+
+#[test]
+fn optional_parameters_normalize_redundant_undefined_without_losing_requiredness() {
+    assert_eq!(
+        normalize_type("(x?: number | undefined) => void"),
+        normalize_type("(arg0?: number) => void")
+    );
+    assert_ne!(
+        normalize_type("(x: number | undefined) => void"),
+        normalize_type("(arg0?: number) => void")
+    );
+    assert_eq!(
+        normalize_type("[x?: number, y?: string]"),
+        normalize_type("[number?, string?]")
+    );
+    assert_eq!(
+        normalize_type("[x: number, y?: string]"),
+        normalize_type("[number, (string | undefined)?]")
+    );
+    assert_ne!(
+        normalize_type("[number, string | undefined]"),
+        normalize_type("[number, string?]")
+    );
+    assert_eq!(
+        normalize_type("{ m?(x: number): string }"),
+        normalize_type("{ m?: (arg0: number) => string }")
+    );
+}
+
+#[test]
+fn exact_optional_tuple_slots_keep_explicit_undefined() {
+    assert_ne!(
+        normalize_type_with_options("[number, (string | undefined)?]", true),
+        normalize_type_with_options("[number, string?]", true)
+    );
+    assert_eq!(
+        normalize_type_with_options("[number, string?]", true),
+        normalize_type_with_options("[x: number, y?: string]", true)
+    );
+}
+
+#[test]
+fn entries_report_defaulted_parameter_reads_without_raw_storage_undefined() {
+    let source = "function read(value: number | null = 7): number | null {\n  const result = value;\n  return result;\n}\nfunction main(): void {}\n";
+    let (typed, errors) = case_errors::case_errors(source);
+    assert!(
+        errors.is_empty(),
+        "unexpected errors: {:?}",
+        errors
+            .iter()
+            .map(|error| &error.message)
+            .collect::<Vec<_>>()
+    );
+    let entries = entries_by_line(&typed, source);
+    let declaration = entries
+        .get(&1)
+        .unwrap()
+        .iter()
+        .find(|entry| entry.text == "value")
+        .unwrap();
+    assert_eq!(
+        normalize_type(&declaration.ty),
+        normalize_type("number | null")
+    );
+    let value = entries
+        .get(&2)
+        .unwrap()
+        .iter()
+        .find(|entry| entry.text == "value")
+        .unwrap();
+    assert_eq!(normalize_type(&value.ty), normalize_type("number | null"));
+}
+
+#[test]
+fn entries_preserve_explicit_undefined_in_defaulted_parameter_declarations() {
+    let source = "function read(value: number | undefined = 7): number {\n  return value;\n}\nfunction main(): void {}\n";
+    let (typed, errors) = case_errors::case_errors(source);
+    assert!(
+        errors.is_empty(),
+        "unexpected errors: {:?}",
+        errors
+            .iter()
+            .map(|error| &error.message)
+            .collect::<Vec<_>>()
+    );
+    let entries = entries_by_line(&typed, source);
+    for (line, expected) in [(1, "number | undefined"), (2, "number")] {
+        let value = entries
+            .get(&line)
+            .unwrap()
+            .iter()
+            .find(|entry| entry.text == "value")
+            .unwrap();
+        assert_eq!(normalize_type(&value.ty), normalize_type(expected));
+    }
+}
+
+#[test]
+fn entries_keep_undefined_in_optional_parameter_reads() {
+    let source = "function read(value?: number): number | undefined {\n  return value;\n}\nfunction main(): void {}\n";
+    let (typed, errors) = case_errors::case_errors(source);
+    assert!(
+        errors.is_empty(),
+        "unexpected errors: {:?}",
+        errors
+            .iter()
+            .map(|error| &error.message)
+            .collect::<Vec<_>>()
+    );
+    let entries = entries_by_line(&typed, source);
+    let value = entries
+        .get(&2)
+        .unwrap()
+        .iter()
+        .find(|entry| entry.text == "value")
+        .unwrap();
+    assert_eq!(
+        normalize_type(&value.ty),
+        normalize_type("number | undefined")
+    );
+}
+
+#[test]
+fn parameter_initialization_copies_do_not_create_source_reads() {
+    let source = "const read = (value?: number): number | undefined => value;\n\
+                  function destructured({ item }: { item: number }): number { return item; }\n\
+                  function main(): void {}\n";
+    let (typed, errors) = case_errors::case_errors(source);
+    assert!(
+        errors.is_empty(),
+        "unexpected errors: {:?}",
+        errors
+            .iter()
+            .map(|error| &error.message)
+            .collect::<Vec<_>>()
+    );
+    assert!(!typed.parameter_inputs.is_empty());
+    let entries = entries_by_line(&typed, source);
+    let reads: Vec<_> = entries
+        .values()
+        .flatten()
+        .filter(|entry| entry.text == "value")
+        .collect();
+    assert_eq!(reads.len(), 1, "only the closure body's authored read");
+    assert_eq!(
+        normalize_type(&reads[0].ty),
+        normalize_type("number | undefined")
+    );
+    let items: Vec<_> = entries
+        .values()
+        .flatten()
+        .filter(|entry| entry.text == "item")
+        .collect();
+    assert_eq!(items.len(), 2, "the destructured binding and body read");
+    assert!(items.iter().all(|entry| entry.ty == "number"));
 }

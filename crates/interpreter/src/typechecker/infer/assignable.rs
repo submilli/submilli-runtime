@@ -97,17 +97,8 @@ impl<'a> TypeResolver<'a> {
             out.insert(
                 member.clone(),
                 ObjectField {
-                    ty: Type::Function {
-                        params: sig
-                            .params
-                            .iter()
-                            .map(|p| substitute_or_record(&p.ty, &bindings, self.limits))
-                            .collect(),
-                        ret: Box::new(substitute_or_record(&sig.ret, &bindings, self.limits)),
-                        predicate: None,
-                        has_rest: sig.params.last().is_some_and(|p| p.rest),
-                    },
-                    optional: false,
+                    ty: self.method_type(sig, &bindings),
+                    optional: sig.optional,
                     readonly: true,
                     method: true,
                 },
@@ -225,7 +216,7 @@ impl<'a> TypeResolver<'a> {
                     }
                     out.entry(name.clone()).or_insert(ObjectField {
                         ty: self.method_type(sig, bindings),
-                        optional: false,
+                        optional: sig.optional,
                         readonly: true,
                         method: true,
                     });
@@ -253,11 +244,17 @@ impl<'a> TypeResolver<'a> {
             params: sig
                 .params
                 .iter()
-                .map(|p| substitute_or_record(&p.ty, bindings, self.limits))
+                .map(|p| {
+                    crate::ObjectField::widen_optional(
+                        p.is_omittable(),
+                        substitute_or_record(&p.ty, bindings, self.limits),
+                    )
+                })
                 .collect(),
             ret: Box::new(substitute_or_record(&sig.ret, bindings, self.limits)),
             predicate: None,
             has_rest: sig.params.last().is_some_and(|p| p.rest),
+            optional: crate::package_declaration::optional_parameter_count(&sig.params),
         }
     }
 
@@ -333,15 +330,21 @@ impl<'a> TypeResolver<'a> {
                 Some(act) => {
                     let mut seen = Vec::new();
                     // A setter's parameter is not a readable value. Check for a
-                    // getter before comparing types, then report mutability or
-                    // optionality only when the readable type is compatible.
+                    // getter and required presence before comparing read types:
+                    // optional reads add undefined even when declared types match.
                     //
                     // `readonly` is shallow, so the type check stays covariant. But a
-                    // writable interface member can be written through the interface
-                    // reference, so a `readonly`/get-only class member can't satisfy
-                    // it. Methods are modelled as `readonly`, so they're unaffected.
+                    // writable interface member requires writable class storage,
+                    // excluding readonly fields and getter-only accessors. Real
+                    // methods have callable payloads that a structural interface
+                    // can replace, even though their structural form is readonly.
                     if self.class_property_is_write_only(class_mangled, class_args, member) {
                         failures.push(ImplementsFailure::NotReadable {
+                            member: member.clone(),
+                            ty: exp.ty.to_string(),
+                        });
+                    } else if !exp.optional && act.optional {
+                        failures.push(ImplementsFailure::OptionalityMismatch {
                             member: member.clone(),
                             ty: exp.ty.to_string(),
                         });
@@ -349,8 +352,8 @@ impl<'a> TypeResolver<'a> {
                         class_mangled,
                         class_args,
                         member,
-                        &act.ty,
-                        &exp.ty,
+                        &act.read_ty(),
+                        &exp.read_ty(),
                         &mut seen,
                     ) {
                         failures.push(ImplementsFailure::Incompatible {
@@ -358,13 +361,11 @@ impl<'a> TypeResolver<'a> {
                             expected: exp.ty.to_string(),
                             actual: act.ty.to_string(),
                         });
-                    } else if !exp.readonly && act.readonly {
+                    } else if !exp.readonly
+                        && act.readonly
+                        && !self.class_member_is_method(class_mangled, class_args, member)
+                    {
                         failures.push(ImplementsFailure::NotWritable {
-                            member: member.clone(),
-                            ty: exp.ty.to_string(),
-                        });
-                    } else if !exp.optional && act.optional {
-                        failures.push(ImplementsFailure::OptionalityMismatch {
                             member: member.clone(),
                             ty: exp.ty.to_string(),
                         });
@@ -401,6 +402,7 @@ impl<'a> TypeResolver<'a> {
                 params,
                 ret,
                 predicate,
+                optional: _,
                 has_rest: false,
             },
             Type::Function {
@@ -446,15 +448,41 @@ impl<'a> TypeResolver<'a> {
         omittable
             && assignable_rec(
                 &Type::Function {
-                    params: params[..expected_params.len()].to_vec(),
+                    params: params.iter().take(expected_params.len()).cloned().collect(),
                     ret: ret.clone(),
                     predicate: predicate.clone(),
                     has_rest: false,
+                    optional: 0,
                 },
                 expected,
                 self,
                 seen,
             )
+    }
+
+    fn class_member_is_method(&self, mangled: &MangledName, args: &[Type], member: &str) -> bool {
+        super::classes::walk_class_chain_with(
+            |name| self.sym_by_mangled(name).cloned(),
+            self.limits,
+            mangled,
+            args,
+            |symbol, _| {
+                let TypeKind::Class {
+                    methods, fields, ..
+                } = &symbol.kind
+                else {
+                    return ControlFlow::Continue(());
+                };
+                if fields.contains_key(member) {
+                    return ControlFlow::Break(Some(false));
+                }
+                if methods.contains_key(member) {
+                    return ControlFlow::Break(Some(true));
+                }
+                ControlFlow::Continue(())
+            },
+        )
+        .unwrap_or(false)
     }
 
     fn class_property_is_write_only(
@@ -722,14 +750,11 @@ fn assignable_rec(
     if matches!(actual, Type::Never) {
         return true;
     }
-    // `void` is not a value: it has no runtime representation, so nothing else
-    // satisfies it and it satisfies nothing else. Checked ahead of the
-    // `TypeVar`/`Unknown` wildcards below, which would otherwise wave it into
-    // a value slot and leave codegen to hit `value_type called on Void`.
-    match (actual, expected) {
-        (Type::Void, Type::Void) => return true,
-        (Type::Void, _) | (_, Type::Void) => return false,
-        _ => {}
+    if matches!(
+        (actual, expected),
+        (Type::Undefined | Type::Void, Type::Void)
+    ) {
+        return true;
     }
     if matches!(expected, Type::TypeVar(_)) || matches!(actual, Type::TypeVar(_)) {
         return true;
@@ -856,7 +881,8 @@ fn assignable_rec(
         ) => member.value == *value,
         (Type::Array(ae), Type::Array(ee)) => assignable_rec(ae, ee, types, seen),
         (Type::Tuple(aa), Type::Tuple(ae)) => {
-            aa.len() == ae.len()
+            aa.required_len() >= ae.required_len()
+                && aa.len() <= ae.len()
                 && aa
                     .iter()
                     .zip(ae.iter())
@@ -957,7 +983,14 @@ fn assignable_rec(
                     Some(act) => {
                         !types.class_property_is_write_only(ma, aa, member)
                             && (exp.optional || !act.optional)
-                            && types.class_member_assignable(ma, aa, member, &act.ty, &exp.ty, seen)
+                            && types.class_member_assignable(
+                                ma,
+                                aa,
+                                member,
+                                &act.read_ty(),
+                                &exp.read_ty(),
+                                seen,
+                            )
                     }
                     None => exp.optional,
                 })
@@ -986,8 +1019,8 @@ fn assignable_rec(
                                 mangled,
                                 args,
                                 member,
-                                &actual.ty,
-                                &expected.ty,
+                                &actual.read_ty(),
+                                &expected.read_ty(),
                                 seen,
                             )
                     }
@@ -1008,12 +1041,14 @@ fn assignable_rec(
                 ret: ra,
                 predicate: predicate_a,
                 has_rest: rest_a,
+                optional: optional_a,
             },
             Type::Function {
                 params: pe,
                 ret: re,
                 predicate: predicate_e,
                 has_rest: rest_e,
+                optional: _,
             },
         ) => {
             // A rest function can't stand for one whose own rest arguments
@@ -1034,7 +1069,13 @@ fn assignable_rec(
             let params_ok = if *rest_a && !rest_e {
                 rest_function_accepts(pa, pe, |e, a| assignable_rec(e, a, types, seen))
             } else {
-                Type::function_arity_fits(pa.len(), pe.len(), *rest_a)
+                // Trailing optional parameters may go unpassed by the caller.
+                let required = if *rest_a {
+                    pa.len()
+                } else {
+                    pa.len().saturating_sub(*optional_a)
+                };
+                Type::function_arity_fits(required, pe.len(), *rest_a)
                     && pa.iter().zip(pe.iter()).enumerate().all(|(i, (a, e))| {
                         let both_rest = *rest_a && i + 1 == pa.len() && i + 1 == pe.len();
                         if both_rest {
@@ -1089,7 +1130,7 @@ fn assignable_rec(
                     if a_field.optional && !e_field.optional {
                         return false;
                     }
-                    assignable_rec(&a_field.ty, &e_field.ty, types, seen)
+                    assignable_rec(&a_field.read_ty(), &e_field.read_ty(), types, seen)
                 }
                 None => e_field.optional,
             })
@@ -1312,7 +1353,8 @@ fn satisfies_structurally(
         .iter()
         .all(|(member, exp)| match actual_form.get(member) {
             Some(act) => {
-                (exp.optional || !act.optional) && assignable_rec(&act.ty, &exp.ty, types, seen)
+                (exp.optional || !act.optional)
+                    && assignable_rec(&act.read_ty(), &exp.read_ty(), types, seen)
             }
             None => exp.optional,
         });
@@ -1390,7 +1432,8 @@ fn type_nesting_depth(ty: &Type) -> usize {
         | Type::ClassRef { args, .. }
         | Type::AliasRef { args, .. }
         | Type::Alias { args, .. } => type_argument_depth(args),
-        Type::Tuple(elements) | Type::Union(elements) => type_argument_depth(elements),
+        Type::Tuple(elements) => type_argument_depth(elements),
+        Type::Union(elements) => type_argument_depth(elements),
         Type::Function { params, ret, .. } => {
             type_argument_depth(params).max(type_nesting_depth(ret))
         }
@@ -1441,7 +1484,7 @@ pub(crate) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Opt
     })
 }
 
-/// `Null` is excluded — it has its own narrowing path via `predicate_envs_eq_null`.
+/// `null` and `undefined` are excluded: they narrow through `predicate_envs_eq_nullish`.
 pub(super) fn literal_value_of(kind: &crate::TypedExprKind) -> Option<narrowing::LiteralValue> {
     use crate::TypedExprKind;
     match kind {
@@ -1464,6 +1507,8 @@ pub(super) fn literal_to_type(lit: &narrowing::LiteralValue) -> Type {
         narrowing::LiteralValue::String(s) => Type::StringLiteral(s.clone()),
         narrowing::LiteralValue::Boolean(b) => Type::BooleanLiteral(*b),
         narrowing::LiteralValue::BigInt(digits) => Type::BigIntLiteral(digits.clone()),
+        narrowing::LiteralValue::Null => Type::Null,
+        narrowing::LiteralValue::Undefined => Type::Undefined,
     }
 }
 
@@ -1495,7 +1540,73 @@ mod tests {
             ret: Box::new(ret),
             predicate: None,
             has_rest: false,
+            optional: 0,
         }
+    }
+
+    #[test]
+    fn undefined_is_distinct_from_null_and_assignable_to_void() {
+        assert!(assignable(&Type::Undefined, &Type::Void));
+        assert!(assignable(&Type::Void, &Type::Unknown));
+        assert!(!assignable(&Type::Void, &Type::Undefined));
+        assert!(!assignable(&Type::Null, &Type::Undefined));
+        assert!(!assignable(&Type::Undefined, &Type::Null));
+    }
+
+    #[test]
+    fn optional_tuple_accepts_omission_but_cannot_satisfy_required_position() {
+        let optional = Type::Tuple(crate::types::TupleType {
+            elements: vec![
+                Type::Number,
+                Type::union(vec![Type::String, Type::Undefined]),
+            ],
+            optional: 1,
+        });
+        let short = Type::Tuple(vec![Type::Number].into());
+        let full = Type::Tuple(vec![Type::Number, Type::String].into());
+        assert!(assignable(&short, &optional));
+        assert!(assignable(&full, &optional));
+        assert!(!assignable(&optional, &short));
+        assert!(!assignable(&optional, &full));
+    }
+
+    #[test]
+    fn optional_function_parameter_can_be_omitted_by_target_callers() {
+        let optional = Type::Function {
+            params: vec![Type::union(vec![Type::String, Type::Undefined])],
+            ret: Box::new(Type::Void),
+            predicate: None,
+            has_rest: false,
+            optional: 1,
+        };
+        let no_args = fn_ty(vec![], Type::Void);
+        let required = fn_ty(vec![Type::String], Type::Void);
+        assert!(assignable(&optional, &no_args));
+        assert!(assignable(&optional, &required));
+        assert!(!assignable(&required, &optional));
+        let required_union = fn_ty(
+            vec![Type::union(vec![Type::String, Type::Undefined])],
+            Type::Void,
+        );
+        assert!(assignable(&required_union, &optional));
+        assert!(!assignable(&required_union, &no_args));
+    }
+
+    #[test]
+    fn optional_object_field_accepts_explicit_undefined() {
+        let object = |field| Type::Object {
+            fields: [("value".to_string(), field)].into_iter().collect(),
+            index: None,
+        };
+        let optional = object(ObjectField::optional(Type::String));
+        assert!(assignable(
+            &object(ObjectField::required(Type::Undefined)),
+            &optional
+        ));
+        assert!(!assignable(
+            &object(ObjectField::required(Type::Null)),
+            &optional
+        ));
     }
 
     #[test]
@@ -1662,7 +1773,7 @@ mod tests {
             &readonly(either.clone())
         ));
         assert!(!assignable(&readonly(either), &readonly(numbers.clone())));
-        let pair = Type::Tuple(vec![Type::Number, Type::Number]);
+        let pair = Type::Tuple(vec![Type::Number, Type::Number].into());
         assert!(assignable(&pair, &readonly(pair.clone())));
         assert!(!assignable(&readonly(pair.clone()), &pair));
         assert!(assignable(
@@ -1786,6 +1897,7 @@ mod tests {
             methods.insert(
                 "m".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: Vec::new(),
                     ret: Type::Void,

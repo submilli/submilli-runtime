@@ -280,6 +280,7 @@ impl Collector<'_> {
             | TypedExprKind::String(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
+            | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
             | TypedExprKind::LocalRef { .. }

@@ -34,8 +34,15 @@ let c: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                             
-/*pruned*/;                       
+let d: void = null as unknown as (void);
+>d : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
 
 // operator <
 let ra1 = a < a;
@@ -68,19 +75,23 @@ let ra3 = c < c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;     
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
 let ra6 = null < null;
 >ra6 : boolean
 >    : ^^^^^^^
 >null < null : boolean
 >            : ^^^^^^^
 
-let ra7 = null < null;
+let ra7 = undefined < undefined;
 >ra7 : boolean
 >    : ^^^^^^^
->null < null : boolean
->            : ^^^^^^^
+>undefined < undefined : boolean
+>                      : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator >
@@ -114,19 +125,23 @@ let rb3 = c > c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;     
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
 let rb6 = null > null;
 >rb6 : boolean
 >    : ^^^^^^^
 >null > null : boolean
 >            : ^^^^^^^
 
-let rb7 = null > null;
+let rb7 = undefined > undefined;
 >rb7 : boolean
 >    : ^^^^^^^
->null > null : boolean
->            : ^^^^^^^
+>undefined > undefined : boolean
+>                      : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator <=
@@ -160,19 +175,23 @@ let rc3 = c <= c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;      
-/*pruned*/;      
+/*pruned*/;
+/*pruned*/;
 let rc6 = null <= null;
 >rc6 : boolean
 >    : ^^^^^^^
 >null <= null : boolean
 >             : ^^^^^^^
 
-let rc7 = null <= null;
+let rc7 = undefined <= undefined;
 >rc7 : boolean
 >    : ^^^^^^^
->null <= null : boolean
->             : ^^^^^^^
+>undefined <= undefined : boolean
+>                       : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator >=
@@ -206,19 +225,23 @@ let rd3 = c >= c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;      
-/*pruned*/;      
+/*pruned*/;
+/*pruned*/;
 let rd6 = null >= null;
 >rd6 : boolean
 >    : ^^^^^^^
 >null >= null : boolean
 >             : ^^^^^^^
 
-let rd7 = null >= null;
+let rd7 = undefined >= undefined;
 >rd7 : boolean
 >    : ^^^^^^^
->null >= null : boolean
->             : ^^^^^^^
+>undefined >= undefined : boolean
+>                       : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator ==
@@ -252,19 +275,32 @@ let re3 = c == c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;      
-/*pruned*/;      
+let re4 = d == d;
+>re4 : boolean
+>    : ^^^^^^^
+>d == d : boolean
+>       : ^^^^^^^
+>d : void
+>  : ^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let re6 = null == null;
 >re6 : boolean
 >    : ^^^^^^^
 >null == null : boolean
 >             : ^^^^^^^
 
-let re7 = null == null;
+let re7 = undefined == undefined;
 >re7 : boolean
 >    : ^^^^^^^
->null == null : boolean
->             : ^^^^^^^
+>undefined == undefined : boolean
+>                       : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator !=
@@ -298,19 +334,32 @@ let rf3 = c != c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;      
-/*pruned*/;      
+let rf4 = d != d;
+>rf4 : boolean
+>    : ^^^^^^^
+>d != d : boolean
+>       : ^^^^^^^
+>d : void
+>  : ^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let rf6 = null != null;
 >rf6 : boolean
 >    : ^^^^^^^
 >null != null : boolean
 >             : ^^^^^^^
 
-let rf7 = null != null;
+let rf7 = undefined != undefined;
 >rf7 : boolean
 >    : ^^^^^^^
->null != null : boolean
->             : ^^^^^^^
+>undefined != undefined : boolean
+>                       : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator ===
@@ -344,19 +393,32 @@ let rg3 = c === c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;       
-/*pruned*/;       
+let rg4 = d === d;
+>rg4 : boolean
+>    : ^^^^^^^
+>d === d : boolean
+>        : ^^^^^^^
+>d : void
+>  : ^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let rg6 = null === null;
 >rg6 : boolean
 >    : ^^^^^^^
 >null === null : boolean
 >              : ^^^^^^^
 
-let rg7 = null === null;
+let rg7 = undefined === undefined;
 >rg7 : boolean
 >    : ^^^^^^^
->null === null : boolean
->              : ^^^^^^^
+>undefined === undefined : boolean
+>                        : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator !==
@@ -390,19 +452,32 @@ let rh3 = c !== c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;       
-/*pruned*/;       
+let rh4 = d !== d;
+>rh4 : boolean
+>    : ^^^^^^^
+>d !== d : boolean
+>        : ^^^^^^^
+>d : void
+>  : ^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let rh6 = null !== null;
 >rh6 : boolean
 >    : ^^^^^^^
 >null !== null : boolean
 >              : ^^^^^^^
 
-let rh7 = null !== null;
+let rh7 = undefined !== undefined;
 >rh7 : boolean
 >    : ^^^^^^^
->null !== null : boolean
->              : ^^^^^^^
+>undefined !== undefined : boolean
+>                        : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 function main(): void {}

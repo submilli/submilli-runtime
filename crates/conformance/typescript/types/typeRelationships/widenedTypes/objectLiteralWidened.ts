@@ -4,20 +4,20 @@
 
 let x1 = {
     foo: null,
-    bar: null
+    bar: undefined
 }
 
 let y1 = {
     foo: null,
     bar: {
         baz: null,
-        boo: null
+        boo: undefined
     }
 }
 
 // these are not widened
 
-let u: null = null;
+let u: undefined = undefined;
 let n: null = null;
 
 let x2 = {

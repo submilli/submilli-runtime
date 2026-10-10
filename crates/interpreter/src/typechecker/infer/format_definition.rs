@@ -627,6 +627,9 @@ fn write_method(
     limits: &CopyBudget,
 ) -> Result<(), RenderError> {
     out.push(name)?;
+    if sig.optional {
+        out.push("?")?;
+    }
     write_generic_list(out, &sig.generics)?;
     out.push("(")?;
     for (i, param) in sig.params.iter().enumerate() {
@@ -636,7 +639,14 @@ fn write_method(
         }
         let ty = substituted(&param.ty, sub, limits)?;
         // Definition snapshots intentionally omit the rest marker here.
-        write_named_param(out, &param.name, &ty, param.default.as_ref(), false)?;
+        write_named_param(
+            out,
+            &param.name,
+            &ty,
+            param.default.as_ref(),
+            false,
+            super::format_signature::shows_optional(&sig.params, i),
+        )?;
     }
     out.push("): ")?;
     write_type(out, &substituted(&sig.ret, sub, limits)?)?;
@@ -770,6 +780,7 @@ mod tests {
 
     fn no_arg_string_ret() -> MethodSig {
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![],
             ret: Type::String,
@@ -847,6 +858,7 @@ mod tests {
     #[test]
     fn array_substitutes_interface_generic() {
         let map_sig = MethodSig {
+            optional: false,
             generics: vec!["U".to_string()],
             params: vec![Param::new(
                 "fn",
@@ -855,6 +867,7 @@ mod tests {
                     ret: Box::new(Type::TypeVar("U".to_string())),
                     predicate: None,
                     has_rest: false,
+                    optional: 0,
                 },
             )],
             ret: Type::Array(Box::new(Type::TypeVar("U".to_string()))),
@@ -899,6 +912,7 @@ mod tests {
                 ret: Box::new(Type::Boolean),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
             &empty_ns(),
             &TypeRegistry::new(),
@@ -909,6 +923,7 @@ mod tests {
     #[test]
     fn interface_ref_substitutes_multiple_args() {
         let get_sig = MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
             ret: Type::TypeVar("V".to_string()),

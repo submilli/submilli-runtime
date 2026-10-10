@@ -19,11 +19,12 @@ const path = require("path");
 const { OPTION_LINE, compilerOptions, lineIndex, tscErrors } = require("./tsc-case.cjs");
 
 const casesDir = path.join(__dirname, "..", "typescript");
-const filter = process.argv[2] ?? "";
-
-for (const file of findCases(casesDir)) {
-  if (!file.includes(filter)) continue;
-  writeBaselines(file);
+function main() {
+  const args = process.argv.slice(2);
+  const files = args[0] === "--case-list"
+    ? require("./case-list.cjs").readCaseList(args[1]).map((rel) => path.join(casesDir, rel))
+    : findCases(casesDir).filter((file) => file.includes(args[0] ?? ""));
+  for (const file of files) writeBaselines(file);
 }
 
 function writeBaselines(file) {
@@ -60,7 +61,9 @@ function typesBaseline(sourceFile, checker) {
     const line = rawLine.replace(/\r$/, "");
     // The harness leaves out the `// @option:` lines; so does this.
     if (OPTION_LINE.test(line)) return;
-    out.push(line);
+    // Echoes identify source lines, not columns. Keep padding in the source and
+    // expression text (including template values), but not at an echo's end.
+    out.push(line.trimEnd());
     for (const [text, type] of entries.get(i) ?? []) {
       out.push(`>${text} : ${type}`);
       out.push(`>${" ".repeat(text.length)} : ${"^".repeat(type.length)}`);
@@ -114,3 +117,6 @@ function findCases(dir) {
     })
     .sort();
 }
+
+module.exports = { writeBaselines };
+if (require.main === module) main();

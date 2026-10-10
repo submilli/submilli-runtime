@@ -183,6 +183,7 @@ enum BindingSource {
         try_stmt: StmtId,
         index: usize,
     },
+    ParameterBinding(StmtId),
     Const,
     Param {
         owner: ParamOwner,
@@ -332,8 +333,55 @@ impl State<'_> {
                 },
             })?;
         }
+        self.predeclare_parameter_bindings(body)?;
         self.walk_stmt(body)?;
         self.pop_frame()?;
+        Ok(())
+    }
+
+    /// Default closures can capture a later destructured parameter before
+    /// its initializer runs. Keep its declaration identity and shared cell.
+    fn predeclare_parameter_bindings(&mut self, body: StmtId) -> Result<(), CompilerFailure> {
+        let Some(&count) = self.ta.parameter_default_prologues.get(&body) else {
+            return Ok(());
+        };
+        let TypedStmtKind::Block(statements) = &self
+            .ta
+            .try_stmt(body)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            return Err(crate::typechecker::invariant_failure(
+                "parameter prologue body is not a block",
+            ));
+        };
+        let statements = statements
+            .get(..count)
+            .ok_or_else(|| {
+                crate::typechecker::invariant_failure("parameter prologue exceeds body length")
+            })?
+            .to_vec();
+        for id in statements {
+            if !self.ta.parameter_initializations.contains(&id) {
+                continue;
+            }
+            let kind = &self
+                .ta
+                .try_stmt(id)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind;
+            let (TypedStmtKind::Let { name, ty, .. } | TypedStmtKind::Const { name, ty, .. }) =
+                kind
+            else {
+                continue;
+            };
+            self.bind(LocalBinding {
+                name_ident: name.clone(),
+                ty: ty.clone(),
+                mutable: true,
+                source: BindingSource::ParameterBinding(id),
+            })?;
+        }
         Ok(())
     }
 
@@ -360,6 +408,9 @@ impl State<'_> {
                 name, ty, value, ..
             } => {
                 self.walk_expr(value)?;
+                if self.ta.parameter_initializations.contains(&id) {
+                    return Ok(());
+                }
                 self.bind(LocalBinding {
                     name_ident: name,
                     ty,
@@ -371,6 +422,9 @@ impl State<'_> {
                 name, ty, value, ..
             } => {
                 self.walk_expr(value)?;
+                if self.ta.parameter_initializations.contains(&id) {
+                    return Ok(());
+                }
                 self.bind(LocalBinding {
                     name_ident: name,
                     ty,
@@ -614,7 +668,10 @@ impl State<'_> {
                 }
                 match body {
                     ClosureBody::Expr(e) => self.walk_expr(e)?,
-                    ClosureBody::Block(b) => self.walk_stmt(b)?,
+                    ClosureBody::Block(b) => {
+                        self.predeclare_parameter_bindings(b)?;
+                        self.walk_stmt(b)?;
+                    }
                 }
                 let frame = self.frames.pop().ok_or_else(|| {
                     crate::typechecker::invariant_failure("missing closure capture frame")
@@ -773,6 +830,7 @@ impl State<'_> {
             | TypedExprKind::String(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
+            | TypedExprKind::Undefined
             | TypedExprKind::Regex { .. }
             | TypedExprKind::GlobalRef { .. }
             | TypedExprKind::FunctionRef { .. }
@@ -874,7 +932,8 @@ impl State<'_> {
             BindingSource::Catch { try_stmt, index } => {
                 self.catch_clause_mut(*try_stmt, *index)?.boxed = true;
             }
-            BindingSource::Const => {} // const captures are copied; never boxed
+            BindingSource::ParameterBinding(sid) => self.box_parameter_binding(*sid)?,
+            BindingSource::Const => {} // ordinary const captures are copied
             BindingSource::Param { owner, index } => match owner {
                 ParamOwner::Function(fidx) => {
                     let param = self
@@ -958,6 +1017,36 @@ impl State<'_> {
             .ok_or_else(|| crate::typechecker::invariant_failure("missing catch capture binding"))
     }
 
+    fn box_parameter_binding(&mut self, id: StmtId) -> Result<(), CompilerFailure> {
+        let statement = self
+            .ta
+            .try_stmt_mut(id)
+            .map_err(crate::typechecker::arena_failure)?;
+        match &mut statement.kind {
+            TypedStmtKind::Let { boxed, .. } => *boxed = true,
+            TypedStmtKind::Const {
+                name,
+                ty,
+                value,
+                doc,
+            } => {
+                statement.kind = TypedStmtKind::Let {
+                    name: name.clone(),
+                    ty: ty.clone(),
+                    value: *value,
+                    doc: doc.clone(),
+                    boxed: true,
+                };
+            }
+            _ => {
+                return Err(crate::typechecker::invariant_failure(
+                    "parameter capture source is not a binding",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Deferred so same-frame refs before a capturing closure still see the final `boxed` flag.
     fn apply_pending(&mut self) -> Result<(), crate::compiler_error::CompilerFailure> {
         let pending = std::mem::take(&mut self.pending);
@@ -1032,6 +1121,20 @@ impl State<'_> {
                 }
             },
             BindingSource::Catch { try_stmt, index } => self.catch_clause(*try_stmt, *index)?.boxed,
+            BindingSource::ParameterBinding(sid) => match &self
+                .ta
+                .try_stmt(*sid)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind
+            {
+                TypedStmtKind::Let { boxed, .. } => *boxed,
+                TypedStmtKind::Const { .. } => false,
+                _ => {
+                    return Err(crate::typechecker::invariant_failure(
+                        "parameter capture source is not a binding",
+                    ));
+                }
+            },
             BindingSource::Const => false,
             BindingSource::Param { owner, index } => match owner {
                 ParamOwner::Function(fidx) => {
@@ -1372,6 +1475,7 @@ mod tests {
             | TypedExprKind::String(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
+            | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
             | TypedExprKind::NumberEnumMember { .. }

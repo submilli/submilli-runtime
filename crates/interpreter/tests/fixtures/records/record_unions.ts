@@ -1,9 +1,9 @@
 interface Base { [key: string]: number; }
 interface Same extends Base { [key: string]: number; }
-function read(values: Record<string, number> | Record<string, string>, key: string): number | string | null {
+function read(values: Record<string, number> | Record<string, string>, key: string): number | string | undefined {
   return values[key];
 }
-function named(values: Record<string, number> | Record<string, string>): number | string | null {
+function named(values: Record<string, number> | Record<string, string>): number | string | undefined {
   return values.item;
 }
 function main(): void {

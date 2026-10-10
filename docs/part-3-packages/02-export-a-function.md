@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6492b508ce3ee84bd668345a028dd24056f1fbda3e124e84db7b49c1b770b941"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "53bfeddfa1d3eb9580e83e6dad2803d26b6502cb01a9728e3c23a8f22276d7af"
+  confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
 The agent's program is going to call a function of yours, and the program
@@ -280,12 +280,12 @@ function lookUpClass(customerId: string): string {
     response.throwForStatus();
     const customer = response.json() as Customer;
     const customerClass = customer.metadata["class"];
-    return customerClass === null ? "standard" : customerClass;
+    return customerClass === undefined ? "standard" : customerClass;
 }
 
 function requestHeaders(form: boolean): Map<string, string> {
     const key = secrets.get("BILLING_API_KEY");
-    if (key === null) {
+    if (key === undefined) {
         throw new Error("BILLING_API_KEY is not configured for this blueprint");
     }
     const headers = new Map<string, string>();
@@ -462,12 +462,12 @@ function lookUpClass(customerId: string): string {
     response.throwForStatus();
     const customer = response.json() as Customer;
     const customerClass = customer.metadata["class"];
-    return customerClass === null ? "standard" : customerClass;
+    return customerClass === undefined ? "standard" : customerClass;
 }
 
 function requestHeaders(form: boolean): Map<string, string> {
     const key = secrets.get("BILLING_API_KEY");
-    if (key === null) {
+    if (key === undefined) {
         throw new Error("BILLING_API_KEY is not configured for this blueprint");
     }
     const headers = new Map<string, string>();

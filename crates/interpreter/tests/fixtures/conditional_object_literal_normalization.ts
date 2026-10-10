@@ -8,11 +8,11 @@ function main(): void {
   const u = c ? (c ? { k: 1 } : { k: 2, m: 3 }) : { k: 4 };
   assert((u.m ?? 0) === 0, "a nested conditional normalizes");
   const v = !c ? (c ? { k: 1 } : { k: 2, m: 3 }) : { k: 4, n: "s" };
-  assert(v.k === 4 && v.m == null && v.n === "s", "fields from every branch read");
+  assert(v.k === 4 && v.m === undefined && v.n === "s", "fields from every branch read");
   const w = c ? { a: { x: 1 } } : { a: { y: 1 } };
-  assert(w.a.x === 1 && w.a.y == null, "a nested object normalizes");
+  assert(w.a.x === 1 && w.a.y === undefined, "a nested object normalizes");
   const n = c ? { a: 1 } : null;
   assert(n !== null && n.a === 1, "a literal beside null keeps its type");
   const m = c ? { a: 1 } : c ? { b: 1 } : null;
-  assert(m !== null && m.a === 1 && m.b == null, "literals beside a null branch normalize");
+  assert(m !== null && m.a === 1 && m.b === undefined, "literals beside a null branch normalize");
 }

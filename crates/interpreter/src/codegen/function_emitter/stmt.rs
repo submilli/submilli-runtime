@@ -70,21 +70,15 @@ pub fn emit_statement(
                         .map_err(crate::codegen::arena_failure)?
                         .ty,
                 )?;
+            } else if emitter.wasm_result_type(ctx)?.is_some() {
+                super::expr::emit_undefined(emitter, ctx)?;
+                cast::emit_coerce_to_return_slot(emitter, ctx, &Type::Undefined)?;
             }
             super::finally::emit_transfer(emitter, super::finally::Transfer::Return)?;
         }
         TypedStmtKind::Expr(expr_id) => {
             emit_expr(emitter, ctx, *expr_id)?;
-            // Expression statements discard the result; `void` calls leave
-            // nothing on the stack and need no Drop.
-            let ty = &ctx
-                .ta
-                .try_expr(*expr_id)
-                .map_err(crate::codegen::arena_failure)?
-                .ty;
-            if !ty.is_void() {
-                emitter.instruction(Instruction::Drop);
-            }
+            emitter.instruction(Instruction::Drop);
         }
         // top-level decls become global.set in _start; these are function-local
         TypedStmtKind::Let {
@@ -106,6 +100,28 @@ pub fn emit_statement(
                 let box_idx = ctx.symbols.box_type_idx(ty)?.ok_or_else(|| {
                     crate::codegen::internal_failure("box type registered for every boxed Let")
                 })?;
+                if ctx.ta.parameter_initializations.contains(&id) {
+                    let slot = emitter
+                        .parameter_binding_cells
+                        .get(name)
+                        .copied()
+                        .ok_or_else(|| {
+                            crate::codegen::internal_failure(
+                                "parameter pattern cell was not reserved",
+                            )
+                        })?;
+                    let value_slot = emitter.add_anonymous_local(ctx.symbols.value_type(ty)?)?;
+                    emitter.instruction(Instruction::LocalSet(value_slot));
+                    emitter.instruction(Instruction::LocalGet(slot));
+                    emitter.instruction(Instruction::LocalGet(value_slot));
+                    emitter.instruction(Instruction::StructSet {
+                        struct_type_index: box_idx,
+                        field_index: 0,
+                    });
+                    super::binding_cells::mark_initialized(emitter, slot, box_idx);
+                    return Ok(());
+                }
+                emitter.instruction(Instruction::I32Const(1));
                 emitter.instruction(Instruction::StructNew(box_idx));
                 let box_val = ValType::Ref(RefType {
                     nullable: false,
@@ -123,11 +139,8 @@ pub fn emit_statement(
             let box_idx = ctx.symbols.box_type_idx(ty)?.ok_or_else(|| {
                 crate::codegen::internal_failure("box type registered for every boxed Let")
             })?;
-            emitter.instruction(Instruction::LocalGet(slot));
-            emitter.instruction(Instruction::StructGet {
-                struct_type_index: box_idx,
-                field_index: 0,
-            });
+            super::binding_cells::read(emitter, ctx, slot, box_idx)?;
+            emitter.instruction(Instruction::I32Const(1));
             emitter.instruction(Instruction::StructNew(box_idx));
             emitter.instruction(Instruction::LocalSet(slot));
         }
@@ -173,10 +186,17 @@ pub fn emit_statement(
                 emitter.instruction(Instruction::LocalGet(slot));
                 emit_expr(emitter, ctx, *value)?;
                 cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty)?;
+                let initialization = ctx.ta.parameter_initializations.contains(&id);
+                if !initialization {
+                    super::binding_cells::check_initialized(emitter, ctx, slot, box_idx)?;
+                }
                 emitter.instruction(Instruction::StructSet {
                     struct_type_index: box_idx,
                     field_index: 0,
                 });
+                if initialization {
+                    super::binding_cells::mark_initialized(emitter, slot, box_idx);
+                }
             } else {
                 emit_expr(emitter, ctx, *value)?;
                 let value_ty = ctx
@@ -463,7 +483,8 @@ fn emit_class_field_store(
     name: &Ident,
     value: ExprId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    // Accessor property (no data slot): dispatch the synthetic setter.
+    // Accessor property (no data slot): dispatch the synthetic setter. The
+    // call leaves its `undefined` result, which the store discards.
     let Some(slot) = ctx.symbols.class_field_slot(mangled, &name.name) else {
         let setter = crate::codegen::classes::accessor_setter_name(&name.name);
         emit_method_call(
@@ -477,6 +498,7 @@ fn emit_class_field_store(
             None,
             &Type::Void,
         )?;
+        emitter.instruction(Instruction::Drop);
         return Ok(());
     };
     let struct_idx = ctx.symbols.class_struct_type_idx(mangled).ok_or_else(|| {
@@ -914,6 +936,8 @@ fn bind_catch_local(
         let box_idx = ctx.symbols.box_type_idx(&clause.ty)?.ok_or_else(|| {
             crate::codegen::internal_failure("box type registered for every boxed catch binding")
         })?;
+        // The caught error initializes the cell.
+        emitter.instruction(Instruction::I32Const(1));
         emitter.instruction(Instruction::StructNew(box_idx));
         ValType::Ref(RefType {
             nullable: false,
@@ -1056,6 +1080,10 @@ fn emit_case_comparison(
         TypedSwitchValue::Expr { comparison, .. } => {
             emit_expr(emitter, ctx, *comparison)?;
         }
+        TypedSwitchValue::Undefined { .. } => {
+            emitter.instruction(Instruction::LocalGet(disc_local));
+            super::expr::emit_is_undefined(emitter, ctx)?;
+        }
         TypedSwitchValue::Null { .. } => {
             // case null: accepted only when discriminant can hold null (nullable ref)
             emitter.instruction(Instruction::LocalGet(disc_local));
@@ -1138,7 +1166,9 @@ fn switch_case_primitive_type(value: &TypedSwitchValue) -> Option<Type> {
             ..
         } => Some(Type::String),
         TypedSwitchValue::Boolean { .. } => Some(Type::Boolean),
-        TypedSwitchValue::Null { .. } | TypedSwitchValue::Expr { .. } => None,
+        TypedSwitchValue::Null { .. }
+        | TypedSwitchValue::Undefined { .. }
+        | TypedSwitchValue::Expr { .. } => None,
     }
 }
 

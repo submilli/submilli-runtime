@@ -14,8 +14,8 @@
 // In a union an unknown absorbs everything
 
 type T10 = unknown | null;  // unknown
-type T11 = unknown | null;  // unknown
-type T12 = unknown | null | null;  // unknown
+type T11 = unknown | undefined;  // unknown
+type T12 = unknown | null | undefined;  // unknown
 type T13 = unknown | string;  // unknown
 type T14 = unknown | string[];  // unknown
 type T15 = unknown | unknown;  // unknown
@@ -114,7 +114,7 @@ function f22(x: unknown): void {
     let v4: string = x;  // Error
     let v5: string[] = x;  // Error
     let v6: {} = x;  // Error
-    let v7: {} | null | null = x;  // Error
+    let v7: {} | null | undefined = x;  // Error
 }
 
 // Type parameter 'T extends unknown' not related to object

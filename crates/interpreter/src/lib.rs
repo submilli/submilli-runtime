@@ -95,4 +95,4 @@ pub use typed_ast::{
     TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl, TypedStringEnumMember,
     TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
 };
-pub use types::{IndexSignature, ObjectField, Package, Type, TypePredicate};
+pub use types::{IndexSignature, ObjectField, Package, TupleType, Type, TypePredicate};

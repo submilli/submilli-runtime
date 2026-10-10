@@ -1,0 +1,61 @@
+types: 81 of 147 tsc entries compared, 13 differ
+
+line 5: z
+  tsc:  { f(x?: string): void; }
+  ours: { f: () => void } | { f: (arg0?: string) => void }
+
+line 5: !!true ? x : y
+  tsc:  { f(x?: string): void; }
+  ours: { f: () => void } | { f: (arg0?: string) => void }
+
+line 6: z.f
+  tsc:  (x?: string) => void
+  ours: (() => void) | ((arg0?: string) => void)
+
+line 6: z
+  tsc:  { f(x?: string): void; }
+  ours: { f: () => void } | { f: (arg0?: string) => void }
+
+line 7: z.f
+  tsc:  (x?: string) => void
+  ours: (() => void) | ((arg0?: string) => void)
+
+line 7: z
+  tsc:  { f(x?: string): void; }
+  ours: { f: () => void } | { f: (arg0?: string) => void }
+
+line 11: z
+  tsc:  { f(x?: string): void; }
+  ours: { f: (arg0: string | undefined) => void } | { f: (arg0?: string) => void }
+
+line 11: !!true ? x : y
+  tsc:  { f(x?: string): void; }
+  ours: { f: (arg0: string | undefined) => void } | { f: (arg0?: string) => void }
+
+line 12: z.f
+  tsc:  (x?: string) => void
+  ours: ((arg0: string | undefined) => void) | ((arg0?: string) => void)
+
+line 12: z
+  tsc:  { f(x?: string): void; }
+  ours: { f: (arg0: string | undefined) => void } | { f: (arg0?: string) => void }
+
+line 13: z.f
+  tsc:  (x?: string) => void
+  ours: ((arg0: string | undefined) => void) | ((arg0?: string) => void)
+
+line 13: z
+  tsc:  { f(x?: string): void; }
+  ours: { f: (arg0: string | undefined) => void } | { f: (arg0?: string) => void }
+
+line 61: { something() { } }
+  tsc:  { something(): void; }
+  ours: ReturnVal
+
+errors:
+line 6: ours: cannot call value of type `(() => void) | ((arg0?: string) => void)` (tsc accepts)
+line 7: ours: cannot call value of type `(() => void) | ((arg0?: string) => void)` (tsc accepts)
+line 12: ours: cannot call value of type `((arg0: string | undefined) => void) | ((arg0?: string) => void)` (tsc accepts)
+line 13: ours: cannot call value of type `((arg0: string | undefined) => void) | ((arg0?: string) => void)` (tsc accepts)
+line 51: ours: cannot call value of type `(() => void) | ((arg0?: string) => void)` (tsc accepts)
+line 52: ours: cannot call value of type `(() => void) | ((arg0?: string) => void)` (tsc accepts)

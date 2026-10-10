@@ -1,4 +1,8 @@
-types: 112 of 184 tsc entries compared, 0 differ
+types: 112 of 184 tsc entries compared, 1 differ
+
+line 11: x
+  tsc:  number
+  ours: number | string
 
 errors:
 line 121: tsc TS2872: This kind of expression is always truthy. (we accept)

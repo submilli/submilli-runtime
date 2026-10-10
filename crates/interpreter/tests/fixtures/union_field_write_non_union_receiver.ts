@@ -7,7 +7,7 @@
 // receiver that carries fields, so the guard *is* the answer and gets named.
 // `string | A` has no such answer — a guard would land on a second rejection —
 // so it keeps the bare message.
-// expect-error: cannot assign to field `f` of `null | A`: the receiver can be `null`
+// expect-error: cannot assign to field `f` of `A | null`: the receiver can be `null`
 // expect-error: guard first — `if (n !== null) { n.f = … }` — or assert non-null with `n!.f = …`
 // expect-error: cannot assign to field of `string | A`
 

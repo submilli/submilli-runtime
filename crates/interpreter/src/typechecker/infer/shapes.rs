@@ -145,6 +145,7 @@ impl<'a> ShapeCollector<'a> {
             | Type::Uint8Array
             | Type::Boolean
             | Type::BooleanLiteral(_)
+            | Type::Undefined
             | Type::Null
             | Type::Void
             | Type::Never
@@ -349,6 +350,7 @@ pub(super) fn collect_from_expr(
         | TypedExprKind::BigInt(_)
         | TypedExprKind::String(_)
         | TypedExprKind::Boolean(_)
+        | TypedExprKind::Undefined
         | TypedExprKind::Null
         | TypedExprKind::This
         | TypedExprKind::Regex { .. }

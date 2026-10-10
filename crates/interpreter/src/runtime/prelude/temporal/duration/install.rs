@@ -11,9 +11,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     let engine = &types.engine;
     let object = &types.object;
     let object_result = [object.clone()];
-    let nullable_options = ValType::Ref(RefType::new(
+    let optional_options = ValType::Ref(RefType::new(
         true,
-        HeapType::ConcreteStruct(types.intr.object_shape.clone()),
+        HeapType::ConcreteStruct(types.intr.object.clone()),
     ));
 
     let intr = types.intr.clone();
@@ -171,8 +171,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     )?;
 
     install_with(linker, types)?;
-    install_round_total_compare(linker, types, nullable_options.clone())?;
-    install_strings(linker, types, nullable_options)?;
+    install_round_total_compare(linker, types, optional_options.clone())?;
+    install_strings(linker, types, optional_options)?;
     Ok(())
 }
 
@@ -465,7 +465,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
             ]),
         )
     };
-    let nullable_options = || Type::Union(vec![shared::object_shape_type(&[]), Type::Null]);
+    let optional_options = || Type::Union(vec![shared::object_shape_type(&[]), Type::Undefined]);
 
     shared::declare_direct_fn(
         defs,
@@ -498,7 +498,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         vec![
             duration_like(),
             duration_like(),
-            Param::with_default("options", nullable_options(), DefaultValue::Null),
+            Param::with_default("options", optional_options(), DefaultValue::Undefined),
         ],
         Type::Number,
     );
@@ -577,7 +577,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         shared::prelude_key("Duration", "toString"),
         vec![
             receiver(),
-            Param::with_default("options", nullable_options(), DefaultValue::Null),
+            Param::with_default("options", optional_options(), DefaultValue::Undefined),
         ],
         Type::String,
     );

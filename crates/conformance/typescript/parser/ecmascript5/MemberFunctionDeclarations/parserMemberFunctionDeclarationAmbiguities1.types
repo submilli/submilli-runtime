@@ -29,7 +29,7 @@ class C {
 >static : { (): void; (): void; }
 >       : ^^^^^^^^^^^^^^^^^^^^^^^
 
-  
+
   static public(): void {}
 >public : { (): void; (): void; }
 >       : ^^^^^^^^^^^^^^^^^^^^^^^

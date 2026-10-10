@@ -1,9 +1,9 @@
 interface Values { [key: string]: number; }
 interface NamedValues { [key: string]: number; x: number; }
-function dot(values: Values): number | null { return values.x; }
-function literal(values: Values): number | null { return values["x"]; }
-function optional(values: Values | null): number | null { return values?.x; }
-function optionalLiteral(values: Values | null): number | null { return values?.["x"]; }
+function dot(values: Values): number | undefined { return values.x; }
+function literal(values: Values): number | undefined { return values["x"]; }
+function optional(values: Values | null): number | undefined { return values?.x; }
+function optionalLiteral(values: Values | null): number | undefined { return values?.["x"]; }
 function named(values: NamedValues): number { return values.x; }
 function main(): void {
   const values: NamedValues = { x: 1 };
@@ -11,8 +11,8 @@ function main(): void {
   assert(literal(values) === 1);
   assert(optional(values) === 1);
   assert(optionalLiteral(values) === 1);
-  assert(optional(null) === null);
-  assert(optionalLiteral({}) === null);
+  assert(optional(null) === undefined);
+  assert(optionalLiteral({}) === undefined);
   const wide: Record<string, unknown> = values;
   wide["x"] = "wrong";
   let errors = 0;

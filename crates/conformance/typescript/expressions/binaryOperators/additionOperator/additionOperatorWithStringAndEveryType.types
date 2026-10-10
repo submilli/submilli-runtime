@@ -10,7 +10,7 @@ enum E { a, b, c }
 >  : ^^^
 
 
-/*pruned*/;                           
+/*pruned*/;
 let b: boolean = null as unknown as (boolean);
 >b : boolean
 >  : ^^^^^^^
@@ -35,9 +35,16 @@ let d: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                 
-/*pruned*/;                             
-/*pruned*/;                       
+/*pruned*/;
+let f: void = null as unknown as (void);
+>f : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
 
 let x: string = null as unknown as (string);
 >x : string
@@ -50,7 +57,7 @@ let x: string = null as unknown as (string);
 
 // string could plus every type, and the result is always string
 // string as left operand
-/*pruned*/;    
+/*pruned*/;
 let r2 = x + b;
 >r2 : string
 >   : ^^^^^^
@@ -81,12 +88,21 @@ let r4 = x + d;
 >d : string
 >  : ^^^^^^
 
-/*pruned*/;    
-/*pruned*/;    
-/*pruned*/;    
+/*pruned*/;
+let r6 = x + f;
+>r6 : string
+>   : ^^^^^^
+>x + f : string
+>      : ^^^^^^
+>x : string
+>  : ^^^^^^
+>f : void
+>  : ^^^^
+
+/*pruned*/;
 
 // string as right operand
-/*pruned*/;    
+/*pruned*/;
 let r9 = b + x;
 >r9 : string
 >   : ^^^^^^
@@ -117,12 +133,12 @@ let r11 = d + x;
 >x : string
 >  : ^^^^^^
 
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 // other cases
-/*pruned*/;     
+/*pruned*/;
 let r16 = x + E.a;
 >r16 : string
 >    : ^^^^^^

@@ -91,9 +91,9 @@ let f = abcOrXyzOrNumber++;
 >abcOrXyzOrNumber : string | number
 >                 : ^^^^^^^^^^^^^^^
 
-/*pruned*/;                
-/*pruned*/;                   
-/*pruned*/;                   
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 let j = abc < xyz;
 >j : boolean
 >  : ^^^^^^^

@@ -43,9 +43,9 @@ interface B extends Entity {
 
 }
 
-/*pruned*/;                                              
-/*pruned*/;                                              
-/*pruned*/;                                                    
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 function hasKind(entity: Entity, kind: Kind): boolean {
 >hasKind : (entity: Entity, kind: Kind) => boolean
 >        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

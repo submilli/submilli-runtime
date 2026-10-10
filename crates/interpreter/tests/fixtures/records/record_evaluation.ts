@@ -19,7 +19,7 @@ function main(): void {
   assert(calls === 3);
   assert(maybe?.x === 2);
   const missing: Record<string, number> | null = nullable(null);
-  assert(missing?.[next()] === null);
+  assert(missing?.[next()] === undefined);
   assert(calls === 3);
   const make = (key: string): () => Record<string, number> => (): Record<string, number> => ({ [key]: 8 });
   assert(make("captured")().captured === 8);

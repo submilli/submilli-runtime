@@ -39,14 +39,14 @@ export function getBlock(context: PageContext): NotionBlock {
  * List direct children of the block or page a context was resolved from.
  *
  * @param context Page context of the parent block or page.
- * @param requestedSize Children per page, 1 to 100; `null` uses 100.
- * @param startCursor Cursor from a previous page's `nextCursor`; `null` starts at the first child.
+ * @param requestedSize Children per page, 1 to 100; undefined uses 100.
+ * @param startCursor Cursor from a previous page's `nextCursor`; undefined starts at the first child.
  * @returns One page of child blocks with pagination state.
  */
 export function listBlockChildren(
     context: PageContext,
-    requestedSize: number | null,
-    startCursor: string | null,
+    requestedSize: number | undefined,
+    startCursor: string | undefined,
 ): PageResult<NotionBlock> {
     const query = new Map<string, string>();
     putQuery(query, "start_cursor", startCursor);

@@ -1,1 +1,2 @@
 line 12, 21, 30, 39 extra: by-design spec §1.6 `<`, `>`, `<=`, `>=` compare only two numbers or two strings
+line 52, 53, 61, 62 extra: by-design spec §1.6 `==` and `!=` against `null` or `undefined` are rejected, since they compare like `===` and would miss the other nullish value

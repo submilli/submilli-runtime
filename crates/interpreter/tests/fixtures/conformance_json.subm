@@ -24,7 +24,7 @@ function main(): void {
   const u = JSON.parse("{\"id\":1,\"name\":\"ada\",\"active\":true,\"tags\":[\"x\"]}") as User;
   assert(u.id === 1 && u.name === "ada" && u.active, "typed parse");
   assert(u.tags.length === 1 && u.tags[0] === "x", "nested array parses");
-  assert(u.nick === null, "omitted optional field reads as null");
+  assert(u.nick === undefined, "omitted optional field reads as undefined");
 
   // Lenient field policy: extras are dropped.
   const v = JSON.parse("{\"id\":2,\"name\":\"b\",\"active\":false,\"tags\":[],\"extra\":9}") as User;

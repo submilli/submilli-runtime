@@ -1,0 +1,18 @@
+types: 0 of 118 tsc entries compared, 0 differ
+
+errors:
+line 11: ours: incompatible inherited member `a` (tsc accepts)
+line 23: ours: incompatible inherited member `a` (tsc accepts)
+line 27: ours: incompatible inherited member `a` (tsc accepts)
+line 31: ours: incompatible inherited member `a` (tsc accepts)
+line 41: ours: incompatible inherited member `a2` (tsc accepts)
+line 45: ours: incompatible inherited member `a2` (tsc accepts)
+line 49: ours: incompatible inherited member `a2` (tsc accepts)
+line 53: ours: incompatible inherited member `a2` (tsc accepts)
+line 65: ours: incompatible inherited member `a2` (tsc accepts)
+line 69: ours: incompatible inherited member `a2` (tsc accepts)
+line 75: ours: incompatible inherited member `a3` (tsc accepts)
+line 79: ours: incompatible inherited member `a3` (tsc accepts)
+line 83: ours: incompatible inherited member `a3` (tsc accepts)
+line 107: ours: incompatible inherited member `a4` (tsc accepts)
+line 123: ours: incompatible inherited member `a4` (tsc accepts)

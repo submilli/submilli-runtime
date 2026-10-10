@@ -1,6 +1,7 @@
 //! Codegen — translates a typechecked Typed AST into a Wasm module.
 
 pub mod analysis;
+mod argument_defaults;
 pub mod bigint_pool;
 pub mod bounds;
 pub mod box_types;
@@ -24,6 +25,7 @@ pub mod init_guard;
 pub mod intrinsics;
 #[cfg(test)]
 mod invariant_tests;
+mod nullish;
 pub mod recursive_validators;
 mod runtime_descriptors;
 mod runtime_values;
@@ -62,6 +64,19 @@ pub(crate) fn internal_failure(message: impl Into<String>) -> CompilerFailure {
         span: None,
         message: message.into(),
     }
+}
+
+/// Whether a package, or a symbol mangled under one, is implemented by the Rust
+/// host rather than compiled guest code. A mangled name starts with its package.
+pub(crate) fn is_host_package(name: &str) -> bool {
+    name.starts_with("submilli:")
+}
+
+/// A host package's `void` function returns no Wasm value, so each call site
+/// pushes `undefined` itself; a guest `void` function returns `undefined`.
+/// `owner` is a package name, or a mangled symbol, which begins with one.
+fn is_resultless(owner: &str, ret: &Type) -> bool {
+    ret.is_void() && is_host_package(owner)
 }
 
 /// Allocates the next index in a WebAssembly index space. Like arena IDs,
@@ -181,7 +196,11 @@ fn import_value_symbol(
                         .iter()
                         .map(|p| symbols.value_type(&p.ty))
                         .collect::<Result<_, _>>()?,
-                    symbols.wasm_result(ret)?,
+                    if is_resultless(&defs.package_name, ret) {
+                        vec![]
+                    } else {
+                        symbols.wasm_result(ret)?
+                    },
                 )
             };
             if defs.runtime_generics.contains(&value.mangled_name) {
@@ -190,17 +209,30 @@ fn import_value_symbol(
                     .insert(value.mangled_name.clone());
                 param_types.push(runtime_descriptors::environment_type(symbols)?);
             }
+            if is_host_package(&defs.package_name) {
+                symbols.record_host_parameter_defaults(
+                    *next_func_idx,
+                    params.iter().map(|param| param.default.clone()).collect(),
+                );
+            }
+            if result_types.is_empty() {
+                symbols.resultless_functions.insert(*next_func_idx);
+            }
             types.ty().function(param_types, result_types);
             import_section.import(
                 defs.package_name.as_str(),
                 value.mangled_name.as_str(),
                 EntityType::Function(sig_idx),
             );
-            if let Some(metadata) = call_arguments::metadata(
-                params
-                    .iter()
-                    .map(|param| (param.default.as_ref(), param.rest)),
-            ) {
+            if let Some(metadata) = call_arguments::metadata(params.iter().map(|param| {
+                (
+                    param
+                        .default
+                        .as_ref()
+                        .or(param.optional.then_some(&crate::DefaultValue::Undefined)),
+                    param.rest,
+                )
+            })) {
                 symbols
                     .function_argument_metadata
                     .insert(value.mangled_name.clone(), metadata);
@@ -284,7 +316,11 @@ fn declared_wrapper_abi(
                 .skip(receiver_offset)
                 .map(|ty| symbols.value_type(ty))
                 .collect::<Result<_, _>>()?,
-            ret: symbols.wasm_result(&imported.ret)?.first().copied(),
+            ret: if symbols.resultless_functions.contains(&imported.wasm_idx) {
+                None
+            } else {
+                symbols.wasm_result(&imported.ret)?.first().copied()
+            },
         });
     }
     Ok(symbol_table::MethodSlotAbi {
@@ -293,7 +329,11 @@ fn declared_wrapper_abi(
             .iter()
             .map(|p| symbols.value_type(&p.ty))
             .collect::<Result<_, _>>()?,
-        ret: symbols.wasm_result(&sig.ret)?.first().copied(),
+        ret: if is_resultless(mangled.as_str(), &sig.ret) {
+            None
+        } else {
+            symbols.wasm_result(&sig.ret)?.first().copied()
+        },
     })
 }
 
@@ -928,6 +968,7 @@ fn codegen_inner(
     // Reconstruct imported classes (their rec groups + function imports + vtable
     // globals) before the local class plan, so a local subclass can subtype an
     // imported parent and lay its fields out after the parent's (SUB-488).
+    symbols.record_rewritable_members(classes::RewritableMembers::of(ta)?);
     let imported_class_layouts = imported_classes::reconstruct(
         dependencies,
         ta,
@@ -945,13 +986,7 @@ fn codegen_inner(
     // Class rec group last among types so class field slots can resolve string /
     // array / closure / box field types via `value_type`.
     let mut class_plan = classes::ClassPlan::collect(ta, &imported_class_layouts)?;
-    class_plan.reserve_and_emit_types(
-        &mut types,
-        &mut next_type_idx,
-        &mut symbols,
-        ta,
-        intrinsics,
-    )?;
+    class_plan.reserve_and_emit_types(&mut types, &mut next_type_idx, &mut symbols, intrinsics)?;
     for value in &dependency_values {
         let defs = value.package;
         // `@mcp/<server>` tools aren't per-tool Wasm imports: every call lowers to
@@ -1012,6 +1047,22 @@ fn codegen_inner(
         symbols.record_global(crate::mangle::prelude(name), next_global_idx);
         crate::codegen::next_index(&mut next_global_idx)?;
     }
+    // The store's single `undefined`, read with `global.get` rather than a host call.
+    let undefined_value = crate::mangle::prelude(crate::runtime::prelude::undefined::GLOBAL_NAME);
+    import_section.import(
+        crate::runtime::prelude::MODULE_NAME,
+        undefined_value.as_str(),
+        EntityType::Global(GlobalType {
+            val_type: ValType::Ref(RefType {
+                nullable: false,
+                heap_type: HeapType::Concrete(intrinsics.undefined),
+            }),
+            mutable: false,
+            shared: false,
+        }),
+    );
+    symbols.record_global(undefined_value, next_global_idx);
+    crate::codegen::next_index(&mut next_global_idx)?;
     if dependency_usage.uses_bigint() {
         let mangled = crate::mangle::prelude("bigint_vtable");
         import_section.import(
@@ -1227,7 +1278,17 @@ fn codegen_inner(
             // method is — its value symbol is declared beside the Rust impl in
             // `runtime::prelude`); only interface members without one
             // (stdlib shim exports like `File#close`) import here.
-            if symbols.func_idx(&mangled).is_some() {
+            // The receiver, when the method has one, is a Wasm parameter
+            // without a default.
+            let host_defaults = is_host_package(&defs.package_name).then(|| {
+                std::iter::repeat_n(None, usize::from(receiver_wasm.is_some()))
+                    .chain(sig.params.iter().map(|param| param.default.clone()))
+                    .collect::<Vec<_>>()
+            });
+            if let Some(func_idx) = symbols.func_idx(&mangled) {
+                if let Some(defaults) = host_defaults {
+                    symbols.record_host_parameter_defaults(func_idx, defaults);
+                }
                 continue;
             }
             let mut params: Vec<ValType> = Vec::new();
@@ -1235,6 +1296,9 @@ fn codegen_inner(
                 params.push(recv);
             }
             params.extend(abi.params.iter().copied());
+            if let Some(defaults) = host_defaults {
+                symbols.record_host_parameter_defaults(next_func_idx, defaults);
+            }
             let results: Vec<ValType> = abi.ret.into_iter().collect();
             let sig_idx = next_type_idx;
             crate::codegen::next_index(&mut next_type_idx)?;
@@ -1467,22 +1531,22 @@ fn codegen_inner(
     }
 
     // `main`'s result is encoded to its output `$string` entirely in wasm by the
-    // `__main_output` shim (`() -> (ref $string)`): scalars render via `toString`
+    // `__main_output` shim (`() -> (ref null $string)`): scalars render via `toString`
     // (a `string` passes through verbatim — no JSON quoting), and structured
     // returns route through the same `toJson` machinery as `JSON.stringify`. Codegen
     // — which has the typed return type — is the single source of truth for the
-    // encoding; the host reads the shim's `$string` verbatim. Only `void` (no
-    // output) skips the shim; `never`/`error` never produce a value to encode.
+    // encoding; the host reads the shim's `$string` verbatim. Undefined produces
+    // no output; `never`/`error` never produce a value to encode.
     let main_func = ta.functions.iter().find(|f| f.name.name == "main");
     let main_return_ty = main_func.map(|f| f.return_type.clone());
     let main_output_shim = match main_return_ty.as_ref().map(Type::peel) {
-        None | Some(Type::Void | Type::Never | Type::Error) => None,
+        None | Some(Type::Never | Type::Error) => None,
         Some(_) => {
             let sig_idx = next_type_idx;
             types.ty().function(
                 Vec::<ValType>::new(),
                 [ValType::Ref(RefType {
-                    nullable: false,
+                    nullable: true,
                     heap_type: HeapType::Concrete(intrinsics.string),
                 })],
             );
@@ -2197,7 +2261,7 @@ pub(crate) mod tests {
 
     #[test]
     fn missing_record_import_returns_an_internal_error_without_wasm() {
-        let source = "function main(): number | null { const d: Record<string, number> = {}; const key: string = 'x'; return d[key]; }";
+        let source = "function main(): number | undefined { const d: Record<string, number> = {}; const key: string = 'x'; return d[key]; }";
         let ta = type_check(source);
         let (prelude_defs, host_defs, internal_defs) =
             prelude::cached_runtime_package_declarations();
@@ -2426,6 +2490,7 @@ function main(): string {
             raw_string: 0,
             vtable: 1,
             object: 2,
+            undefined: 51,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,
@@ -2718,7 +2783,7 @@ function main(): string {
                  * @param value Value to encode.
                  * @returns `value` as JSON.
                  */
-                export function passthrough(value: unknown): string {
+                export function passthrough(value: unknown): string | undefined {
                     return JSON.stringify(value);
                 }
                 "#,
@@ -2794,7 +2859,7 @@ function main(): string {
                 constructor() { this.stolen = "none"; }
                 toJson(): string {
                     const token = get("TOKEN");
-                    if (token !== null) { this.stolen = token; }
+                    if (token !== undefined) { this.stolen = token; }
                     return "\"ok\"";
                 }
             }
@@ -2928,7 +2993,7 @@ function main(): string {
                 constructor() { this.stolen = "none"; }
                 toJson(): string {
                     const t = get("TOKEN");
-                    if (t !== null) { this.stolen = t; }
+                    if (t !== undefined) { this.stolen = t; }
                     return "\"ok\"";
                 }
             }
@@ -2975,7 +3040,7 @@ function main(): string {
                      */
                     load(): string {
                         const t = get("TOKEN");
-                        return t === null ? "none" : t;
+                        return t === undefined ? "none" : t;
                     }
                 }
                 "#,
@@ -3017,14 +3082,14 @@ function main(): string {
                 r#"
                 import { get } from "submilli:secrets";
 
-                const TOKEN: string | null = get("TOKEN");
+                const TOKEN: string | undefined = get("TOKEN");
 
                 /**
                  * Reports whether the module-level read succeeded.
                  * @returns Whether the read succeeded.
                  */
                 export function loaded(): boolean {
-                    return TOKEN !== null;
+                    return TOKEN !== undefined;
                 }
                 "#,
             )],
@@ -3218,6 +3283,97 @@ function main(): string {
         run_main_number(&compile(source))
     }
 
+    #[test]
+    fn undefined_backend_distinguishes_nullish_values_and_absence() {
+        assert_eq!(
+            run_main_f64(
+                r#"
+            function read(value: { a?: number } | null | undefined): number | undefined {
+                return value?.a;
+            }
+            function main(): number {
+                const absent: { a?: number } = {};
+                const present: { a?: number } = { a: undefined };
+                assert(absent.a === undefined, "missing read");
+                assert(!("a" in absent) && "a" in present, "presence");
+                assert(read(null) === undefined && read(undefined) === undefined, "chain");
+                assert((read(undefined) ?? 7) === 7, "coalesce");
+                const value: number | undefined = undefined;
+                assert(!value && typeof value === "undefined", "truthiness and tag");
+                assert(typeof null === "object" && typeof 1n === "bigint", "other tags");
+                return 1;
+            }
+        "#
+            ),
+            1.0
+        );
+    }
+
+    #[test]
+    fn undefined_backend_preserves_void_callback_completion() {
+        assert_eq!(
+            run_main_f64(
+                r#"
+            function empty(): void {}
+            function invoke(callback: () => void): unknown { return callback(); }
+            function main(): number {
+                const callback: () => void = () => 42;
+                const result: unknown = invoke(callback);
+                assert(result === 42, "void callback preserves value");
+                const completion: unknown = empty();
+                assert(completion === undefined, "fallthrough completion");
+                assert((void 42) === undefined, "void expression");
+                return 1;
+            }
+        "#
+            ),
+            1.0
+        );
+    }
+
+    #[test]
+    fn undefined_backend_optional_tuple_casts_preserve_length() {
+        assert_eq!(
+            run_main_f64(
+                r#"
+            function check(value: unknown): [number, string?] {
+                return value as [number, string?];
+            }
+            function main(): number {
+                const short = check([1]);
+                const entries: unknown[] = [1, undefined];
+                const explicit = check(entries);
+                assert(short.length === 1 && short[1] === undefined, "omitted tuple slot");
+                assert(explicit.length === 2 && explicit[1] === undefined, "present tuple slot");
+                assert(JSON.stringify(short) === "[1]", "short tuple JSON");
+                return 1;
+            }
+        "#
+            ),
+            1.0
+        );
+    }
+
+    #[test]
+    fn undefined_backend_native_defaults_and_constructor_properties() {
+        assert_eq!(
+            run_main_f64(
+                r#"
+            class Value {
+                constructor(public value: number = 17) {}
+            }
+            function main(): number {
+                assert(new Value(undefined).value === 17, "parameter property default");
+                assert("abc".slice(1, undefined) === "bc", "native numeric default");
+                assert("a".padStart(2, undefined) === " a", "native string default");
+                return 1;
+            }
+        "#
+            ),
+            1.0
+        );
+    }
+
     fn run_main_number(bytes: &[u8]) -> f64 {
         let (mut store, inst) = link_consumer(bytes);
         let main = inst.get_func(&mut store, "main").expect("main export");
@@ -3253,10 +3409,12 @@ function main(): string {
     fn run_main_expecting_error(source: &str) -> String {
         let bytes = compile(source);
         let (mut store, inst) = link_consumer(&bytes);
-        let main = inst
-            .get_typed_func::<(), ()>(&mut store, "main")
-            .expect("main signature is `() -> void` in expecting-error fixtures");
-        let result = pollster::block_on(main.call_async(&mut store, ()));
+        let main = inst.get_func(&mut store, "main").expect("main export");
+        let result = pollster::block_on(main.call_async(
+            &mut store,
+            &[],
+            &mut [wasmtime::Val::AnyRef(None)],
+        ));
         // Same uncaught-exception reshaping `dispatch_main_async` applies, so a
         // throw renders with its stashed backtrace like a trap does.
         let err = result.expect_err("expected main() to trap or throw");
@@ -3376,8 +3534,8 @@ function main(): string {
     #[test]
     fn string_runtime_imported_from_prelude() {
         let bytes = compile("function main(): void { }");
-        // User functions, module start, and the shared field lookup.
-        assert_eq!(function_count(&bytes), 3);
+        // User functions, module start, output shim, and shared field lookup.
+        assert_eq!(function_count(&bytes), 4);
         let stable_imports: Vec<_> = imports(&bytes)
             .into_iter()
             .filter(|(_, name)| !is_sub421_temporal_getter_import(name))
@@ -3471,7 +3629,10 @@ function main(): string {
     #[test]
     fn main_still_exported_uniquely() {
         let bytes = compile("function main(): void { }");
-        assert_eq!(export_names(&bytes), vec!["main".to_string()]);
+        assert_eq!(
+            export_names(&bytes),
+            vec!["main".to_string(), "__main_output".to_string()]
+        );
     }
 
     #[test]
@@ -3530,8 +3691,8 @@ function main(): string {
     #[test]
     fn module_with_strings_keeps_runtime_imports() {
         let bytes = compile(r#"let x: string = "hi"; function main(): void { }"#);
-        // User functions, module start, and the shared field lookup.
-        assert_eq!(function_count(&bytes), 3);
+        // User functions, module start, output shim, and shared field lookup.
+        assert_eq!(function_count(&bytes), 4);
         let imp = imports(&bytes);
         assert!(imp.contains(&(
             crate::runtime::prelude::MODULE_NAME.to_string(),
@@ -3554,9 +3715,12 @@ function main(): string {
     fn helper_emits_function_body_but_is_not_exported() {
         let bytes = compile("function main(): void { } function helper(): void { }");
         instantiate_against_prelude(&bytes);
-        // User functions, module start, and the shared field lookup.
-        assert_eq!(function_count(&bytes), 4);
-        assert_eq!(export_names(&bytes), vec!["main".to_string()]);
+        // User functions, module start, output shim, and shared field lookup.
+        assert_eq!(function_count(&bytes), 5);
+        assert_eq!(
+            export_names(&bytes),
+            vec!["main".to_string(), "__main_output".to_string()]
+        );
     }
 
     #[test]
@@ -4470,8 +4634,8 @@ function main(): number { return counter + max_iterations; }"#,
             start_function_idx(&bytes),
             Some(imported_func_count(&bytes))
         );
-        // User functions, module start, and the shared field lookup.
-        assert_eq!(function_count(&bytes), 3);
+        // User functions, module start, output shim, and shared field lookup.
+        assert_eq!(function_count(&bytes), 4);
     }
 
     #[test]
@@ -5369,10 +5533,14 @@ function main(): void {
         let bytes = compile(source);
         let (mut store, inst) = link_consumer_with(cfg, &bytes);
         let main = inst
-            .get_typed_func::<(), ()>(&mut store, "main")
+            .get_func(&mut store, "main")
             .expect("main signature is `() -> void` in expecting-trap fixtures");
-        let err = pollster::block_on(main.call_async(&mut store, ()))
-            .expect_err("expected main() to trap");
+        let err = pollster::block_on(main.call_async(
+            &mut store,
+            &[],
+            &mut [wasmtime::Val::AnyRef(None)],
+        ))
+        .expect_err("expected main() to trap");
         let (sources, file) = crate::Sources::single("script.subm", source).unwrap();
         crate::render_backtrace(&err, &sources, file, crate::BacktraceMode::Full)
             .expect("backtrace empty — was wasm_backtrace_details enabled?")
@@ -5476,10 +5644,9 @@ function main(): void {
                 .await
                 .expect("consumer instantiates")
         });
-        let main = inst
-            .get_typed_func::<(), ()>(&mut store, "main")
-            .expect("main () -> void");
-        pollster::block_on(main.call_async(&mut store, ())).expect("main does not trap");
+        let main = inst.get_func(&mut store, "main").expect("main () -> void");
+        pollster::block_on(main.call_async(&mut store, &[], &mut [wasmtime::Val::AnyRef(None)]))
+            .expect("main does not trap");
         let captured = buf.lock().unwrap().clone();
         String::from_utf8(captured).expect("utf8")
     }
@@ -6017,6 +6184,7 @@ function main(): void {
             | TypedExprKind::String(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
+            | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
             | TypedExprKind::GlobalRef { .. }
@@ -6174,6 +6342,7 @@ function main(): void {
             raw_string: 0,
             vtable: 1,
             object: 2,
+            undefined: 51,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,

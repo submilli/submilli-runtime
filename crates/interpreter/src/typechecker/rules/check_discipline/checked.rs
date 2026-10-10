@@ -14,7 +14,7 @@
 //! branch that left, holds what decided the branch as well, so a flag set
 //! under a condition carries the condition.
 //!
-//! A value only compared with `null`, tested for truthiness, given to
+//! A value only compared with `null` or `undefined`, tested for truthiness, given to
 //! `typeof` or `instanceof`, or compared with another `Map`, `Set` or
 //! regular expression reaches `check()` by its identity: only reading it
 //! again, or handing on a value that holds it, can change the decision. Any
@@ -693,7 +693,11 @@ impl<'a> Walker<'a, '_> {
                 let flow = self.eval(*value)?;
                 if let Some(local) = self.scopes.resolve(&ident.name).copied() {
                     self.note_made_from(local, *value)?;
-                    self.reassign(local, flow, stmt.span)?;
+                    if ta.parameter_initializations.contains(&id) {
+                        self.initialize_parameter(local, flow, stmt.span)?;
+                    } else {
+                        self.reassign(local, flow, stmt.span)?;
+                    }
                 }
             }
             TypedStmtKind::AssignField {
@@ -1137,6 +1141,31 @@ impl Walker<'_, '_> {
         }
     }
 
+    /// A callee default chooses the parameter's initial value. Retaining the
+    /// incoming value preserves its property paths, unlike a later reassignment.
+    fn initialize_parameter(
+        &mut self,
+        local: LocalId,
+        mut flow: Flow,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        // The declaration already carries the incoming argument. Keep derived
+        // self-reads (including the undefined test), but avoid a redundant alias.
+        flow.retain(|term| {
+            term.source != Source::Local(local) || term.derived || !term.steps.is_empty()
+        });
+        let made_from = sources_read(&flow);
+        self.note_aliases(local, &made_from, span, true);
+        self.local_mut(local)?.made_from.extend(made_from);
+        let guards = self.guard_terms();
+        if self.work.spend(flow.len().saturating_add(guards.len())) {
+            let initial = &mut self.local_mut(local)?.flow;
+            initial.extend(flow);
+            initial.extend(guards);
+        }
+        Ok(())
+    }
+
     /// Assigns a local declared earlier: a new value it may be, and one a
     /// nested function may set behind the walk's back.
     fn reassign(&mut self, local: LocalId, flow: Flow, span: Span) -> Result<(), CompilerFailure> {
@@ -1384,6 +1413,7 @@ impl<'a> Walker<'a, '_> {
             | TypedExprKind::String(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
+            | TypedExprKind::Undefined
             | TypedExprKind::Regex { .. }
             | TypedExprKind::FunctionRef { .. }
             | TypedExprKind::NumberEnumMember { .. }
@@ -1567,8 +1597,8 @@ impl<'a> Walker<'a, '_> {
         match op {
             BinOp::And | BinOp::Or | BinOp::NullishCoalesce => self.either(lhs, rhs, span),
             BinOp::Eq | BinOp::NotEq => {
-                let by_identity = self.is_null(lhs)?
-                    || self.is_null(rhs)?
+                let by_identity = self.is_nullish(lhs)?
+                    || self.is_nullish(rhs)?
                     || compared_by_identity(&self.package.expr_at(lhs)?.ty)
                         && compared_by_identity(&self.package.expr_at(rhs)?.ty);
                 let mut flow = self.eval(lhs)?;
@@ -1621,10 +1651,10 @@ impl<'a> Walker<'a, '_> {
         Ok(flow)
     }
 
-    fn is_null(&self, id: ExprId) -> Result<bool, CompilerFailure> {
+    fn is_nullish(&self, id: ExprId) -> Result<bool, CompilerFailure> {
         Ok(matches!(
             self.package.expr_at(id)?.kind,
-            TypedExprKind::Null
+            TypedExprKind::Null | TypedExprKind::Undefined
         ))
     }
 
@@ -2058,7 +2088,7 @@ fn is_fresh(ta: &crate::TypedAst, expr: &TypedExpr) -> Result<bool, CompilerFail
 /// class instances compare by their stored contents.
 fn compared_by_identity(ty: &Type) -> bool {
     match ty.peel() {
-        Type::Null => true,
+        Type::Null | Type::Undefined => true,
         Type::Union(members) => members.iter().all(compared_by_identity),
         Type::InterfaceRef { mangled, .. } => matches!(
             mangled.as_str(),
@@ -2535,7 +2565,7 @@ fn derived(flow: Flow) -> Flow {
         .collect()
 }
 
-/// The flow of a comparison with `null`, a truthiness test, or a `typeof` or
+/// The flow of a comparison with `null` or `undefined`, a truthiness test, or a `typeof` or
 /// `instanceof` of each value `flow` holds.
 fn identity(flow: Flow) -> Flow {
     using(flow, Reliance::Identity)

@@ -155,6 +155,7 @@ impl<'a> Inferer<'a> {
                     if matches!(name, "toString" | "toJson") {
                         return Some((
                             MethodSig {
+                                optional: false,
                                 generics: Vec::new(),
                                 params: Vec::new(),
                                 ret: Type::String,
@@ -254,24 +255,6 @@ impl<'a> Inferer<'a> {
         let sig = properties.get(name)?.clone();
         let bindings: BTreeMap<String, Type> = generics.iter().cloned().zip(args).collect();
         Some((sig, bindings, sym.mangled_name.clone(), *dispatch))
-    }
-
-    /// Whether a read of `field` on a receiver of type `receiver` can find it
-    /// absent, which JavaScript reads as `undefined` and Submilli as `null`.
-    pub(super) fn field_may_be_absent(&self, receiver: &Type, field: &str) -> bool {
-        match receiver.peel() {
-            Type::Union(members) => members
-                .iter()
-                .any(|member| self.field_may_be_absent(member, field)),
-            Type::Object { fields, .. } => fields.get(field).is_some_and(|f| f.optional),
-            member @ Type::InterfaceRef { .. } => self
-                .lookup_interface_property(member, field)
-                .is_some_and(|(sig, ..)| sig.optional),
-            Type::ClassRef { mangled, args, .. } => self
-                .class_field_visible(mangled, args, field)
-                .is_some_and(|(sig, _)| sig.optional),
-            _ => false,
-        }
     }
 
     /// Field read type for one member of a union receiver, resolved by the same
@@ -420,9 +403,8 @@ impl<'a> Inferer<'a> {
                     && fields.values().all(|f| self.name_resolves_here(&f.ty))
             }
             Type::Array(elem) => self.name_resolves_here(elem),
-            Type::Tuple(elements) | Type::Union(elements) => {
-                elements.iter().all(|e| self.name_resolves_here(e))
-            }
+            Type::Tuple(elements) => elements.iter().all(|e| self.name_resolves_here(e)),
+            Type::Union(elements) => elements.iter().all(|e| self.name_resolves_here(e)),
             Type::Function { params, ret, .. } => {
                 params.iter().all(|p| self.name_resolves_here(p)) && self.name_resolves_here(ret)
             }
@@ -492,7 +474,7 @@ impl<'a> Inferer<'a> {
     /// them the same way via `find_property`. Answering by variant instead leaves
     /// a nullable receiver disagreeing with its own non-null twin about what a
     /// value is checked against; the read side routes the same way, and says why
-    /// in `access_after_null`.
+    /// in `access_after_nullish`.
     fn property_field_write(&self, member: &Type, field: &str) -> Option<FieldWrite> {
         let (sig, bindings, _, dispatch) = self.lookup_interface_property(member, field)?;
         let ty = if bindings.is_empty() {
@@ -650,7 +632,12 @@ impl<'a> Inferer<'a> {
             let params: Vec<Type> = sig
                 .params
                 .iter()
-                .map(|p| substitute_or_record(&p.ty, &bindings, &self.type_limits))
+                .map(|p| {
+                    ObjectField::widen_optional(
+                        p.is_omittable(),
+                        substitute_or_record(&p.ty, &bindings, &self.type_limits),
+                    )
+                })
                 .collect();
             let ret = substitute_or_record(&sig.ret, &bindings, &self.type_limits);
             result.insert(
@@ -660,9 +647,10 @@ impl<'a> Inferer<'a> {
                         params,
                         ret: Box::new(ret),
                         predicate: None,
-                        has_rest: false,
+                        has_rest: sig.params.last().is_some_and(|p| p.rest),
+                        optional: crate::package_declaration::optional_parameter_count(&sig.params),
                     },
-                    optional: false,
+                    optional: sig.optional,
                     readonly: true,
                     method: true,
                 },
@@ -725,10 +713,12 @@ fn readonly_callback_arrays(ty: &Type, generics: &[String]) -> Type {
     match ty {
         Type::Function {
             params,
+            optional,
             ret,
             predicate,
             has_rest,
         } => Type::Function {
+            optional: *optional,
             params: params
                 .iter()
                 .map(|param| match param {
@@ -761,7 +751,11 @@ fn generic_flows_in(ty: &Type, generics: &[String]) -> bool {
         Type::TypeVar(name) => generics.contains(name),
         Type::Function { ret, .. } => generic_flows_in(ret, generics),
         Type::Array(element) | Type::Readonly(element) => generic_flows_in(element, generics),
-        Type::Tuple(elements) | Type::Union(elements) => elements
+        Type::Tuple(tuple) => tuple
+            .elements
+            .iter()
+            .any(|element| generic_flows_in(element, generics)),
+        Type::Union(elements) => elements
             .iter()
             .any(|element| generic_flows_in(element, generics)),
         Type::Object { fields, index } => {

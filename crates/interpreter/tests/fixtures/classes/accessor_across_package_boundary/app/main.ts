@@ -37,7 +37,7 @@ class BagAcc implements Bag {
 class BagPlain implements Bag { tag: string = "t"; }
 
 // A required member backed by a getter with no setter must still reach the
-// accessor branch: the absent-property fallback widens `null`, which a
+// accessor branch: the absent-property fallback widens `undefined`, which a
 // non-nullable `number` cannot hold.
 class AppPerimeter implements Perimeter {
   private side: number = 2;
@@ -45,7 +45,7 @@ class AppPerimeter implements Perimeter {
 }
 
 // A read-only *optional* member backed by a getter: the absent-member fallback
-// and the accessor branch both produce `string | null`, so only the accessor
+// and the accessor branch both produce `string | undefined`, so only the accessor
 // name scan tells them apart.
 class NickAcc implements MaybeName {
   get nick(): string {
@@ -72,9 +72,9 @@ function main(): void {
   writeNote(b, "w2");
   assert(readNote(b) === "w2", "optional accessor write across the boundary");
 
-  // An absent optional member reads null until a write creates it.
+  // An absent optional member reads undefined until a write creates it.
   const bp = new BagPlain();
-  assert(readNote(bp) === null, "absent optional member reads null");
+  assert(readNote(bp) === undefined, "absent optional member reads undefined");
   writeNote(bp, "gone");
   assert(readNote(bp) === "gone", "write creates an optional member across packages");
 
@@ -101,13 +101,13 @@ function main(): void {
   onlyWrite(rmw, 5);
   assert(chainArea(rmw) === 25, "a write-only library fn reaches the consumer's setter");
   assert(chainArea(new Plain()) === 1, "a data field through a chain across the boundary");
-  assert(chainArea(null) === null, "short-circuit across the boundary");
+  assert(chainArea(null) === undefined, "short-circuit across the boundary");
 
   assert(readNick(new NickAcc()) === "acc-nick", "a read-only optional member backed by a getter");
-  assert(readNick(new NickNone()) === null, "a genuinely absent optional member reads null");
+  assert(readNick(new NickNone()) === undefined, "a genuinely absent optional member reads undefined");
   assert(readNick(new NickField()) === "field-nick", "an optional data field");
   assert(chainNick(new NickAcc()) === "acc-nick", "the same through an optional chain");
-  assert(chainNick(null) === null, "short-circuit on the optional member");
+  assert(chainNick(null) === undefined, "short-circuit on the optional member");
 
   assert(dump(new Plain()) === '{"area":1}', "the library serializes a data-field implementation");
   assert(

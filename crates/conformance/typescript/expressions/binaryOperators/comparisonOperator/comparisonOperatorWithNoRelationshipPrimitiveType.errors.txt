@@ -1,0 +1,96 @@
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(11,12): error TS2365: Operator '<' cannot be applied to types 'number' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(12,14): error TS2365: Operator '<' cannot be applied to types 'number' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(13,14): error TS2365: Operator '<' cannot be applied to types 'number' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(16,12): error TS2365: Operator '<' cannot be applied to types 'boolean' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(17,14): error TS2365: Operator '<' cannot be applied to types 'boolean' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(18,14): error TS2365: Operator '<' cannot be applied to types 'boolean' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(21,12): error TS2365: Operator '<' cannot be applied to types 'string' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(22,14): error TS2365: Operator '<' cannot be applied to types 'string' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(23,14): error TS2365: Operator '<' cannot be applied to types 'string' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(26,12): error TS2365: Operator '<' cannot be applied to types 'void' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(27,14): error TS2365: Operator '<' cannot be applied to types 'void' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(28,14): error TS2365: Operator '<' cannot be applied to types 'void' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(37,12): error TS2365: Operator '>' cannot be applied to types 'number' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(38,14): error TS2365: Operator '>' cannot be applied to types 'number' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(39,14): error TS2365: Operator '>' cannot be applied to types 'number' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(42,12): error TS2365: Operator '>' cannot be applied to types 'boolean' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(43,14): error TS2365: Operator '>' cannot be applied to types 'boolean' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(44,14): error TS2365: Operator '>' cannot be applied to types 'boolean' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(47,12): error TS2365: Operator '>' cannot be applied to types 'string' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(48,14): error TS2365: Operator '>' cannot be applied to types 'string' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(49,14): error TS2365: Operator '>' cannot be applied to types 'string' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(52,12): error TS2365: Operator '>' cannot be applied to types 'void' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(53,14): error TS2365: Operator '>' cannot be applied to types 'void' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(54,14): error TS2365: Operator '>' cannot be applied to types 'void' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(63,12): error TS2365: Operator '<=' cannot be applied to types 'number' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(64,14): error TS2365: Operator '<=' cannot be applied to types 'number' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(65,14): error TS2365: Operator '<=' cannot be applied to types 'number' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(68,12): error TS2365: Operator '<=' cannot be applied to types 'boolean' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(69,14): error TS2365: Operator '<=' cannot be applied to types 'boolean' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(70,14): error TS2365: Operator '<=' cannot be applied to types 'boolean' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(73,12): error TS2365: Operator '<=' cannot be applied to types 'string' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(74,14): error TS2365: Operator '<=' cannot be applied to types 'string' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(75,14): error TS2365: Operator '<=' cannot be applied to types 'string' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(78,12): error TS2365: Operator '<=' cannot be applied to types 'void' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(79,14): error TS2365: Operator '<=' cannot be applied to types 'void' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(80,14): error TS2365: Operator '<=' cannot be applied to types 'void' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(89,12): error TS2365: Operator '>=' cannot be applied to types 'number' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(90,14): error TS2365: Operator '>=' cannot be applied to types 'number' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(91,14): error TS2365: Operator '>=' cannot be applied to types 'number' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(94,12): error TS2365: Operator '>=' cannot be applied to types 'boolean' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(95,14): error TS2365: Operator '>=' cannot be applied to types 'boolean' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(96,14): error TS2365: Operator '>=' cannot be applied to types 'boolean' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(99,12): error TS2365: Operator '>=' cannot be applied to types 'string' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(100,14): error TS2365: Operator '>=' cannot be applied to types 'string' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(101,14): error TS2365: Operator '>=' cannot be applied to types 'string' and 'void'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(104,12): error TS2365: Operator '>=' cannot be applied to types 'void' and 'number'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(105,14): error TS2365: Operator '>=' cannot be applied to types 'void' and 'boolean'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(106,14): error TS2365: Operator '>=' cannot be applied to types 'void' and 'string'.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(115,12): error TS2367: This comparison appears to be unintentional because the types 'number' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(116,14): error TS2367: This comparison appears to be unintentional because the types 'number' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(117,14): error TS2367: This comparison appears to be unintentional because the types 'number' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(120,12): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(121,14): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(122,14): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(125,12): error TS2367: This comparison appears to be unintentional because the types 'string' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(126,14): error TS2367: This comparison appears to be unintentional because the types 'string' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(127,14): error TS2367: This comparison appears to be unintentional because the types 'string' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(130,12): error TS2367: This comparison appears to be unintentional because the types 'void' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(131,14): error TS2367: This comparison appears to be unintentional because the types 'void' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(132,14): error TS2367: This comparison appears to be unintentional because the types 'void' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(141,12): error TS2367: This comparison appears to be unintentional because the types 'number' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(142,14): error TS2367: This comparison appears to be unintentional because the types 'number' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(143,14): error TS2367: This comparison appears to be unintentional because the types 'number' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(146,12): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(147,14): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(148,14): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(151,12): error TS2367: This comparison appears to be unintentional because the types 'string' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(152,14): error TS2367: This comparison appears to be unintentional because the types 'string' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(153,14): error TS2367: This comparison appears to be unintentional because the types 'string' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(156,12): error TS2367: This comparison appears to be unintentional because the types 'void' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(157,14): error TS2367: This comparison appears to be unintentional because the types 'void' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(158,14): error TS2367: This comparison appears to be unintentional because the types 'void' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(167,12): error TS2367: This comparison appears to be unintentional because the types 'number' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(168,14): error TS2367: This comparison appears to be unintentional because the types 'number' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(169,14): error TS2367: This comparison appears to be unintentional because the types 'number' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(172,12): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(173,14): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(174,14): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(177,12): error TS2367: This comparison appears to be unintentional because the types 'string' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(178,14): error TS2367: This comparison appears to be unintentional because the types 'string' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(179,14): error TS2367: This comparison appears to be unintentional because the types 'string' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(182,12): error TS2367: This comparison appears to be unintentional because the types 'void' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(183,14): error TS2367: This comparison appears to be unintentional because the types 'void' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(184,14): error TS2367: This comparison appears to be unintentional because the types 'void' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(193,12): error TS2367: This comparison appears to be unintentional because the types 'number' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(194,14): error TS2367: This comparison appears to be unintentional because the types 'number' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(195,14): error TS2367: This comparison appears to be unintentional because the types 'number' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(198,12): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(199,14): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'string' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(200,14): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(203,12): error TS2367: This comparison appears to be unintentional because the types 'string' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(204,14): error TS2367: This comparison appears to be unintentional because the types 'string' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(205,14): error TS2367: This comparison appears to be unintentional because the types 'string' and 'void' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(208,12): error TS2367: This comparison appears to be unintentional because the types 'void' and 'number' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(209,14): error TS2367: This comparison appears to be unintentional because the types 'void' and 'boolean' have no overlap.
+comparisonOperatorWithNoRelationshipPrimitiveType.ts(210,14): error TS2367: This comparison appears to be unintentional because the types 'void' and 'string' have no overlap.

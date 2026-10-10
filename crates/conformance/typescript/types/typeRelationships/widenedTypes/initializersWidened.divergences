@@ -1,0 +1,9 @@
+types: 37 of 43 tsc entries compared, 0 differ
+
+errors:
+line 21: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 22: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 23: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 25: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 26: tsc TS2873: This kind of expression is always falsy. (we accept)
+line 27: tsc TS2873: This kind of expression is always falsy. (we accept)

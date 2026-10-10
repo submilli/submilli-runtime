@@ -1,6 +1,8 @@
 function main(): void {
   const present: string | null = "hello";
   const missing: string | null = null;
+  const absent: string | undefined = undefined;
   assert((present ?? "fallback") === "hello", "non-null lhs");
   assert((missing ?? "fallback") === "fallback", "null lhs picks rhs");
+  assert((absent ?? "fallback") === "fallback", "undefined lhs picks rhs");
 }

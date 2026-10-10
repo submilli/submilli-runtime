@@ -15,7 +15,7 @@
 {
     const data =  { param: 'value' };
 
-    let foo: string | null = "";
+    let foo: string | undefined = "";
     /**/;  
                                                                       
              
@@ -26,7 +26,7 @@
 {
     const data =  { param: 'value' };
 
-    let foo: string | null = "";
+    let foo: string | undefined = "";
     /**/;  
                                          
              
@@ -37,10 +37,10 @@
 {
     const data =  { param: 'value' };
 
-    let foo: string | null = "";
-    /**/;  
-                                            
-             
+    let foo: string | undefined = "";
+    const {
+        param = (() => { return "" + 1 })(),
+    } = data;
     
     foo;  // should be string
 }
@@ -50,7 +50,7 @@
         window: Window;
     }
 
-    let foo: string | null = null as unknown as (string | null);
+    let foo: string | undefined = null as unknown as (string | undefined);
     /*pruned*/;               
     window.window = window;
 
@@ -65,7 +65,7 @@
         window: Window;
     }
 
-    let foo: string | null = null as unknown as (string | null);
+    let foo: string | undefined = null as unknown as (string | undefined);
     /*pruned*/;               
     window.window = window;
 
@@ -80,7 +80,7 @@
         window: Window;
     }
 
-    let foo: string | null = null as unknown as (string | null);
+    let foo: string | undefined = null as unknown as (string | undefined);
     /*pruned*/;               
     window.window = window;
 

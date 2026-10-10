@@ -1,7 +1,4 @@
-// A conditional with a `void` branch has no value on that path, so it is
-// `void` as a whole and refused wherever a value is needed.
-// expect-error: cannot bind a `void` value
-// expect-error: expected `number`, got `void`
+// expect-error: expected `number`
 function f(): void {}
 
 function n(): number {
@@ -13,5 +10,6 @@ function take(x: number): void {}
 function main(): void {
   const k: string = ["a"][0];
   const bound = k === "a" ? f() : n();
+  assert(bound === undefined, "conditional void branch is a value");
   take(k === "a" ? n() : f());
 }

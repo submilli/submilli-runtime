@@ -114,7 +114,7 @@ fn walk(
                 properties.insert(name.clone(), walk(&field.ty, expand, path, seen)?);
                 path.truncate(restore);
                 // An optional field is absent from `required`. It is *not* also
-                // `| null`: that widening is the *read* type of the field, a
+                // `| undefined`: that widening is the *read* type of the field, a
                 // different thing from whether the provider must emit the key.
                 if !field.optional {
                     required.push(Value::String(name.clone()));
@@ -147,17 +147,33 @@ fn walk(
                 "type": "array",
                 "prefixItems": Value::Array(items),
                 "items": false,
-                "minItems": len,
+                "minItems": elems.required_len(),
                 "maxItems": len,
             }))
         }
         Type::Union(members) => {
             let mut any_of = Vec::with_capacity(members.len());
             for member in members {
+                if matches!(member.peel(), Type::Undefined | Type::Void) {
+                    continue;
+                }
                 any_of.push(walk(member, expand, path, seen)?);
             }
-            Ok(json!({ "anyOf": Value::Array(any_of) }))
+            match any_of.len() {
+                0 => Err(reject(
+                    path,
+                    "undefined has no JSON value; include a JSON-representable type",
+                )),
+                1 => any_of
+                    .pop()
+                    .ok_or_else(|| reject(path, "missing JSON union schema")),
+                _ => Ok(json!({ "anyOf": Value::Array(any_of) })),
+            }
         }
+        Type::Undefined => Err(reject(
+            path,
+            "undefined has no JSON value; include a JSON-representable type",
+        )),
         // A recursion back-edge: expand once and describe the body inline.
         // Unlike the cast gate, a re-encounter is fatal — inlining a cycle
         // does not terminate, and `$ref` is not an option (see module docs).
@@ -318,9 +334,56 @@ mod tests {
         ]))
         .expect("emits");
         assert_eq!(schema["required"], json!(["id"]));
-        // Present in `properties`, and as a bare string — the `| null` widening
+        // Present in `properties`, and as a bare string — the `| undefined` widening
         // is the read type of the field, not its schema.
         assert_eq!(schema["properties"]["note"], json!({ "type": "string" }));
+    }
+
+    #[test]
+    fn undefined_projection_preserves_property_requiredness() {
+        let maybe_string = Type::union(vec![Type::String, Type::Undefined]);
+        let schema = json_schema(&obj(&[
+            ("required", maybe_string.clone(), false),
+            ("optional", maybe_string, true),
+            (
+                "nullable",
+                Type::union(vec![Type::String, Type::Null, Type::Undefined]),
+                false,
+            ),
+        ]))
+        .expect("JSON-representable branches remain");
+        assert_eq!(schema["required"], json!(["nullable", "required"]));
+        assert_eq!(schema["properties"]["required"], json!({"type":"string"}));
+        assert_eq!(schema["properties"]["optional"], json!({"type":"string"}));
+        assert_eq!(
+            schema["properties"]["nullable"],
+            json!({"anyOf":[{"type":"string"},{"type":"null"}]})
+        );
+    }
+
+    #[test]
+    fn undefined_only_schema_reports_the_property_path() {
+        let error = json_schema(&obj(&[("missing", Type::Undefined, true)]))
+            .expect_err("undefined is not JSON");
+        assert_eq!(error.path, "missing");
+        assert!(error.reason.contains("undefined has no JSON value"));
+        assert!(json_schema(&Type::Undefined).is_err());
+    }
+
+    #[test]
+    fn optional_tuple_schema_keeps_lengths_and_excludes_null() {
+        let tuple = Type::Tuple(crate::types::TupleType {
+            elements: vec![
+                Type::Number,
+                Type::union(vec![Type::String, Type::Undefined]),
+            ],
+            optional: 1,
+        });
+        let schema = json_schema(&tuple).expect("optional tuple schema");
+        assert_eq!(schema["minItems"], json!(1));
+        assert_eq!(schema["maxItems"], json!(2));
+        assert_eq!(schema["prefixItems"][1], json!({"type":"string"}));
+        assert_eq!(schema["items"], json!(false));
     }
 
     #[test]
@@ -329,7 +392,7 @@ mod tests {
         assert_eq!(arr["type"], json!("array"));
         assert_eq!(arr["items"], json!({ "type": "number" }));
 
-        let tup = json_schema(&Type::Tuple(vec![Type::String, Type::Boolean])).expect("emits");
+        let tup = json_schema(&Type::tuple(vec![Type::String, Type::Boolean])).expect("emits");
         assert_eq!(tup["type"], json!("array"));
         assert_eq!(
             tup["prefixItems"],
@@ -407,6 +470,7 @@ mod tests {
             ret: Box::new(Type::Number),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let err = json_schema(&obj(&[
             ("handler", handler, false),
@@ -429,6 +493,7 @@ mod tests {
             ret: Box::new(Type::Void),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let item = obj(&[("run", handler, false)]);
         let ty = obj(&[("items", Type::Array(Box::new(item)), false)]);
@@ -438,7 +503,7 @@ mod tests {
 
     #[test]
     fn tuple_element_path_names_its_index() {
-        let ty = obj(&[("pair", Type::Tuple(vec![Type::String, Type::BigInt]), false)]);
+        let ty = obj(&[("pair", Type::tuple(vec![Type::String, Type::BigInt]), false)]);
         let err = json_schema(&ty).expect_err("rejects");
         assert_eq!(err.path, "pair[1]");
     }
@@ -528,7 +593,7 @@ mod tests {
                 Type::Array(Box::new(obj(&[("v", Type::Number, false)]))),
                 false,
             ),
-            ("span", Type::Tuple(vec![Type::Number, Type::Number]), false),
+            ("span", Type::tuple(vec![Type::Number, Type::Number]), false),
         ]);
         assert_safe(&json_schema(&ty).expect("emits"), SAFE);
     }

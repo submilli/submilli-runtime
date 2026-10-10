@@ -1728,10 +1728,10 @@ fn build_test_credentials_are_empty_by_default() {
     let project = credential_project(
         tmp.path(),
         r#"
-        assert(secrets.get("SUBMILLI_TEST_KEY") === null);
-        assert(secrets.get("SUBMILLI_TEST_OTHER") === null);
-        assert(secrets.get("FILE_ONLY") === null);
-        if (secrets.get("SUBMILLI_TEST_KEY") === null) return;
+        assert(secrets.get("SUBMILLI_TEST_KEY") === undefined);
+        assert(secrets.get("SUBMILLI_TEST_OTHER") === undefined);
+        assert(secrets.get("FILE_ONLY") === undefined);
+        if (secrets.get("SUBMILLI_TEST_KEY") === undefined) return;
         assert(false, "credential unexpectedly supplied");
     "#,
     );
@@ -1750,9 +1750,19 @@ fn build_test_credentials_are_empty_by_default() {
 #[test]
 fn build_test_credential_sources_and_precedence() {
     let cases: &[(&[&str], &str, &str, &str)] = &[
-        (&["--env-var", "SUBMILLI_TEST_KEY"], "shell", "null", "null"),
-        (&["--env-file", "selected.env"], "file", "null", "\"file\""),
-        (&["--all-env"], "shell", "\"other\"", "null"),
+        (
+            &["--env-var", "SUBMILLI_TEST_KEY"],
+            "shell",
+            "undefined",
+            "undefined",
+        ),
+        (
+            &["--env-file", "selected.env"],
+            "file",
+            "undefined",
+            "\"file\"",
+        ),
+        (&["--all-env"], "shell", "\"other\"", "undefined"),
         (
             &["--all-env", "--env-file", "selected.env"],
             "file",
@@ -1799,7 +1809,7 @@ fn build_test_credential_sources_and_precedence() {
             assert(secrets.get("SUBMILLI_TEST_KEY") === "{key}");
             assert(secrets.get("SUBMILLI_TEST_OTHER") === {other});
             assert(secrets.get("FILE_ONLY") === {file});
-            assert(secrets.get("IMPLICIT_FILE") === null);
+            assert(secrets.get("IMPLICIT_FILE") === undefined);
         "#
             ),
         );
@@ -1850,7 +1860,7 @@ fn build_test_env_file_uses_cwd_and_preserves_dotenv_syntax() {
         assert(secrets.get("EMPTY") === "");
         assert(secrets.get("QUOTED") === "two words");
         assert(secrets.get("DOUBLE") === "a=b");
-        assert(secrets.get("SUBMILLI_TEST_KEY") === null);
+        assert(secrets.get("SUBMILLI_TEST_KEY") === undefined);
     "#,
     );
     write_file(
@@ -1909,7 +1919,7 @@ fn build_test_non_unicode_environment_is_handled_without_panicking() {
     let project = credential_project(
         tmp.path(),
         r#"
-        assert(secrets.get("SUBMILLI_TEST_INVALID") === null);
+        assert(secrets.get("SUBMILLI_TEST_INVALID") === undefined);
         assert(secrets.get("SUBMILLI_TEST_KEY") === "shell");
     "#,
     );

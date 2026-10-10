@@ -1,0 +1,1 @@
+constructorDefaultValuesReferencingThis.ts(16,29): error TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class.

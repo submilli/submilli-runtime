@@ -8,7 +8,7 @@
 //typeof regex literal is Regex
 
 let nu = null / null;
-let u = null / null;
+let u = undefined / undefined;
 
 let b: boolean = null as unknown as (boolean);
 let b_2 = true;

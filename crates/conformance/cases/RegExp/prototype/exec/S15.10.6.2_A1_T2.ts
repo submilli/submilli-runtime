@@ -1,6 +1,6 @@
 // test262: test/built-ins/RegExp/prototype/exec/S15.10.6.2_A1_T2.js
 // `new String("123")` receiver replaced by the plain string; RegExpExecArray
-// shape adapted to RegExpMatch (unmatched captures are null, not undefined).
+// shape adapted to RegExpMatch (unmatched captures are undefined).
 
 function main(): void {
   const m = /((1)|(12))((3)|(23))/.exec("123");
@@ -24,8 +24,8 @@ function main(): void {
   assertSameValue(captures, 6, "six capture groups");
   assertSameValue(g1, "1", "capture 1");
   assertSameValue(g2, "1", "capture 2");
-  assertSameValue(g3, null, "capture 3 did not participate");
+  assertSameValue(g3, undefined, "capture 3 did not participate");
   assertSameValue(g4, "23", "capture 4");
-  assertSameValue(g5, null, "capture 5 did not participate");
+  assertSameValue(g5, undefined, "capture 5 did not participate");
   assertSameValue(g6, "23", "capture 6");
 }

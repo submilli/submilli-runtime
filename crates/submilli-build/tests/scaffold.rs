@@ -288,7 +288,7 @@ fn generated_tsconfig_maps_package_names_to_source_entrypoints() {
         "got: {generated}"
     );
     assert!(
-        generated.contains("\"strictNullChecks\": false"),
+        generated.contains("\"strictNullChecks\": true"),
         "got: {generated}"
     );
     assert!(

@@ -101,11 +101,13 @@ function c(): void {
 >x : string
 >  : ^^^^^^
 
-        x = null;
->x = null : null
->         : ^^^^
+        x = undefined;
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         if (typeof x === "string") continue;
 >typeof x === "string" : boolean
@@ -215,24 +217,24 @@ function f(): void {
 >f : () => void
 >  : ^^^^^^^^^^
 
-    /*pruned*/;                                                                                                               
-    /**/;  
+    /*pruned*/;
+    /**/;
     do {
         if (cond) {
 >cond : boolean
 >     : ^^^^^^^
 
-            /**/;  
+            /**/;
             break;
         }
         if (cond) {
 >cond : false
 >     : ^^^^^
 
-            /**/;    
+            /**/;
             continue;
         }
-        /**/;   
+        /**/;
     } while (cond)
 >cond : false
 >     : ^^^^^
@@ -243,24 +245,24 @@ function g(): void {
 >g : () => void
 >  : ^^^^^^^^^^
 
-    /*pruned*/;                                                                                                               
-    /**/;  
+    /*pruned*/;
+    /**/;
     do {
         if (cond) {
 >cond : boolean
 >     : ^^^^^^^
 
-            /**/;  
+            /**/;
             break;
         }
         if (cond) {
 >cond : false
 >     : ^^^^^
 
-            /**/;    
+            /**/;
             continue;
         }
-        /**/;   
+        /**/;
     } while (true)
 >true : true
 >     : ^^^^

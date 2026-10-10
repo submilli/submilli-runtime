@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d1b649e5ab9c279cd942af36774176a032dbf7eebff4e0364b5923a31465b13d"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "8e8c2bc965b9a82f67f40091e3d5bcbf93388f33d55ce696823f7810aa5c21d1"
+  confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
 The agent is a model already, so why would its program call another?
@@ -95,8 +95,8 @@ submilli docs submilli:llm
 ```text
 submilli:llm — Gated model calls: call/batch, and models() to discover them.
 …
-function batch<T>(model: string, prompts: string[], schema?: string | null): T;
-function call<T>(model: string, prompt: string, schema?: string | null): T;
+function batch<T>(model: string, prompts: string[], schema?: string): T;
+function call<T>(model: string, prompt: string, schema?: string): T;
 function models(): Model[];
 …
 ```
@@ -164,7 +164,7 @@ function main(): Verdict {
     const billing: string[] = [];
     for (let i = 0; i < answers.length; i++) {
         const text = answers[i].text;
-        if (text !== null && text.trim().toLowerCase().startsWith("yes")) {
+        if (text !== undefined && text.trim().toLowerCase().startsWith("yes")) {
             billing.push(tickets[i]);
         }
     }

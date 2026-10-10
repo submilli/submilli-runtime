@@ -15,7 +15,7 @@ enum E {
 
 }
 
-/*pruned*/;                           
+/*pruned*/;
 let b: number = null as unknown as (number);
 >b : number
 >  : ^^^^^^
@@ -24,15 +24,15 @@ let b: number = null as unknown as (number);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                       
+/*pruned*/;
 
 // operator **
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;       
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 let r7 = E.a ** b;
 >r7 : number
 >   : ^^^^^^
@@ -79,7 +79,7 @@ let r9 = E.a ** 1;
 >1 : 1
 >  : ^
 
-/*pruned*/;        
+/*pruned*/;
 let r11 = b ** E.b;
 >r11 : number
 >    : ^^^^^^

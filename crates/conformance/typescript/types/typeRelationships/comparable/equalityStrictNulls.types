@@ -6,6 +6,42 @@ function f1(x: string): void {
 >x : string
 >  : ^^^^^^
 
+    if (x == undefined) {
+>x == undefined : boolean
+>               : ^^^^^^^
+>x : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+    }
+    if (x != undefined) {
+>x != undefined : boolean
+>               : ^^^^^^^
+>x : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+    }
+    if (x === undefined) {
+>x === undefined : boolean
+>                : ^^^^^^^
+>x : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+    }
+    if (x !== undefined) {
+>x !== undefined : boolean
+>                : ^^^^^^^
+>x : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+    }
     if (x == null) {
 >x == null : boolean
 >          : ^^^^^^^
@@ -34,58 +70,38 @@ function f1(x: string): void {
 >  : ^^^^^^
 
     }
-    if (x == null) {
->x == null : boolean
->          : ^^^^^^^
+    if (undefined == x) {
+>undefined == x : boolean
+>               : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >x : string
 >  : ^^^^^^
 
     }
-    if (x != null) {
->x != null : boolean
->          : ^^^^^^^
+    if (undefined != x) {
+>undefined != x : boolean
+>               : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >x : string
 >  : ^^^^^^
 
     }
-    if (x === null) {
->x === null : boolean
->           : ^^^^^^^
+    if (undefined === x) {
+>undefined === x : boolean
+>                : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >x : string
 >  : ^^^^^^
 
     }
-    if (x !== null) {
->x !== null : boolean
->           : ^^^^^^^
->x : string
->  : ^^^^^^
-
-    }
-    if (null == x) {
->null == x : boolean
->          : ^^^^^^^
->x : string
->  : ^^^^^^
-
-    }
-    if (null != x) {
->null != x : boolean
->          : ^^^^^^^
->x : string
->  : ^^^^^^
-
-    }
-    if (null === x) {
->null === x : boolean
->           : ^^^^^^^
->x : string
->  : ^^^^^^
-
-    }
-    if (null !== x) {
->null !== x : boolean
->           : ^^^^^^^
+    if (undefined !== x) {
+>undefined !== x : boolean
+>                : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >x : string
 >  : ^^^^^^
 
@@ -124,19 +140,27 @@ function f2(): void {
 >f2 : () => void
 >   : ^^^^^^^^^^
 
-    if (null == null) {
->null == null : boolean
->             : ^^^^^^^
+    if (undefined == undefined) {
+>undefined == undefined : boolean
+>                       : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     }
-    if (null == null) {
->null == null : boolean
->             : ^^^^^^^
+    if (undefined == null) {
+>undefined == null : boolean
+>                  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     }
-    if (null == null) {
->null == null : boolean
->             : ^^^^^^^
+    if (null == undefined) {
+>null == undefined : boolean
+>                  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     }
     if (null == null) {
@@ -196,32 +220,40 @@ function f4(x: number): void {
 >x : number
 >  : ^^^^^^
 
-    if (x > null) {
->x > null : boolean
->         : ^^^^^^^
+    if (x > undefined) {
+>x > undefined : boolean
+>              : ^^^^^^^
 >x : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     }
-    if (x < null) {
->x < null : boolean
->         : ^^^^^^^
+    if (x < undefined) {
+>x < undefined : boolean
+>              : ^^^^^^^
 >x : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     }
-    if (x >= null) {
->x >= null : boolean
->          : ^^^^^^^
+    if (x >= undefined) {
+>x >= undefined : boolean
+>               : ^^^^^^^
 >x : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     }
-    if (x <= null) {
->x <= null : boolean
->          : ^^^^^^^
+    if (x <= undefined) {
+>x <= undefined : boolean
+>               : ^^^^^^^
 >x : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     }
 }
@@ -237,7 +269,10 @@ function f5(x: string): void {
 
         case null:
             break;
-        case null:
+        case undefined:
+>undefined : undefined
+>          : ^^^^^^^^^
+
             break;
         default:
             return;

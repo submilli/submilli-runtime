@@ -1,1 +1,0 @@
-line 8 extra: by-design spec §2.2 a class may only extend another class, `Object` is a prelude interface and `null` is not a class

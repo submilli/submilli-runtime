@@ -22,45 +22,230 @@ let cond: boolean = null as unknown as (boolean);
 >                : ^^^^^^^
 
 
-/*pruned*/;                                                 
-               
-                  
-                   
-                   
-                
-                           
-                  
-                 
-               
-                  
-                   
-                   
-                
-                           
-                  
-                 
-                 
-                    
-                     
-                     
-                  
-                             
-                    
-                   
- 
+function f1(p1: number = 1, p2: string = "abc", p3: boolean = true, p4: E = E.A): void {
+>f1 : (p1?: number, p2?: string, p3?: boolean, p4?: E) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>p1 : number
+>   : ^^^^^^
+>1 : 1
+>  : ^
+>p2 : string
+>   : ^^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+>p3 : boolean
+>   : ^^^^^^^
+>true : true
+>     : ^^^^
+>p4 : E
+>   : ^
+>E.A : E.A
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E.A
+>  : ^^^
 
-/*pruned*/;                                                                      
-                  
-                        
-                          
-                        
-                      
-                  
-                        
-                          
-                        
-                      
- 
+    let v1 = 1;
+>v1 : number
+>   : ^^^^^^
+>1 : 1
+>  : ^
+
+    let v2 = -123;
+>v2 : number
+>   : ^^^^^^
+>-123 : -123
+>     : ^^^^
+>123 : 123
+>    : ^^^
+
+    let v3 = 3 + 4;
+>v3 : number
+>   : ^^^^^^
+>3 + 4 : number
+>      : ^^^^^^
+>3 : 3
+>  : ^
+>4 : 4
+>  : ^
+
+    let v4 = "abc";
+>v4 : string
+>   : ^^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+
+    let v5 = "";
+>v5 : string
+>   : ^^^^^^
+>"" : ""
+>   : ^^
+
+    let v6 = "abc" + "def";
+>v6 : string
+>   : ^^^^^^
+>"abc" + "def" : string
+>              : ^^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+>"def" : "def"
+>      : ^^^^^
+
+    let v7 = true;
+>v7 : boolean
+>   : ^^^^^^^
+>true : true
+>     : ^^^^
+
+    let v8 = E.A;
+>v8 : E
+>   : ^
+>E.A : E.A
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E.A
+>  : ^^^
+
+    let x1 = 1;
+>x1 : number
+>   : ^^^^^^
+>1 : 1
+>  : ^
+
+    let x2 = -123;
+>x2 : number
+>   : ^^^^^^
+>-123 : -123
+>     : ^^^^
+>123 : 123
+>    : ^^^
+
+    let x3 = 3 + 4;
+>x3 : number
+>   : ^^^^^^
+>3 + 4 : number
+>      : ^^^^^^
+>3 : 3
+>  : ^
+>4 : 4
+>  : ^
+
+    let x4 = "abc";
+>x4 : string
+>   : ^^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+
+    let x5 = "";
+>x5 : string
+>   : ^^^^^^
+>"" : ""
+>   : ^^
+
+    let x6 = "abc" + "def";
+>x6 : string
+>   : ^^^^^^
+>"abc" + "def" : string
+>              : ^^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+>"def" : "def"
+>      : ^^^^^
+
+    let x7 = true;
+>x7 : boolean
+>   : ^^^^^^^
+>true : true
+>     : ^^^^
+
+    let x8 = E.A;
+>x8 : E
+>   : ^
+>E.A : E.A
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E.A
+>  : ^^^
+
+    const c1 = 1;
+>c1 : 1
+>   : ^
+>1 : 1
+>  : ^
+
+    const c2 = -123;
+>c2 : -123
+>   : ^^^^
+>-123 : -123
+>     : ^^^^
+>123 : 123
+>    : ^^^
+
+    const c3 = 3 + 4;
+>c3 : number
+>   : ^^^^^^
+>3 + 4 : number
+>      : ^^^^^^
+>3 : 3
+>  : ^
+>4 : 4
+>  : ^
+
+    const c4 = "abc";
+>c4 : "abc"
+>   : ^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+
+    const c5 = "";
+>c5 : ""
+>   : ^^
+>"" : ""
+>   : ^^
+
+    const c6 = "abc" + "def";
+>c6 : string
+>   : ^^^^^^
+>"abc" + "def" : string
+>              : ^^^^^^
+>"abc" : "abc"
+>      : ^^^^^
+>"def" : "def"
+>      : ^^^^^
+
+    const c7 = true;
+>c7 : true
+>   : ^^^^
+>true : true
+>     : ^^^^
+
+    const c8 = E.A;
+>c8 : E.A
+>   : ^^^
+>E.A : E.A
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E.A
+>  : ^^^
+
+}
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
 
 function f3(): void {
 >f3 : () => void
@@ -122,15 +307,17 @@ function f3(): void {
 >"abc" : "abc"
 >      : ^^^^^
 
-    const c5 = cond ? 456 : null;
->c5 : 456 | null
->   : ^^^^^^^^^^
->cond ? 456 : null : 456 | null
->                  : ^^^^^^^^^^
+    const c5 = cond ? 456 : undefined;
+>c5 : 456 | undefined
+>   : ^^^^^^^^^^^^^^^
+>cond ? 456 : undefined : 456 | undefined
+>                       : ^^^^^^^^^^^^^^^
 >cond : boolean
 >     : ^^^^^^^
 >456 : 456
 >    : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     const c6: { kind: 123 } = { kind: 123 };
 >c6 : { kind: 123; }
@@ -197,10 +384,10 @@ function f3(): void {
 >   : ^^^^^^^^^^^^
 
     let x5 = c5;
->x5 : number | null
->   : ^^^^^^^^^^^^^
->c5 : 456 | null
->   : ^^^^^^^^^^
+>x5 : number | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+>c5 : 456 | undefined
+>   : ^^^^^^^^^^^^^^^
 
     let x6 = c6;
 >x6 : { kind: 123; }
@@ -222,24 +409,24 @@ function f3(): void {
 
 }
 
-/**/;     
-           
-              
-               
-               
-            
-                       
-              
-             
-                    
-                       
-                        
-                        
-                     
-                                
-                       
-                      
- 
+/**/;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 function f4(): void {
 >f4 : () => void
@@ -377,10 +564,67 @@ function f5(): void {
 
 }
 
-/*pruned*/;          
-                                                                              
-                                                                            
- 
+function f6(): void {
+>f6 : () => void
+>   : ^^^^^^^^^^
+
+    const { c1 = true, c2 = 0, c3 = "foo" } = { c1: false, c2: 1, c3: "bar" };
+>c1 : boolean
+>   : ^^^^^^^
+>true : true
+>     : ^^^^
+>c2 : 1 | 0
+>   : ^^^^^
+>0 : 0
+>  : ^
+>c3 : "foo" | "bar"
+>   : ^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>{ c1: false, c2: 1, c3: "bar" } : { c1?: false; c2?: 1; c3?: "bar"; }
+>                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>c1 : false
+>   : ^^^^^
+>false : false
+>      : ^^^^^
+>c2 : 1
+>   : ^
+>1 : 1
+>  : ^
+>c3 : "bar"
+>   : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+    let { x1 = true, x2 = 0, x3 = "foo" } = { x1: false, x2: 1, x3: "bar" };
+>x1 : boolean
+>   : ^^^^^^^
+>true : true
+>     : ^^^^
+>x2 : number
+>   : ^^^^^^
+>0 : 0
+>  : ^
+>x3 : string
+>   : ^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>{ x1: false, x2: 1, x3: "bar" } : { x1?: false; x2?: number; x3?: string; }
+>                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x1 : false
+>   : ^^^^^
+>false : false
+>      : ^^^^^
+>x2 : number
+>   : ^^^^^^
+>1 : 1
+>  : ^
+>x3 : string
+>   : ^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+}
 
 function f10(): string {
 >f10 : () => string
@@ -525,14 +769,14 @@ function f20(): void {
 
 }
 
-/*pruned*/;                                               
-/*pruned*/;                                                     
-/*pruned*/;                                                                
-/*pruned*/;                                                   
-/*pruned*/;                                                                        
-/*pruned*/;                                                 
-/*pruned*/;                                                     
-/*pruned*/;                                                               
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 const a: (1 | 2)[] = [1, 2];
 >a : (1 | 2)[]

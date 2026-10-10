@@ -4,19 +4,19 @@ function main(): void {
   const u: URL = parse("https://api.example.com/v1/search?q=widget&category=tools&limit=50&page=2&sort=relevance");
   assert(u.query.size === 5, "five query params");
 
-  const q: string | null = u.query.get("q");
-  assert(q !== null && q === "widget", "q");
-  const cat: string | null = u.query.get("category");
-  assert(cat !== null && cat === "tools", "category");
-  const limit: string | null = u.query.get("limit");
-  assert(limit !== null && limit === "50", "limit");
-  const page: string | null = u.query.get("page");
-  assert(page !== null && page === "2", "page");
-  const sort: string | null = u.query.get("sort");
-  assert(sort !== null && sort === "relevance", "sort");
+  const q: string | undefined = u.query.get("q");
+  assert(q !== undefined && q === "widget", "q");
+  const cat: string | undefined = u.query.get("category");
+  assert(cat !== undefined && cat === "tools", "category");
+  const limit: string | undefined = u.query.get("limit");
+  assert(limit !== undefined && limit === "50", "limit");
+  const page: string | undefined = u.query.get("page");
+  assert(page !== undefined && page === "2", "page");
+  const sort: string | undefined = u.query.get("sort");
+  assert(sort !== undefined && sort === "relevance", "sort");
 
   const v: URL = parse("https://example.com/?tag=a&tag=b&tag=c");
   assert(v.query.size === 1, "repeated key collapses to one entry");
-  const tag: string | null = v.query.get("tag");
-  assert(tag !== null && tag === "c", "last value wins");
+  const tag: string | undefined = v.query.get("tag");
+  assert(tag !== undefined && tag === "c", "last value wins");
 }

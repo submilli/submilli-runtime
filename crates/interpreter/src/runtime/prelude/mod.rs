@@ -34,6 +34,7 @@ pub mod string;
 pub mod temporal;
 pub mod textcodec;
 pub mod uint8array;
+pub(crate) mod undefined;
 pub(crate) mod uri;
 pub(crate) mod value;
 pub(crate) mod vtable;
@@ -82,6 +83,7 @@ pub(crate) fn install_vtables(
     store: &mut Store<StoreData>,
 ) -> wasmtime::Result<(vtable::HostVtables, error::ErrorHost)> {
     let vtables = vtable::install_vtable_module(linker, store)?;
+    undefined::install_store_bound(linker, store, &vtables.object)?;
     let intr = crate::runtime::intrinsic_types::build_intrinsic_types(store.engine())?;
     let error_host = error::install_store_bound(linker, store, &intr, &vtables.string)?;
     number::install_constants(linker, store)?;

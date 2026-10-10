@@ -268,6 +268,7 @@ impl<'a> Inferer<'a> {
                 && !matches!(value_ty, crate::Type::Error)
             {
                 let init_span = self.ast.try_expr(*init).map_err(super::arena_failure)?.span;
+                self.drop_contextual_mismatch(init_span, &sig.ty, &value_ty);
                 self.error(
                     init_span,
                     format!(

@@ -1,6 +1,5 @@
 types: 11 of 18 tsc entries compared, 0 differ
 
 errors:
-line 5: ours: expected `Object`, got `number` (tsc accepts)
 line 8: ours: expected `E`, got `number` (tsc accepts)
 line 10: ours: expected `E`, got `number` (tsc accepts)

@@ -1,0 +1,9 @@
+types: 5 of 12 tsc entries compared, 1 differ
+
+line 10: () => arguments
+  tsc:  () => number
+  ours: () => 100
+
+errors:
+line 7: tsc TS1100: Invalid use of 'arguments' in strict mode. (we accept)
+line 9: tsc TS1100: Invalid use of 'arguments' in strict mode. (we accept)

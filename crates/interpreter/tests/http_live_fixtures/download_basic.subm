@@ -21,8 +21,8 @@ function main(): void {
   assert(r.contentType === "text/plain", "content-type extracted");
   assert(r.path === "/out.bin", "path echoes the user-supplied arg");
 
-  const back: string | null = readText("/out.bin");
-  if (back === null) {
+  const back: string | undefined = readText("/out.bin");
+  if (back === undefined) {
     assert(false, "readText returned null");
   } else {
     assert(back === "hello live", back);

@@ -1,10 +1,10 @@
 === typeGuardOfFormTypeOfFunction.ts ===
 
-/*pruned*/;                
-                                  
-                  
-     
- 
+/*pruned*/;
+
+
+
+
 
 function f2(x: unknown): void {
 >f2 : (x: unknown) => void
@@ -220,26 +220,26 @@ function f12(x: { s: string } | { n: number }): void {
 
 // Repro from #18238
 
-/*pruned*/;                                                    
-                           
-                            
-                                      
-                           
-     
- 
+/*pruned*/;
+
+
+
+
+
+
 
 // Repro from #49316
 
-/*pruned*/;                                                                                           
-                                                                  
-                                        
-                              
-     
- 
+/*pruned*/;
 
-/*pruned*/;                                          
-                                               
- 
+
+
+
+
+
+/*pruned*/;
+
+
 
 
 function main(): void {}

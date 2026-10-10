@@ -86,14 +86,12 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
 }
 
 async fn lookup(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
-    require_receiver(abi_arg(params, 0)?)?;
+    require_receiver(caller, abi_arg(params, 0)?)?;
     let name = host::read_string_arg(caller, abi_arg(params, 1)?, "member")?;
     let fallback = host::read_string_arg(caller, abi_arg(params, 2)?, "interface")?;
-    // An optional conversion field left out reads as null; the call then takes
+    // An optional conversion field left out has no method; the call then takes
     // the inherited conversion, as `String(value)` does.
-    let method = value::conversion_method(caller, abi_arg(params, 0)?, &name)
-        .await?
-        .filter(|method| !matches!(method, Val::AnyRef(None)));
+    let method = value::conversion_method(caller, abi_arg(params, 0)?, &name).await?;
     let interface = receiver_interface(caller, abi_arg(params, 0)?)?.unwrap_or(fallback);
     let key = if method.is_some() {
         String::new()
@@ -123,13 +121,16 @@ async fn invoke(
 ) -> wasmtime::Result<Val> {
     let token = super::array::read_array(caller, token, "member")?;
     let args = super::array::read_array(caller, args, "arguments")?;
-    let key = host::read_string_arg(caller, &token[1], "member key")?;
+    let [receiver, key, method] = token.as_slice() else {
+        return Err(host::fatal_host_error("invalid member call token"));
+    };
+    let key = host::read_string_arg(caller, key, "member key")?;
     if key.is_empty() {
-        if !value::is_callable(caller, &token[2])? {
+        if !value::is_callable(caller, method)? {
             return Err(host::type_error("Member is not callable"));
         }
-        return super::closure::read(caller, &token[2], "method")?
-            .call_with_receiver(caller, token[0], &args)
+        return super::closure::read(caller, method, "method")?
+            .call_with_receiver(caller, *receiver, &args)
             .await;
     }
     let function = caller
@@ -139,7 +140,7 @@ async fn invoke(
         .and_then(|abi| abi.member_functions.get(&key))
         .copied();
     if let Some(function) = function {
-        return call_builtin(caller, function, token[0], &args, &key).await;
+        return call_builtin(caller, function, *receiver, &args, &key).await;
     }
     let slot = if key.ends_with("#toString") {
         Some(0)
@@ -149,7 +150,7 @@ async fn invoke(
         None
     };
     if let Some(slot) = slot {
-        return super::vtable::dispatch_vtable_slot(caller, &token[0], slot, &[]).await;
+        return super::vtable::dispatch_vtable_slot(caller, receiver, slot, &[]).await;
     }
     Err(host::type_error("Member is not callable"))
 }
@@ -161,14 +162,13 @@ fn defaults_fit(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
     let ends_in_rest = host::read_boxed_number(caller, abi_arg(params, 3)?, "rest")? != 0.0;
     let fits = value::is_callable(caller, abi_arg(params, 0)?)? && {
         // A cast adapts to its target by calling what an adapter ultimately
-        // wraps, so that original decides: its parameters, and its return
-        // convention unless the target is `void`, which drops any result. A
-        // value-returning function stored as a `void` one still returns its value.
+        // wraps, so that original decides: its parameters, and its result
+        // count when the target names one. A `void` closure returns
+        // `undefined`, so either convention has one result.
         let original_ref = super::closure::original(caller, *abi_arg(params, 0)?)?;
         let original = super::closure::read(caller, &original_ref, "function")?;
-        let returns_fit = results.is_none_or(|expected_results| {
-            expected_results == 0 || original.result_count(caller) == expected_results
-        });
+        let returns_fit = results
+            .is_none_or(|expected_results| original.result_count(caller) == expected_results);
         returns_fit
             && if ends_in_rest {
                 original.ends_in_rest(caller, argument_count)?
@@ -217,7 +217,7 @@ async fn call_builtin(
         } else if let Some(value) = args.get(index - 1) {
             *value
         } else {
-            Val::null_any_ref()
+            super::undefined::value(caller)?
         };
         inputs.push(coerce(caller, value, &slot).await?);
     }
@@ -232,10 +232,10 @@ async fn call_builtin(
     function
         .call_async(&mut *caller, &inputs, &mut outputs)
         .await?;
-    box_result(
-        caller,
-        outputs.first().copied().unwrap_or(Val::null_any_ref()),
-    )
+    match outputs.first().copied() {
+        Some(result) => box_result(caller, result),
+        None => super::undefined::value(caller),
+    }
 }
 
 async fn coerce(
@@ -277,7 +277,14 @@ static BUILTIN_PARAMETERS: LazyLock<HashMap<String, Parameters>> = LazyLock::new
                 signature
                     .params
                     .iter()
-                    .map(|param| (param.default.clone(), param.rest))
+                    .map(|param| {
+                        (
+                            param.default.clone().or_else(|| {
+                                param.optional.then_some(crate::DefaultValue::Undefined)
+                            }),
+                            param.rest,
+                        )
+                    })
                     .collect()
             });
         }
@@ -302,7 +309,7 @@ pub(super) fn box_result(caller: &mut Caller<'_, StoreData>, result: Val) -> was
 }
 
 async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
-    require_receiver(abi_arg(params, 0)?)?;
+    require_receiver(caller, abi_arg(params, 0)?)?;
     let name = host::read_string_arg(caller, abi_arg(params, 1)?, "property")?;
     if let Some(value) = value::conversion_method(caller, abi_arg(params, 0)?, &name).await? {
         return Ok(value);
@@ -339,9 +346,11 @@ async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtim
     invoke(caller, &token, &args).await
 }
 
-fn require_receiver(value: &Val) -> wasmtime::Result<()> {
-    if matches!(value, Val::AnyRef(None)) {
-        return Err(host::type_error("Cannot read property of null"));
+fn require_receiver(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<()> {
+    if super::undefined::is_nullish(caller, value)? {
+        return Err(host::type_error(
+            "Cannot read property of null or undefined",
+        ));
     }
     Ok(())
 }

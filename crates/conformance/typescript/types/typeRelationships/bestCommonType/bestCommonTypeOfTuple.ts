@@ -18,7 +18,7 @@ let t1: [(x: number) => string, (x: number) => number] = null as unknown as ([(x
 // no error
 t1 = [f1, f2];
 /*pruned*/;           
-/*pruned*/;    
+/*pruned*/;         
 /*pruned*/;               
 let e1 = t1[2];  // {}
 /*pruned*/;      // {}

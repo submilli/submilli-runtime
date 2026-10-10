@@ -1,0 +1,2 @@
+superPropertyInConstructorBeforeSuperCall.ts(8,9): error TS17011: 'super' must be called before accessing a property of 'super' in the constructor of a derived class.
+superPropertyInConstructorBeforeSuperCall.ts(14,15): error TS17011: 'super' must be called before accessing a property of 'super' in the constructor of a derived class.

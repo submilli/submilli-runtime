@@ -26,11 +26,13 @@ function a(x: string | number | boolean): void {
 >x : string | true
 >  : ^^^^^^^^^^^^^
 
-        x = null;
->x = null : null
->         : ^^^^
+        x = undefined;
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number | boolean
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     } while (typeof x === "string")
 >typeof x === "string" : boolean
@@ -70,11 +72,13 @@ function b(x: string | number | boolean): void {
 >cond : boolean
 >     : ^^^^^^^
 
-        x = null;
->x = null : null
->         : ^^^^
+        x = undefined;
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number | boolean
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     } while (typeof x === "string")
 >typeof x === "string" : boolean
@@ -114,11 +118,13 @@ function c(x: string | number): void {
 >cond : boolean
 >     : ^^^^^^^
 
-        x = null;
->x = null : null
->         : ^^^^
+        x = undefined;
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number
 >  : ^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     } while (typeof x === "string")
 >typeof x === "string" : boolean

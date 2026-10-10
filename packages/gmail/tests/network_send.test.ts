@@ -4,10 +4,10 @@ import { sendEmail } from "@submilli/gmail";
 
 function main(): void {
     label("live Gmail self-addressed send");
-    if (secrets.get("GOOGLE_ACCESS_TOKEN") === null) return;
+    if (secrets.get("GOOGLE_ACCESS_TOKEN") === undefined) return;
     if (secrets.get("GOOGLE_LIVE_MUTATIONS") !== "true") return;
     const recipient = secrets.get("GOOGLE_TEST_EMAIL_RECIPIENT");
-    if (recipient === null) return;
+    if (recipient === undefined) return;
 
     const stamp = Temporal.Now.instant().toString();
     const message = sendEmail({

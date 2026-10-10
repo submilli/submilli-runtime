@@ -74,45 +74,14 @@ pub(crate) fn next_closure_type(
     Ok((func, st))
 }
 
-/// The `$closure_0_void` func + struct types: `close: () => void` under the
-/// closure ABI — funcref `(ref any) -> ()`, struct a `$closure` subtype
-/// `{ vtable, funcref, env }`. Declared to canonicalize with
-/// `codegen::closures`, so the guest's `ref.cast` when invoking an iterator's
-/// `close` field succeeds. [`void_closure_matches_codegen`] pins the agreement.
+/// The `close: () => void` closure has the same value-carrying ABI as `next`.
+/// Host close callbacks produce undefined after releasing their resources.
+/// [`void_closure_matches_codegen`] pins agreement with generated closures.
 pub(crate) fn void_closure_type(
     engine: &wasmtime::Engine,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<(FuncType, StructType)> {
-    let imm = Mutability::Const;
-    let func = singleton_func(
-        engine,
-        vec![ValType::Ref(RefType::new(false, HeapType::Any))],
-        Vec::new(),
-    )?;
-    let st = singleton_struct(
-        engine,
-        Finality::NonFinal,
-        Some(intr.closure.clone()),
-        vec![
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(
-                    false,
-                    intr.vtable.clone().into(),
-                ))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(false, func.clone().into()))),
-            ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
-            ),
-            FieldType::new(Mutability::Var, StorageType::ValType(ValType::I64)),
-        ],
-    )?;
-    Ok((func, st))
+    next_closure_type(engine, intr)
 }
 
 /// The `IteratorYieldResult` / `IteratorReturnResult` struct type: a non-final
@@ -171,13 +140,14 @@ pub(crate) fn iter_yield(caller: &mut Caller<'_, StoreData>, value: Val) -> wasm
     build_result(caller, &intr, vtable, names, fields)
 }
 
-/// Build `{ done: true }` (an `IteratorReturnResult`).
+/// Build `{ done: true, value: undefined }` (an `IteratorReturnResult`).
 pub(crate) fn iter_done(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     let intr = intrinsic_types(&mut *caller)?;
     let vtable = host_object_vtable(caller)?;
     let done = box_boolean(caller, true)?;
-    let names = field_names_array(caller, &intr, &["done"])?;
-    let fields = object_fields_array(caller, &intr, &[done])?;
+    let value = super::undefined::value(caller)?;
+    let names = field_names_array(caller, &intr, &["done", "value"])?;
+    let fields = object_fields_array(caller, &intr, &[done, value])?;
     build_result(caller, &intr, vtable, names, fields)
 }
 
@@ -685,6 +655,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     let return_result_body = || -> Type {
         let mut fields = std::collections::BTreeMap::new();
         fields.insert(
+            "value".to_string(),
+            crate::ObjectField::required(Type::Undefined),
+        );
+        fields.insert(
             "done".to_string(),
             crate::ObjectField::required(Type::Boolean),
         );
@@ -703,7 +677,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 generics: Vec::new(),
                 ty: return_result_body(),
                 doc: doc(
-                    "/** End-of-stream marker: `{ done: true }`. Returned by `Iterator<T>.next()` after the iterator is exhausted; subsequent calls keep returning this same shape. */",
+                    "/** End-of-stream marker: `{ done: true; value: undefined }`. Returned by `Iterator<T>.next()` after the iterator is exhausted; subsequent calls keep returning this same shape. */",
                 ),
             },
         },
@@ -754,6 +728,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "next".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: Vec::new(),
                         params: Vec::new(),
                         ret: Type::Alias { mangled: crate::mangle::prelude("IteratorResult"), package: crate::Package::prelude(),
@@ -771,6 +746,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     "close".to_string(),
                     PropertySig {
                         ty: Type::Function {
+                            optional: 0,
                             params: Vec::new(),
                             ret: Box::new(Type::Void),
                             predicate: None,
@@ -786,7 +762,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 )]),
                 dispatch: Dispatch::VTable,
                 doc: doc(
-                    "/** A consumed-once cursor producing values of type `T`. `for-of` walks it via `next()` until the result is `{ done: true }`. `T` may include `null` — the `done` field is the discriminator, not the element value. */",
+                    "/** A consumed-once cursor producing values of type `T`. `for-of` walks it via `next()` until the result is `{ done: true }`. `T` may include `null` or `undefined` — the `done` field is the discriminator, not the element value. */",
                 ),
             },
         },
@@ -802,6 +778,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "iterator".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: Vec::new(),
                         params: Vec::new(),
                         ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("T".to_string())]),

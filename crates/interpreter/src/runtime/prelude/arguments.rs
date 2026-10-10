@@ -185,7 +185,17 @@ pub(super) fn bind(
             ))
         } else {
             match args.get(index) {
-                Some(value) => *value,
+                Some(value)
+                    if default.is_none() || !super::undefined::is_undefined(caller, value)? =>
+                {
+                    *value
+                }
+                Some(_) => match default {
+                    Some(DefaultValue::OmittedNumber { undefined, .. }) => {
+                        box_result(caller, Val::F64(undefined.to_bits()))?
+                    }
+                    _ => default_value(caller, default.as_ref())?,
+                },
                 None => default_value(caller, default.as_ref())?,
             }
         };
@@ -199,7 +209,9 @@ fn default_value(
     default: Option<&DefaultValue>,
 ) -> wasmtime::Result<Val> {
     match default {
-        Some(DefaultValue::Number(value)) => box_result(caller, Val::F64(value.to_bits())),
+        Some(DefaultValue::Number(value) | DefaultValue::OmittedNumber { omitted: value, .. }) => {
+            box_result(caller, Val::F64(value.to_bits()))
+        }
         Some(DefaultValue::Boolean(value)) => box_result(caller, Val::I32(*value as i32)),
         Some(DefaultValue::String(value)) => Ok(Val::AnyRef(Some(
             host::write_submilli_string_struct(caller, value)?.to_anyref(),
@@ -219,9 +231,12 @@ fn default_value(
                 let value = global.get(&mut *caller);
                 box_result(caller, value)
             }
-            _ => Err(host::type_error("Default argument constant is unavailable")),
+            _ => Err(host::fatal_host_error(
+                "Default argument constant is unavailable",
+            )),
         },
-        None | Some(DefaultValue::Null) => Ok(Val::null_any_ref()),
+        Some(DefaultValue::Null) => Ok(Val::null_any_ref()),
+        None | Some(DefaultValue::Undefined) => super::undefined::value(caller),
     }
 }
 
@@ -253,6 +268,62 @@ mod tests {
     use super::*;
     use crate::runtime::{RuntimeConfig, Vfs, install_runtime_async};
     use wasmtime::{Func, FuncType, Linker, StructRef, StructRefPre};
+
+    #[tokio::test]
+    async fn unavailable_default_constant_is_fatal_and_store_remains_usable() {
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config
+            .store_async(&engine, StoreData::with_vfs(Vfs::none()))
+            .unwrap();
+        let mut linker = Linker::new(&engine);
+        install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
+        let name = crate::mangle::host("test:arguments", "default");
+        host::register_host_fn(
+            &mut linker,
+            "test:arguments",
+            name.clone(),
+            FuncType::new(&engine, [ValType::I32], [ValType::ANYREF]),
+            true,
+            |caller, args, results| {
+                let default = if args[0].i32() == Some(0) {
+                    DefaultValue::GlobalConst(crate::mangle::host(
+                        "test:arguments",
+                        "missing_default_export",
+                    ))
+                } else {
+                    DefaultValue::Null
+                };
+                results[0] = default_value(caller, Some(&default))?;
+                Ok(())
+            },
+        )
+        .unwrap();
+        let wasmtime::Extern::Func(probe) = linker
+            .get(&mut store, "test:arguments", name.as_str())
+            .unwrap()
+        else {
+            panic!("default probe is not a function");
+        };
+        let mut result = [Val::null_any_ref()];
+        let error = probe
+            .call_async(&mut store, &[Val::I32(0)], &mut result)
+            .await
+            .unwrap_err();
+        assert!(error.is::<host::FatalHostError>(), "{error:#}");
+        assert!(
+            error
+                .to_string()
+                .contains("Default argument constant is unavailable")
+        );
+        probe
+            .call_async(&mut store, &[Val::I32(1)], &mut result)
+            .await
+            .unwrap();
+        assert!(matches!(result[0], Val::AnyRef(None)));
+    }
 
     #[tokio::test]
     async fn parsed_metadata_is_reused_when_calls_and_input_double() {

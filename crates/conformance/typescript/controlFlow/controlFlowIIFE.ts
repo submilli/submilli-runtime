@@ -31,16 +31,16 @@ function f3(): void {
 
 // Repros from #8381
 
-let maybeNumber: number | null = null as unknown as (number | null);
+let maybeNumber: number | undefined = null as unknown as (number | undefined);
 (function () {
     maybeNumber = 1;
 })();
 maybeNumber++;
-if (maybeNumber !== null) {
+if (maybeNumber !== undefined) {
     maybeNumber++;
 }
 
-let test: string | null = null as unknown as (string | null);
+let test: string | undefined = null as unknown as (string | undefined);
 if (!test) {
     throw new Error('Test is not defined');
 }

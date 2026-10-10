@@ -1,0 +1,120 @@
+=== validUndefinedAssignments.ts ===
+let x: typeof undefined = null as unknown as (typeof undefined);
+>x : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>null as unknown as (typeof undefined) : undefined
+>                                      : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+let a: number = x;
+>a : number
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let b: boolean = x;
+>b : boolean
+>  : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let c: string = x;
+>c : string
+>  : ^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+let d: void = x;
+>d : void
+>  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+let e: typeof undefined = x;
+>e : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+e = x; // should work
+>e = x : undefined
+>      : ^^^^^^^^^
+>e : undefined
+>  : ^^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+class C { foo: string }
+>C : C
+>  : ^
+>foo : string
+>    : ^^^^^^
+
+/*pruned*/;
+/**/;
+
+interface I { foo: string }
+>I : I
+>  : ^
+>foo : string
+>    : ^^^^^^
+
+let g: I = null as unknown as (I);
+>g : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+g = x;
+>g = x : undefined
+>      : ^^^^^^^^^
+>g : I
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+let h: { f(): void } = x;
+>h : { f(): void; }
+>  : ^^^^^^^^^^^^^^
+>f : () => void
+>  : ^^^^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+
+
+function i<T>(a: T): void {
+>i : <T>(a: T) => void
+>  : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : T
+>  : ^
+
+    a = x;
+>a = x : undefined
+>      : ^^^^^^^^^
+>a : T
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

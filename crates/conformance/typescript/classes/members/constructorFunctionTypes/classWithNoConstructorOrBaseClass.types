@@ -17,7 +17,7 @@ let c = new C();
 >C : typeof C
 >  : ^^^^^^^^
 
-/**/;     
+/**/;
 
 class D<T,U> {
 >D : D<T, U>

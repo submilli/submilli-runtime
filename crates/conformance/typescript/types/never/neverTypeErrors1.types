@@ -3,14 +3,14 @@ function f1(): void {
 >f1 : () => void
 >   : ^^^^^^^^^^
 
-    /*pruned*/;                               
-    /**/; 
-    /**/;     
-    /**/;     
-    /**/;    
-    /**/;    
-    /**/;  
-    ;   
+    /*pruned*/;
+    /**/;
+    /**/;
+    /**/;
+    /*pruned*/;
+    /**/;
+    /**/;
+    ;
 }
 
 function f2(): never {
@@ -44,7 +44,7 @@ for (const n of f4()) {}
 >f4 : () => never
 >   : ^^^^^^^^^^^
 
-/*pruned*/;             
+/*pruned*/;
 
 function f5(): void {
 >f5 : () => void
@@ -80,13 +80,13 @@ interface B {
 
 }
 
-/*pruned*/;        
+/*pruned*/;
 
-/*pruned*/;                          
-            
-                  
-      
- 
+/*pruned*/;
+
+
+
+
 
 
 function main(): void {}

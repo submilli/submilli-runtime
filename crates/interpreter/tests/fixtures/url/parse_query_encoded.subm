@@ -2,18 +2,18 @@ import { parse, URL } from "submilli:url";
 
 function main(): void {
   const a: URL = parse("https://example.com/?key=hello%20world");
-  const v: string | null = a.query.get("key");
-  assert(v !== null && v === "hello world", "space decoded");
+  const v: string | undefined = a.query.get("key");
+  assert(v !== undefined && v === "hello world", "space decoded");
 
   const b: URL = parse("https://example.com/?expr=a%26b");
-  const e: string | null = b.query.get("expr");
-  assert(e !== null && e === "a&b", "& in value");
+  const e: string | undefined = b.query.get("expr");
+  assert(e !== undefined && e === "a&b", "& in value");
 
   const c: URL = parse("https://example.com/?eq=a%3Db");
-  const f: string | null = c.query.get("eq");
-  assert(f !== null && f === "a=b", "= in value");
+  const f: string | undefined = c.query.get("eq");
+  assert(f !== undefined && f === "a=b", "= in value");
 
   const d: URL = parse("https://example.com/?foo%20bar=value");
-  const g: string | null = d.query.get("foo bar");
-  assert(g !== null && g === "value", "encoded key");
+  const g: string | undefined = d.query.get("foo bar");
+  assert(g !== undefined && g === "value", "encoded key");
 }

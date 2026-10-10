@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cf16f6a01adc6ebfd369afd197642914f12148b6a20b46bed16e7f6af33df1aa"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "c1b58411c3c0502a0a89571044e96fe4310fb7ead9e02dc84ff463b25fec5b59"
+  confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
 A Package in Submilli is like a package in npm or pip, a library you
@@ -73,7 +73,7 @@ export function applyCredit(customerId: string, amount: number): Credit {
     check("acme.com/credits.apply", { customerId, customerClass, amount });
 
     const key = secrets.get("BILLING_API_KEY");
-    if (key === null) {
+    if (key === undefined) {
         throw new Error("BILLING_API_KEY is not configured for this blueprint");
     }
     const headers = new Map<string, string>();

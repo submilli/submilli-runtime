@@ -10,19 +10,19 @@ function main(): void {
   assert(nums.findLastIndex((n) => n > 100) === -1, "findLastIndex returns -1 when nothing matches");
 
   let last = nums.findLast((n) => n === 30);
-  if (last !== null) {
+  if (last !== undefined) {
     assert(last === 30, "findLast returns the last matching element");
   } else {
     assert(false, "findLast should locate 30");
   }
 
   let lastBig = nums.findLast((n) => n > 100);
-  assert(lastBig === null, "findLast returns null when nothing matches");
+  assert(lastBig === undefined, "findLast returns undefined when nothing matches");
 
   let empty: number[] = [];
   assert(empty.findIndex((n) => true) === -1, "findIndex on empty array returns -1");
   assert(empty.findLastIndex((n) => true) === -1, "findLastIndex on empty array returns -1");
-  assert(empty.findLast((n) => true) === null, "findLast on empty array returns null");
+  assert(empty.findLast((n) => true) === undefined, "findLast on empty array returns undefined");
 
   let words = ["apple", "banana", "cherry", "fig"];
   assert(words.findIndex((s) => s.length === 3) === 3, "findIndex over strings");

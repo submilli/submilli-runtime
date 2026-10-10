@@ -12,9 +12,11 @@ function fn2(): string { return ''; }
 >'' : ""
 >   : ^^
 
-function fn3(): void { return null; }
+function fn3(): void { return undefined; }
 >fn3 : () => void
 >    : ^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 function fn4(): void { return; }
 >fn4 : () => void
@@ -26,8 +28,8 @@ function fn5(): boolean { return true; }
 >true : true
 >     : ^^^^
 
-/*pruned*/;                                  
-/*pruned*/;                         
+/*pruned*/;
+/*pruned*/;
 /*pruned*/;                     // OK, eq. to 'return undefined'
 
 interface I { id: number }
@@ -60,7 +62,7 @@ class D extends C {
 >     : ^^^^^^
 
 }
-function fn10(): I { return { id: 12 }; } 
+function fn10(): I { return { id: 12 }; }
 >fn10 : () => I
 >     : ^^^^^^^
 >{ id: 12 } : { id: number; }

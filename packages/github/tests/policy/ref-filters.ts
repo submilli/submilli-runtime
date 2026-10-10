@@ -1,6 +1,7 @@
 // Run through `submilli run --blueprint ref-filters.yaml`, not the allow-all build test runner.
 import {
-    CreatePullRequestInput, FileReadOptions, RepositoryRef, listCommits, createPullRequest, listDirectory, readFile, readTextFile, updatePullRequest,
+    CreatePullRequestInput, FileReadOptions, RepositoryRef, createPullRequest, getIssue, listBranches, listCommits, listDirectory, readFile,
+    readTextFile, updatePullRequest,
 } from "@submilli/github";
 
 const REPOSITORY: RepositoryRef = { owner: "allowed-org", name: "repo" };
@@ -97,5 +98,9 @@ function main(): string {
     deniedAt("github.com/commits.list", "main", () => { listCommits(REPOSITORY, { sha: "secret-branch", path: "src/lib.ts" }); });
     deniedAt("github.com/commits.list", "main", () => { listCommits(REPOSITORY, { sha: "main", path: "secret.txt" }); });
     deniedAt("github.com/commits.list", "main", () => { listCommits(REPOSITORY); });
+
+    // Fields an operation does not name are checked as null, so `field == null` rules match them.
+    reachesCredentialBoundary(() => { listBranches(REPOSITORY); });
+    reachesCredentialBoundary(() => { getIssue(REPOSITORY, 1); });
     return "ref, head and base checks passed";
 }

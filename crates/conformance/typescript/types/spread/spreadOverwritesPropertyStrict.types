@@ -89,32 +89,32 @@ let unused5 = { ...abq, b: 1 } // ok
 >1 : 1
 >  : ^
 
-function g(obj: { x: number | null }): { x: number | null; } {
->g : (obj: { x: number | null; }) => { x: number | null; }
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->obj : { x: number | null; }
->    : ^^^^^^^^^^^^^^^^^^^^^
->x : number | null
->  : ^^^^^^^^^^^^^
->x : number | null
->  : ^^^^^^^^^^^^^
+function g(obj: { x: number | undefined }): { x: number | undefined; } {
+>g : (obj: { x: number | undefined; }) => { x: number | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number | undefined; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>x : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
     return { x: 1, ...obj }; // ok, obj might have x: undefined
->{ x: 1, ...obj } : { x: number | null; }
->                 : ^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, ...obj } : { x: number | undefined; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x : number
 >  : ^^^^^^
 >1 : 1
 >  : ^
->obj : { x: number | null; }
->    : ^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number | undefined; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 }
-function f(obj: { x: number } | null): { x: number; } {
->f : (obj: { x: number; } | null) => { x: number; }
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->obj : { x: number; } | null
->    : ^^^^^^^^^^^^^^^^^^^^^
+function f(obj: { x: number } | undefined): { x: number; } {
+>f : (obj: { x: number; } | undefined) => { x: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number; } | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x : number
 >  : ^^^^^^
 >x : number
@@ -127,8 +127,8 @@ function f(obj: { x: number } | null): { x: number; } {
 >  : ^^^^^^
 >1 : 1
 >  : ^
->obj : { x: number; } | null
->    : ^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number; } | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 }
 function h(obj: { x: number } | { x: string }): { x: number; } | { x: string; } {
@@ -156,9 +156,9 @@ function h(obj: { x: number } | { x: string }): { x: number; } | { x: string; } 
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 }
-function i(b: boolean, t: { command: string, ok: string }): { command: string; ok?: string | null; } {
->i : (b: boolean, t: { command: string; ok: string; }) => { command: string; ok?: string | null; }
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+function i(b: boolean, t: { command: string, ok: string }): { command: string; ok?: string | undefined; } {
+>i : (b: boolean, t: { command: string; ok: string; }) => { command: string; ok?: string | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >b : boolean
 >  : ^^^^^^^
 >t : { command: string; ok: string; }
@@ -169,8 +169,8 @@ function i(b: boolean, t: { command: string, ok: string }): { command: string; o
 >   : ^^^^^^
 >command : string
 >        : ^^^^^^
->ok : string | null | undefined
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>ok : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
 
     return { command: "hi", ...(b ? t : {}) } // ok
 >{ command: "hi", ...(b ? t : {}) } : { command: string; ok?: string | undefined; }
@@ -254,12 +254,12 @@ function k(t: { command: string, ok: string }): { command: string; ok: string; s
 
 }
 
-/*pruned*/;                                       
-                                                
- 
-/*pruned*/;                                        
-                                             
- 
+/*pruned*/;
+
+
+/*pruned*/;
+
+
 
 
 

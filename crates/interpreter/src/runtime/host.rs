@@ -14,7 +14,7 @@ use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 pub(crate) use crate::runtime::intrinsic_types::{
     intrinsic_array_type, intrinsic_bigint_type, intrinsic_string_type, intrinsic_uint8_array_type,
 };
-use crate::runtime::number::{parse_float_js, parse_int_js, string_to_number_js};
+use crate::runtime::number::{parse_float_js, parse_int_with_radix, string_to_number_js};
 use crate::runtime::{StoreData, read_submilli_string};
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
@@ -463,19 +463,7 @@ fn install_number_module(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                     )));
                 }
             };
-            // ToInteger semantics: NaN → 0, finite → trunc; out-of-range
-            // u32 → 0 so `parse_int_js` returns NaN via the radix check.
-            let r = if radix.is_nan() {
-                0u32
-            } else {
-                let truncated = radix.trunc();
-                if (0.0..=36.0).contains(&truncated) {
-                    truncated as u32
-                } else {
-                    0
-                }
-            };
-            let value = parse_int_js(&s, r);
+            let value = parse_int_with_radix(&s, radix);
             *abi_result(results, 0)? = Val::F64(value.to_bits());
             Ok(())
         },
@@ -1814,14 +1802,11 @@ fn number_module_definitions() -> PackageDeclaration {
     insert(
         &mut defs,
         "parseInt",
-        vec![
-            Param::new("string", Type::String),
-            Param::new("radix", Type::Number),
-        ],
+        vec![Param::new("string", Type::String), parse_int_radix_param()],
         Type::Number,
         crate::doc(
             crate::FileId::NUMBER,
-            "/**\n * Parses `string` as an integer in the given `radix`. Stops at the first non-digit character. Returns `NaN` if no digits are found.\n * @param string The text to parse.\n * @param radix The base (2-36).\n */",
+            "/**\n * Parses `string` as an integer in the given `radix`. Stops at the first non-digit character. Returns `NaN` if no digits are found.\n * @param string The text to parse.\n * @param radix The base (2-36). Omitted or `undefined`, a `0x` prefix reads as base 16 and anything else as base 10.\n */",
         ),
     );
     insert(
@@ -1835,6 +1820,14 @@ fn number_module_definitions() -> PackageDeclaration {
         ),
     );
     defs
+}
+
+/// `parseInt`'s `radix`: omitted or `undefined` passes 0, which
+/// `parse_int_with_radix` reads as "detect a `0x` prefix, else base 10", as in JS.
+/// The host receives an `f64`, so the declared type stays `number`; a
+/// defaulted parameter still accepts `undefined` at the call.
+pub(crate) fn parse_int_radix_param() -> Param {
+    Param::with_default("radix", Type::Number, crate::DefaultValue::Number(0.0))
 }
 
 #[cfg(test)]

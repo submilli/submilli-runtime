@@ -22,12 +22,12 @@ function f2(): 1 | 2 | null {
     }
 }
 
-function f4(): 1 | null {
+function f4(): 1 | undefined {
     try {
         return 1;
     }
     catch (e) {
-        return null;
+        return undefined;
     }
     finally {
         return 1;

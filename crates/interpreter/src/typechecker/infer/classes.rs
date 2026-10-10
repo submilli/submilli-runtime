@@ -16,7 +16,6 @@ use crate::{
     Visibility,
 };
 
-use super::void_value::ValuePosition;
 use super::{Inferer, type_limit_at, type_limit_unlocated};
 use crate::type_size::{TypeLimits, TypeTooLarge};
 
@@ -204,7 +203,7 @@ impl<'a> Inferer<'a> {
                         );
                         continue;
                     }
-                    let resolved = self.resolve_value_type(ty, ValuePosition::FieldType)?;
+                    let resolved = self.resolve_type(ty)?;
                     if self.reject_class_generic_in_static(
                         f_name,
                         &generic_names,
@@ -227,6 +226,7 @@ impl<'a> Inferer<'a> {
                 ClassMember::Method {
                     name: m_name,
                     modifiers,
+                    optional,
                     generics: m_generics,
                     params,
                     return_type,
@@ -253,6 +253,7 @@ impl<'a> Inferer<'a> {
                     statics.insert(
                         m_name.name.clone(),
                         MethodSig {
+                            optional: *optional,
                             generics: m_generic_names,
                             params: resolved_params,
                             ret: resolved_ret,
@@ -273,7 +274,7 @@ impl<'a> Inferer<'a> {
                     if self.reject_duplicate_member(&fields, &methods, f_name, &name) {
                         continue;
                     }
-                    let resolved = self.resolve_value_type(ty, ValuePosition::FieldType)?;
+                    let resolved = self.resolve_type(ty)?;
                     fields.insert(
                         f_name.name.clone(),
                         FieldSig {
@@ -288,6 +289,7 @@ impl<'a> Inferer<'a> {
                 ClassMember::Method {
                     name: m_name,
                     modifiers,
+                    optional,
                     generics: m_generics,
                     params,
                     return_type,
@@ -342,6 +344,7 @@ impl<'a> Inferer<'a> {
                     methods.insert(
                         m_name.name.clone(),
                         MethodSig {
+                            optional: *optional,
                             generics: m_generic_names,
                             params: resolved_params,
                             ret: resolved_ret,
@@ -375,10 +378,32 @@ impl<'a> Inferer<'a> {
                         if self.reject_duplicate_member(&fields, &methods, &decl.name, &name) {
                             continue;
                         }
+                        let field_ty = match &decl.ty {
+                            Some(annotation) => crate::ObjectField::widen_optional(
+                                decl.optional,
+                                self.resolve_type(annotation)?,
+                            ),
+                            None if decl.default.is_some() => self
+                                .typed_ast
+                                .authored_parameter_types
+                                .get(&(
+                                    decl.name.span.file.0,
+                                    decl.name.span.start,
+                                    decl.name.span.end,
+                                ))
+                                .cloned()
+                                .ok_or_else(|| {
+                                    super::inference_failure(
+                                        "missing inferred parameter-property source type",
+                                    )
+                                    .with_span(decl.name.span)
+                                })?,
+                            None => resolved.ty.clone(),
+                        };
                         fields.insert(
                             decl.name.name.clone(),
                             FieldSig {
-                                ty: resolved.ty.clone(),
+                                ty: field_ty,
                                 visibility: modifiers.visibility,
                                 readonly: modifiers.readonly.is_some(),
                                 optional: false,
@@ -445,7 +470,7 @@ impl<'a> Inferer<'a> {
                             let write_ty = param
                                 .as_ref()
                                 .and_then(|p| p.ty.as_ref())
-                                .map(|t| self.resolve_value_type(t, ValuePosition::Parameter))
+                                .map(|t| self.resolve_type(t))
                                 .transpose()?
                                 .unwrap_or(Type::Error);
                             let param_name = param
@@ -466,6 +491,7 @@ impl<'a> Inferer<'a> {
                                 param: crate::Param {
                                     name: param_name,
                                     ty: write_ty,
+                                    optional: false,
                                     default: None,
                                     rest: false,
                                 },
@@ -1530,6 +1556,7 @@ impl<'a> Inferer<'a> {
                 .all(|member| self.array_representation_distinguishes(member, child)),
             Type::Array(_) | Type::Tuple(_) => super::assignable(parent, child, self.resolver()),
             Type::Null
+            | Type::Undefined
             | Type::Number
             | Type::NumberLiteral(_)
             | Type::Boolean
@@ -1592,20 +1619,23 @@ impl<'a> Inferer<'a> {
         &self,
         child_ty: &Type,
     ) -> Option<crate::InterfaceNarrowingTest> {
-        let (interface_ty, nullable) = match child_ty.peel() {
-            Type::InterfaceRef { .. } => (child_ty.peel(), false),
+        let (interface_ty, nullable, undefined) = match child_ty.peel() {
+            Type::InterfaceRef { .. } => (child_ty.peel(), false, false),
             Type::Union(members) => {
                 let nullable = members
                     .iter()
                     .any(|member| matches!(member.peel(), Type::Null));
+                let undefined = members
+                    .iter()
+                    .any(|member| matches!(member.peel(), Type::Undefined));
                 let mut non_null = members
                     .iter()
-                    .filter(|member| !matches!(member.peel(), Type::Null));
+                    .filter(|member| !matches!(member.peel(), Type::Null | Type::Undefined));
                 let interface = non_null.next()?;
                 if non_null.next().is_some() {
                     return None;
                 }
-                (interface.peel(), nullable)
+                (interface.peel(), nullable, undefined)
             }
             _ => return None,
         };
@@ -1637,6 +1667,7 @@ impl<'a> Inferer<'a> {
                 || non_shape_carriers.contains(&crate::InterfaceCarrier::ObjectShape),
             non_shape_carriers,
             nullable,
+            undefined,
         })
     }
 
@@ -1814,7 +1845,7 @@ impl<'a> Inferer<'a> {
                 self.carrier_fit(&Type::Array(Box::new(Type::Unknown)), target, members);
             let array_matches = array_fit.matching(candidates, |element| {
                 let array = Type::Array(Box::new(element.clone()));
-                let tuple = Type::Tuple(vec![element.clone()]);
+                let tuple = Type::Tuple(vec![element.clone()].into());
                 super::assignable(&array, target, self.resolver())
                     || super::assignable(&tuple, target, self.resolver())
             });
@@ -2211,9 +2242,12 @@ impl<'a> Inferer<'a> {
         };
         match ty.peel() {
             Type::Array(element) => record(element)?,
-            Type::Tuple(elements)
-            | Type::Union(elements)
-            | Type::ClassRef { args: elements, .. } => {
+            Type::Tuple(elements) => {
+                for element in elements {
+                    record(element)?;
+                }
+            }
+            Type::Union(elements) | Type::ClassRef { args: elements, .. } => {
                 for element in elements {
                     record(element)?;
                 }
@@ -2771,6 +2805,31 @@ impl<'a> Inferer<'a> {
         })
     }
 
+    /// Compiled instances carry callable method payloads; native instances
+    /// expose only their host/vtable methods. Imported compiler metadata records
+    /// the same distinction used when reconstructing their runtime layouts.
+    pub(super) fn class_method_has_mutable_payload(&self, receiver: &Type, method: &str) -> bool {
+        let Type::ClassRef {
+            mangled,
+            package,
+            args,
+            ..
+        } = receiver.peel()
+        else {
+            return false;
+        };
+        let compiled = package.as_str() == self.package_name
+            || self
+                .packages_by_name
+                .get(package.as_str())
+                .or_else(|| self.type_only_packages.get(package.as_str()))
+                .is_some_and(|package| package.runtime_types.contains_key(mangled.as_str()));
+        compiled
+            && self
+                .class_method_in_chain(mangled, args, method)
+                .is_some_and(|resolved| resolved.sig.generics.is_empty())
+    }
+
     /// A static member resolved up the inheritance chain (TS hands statics down
     /// to subclasses): the resolution plus the mangled name of the *defining*
     /// class — the dispatch key is minted from the definer, so `B.f()` calls
@@ -3053,6 +3112,57 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    /// TS2729: a field initializer reading `this.x` before `x` is set. Field
+    /// initializers run in declaration order, before the constructor assigns
+    /// its parameter properties; a closure reading it later is fine.
+    pub(super) fn note_uninitialized_member_read(
+        &mut self,
+        receiver: crate::ExprId,
+        name: &crate::Ident,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        if self.in_nested_function
+            || !self
+                .uninitialized_members
+                .as_ref()
+                .is_some_and(|members| members.contains(&name.name))
+        {
+            return Ok(());
+        }
+        let mut receiver = receiver;
+        while let crate::ExprKind::Paren(inner) = &self
+            .ast
+            .try_expr(receiver)
+            .map_err(super::arena_failure)?
+            .kind
+        {
+            receiver = *inner;
+        }
+        if !matches!(
+            self.ast
+                .try_expr(receiver)
+                .map_err(super::arena_failure)?
+                .kind,
+            crate::ExprKind::This
+        ) {
+            return Ok(());
+        }
+        self.error_with_help(
+            span,
+            format!("property `{}` is used before its initialization", name.name),
+            vec![
+                format!(
+                    "field initializers run in declaration order, before the constructor \
+                     assigns parameter properties, so `this.{}` is still `undefined` here",
+                    name.name
+                ),
+                "read it in the constructor instead, or declare the field it depends on first"
+                    .to_string(),
+            ],
+        );
+        Ok(())
+    }
+
     /// Whether `expr` is a `super(...)` call, parenthesized or not, as opposed
     /// to one inside it.
     pub(super) fn is_super_call(&self, expr: crate::ExprId) -> Result<bool, CompilerFailure> {
@@ -3131,6 +3241,13 @@ impl<'a> Inferer<'a> {
             declared_by: owner,
             ..
         } = resolved;
+        if sig.optional {
+            self.error_with_help(
+                name.span,
+                format!("method `{}` may be undefined", name.name),
+                vec!["check the optional method before invoking it".into()],
+            );
+        }
         if !sig.generics.is_empty() {
             self.error(
                 span,
@@ -3476,6 +3593,7 @@ impl<'a> Inferer<'a> {
                             ty: p.ty.clone(),
                             boxed: false,
                             rest: p.rest,
+                            optional: p.optional,
                             default: p.default.clone(),
                         })
                         .collect()
@@ -3508,6 +3626,28 @@ impl<'a> Inferer<'a> {
         class_inst: &BTreeMap<String, Type>,
     ) -> Result<Vec<TypedClassField>, CompilerFailure> {
         let mut out = Vec::new();
+        // Members an initializer would read before they are set: every
+        // parameter property, and each instance field from the current one on.
+        let mut pending: std::collections::BTreeSet<String> = members
+            .iter()
+            .filter_map(|member| match member {
+                ClassMember::Field {
+                    name, modifiers, ..
+                } if modifiers.static_span.is_none() => Some(name.name.clone()),
+                _ => None,
+            })
+            .collect();
+        if let Some(ClassMember::Constructor { params, .. }) = members
+            .iter()
+            .find(|m| matches!(m, ClassMember::Constructor { .. }))
+        {
+            pending.extend(
+                params
+                    .iter()
+                    .filter(|param| param.modifiers.is_some())
+                    .map(|param| param.name.name.clone()),
+            );
+        }
         for member in members {
             let ClassMember::Field {
                 name,
@@ -3535,6 +3675,7 @@ impl<'a> Inferer<'a> {
             // Field initializers may read `this`; `current_class` is already set.
             let body_ty = substitute_typevars(&sig.ty, class_inst, &self.type_limits)
                 .map_err(type_limit_at(name.span))?;
+            let previous = self.uninitialized_members.replace(pending.clone());
             let typed_init = initializer
                 .map(|expr| {
                     let (typed, value_ty) = self.infer_expr(expr, Some(&body_ty))?;
@@ -3542,6 +3683,7 @@ impl<'a> Inferer<'a> {
                         && !matches!(value_ty, Type::Error)
                     {
                         let span = self.ast.try_expr(expr).map_err(super::arena_failure)?.span;
+                        self.drop_contextual_mismatch(span, &body_ty, &value_ty);
                         self.error(
                             span,
                             format!(
@@ -3552,7 +3694,10 @@ impl<'a> Inferer<'a> {
                     }
                     Ok::<_, CompilerFailure>(typed)
                 })
-                .transpose()?;
+                .transpose();
+            self.uninitialized_members = previous;
+            let typed_init = typed_init?;
+            pending.remove(&name.name);
             out.push(TypedClassField {
                 name: name.clone(),
                 ty: sig.ty.clone(),
@@ -3620,7 +3765,6 @@ impl<'a> Inferer<'a> {
             return Ok(None);
         };
 
-        let typed_params = bind_params_for_body(self, params, ctor_params, class_inst)?;
         let prev_in_ctor = std::mem::replace(&mut self.in_constructor, true);
         let prev_super_seen = std::mem::replace(&mut self.super_seen, false);
         let prev_read_before = std::mem::replace(&mut self.read_before_super, false);
@@ -3628,9 +3772,11 @@ impl<'a> Inferer<'a> {
         // A constructor returns no value; a bare `return;` is fine.
         let prev_return = self.current_return.replace(Type::Void);
         let prev_reachable = self.enter_body_reachability();
+        let (typed_params, prologue) = bind_params_for_body(self, params, ctor_params, class_inst)?;
         let body_id = self
             .infer_body_with_narrowing_boundary(body)?
             .ok_or_else(|| super::inference_failure("constructor body is a Block"))?;
+        let body_id = self.prepend_parameter_defaults(prologue, body_id)?;
         // A subclass constructor must initialize the parent via `super(...)`.
         if self.current_super.is_some() && !self.super_seen {
             let ctor_span = members
@@ -3715,12 +3861,15 @@ impl<'a> Inferer<'a> {
             // Method-level generics shadow class-level ones of the same name.
             let mut merged = class_inst.clone();
             merged.extend(body_instantiation);
-            let body_param_types: Vec<Type> = sig
+            let mut body_param_types: Vec<Type> = sig
                 .params
                 .iter()
                 .map(|p| substitute_typevars(&p.ty, &merged, &self.type_limits))
                 .collect::<Result<_, _>>()
                 .map_err(type_limit_at(name.span))?;
+            // A rejected duplicate is checked against the first declaration's
+            // signature; parameters that signature lacks type as errors.
+            body_param_types.resize(params.len(), Type::Error);
             let body_ret = substitute_typevars(&sig.ret, &merged, &self.type_limits)
                 .map_err(type_limit_at(name.span))?;
 
@@ -3732,23 +3881,21 @@ impl<'a> Inferer<'a> {
                     ty: rp.ty.clone(),
                     boxed: false,
                     rest: rp.rest,
+                    optional: rp.optional,
                     default: rp.default.clone(),
                 })
                 .collect();
 
             self.scopes.push();
-            for (p, body_ty) in params.iter().zip(body_param_types.iter()) {
-                let body_ty = self.local_storage_ty(&p.name, body_ty.clone());
-                self.scopes
-                    .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
-            }
             let prev_return = self.current_return.replace(body_ret);
             let prev_reachable = self.enter_body_reachability();
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
+            let prologue = self.infer_parameter_defaults(params, &body_param_types)?;
             let body_id = self
                 .infer_body_with_narrowing_boundary(*body)?
                 .ok_or_else(|| super::inference_failure("method body is a Block"))?;
+            let body_id = self.prepend_parameter_defaults(prologue, body_id)?;
             self.current_return = prev_return;
             self.restore_reachability(prev_reachable);
             self.scopes.pop();
@@ -3837,12 +3984,15 @@ impl<'a> Inferer<'a> {
                 );
             }
             let body_instantiation = self.push_body_generics(sig.generics.clone())?;
-            let body_param_types: Vec<Type> = sig
+            let mut body_param_types: Vec<Type> = sig
                 .params
                 .iter()
                 .map(|p| substitute_typevars(&p.ty, &body_instantiation, &self.type_limits))
                 .collect::<Result<_, _>>()
                 .map_err(type_limit_at(name.span))?;
+            // A rejected duplicate is checked against the first declaration's
+            // signature; parameters that signature lacks type as errors.
+            body_param_types.resize(params.len(), Type::Error);
             let body_ret = substitute_typevars(&sig.ret, &body_instantiation, &self.type_limits)
                 .map_err(type_limit_at(name.span))?;
             let typed_params: Vec<TypedParam> = params
@@ -3853,16 +4003,12 @@ impl<'a> Inferer<'a> {
                     ty: rp.ty.clone(),
                     boxed: false,
                     rest: rp.rest,
+                    optional: rp.optional,
                     default: rp.default.clone(),
                 })
                 .collect();
 
             self.scopes.push();
-            for (p, body_ty) in params.iter().zip(body_param_types.iter()) {
-                let body_ty = self.local_storage_ty(&p.name, body_ty.clone());
-                self.scopes
-                    .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
-            }
             let prev_return = self.current_return.replace(body_ret);
             let prev_reachable = self.enter_body_reachability();
             let prev_static = self
@@ -3870,9 +4016,11 @@ impl<'a> Inferer<'a> {
                 .replace((class_name.to_string(), name.name.clone()));
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
+            let prologue = self.infer_parameter_defaults(params, &body_param_types)?;
             let body_id = self
                 .infer_body_with_narrowing_boundary(*body)?
                 .ok_or_else(|| super::inference_failure("static method body is a Block"))?;
+            let body_id = self.prepend_parameter_defaults(prologue, body_id)?;
             self.current_return = prev_return;
             self.restore_reachability(prev_reachable);
             self.current_static = prev_static;
@@ -3961,7 +4109,7 @@ impl<'a> Inferer<'a> {
                         .map(|t| self.re_resolve_type(t))
                         .transpose()?
                         .unwrap_or(Type::Error);
-                    let body_id = self.check_accessor_body(*body, &[], &ret_ty)?;
+                    let body_id = self.check_accessor_body(*body, None, &ret_ty)?;
                     accessors.push(TypedClassAccessor::Getter {
                         name: name.clone(),
                         ret_ty: erase_generic_params(&ret_ty),
@@ -3988,11 +4136,12 @@ impl<'a> Inferer<'a> {
                         ty: write_ty,
                         boxed: false,
                         rest: false,
+                        optional: false,
                         default: None,
                     };
                     let body_id = self.check_accessor_body(
                         *body,
-                        std::slice::from_ref(&typed_param),
+                        Some((param.as_deref(), &typed_param)),
                         &Type::Void,
                     )?;
                     accessors.push(TypedClassAccessor::Setter {
@@ -4010,24 +4159,39 @@ impl<'a> Inferer<'a> {
         Ok(accessors)
     }
 
-    /// Typecheck an accessor body with its params in scope and the given return type.
+    /// Typecheck an accessor body with the given return type. A setter's
+    /// parameter is in scope, its destructuring pattern decomposed by the
+    /// body's prologue; one the parser recovered without a declaration binds
+    /// by name alone.
     fn check_accessor_body(
         &mut self,
         body: crate::StmtId,
-        params: &[TypedParam],
+        setter_param: Option<(Option<&crate::ParamDecl>, &TypedParam)>,
         ret: &Type,
     ) -> Result<crate::StmtId, CompilerFailure> {
         self.scopes.push();
-        for p in params {
-            let body_ty = self.local_storage_ty(&p.name, p.ty.clone());
-            self.scopes
-                .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
-        }
+        let prologue = match setter_param {
+            Some((Some(decl), typed)) => self.infer_parameter_defaults(
+                std::slice::from_ref(decl),
+                std::slice::from_ref(&typed.ty),
+            )?,
+            Some((None, typed)) => {
+                let body_ty = self.local_storage_ty(&typed.name, typed.ty.clone());
+                self.scopes.insert_annotated_param(
+                    typed.name.name.clone(),
+                    body_ty,
+                    typed.name.span,
+                );
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
         let prev_return = self.current_return.replace(ret.clone());
         let prev_reachable = self.enter_body_reachability();
         let body_id = self
             .infer_body_with_narrowing_boundary(body)?
             .ok_or_else(|| super::inference_failure("accessor body is a Block"))?;
+        let body_id = self.prepend_parameter_defaults(prologue, body_id)?;
         self.current_return = prev_return;
         self.restore_reachability(prev_reachable);
         self.scopes.pop();
@@ -4086,7 +4250,12 @@ fn collect_runtime_carrier_candidates(ty: &Type, out: &mut Vec<Type>) {
     }
     match ty {
         Type::Array(element) => collect_runtime_carrier_candidates(element, out),
-        Type::Tuple(elements) | Type::Union(elements) => {
+        Type::Tuple(elements) => {
+            for element in elements {
+                collect_runtime_carrier_candidates(element, out);
+            }
+        }
+        Type::Union(elements) => {
             for element in elements {
                 collect_runtime_carrier_candidates(element, out);
             }
@@ -4122,7 +4291,12 @@ fn collect_interface_instantiations(ty: &Type, identity: &MangledName, out: &mut
             out.insert(ty.peel().clone());
         }
         Type::Array(element) => collect_interface_instantiations(element, identity, out),
-        Type::Tuple(elements) | Type::Union(elements) => {
+        Type::Tuple(elements) => {
+            for element in elements {
+                collect_interface_instantiations(element, identity, out);
+            }
+        }
+        Type::Union(elements) => {
             for element in elements {
                 collect_interface_instantiations(element, identity, out);
             }
@@ -4246,6 +4420,7 @@ fn erased_ctor_rest_param() -> Param {
     Param {
         name: "args".to_string(),
         ty: Type::Array(Box::new(Type::Error)),
+        optional: false,
         default: None,
         rest: true,
     }
@@ -4302,6 +4477,7 @@ fn substitute_method_sig(
 ) -> Result<MethodSig, TypeTooLarge> {
     use super::generic::substitute_typevars;
     Ok(MethodSig {
+        optional: sig.optional,
         generics: sig.generics.clone(),
         params: sig
             .params
@@ -4470,7 +4646,7 @@ fn visibility_keyword(v: Visibility) -> &'static str {
 /// check, so the latter compares the types access sites actually see.
 fn field_read_ty(field: &FieldSig) -> Type {
     if field.optional {
-        Type::union(vec![field.ty.clone(), Type::Null])
+        Type::union(vec![field.ty.clone(), Type::Undefined])
     } else {
         field.ty.clone()
     }
@@ -4485,6 +4661,7 @@ fn method_fn_type(sig: &MethodSig) -> Type {
         ret: Box::new(sig.ret.clone()),
         predicate: None,
         has_rest: sig.params.last().is_some_and(|p| p.rest),
+        optional: crate::package_declaration::optional_parameter_count(&sig.params),
     }
 }
 
@@ -4496,33 +4673,37 @@ fn bind_params_for_body(
     params: &[crate::ParamDecl],
     sig_params: &[Param],
     bindings: &BTreeMap<String, Type>,
-) -> Result<Vec<TypedParam>, CompilerFailure> {
+) -> Result<(Vec<TypedParam>, Vec<crate::StmtId>), CompilerFailure> {
     if params.len() != sig_params.len() {
         return Err(super::inference_failure(
             "constructor parameter/signature length mismatch",
         ));
     }
     tc.scopes.push();
-    // Scope types go through the body instantiation (TypeVar → GenericParam);
-    // the returned TypedParams keep the raw signature forms codegen expects.
-    for (p, sp) in params.iter().zip(sig_params.iter()) {
-        let ty = substitute_typevars(&sp.ty, bindings, &tc.type_limits)
-            .map_err(type_limit_at(p.name.span))?;
-        let ty = tc.local_storage_ty(&p.name, ty);
-        tc.scopes
-            .insert_annotated_param(p.name.name.clone(), ty, p.name.span);
-    }
-    Ok(params
+    let input_types = params
         .iter()
-        .zip(sig_params.iter())
-        .map(|(p, sp)| TypedParam {
-            name: p.name.clone(),
-            ty: sp.ty.clone(),
-            boxed: false,
-            rest: sp.rest,
-            default: sp.default.clone(),
+        .zip(sig_params)
+        .map(|(p, sp)| {
+            substitute_typevars(&sp.ty, bindings, &tc.type_limits)
+                .map_err(type_limit_at(p.name.span))
         })
-        .collect())
+        .collect::<Result<Vec<_>, _>>()?;
+    let prologue = tc.infer_parameter_defaults(params, &input_types)?;
+    Ok((
+        params
+            .iter()
+            .zip(sig_params.iter())
+            .map(|(p, sp)| TypedParam {
+                name: p.name.clone(),
+                ty: sp.ty.clone(),
+                boxed: false,
+                rest: sp.rest,
+                optional: sp.optional,
+                default: sp.default.clone(),
+            })
+            .collect(),
+        prologue,
+    ))
 }
 
 /// Signature-space scan for a `TypeVar` mention, over the one child traversal
@@ -4550,7 +4731,8 @@ fn type_mentions_erased_parameter(ty: &Type) -> bool {
     match ty.peel() {
         Type::TypeVar(_) | Type::GenericParam { .. } => true,
         Type::Array(elem) => type_mentions_erased_parameter(elem),
-        Type::Tuple(elems) | Type::Union(elems) => elems.iter().any(type_mentions_erased_parameter),
+        Type::Tuple(elems) => elems.iter().any(type_mentions_erased_parameter),
+        Type::Union(elems) => elems.iter().any(type_mentions_erased_parameter),
         Type::Object { fields, index } => {
             index
                 .as_ref()
@@ -4769,14 +4951,14 @@ mod tests {
                 .all(|d| d
                     .help
                     .iter()
-                    .any(|h| h.contains("y: number = 0, ...labels: string[]"))),
+                    .any(|h| h.contains("y?: number, ...labels: string[]"))),
             "{errors:?}"
         );
         assert!(
             arity.iter().any(|d| d
                 .help
                 .iter()
-                .any(|h| h.contains("Point.move(dx: number, dy: number = 0)"))),
+                .any(|h| h.contains("Point.move(dx: number, dy?: number)"))),
             "{errors:?}"
         );
     }

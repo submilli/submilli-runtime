@@ -1,10 +1,10 @@
 === nullishCoalescingOperator11.ts ===
 
-const f11: 1 | 0 | '' | null | null = null as unknown as (1 | 0 | '' | null | null);
->f11 : "" | 0 | 1 | null
->    : ^^^^^^^^^^^^^^^^^
->null as unknown as (1 | 0 | '' | null | null) : "" | 0 | 1 | null
->                                              : ^^^^^^^^^^^^^^^^^
+const f11: 1 | 0 | '' | null | undefined = null as unknown as (1 | 0 | '' | null | undefined);
+>f11 : "" | 0 | 1 | null | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (1 | 0 | '' | null | undefined) : "" | 0 | 1 | null | undefined
+>                                                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
@@ -14,14 +14,14 @@ let g11 = f11 ?? f11.toFixed()
 >    : ^^^
 >f11 ?? f11.toFixed() : any
 >                     : ^^^
->f11 : "" | 0 | 1 | null
->    : ^^^^^^^^^^^^^^^^^
+>f11 : "" | 0 | 1 | null | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >f11.toFixed() : any
 >              : ^^^
 >f11.toFixed : any
 >            : ^^^
->f11 : null
->    : ^^^^
+>f11 : null | undefined
+>    : ^^^^^^^^^^^^^^^^
 >toFixed : any
 >        : ^^^
 

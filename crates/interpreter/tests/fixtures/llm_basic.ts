@@ -11,18 +11,18 @@ function main(): void {
 
   // A clean completion reports a natural stop and carries its text.
   assert(c.ok, "a clean completion reports a natural stop");
-  assert(c.text !== null, "a successful completion always carries text");
+  assert(c.text !== undefined, "a successful completion always carries text");
   assert((c.text as string).length > 0, "the completion text reaches the guest");
 
   // The failure fields are all absent on the success arm — `reason` is what a
-  // program branches on, so it must be null rather than an empty string.
-  assert(c.reason === null, "a clean completion has no failure reason");
-  assert(c.message === null, "a clean completion has no failure message");
+  // program branches on, so it must be undefined rather than an empty string.
+  assert(c.reason === undefined, "a clean completion has no failure reason");
+  assert(c.message === undefined, "a clean completion has no failure message");
   assert(!c.retryable, "there is nothing to retry on the success arm");
-  assert(c.finishReason === null, "no raw stop reason is reported for a clean stop");
+  assert(c.finishReason === undefined, "no raw stop reason is reported for a clean stop");
 
-  // Usage is nullable on both arms: this provider reported none, and null
+  // Usage is optional on both arms: this provider reported none, and undefined
   // means indeterminate rather than free.
-  assert(c.inputTokens === null, "unreported usage stays null rather than zero");
-  assert(c.outputTokens === null, "unreported output usage stays null too");
+  assert(c.inputTokens === undefined, "unreported usage stays undefined rather than zero");
+  assert(c.outputTokens === undefined, "unreported output usage stays undefined too");
 }

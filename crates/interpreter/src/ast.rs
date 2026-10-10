@@ -68,6 +68,10 @@ pub enum ExprKind {
         type_predicate: Option<TypePredicateAnnotation>,
         body: ArrowBody,
     },
+    /// Evaluate the operand for effects and produce `undefined`.
+    Void {
+        operand: ExprId,
+    },
     /// `typeof x` — only valid against a string-literal tag. Folded into `TypedExprKind::TypeofTag`; never appears in the typed AST.
     Typeof {
         operand: ExprId,
@@ -538,6 +542,7 @@ pub enum InterfaceMember {
     IndexSignature(IndexSignatureAnnotation),
     Method {
         name: Ident,
+        optional: bool,
         generics: Vec<Ident>,
         params: Vec<ParamDecl>,
         return_type: TypeAnnotation,
@@ -545,7 +550,7 @@ pub enum InterfaceMember {
         doc: Option<DocComment>,
     },
     /// Property. `readonly` forbids writes through the interface; `optional: true`
-    /// widens reads to `T | null`.
+    /// widens reads to `T | undefined`.
     Property {
         name: Ident,
         ty: TypeAnnotation,
@@ -595,6 +600,7 @@ pub enum ClassMember {
     },
     Method {
         name: Ident,
+        optional: bool,
         modifiers: ClassModifiers,
         generics: Vec<Ident>,
         params: Vec<ParamDecl>,
@@ -698,12 +704,22 @@ pub struct ParamDecl {
     pub name: Ident,
     pub ty: Option<TypeAnnotation>,
     pub default: Option<ExprId>,
+    /// Declared with `?`. A parameter with a default may be omitted too;
+    /// [`ParamDecl::is_omittable`] asks that.
+    pub optional: bool,
     /// Cleared by `lower_patterns`; always `None` post-lowering.
     pub pattern: Option<Binding>,
     pub rest: bool,
     /// `Some` for a constructor parameter property (`constructor(public x: T)`):
     /// declares and auto-assigns a field. `None` for an ordinary parameter.
     pub modifiers: Option<ClassModifiers>,
+}
+
+impl ParamDecl {
+    /// Whether a caller may leave the argument out: declared `?`, or defaulted.
+    pub fn is_omittable(&self) -> bool {
+        self.optional || self.default.is_some()
+    }
 }
 
 /// Destructuring binding pattern. Plain `Ident` bindings stay as `Let`/`Const` stmts; only `{…}` / `[…]` forms appear here.
@@ -717,6 +733,8 @@ pub enum Binding {
     Array {
         /// `None` entries are holes (`[, x]`).
         elems: Vec<Option<Ident>>,
+        /// Defaults at the corresponding element positions; holes have no default.
+        defaults: Vec<Option<ExprId>>,
         rest: Option<Ident>,
         span: Span,
     },
@@ -735,6 +753,7 @@ impl Binding {
 pub struct ObjectPatternField {
     pub source: Ident,
     pub local: Ident,
+    pub default: Option<ExprId>,
     pub span: Span,
 }
 
@@ -774,6 +793,8 @@ pub enum TypeAnnotationKind {
     /// Element labels (`[x: number, y: number]`) are documentation only, so the
     /// parser checks and drops them.
     Tuple(Vec<TypeAnnotation>),
+    /// An omittable tuple element (`T?` or `name?: T`).
+    Optional(Box<TypeAnnotation>),
     /// `readonly T[]` / `readonly [A, B]`. The parser only builds this around an
     /// [`Array`](Self::Array) or [`Tuple`](Self::Tuple) operand.
     Readonly(Box<TypeAnnotation>),
@@ -813,6 +834,18 @@ pub struct TypeAnnotationField {
     pub method: bool,
 }
 
+/// A destructuring default, lowered to `saved === undefined ? default : saved`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BindingDefault {
+    /// The component read, saved once before the default is chosen.
+    pub saved: Ident,
+    /// The default expression.
+    pub default: ExprId,
+    /// Whether the pattern's root has a type annotation, which the default
+    /// must then fit.
+    pub annotated: bool,
+}
+
 /// Metadata for a synthesized `IndexAccess` from pattern lowering — lets the typechecker emit destructure-specific errors.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PatternOrigin {
@@ -847,6 +880,8 @@ pub struct Ast {
     /// the pattern, so each name gets its element's type and a pattern longer
     /// than the literal is a compile error (populated by `lower_patterns`).
     pub tuple_pattern_sources: std::collections::BTreeSet<ExprId>,
+    /// Pattern decomposition statements, run immediately after their parameter initializes.
+    pub parameter_bindings: std::collections::HashMap<Span, Vec<StmtId>>,
     /// Source names in lowered for-of heads, whose TDZ includes the iterable.
     pub for_of_pattern_bindings: std::collections::BTreeMap<StmtId, Vec<Ident>>,
     /// The `let` names a destructuring `for` initializer declared, by the
@@ -855,6 +890,14 @@ pub struct Ast {
     pub for_pattern_init_bindings: std::collections::BTreeMap<StmtId, Vec<Ident>>,
     /// Top-level declarations carrying a leading `export` (Form 1).
     pub exported_decls: Vec<ExportedDecl>,
+    /// The `undefined` a typed `let x: T;` starts with, synthesized by the parser.
+    pub implicit_initializers: std::collections::BTreeSet<ExprId>,
+    /// Every `undefined` the compiler writes itself: implicit initializers and
+    /// the padding of a destructured tuple. Each reads the value `undefined`,
+    /// even where a binding named `undefined` is in scope.
+    pub synthetic_undefined: std::collections::BTreeSet<ExprId>,
+    /// Destructuring defaults, keyed by the ternary `lower_patterns` makes of each.
+    pub binding_defaults: std::collections::BTreeMap<ExprId, BindingDefault>,
 }
 
 impl Ast {

@@ -5,13 +5,13 @@ type PrimitiveName = 'string' | 'number' | 'boolean';
 >              : ^^^^^^^^^^^^^
 
 
-/*pruned*/;                                     
-/*pruned*/;                                     
-/*pruned*/;                                       
-/*pruned*/;                                                           
-/*pruned*/;                                                           
-/*pruned*/;                                                         
-/*pruned*/;                                                                               
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 function getFalsyPrimitive(x: PrimitiveName): number | string | boolean {
 >getFalsyPrimitive : (x: PrimitiveName) => number | string | boolean
 >                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -65,11 +65,11 @@ function getFalsyPrimitive(x: PrimitiveName): number | string | boolean {
 
 }
 
-/*pruned*/;        
-                                                     
-                                             
-                                               
- 
+/*pruned*/;
+
+
+
+
 
 const string: "string" = "string"
 >string : "string"
@@ -131,16 +131,16 @@ const stringOrBooleanOrNumber = stringOrBoolean || number;
 >       : ^^^^^^^^
 
 
-/*pruned*/;        
-                                                   
-                                           
-                                             
+/*pruned*/;
 
-                                                
-                                                 
-                                                 
-                                                         
- 
+
+
+
+
+
+
+
+
 
 
 

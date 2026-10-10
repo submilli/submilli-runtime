@@ -32,7 +32,7 @@ function main(): void {
 
   // The partial text survives the failure — this is the whole point of the
   // failure arm keeping a `text` field.
-  assert(failed.text !== null, "a truncated element still carries the text it produced");
+  assert(failed.text !== undefined, "a truncated element still carries the text it produced");
   assert((failed.text as string).length > 0, "and that text is non-empty");
 
   // The raw provider stop reason travels separately, for diagnosis only.
@@ -47,7 +47,7 @@ function main(): void {
   let usableText = 0;
   for (const r of results) {
     if (r.ok) clean = clean + 1;
-    if (r.text !== null) usableText = usableText + 1;
+    if (r.text !== undefined) usableText = usableText + 1;
   }
   assert(clean === 2, "two elements stopped naturally");
   assert(usableText === 3, "but all three produced text worth reading");

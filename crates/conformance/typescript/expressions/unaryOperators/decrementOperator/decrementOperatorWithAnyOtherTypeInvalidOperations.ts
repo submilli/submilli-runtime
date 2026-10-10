@@ -42,7 +42,7 @@ let ResultIsNumber10 = obj1--;
 
 let ResultIsNumber14 = null--;
 let ResultIsNumber15 = {}--;
-let ResultIsNumber16 = null--;
+let ResultIsNumber16 = undefined--;
 
 // any type expressions
 /*pruned*/;                    
@@ -55,9 +55,9 @@ let ResultIsNumber16 = null--;
 
 /*pruned*/;                    
 /*pruned*/;                      
-let ResultIsNumber26 = (null + null)--;
+let ResultIsNumber26 = (null + undefined)--;
 let ResultIsNumber27 = (null + null)--;
-let ResultIsNumber28 = (null + null)--;
+let ResultIsNumber28 = (undefined + undefined)--;
 let ResultIsNumber29 = obj1.x--;
 let ResultIsNumber30 = obj1.y--;
 

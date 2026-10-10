@@ -1,7 +1,7 @@
 function main(): string {
   const counts: Record<string, number> = {};
   const key: string = "hello";
-  assert(counts[key] === null);
+  assert(counts[key] === undefined);
   counts[key] = (counts[key] ?? 0) + 1;
   assert(counts[key] === 1);
   counts.other = 2;

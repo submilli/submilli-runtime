@@ -13,7 +13,7 @@ class MyClass {
 >fn : () => void
 >   : ^^^^^^^^^^
 
-        /*pruned*/;                
+        /*pruned*/;
         //type of 'this' in an object literal is the containing scope's this
         let t = { x: this, y: this.t };
 >t : { x: this; y: number; }
@@ -33,7 +33,7 @@ class MyClass {
 >t : number
 >  : ^^^^^^
 
-        /*pruned*/;                                                                                       
+        /*pruned*/;
     }
 }
 
@@ -58,7 +58,7 @@ let obj = {
 
     }
 };
-/*pruned*/;                                                           
+/*pruned*/;
 
 
 function main(): void {}

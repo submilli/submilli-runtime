@@ -1,8 +1,8 @@
 // expect-error: cannot assign to readonly field
 // expect-error: cannot assign to read-only accessor
 // expect-error: postfix `++` is not supported on accessor property
-// expect-error: `extra` on `Box` is optional; `+=` requires a non-null field
-// expect-error: `slack` on `Box` is nullable; `+=` requires a non-null field
+// expect-error: `extra` on `Box` is optional; `+=` requires a field that is never `undefined`
+// expect-error: `slack` on `Box` is nullable; `+=` requires a field that is never `null`
 // expect-error: write the assignment out: `if (b.slack !== null) { b.slack = b.slack + …; }`
 // expect-error: cannot assign to static readonly field
 class Box {

@@ -48,8 +48,8 @@ export class C {
 >    : ^^^^^^
 
 }
-/*pruned*/;                       
-/*pruned*/;                        
+/*pruned*/;
+/*pruned*/;
 
 let r3: typeof C = null as unknown as (typeof C);
 >r3 : typeof C
@@ -63,8 +63,8 @@ let r3: typeof C = null as unknown as (typeof C);
 >C : typeof C
 >  : ^^^^^^^^
 
-/*pruned*/;                                      
-/*pruned*/;                                         
+/*pruned*/;
+/*pruned*/;
 
 export interface I {
 >I : I
@@ -116,18 +116,18 @@ let r5_2: typeof i2 = null as unknown as (typeof i2);
 >   : ^
 
 
-/*pruned*/;         
-                        
-                    
-                    
-     
- 
-/*pruned*/;                                      
-/*pruned*/;                                              
+/*pruned*/;
 
-/*pruned*/;         
-/*pruned*/;                                      
-/*pruned*/;                                              
+
+
+
+
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 export enum E {
 >E : E
@@ -188,12 +188,12 @@ export function foo(): void { }
 >foo : () => void
 >    : ^^^^^^^^^^
 
-/*pruned*/;           
-                     
-                    
-                    
-     
- 
+/*pruned*/;
+
+
+
+
+
 let r13: typeof foo = null as unknown as (typeof foo);
 >r13 : () => void
 >    : ^^^^^^^^^^

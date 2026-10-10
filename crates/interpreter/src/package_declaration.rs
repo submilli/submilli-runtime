@@ -221,7 +221,10 @@ impl PackageDeclaration {
                     }
                 }
                 Shape::Array(element) => visit(element),
-                Shape::Tuple(members) | Shape::Union(members) => {
+                Shape::Tuple(members) => {
+                    members.iter().for_each(&mut *visit);
+                }
+                Shape::Union(members) => {
                     members.iter().for_each(&mut *visit);
                 }
             }
@@ -409,6 +412,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
                 non_shape_carriers,
                 shape_allowed: _,
                 nullable: _,
+                undefined: _,
             } = interface;
             if let Some(index) = index {
                 visit(&index.value);
@@ -464,6 +468,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
 
 fn method_types(method: &MethodSig, visit: &mut dyn FnMut(&Type)) {
     let MethodSig {
+        optional: _,
         generics: _,
         params,
         ret,
@@ -621,6 +626,7 @@ impl PackageShapeCollector {
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Null
+            | Type::Undefined
             | Type::Void
             | Type::Never
             | Type::Unknown
@@ -657,8 +663,31 @@ pub struct Param {
     pub name: String,
     pub ty: Type,
     pub default: Option<DefaultValue>,
+    /// Whether a caller may omit the argument. Signatures the typechecker
+    /// builds from source set it for `?` and for defaulted parameters alike,
+    /// but a host declaration may give only `default`, so readers ask
+    /// [`Param::is_omittable`], which covers both.
+    #[serde(default)]
+    pub optional: bool,
     /// Callee sees `T[]`; call-site collects trailing args into a fresh array.
     pub rest: bool,
+}
+
+impl Param {
+    /// Whether a caller may leave the argument out: declared `?`, or defaulted.
+    pub fn is_omittable(&self) -> bool {
+        self.optional || self.default.is_some()
+    }
+}
+
+/// Optional fixed parameters at the end of a signature, excluding its rest slot.
+pub(crate) fn optional_parameter_count(params: &[Param]) -> usize {
+    params
+        .iter()
+        .rev()
+        .skip_while(|param| param.rest)
+        .take_while(|param| param.is_omittable())
+        .count()
 }
 
 impl Param {
@@ -667,6 +696,7 @@ impl Param {
             name: name.into(),
             ty,
             default: None,
+            optional: false,
             rest: false,
         }
     }
@@ -676,7 +706,16 @@ impl Param {
             name: name.into(),
             ty,
             default: Some(default),
+            optional: true,
             rest: false,
+        }
+    }
+
+    /// The caller may omit this parameter, supplying `undefined`.
+    pub fn optional(name: impl Into<String>, ty: Type) -> Self {
+        Self {
+            optional: true,
+            ..Self::new(name, ty)
         }
     }
 
@@ -686,6 +725,7 @@ impl Param {
             name: name.into(),
             ty,
             default: None,
+            optional: false,
             rest: true,
         }
     }
@@ -696,6 +736,7 @@ impl Param {
             name: String::new(),
             ty,
             default: None,
+            optional: false,
             rest: false,
         }
     }
@@ -704,12 +745,12 @@ impl Param {
 /// Lower a body-pass `TypedParam` to an exported `Param`, preserving `rest` and
 /// the resolved default so cross-module callers can omit the argument.
 pub(crate) fn param_from_typed(p: &crate::TypedParam) -> Param {
-    if p.rest {
-        Param::rest(p.name.name.clone(), p.ty.clone())
-    } else if let Some(default) = &p.default {
-        Param::with_default(p.name.name.clone(), p.ty.clone(), default.clone())
-    } else {
-        Param::new(p.name.name.clone(), p.ty.clone())
+    Param {
+        name: p.name.name.clone(),
+        ty: p.ty.clone(),
+        default: p.default.clone(),
+        optional: p.optional,
+        rest: p.rest,
     }
 }
 
@@ -717,7 +758,17 @@ pub(crate) fn param_from_typed(p: &crate::TypedParam) -> Param {
 /// Re-evaluated per call (matching JS/TS) — a fresh `TypedExpr` is spliced at each call site.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DefaultValue {
+    Undefined,
     Number(#[serde(with = "crate::artifact_f64")] f64),
+    /// A number for an omitted argument that an explicit `undefined` does not
+    /// share, as in JavaScript: `splice(1)` removes to the end, while
+    /// `splice(1, undefined)` converts `undefined` to `0` and removes nothing.
+    OmittedNumber {
+        #[serde(with = "crate::artifact_f64")]
+        omitted: f64,
+        #[serde(with = "crate::artifact_f64")]
+        undefined: f64,
+    },
     String(String),
     Boolean(bool),
     Null,
@@ -900,6 +951,9 @@ pub enum Dispatch {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MethodSig {
+    /// Declared `m?(…)`: the member may be absent, so a call goes through `?.`.
+    #[serde(default)]
+    pub optional: bool,
     pub generics: Vec<String>,
     pub params: Vec<Param>,
     pub ret: Type,
@@ -927,7 +981,7 @@ impl AccessorSig {
 
 /// `readonly` mirrors the declared modifier and forbids writes through the
 /// interface (shallow — it does not affect assignability). Optional properties
-/// widen reads to `T | null`.
+/// widen reads to `T | undefined`.
 ///
 /// `intrinsic` marks a member codegen emits inline as an instruction sequence
 /// (`String#length`/`Array#length` → payload `struct.get` + `array.len`): no
@@ -944,7 +998,7 @@ pub struct PropertySig {
 
 /// A class instance field. Unlike [`PropertySig`], a field may be mutable and carries
 /// `visibility`; `readonly` fields are writeable only inside the declaring constructor.
-/// Optional fields widen reads to `T | null`.
+/// Optional fields widen reads to `T | undefined`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FieldSig {
     pub ty: Type,

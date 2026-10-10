@@ -31,6 +31,8 @@ pub(super) struct Analysis {
     pub(super) diagnostics: Vec<Diagnostic>,
     scopes: Vec<BTreeMap<String, Binding>>,
     function_depth: usize,
+    /// Function frames entered by direct invocation, rather than deferred closure creation.
+    immediate_function_depths: Vec<usize>,
     assignment_regions: Vec<Span>,
     /// The nested function declarations whose bodies are being scanned: each
     /// one's name span and the index in `scopes` of the block declaring it.
@@ -42,9 +44,10 @@ struct Binding {
     span: Span,
     function_depth: usize,
     initialized: bool,
-    /// Declared by a `let`/`const` statement, so it has no value before that
-    /// statement runs. Parameters and hoisted functions have one from the start.
+    /// A binding initialized in source order, including parameter initializers.
     block_local: bool,
+    /// A default can create a closure over a later parameter's shared slot.
+    parameter: bool,
 }
 
 pub(super) fn analyze(ast: &Ast) -> Result<Analysis, crate::compiler_error::CompileError> {
@@ -311,6 +314,7 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) -> Result<(), CompilerF
                                 function_depth: out.function_depth,
                                 initialized: true,
                                 block_local: false,
+                                parameter: false,
                             },
                         )
                     })
@@ -320,6 +324,8 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) -> Result<(), CompilerF
             out.scopes.pop();
         }
         ExprKind::Arrow { params, body, .. } => scan_function(ast, params, *body, out)?,
+        // A compiler-written `undefined` reads no binding of that name.
+        ExprKind::Identifier(_) if ast.synthetic_undefined.contains(&id) => {}
         ExprKind::Identifier(ident) => out.read(ident),
         // `x++` and `x--` write `x` exactly as `x = x + 1` does. `x!` is the
         // third `PostfixOp` and is a pure read — counting it would refuse
@@ -359,6 +365,7 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) -> Result<(), CompilerF
             visit_expr(ast, *rhs, out)?;
         }
         ExprKind::Unary { operand: inner, .. }
+        | ExprKind::Void { operand: inner }
         | ExprKind::Typeof { operand: inner }
         | ExprKind::Delete { operand: inner }
         | ExprKind::As { expr: inner, .. }
@@ -390,10 +397,7 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) -> Result<(), CompilerF
             {
                 out.grow(ast, *receiver)?;
             }
-            visit_expr(ast, *callee, out)?;
-            for &a in args {
-                visit_expr(ast, a, out)?;
-            }
+            visit_call(ast, *callee, args, out)?;
         }
         ExprKind::ObjectLiteral { members } => {
             for m in members {
@@ -451,6 +455,49 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) -> Result<(), CompilerF
     Ok(())
 }
 
+fn visit_call(
+    ast: &Ast,
+    callee: ExprId,
+    args: &[ExprId],
+    out: &mut Analysis,
+) -> Result<(), CompilerFailure> {
+    if !is_direct_function(ast, callee)? {
+        visit_expr(ast, callee, out)?;
+        for &argument in args {
+            visit_expr(ast, argument, out)?;
+        }
+        return Ok(());
+    }
+    for &argument in args {
+        visit_expr(ast, argument, out)?;
+    }
+    let depth = out
+        .function_depth
+        .checked_add(1)
+        .ok_or_else(|| super::inference_failure("binding analysis function depth overflow"))?;
+    out.immediate_function_depths.push(depth);
+    let result = visit_expr(ast, callee, out);
+    out.immediate_function_depths.pop();
+    result
+}
+
+fn is_direct_function(ast: &Ast, mut expression: ExprId) -> Result<bool, CompilerFailure> {
+    for _ in 0..ast.exprs_len() {
+        match &ast.try_expr(expression).map_err(super::arena_failure)?.kind {
+            crate::ExprKind::Arrow { .. } | crate::ExprKind::FunctionExpression { .. } => {
+                return Ok(true);
+            }
+            crate::ExprKind::Paren(inner) | crate::ExprKind::As { expr: inner, .. } => {
+                expression = *inner;
+            }
+            _ => return Ok(false),
+        }
+    }
+    Err(super::inference_failure(
+        "cyclic expression while checking an immediate function call",
+    ))
+}
+
 fn visit_iterable(
     ast: &Ast,
     loop_id: StmtId,
@@ -504,6 +551,7 @@ impl Analysis {
                 function_depth: self.function_depth,
                 initialized,
                 block_local,
+                parameter: false,
             },
         );
     }
@@ -548,7 +596,9 @@ impl Analysis {
     fn resolve_use(&mut self, ident: &Ident) -> Option<(usize, Binding)> {
         let (scope, binding) = self.lookup(&ident.name)?;
         let binding = *binding;
-        if binding.block_local {
+        // Parameters initialize before the body starts, so a nested function
+        // never has to wait for a body declaration to capture their slots.
+        if binding.block_local && !binding.parameter {
             self.note_capture(
                 scope,
                 Ident {
@@ -591,7 +641,10 @@ impl Analysis {
         let Some((scope, binding)) = self.resolve_use(ident) else {
             return;
         };
-        if binding.initialized || self.is_inside_function_declared_in(scope) {
+        if binding.initialized
+            || self.is_inside_function_declared_in(scope)
+            || (binding.parameter && self.is_deferred_from(binding.function_depth))
+        {
             return;
         }
         let declaration = binding.span;
@@ -632,6 +685,12 @@ impl Analysis {
                 self.arithmetic_written_globals.insert(ident.name.clone());
             }
         }
+    }
+
+    fn is_deferred_from(&self, declaration_depth: usize) -> bool {
+        (declaration_depth..self.function_depth)
+            .filter_map(|depth| depth.checked_add(1))
+            .any(|depth| !self.immediate_function_depths.contains(&depth))
     }
 
     fn write(&mut self, ident: &Ident) {
@@ -733,11 +792,33 @@ fn scan_function_body(
         scope.entry(param.name.name.clone()).or_insert(Binding {
             span: param.name.span,
             function_depth: out.function_depth,
-            initialized: true,
-            block_local: false,
+            initialized: false,
+            block_local: true,
+            parameter: true,
         });
     }
     out.scopes.push(scope);
+    for param in params {
+        if let Some(statements) = ast.parameter_bindings.get(&param.name.span) {
+            out.reserve_statements(ast, statements)?;
+        }
+    }
+    if let Some(scope) = out.scopes.last_mut() {
+        for binding in scope.values_mut() {
+            binding.parameter = true;
+        }
+    }
+    for param in params {
+        if let Some(default) = param.default {
+            visit_expr(ast, default, out)?;
+        }
+        out.initialize(&param.name);
+        if let Some(statements) = ast.parameter_bindings.get(&param.name.span) {
+            for &statement in statements {
+                visit_stmt(ast, statement, out)?;
+            }
+        }
+    }
     match body {
         crate::ArrowBody::Expr(expr) => visit_expr(ast, expr, out)?,
         crate::ArrowBody::Block(body) => scan_body(ast, body, out)?,
@@ -745,4 +826,131 @@ fn scan_function_body(
     out.scopes.pop();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::analyze;
+
+    fn analyze_source(source: &str) -> super::Analysis {
+        let file = crate::FileId(0);
+        let mut asi = crate::Asi::new(source, file);
+        let mut tokens = Vec::new();
+        loop {
+            let token = asi.next_token();
+            let done = matches!(token.kind, crate::TokenKind::Eof);
+            tokens.push(token);
+            if done {
+                break;
+            }
+        }
+        assert!(asi.finish().unwrap().is_empty());
+        let (ast, diagnostics) = crate::parser::parse_checked(source, tokens, file).unwrap();
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        analyze(&crate::lower_patterns::lower(ast).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn parameter_defaults_observe_initialization_order() {
+        for source in [
+            "function f(a: number = b, b: number = 1): void {}",
+            "function f(a: number = a): void {}",
+        ] {
+            let analysis = analyze_source(source);
+            assert!(
+                analysis
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("before its initialization")),
+                "{source}: {:?}",
+                analysis.diagnostics
+            );
+        }
+        let analysis = analyze_source("function f(a: number = 1, b: number = a): void {}");
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
+    }
+
+    #[test]
+    fn default_closures_can_capture_later_parameters() {
+        for source in [
+            "function f(read: () => number = () => value, value: number = 5): number { return read(); }",
+            "function f(read: () => number = () => value, { value }: { value: number } = { value: 5 }): number { return read(); }",
+        ] {
+            let analysis = analyze_source(source);
+            assert!(
+                analysis.diagnostics.is_empty(),
+                "{source}: {:?}",
+                analysis.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn nested_functions_can_capture_initialized_parameters() {
+        for source in [
+            "function outer(value: number): number { function read(): number { return value; } return read(); }",
+            "function outer(value: number = 1): number { function read(): number { return value; } return read(); }",
+            "function outer({ value }: { value: number }): number { function read(): number { return value; } return read(); }",
+        ] {
+            let analysis = analyze_source(source);
+            assert!(
+                analysis.diagnostics.is_empty(),
+                "{source}: {:?}",
+                analysis.diagnostics
+            );
+            assert!(
+                analysis.nested_function_creation_points.is_empty(),
+                "{source}"
+            );
+        }
+
+        let analysis = analyze_source(
+            "function outer(): number { const value = 1; function read(): number { return value; } return read(); }",
+        );
+        assert_eq!(analysis.nested_function_creation_points.len(), 1);
+    }
+
+    #[test]
+    fn immediate_default_closures_observe_parameter_tdz() {
+        for source in [
+            "function f(value: number = (() => later)(), later: number = 5): number { return value; }",
+            "function f(value: number = (function(): number { return later; })(), later: number = 5): number { return value; }",
+            "function f(value: number = (() => (() => later)())(), later: number = 5): number { return value; }",
+        ] {
+            let analysis = analyze_source(source);
+            assert!(
+                analysis
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("before its initialization")),
+                "{source}: {:?}",
+                analysis.diagnostics
+            );
+        }
+        let analysis = analyze_source(
+            "function f(read: () => number = () => (() => later)(), later: number = 5): number { return read(); }",
+        );
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
+    }
+
+    #[test]
+    fn void_in_default_preserves_closure_write_analysis() {
+        let analysis = analyze_source(
+            "function outer(): void { let x: number | null = null; const f = (a: unknown = void (x = 1)) => a; }",
+        );
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
+        assert!(analysis.mutators.iter().any(|(name, _)| name == "x"));
+    }
 }

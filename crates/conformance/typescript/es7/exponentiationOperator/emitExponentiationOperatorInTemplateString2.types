@@ -12,7 +12,7 @@ let t2 = 10;
 >10 : 10
 >   : ^^
 
-/**/; 
+/**/;
 
 // With templateHead
 `hello ${t1 ** t2}`;
@@ -85,8 +85,8 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                         
-/*pruned*/;                             
+/*pruned*/;
+/*pruned*/;
 
 `hello ${t1 ** t2}${t1 ** t2}`;
 >`hello ${t1 ** t2}${t1 ** t2}` : string
@@ -208,7 +208,7 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                                                    
+/*pruned*/;
 
 `hello ${t1 ** t2} hello world ${t1 ** t2}`;
 >`hello ${t1 ** t2} hello world ${t1 ** t2}` : string
@@ -330,7 +330,7 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                                                                 
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

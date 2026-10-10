@@ -214,7 +214,7 @@ class SetStructuralChild extends ErasedParent {
 }
 
 interface StringPop {
-  pop(): string | null;
+  pop(): string | undefined;
 }
 
 class StringPopChild extends ErasedParent {

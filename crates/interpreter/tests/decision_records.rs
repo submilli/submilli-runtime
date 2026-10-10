@@ -1119,7 +1119,7 @@ async fn a_session_list_denial_is_recorded_as_filtered_and_the_program_succeeds(
 import session from "submilli:session";
 function main(): string {
   session.set("hidden", 1);
-  const page = session.list("", 10, null);
+  const page = session.list("", 10);
   return page.entries.length.toString();
 }
 "#;
@@ -2116,7 +2116,7 @@ function main(): string {
   const body = get("https://example.test/x").body;
   const answer = llm.call("open", "ping").text ?? "";
   run("1");
-  return (text ?? "").length.toString() + ":" + lines.toString() + ":" + stored + ":" + body + ":" + answer;
+  return (text ?? "").length.toString() + ":" + lines.toString() + ":" + (stored ?? "") + ":" + body + ":" + answer;
 }
 "#;
     let outcome = run(

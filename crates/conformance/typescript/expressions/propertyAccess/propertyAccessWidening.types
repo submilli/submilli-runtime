@@ -1,0 +1,102 @@
+=== propertyAccessWidening.ts ===
+
+// Repro from #31762
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+// Object in property or element access is widened when target of assignment
+
+function foo(options?: { a: string, b: number }): void {
+>foo : (options?: { a: string; b: number; }) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>options : { a: string; b: number; } | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+
+    let x1 = (options || {}).a;     // Object type not widened
+>x1 : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+>(options || {}).a : string | undefined
+>                  : ^^^^^^^^^^^^^^^^^^
+>(options || {}) : { a: string; b: number; } | {}
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>options || {} : { a: string; b: number; } | {}
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>options : { a: string; b: number; } | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    let x2 = (options || {})["a"];  // Object type not widened
+>x2 : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+>(options || {})["a"] : string | undefined
+>                     : ^^^^^^^^^^^^^^^^^^
+>(options || {}) : { a: string; b: number; } | {}
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>options || {} : { a: string; b: number; } | {}
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>options : { a: string; b: number; } | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+>"a" : "a"
+>    : ^^^
+
+    (options || {}).a = 1;          // Object type widened, error
+>(options || {}).a = 1 : 1
+>                      : ^
+>(options || {}).a : any
+>                  : ^^^
+>(options || {}) : { a: string; b: number; } | {}
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>options || {} : { a: string; b: number; } | {}
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>options : { a: string; b: number; } | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+>a : any
+>  : ^^^
+>1 : 1
+>  : ^
+
+    (options || {})["a"] = 1;       // Object type widened, error
+>(options || {})["a"] = 1 : 1
+>                         : ^
+>(options || {})["a"] : any
+>                     : ^^^
+>(options || {}) : { a: string; b: number; } | {}
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>options || {} : { a: string; b: number; } | {}
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>options : { a: string; b: number; } | undefined
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+>"a" : "a"
+>    : ^^^
+>1 : 1
+>  : ^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

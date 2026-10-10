@@ -2,8 +2,8 @@
 // produced. The prelude receivers are the ones with no other coverage: the unit
 // tests below `format_signature` hand the formatter a table directly, so nothing
 // but this pins the routing that builds it. A `find_method` change would print
-// `Map<string, number>.get(key: K): V | null` and no test would fail.
-// expect-error: Map<string, number>.get(key: string): number | null
+// `Map<string, number>.get(key: K): V | undefined` and no test would fail.
+// expect-error: Map<string, number>.get(key: string): number | undefined
 // expect-error: number[].map<U>(callback: (arg0: number, arg1: number, arg2: number[]) => U): U[]
 // expect-error: string.repeat(count: number): string
 // expect-error: Set<number>.add(value: number): Set<number>

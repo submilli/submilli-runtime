@@ -1,1 +1,16 @@
-types: 13 of 23 tsc entries compared, 0 differ
+types: 12 of 23 tsc entries compared, 3 differ
+
+line 8: value.foo
+  tsc:  number | null
+  ours: number | null | undefined
+
+line 9: value.foo
+  tsc:  number
+  ours: number | undefined
+
+line 11: value.bar
+  tsc:  number | null
+  ours: number | null | undefined
+
+errors:
+line 9: ours: cannot read field `toExponential` on `number | undefined`: the receiver can be `undefined` (tsc accepts)

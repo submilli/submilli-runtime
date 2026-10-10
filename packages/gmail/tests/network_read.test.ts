@@ -4,7 +4,7 @@ import { getProfile, searchThreads } from "@submilli/gmail";
 
 function main(): void {
     label("live Gmail reads when GOOGLE_ACCESS_TOKEN is available");
-    if (secrets.get("GOOGLE_ACCESS_TOKEN") === null) return;
+    if (secrets.get("GOOGLE_ACCESS_TOKEN") === undefined) return;
     const profile = getProfile();
     assert(profile.emailAddress.length > 0, "profile has an email address");
     const page = searchThreads("in:inbox", { limit: 1 });
