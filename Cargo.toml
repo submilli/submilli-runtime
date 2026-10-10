@@ -6,6 +6,7 @@ members = [
     "crates/submilli",
     "crates/submilli-build",
     "crates/submilli-blueprint",
+    "crates/submilli-policy",
     "crates/submilli-shared",
     "crates/submilli-server",
 ]

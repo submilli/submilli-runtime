@@ -25,7 +25,7 @@ async fn a_recorded_run_cites_an_unnormalizable_path_as_a_runtime_invariant() {
     data.install_type_info(script.type_info.clone());
     // Under `default: allow`, only the path keeps this call from being allowed.
     data.security_check = Arc::new(PolicyCheck::new(Arc::new(
-        parse("name: open\ndefault: allow\n").unwrap(),
+        parse("name: open\ndefault: allow\n").unwrap().policy(),
     )));
     let log = DecisionLog::install(&mut data, DecisionLogConfig::default());
     let mut store = cfg.store_async(&engine, data).unwrap();

@@ -1,224 +1,71 @@
-//! The blueprint `auth_proxy:` block — host-keyed rules that inject auth
-//! headers / query params into outbound HTTP, with `${secrets.X}` resolved from
-//! the `secrets:` block. The script never sees the resolved values.
-//!
-//! This module is interpreter-free: it parses + validates the rules and, given
-//! a [`SecretResolver`], computes what to inject. The embedder (`submilli-server`)
-//! supplies the resolver and adapts the result to the runtime's `AuthProxy` trait.
+//! The blueprint `auth_proxy:` block. The rules and their resolution live in
+//! `submilli-policy`; this ties them to the blueprint's `secrets:` block —
+//! a `${secrets.X}` must name a declared secret, resolved from where the
+//! declaration says — and validates the rules with the YAML path of the
+//! offending key.
 
-use std::collections::BTreeMap;
-use std::fmt;
-
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde::{Deserialize, Serialize};
+use submilli_policy::{AuthError, AuthSpec, Injections, SecretResolver, secret_refs};
 
 use crate::{Blueprint, BlueprintError, Fault, SecretSource, yaml_path};
 
-const PLACEHOLDER_PREFIX: &str = "${secrets.";
-
-/// One host-keyed injection rule. v1 matches `host` exactly.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AuthProxyRule {
-    pub host: String,
-    /// Also requires the blueprint-wide opt-in to permit cleartext requests.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub allow_insecure_http: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auth: Option<AuthSpec>,
-    #[serde(
-        default,
-        skip_serializing_if = "BTreeMap::is_empty",
-        deserialize_with = "crate::maps::deserialize"
-    )]
-    pub headers: BTreeMap<String, String>,
-    #[serde(
-        default,
-        skip_serializing_if = "BTreeMap::is_empty",
-        deserialize_with = "crate::maps::deserialize"
-    )]
-    pub query: BTreeMap<String, String>,
-}
-
-/// A first-class auth method, lowered into an `Authorization` header at resolve
-/// time. Exactly one of `bearer`/`basic` is set (enforced by validation).
-/// `bearer` / basic `password` name declared secrets; basic `username` is a
-/// literal. Basic auth can't be expressed as an interpolation-only header value —
-/// its `base64(user:pass)` is computed *after* the password secret resolves.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AuthSpec {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bearer: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub basic: Option<BasicAuth>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BasicAuth {
-    pub username: String,
-    pub password: String,
-}
-
-/// Resolves a declared secret to its value. Implemented by the embedder
-/// (store or harness). Async so a `store:` source can `await` the
+/// Resolves a declared secret from its declaration's source. Implemented by the
+/// embedder (store or harness). Async so a `store:` source can `await` the
 /// `SecretStore` without blocking the executor.
 #[async_trait::async_trait]
-pub trait SecretResolver: Sync {
+pub trait SourceSecretResolver: Sync {
     async fn resolve(&self, name: &str, source: &SecretSource) -> Result<String, AuthError>;
 }
 
-/// What an auth-proxy rule contributes to a request. Header/query *names* are
-/// taken verbatim; values have their `${secrets.X}` placeholders resolved.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Injections {
-    pub headers: Vec<(String, String)>,
-    pub query: Vec<(String, String)>,
+/// A blueprint's declared secrets as a policy [`SecretResolver`]: a name the
+/// `secrets:` block does not declare is [`AuthError::UndeclaredSecret`], and a
+/// declared one resolves from its source through `inner`.
+pub struct DeclaredSecrets<'a> {
+    pub blueprint: &'a Blueprint,
+    pub inner: &'a dyn SourceSecretResolver,
 }
 
-/// Runtime auth-proxy failure. Maps onto the runtime's `AuthProxyError`.
-#[derive(Debug)]
-pub enum AuthError {
-    /// `${secrets.X}` referenced a name not in the `secrets:` block. (Caught at
-    /// parse time too; this guards a resolver fed a stale blueprint.)
-    UndeclaredSecret(String),
-    /// Secret declared but its source produced no value.
-    MissingSecret(String),
-    Other(String),
-}
-
-impl fmt::Display for AuthError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AuthError::UndeclaredSecret(name) => write!(f, "undeclared secret '{name}'"),
-            AuthError::MissingSecret(name) => write!(f, "missing secret '{name}'"),
-            AuthError::Other(msg) => f.write_str(msg),
-        }
-    }
-}
-
-impl std::error::Error for AuthError {}
-
-/// The `${secrets.NAME}` names referenced by a value, in order.
-pub fn secret_refs(value: &str) -> Vec<&str> {
-    let mut names = Vec::new();
-    let mut rest = value;
-    while let Some(start) = rest.find(PLACEHOLDER_PREFIX) {
-        let after = &rest[start + PLACEHOLDER_PREFIX.len()..];
-        match after.find('}') {
-            Some(end) => {
-                names.push(&after[..end]);
-                rest = &after[end + 1..];
-            }
-            None => break,
-        }
-    }
-    names
-}
-
-/// The first rule whose `host` matches exactly, with `${secrets.X}` resolved.
-/// `Ok(None)` when no rule matches.
-pub async fn resolve_injections(
-    blueprint: &Blueprint,
-    host: &str,
-    resolver: &dyn SecretResolver,
-) -> Result<Option<Injections>, AuthError> {
-    let Some(rule) = blueprint.auth_proxy.iter().find(|r| r.host == host) else {
-        return Ok(None);
-    };
-    let mut headers = interpolate_pairs(&rule.headers, blueprint, resolver).await?;
-    if let Some(auth) = &rule.auth {
-        headers.push((
-            "Authorization".to_string(),
-            resolve_authorization(auth, blueprint, resolver).await?,
-        ));
-    }
-    Ok(Some(Injections {
-        headers,
-        query: interpolate_pairs(&rule.query, blueprint, resolver).await?,
-    }))
-}
-
-/// The `Authorization` header value for an `auth:` method: `Bearer <secret>` or
-/// `Basic <base64(user:secret)>`. `bearer`/`password` name declared secrets and
-/// are resolved directly (not `${secrets.X}` interpolation).
-async fn resolve_authorization(
-    auth: &AuthSpec,
-    blueprint: &Blueprint,
-    resolver: &dyn SecretResolver,
-) -> Result<String, AuthError> {
-    if let Some(secret) = &auth.bearer {
-        return Ok(format!(
-            "Bearer {}",
-            resolve_secret(secret, blueprint, resolver).await?
-        ));
-    }
-    if let Some(basic) = &auth.basic {
-        let password = resolve_secret(&basic.password, blueprint, resolver).await?;
-        let token = STANDARD.encode(format!("{}:{password}", basic.username));
-        return Ok(format!("Basic {token}"));
-    }
-    // Unreachable after validation, which requires exactly one method.
-    Err(AuthError::Other(
-        "auth_proxy rule has an empty `auth:` block".into(),
-    ))
-}
-
-/// Resolve a declared secret by name (as opposed to `${secrets.X}` placeholders
-/// inside a value string).
-async fn resolve_secret(
-    name: &str,
-    blueprint: &Blueprint,
-    resolver: &dyn SecretResolver,
-) -> Result<String, AuthError> {
-    let source = blueprint
-        .secrets
-        .get(name)
-        .ok_or_else(|| AuthError::UndeclaredSecret(name.to_string()))?;
-    resolver.resolve(name, source).await
-}
-
-async fn interpolate_pairs(
-    pairs: &BTreeMap<String, String>,
-    blueprint: &Blueprint,
-    resolver: &dyn SecretResolver,
-) -> Result<Vec<(String, String)>, AuthError> {
-    let mut out = Vec::with_capacity(pairs.len());
-    for (name, value) in pairs {
-        out.push((name.clone(), interpolate(value, blueprint, resolver).await?));
-    }
-    Ok(out)
-}
-
-/// Replace every `${secrets.NAME}` in `value` with its resolved secret. Public so
-/// other blueprint blocks that interpolate secrets (e.g. the `mcp:` OAuth
-/// `client_id`) can reuse the exact placeholder semantics `auth_proxy` uses.
-pub async fn interpolate(
-    value: &str,
-    blueprint: &Blueprint,
-    resolver: &dyn SecretResolver,
-) -> Result<String, AuthError> {
-    let mut out = String::new();
-    let mut rest = value;
-    while let Some(start) = rest.find(PLACEHOLDER_PREFIX) {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + PLACEHOLDER_PREFIX.len()..];
-        let end = after.find('}').ok_or_else(|| {
-            AuthError::Other(format!(
-                "unterminated '{PLACEHOLDER_PREFIX}...}}' in '{value}'"
-            ))
-        })?;
-        let name = &after[..end];
-        let source = blueprint
+#[async_trait::async_trait]
+impl SecretResolver for DeclaredSecrets<'_> {
+    async fn resolve(&self, name: &str) -> Result<String, AuthError> {
+        let source = self
+            .blueprint
             .secrets
             .get(name)
             .ok_or_else(|| AuthError::UndeclaredSecret(name.to_string()))?;
-        out.push_str(&resolver.resolve(name, source).await?);
-        rest = &after[end + 1..];
+        self.inner.resolve(name, source).await
     }
-    out.push_str(rest);
-    Ok(out)
+}
+
+/// [`submilli_policy::resolve_injections`] for a blueprint: the first
+/// `auth_proxy` rule whose `host` matches exactly, with
+/// `${secrets.X}` resolved against the declared secrets. `Ok(None)` when no
+/// rule matches.
+pub async fn resolve_injections(
+    blueprint: &Blueprint,
+    host: &str,
+    resolver: &dyn SourceSecretResolver,
+) -> Result<Option<Injections>, AuthError> {
+    let secrets = DeclaredSecrets {
+        blueprint,
+        inner: resolver,
+    };
+    submilli_policy::resolve_injections(&blueprint.auth_proxy, host, &secrets).await
+}
+
+/// [`submilli_policy::interpolate`] for a blueprint: replace every
+/// `${secrets.NAME}` in `value` with its resolved declared secret. Public so
+/// other blueprint blocks that interpolate secrets (e.g. the `mcp:` OAuth
+/// `client_id`) reuse the exact placeholder semantics `auth_proxy` uses.
+pub async fn interpolate(
+    value: &str,
+    blueprint: &Blueprint,
+    resolver: &dyn SourceSecretResolver,
+) -> Result<String, AuthError> {
+    let secrets = DeclaredSecrets {
+        blueprint,
+        inner: resolver,
+    };
+    submilli_policy::interpolate(value, &secrets).await
 }
 
 /// Resolve **every declared secret**, to verify (at blueprint apply/add time)
@@ -226,10 +73,10 @@ pub async fn interpolate(
 /// `auth_proxy:` — the `secrets:` block is the operator's declaration of what
 /// exists in this sandbox, so all of it is checked (whether or not auth_proxy
 /// references it). Point-in-time only: a later deletion from the store is the
-/// runtime's concern, not a reason to reject the registration. IO lives in the embedder's [`SecretResolver`].
+/// runtime's concern, not a reason to reject the registration. IO lives in the embedder's [`SourceSecretResolver`].
 pub async fn verify_secrets(
     blueprint: &Blueprint,
-    resolver: &dyn SecretResolver,
+    resolver: &dyn SourceSecretResolver,
 ) -> Result<(), AuthError> {
     for (name, source) in &blueprint.secrets {
         // Harness secrets are bound when a session opens — there is nothing to
@@ -329,6 +176,8 @@ fn auth_secret_refs(auth: &AuthSpec) -> Vec<&str> {
 
 #[cfg(test)]
 mod tests {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
     use super::*;
     use crate::parse;
 
@@ -337,7 +186,7 @@ mod tests {
         missing: Option<&'static str>,
     }
     #[async_trait::async_trait]
-    impl SecretResolver for StubResolver {
+    impl SourceSecretResolver for StubResolver {
         async fn resolve(&self, name: &str, _src: &SecretSource) -> Result<String, AuthError> {
             if self.missing == Some(name) {
                 return Err(AuthError::MissingSecret(name.to_string()));

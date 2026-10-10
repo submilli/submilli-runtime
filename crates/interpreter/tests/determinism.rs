@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use interpreter::{
+use submilli_engine::{
     CompiledPackage, Diagnostic, FileId, ModulePath, PackageSourceModule, compile_package,
     compile_script,
 };
@@ -165,7 +165,7 @@ fn check_in_parallel(paths: Vec<PathBuf>) -> Report {
         .into_iter()
         .map(|chunk| {
             std::thread::Builder::new()
-                .stack_size(interpreter::compiler_limits::COMPILER_STACK_BYTES)
+                .stack_size(submilli_engine::compiler_limits::COMPILER_STACK_BYTES)
                 .spawn(move || find_unstable(&chunk))
                 .expect("spawn compile worker")
         })

@@ -123,7 +123,7 @@ not satisfy these gates.
 
   ```sh
   SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
-    cargo test --locked -p interpreter --test determinism -- --nocapture
+    cargo test --locked -p submilli-engine --test determinism -- --nocapture
   ```
 
   `SUBMILLI_FULL_TEST` does not enable determinism. Require successful execution
@@ -157,7 +157,7 @@ not satisfy these gates.
 
   ```sh
   SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
-    cargo test --locked -p interpreter --test type_limits -- --nocapture
+    cargo test --locked -p submilli-engine --test type_limits -- --nocapture
   ```
 
   Require all test bodies to execute successfully. Record the candidate and
@@ -166,7 +166,7 @@ not satisfy these gates.
 
   ```sh
   SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
-    cargo test --locked -p interpreter --test git_memory -- --nocapture
+    cargo test --locked -p submilli-engine --test git_memory -- --nocapture
   ```
 
   Require both memory-limit test bodies to execute successfully. The optional
@@ -176,7 +176,7 @@ not satisfy these gates.
 
   ```sh
   SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
-    cargo test --locked -p interpreter --test host_memory -- --nocapture
+    cargo test --locked -p submilli-engine --test host_memory -- --nocapture
   SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
     cargo test --locked -p submilli-server --test memory_cap -- --nocapture
   ```

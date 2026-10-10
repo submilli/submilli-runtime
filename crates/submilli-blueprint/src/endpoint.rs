@@ -12,8 +12,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use url::Url;
 
-use crate::auth_proxy::secret_refs;
 use crate::{Blueprint, Fault, FieldMatch, yaml_path};
+use submilli_policy::secret_refs;
 
 /// Host names that always mean this machine, whatever DNS says. Mirrors the
 /// loopback set the server's MCP endpoint keeps

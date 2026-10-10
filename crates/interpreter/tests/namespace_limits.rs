@@ -1,13 +1,13 @@
-use interpreter::compiler_limits::{
-    COMPILER_STACK_BYTES, MAX_NAMESPACE_DEPTH, MAX_NAMESPACE_NODES, MAX_NAMESPACE_PATH_BYTES,
-};
-use interpreter::type_size::TypeTooLarge;
-use interpreter::{
-    FileId, ModulePath, NamespaceSymbol, PackageDeclaration, PackageSourceModule, Span,
-};
 use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use submilli_engine::compiler_limits::{
+    COMPILER_STACK_BYTES, MAX_NAMESPACE_DEPTH, MAX_NAMESPACE_NODES, MAX_NAMESPACE_PATH_BYTES,
+};
+use submilli_engine::type_size::TypeTooLarge;
+use submilli_engine::{
+    FileId, ModulePath, NamespaceSymbol, PackageDeclaration, PackageSourceModule, Span,
+};
 
 #[test]
 fn namespace_limits_and_cleanup() {
@@ -46,7 +46,7 @@ fn namespace_limits_and_cleanup() {
 fn namespace() -> NamespaceSymbol {
     NamespaceSymbol {
         name: "N".into(),
-        mangled_prefix: interpreter::mangle::prelude("N"),
+        mangled_prefix: submilli_engine::mangle::prelude("N"),
         declaration_span: Span::at(FileId(0)),
         values: BTreeMap::new(),
         types: BTreeMap::new(),
@@ -109,7 +109,7 @@ fn check_namespace_limits() {
     }];
     let very_deep = declaration(30_000);
     assert!(
-        interpreter::compile::compile_package_with_transitive_checked(
+        submilli_engine::compile::compile_package_with_transitive_checked(
             "pkg",
             ModulePath::from("lib"),
             &modules,
@@ -119,7 +119,7 @@ fn check_namespace_limits() {
         .is_err()
     );
     assert!(
-        interpreter::compile::compile_package_with_transitive_checked(
+        submilli_engine::compile::compile_package_with_transitive_checked(
             "pkg",
             ModulePath::from("lib"),
             &modules,
@@ -134,7 +134,7 @@ fn check_namespace_limits() {
             let source = "export function main(): number { return 1; }";
             let deep = declaration(MAX_NAMESPACE_DEPTH + 1);
             assert!(
-                interpreter::compile::compile_script_checked(
+                submilli_engine::compile::compile_script_checked(
                     source,
                     "main.ts",
                     FileId(0),
@@ -145,7 +145,7 @@ fn check_namespace_limits() {
             );
             let healthy = declaration(2);
             assert!(
-                interpreter::compile::compile_script_checked(
+                submilli_engine::compile::compile_script_checked(
                     source,
                     "main.ts",
                     FileId(0),

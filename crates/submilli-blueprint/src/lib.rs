@@ -6,7 +6,6 @@ pub mod diff;
 mod edit;
 mod embedding;
 mod endpoint;
-mod filter;
 mod git;
 mod llm;
 mod locate;
@@ -26,8 +25,7 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Serialize, Serializer, de};
 
 pub use auth_proxy::{
-    AuthError, AuthProxyRule, AuthSpec, BasicAuth, Injections, SecretResolver, interpolate,
-    resolve_injections, secret_refs, verify_secrets,
+    DeclaredSecrets, SourceSecretResolver, interpolate, resolve_injections, verify_secrets,
 };
 pub use diag::{Fault, PathSeg, YamlPath};
 pub use edit::{Draft, DraftCall, DraftError, draft_allow};
@@ -35,21 +33,21 @@ pub use embedding::{
     EmbeddingConfig, EmbeddingModelDecl, EmbeddingProviderDecl, EmbeddingProviderType,
     limits as embedding_limits,
 };
-pub use filter::{
-    ComparisonFailure, FailureReason, FieldMatch, FilterEvaluation, FilterExpr, VarBindings,
-};
 pub use git::{GitConfig, GitIdentity};
 pub use llm::{LlmConfig, LlmModelDecl, LlmProviderDecl};
 pub use locate::{Citation, RuleLocation, locate_key, locate_rule};
 pub use mcp::{McpAuth, McpServer};
-pub use permissions::{
-    Action, DefaultAction, NearMiss, PermissionRule, Resolution, ResolutionCause, RuleRef,
-};
 pub use secrets::{
     HarnessSecret, HarnessSecretBindings, HarnessSecretError, SecretSource,
     required_harness_secrets, resolve_harness_secrets,
 };
-pub use variables::{VariableDecl, VariableError, resolve_variables};
+use submilli_policy::serde_support::Reject;
+pub use submilli_policy::{
+    Action, AuthError, AuthProxyPolicy, AuthProxyRule, AuthSpec, BasicAuth, ComparisonFailure,
+    DefaultAction, FailureReason, FieldMatch, FilterEvaluation, FilterExpr, Injections, NearMiss,
+    PermissionRule, Policy, Resolution, ResolutionCause, RuleRef, VarBindings, VariableDecl,
+    VariableError, resolve_variables, secret_refs,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -176,10 +174,6 @@ impl Blueprint {
         self.default_action.is_some() || !self.permissions.is_empty()
     }
 
-    /// Resolve a capability `check()` for `caller` against this blueprint's
-    /// permission rules. Pure — no parsing happens here (filter ASTs are parsed
-    /// at registration), so it is cheap to call per check. The fall-through is
-    /// `default:` when set, else `deny`.
     /// Resolve a permission and its zero-based index within the caller's rules.
     /// `None` identifies the blueprint's fall-through default.
     pub fn resolve_permission_with_rule(
@@ -189,7 +183,7 @@ impl Blueprint {
         context: &serde_json::Value,
         vars: &VarBindings,
     ) -> (Action, Option<usize>) {
-        permissions::resolve_with_rule(
+        submilli_policy::resolve_with_rule(
             &self.permissions,
             self.default_action.unwrap_or_default(),
             caller,
@@ -210,7 +204,7 @@ impl Blueprint {
         context: &serde_json::Value,
         vars: &VarBindings,
     ) -> Resolution {
-        permissions::explain(
+        submilli_policy::explain(
             &self.permissions,
             self.default_action.unwrap_or_default(),
             caller,
@@ -220,6 +214,10 @@ impl Blueprint {
         )
     }
 
+    /// Resolve a capability `check()` for `caller` against this blueprint's
+    /// permission rules. Pure — no parsing happens here (filter ASTs are parsed
+    /// at registration), so it is cheap to call per check. The fall-through is
+    /// `default:` when set, else `deny`.
     pub fn resolve_permission(
         &self,
         caller: &str,
@@ -227,7 +225,7 @@ impl Blueprint {
         context: &serde_json::Value,
         vars: &VarBindings,
     ) -> Action {
-        permissions::resolve(
+        submilli_policy::resolve(
             &self.permissions,
             self.default_action.unwrap_or_default(),
             caller,
@@ -235,6 +233,23 @@ impl Blueprint {
             context,
             vars,
         )
+    }
+
+    /// The `permissions:` block and `default:` as a format-neutral [`Policy`].
+    pub fn policy(&self) -> Policy {
+        Policy {
+            rules: self.permissions.clone(),
+            default: self.default_action.unwrap_or_default(),
+        }
+    }
+
+    /// The `auth_proxy:` block and the blueprint-wide cleartext opt-in as a
+    /// format-neutral [`AuthProxyPolicy`].
+    pub fn auth_proxy_policy(&self) -> AuthProxyPolicy {
+        AuthProxyPolicy {
+            allow_insecure_http: self.allow_insecure_http,
+            rules: self.auth_proxy.clone(),
+        }
     }
 }
 
@@ -710,88 +725,6 @@ impl<'de, S: de::DeserializeSeed<'de>> de::DeserializeSeed<'de> for Guarded<S> {
             Some(conflict) => Reject::new(conflict).deserialize(deserializer),
             None => self.inner.deserialize(deserializer),
         }
-    }
-}
-
-/// A map value whose deserialization always fails, standing in for a value of
-/// type `T` so it can replace any field's seed.
-///
-/// Raising the error from *inside* the value is what anchors the diagnostic at
-/// that key: an error returned from [`VfsVisitor::visit_map`] itself carries
-/// only the `vfs:` path, which is too coarse for an editor to squiggle the
-/// offending line. Failing from within the visitor rather than after consuming
-/// the node also keeps the YAML parser's mark on the value, so the reported
-/// line is the offending one and not the first line of the block.
-struct Reject<T>(String, PhantomData<T>);
-
-impl<T> Reject<T> {
-    fn new(message: impl Into<String>) -> Self {
-        Reject(message.into(), PhantomData)
-    }
-
-    fn fail<E: de::Error>(self) -> Result<T, E> {
-        Err(de::Error::custom(self.0))
-    }
-}
-
-impl<'de, T> de::DeserializeSeed<'de> for Reject<T> {
-    type Value = T;
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(self)
-    }
-}
-
-// Every shape of value gets the same message; the default `Visitor` methods
-// would replace it with serde's own `invalid type` wording.
-impl<'de, T> de::Visitor<'de> for Reject<T> {
-    type Value = T;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-
-    fn visit_bool<E: de::Error>(self, _: bool) -> Result<T, E> {
-        self.fail()
-    }
-
-    fn visit_i64<E: de::Error>(self, _: i64) -> Result<T, E> {
-        self.fail()
-    }
-
-    fn visit_u64<E: de::Error>(self, _: u64) -> Result<T, E> {
-        self.fail()
-    }
-
-    fn visit_f64<E: de::Error>(self, _: f64) -> Result<T, E> {
-        self.fail()
-    }
-
-    fn visit_str<E: de::Error>(self, _: &str) -> Result<T, E> {
-        self.fail()
-    }
-
-    fn visit_bytes<E: de::Error>(self, _: &[u8]) -> Result<T, E> {
-        self.fail()
-    }
-
-    fn visit_unit<E: de::Error>(self) -> Result<T, E> {
-        self.fail()
-    }
-
-    fn visit_seq<A: de::SeqAccess<'de>>(self, _: A) -> Result<T, A::Error> {
-        self.fail()
-    }
-
-    fn visit_map<A: de::MapAccess<'de>>(self, _: A) -> Result<T, A::Error> {
-        self.fail()
-    }
-
-    fn visit_enum<A: de::EnumAccess<'de>>(self, _: A) -> Result<T, A::Error> {
-        self.fail()
     }
 }
 

@@ -6,7 +6,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use interpreter::{
+use submilli_engine::{
     compile_script, dispatch_main_async,
     runtime::{RuntimeConfig, StoreData, Vfs, install_runtime_async, install_tenant_limits},
     stdlib::http::transport::{
@@ -141,8 +141,14 @@ fn measure_scenario(
     seed: impl FnOnce(&std::path::Path),
     install_client: impl FnOnce(&mut StoreData),
 ) -> (usize, tempfile::TempDir) {
-    let compiled =
-        compile_script(src, "host_memory.subm", interpreter::FileId(0), &[], &[]).expect("compile");
+    let compiled = compile_script(
+        src,
+        "host_memory.subm",
+        submilli_engine::FileId(0),
+        &[],
+        &[],
+    )
+    .expect("compile");
     let cfg = RuntimeConfig {
         memory_reservation: TEST_MEMORY_RESERVATION,
         ..RuntimeConfig::default()
@@ -335,8 +341,8 @@ fn nightly_only_requested() -> bool {
 
 #[test]
 fn rejected_string_output_does_not_allocate_its_buffer() {
-    use interpreter::runtime::limits::{MemoryCapExceeded, TenantLimits};
-    use interpreter::runtime::prelude::string::{Str, concat, pad_end, pad_start, repeat};
+    use submilli_engine::runtime::limits::{MemoryCapExceeded, TenantLimits};
+    use submilli_engine::runtime::prelude::string::{Str, concat, pad_end, pad_start, repeat};
 
     if !nightly_only_requested() {
         eprintln!("host memory: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");

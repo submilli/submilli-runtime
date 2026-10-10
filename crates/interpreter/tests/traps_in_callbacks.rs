@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use interpreter::{compile_script, runtime::RuntimeConfig};
+use submilli_engine::{compile_script, runtime::RuntimeConfig};
 use wasmtime::{Trap, WasmBacktrace};
 
 /// Every program below returns normally from its handler, so a run that reaches
@@ -12,7 +12,7 @@ use wasmtime::{Trap, WasmBacktrace};
 fn run(raise: &str, body: &str, cfg: RuntimeConfig) -> wasmtime::Result<()> {
     let source =
         format!("{PRELUDE}\nfunction main(): string {{\n{body}\n}}\n").replace("RAISE", raise);
-    let compiled = compile_script(&source, "test.ts", interpreter::FileId(0), &[], &[])
+    let compiled = compile_script(&source, "test.ts", submilli_engine::FileId(0), &[], &[])
         .map_err(|diagnostics| wasmtime::Error::msg(format!("compile failed: {diagnostics:#?}")))?;
     // Re-entry nests interpreter frames on the native stack, so the thread is
     // sized for the config as the CLI and the server size theirs.
@@ -162,7 +162,7 @@ fn a_timeout_under_a_callback_is_not_catchable() {
 #[test]
 fn a_timeout_in_top_level_statements_ends_the_run() {
     let source = "let spins = 0;\nwhile (true) { spins = spins + 1; }\nfunction main(): void { }\n";
-    let compiled = compile_script(source, "test.ts", interpreter::FileId(0), &[], &[])
+    let compiled = compile_script(source, "test.ts", submilli_engine::FileId(0), &[], &[])
         .unwrap_or_else(|diagnostics| panic!("compile failed: {diagnostics:#?}"));
     let cfg = RuntimeConfig {
         fuel: u64::MAX,

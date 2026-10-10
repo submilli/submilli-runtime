@@ -13,8 +13,9 @@ workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-interpreter = { path = "../interpreter" }
+interpreter = { package = "submilli-engine", path = "../interpreter" }
 submilli-blueprint = { path = "../submilli-blueprint" }
+submilli-policy = { path = "../submilli-policy", features = ["engine"] }
 submilli-build = { path = "../submilli-build" }
 anyhow = { workspace = true }
 sha2 = "0.10"

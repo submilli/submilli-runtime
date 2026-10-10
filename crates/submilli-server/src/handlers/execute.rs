@@ -569,7 +569,7 @@ async fn prepare_and_run(
     };
     let manager = state.session_manager();
     let policy: Arc<dyn interpreter::runtime::SecurityCheck> = Arc::new(
-        PolicyCheck::with_variables(Arc::clone(&blueprint), Arc::clone(&variables)),
+        PolicyCheck::with_variables(Arc::new(blueprint.policy()), Arc::clone(&variables)),
     );
     let security_check = execution_audit.as_ref().map_or_else(
         || policy.clone(),

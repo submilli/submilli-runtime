@@ -536,6 +536,8 @@ mod tests {
         "llm.call",
         "embedding.embed",
         "mcp.<server>",
+        "agent.run",
+        "skill.load",
     ];
     /// The request is the decision's context; the response is kept for whole reads and
     /// session reads.
@@ -563,7 +565,7 @@ mod tests {
 
     #[test]
     fn every_capability_has_a_recording_class() {
-        for group in crate::stdlib::capabilities::catalog() {
+        for group in crate::stdlib::capabilities::all_groups() {
             for capability in group.capabilities {
                 let classes = [REQUEST_AND_RESPONSE, RESPONSE_ONLY, TIMING_ONLY]
                     .iter()
@@ -580,7 +582,7 @@ mod tests {
 
     #[test]
     fn every_gating_module_ends_the_calls_it_begins() {
-        for group in crate::stdlib::capabilities::catalog() {
+        for group in crate::stdlib::capabilities::all_groups() {
             // The catalog names `@mcp/<server>` imports; their calls dispatch through the
             // internal MCP module.
             let module = match group.module {
@@ -614,6 +616,14 @@ mod tests {
     /// host functions run it. `None` marks the shared helpers: they run inside whichever
     /// module calls them.
     const CALLING_FILES: &[(&str, Option<&str>)] = &[
+        (
+            "src/stdlib/agents/mod.rs",
+            Some(crate::stdlib::agents::MODULE_NAME),
+        ),
+        (
+            "src/stdlib/skills/mod.rs",
+            Some(crate::stdlib::skills::MODULE_NAME),
+        ),
         (
             "src/stdlib/code/mod.rs",
             Some(crate::stdlib::code::MODULE_NAME),

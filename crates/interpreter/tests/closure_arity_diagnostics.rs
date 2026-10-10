@@ -1,6 +1,10 @@
 //! Source validation must run during check, before lowering to Wasm.
-use interpreter::compile::{compile_package_checked, compile_script_checked, typecheck_checked};
-use interpreter::{Diagnostic, FileId, ModulePath, PackageSourceModule, Severity, Type, ValueKind};
+use submilli_engine::compile::{
+    compile_package_checked, compile_script_checked, typecheck_checked,
+};
+use submilli_engine::{
+    Diagnostic, FileId, ModulePath, PackageSourceModule, Severity, Type, ValueKind,
+};
 
 fn parameters(arity: usize) -> String {
     (0..arity)
@@ -96,7 +100,7 @@ fn constructors_keep_their_own_abi() {
     compile_script_checked(&source, "constructor.ts", FileId(0), &[], &[]).unwrap();
 }
 
-fn imported_declaration() -> interpreter::PackageDeclaration {
+fn imported_declaration() -> submilli_engine::PackageDeclaration {
     compile_package_checked("aritydep", ModulePath::from("lib"), &[PackageSourceModule {
         path: ModulePath::from("lib"),
         source: "export function bad(a: number): number { return a; } export function healthy(): number { return 42; }",
@@ -111,7 +115,7 @@ fn imported_signatures_are_checked_on_use_and_unused_surface_is_allowed() {
         panic!("function")
     };
     *params = (0..256)
-        .map(|i| interpreter::Param::new(format!("a{i}"), Type::Number))
+        .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
         .collect();
     // Keep the physical ABI consistent so this tests payload arity, not corrupt metadata.
     let runtime_name = declaration.values.get("bad").unwrap().mangled_name.clone();
@@ -231,13 +235,13 @@ fn imported_interface_methods_are_validated_when_dispatched() {
         path: ModulePath::from("lib"),
         source: "export interface I { f(): number; } export function get(): I { return { f: (): number => 42 }; }",
     }], &[]).unwrap().declaration;
-    let interpreter::TypeKind::Interface { methods, .. } =
+    let submilli_engine::TypeKind::Interface { methods, .. } =
         &mut declaration.types.get_mut("I").unwrap().kind
     else {
         panic!("interface")
     };
     methods.get_mut("f").unwrap().params = (0..256)
-        .map(|i| interpreter::Param::new(format!("a{i}"), Type::Number))
+        .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
         .collect();
     let args = (0..256)
         .map(|i| i.to_string())
@@ -312,7 +316,7 @@ fn static_only_class_usage_checks_required_callable_payloads() {
         path: ModulePath::from("lib"),
         source: "export class C { static f: (a: number) => number = (a: number): number => a; static healthy(): number { return 42; } }",
     }], &[]).unwrap().declaration;
-    let interpreter::TypeKind::Class { static_fields, .. } =
+    let submilli_engine::TypeKind::Class { static_fields, .. } =
         &mut declaration.types.get_mut("C").unwrap().kind
     else {
         panic!("class")
@@ -339,13 +343,13 @@ fn static_calls_validate_unmentioned_instance_method_payloads() {
         path: ModulePath::from("lib"),
         source: "export class C { f(): number { return 42; } static healthy(): number { return 42; } }",
     }], &[]).unwrap().declaration;
-    let interpreter::TypeKind::Class { methods, .. } =
+    let submilli_engine::TypeKind::Class { methods, .. } =
         &mut declaration.types.get_mut("C").unwrap().kind
     else {
         panic!("class")
     };
     methods.get_mut("f").unwrap().params = (0..256)
-        .map(|i| interpreter::Param::new(format!("a{i}"), Type::Number))
+        .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
         .collect();
     let source = "import { C } from \"aritydep\"; function main(): number { return C.healthy(); }";
     let error =
@@ -363,7 +367,7 @@ fn raw_host_functions_only_need_the_limit_when_adapted_to_closures() {
         panic!("function")
     };
     *params = (0..256)
-        .map(|i| interpreter::Param::new(format!("a{i}"), Type::Number))
+        .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
         .collect();
     let args = (0..256)
         .map(|i| i.to_string())
@@ -434,7 +438,7 @@ fn inherited_statics_validate_the_declaring_class_only() {
 
 // Public exports and hidden runtime class surfaces share the physical signature.
 fn set_oversized_method(
-    declaration: &mut interpreter::PackageDeclaration,
+    declaration: &mut submilli_engine::PackageDeclaration,
     class: &str,
     method: &str,
 ) {
@@ -445,14 +449,14 @@ fn set_oversized_method(
         .chain(declaration.runtime_types.values_mut())
         .filter(|symbol| symbol.mangled_name == class_name)
     {
-        let interpreter::TypeKind::Class { methods, .. } = &mut symbol.kind else {
+        let submilli_engine::TypeKind::Class { methods, .. } = &mut symbol.kind else {
             panic!("class")
         };
         methods.get_mut(method).unwrap().params = (0..256)
-            .map(|i| interpreter::Param::new(format!("a{i}"), Type::Number))
+            .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
             .collect();
     }
-    let runtime_name = interpreter::mangle::extend(&class_name, method);
+    let runtime_name = submilli_engine::mangle::extend(&class_name, method);
     declaration
         .runtime_functions
         .get_mut(&runtime_name)

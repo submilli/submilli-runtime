@@ -312,7 +312,7 @@ async fn run(source: &str, setup: Setup) -> Outcome {
         None,
         Arc::new(setup.secrets),
     ));
-    data.security_check = Arc::new(PolicyCheck::new(blueprint));
+    data.security_check = Arc::new(PolicyCheck::new(Arc::new(blueprint.policy())));
     if let Some(llm) = setup.llm {
         data.llm_provider = Some(llm);
     }

@@ -2252,11 +2252,12 @@ impl Inferer<'_> {
         // ordinary generic call; the two sites below are the two halves of that
         // one decision, so it is read once here.
         let checked_get = crate::stdlib::session::declaration::is_checked_get(&mangled);
-        // `llm.call<T>` / `llm.batch<T>` lower the same way and for the same
-        // reason. They differ from `session.get` only in what a bare call means
-        // — the `Completion` envelope rather than an unchecked `unknown` — and
-        // in carrying a compile-time schema into the trailing argument.
-        let checked_llm = crate::stdlib::llm::declaration::is_checked_call(&mangled);
+        // Schema-checked calls (`llm.call<T>`, `llm.batch<T>`, `agents.run<T>`)
+        // lower the same way and for the same reason. They differ from
+        // `session.get` only in what a bare call means — a typed default such as
+        // the `Completion` envelope rather than an unchecked `unknown` — and in
+        // carrying a compile-time schema into the trailing argument.
+        let schema_checked = crate::stdlib::schema_checked_call(&mangled);
 
         if let Some(targs) = &type_args {
             if targs.len() != generics.len() {
@@ -2371,11 +2372,13 @@ impl Inferer<'_> {
         // is not an unchecked read, it is a different fully-typed result. `T`
         // appears only in the return type, so it is never inferable from an
         // argument and would otherwise always trip the unbound-parameter error.
-        if checked_llm && !type_args_written {
+        if let Some(checked) = &schema_checked
+            && !type_args_written
+        {
             bind_remaining(
                 &mut sub,
                 &generics,
-                crate::stdlib::llm::declaration::untyped_result_type(&mangled),
+                checked.untyped_result.clone(),
                 &self.type_limits,
             )
             .map_err(type_limit_at(span))?;
@@ -2431,30 +2434,34 @@ impl Inferer<'_> {
         // unaffected in behavior — `substitute_schema_argument` overwrites the
         // slot — but a written argument there is equally meaningless, so both
         // forms are refused and no working program changes.
-        if checked_llm && args.len() > 2 {
+        if let Some(checked) = &schema_checked
+            && args.len() > checked.written_param_count
+        {
             let name = &callee_ident.name;
+            let written = checked.written_params;
+            let extra = checked.schema_argument_ordinal();
             self.error_with_help(
                 span,
                 format!(
-                    "`{name}` takes the model and the prompt; the schema argument is filled by \
+                    "`{name}` takes {written}; the schema argument is filled by \
                      the compiler from the type argument"
                 ),
                 vec![format!(
-                    "drop the third argument — write `{name}<T>(...)` to send a schema for `T`, \
+                    "drop the {extra} argument — write `{name}<T>(...)` to send a schema for `T`, \
                      or `{name}(...)` for an untyped call"
                 )],
             );
             return Ok((TypedExprKind::Null, Type::Error));
         }
 
-        let mut llm_schema = None;
-        if checked_llm {
-            match self.llm_call_schema(&result_ty, type_args_written, span) {
-                Ok(schema) => llm_schema = schema,
+        let mut emitted_schema = None;
+        if let Some(checked) = &schema_checked {
+            match self.schema_checked_call_schema(checked, &result_ty, type_args_written, span) {
+                Ok(schema) => emitted_schema = schema,
                 Err(()) => return Ok((TypedExprKind::Null, Type::Error)),
             }
         }
-        if let Some(schema) = &llm_schema {
+        if let Some(schema) = &emitted_schema {
             self.substitute_schema_argument(&params, &mut typed_args, schema, span)?;
         }
         self.record_generic_call_arguments(&typed_args, &params, &ret, type_args_written);
@@ -2497,7 +2504,7 @@ impl Inferer<'_> {
             mangled,
             type_args: runtime_args,
             args: generic_args,
-            return_cast: if checked_get || checked_llm {
+            return_cast: if checked_get || schema_checked.is_some() {
                 None
             } else {
                 return_cast
@@ -2507,10 +2514,10 @@ impl Inferer<'_> {
         if checked_get {
             return self.checked_session_get(call, &result_ty, type_args_written, span);
         }
-        // An untyped `llm.call` emitted no schema and needs no check: it returns
-        // the `Completion` envelope the declaration already typed.
-        if checked_llm && llm_schema.is_some() {
-            return self.checked_llm_cast(call, &result_ty, span);
+        // An untyped schema-checked call emitted no schema and needs no check: it
+        // returns the default the declaration already typed.
+        if schema_checked.is_some() && emitted_schema.is_some() {
+            return self.schema_checked_cast(call, &result_ty, span);
         }
         Ok((call, result_ty))
     }

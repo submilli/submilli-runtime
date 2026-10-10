@@ -156,7 +156,19 @@ fn binding_filter(
                 return None;
             }
             let normalized = normalized_string(tag, field, value, warn_at, warnings);
-            format!("\"{}\"", escape(&normalized))
+            let Some(literal) = filter_string_literal(&normalized) else {
+                if let Some(span) = warn_at {
+                    warnings.push(warning(
+                        span,
+                        format!(
+                            "`{field}` value contains `{VAR_PLACEHOLDER}`, which a filter reads as a variable reference; no static filter for `{}`",
+                            tag.capability
+                        ),
+                    ));
+                }
+                return None;
+            };
+            literal
         }
         StaticValue::Number(spelling) => spelling,
         StaticValue::Boolean(value) => value.to_string(),
@@ -193,7 +205,7 @@ fn normalized_string(
 }
 
 fn field_normalization(capability: &str, field: &str) -> FieldNormalization {
-    capabilities::find(capability)
+    capabilities::find_any(capability)
         .and_then(|entry| entry.filter_fields.iter().find(|f| f.name == field))
         .map_or(FieldNormalization::Verbatim, |f| f.normalization)
 }
@@ -433,8 +445,33 @@ fn url_component(url: &str, component: &str) -> Option<String> {
     Some(value)
 }
 
+/// What a filter reads inside a quoted string as the start of a variable reference.
+const VAR_PLACEHOLDER: &str = "${vars.";
+
+/// `value` as a quoted filter string, in the canonical form the policy parser
+/// reads back as exactly `value`. `None` when no quoted string can spell it: the
+/// parser reads `${vars.` inside quotes as a variable reference.
+///
+/// Must agree with the policy crate's own quoting; a test there compares the two.
+#[doc(hidden)]
+pub fn filter_string_literal(value: &str) -> Option<String> {
+    (!value.contains(VAR_PLACEHOLDER)).then(|| format!("\"{}\"", escape(value)))
+}
+
+/// The escapes the filter tokenizer reads inside a quoted string.
 fn escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn number_literal(value: f64) -> String {
@@ -535,6 +572,36 @@ mod tests {
         let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
         assert_eq!(derived.filter.as_deref(), Some("name == \"TOKEN\""));
         assert!(derived.warnings.is_empty(), "{:?}", derived.warnings);
+    }
+
+    /// A filter reads `${vars.` inside quotes as a variable, so no literal can spell
+    /// such a value: the binding is dropped, with a warning, rather than written as
+    /// a variable reference the program never meant.
+    #[test]
+    fn literal_holding_a_variable_reference_contributes_no_filter() {
+        let (ta, tag, params, args) = first_doc_capability(
+            "/** @capability secrets.get { name } */\n\
+             function callee(name: string): void { }\n\
+             function main(): void { callee(\"${vars.who}\"); }\n",
+        );
+        let derived = derive_call_site_capability(&tag, &params, &ta, &args).unwrap();
+        assert_eq!(derived.filter, None);
+        assert!(derived.known_bindings.is_empty());
+        assert_eq!(derived.warnings.len(), 1, "{:?}", derived.warnings);
+        assert!(derived.warnings[0].message.contains("${vars."));
+    }
+
+    #[test]
+    fn string_literal_escapes_what_the_filter_tokenizer_reads() {
+        assert_eq!(
+            filter_string_literal("a\"b\\c\nd\te\rf").as_deref(),
+            Some("\"a\\\"b\\\\c\\nd\\te\\rf\""),
+        );
+        assert_eq!(filter_string_literal("${vars.x}"), None);
+        assert_eq!(
+            filter_string_literal("${other}").as_deref(),
+            Some("\"${other}\"")
+        );
     }
 
     #[test]

@@ -4,10 +4,12 @@
 //!
 //! Set `SUBMILLI_TEST_NIGHTLY_ONLY=1` to run these limit-sized inputs.
 //! `SUBMILLI_FULL_TEST` does not enable them.
-use interpreter::compile::{PackageSourceModule, compile_package_checked, compile_script_checked};
-use interpreter::compiler_error::{CompilerFailure, CompilerStage};
-use interpreter::compiler_limits::{COMPILER_STACK_BYTES, MAX_TYPE_DEPTH};
-use interpreter::{FileId, ModulePath, PackageDeclaration, Span, Type, ValueKind, ValueSymbol};
+use submilli_engine::compile::{
+    PackageSourceModule, compile_package_checked, compile_script_checked,
+};
+use submilli_engine::compiler_error::{CompilerFailure, CompilerStage};
+use submilli_engine::compiler_limits::{COMPILER_STACK_BYTES, MAX_TYPE_DEPTH};
+use submilli_engine::{FileId, ModulePath, PackageDeclaration, Span, Type, ValueKind, ValueSymbol};
 
 const SCRIPT: &str = "export function main(): number { return 1; }";
 
@@ -21,7 +23,7 @@ fn declaring(ty: Type) -> PackageDeclaration {
         "value".into(),
         ValueSymbol {
             name: "value".into(),
-            mangled_name: interpreter::mangle::package_symbol("dep", "value"),
+            mangled_name: submilli_engine::mangle::package_symbol("dep", "value"),
             declaration_span: Span::at(FileId(0)),
             kind: ValueKind::Const { ty, doc: None },
         },
@@ -263,7 +265,7 @@ fn comparing_types_draws_on_the_work_limit() {
         message,
         format!(
             "building and comparing types takes more than the compiler limit of {} steps",
-            interpreter::compiler_limits::MAX_TYPE_WORK
+            submilli_engine::compiler_limits::MAX_TYPE_WORK
         )
     );
 }
@@ -319,7 +321,7 @@ fn a_runtime_check_too_large_for_one_function_is_reported_at_the_cast() {
         message,
         format!(
             "the runtime check of `I | null` makes its function larger than the {} bytes a function may have",
-            interpreter::compiler_limits::MAX_FUNCTION_BODY_BYTES
+            submilli_engine::compiler_limits::MAX_FUNCTION_BODY_BYTES
         )
     );
     assert_eq!(text, "JSON.parse(\"null\") as I | null");
@@ -330,7 +332,7 @@ fn a_function_with_too_many_locals_is_reported_where_it_runs_out() {
     if !nightly_only_requested() {
         return;
     }
-    let locals = interpreter::compiler_limits::MAX_FUNCTION_LOCALS + 10;
+    let locals = submilli_engine::compiler_limits::MAX_FUNCTION_LOCALS + 10;
     let body: String = (0..locals)
         .map(|i| format!("  const v{i} = {i};\n"))
         .collect();
@@ -340,14 +342,14 @@ fn a_function_with_too_many_locals_is_reported_where_it_runs_out() {
         message,
         format!(
             "the function this code compiles into needs more than the {} locals a function may have",
-            interpreter::compiler_limits::MAX_FUNCTION_LOCALS
+            submilli_engine::compiler_limits::MAX_FUNCTION_LOCALS
         )
     );
     // The initializer of the binding whose local crosses the limit, not the
     // whole body.
     assert_eq!(
         text,
-        interpreter::compiler_limits::MAX_FUNCTION_LOCALS.to_string()
+        submilli_engine::compiler_limits::MAX_FUNCTION_LOCALS.to_string()
     );
 }
 
@@ -357,7 +359,7 @@ fn a_function_with_too_many_locals_is_reported_where_it_runs_out() {
 fn function_whose_loop_crosses_the_locals_limit(name: &str) -> String {
     // Seven locals short of the limit leaves `arr` and `s` within it, so the
     // loop's own locals cross it.
-    let consts = interpreter::compiler_limits::MAX_FUNCTION_LOCALS - 7;
+    let consts = submilli_engine::compiler_limits::MAX_FUNCTION_LOCALS - 7;
     let body: String = (0..consts)
         .map(|i| format!("  const v{i} = {i};\n"))
         .collect();
@@ -384,7 +386,7 @@ fn a_check_after_code_that_crossed_the_locals_limit_does_not_take_the_blame() {
     if !nightly_only_requested() {
         return;
     }
-    let locals = interpreter::compiler_limits::MAX_FUNCTION_LOCALS + 10;
+    let locals = submilli_engine::compiler_limits::MAX_FUNCTION_LOCALS + 10;
     let body: String = (0..locals)
         .map(|i| format!("  const v{i} = {i};\n"))
         .collect();
@@ -397,12 +399,12 @@ fn a_check_after_code_that_crossed_the_locals_limit_does_not_take_the_blame() {
         message,
         format!(
             "the function this code compiles into needs more than the {} locals a function may have",
-            interpreter::compiler_limits::MAX_FUNCTION_LOCALS
+            submilli_engine::compiler_limits::MAX_FUNCTION_LOCALS
         )
     );
     assert_eq!(
         text,
-        interpreter::compiler_limits::MAX_FUNCTION_LOCALS.to_string()
+        submilli_engine::compiler_limits::MAX_FUNCTION_LOCALS.to_string()
     );
 }
 

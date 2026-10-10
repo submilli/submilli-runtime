@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use interpreter::RuntimeConfig;
+use submilli_engine::RuntimeConfig;
 use wasm_encoder::{
     BlockType, CodeSection, CompositeInnerType, CompositeType, ElementSection, Elements,
     ExportKind, ExportSection, FieldType, Function, FunctionSection, HeapType, ImportSection,
