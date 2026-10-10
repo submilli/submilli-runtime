@@ -1,0 +1,225 @@
+name: Deploy to Render
+
+# When CI passes on main's head commit, that commit becomes an image tagged with
+# its SHA, and Render is told to run exactly that image. Render no longer builds
+# anything, so the Rust compile runs here, on GitHub's runners.
+#
+# There is no moving tag such as `latest-main`: each deploy names one SHA, and a
+# rollback is Render's own rollback to an earlier deploy.
+#
+# The images go to a separate package, `submilli-runtime-dev`, so per-commit
+# builds never clutter the package users pull releases from.
+#
+# Only main's current head is deployed. CI runs finish out of order and can be
+# re-run on old commits, so a run for anything else stops early instead of
+# putting older code back on Render. The cost: when the head commit fails CI, or
+# its CI never runs (`[skip ci]`), nothing is deployed, not even the commit
+# before it, until a later commit passes.
+#
+# To retry a failed deploy, use "Re-run failed jobs" on the newest run only: a
+# re-run keeps the head checks it already passed.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  SUBMILLI_TELEMETRY: "0"
+  CARGO_TERM_COLOR: always
+  TARGET: x86_64-unknown-linux-musl
+  PACKAGE: ${{ github.event.repository.name }}-dev
+  SHA: ${{ github.event.workflow_run.head_sha }}
+
+jobs:
+  gate:
+    name: Check this is main's head
+    # `branches: [main]` matches a fork's pull request from its own `main` too, so
+    # also require a push to this repository.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      current: ${{ steps.head.outputs.current }}
+    steps:
+      - name: Compare with main
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+          if [ "$HEAD" = "$SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Skipping $SHA: main has moved on to $HEAD"
+          fi
+
+  image:
+    name: Build and push image
+    needs: gate
+    if: needs.gate.outputs.current == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+
+      - name: Image reference
+        id: ref
+        run: echo "image=ghcr.io/${{ github.repository_owner }}/$PACKAGE:sha-$SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: ${{ env.TARGET }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.TARGET }}
+
+      - name: Install zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      # Same static musl build as release.yml. Render runs amd64 only, so this
+      # is the one target the image needs.
+      - name: Build
+        run: |
+          cargo zigbuild --locked --release --target "$TARGET" \
+            --bin submilli --bin submilli-server
+
+      - name: Lay out binaries for the Dockerfile
+        run: |
+          mkdir -p dist/amd64
+          for BIN in submilli submilli-server; do
+            install -m 755 "target/$TARGET/release/$BIN" "dist/amd64/$BIN"
+          done
+
+      - uses: docker/setup-buildx-action@v3
+
+      # `context: .` and `provenance: false` for the reasons given in release.yml.
+      - name: Build the candidate
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          provenance: false
+          tags: ${{ steps.ref.outputs.image }}
+          build-args: |
+            VERSION=0.0.0-dev
+            REVISION=${{ env.SHA }}
+
+      - name: Smoke test
+        run: scripts/docker-smoke.sh "${{ steps.ref.outputs.image }}"
+
+      # As in release.yml: proves the CA roots and resolver reach the network.
+      - name: Conformance
+        run: scripts/docker-conformance.sh "${{ steps.ref.outputs.image }}"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pushed by buildx, as release.yml does, rather than `docker push` from the
+      # daemon: buildx with `provenance: false` pushes a single manifest, so each
+      # commit is exactly one package version for the prune job to count. The
+      # build cache reuses the tested binaries, as long as these inputs stay
+      # identical to the candidate build's.
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.ref.outputs.image }}
+          build-args: |
+            VERSION=0.0.0-dev
+            REVISION=${{ env.SHA }}
+
+  # The gate job's check again, since main may have moved during the build. A
+  # job of its own so that a stale run never joins the deploy queue below.
+  recheck:
+    name: Check this is still main's head
+    needs: image
+    runs-on: ubuntu-latest
+    outputs:
+      current: ${{ steps.head.outputs.current }}
+    steps:
+      - name: Compare with main
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+          if [ "$HEAD" = "$SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Skipping $SHA: main has moved on to $HEAD"
+          fi
+
+  deploy:
+    name: Deploy to Render
+    needs: [image, recheck]
+    if: needs.recheck.outputs.current == 'true'
+    runs-on: ubuntu-latest
+    # At job level so that runs which skip never join the group: a pending run
+    # is replaced by the next one, and that must be a real deploy.
+    concurrency:
+      group: deploy-render
+      cancel-in-progress: false
+    # The deploy hook lives in this environment's secrets, so only this job,
+    # and only from main, can read it.
+    environment: render
+    steps:
+      # A deploy hook can deploy only its own service, unlike an API key, which
+      # reaches the whole Render account. `imgURL` tells an image-backed service
+      # which image to run. The hook already carries `?key=`, hence the `&`.
+      - name: Trigger the deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          IMAGE_REF: ${{ needs.image.outputs.image }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK_URL is not set in the render environment"
+            exit 1
+          fi
+          ENCODED_IMAGE=$(jq -rn --arg u "$IMAGE_REF" '$u|@uri')
+          curl --fail-with-body -sS --max-time 30 --retry 3 --retry-all-errors \
+            -X POST "$HOOK&imgURL=$ENCODED_IMAGE"
+          echo # the response body has no trailing newline
+          # Render has queued the deploy; whether it starts shows on Render.
+          echo "Deploy queued for $IMAGE_REF" >> "$GITHUB_STEP_SUMMARY"
+
+  # Its own job so a failure here never blocks a deploy. Thirty versions, one
+  # per commit, is plenty of room to roll back.
+  prune:
+    name: Prune old images
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ env.PACKAGE }}
+          package-type: container
+          min-versions-to-keep: 30
