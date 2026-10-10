@@ -528,7 +528,7 @@ pub fn compile_package_with_transitive_checked(
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
 ) -> Result<CompiledPackage, CompileError> {
-    compile_package_with_transitive_in_checked(
+    compile_package_with_transitive_checked_for(
         Stdlib::core(),
         package_name,
         root_module,
@@ -540,7 +540,7 @@ pub fn compile_package_with_transitive_checked(
 
 /// [`compile_package_with_transitive_checked`] for an embedder that offers
 /// `stdlib`, so the package may import its optional packages.
-pub fn compile_package_with_transitive_in_checked(
+pub fn compile_package_with_transitive_checked_for(
     stdlib: Stdlib,
     package_name: &str,
     root_module: ModulePath,

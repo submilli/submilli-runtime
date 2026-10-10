@@ -105,17 +105,31 @@ pub(crate) struct SchemaCheckedCall {
     pub checks: &'static str,
     /// Who the schema is sent to.
     pub answerer: &'static str,
-    /// The arguments a program writes, in prose.
-    pub written: &'static str,
-    pub written_count: usize,
-    /// The ordinal of the schema argument, in prose.
-    pub extra_argument: &'static str,
-    /// How to do without a type argument, in three phrasings.
-    pub untyped_read: &'static str,
-    pub untyped_unknown: &'static str,
-    pub untyped_parse: &'static str,
+    /// The parameters a program writes, in prose; the schema parameter follows.
+    pub written_params: &'static str,
+    pub written_param_count: usize,
+    /// Ends the "cannot be verified" diagnostics: what to do instead of a type
+    /// argument the runtime cannot test.
+    pub untyped_hint: &'static str,
+    /// Ends the `<unknown>` diagnostic.
+    pub untyped_hint_for_unknown: &'static str,
+    /// Ends the "has no JSON Schema" diagnostic.
+    pub untyped_hint_for_no_schema: &'static str,
     /// What `T` binds to when the program wrote no type argument.
     pub untyped_result: Type,
+}
+
+impl SchemaCheckedCall {
+    /// The schema parameter's position, as an ordinal word.
+    pub fn schema_argument_ordinal(&self) -> &'static str {
+        match self.written_param_count {
+            0 => "first",
+            1 => "second",
+            2 => "third",
+            3 => "fourth",
+            _ => "last",
+        }
+    }
 }
 
 /// The schema-checked call `mangled` names, if it is one.
@@ -126,12 +140,11 @@ pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaChecked
             example: "llm.call<Severity>(model, prompt)",
             checks: "the model's response",
             answerer: "the model",
-            written: "the model and the prompt",
-            written_count: 2,
-            extra_argument: "third",
-            untyped_read: "read the `Completion` envelope yourself",
-            untyped_unknown: "read the `Completion` envelope's `ok` and `text` yourself",
-            untyped_parse: "parse the `Completion` text yourself",
+            written_params: "the model and the prompt",
+            written_param_count: 2,
+            untyped_hint: "read the `Completion` envelope yourself",
+            untyped_hint_for_unknown: "read the `Completion` envelope's `ok` and `text` yourself",
+            untyped_hint_for_no_schema: "parse the `Completion` text yourself",
             untyped_result: llm::declaration::untyped_result_type(mangled),
         });
     }
@@ -141,12 +154,11 @@ pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaChecked
             example: "agents.run<Report>(agent, input)",
             checks: "the agent's result",
             answerer: "the agent",
-            written: "the agent and the input",
-            written_count: 2,
-            extra_argument: "third",
-            untyped_read: "read the returned text yourself",
-            untyped_unknown: "read the returned text yourself",
-            untyped_parse: "parse the returned text yourself",
+            written_params: "the agent and the input",
+            written_param_count: 2,
+            untyped_hint: "read the returned text yourself",
+            untyped_hint_for_unknown: "read the returned text yourself",
+            untyped_hint_for_no_schema: "parse the returned text yourself",
             untyped_result: Type::String,
         });
     }
@@ -158,6 +170,8 @@ pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaChecked
 ///
 /// Compiling, discovery, the capability catalog and host-function installation
 /// all read the same set, so a package is either fully present or fully absent.
+/// The discovery methods (`docs`, `search`, `resolve`, …) are in
+/// [`crate::packages`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Stdlib {
     optional: u8,

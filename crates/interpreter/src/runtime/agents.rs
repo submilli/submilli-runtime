@@ -18,12 +18,18 @@ use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 
+use crate::stdlib::shared::truncated;
+
 pub const AGENTS_MODULE_NAME: &str = "submilli:agents";
 
 /// One sub-agent run, as the program asked for it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRequest {
-    /// The agent's name, as [`AgentProvider::agents`] lists it.
+    /// The agent's name, exactly as the program wrote it. Not checked against
+    /// [`AgentProvider::agents`]: an unknown name is the provider's
+    /// [`AgentCallError::NotFound`]. The policy decided on it as written, so a
+    /// provider must match it byte for byte — no case folding, Unicode
+    /// normalization or path canonicalization — and must not use it as a path.
     pub agent: String,
     /// The task for the agent.
     pub input: String,
@@ -86,10 +92,13 @@ impl std::fmt::Display for AgentCallError {
             ),
             Self::NotFound { agent } => write!(
                 f,
-                "no agent named `{agent}`; call `list()` for the agents you may use"
+                "no agent named `{}`; call `list()` for the agents you may use",
+                truncated(agent)
             ),
-            Self::Failed { agent, message } => write!(f, "agent `{agent}` failed: {message}"),
-            Self::Cancelled { agent } => write!(f, "agent `{agent}` was cancelled"),
+            Self::Failed { agent, message } => {
+                write!(f, "agent `{}` failed: {message}", truncated(agent))
+            }
+            Self::Cancelled { agent } => write!(f, "agent `{}` was cancelled", truncated(agent)),
         }
     }
 }

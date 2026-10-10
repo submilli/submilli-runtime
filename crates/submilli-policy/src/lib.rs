@@ -24,8 +24,12 @@ pub use filter::{
 };
 pub use permissions::{
     Action, DefaultAction, NearMiss, PermissionRule, Policy, Resolution, ResolutionCause, RuleRef,
-    Rules, explain, resolve, resolve_with_rule,
+    Rules,
 };
+/// The [`Policy`] methods over borrowed rules, for a format that keeps its rules
+/// in place rather than building a `Policy`.
+#[doc(hidden)]
+pub use permissions::{explain, resolve, resolve_with_rule};
 pub use variables::{VariableDecl, VariableError, resolve_variables};
 
 /// Tooling over the filter language that is not part of the evaluation API:

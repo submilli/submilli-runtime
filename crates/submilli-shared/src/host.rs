@@ -102,7 +102,8 @@ impl SourceSecretResolver for BlueprintSecretResolver {
 
 /// A blueprint's declared secrets as a policy [`SecretResolver`]: a name the
 /// `secrets:` block does not declare is undeclared, and a declared one resolves
-/// from its source.
+/// from its source. The owning form of [`DeclaredSecrets`], for the adapters
+/// that keep a resolver for the life of a session.
 pub struct BlueprintSecrets {
     blueprint: Arc<Blueprint>,
     resolver: BlueprintSecretResolver,

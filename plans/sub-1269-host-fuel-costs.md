@@ -1834,8 +1834,8 @@ Optional: installed only for an embedder that enables it. Variables: `T` = bytes
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:skills#list` | Gate, list the skills, run the policy check once per skill, sanitize each description, build `SkillInfo` structs and an array (`stdlib/skills/mod.rs` `list`) | `CALL + (1 + m) x GATE + ELEM(m)` plus the strings through `write_submilli_string_struct` | before + output | `m` is known after `provider.list().await`. |
-| `submilli:skills#load` | Gate, one provider read, build the `Skill` struct (`stdlib/skills/mod.rs` `load`) | `CALL + GATE + IO(T)` plus the strings through `write_submilli_string_struct` | `IO(T)` and the result after the read | The read is the effect, so the result is built under `settle_result`. |
-| `submilli:skills#readFile` | Gate, check the path, one provider read, build the string (`stdlib/skills/mod.rs` `read_file`) | `CALL + GATE + IO(T)` plus the string through `write_submilli_string_struct` | `IO(T)` and the result after the read | A path outside the skill is refused before the provider is asked. |
+| `submilli:skills#load` | Gate, check the name, one provider read, build the `Skill` struct (`stdlib/skills/mod.rs` `load`) | `CALL + GATE + IO(T)` plus the strings through `write_submilli_string_struct` | `IO(T)` and the result after the read | The read is the effect, so the result is built under `settle_result`. A name that is not one skill name is refused before the provider is asked. |
+| `submilli:skills#readFile` | Gate, check the name and the path, one provider read, build the string (`stdlib/skills/mod.rs` `read_file`) | `CALL + GATE + IO(T)` plus the string through `write_submilli_string_struct` | `IO(T)` and the result after the read | A name or path outside the skills is refused before the provider is asked. |
 | `submilli:skills#Skill#content` | Field read | `CALL` | before | |
 | `submilli:skills#Skill#description` | Field read | `CALL` | before | |
 | `submilli:skills#Skill#name` | Field read | `CALL` | before | |

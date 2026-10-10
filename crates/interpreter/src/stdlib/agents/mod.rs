@@ -34,8 +34,8 @@ use crate::stdlib::abi::{
     self, backing_struct, install_field_getters, nullable_object_field, string_field,
 };
 use crate::stdlib::shared::{
-    check_security_call, filters_candidate, mark_filtered, preflight_listing, running_package,
-    sanitize_description,
+    check_security_call, permitted_candidates, preflight_listing, running_package,
+    sanitize_description, truncated,
 };
 
 pub use declaration::package_declaration;
@@ -121,8 +121,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     )
 }
 
-/// One run: gate, record, dispatch, then build the result without refusing for
-/// fuel, because the run has already happened.
+/// One run: gate, charge, record what is sent, dispatch, then build the result
+/// without refusing for fuel, because the run has already happened.
 async fn run(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     agent: String,
@@ -130,15 +130,15 @@ async fn run(
     schema: Option<String>,
 ) -> wasmtime::Result<Val> {
     let ticket = gate(caller, &agent)?;
+    let provider = provider(caller).map_err(|error| fail(caller, ticket, "run", &error))?;
+    let principal = running_package(caller).map_err(|error| error.into_denial(CAPABILITY))?;
     let sent = (input.len() + schema.as_deref().map_or(0, str::len)) as u64;
+    fuel::charge(&mut *caller, fuel::IO, sent)?;
     record_payload(&*caller, ticket, Side::Request, || {
         Payload::meta(serde_json::json!({ "op": "run", "agent": agent, "schema": schema }))
             .with_owned_body(input.clone().into_bytes())
             .with_size(sent)
     });
-    let provider = provider(caller, "run")?;
-    fuel::charge(&mut *caller, fuel::IO, sent)?;
-    let principal = running_package(caller).map_err(|error| error.into_denial(CAPABILITY))?;
     let typed = schema.is_some();
     let request = AgentRequest {
         agent: agent.clone(),
@@ -155,7 +155,10 @@ async fn run(
                     crate::runtime::json::parse_json_as_unknown(
                         caller,
                         &outcome.text,
-                        &format!("agents.run(\"{agent}\"): the agent's result is not JSON"),
+                        &format!(
+                            "agents.run(\"{}\"): the agent's result is not JSON",
+                            truncated(&agent)
+                        ),
                     )
                 } else {
                     let text = write_submilli_string_struct(caller, &outcome.text)?;
@@ -163,13 +166,21 @@ async fn run(
                 }
             })
         }
-        Err(error) => {
-            record_payload(&*caller, ticket, Side::Response, || {
-                Payload::meta(serde_json::json!({ "call_error": call_error_record(&error) }))
-            });
-            Err(throw("run", &error))
-        }
+        Err(error) => Err(fail(caller, ticket, "run", &error)),
     }
+}
+
+/// Record `error` as the call's response and turn it into the guest's error.
+fn fail(
+    caller: &wasmtime::Caller<'_, StoreData>,
+    ticket: Option<CallTicket>,
+    op: &str,
+    error: &AgentCallError,
+) -> wasmtime::Error {
+    record_payload(caller, ticket, Side::Response, || {
+        Payload::meta(serde_json::json!({ "call_error": call_error_record(error) }))
+    });
+    throw(op, error)
 }
 
 fn record_outcome(
@@ -209,20 +220,18 @@ fn gate(
 }
 
 /// `list()`: every agent the harness offers that the caller may run. A denied
-/// candidate is left out, never reported.
+/// candidate is left out, never reported. Whether a provider is wired is not
+/// hidden here: a listing has no candidate to gate before asking it.
 async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     preflight_listing(caller, CAPABILITY, &serde_json::json!({ "agent": "" }))?;
-    let provider = provider(caller, "list")?;
+    let provider = provider(caller).map_err(|error| throw("list", &error))?;
     let candidates = provider.agents().await.map_err(|e| throw("list", &e))?;
-    let mut visible = Vec::new();
-    for candidate in candidates {
-        let keeps = filters_candidate(gate(caller, &candidate.name).map(|_| ()))?;
-        if keeps {
-            visible.push(candidate);
-        } else {
-            mark_filtered(&*caller);
-        }
-    }
+    let visible = permitted_candidates(
+        caller,
+        candidates,
+        |agent| agent.name.as_str(),
+        |caller, name| gate(caller, name).map(|_| ()),
+    )?;
     let mut built = Vec::with_capacity(visible.len());
     for agent in visible {
         built.push(build_agent_info(caller, agent)?);
@@ -230,17 +239,17 @@ async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<
     abi::new_array(caller, &built)
 }
 
-/// Clone the provider out of the store before any `await`. Runs after the
-/// capability check, so a denied caller cannot learn whether a harness is wired.
+/// Clone the provider out of the store before any `await`. `run` looks it up
+/// after the capability check, so a denied caller cannot learn whether a harness
+/// is wired.
 fn provider(
     caller: &wasmtime::Caller<'_, StoreData>,
-    op: &str,
-) -> wasmtime::Result<Arc<dyn AgentProvider>> {
+) -> Result<Arc<dyn AgentProvider>, AgentCallError> {
     caller
         .data()
         .agent_provider
         .clone()
-        .ok_or_else(|| throw(op, &AgentCallError::NotConfigured))
+        .ok_or(AgentCallError::NotConfigured)
 }
 
 fn throw(op: &str, error: &AgentCallError) -> wasmtime::Error {

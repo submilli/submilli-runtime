@@ -76,7 +76,9 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// See [`resolve`].
+    /// Walk the rules for `caller` and return the resolved action. No caller
+    /// block, or no rule matching `(capability, ctx)`, falls through to
+    /// `default`.
     pub fn resolve(
         &self,
         caller: &str,
@@ -87,7 +89,8 @@ impl Policy {
         resolve(&self.rules, self.default, caller, capability, ctx, vars)
     }
 
-    /// See [`resolve_with_rule`].
+    /// [`Self::resolve`], with the index of the deciding rule in the caller's
+    /// block, or `None` when the default decided.
     pub fn resolve_with_rule(
         &self,
         caller: &str,
@@ -98,7 +101,8 @@ impl Policy {
         resolve_with_rule(&self.rules, self.default, caller, capability, ctx, vars)
     }
 
-    /// See [`explain`].
+    /// [`Self::resolve`], with the reasoning: the deciding rule or default, and
+    /// the rules for the capability whose filters rejected the call.
     pub fn explain(
         &self,
         caller: &str,

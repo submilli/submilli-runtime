@@ -3510,8 +3510,9 @@ impl Inferer<'_> {
         })
     }
 
-    /// Rewrite `llm.call<T>(model, prompt)` into a runtime-checked cast, and
-    /// emit the JSON Schema for `T` that rides along to the provider.
+    /// Rewrite a schema-checked call such as `llm.call<T>(model, prompt)` into a
+    /// runtime-checked cast, and emit the JSON Schema for `T` that rides along
+    /// to the provider.
     ///
     /// Mirrors [`Self::checked_session_get`] — same soundness argument, same
     /// `checked_cast_around` — with one addition: the schema gate. A typed call
@@ -3525,14 +3526,14 @@ impl Inferer<'_> {
     /// has to replace the trailing `schema` argument before the call node's
     /// argument list is frozen. `Ok(None)` is the untyped form, which sends no
     /// schema and gets no check; `Ok(Some(schema))` means both gates passed and
-    /// the caller must wrap the call in [`Self::checked_llm_cast`]; `Err(())`
+    /// the caller must wrap the call in [`Self::schema_checked_cast`]; `Err(())`
     /// means a diagnostic was reported (or deliberately suppressed) and the
     /// call is an error.
     ///
     /// `checked` describes the call, from [`crate::stdlib::schema_checked_call`].
     /// `type_args_written` separates an explicit `call<unknown>` from a bare
     /// `call(...)`, whose result is the untyped default and needs no check.
-    pub(super) fn llm_call_schema(
+    pub(super) fn schema_checked_call_schema(
         &mut self,
         checked: &crate::stdlib::SchemaCheckedCall,
         result_ty: &Type,
@@ -3544,9 +3545,9 @@ impl Inferer<'_> {
             example,
             checks,
             answerer,
-            untyped_read,
-            untyped_unknown,
-            untyped_parse,
+            untyped_hint,
+            untyped_hint_for_unknown,
+            untyped_hint_for_no_schema,
             ..
         } = checked;
         // No type argument: the call keeps its pre-generic meaning and returns
@@ -3569,7 +3570,7 @@ impl Inferer<'_> {
                 ),
                 vec![format!(
                     "name the shape you expect — `{example}` — or drop the type argument \
-                     and {untyped_unknown}."
+                     and {untyped_hint_for_unknown}."
                 )],
             );
             return Err(());
@@ -3595,7 +3596,7 @@ impl Inferer<'_> {
                      that argument must be one the runtime can test, and the schema is \
                      emitted at compile time where `{result_ty}` is not yet known. Call it \
                      at a concrete type — `{example}` — inside the \
-                     generic function, or drop the type argument and {untyped_read}."
+                     generic function, or drop the type argument and {untyped_hint}."
                 )],
             );
             return Err(());
@@ -3605,7 +3606,7 @@ impl Inferer<'_> {
         // narrower (KTD5) *and* its rejections name the offending field. A
         // recursive type fails both; the schema reason points at the field that
         // closes the cycle, which is the one the author has to change.
-        match self.llm_schema_for(result_ty) {
+        match self.json_schema_for(result_ty) {
             Ok(schema) => {
                 // The cast gate still has to pass: it is what `checked_cast_around`
                 // will re-run, and the two surfaces agree everywhere except the
@@ -3622,7 +3623,7 @@ impl Inferer<'_> {
                              an object, array, tuple, union, or primitive shape. Call it \
                              at a concrete type instead of `{result_ty}` — \
                              `{example}` — or drop the type \
-                             argument and {untyped_read}."
+                             argument and {untyped_hint}."
                         )],
                     );
                     return Err(());
@@ -3644,7 +3645,7 @@ impl Inferer<'_> {
                              `$ref`, so every field must be an object, array, tuple, union, \
                              enum, or primitive shape. Replace that field with one — a \
                              `string` for bytes or a big number, a named shape in place of \
-                             `unknown` — or drop the type argument and {untyped_parse}."
+                             `unknown` — or drop the type argument and {untyped_hint_for_no_schema}."
                         )],
                     );
                 }
@@ -3653,12 +3654,13 @@ impl Inferer<'_> {
         }
     }
 
-    /// Wrap a gated `llm.call<T>` in its checked cast. Split from
-    /// [`Self::llm_call_schema`] because the gates must run before the call
-    /// node's arguments are frozen and this must run after. `checked_cast_around`
-    /// cannot fail here: `llm_call_schema` already ran the same cast gate on the
-    /// same type, and passing it is what produced the schema that got us here.
-    pub(super) fn checked_llm_cast(
+    /// Wrap a gated schema-checked call in its checked cast. Split from
+    /// [`Self::schema_checked_call_schema`] because the gates must run before the
+    /// call node's arguments are frozen and this must run after.
+    /// `checked_cast_around` cannot fail here: `schema_checked_call_schema`
+    /// already ran the same cast gate on the same type, and passing it is what
+    /// produced the schema that got us here.
+    pub(super) fn schema_checked_cast(
         &mut self,
         call: TypedExprKind,
         result_ty: &Type,
@@ -3717,7 +3719,7 @@ impl Inferer<'_> {
     /// resolves alias back-edges through the type namespace — without that
     /// expander every `AliasRef` survives the walk and is rejected as
     /// unresolvable.
-    fn llm_schema_for(
+    fn json_schema_for(
         &mut self,
         target_ty: &Type,
     ) -> Result<String, crate::typechecker::json_schema::SchemaReject> {

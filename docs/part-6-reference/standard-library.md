@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3793fac8286c446ca61433ddc6b5f69445e64bf9b2ec0d36fb2c3e98b517179e"
+  contentHash: "94d4d49e52c6614b6be56c086abc7229f7c932d7d35e01e81c1e040b21c461f3"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -213,17 +213,24 @@ listed by `submilli search` or in the sections below.
 
 - `run(agent, input)` returns the agent's final answer as text. With a type
   argument it works like `llm.call<T>`: the schema for `T` is sent with the
-  task, and an answer that is not JSON or does not match `T` throws
-  `TypeError`.
+  task. An answer that is not JSON throws `SyntaxError`, and one that does
+  not match `T` throws `TypeError`.
 - The harness decides how long a run may take and what it may spend. The
   execution timeout does not stop a run in progress.
 - `list()` in either module leaves out what the policy denies the caller,
   without saying how many were left out.
-- `readFile(name, path)` takes a path relative to the skill, with `/`
-  separators. An absolute path, or one with an empty, `.`, or `..` segment,
-  throws `RangeError`. Reading a file is gated by `skill.load` on the skill's
-  name.
-- With no provider configured, every function throws an `Error` saying so.
+- `load(name)` and `readFile(name, path)` take a skill name as `list()`
+  returns it. A name that is empty, `.` or `..`, or contains `/`, `\` or
+  NUL throws `RangeError`.
+- `readFile` takes a path relative to the skill, with `/` separators. A path
+  that is absolute, has an empty, `.` or `..` segment, or contains `\`, `:`
+  or NUL throws `RangeError`. Reading a file is gated by `skill.load` on the
+  skill's name.
+- A name or path over 4096 bytes of UTF-8 throws `RangeError`.
+- A name may contain `:`, as in `plugin:review`. Policy rules match names
+  exactly as written: `Review` is not `review`.
+- With no provider configured, any call the checks above allow throws an
+  `Error` saying so.
 
 <!-- generated:stdlib -->
 

@@ -36,7 +36,8 @@ impl SecretResolver for DeclaredSecrets<'_> {
     }
 }
 
-/// The first `auth_proxy` rule whose `host` matches exactly, with
+/// [`submilli_policy::resolve_injections`] for a blueprint: the first
+/// `auth_proxy` rule whose `host` matches exactly, with
 /// `${secrets.X}` resolved against the declared secrets. `Ok(None)` when no
 /// rule matches.
 pub async fn resolve_injections(
@@ -51,10 +52,10 @@ pub async fn resolve_injections(
     submilli_policy::resolve_injections(&blueprint.auth_proxy, host, &secrets).await
 }
 
-/// Replace every `${secrets.NAME}` in `value` with its resolved declared
-/// secret. Public so other blueprint blocks that interpolate secrets (e.g. the
-/// `mcp:` OAuth `client_id`) reuse the exact placeholder semantics `auth_proxy`
-/// uses.
+/// [`submilli_policy::interpolate`] for a blueprint: replace every
+/// `${secrets.NAME}` in `value` with its resolved declared secret. Public so
+/// other blueprint blocks that interpolate secrets (e.g. the `mcp:` OAuth
+/// `client_id`) reuse the exact placeholder semantics `auth_proxy` uses.
 pub async fn interpolate(
     value: &str,
     blueprint: &Blueprint,

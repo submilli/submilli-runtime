@@ -23,9 +23,11 @@ fn harness_stdlib() -> Stdlib {
         .with(OptionalPackage::Skills)
 }
 
-/// Answers every run with `answer` and records what it was asked.
+/// Answers every run with `answer`, lists `listing`, and records what it was
+/// asked to run.
 struct FakeAgents {
     answer: Result<String, AgentCallError>,
+    listing: Result<Vec<AgentInfo>, AgentCallError>,
     requests: Mutex<Vec<AgentRequest>>,
 }
 
@@ -33,6 +35,7 @@ impl FakeAgents {
     fn answering(answer: &str) -> Arc<Self> {
         Arc::new(Self {
             answer: Ok(answer.to_string()),
+            listing: Ok(two_agents()),
             requests: Mutex::new(Vec::new()),
         })
     }
@@ -40,6 +43,15 @@ impl FakeAgents {
     fn failing(error: AgentCallError) -> Arc<Self> {
         Arc::new(Self {
             answer: Err(error),
+            listing: Ok(two_agents()),
+            requests: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn listing(listing: Result<Vec<AgentInfo>, AgentCallError>) -> Arc<Self> {
+        Arc::new(Self {
+            answer: Ok(String::new()),
+            listing,
             requests: Mutex::new(Vec::new()),
         })
     }
@@ -65,29 +77,35 @@ impl AgentProvider for FakeAgents {
     }
 
     fn agents<'a>(&'a self) -> Boxed<'a, Result<Vec<AgentInfo>, AgentCallError>> {
-        Box::pin(async {
-            Ok(vec![
-                AgentInfo {
-                    name: "researcher".to_string(),
-                    description: Some("Finds\nsources".to_string()),
-                },
-                AgentInfo {
-                    name: "deployer".to_string(),
-                    description: None,
-                },
-            ])
-        })
+        let listing = self.listing.clone();
+        Box::pin(async move { listing })
     }
 }
 
-/// Two skills; `review` bundles one file.
+fn two_agents() -> Vec<AgentInfo> {
+    vec![
+        AgentInfo {
+            name: "researcher".to_string(),
+            description: Some("Finds\nsources".to_string()),
+        },
+        AgentInfo {
+            name: "deployer".to_string(),
+            description: None,
+        },
+    ]
+}
+
+/// Two skills; `review` bundles one file. Records every name it is asked to
+/// load and every file it is asked to read.
 struct FakeSkills {
+    loads: Mutex<Vec<String>>,
     reads: Mutex<Vec<(String, String)>>,
 }
 
 impl FakeSkills {
     fn new() -> Arc<Self> {
         Arc::new(Self {
+            loads: Mutex::new(Vec::new()),
             reads: Mutex::new(Vec::new()),
         })
     }
@@ -105,11 +123,17 @@ impl SkillProvider for FakeSkills {
                     name: "internal".to_string(),
                     description: None,
                 },
+                // Not one name: `load` would refuse it, so `list()` drops it.
+                SkillInfo {
+                    name: "team/review".to_string(),
+                    description: None,
+                },
             ])
         })
     }
 
     fn load<'a>(&'a self, name: &'a str) -> Boxed<'a, Result<Skill, SkillError>> {
+        self.loads.lock().expect("loads").push(name.to_string());
         Box::pin(async move {
             match name {
                 "review" => Ok(Skill {
@@ -306,11 +330,11 @@ fn only_an_enabling_set_discovers_and_catalogs_the_packages() {
     }
     for capability in ["agent.run", "skill.load"] {
         assert!(capabilities::find(capability).is_none());
-        assert!(capabilities::find_in(harness_stdlib(), capability).is_some());
+        assert!(capabilities::find_for(harness_stdlib(), capability).is_some());
     }
     let agents_only = Stdlib::core().with(OptionalPackage::Agents);
-    assert!(capabilities::find_in(agents_only, "agent.run").is_some());
-    assert!(capabilities::find_in(agents_only, "skill.load").is_none());
+    assert!(capabilities::find_for(agents_only, "agent.run").is_some());
+    assert!(capabilities::find_for(agents_only, "skill.load").is_none());
 }
 
 #[test]
@@ -508,4 +532,248 @@ async fn read_file_is_gated_by_the_skill_and_refuses_paths_outside_it() {
         skills.reads.lock().expect("reads").is_empty(),
         "neither call may reach the harness"
     );
+}
+
+#[test]
+fn an_unknown_type_argument_is_refused_in_agents_words() {
+    let errors = compile_errors(
+        "import agents from \"submilli:agents\";\n\
+         function main(): void { agents.run<unknown>(\"researcher\", \"go\"); }\n",
+        harness_stdlib(),
+    );
+    assert!(
+        errors.iter().any(
+            |e| e.contains("`agents.run<unknown>` would not verify anything")
+                && e.contains("agents.run<Report>(agent, input)")
+        ),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_parsed_script_typechecks_against_an_enabling_set() {
+    let source = "import { list } from \"submilli:skills\";\nfunction main(): void { list(); }\n";
+    let parsed = crate::parse_script(source, crate::FileId(0));
+    crate::compile::typecheck_parsed_checked(
+        source,
+        &parsed,
+        &harness_stdlib().package_declarations(),
+    )
+    .expect("skills is available");
+    assert!(
+        crate::compile::typecheck_parsed_checked(
+            source,
+            &parsed,
+            &Stdlib::core().package_declarations()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_package_compiles_against_an_enabling_set() {
+    let source = "import { list } from \"submilli:agents\";\n\
+                  export function names(): string[] { return list().map((a) => a.name); }\n";
+    let modules = [crate::PackageSourceModule {
+        path: crate::ModulePath::from("lib"),
+        source,
+    }];
+    crate::compile::compile_package_with_transitive_checked_for(
+        harness_stdlib(),
+        "@acme/fanout",
+        crate::ModulePath::from("lib"),
+        &modules,
+        &[],
+        &[],
+    )
+    .expect("agents is importable");
+    assert!(
+        crate::compile::compile_package_with_transitive_checked(
+            "@acme/fanout",
+            crate::ModulePath::from("lib"),
+            &modules,
+            &[],
+            &[],
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_typed_run_with_a_prose_answer_throws_a_syntax_error() {
+    let out = Harness::default()
+        .agents(FakeAgents::answering("Sure, here is the report"))
+        .run(
+            r#"import agents from "submilli:agents";
+               interface Review { score: number }
+               function main(): string {
+                 try {
+                   agents.run<Review>("researcher", "review it");
+                   return "accepted";
+                 } catch (e: SyntaxError) {
+                   return "not json";
+                 }
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    assert_eq!(out, "not json");
+}
+
+#[tokio::test]
+async fn an_empty_or_failed_listing_is_what_the_program_sees() {
+    let empty = Harness::default()
+        .agents(FakeAgents::listing(Ok(Vec::new())))
+        .run(
+            r#"import agents from "submilli:agents";
+               function main(): string { return String(agents.list().length); }"#,
+        )
+        .await
+        .expect("program completes");
+    assert_eq!(empty, "0");
+
+    let failed = Harness::default()
+        .agents(FakeAgents::listing(Err(AgentCallError::Failed {
+            agent: String::new(),
+            message: "catalog unavailable".to_string(),
+        })))
+        .run(
+            r#"import agents from "submilli:agents";
+               function main(): string {
+                 try { agents.list(); return "listed"; } catch (e) { return e.message; }
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    assert!(failed.contains("catalog unavailable"), "{failed}");
+}
+
+#[tokio::test]
+async fn a_skill_name_that_is_not_one_segment_never_reaches_the_harness() {
+    let skills = FakeSkills::new();
+    let out = Harness::default()
+        .skills(skills.clone())
+        .run(
+            r#"import skills from "submilli:skills";
+               function main(): string {
+                 let out = "";
+                 for (const name of ["../other", "a/b", "", ".."]) {
+                   try { skills.load(name); out += "loaded "; }
+                   catch (e: RangeError) { out += "range "; }
+                 }
+                 try { skills.readFile("../../etc", "passwd"); out += "read"; }
+                 catch (e: RangeError) { out += "range"; }
+                 return out;
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    assert_eq!(out, "range range range range range");
+    assert!(skills.loads.lock().expect("loads").is_empty());
+    assert!(skills.reads.lock().expect("reads").is_empty());
+}
+
+#[tokio::test]
+async fn an_unknown_skill_and_a_missing_provider_are_catchable() {
+    let source = r#"import skills from "submilli:skills";
+        function main(): string {
+          try { skills.load("nope"); return "loaded"; } catch (e) { return e.message; }
+        }"#;
+    let unknown = Harness::default()
+        .skills(FakeSkills::new())
+        .run(source)
+        .await
+        .expect("program completes");
+    assert_eq!(
+        unknown,
+        "skills.load: no skill named `nope`; call `list()` for the skills you may load"
+    );
+
+    let unconfigured = Harness::default()
+        .run(source)
+        .await
+        .expect("program completes");
+    assert!(
+        unconfigured.contains("no skill provider is configured"),
+        "{unconfigured}"
+    );
+}
+
+#[tokio::test]
+async fn a_namespaced_skill_name_reaches_the_harness() {
+    let skills = FakeSkills::new();
+    let out = Harness::default()
+        .skills(skills.clone())
+        .run(
+            r#"import skills from "submilli:skills";
+               function main(): string {
+                 try { skills.load("plugin:review"); return "loaded"; } catch (e) { return e.message; }
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    assert!(out.contains("no skill named `plugin:review`"), "{out}");
+    assert_eq!(*skills.loads.lock().expect("loads"), ["plugin:review"]);
+}
+
+/// Answers every load with the `review` skill, whatever was asked for.
+struct CaseFoldingSkills;
+
+impl SkillProvider for CaseFoldingSkills {
+    fn list<'a>(&'a self) -> Boxed<'a, Result<Vec<SkillInfo>, SkillError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn load<'a>(&'a self, _name: &'a str) -> Boxed<'a, Result<Skill, SkillError>> {
+        Box::pin(async {
+            Ok(Skill {
+                name: "review".to_string(),
+                description: None,
+                content: "Read the diff twice.".to_string(),
+            })
+        })
+    }
+
+    fn read_file<'a>(
+        &'a self,
+        _name: &'a str,
+        _path: &'a str,
+    ) -> Boxed<'a, Result<String, SkillError>> {
+        Box::pin(async { Ok(String::new()) })
+    }
+}
+
+/// The policy decided on the name the program wrote, so a skill answered under
+/// another name is refused rather than handed over.
+#[tokio::test]
+async fn a_skill_answered_under_another_name_is_refused() {
+    let out = Harness::default()
+        .skills(Arc::new(CaseFoldingSkills))
+        .policy(DenyOne::new("name", "review"))
+        .run(
+            r#"import skills from "submilli:skills";
+               function main(): string {
+                 try { return skills.load("Review").content; } catch (e) { return e.message; }
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    assert!(out.contains("with a different skill"), "{out}");
+}
+
+#[tokio::test]
+async fn an_oversized_name_is_refused_with_a_short_message() {
+    let out = Harness::default()
+        .skills(FakeSkills::new())
+        .run(
+            r#"import skills from "submilli:skills";
+               function main(): string {
+                 try { skills.load("x".repeat(5000)); return "loaded"; }
+                 catch (e: RangeError) { return e.message; }
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    assert!(out.contains("at most 4096 bytes"), "{out}");
+    assert!(out.len() < 600, "{}", out.len());
 }

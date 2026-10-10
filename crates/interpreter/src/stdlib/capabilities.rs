@@ -601,11 +601,11 @@ pub(crate) fn all_groups() -> impl Iterator<Item = &'static CapabilityGroup> {
 /// Look up a core capability by its exact name (templates included, by their
 /// literal `mcp.<server>` spelling).
 pub fn find(name: &str) -> Option<&'static Capability> {
-    find_in(Stdlib::core(), name)
+    find_for(Stdlib::core(), name)
 }
 
 /// [`find`] among the capabilities of `stdlib`.
-pub fn find_in(stdlib: Stdlib, name: &str) -> Option<&'static Capability> {
+pub fn find_for(stdlib: Stdlib, name: &str) -> Option<&'static Capability> {
     catalog_for(stdlib)
         .into_iter()
         .flat_map(|group| group.capabilities)
@@ -630,12 +630,12 @@ pub fn uncataloged_http_method(name: &str) -> Option<&str> {
 /// The entry describing `name`: its catalog entry, or [`HTTP_OTHER_METHOD`]
 /// for a name that fills it.
 pub fn find_gating(name: &str) -> Option<&'static Capability> {
-    find_gating_in(Stdlib::core(), name)
+    find_gating_for(Stdlib::core(), name)
 }
 
 /// [`find_gating`] among the capabilities of `stdlib`.
-pub fn find_gating_in(stdlib: Stdlib, name: &str) -> Option<&'static Capability> {
-    find_in(stdlib, name).or_else(|| uncataloged_http_method(name).map(|_| &HTTP_OTHER_METHOD))
+pub fn find_gating_for(stdlib: Stdlib, name: &str) -> Option<&'static Capability> {
+    find_for(stdlib, name).or_else(|| uncataloged_http_method(name).map(|_| &HTTP_OTHER_METHOD))
 }
 
 /// An RFC 9110 method token, the set `http.request` accepts, in lowercase.

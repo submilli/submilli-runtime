@@ -46,8 +46,8 @@ pub fn package_declaration() -> PackageDeclaration {
          * Without a type argument the answer is the agent's text. With one — \
          `run<Report>(agent, input)` — a JSON Schema for `T` is emitted at compile time \
          and sent with the task, and the answer is then checked structurally against \
-         `T`. An answer that is not JSON, or does not match, throws a catchable \
-         `TypeError`; nothing is coerced.\n *\n * `T` must be a type the schema can \
+         `T`. An answer that is not JSON throws a catchable `SyntaxError`, and one \
+         that does not match throws a catchable `TypeError`; nothing is coerced.\n *\n * `T` must be a type the schema can \
          carry: no functions, no `bigint`, no `Uint8Array`, no `unknown`, and no \
          recursive type.\n *\n * The harness runs the agent and decides how long it may \
          take and what it may spend. A run that fails, is cancelled, or names an agent \

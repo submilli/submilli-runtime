@@ -556,6 +556,38 @@ pub(crate) fn filters_candidate(checked: wasmtime::Result<()>) -> wasmtime::Resu
     }
 }
 
+/// The candidates of a listing the caller may use. `gate` runs the capability
+/// check one candidate's use would; a policy denial leaves the candidate out and
+/// marks the recorded decision filtered, and any other refusal propagates, the
+/// [`filters_candidate`] rule.
+pub(crate) fn permitted_candidates<T>(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    candidates: Vec<T>,
+    name_of: impl Fn(&T) -> &str,
+    mut gate: impl FnMut(&mut wasmtime::Caller<'_, StoreData>, &str) -> wasmtime::Result<()>,
+) -> wasmtime::Result<Vec<T>> {
+    let mut permitted = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if filters_candidate(gate(caller, name_of(&candidate)))? {
+            permitted.push(candidate);
+        } else {
+            mark_filtered(&*caller);
+        }
+    }
+    Ok(permitted)
+}
+
+/// At most the first 200 bytes of a program-supplied value, for an error that
+/// echoes it: a refused value may be refused for its size.
+pub(crate) fn truncated(value: &str) -> std::borrow::Cow<'_, str> {
+    const MAX_ECHO_BYTES: usize = 200;
+    if value.len() <= MAX_ECHO_BYTES {
+        return std::borrow::Cow::Borrowed(value);
+    }
+    let end = value.floor_char_boundary(MAX_ECHO_BYTES);
+    std::borrow::Cow::Owned(format!("{}…", value.get(..end).unwrap_or_default()))
+}
+
 /// Reduce an operator-authored `description` to inert single-line data.
 ///
 /// This is sanitization, not merely a bound. The text flows verbatim into a

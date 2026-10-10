@@ -39,9 +39,11 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![Param::new("name", Type::String)],
         interface_type("Skill"),
         "/**\n * Load the skill `name`: its description and its instructions.\n *\n * \
-         Throws a catchable error when the harness has no skill of that name, or when \
-         this runtime has no skill provider.\n * @param name Skill name. Call `list()` \
-         for the skills you may load.\n * @capability skill.load { name: $name }\n */",
+         A name that is not one skill name — empty, `.` or `..`, containing `/`, \
+         `\\` or NUL, or over 4096 bytes — throws a `RangeError` without asking the \
+         harness. Throws a catchable error when the harness has no skill of that name, \
+         or when this runtime has no skill provider.\n * @param name Skill name, as \
+         `list()` returns it.\n * @capability skill.load { name: $name }\n */",
     );
     insert_fn(
         &mut defs,
@@ -53,9 +55,12 @@ pub fn package_declaration() -> PackageDeclaration {
         Type::String,
         "/**\n * Read a file bundled with the skill `name`, as text.\n *\n * `path` is \
          relative to the skill, with `/` separators, as the skill's instructions name \
-         it — `\"templates/report.md\"`. An absolute path, or one with an empty, `.` \
-         or `..` segment, throws a `RangeError` without asking the harness; a file the \
-         skill does not have throws a catchable error.\n * @param name Skill name.\n \
+         it — `\"templates/report.md\"`. An absolute path, one with an empty, `.` \
+         or `..` segment, one containing `\\`, `:` or NUL, or one over 4096 bytes, \
+         throws a `RangeError` \
+         without asking the harness, as does a name that is not one skill name; a file \
+         the skill does not have throws a catchable error.\n * @param name Skill name, \
+         as `list()` returns it.\n \
          * @param path The file's path inside the skill.\n * @capability skill.load { \
          name: $name }\n */",
     );
