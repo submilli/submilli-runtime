@@ -1,18 +1,18 @@
 name: Publish engine
 
-# Publishes `submilli-engine` to crates.io when a runtime release is published,
-# from that release's tag, or by hand from main. The `crates-io` environment
-# holds the token, takes only main and `v*` tags, and waits for a reviewer
-# before the job runs.
+# Publishes `submilli-engine` to crates.io. The release workflow calls this with
+# its tagged commit; started by hand, it publishes from main. The `crates-io`
+# environment holds the token, takes only main and `v*` tags, and waits for a
+# reviewer before the job runs.
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
-
-concurrency:
-  group: publish-engine
-  cancel-in-progress: false
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact runtime release commit
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -24,9 +24,14 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: crates-io
+    concurrency:
+      group: publish-engine
+      cancel-in-progress: false
     steps:
-      # A release event checks out its tag.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.98.1
 
       # The engine takes the workspace version, so a rerun, or a release cut
