@@ -44,7 +44,8 @@ Default to stable releases. Prereleases and older maintenance lines require
 checking container aliases and GitHub prerelease/latest flags; do not move stable
 aliases back to an older release. This workflow does not publish crates,
 TypeScript packages or `skill-v*` releases unless
-separately requested.
+separately requested. The `Publish engine` workflow publishes `submilli-engine`
+to crates.io when started by hand.
 
 ## 2. Prepare versions and documentation
 

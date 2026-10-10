@@ -1,0 +1,37 @@
+name: Publish engine
+
+# Publishes `submilli-engine` to crates.io from main. Started by hand for now;
+# a trigger on published releases follows once the engine's versioning is
+# settled. The `crates-io` environment holds the token, takes only main, and
+# waits for a reviewer before the job runs.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: publish-engine
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      # Fail before uploading anything if the package does not build from its
+      # packaged files alone.
+      - name: Package
+        run: cargo publish --dry-run --locked -p submilli-engine
+
+      - name: Publish
+        run: cargo publish --locked -p submilli-engine
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
