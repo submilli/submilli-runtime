@@ -11,11 +11,12 @@ use serde_json::Value;
 use submilli_blueprint::{Blueprint, HarnessSecretBindings};
 use submilli_server::blueprint::InMemoryBlueprintStore;
 use submilli_server::record::{
-    FinishedRun, ProgramRun, RecordedRun, RetryLink, RunRecorder, RunRecorderFactory, RunStart,
-    SessionEvent, TestMode, TestReport, TestRun, run_program, test_program,
+    EventKind, FinishedRun, ProgramRun, RecordedRun, RetryLink, RunRecorder, RunRecorderFactory,
+    RunStart, SessionEvent, TestMode, TestReport, TestRun, run_program, test_program,
 };
 use submilli_server::{AppState, ServerConfig};
 
+use super::super::events::EventBody;
 use super::super::{KnownSecrets, Recorder, Store};
 use super::SECRET;
 use crate::commands::playground::labels;
@@ -357,4 +358,20 @@ function main(): string {{
         .unwrap();
     assert!(!events.events.is_empty());
     let _: Value = serde_json::to_value(&events.events[0]).unwrap();
+    let lines: Vec<&str> = events
+        .events
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::Event(event) => match &event.kind {
+                EventKind::Console { line, .. } => Some(line.as_str()),
+                _ => None,
+            },
+            EventBody::Gap(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        ["plain=[redacted] b64=[redacted] url=[redacted]"],
+        "the console line is an event of its own, masked like the run's console"
+    );
 }

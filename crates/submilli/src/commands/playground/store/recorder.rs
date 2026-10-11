@@ -581,6 +581,17 @@ fn position_of(kind: &EventKind, arrived_micros: u64, track: &Track) -> Position
             ended_micros,
             ..
         } => in_run(ended_micros.unwrap_or(*started_micros), *call_index, 2),
+        // After the end of the call before it, and before the start of the next.
+        EventKind::Console {
+            written_micros,
+            after_call,
+            ..
+        } => Position {
+            at_micros: base.saturating_add(*written_micros),
+            run: Some(track.id),
+            call_index: *after_call,
+            rank: 3,
+        },
         EventKind::RunFinished { .. } | EventKind::Returned { .. } | EventKind::ToolCall { .. } => {
             Position {
                 at_micros: arrived_micros,

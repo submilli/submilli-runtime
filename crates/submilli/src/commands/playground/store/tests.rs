@@ -276,6 +276,7 @@ fn kinds(events: &[&StoredEvent]) -> Vec<String> {
                 EventKind::RunFinished { .. } => "end".to_owned(),
                 EventKind::Returned { .. } => "returned".to_owned(),
                 EventKind::ToolCall { tool, .. } => format!("tool {tool}"),
+                EventKind::Console { line, .. } => format!("console {line}"),
             },
         })
         .collect()
@@ -1071,6 +1072,71 @@ fn an_event_log_with_dropped_events_says_so() {
     assert_eq!(gap.dropped, Some(3));
     assert!(!gap.lost);
     assert!(!log.lost());
+}
+
+fn console(line: &str, written_micros: u64, after_call: Option<u64>) -> EventKind {
+    EventKind::Console {
+        line: line.into(),
+        written_micros,
+        after_call,
+        truncated: false,
+    }
+}
+
+#[test]
+fn console_lines_sort_between_the_calls_around_them_and_are_masked() {
+    let world = World::new();
+    world.secrets.add(SECRET);
+    let recorder = world.start(run_start("exec-1", Some("sess")));
+    let calls: Vec<CallRecord> = (0..2).map(|n| call(n, "http.get", Some("ok"))).collect();
+    let mut seq = 0;
+    let mut send = |kind| {
+        seq += 1;
+        world.recorder.event(event(seq, "sess", "exec-1", kind));
+    };
+    send(run_started());
+    send(console("first", 0, None));
+    send(call_started(0));
+    send(call_finished(&calls[0]));
+    // Written the moment call 0 ended and call 1 started: after one, before the other.
+    send(console(&format!("key {SECRET}"), 100, Some(0)));
+    send(call_started(1));
+    send(call_finished(&calls[1]));
+    send(console("last", 150, Some(1)));
+    send(run_finished(0));
+    recorder.finish(finished(Vec::new(), calls));
+    let bytes = std::fs::read(world.store.events_path(Some("sess"))).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains(SECRET));
+    let log = world.store.read_events(Some("sess")).unwrap();
+    assert!(!log.incomplete());
+    let order = kinds(&log.causal());
+    assert_eq!(order[..2], ["started", "console first"]);
+    assert_eq!(order[2..4], ["call 0", "finished 0"]);
+    assert!(order[4].starts_with("console key ") && !order[4].contains(SECRET));
+    assert_eq!(order[5..], ["call 1", "finished 1", "console last", "end"]);
+}
+
+#[test]
+fn a_dropped_console_line_leaves_a_gap_and_the_run_keeps_its_console() {
+    let world = World::new();
+    let recorder = world.start(run_start("exec-1", Some("sess")));
+    world
+        .recorder
+        .event(event(1, "sess", "exec-1", run_started()));
+    world
+        .recorder
+        .event(event(2, "sess", "exec-1", console("kept", 0, None)));
+    // Event 3, the second line, was dropped.
+    world
+        .recorder
+        .event(event(4, "sess", "exec-1", run_finished(1)));
+    recorder.finish(finished(Vec::new(), Vec::new()));
+    let log = world.store.read_events(Some("sess")).unwrap();
+    assert!(log.incomplete());
+    assert_eq!(log.gaps().next().unwrap().dropped, Some(1));
+    assert!(kinds(&log.causal()).contains(&"console kept".to_owned()));
+    let run = world.store.load_run(1).unwrap().unwrap();
+    assert_eq!(run.console, "hello\n");
 }
 
 /// A run with three calls whose second call's events the server dropped: its call

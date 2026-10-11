@@ -70,8 +70,8 @@ pub(crate) struct Gap {
 
 /// Where an event happened, the order to read a session in: a timestamp from the
 /// playground's one clock (microseconds since the Unix epoch), then for a run's event its
-/// run id and run-wide call index, then within one call: its start, its decisions, and
-/// its end.
+/// run id and run-wide call index, then within one call: its start, its decisions, its
+/// end, and the console lines written after it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct Position {
     pub(crate) at_micros: u64,
