@@ -2370,6 +2370,28 @@ fn watch_line(seq: Option<u64>, stored: &Value, session: &str) -> Value {
         line.extend(gap.clone());
         return Value::Object(line);
     }
+    // A chat message: who spoke is ours to say; what it said and its ids came from the
+    // assistant.
+    for (body, kind, untrusted_fields) in [
+        ("chat", "chat", &["turn", "text", "agent"][..]),
+        ("chat-replaced", "chat-replaced", &["turns"][..]),
+    ] {
+        if let Some(chat) = stored["body"][body].as_object() {
+            line.insert("kind".into(), json!(kind));
+            if let Some(at) = stored["position"]["at_micros"].as_u64() {
+                line.insert("at".into(), json!(render::rfc3339(at)));
+            }
+            for (field, value) in chat {
+                if untrusted_fields.contains(&field.as_str()) {
+                    untrusted.insert(field.clone(), value.clone());
+                } else {
+                    line.entry(field.clone()).or_insert_with(|| value.clone());
+                }
+            }
+            line.insert("untrusted".into(), Value::Object(untrusted));
+            return Value::Object(line);
+        }
+    }
     let Some(event) = stored["body"]["event"].as_object() else {
         line.insert("kind".into(), json!("unknown"));
         return Value::Object(line);
