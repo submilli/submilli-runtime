@@ -1,13 +1,5 @@
-types: 47 of 102 tsc entries compared, 3 differ
+types: 47 of 102 tsc entries compared, 1 differ
 
 line 21: { x: 0, y: undefined }
   tsc:  { x: number; y: undefined; }
   ours: Point
-
-line 36: []
-  tsc:  never[]
-  ours: string[]
-
-line 37: []
-  tsc:  never[]
-  ours: string[]

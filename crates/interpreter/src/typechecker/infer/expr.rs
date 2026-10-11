@@ -6490,15 +6490,23 @@ impl Inferer<'_> {
         };
 
         if elements.is_empty() {
-            // Without a hint, `[]` holds no element, so it is `never[]`, as in
-            // tsc, and fits any array type it is later used as.
+            // `[]` holds no element, so it is `never[]`, as in tsc, and fits
+            // any array type it is used as. It is built with the expected
+            // element type, the slot it lands in. An element type still
+            // holding a type parameter is the call inferring it, which reads
+            // the hint back.
             let elem_ty = expected_elem.cloned().unwrap_or(Type::Never);
+            let own_elem_ty = if type_contains_type_var(&elem_ty) {
+                elem_ty.clone()
+            } else {
+                Type::Never
+            };
             return Ok((
                 TypedExprKind::ArrayLiteral {
                     elements: Vec::new(),
-                    element_ty: elem_ty.clone(),
+                    element_ty: elem_ty,
                 },
-                Type::Array(Box::new(elem_ty)),
+                Type::Array(Box::new(own_elem_ty)),
             ));
         }
 

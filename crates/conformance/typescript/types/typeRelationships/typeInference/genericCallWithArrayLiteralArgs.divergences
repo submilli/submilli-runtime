@@ -1,8 +1,4 @@
-types: 20 of 37 tsc entries compared, 4 differ
-
-line 10: []
-  tsc:  never[]
-  ours: number[]
+types: 20 of 37 tsc entries compared, 3 differ
 
 line 11: r4
   tsc:  (string | number)[]
