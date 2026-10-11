@@ -1,4 +1,4 @@
-line 13 type: bug SUB-1490 an object literal property widens to its base type where tsc keeps the literal type
+line 13 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (tsc keeps the rejected literal's `true`)
 line 6, 15, 38 type: by-design spec §Excluded-Features the array literal already holds the normalized union, with its added `?: undefined` fields, where tsc normalizes only on widening
 line 26, 27 type: by-design spec §2.5 a spread of a union merges its members into one object type with optional fields
 line 34, 35 type: by-design spec §Excluded-Features the conditional already holds the normalized union, with its added `?: undefined` fields, where tsc normalizes only on widening

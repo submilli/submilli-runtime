@@ -138,6 +138,7 @@ pub fn infer_with_transitive_checked<'a>(
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
+        spread_context_for_next_literal: None,
         invoked_return_hint: None,
         cast_operand: None,
         invoked_body_exit: None,
@@ -423,6 +424,7 @@ pub fn infer_package_checked<'a>(
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
+        spread_context_for_next_literal: None,
         invoked_return_hint: None,
         cast_operand: None,
         invoked_body_exit: None,
@@ -773,6 +775,10 @@ pub(super) struct Inferer<'a> {
     /// The span of the arrow an immediately-invoked call is about to infer;
     /// see [`iife::immediately_invoked_arrow`].
     immediately_invoked: Option<Span>,
+    /// The context the next object literal `infer_expr` meets gives its own
+    /// spreads, without taking it itself: it is a spread's source holding a
+    /// spread of its own (see `Inferer::infer_spread_source`).
+    spread_context_for_next_literal: Option<Type>,
     /// The type the immediately-invoked call's result is expected to have,
     /// which the arrow it runs takes as its return type's context, as in tsc.
     invoked_return_hint: Option<Type>,

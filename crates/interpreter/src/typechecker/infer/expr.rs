@@ -5450,7 +5450,9 @@ impl Inferer<'_> {
             [crate::ObjectLiteralMember::Spread { .. }]
         );
         let errors_before = self.error_count();
-        let (kind, ty) = self.infer_object_literal(literal, members, expected, span)?;
+        let spread_context = self.spread_context_for_next_literal.take();
+        let (kind, ty) =
+            self.infer_object_literal(literal, members, expected, spread_context, span)?;
         match expected {
             Some(expected) if lone_spread && self.error_count() == errors_before => {
                 self.spread_as_its_alternatives(kind, ty, expected, span)
@@ -5464,6 +5466,7 @@ impl Inferer<'_> {
         literal: ExprId,
         members: Vec<crate::ObjectLiteralMember>,
         expected: Option<&Type>,
+        spread_context: Option<Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if members
@@ -5602,7 +5605,18 @@ impl Inferer<'_> {
             (crate::ObjectField, crate::TypedObjectFieldSource),
         > = std::collections::BTreeMap::new();
 
-        for member in members {
+        // For each member, the names the fields written after it give: a
+        // spread's source doesn't decide those.
+        let mut written_after: Vec<std::collections::BTreeSet<String>> = Vec::new();
+        let mut later = std::collections::BTreeSet::new();
+        for member in members.iter().rev() {
+            written_after.push(later.clone());
+            if let crate::ObjectLiteralMember::Field(field) = member {
+                later.insert(field.name.name.clone());
+            }
+        }
+        written_after.reverse();
+        for (member, overwritten) in members.into_iter().zip(written_after) {
             match member {
                 crate::ObjectLiteralMember::Computed { .. } => {
                     self.error(
@@ -5791,7 +5805,11 @@ impl Inferer<'_> {
                         if let Some((id, ty, _)) = inferred_fields.remove(&value) {
                             (id, ty)
                         } else {
-                            self.infer_spread_source(value, expected)?
+                            self.infer_spread_source(
+                                value,
+                                expected.or(spread_context.as_ref()),
+                                &overwritten,
+                            )?
                         };
                     if let Some(value) = self.spread_source_index(typed_source, &source_ty)? {
                         for (field, _) in merged.values_mut() {
@@ -10265,17 +10283,30 @@ impl Inferer<'_> {
         &mut self,
         value: ExprId,
         expected: Option<&Type>,
+        overwritten: &std::collections::BTreeSet<String>,
     ) -> Result<(ExprId, Type), CompilerFailure> {
-        match expected {
-            Some(want)
-                if !type_contains_type_var(want)
-                    && self.shaped_by_context(value)?
-                    && !self.holds_spread(value)? =>
-            {
-                self.infer_with_soft_context(value, Some(spread_source_context(want)))
-            }
-            _ => self.infer_expr(value, None),
+        let Some(want) = expected.filter(|want| !type_contains_type_var(want)) else {
+            return self.infer_expr(value, None);
+        };
+        if !self.shaped_by_context(value)? {
+            return self.infer_expr(value, None);
         }
+        if !self.holds_spread(value)? {
+            let context = spread_source_context(want, overwritten);
+            return self.infer_with_soft_context(value, Some(context));
+        }
+        // A literal with spreads of its own would take the context as its own
+        // type, so only those spreads take it.
+        let id = peel_parens(self.ast, value)?;
+        if matches!(
+            self.ast.try_expr(id).map_err(super::arena_failure)?.kind,
+            ExprKind::ObjectLiteral { .. }
+        ) {
+            self.spread_context_for_next_literal = Some(spread_source_context(want, overwritten));
+        }
+        let inferred = self.infer_expr(value, None);
+        self.spread_context_for_next_literal = None;
+        inferred
     }
 
     /// Whether `expr` is an object literal with a spread of its own, or a
@@ -12657,15 +12688,22 @@ fn returned_value_types(returned: Vec<super::ReturnedValue>) -> Vec<(Type, Span)
 
 /// The context a spread's source takes from its literal's expected type `ty`:
 /// that type with every object field optional, since the fields written after
-/// the spread may supply the rest.
-fn spread_source_context(ty: &Type) -> Type {
+/// the spread may supply the rest. A field in `overwritten`, which a later
+/// field replaces, takes any value.
+fn spread_source_context(ty: &Type, overwritten: &std::collections::BTreeSet<String>) -> Type {
     match ty.peel() {
         Type::Object { index, fields } => Type::Object {
             index: index.clone(),
             fields: fields
                 .iter()
                 .map(|(name, field)| {
+                    let ty = if overwritten.contains(name) {
+                        Type::Unknown
+                    } else {
+                        field.ty.clone()
+                    };
                     let optional = crate::ObjectField {
+                        ty,
                         optional: true,
                         ..field.clone()
                     };
@@ -12673,7 +12711,12 @@ fn spread_source_context(ty: &Type) -> Type {
                 })
                 .collect(),
         },
-        Type::Union(members) => Type::union(members.iter().map(spread_source_context).collect()),
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|member| spread_source_context(member, overwritten))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
