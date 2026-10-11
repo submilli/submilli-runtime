@@ -5791,7 +5791,7 @@ impl Inferer<'_> {
                         if let Some((id, ty, _)) = inferred_fields.remove(&value) {
                             (id, ty)
                         } else {
-                            self.infer_expr(value, None)?
+                            self.infer_spread_source(value, expected)?
                         };
                     if let Some(value) = self.spread_source_index(typed_source, &source_ty)? {
                         for (field, _) in merged.values_mut() {
@@ -10224,6 +10224,39 @@ impl Inferer<'_> {
         self.infer_expr_keeping_literals(expr, None, true)
     }
 
+    /// A spread's source in an object literal checked against `expected`. A
+    /// literal or conditional there takes the literal's context, as in tsc, so
+    /// `{ ...(c ? { kind: "circle" } : { kind: "square" }) }` keeps its kinds.
+    fn infer_spread_source(
+        &mut self,
+        value: ExprId,
+        expected: Option<&Type>,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        match expected {
+            Some(want) if self.shaped_by_context(value)? && !self.holds_spread(value)? => {
+                self.infer_with_soft_context(value, Some(spread_source_context(want)))
+            }
+            _ => self.infer_expr(value, None),
+        }
+    }
+
+    /// Whether `expr` is an object literal with a spread of its own, or a
+    /// conditional with one as a branch. Such a literal takes its expected type
+    /// as its own (see `own_object_literal_type`), so under a spread's
+    /// all-optional context it would claim every field may be absent.
+    fn holds_spread(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        let id = peel_parens(self.ast, expr)?;
+        Ok(match &self.ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::ObjectLiteral { members } => members
+                .iter()
+                .any(|member| matches!(member, crate::ObjectLiteralMember::Spread { .. })),
+            ExprKind::Ternary { then_, else_, .. } => {
+                self.holds_spread(*then_)? || self.holds_spread(*else_)?
+            }
+            _ => false,
+        })
+    }
+
     /// `a ?? b`. Result type is `union(strip_nullish(lhs), rhs)`.
     /// Emits a `Severity::Warning` when `lhs` is statically
     /// non-nullable (the `??` clause is unreachable). The right side takes
@@ -12550,6 +12583,29 @@ pub(super) fn cannot_be_typed_alone(ast: &crate::Ast, id: ExprId) -> Result<bool
             _ => false,
         },
     )
+}
+
+/// The context a spread's source takes from its literal's expected type `ty`:
+/// that type with every object field optional, since the fields written after
+/// the spread may supply the rest.
+fn spread_source_context(ty: &Type) -> Type {
+    match ty.peel() {
+        Type::Object { index, fields } => Type::Object {
+            index: index.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, field)| {
+                    let optional = crate::ObjectField {
+                        optional: true,
+                        ..field.clone()
+                    };
+                    (name.clone(), optional)
+                })
+                .collect(),
+        },
+        Type::Union(members) => Type::union(members.iter().map(spread_source_context).collect()),
+        other => other.clone(),
+    }
 }
 
 /// Whether `id` is a literal form that takes its type from context when it
