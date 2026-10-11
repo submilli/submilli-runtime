@@ -146,6 +146,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         spread_context_for_next_literal: None,
+        soft_context_function_spans: None,
         invoked_return_hint: None,
         cast_operand: None,
         invoked_body_exit: None,

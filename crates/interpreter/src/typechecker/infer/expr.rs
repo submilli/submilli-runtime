@@ -8868,6 +8868,9 @@ impl Inferer<'_> {
         keeps_returned_literals: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type, bool), CompilerFailure> {
+        if let Some(spans) = self.soft_context_function_spans.as_mut() {
+            spans.push(span);
+        }
         let errors_before = self.error_count();
         let ArrowContext {
             immediately_invoked,
@@ -10240,7 +10243,10 @@ impl Inferer<'_> {
     /// Infers `expr`, keeping its literal types, under a `context` that guides
     /// it without being a requirement: an expression that doesn't fit it is
     /// inferred again alone, so a mismatch is reported once, where the value
-    /// is used.
+    /// is used. The context stays, errors and all, when every error is inside
+    /// a function literal, whose body tsc checks under the context too (and
+    /// re-inferring nested bodies would cost twice per level), or when `expr`
+    /// writes: the writes have already narrowed what a second pass would read.
     fn infer_with_soft_context(
         &mut self,
         expr: ExprId,
@@ -10251,8 +10257,29 @@ impl Inferer<'_> {
         };
         let diagnostics_before = self.diagnostics.len();
         let errors_before = self.error_count();
-        let hinted = self.infer_expr_keeping_literals(expr, Some(&context), true)?;
+        let outermost = self.soft_context_function_spans.is_none();
+        let spans_before = self
+            .soft_context_function_spans
+            .get_or_insert_with(Vec::new)
+            .len();
+        let hinted = self.infer_expr_keeping_literals(expr, Some(&context), true);
+        let function_spans = if outermost {
+            self.soft_context_function_spans.take().unwrap_or_default()
+        } else {
+            self.soft_context_function_spans
+                .as_ref()
+                .map(|spans| spans[spans_before..].to_vec())
+                .unwrap_or_default()
+        };
+        let hinted = hinted?;
         if self.error_count() == errors_before {
+            return Ok(hinted);
+        }
+        let only_inside_functions = self.diagnostics[diagnostics_before..]
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == crate::Severity::Error)
+            .all(|error| function_spans.iter().any(|span| span.encloses(error.span)));
+        if only_inside_functions || !self.writes_nothing(expr)? {
             return Ok(hinted);
         }
         self.diagnostics.truncate(diagnostics_before);

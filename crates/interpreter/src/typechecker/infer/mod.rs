@@ -139,6 +139,7 @@ pub fn infer_with_transitive_checked<'a>(
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         spread_context_for_next_literal: None,
+        soft_context_function_spans: None,
         invoked_return_hint: None,
         cast_operand: None,
         invoked_body_exit: None,
@@ -425,6 +426,7 @@ pub fn infer_package_checked<'a>(
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         spread_context_for_next_literal: None,
+        soft_context_function_spans: None,
         invoked_return_hint: None,
         cast_operand: None,
         invoked_body_exit: None,
@@ -779,6 +781,10 @@ pub(super) struct Inferer<'a> {
     /// `Inferer::infer_spread_source`). That object literal passes it on to
     /// its own spreads instead of taking it as its expected type.
     spread_context_for_next_literal: Option<Type>,
+    /// The spans of the function literals inferred while a soft context is
+    /// being tried (see `Inferer::infer_with_soft_context`); `None` outside
+    /// one.
+    soft_context_function_spans: Option<Vec<Span>>,
     /// The type the immediately-invoked call's result is expected to have,
     /// which the arrow it runs takes as its return type's context, as in tsc.
     invoked_return_hint: Option<Type>,

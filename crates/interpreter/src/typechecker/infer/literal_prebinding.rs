@@ -673,7 +673,7 @@ impl Inferer<'_> {
     /// code before it see a narrowing that only holds after it. A call may
     /// still drop narrowings of what its callee writes; seen early, that only
     /// makes the code before it narrow less.
-    fn writes_nothing(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+    pub(super) fn writes_nothing(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         let all = |this: &Self, exprs: &[ExprId]| -> Result<bool, CompilerFailure> {
             for &expr in exprs {
                 if !this.writes_nothing(expr)? {
