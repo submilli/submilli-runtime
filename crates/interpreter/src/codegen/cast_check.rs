@@ -698,6 +698,15 @@ fn emit_function_structural_test(
             crate::codegen::internal_failure("closure signature registered during analysis")
         })?;
     let target = super::closure_coercions::DefaultsFitTarget::exact(signature, has_rest);
+    // A `void` function fits a function type returning `unknown`, as in
+    // TypeScript; the cast adapts its convention.
+    let returns_unknown =
+        matches!(ty.peel(), Type::Function { ret, .. } if matches!(ret.peel(), Type::Unknown));
+    let target = if returns_unknown {
+        target.either_convention()
+    } else {
+        target
+    };
     let fit = |emitter: &mut FunctionEmitter| {
         super::closure_coercions::emit_defaults_fit(emitter, ctx, value_local, target)
     };
@@ -805,6 +814,12 @@ pub(crate) fn emit_checked_cast_on_stack(
         }
         Some(crate::FieldNarrowingTest::Shape(shape)) => {
             emit_structural_test(emitter, ctx, scratch, shape, target_ty)?;
+        }
+        // A function that declares fewer parameters than the target, or
+        // trailing defaults, still fits when its adapter can stand for the
+        // target, which the cast then builds.
+        _ if matches!(target_ty.peel(), Type::Function { .. }) => {
+            emit_structural_test(emitter, ctx, scratch, target_ty, target_ty)?;
         }
         _ => emit_target_test(emitter, ctx, scratch, target_ty)?,
     }

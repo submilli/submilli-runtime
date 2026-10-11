@@ -1145,31 +1145,83 @@ impl Inferer<'_> {
 
     /// The fields of `param_ty` an object literal argument with `members` is
     /// inferred against one at a time, when one of them is a function literal
-    /// with an unannotated parameter.
+    /// with an unannotated parameter, or a `new` that takes its type
+    /// arguments from its field's type: tsc types each against what the
+    /// fields before it bound, so `{ k: "a", m: new Map() }` for `{ k: K; m:
+    /// Map<K, number> }` creates a `Map<string, number>`.
     fn object_argument_fields(
         &self,
         members: &[crate::ObjectLiteralMember],
         param_ty: &Type,
     ) -> Result<Option<BTreeMap<String, crate::ObjectField>>, CompilerFailure> {
-        let mut has_context_sensitive_field = false;
-        for member in members {
-            if let crate::ObjectLiteralMember::Field(field) = member {
-                has_context_sensitive_field |= self.is_context_sensitive_function(field.value)?;
-            }
-        }
-        if !has_context_sensitive_field {
-            return Ok(None);
-        }
-        Ok(match param_ty.peel() {
-            Type::Object { fields, .. } => Some(fields.clone()),
+        let fields = match param_ty.peel() {
+            Type::Object { fields, .. } => fields.clone(),
             interface @ Type::InterfaceRef { .. } => {
                 match super::assignable::expand_interface_data_shape(interface, self.resolver()) {
-                    Some(Type::Object { fields, .. }) => Some(fields),
-                    _ => None,
+                    Some(Type::Object { fields, .. }) => fields,
+                    _ => return Ok(None),
                 }
             }
-            _ => None,
-        })
+            _ => return Ok(None),
+        };
+        for member in members {
+            let crate::ObjectLiteralMember::Field(field) = member else {
+                continue;
+            };
+            if self.is_context_sensitive_function(field.value)? {
+                return Ok(Some(fields));
+            }
+            let field_builds_from_type_parameters = fields
+                .get(&field.name.name)
+                .is_some_and(|declared| builds_from_type_parameters(&declared.ty));
+            if field_builds_from_type_parameters
+                && self.may_infer_type_arguments_from_context(field.value)?
+            {
+                return Ok(Some(fields));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Whether `expr` is a `new` of a generic class with neither type
+    /// arguments nor arguments, which takes its type arguments from the type
+    /// it is expected to have. tsc gives a bare `new Map()` `any` type
+    /// arguments, which fit whatever the fields before it bound. Not such an
+    /// expression:
+    /// - a `new` with arguments, which infer the type arguments;
+    /// - a class with no type parameters, which has none to take;
+    /// - a generic call, whose type arguments are inferred, an unbound
+    ///   context leaving them `unknown`.
+    fn may_infer_type_arguments_from_context(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        let expr = super::expr::peel_parens(self.ast, expr)?;
+        let ExprKind::New {
+            callee,
+            type_args: None,
+            args,
+        } = &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind
+        else {
+            return Ok(false);
+        };
+        if !args.is_empty() {
+            return Ok(false);
+        }
+        let ExprKind::Identifier(ident) = &self
+            .ast
+            .try_expr(*callee)
+            .map_err(super::arena_failure)?
+            .kind
+        else {
+            return Ok(false);
+        };
+        match self
+            .lookup_named_type(&ident.name)
+            .map(|symbol| &symbol.kind)
+        {
+            Some(crate::TypeKind::Class { generics, .. }) => Ok(!generics.is_empty()),
+            // The built-in collections, such as `Map`, are declared as
+            // generic interfaces with a constructor.
+            _ => Ok(true),
+        }
     }
 
     /// The type parameters in `inferred` that keep the literals a function
@@ -1180,7 +1232,7 @@ impl Inferer<'_> {
     /// widens what they return to `() => number`. An empty list when `arg`
     /// spreads another object; every one of `inferred` when `arg` is not an
     /// object literal or `param_ty` has no object shape.
-    fn type_params_of_one_field(
+    pub(super) fn type_params_of_one_field(
         &self,
         arg: ExprId,
         param_ty: &Type,
@@ -1277,7 +1329,7 @@ impl Inferer<'_> {
 
     /// The object shapes of `ty`: an object type, an interface with the
     /// members it extends, or those among a union's members.
-    fn object_shapes(&self, ty: &Type) -> Vec<BTreeMap<String, crate::ObjectField>> {
+    pub(super) fn object_shapes(&self, ty: &Type) -> Vec<BTreeMap<String, crate::ObjectField>> {
         match ty.peel() {
             Type::Object { fields, .. } => vec![fields.clone()],
             interface @ Type::InterfaceRef { .. } => {
@@ -1552,7 +1604,7 @@ impl Inferer<'_> {
         Ok(ahead)
     }
 
-    fn function_literal_params(
+    pub(super) fn function_literal_params(
         &self,
         expr: ExprId,
     ) -> Result<Option<Vec<crate::ParamDecl>>, CompilerFailure> {
@@ -1659,6 +1711,8 @@ impl Inferer<'_> {
                 }
                 if deferred {
                     fix_callback_parameters(sub, &param_ty, inferred_generics);
+                } else {
+                    self.prebind_from_literal_argument(i, &args_with_param_types, &arguments, sub)?;
                 }
                 let errors_before = self.error_count();
                 let diagnostics_before = self.diagnostics.len();
@@ -1752,7 +1806,7 @@ impl Inferer<'_> {
     /// Infer one argument of a generic call against `param_ty`, with what
     /// `sub` has bound so far as its hint, and return the type to unify with
     /// `param_ty`: a fresh literal widened where tsc would widen it.
-    fn infer_generic_argument(
+    pub(super) fn infer_generic_argument(
         &mut self,
         arg_id: ExprId,
         param_ty: &Type,
@@ -1805,6 +1859,12 @@ impl Inferer<'_> {
         sub: &mut TypeParamSubstitution,
     ) -> Result<(ExprId, Type), CompilerFailure> {
         let hint = self.method_interface_literal_hint(arg_id, hint, param_ty, sub)?;
+        if let Type::InterfaceRef { name, .. } = hint.peel()
+            && self.builds_literal(arg_id)?
+        {
+            let literal = super::expr::peel_parens(self.ast, arg_id)?;
+            self.literal_hint_interfaces.insert(literal, name.clone());
+        }
         let hint = self.literal_argument_hint(arg_id, hint, arguments.inferred_generics)?;
         let hinted_by_replaceable_binding = sub.mentions_replaceable_binding(param_ty);
         if hinted_by_replaceable_binding {
@@ -1972,7 +2032,7 @@ impl Inferer<'_> {
 
     /// Whether `expr` is an object or array literal, in parentheses or as both
     /// of a conditional's branches.
-    fn builds_literal(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+    pub(super) fn builds_literal(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         Ok(
             match &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
                 ExprKind::ObjectLiteral { .. } | ExprKind::ArrayLiteral { .. } => true,
@@ -2532,9 +2592,9 @@ struct ArgumentCheck {
 }
 
 /// What every argument of one generic call is inferred with.
-struct GenericArguments<'a> {
+pub(super) struct GenericArguments<'a> {
     /// The type parameters the call infers rather than takes as written.
-    inferred_generics: &'a [String],
+    pub(super) inferred_generics: &'a [String],
     /// Those that only object and array literals are candidates for
     /// ([`super::inference_sources`]).
     sourced_by_literals: Vec<String>,
@@ -2980,6 +3040,14 @@ fn is_or_has_type_var(ty: &Type, name: &str) -> bool {
         Type::Union(members) => members.iter().any(is_var),
         _ => is_var(ty),
     }
+}
+
+/// Whether a `new` in a field declared `ty` takes type arguments from the
+/// type parameters `ty` mentions: `Map<K, number>` does; a bare `T` gives it
+/// nothing to take, and a type with no type parameter is the same whatever
+/// the fields before it bound.
+fn builds_from_type_parameters(ty: &Type) -> bool {
+    !matches!(ty.peel(), Type::TypeVar(_)) && super::expr::type_contains_type_var(ty)
 }
 
 /// Whether a property name is a canonical array index, such as `"0"` or `"12"`.

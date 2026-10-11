@@ -358,6 +358,14 @@ impl Inferer<'_> {
             Some(v) => {
                 let hint = self.current_return.clone();
                 let (id, value_ty) = self.infer_returned_value(v, hint.as_ref())?;
+                // A closure in a `void` context may return `unknown` (see
+                // `infer_arrow`), so a `void` value it returns is run and
+                // `undefined` returned in its place.
+                let id = if self.returns_into_void_context && value_ty.is_void() {
+                    self.push_void_value_as_undefined(id, span)?
+                } else {
+                    id
+                };
                 if let Some(collected) = self.inferred_returns.as_mut() {
                     collected.push((value_ty, span));
                 }
@@ -399,6 +407,29 @@ impl Inferer<'_> {
             collected.push((Type::Undefined, span));
         }
         Ok(undefined)
+    }
+
+    /// The `void` expression `effect` run, then the `undefined` it yields.
+    fn push_void_value_as_undefined(
+        &mut self,
+        effect: ExprId,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        let result = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Undefined,
+                span,
+                ty: Type::Undefined,
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::EffectThen { effect, result },
+                span,
+                ty: Type::Undefined,
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// The type a variable declared `declared` holds. Arithmetic written back

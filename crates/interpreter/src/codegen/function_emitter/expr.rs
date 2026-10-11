@@ -3055,7 +3055,11 @@ fn emit_chain_access(
             }
             emitter.instruction(Instruction::Call(func_idx));
         }
-        crate::TypedChainPart::Call { args, .. } => {
+        crate::TypedChainPart::Call {
+            args,
+            union_signature,
+            ..
+        } => {
             // receiver on stack is the closure value
             // (`(ref $closure_N)` after `emit_chain_parts`'s
             // strip-null cast). Helper extracts env + funcref and
@@ -3065,7 +3069,7 @@ fn emit_chain_access(
             emit_indirect_closure_call_with_receiver_on_stack(
                 emitter,
                 ctx,
-                receiver_ty,
+                union_signature.as_ref().unwrap_or(receiver_ty),
                 args,
                 part.result_ty(),
             )?;

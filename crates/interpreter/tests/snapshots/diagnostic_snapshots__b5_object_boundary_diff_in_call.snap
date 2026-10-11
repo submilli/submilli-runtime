@@ -23,14 +23,3 @@ error: object literal is missing required field `y`
   |         ^^^^^^^^^^^^^^
 4 | }
 ---
-error: expected `{ x: number; y: number }`, got `{ x: number; z: number }`
- --> test.subm:3:9
-  |
-2 | function main(): void {
-3 |   takes({ x: 1, z: 3 });
-  |         ^^^^^^^^^^^^^^
-4 | }
-  |
-help: missing field(s): `y`
-extra field(s): `z`
----

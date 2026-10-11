@@ -1,17 +1,1 @@
-types: 38 of 75 tsc entries compared, 4 differ
-
-line 14: fs
-  tsc:  (((a: { x: number; y?: number; }) => number) | ((b: { x: number; z?: number; }) => number))[]
-  ours: ((arg0: { x: number; y?: number }) => number)[]
-
-line 14: [(a: { x: number; y?: number }) => 1, (b: { x: number; z?: number }) => 2]
-  tsc:  (((a: { x: number; y?: number; }) => number) | ((b: { x: number; z?: number; }) => number))[]
-  ours: ((arg0: { x: number; y?: number }) => number)[]
-
-line 15: gs
-  tsc:  (((b: { x: number; z?: number; }) => number) | ((a: { x: number; y?: number; }) => number))[]
-  ours: ((arg0: { x: number; z?: number }) => number)[]
-
-line 15: [(b: { x: number; z?: number }) => 2, (a: { x: number; y?: number }) => 1]
-  tsc:  (((b: { x: number; z?: number; }) => number) | ((a: { x: number; y?: number; }) => number))[]
-  ours: ((arg0: { x: number; z?: number }) => number)[]
+types: 38 of 75 tsc entries compared, 0 differ

@@ -1383,7 +1383,11 @@ impl<'a> Inferer<'a> {
             );
             return Ok(());
         }
-        if !super::assignable(&child_fn, &parent_fn, self.resolver()) {
+        // The slot's return convention is fixed as well: callers of the
+        // inherited method read a value a `void` override doesn't leave.
+        let drops_inherited_value =
+            child_sig.ret.is_void() && !matches!(parent_sig.ret.peel(), Type::Void | Type::Error);
+        if drops_inherited_value || !super::assignable(&child_fn, &parent_fn, self.resolver()) {
             self.error_with_help(
                 member.span,
                 format!(
@@ -2009,6 +2013,13 @@ impl<'a> Inferer<'a> {
     }
 
     pub(super) fn record_runtime_type_test(&mut self, ty: &Type) -> Result<(), CompilerFailure> {
+        // A type holding an error type belongs to an expression whose error
+        // stops compilation, or to one inferred only to bind type
+        // parameters early (see `literal_prebinding`), which codegen never
+        // reaches; neither needs a runtime test.
+        if super::literal_prebinding::holds_error_type(ty) {
+            return Ok(());
+        }
         self.record_runtime_type_test_inner(ty, RuntimeTestMode::General, &mut BTreeSet::new())?;
         Ok(())
     }

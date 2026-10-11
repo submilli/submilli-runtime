@@ -1,9 +1,6 @@
-types: 24 of 78 tsc entries compared, 0 differ
+types: 27 of 78 tsc entries compared, 0 differ
 
 errors:
-line 9: ours: cannot call value of type `F1 | F2` (tsc accepts)
-line 10: ours: cannot call value of type `F1 | F2` (tsc accepts)
-line 11: ours: cannot call value of type `F1 | F2` (tsc accepts)
 line 14: ours: cannot call value of type `F3 | F4` (tsc accepts)
 line 15: ours: cannot call value of type `F3 | F4` (tsc accepts)
 line 16: ours: cannot call value of type `F3 | F4` (tsc accepts)

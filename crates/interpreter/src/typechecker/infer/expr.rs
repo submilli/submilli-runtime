@@ -597,9 +597,9 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .clone();
         let span = expr.span;
-        // An arrow whose own errors explain its mismatch with `expected` isn't
-        // reported again as a whole.
-        let mut arrow_reported = false;
+        // An arrow or object literal whose own errors explain its mismatch
+        // with `expected` isn't reported again as a whole.
+        let mut reported_in_parts = false;
         // Propagate once after dispatch: per-arm `?` creates large temporary
         // results that inflate every recursive frame in debug builds.
         let (kind, ty) = (match expr.kind {
@@ -668,7 +668,10 @@ impl Inferer<'_> {
                 return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
             }
             ExprKind::ObjectLiteral { members } => {
-                self.infer_object_literal_expr(expr_id, members, expected, span)
+                let errors_before = self.error_count();
+                let inferred = self.infer_object_literal_expr(expr_id, members, expected, span);
+                reported_in_parts = expected.is_some() && self.error_count() > errors_before;
+                inferred
             }
             ExprKind::ArrayLiteral { elements }
                 if expected.is_none() && self.ast.tuple_pattern_sources.contains(&expr_id) =>
@@ -705,7 +708,7 @@ impl Inferer<'_> {
                     keeps_returned_literals,
                     span,
                 )?;
-                arrow_reported = reported;
+                reported_in_parts = reported;
                 Ok((kind, ty))
             }
             ExprKind::Delete { operand } => self.reject_delete(operand, span),
@@ -799,7 +802,7 @@ impl Inferer<'_> {
         // is strict, so `let n: number = x` (where x is GP) does
         // reject as expected.
         if let Some(want) = expected
-            && !arrow_reported
+            && !reported_in_parts
             && !self.arguments_with_replaceable_hints.contains(&expr_id)
             && !assignable(&ty, want, self.resolver())
             && !self.widens_candidate(expr_id, want, &ty)
@@ -850,9 +853,13 @@ impl Inferer<'_> {
 
     /// Whether `expr_id`, a literal argument slot's value, widens the earlier
     /// candidate `want` it was hinted with rather than mismatching it: the
-    /// candidate fits the value's type `ty`.
+    /// candidate fits the value's type `ty`, or one of them is `null`, which
+    /// only makes the binding nullable, as tsc sets a `null` candidate aside.
     fn widens_candidate(&self, expr_id: ExprId, want: &Type, ty: &Type) -> bool {
-        self.values_widening_candidates.contains(&expr_id) && assignable(want, ty, self.resolver())
+        self.values_widening_candidates.contains(&expr_id)
+            && (matches!(want.peel(), Type::Null)
+                || matches!(ty.peel(), Type::Null)
+                || assignable(want, ty, self.resolver()))
     }
 
     /// A primitive literal's type: the literal itself where it is kept or the
@@ -1217,7 +1224,7 @@ impl Inferer<'_> {
         // its own typed-AST node so codegen and the type-result rule
         // (`union(strip_nullish(lhs), rhs)`) can be specialised cleanly.
         if matches!(op, BinOp::NullishCoalesce) {
-            return self.infer_nullish_coalesce(lhs, rhs, span);
+            return self.infer_nullish_coalesce(lhs, rhs, expected, span);
         }
         match op {
             BinOp::Add => {
@@ -2465,6 +2472,7 @@ impl Inferer<'_> {
         }
 
         let (typed_callee, callee_ty) = self.infer_expr(callee, None)?;
+        let (typed_callee, callee_ty) = self.cast_up_to_union_signature(typed_callee, callee_ty)?;
         // call-signature dispatch — when the callee types
         // as an `InterfaceRef` declaring `@call`, route through the
         // same method-call pipeline as `find_method(_, "new")` for
@@ -5847,26 +5855,30 @@ impl Inferer<'_> {
                 } else {
                     "fields"
                 };
-                match &interface_target {
-                    Some((package, name, mangled, args)) => {
-                        let ty = Type::interface_ref(
-                            package.clone(),
-                            name.clone(),
-                            mangled.clone(),
-                            args.clone(),
-                        );
-                        self.error_with_help(
-                            span,
-                            format!(
-                                "object literal is missing required {noun} {list} of type `{name}`"
-                            ),
-                            vec![self.format_definition(&ty)],
-                        );
-                    }
-                    None => self.error(
+                if let Some((package, name, mangled, args)) = &interface_target {
+                    let ty = Type::interface_ref(
+                        package.clone(),
+                        name.clone(),
+                        mangled.clone(),
+                        args.clone(),
+                    );
+                    self.error_with_help(
                         span,
-                        format!("object literal is missing required {noun} {list}"),
-                    ),
+                        format!(
+                            "object literal is missing required {noun} {list} of type `{name}`"
+                        ),
+                        vec![self.format_definition(&ty)],
+                    );
+                } else {
+                    let of_type = self
+                        .literal_hint_interfaces
+                        .get(&literal)
+                        .map(|name| format!(" of type `{name}`"))
+                        .unwrap_or_default();
+                    self.error(
+                        span,
+                        format!("object literal is missing required {noun} {list}{of_type}"),
+                    );
                 }
             }
         }
@@ -8832,6 +8844,13 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type, bool), CompilerFailure> {
         let errors_before = self.error_count();
+        let ArrowContext {
+            immediately_invoked,
+            is_cast_operand,
+            returns_into_call,
+            own_expected,
+        } = self.arrow_context(span, expected);
+        let expected = expected.or(own_expected.as_ref());
         self.check_parameter_arity(&params)?;
         // Arrow parameters never reach `resolve_params`, so the duplicate check
         // has to be repeated here rather than inherited.
@@ -8923,6 +8942,7 @@ impl Inferer<'_> {
                         (hp.get(i), &own_ty)
                     };
                     if let Some(h) = hint_param
+                        && !is_cast_operand
                         && !assignable(h, own_param, self.resolver())
                     {
                         self.error(
@@ -9024,6 +9044,7 @@ impl Inferer<'_> {
                 // check above. The closure's annotation is the truth;
                 // the call site's unify binds the var.
                 if !params_reported
+                    && !is_cast_operand
                     && !hr.is_void()
                     && !type_contains_type_var(hr)
                     && !assignable(&t, hr, self.resolver())
@@ -9039,13 +9060,21 @@ impl Inferer<'_> {
                 Some(t)
             }
             (None, Some((_, hr)))
-                if params_reported || matches!(hr.peel(), Type::TypeVar(_) | Type::Void) =>
+                if params_reported
+                    || matches!(hr.peel(), Type::TypeVar(_) | Type::Void)
+                    || (is_cast_operand && !matches!(hr.peel(), Type::Unknown)) =>
             {
                 None
             }
             (None, Some((_, hr))) => Some(hr.clone()),
             (None, None) => None,
         };
+
+        // Read off `hint_owned` because `ret_hint` holds the annotation
+        // whenever there is one. A call's context is not a function's: what
+        // a function called on the spot returns is the call's value.
+        let contextual_ret_is_void =
+            !returns_into_call && hint_owned.as_ref().is_some_and(|(_, hr)| hr.is_void());
 
         // Push scope, bind params.
         self.scopes.push();
@@ -9059,7 +9088,6 @@ impl Inferer<'_> {
         // scope so a shadowed root is rejected. `pending_joins` is deliberately
         // left alone: a `break` inside the body snapshots an empty range over
         // the fresh, shorter stack.
-        let immediately_invoked = self.immediately_invoked.take() == Some(span);
         let returns_before_end =
             immediately_invoked && super::iife::returns_before_end(self.ast, &body)?;
         let narrow_seed = self.enter_closure_narrow_boundary(span, immediately_invoked)?;
@@ -9091,6 +9119,8 @@ impl Inferer<'_> {
         // Save / set return-type frames. Stack-based so nested arrows
         // restore correctly.
         let prev_return = std::mem::replace(&mut self.current_return, ret_hint.clone());
+        let prev_returns_into_void_context =
+            std::mem::replace(&mut self.returns_into_void_context, contextual_ret_is_void);
         let prev_keeps_returned_literals = std::mem::replace(
             &mut self.returns_keep_literals,
             keeps_returned_literals && annotated_ret.is_none(),
@@ -9119,37 +9149,14 @@ impl Inferer<'_> {
                     super::inference_failure("arrow block body is a Block, never a type-only decl")
                 })?;
                 let id = self.wrap_narrow_regions(id, &narrow_seed, span)?;
-                let mut collected = self.inferred_returns.take().unwrap_or_default();
-                // Falling off the end returns `undefined`, as a bare `return;` does.
-                if self.reachable && !collected.is_empty() {
-                    collected.push((Type::Undefined, span));
-                }
-                let context_takes_undefined = ret_hint.as_ref().is_some_and(|hint| {
-                    !hint.is_void()
-                        && assignable(&Type::Undefined, hint, self.resolver())
-                        && !matches!(hint.peel(), Type::Unknown)
-                });
-                let returns_into_unknown = ret_hint
-                    .as_ref()
-                    .is_some_and(|hint| matches!(hint.peel(), Type::Unknown));
-                let t = if let Some(t) = &annotated_ret {
-                    t.clone()
-                } else if returns_into_unknown && !collected.is_empty() {
-                    // Any return fits an `unknown` context, so the returns need
-                    // not agree and the body may fall off the end, as an
-                    // annotated `unknown` body may. A body with no `return`
-                    // stays `void`.
-                    Type::Unknown
-                } else if collected.is_empty() && !self.reachable {
-                    // No `return`, and the end of the body can't be reached: the
-                    // closure only throws, so it never returns, as tsc infers.
-                    Type::Never
-                } else if collected.is_empty() && context_takes_undefined {
-                    // `const done: () => undefined = () => {}`, as in TypeScript 5.1.
-                    Type::Undefined
-                } else {
-                    self.unify_returns(&self.returned_types(collected))
-                };
+                let collected = self.inferred_returns.take().unwrap_or_default();
+                let t = self.block_body_return_type(
+                    annotated_ret.as_ref(),
+                    collected,
+                    ret_hint.as_ref(),
+                    contextual_ret_is_void,
+                    span,
+                );
                 (ClosureBody::Block(id), t)
             }
         };
@@ -9181,6 +9188,7 @@ impl Inferer<'_> {
         self.current_type_predicate = prev_predicate;
         self.inferred_returns = prev_collect;
         self.current_return = prev_return;
+        self.returns_into_void_context = prev_returns_into_void_context;
         self.returns_keep_literals = prev_keeps_returned_literals;
         self.scopes.pop();
 
@@ -9201,9 +9209,7 @@ impl Inferer<'_> {
         // at all. `never` is assignable to everything, so adopting the hint is
         // unobservable to the typechecker — and only a `void` hint is safe to
         // adopt, since a hint still holding a `TypeVar` has to bind against the
-        // body's own type. `contextual_ret` is read off `hint_owned` because
-        // `ret_hint` holds the annotation whenever there is one.
-        let contextual_ret_is_void = hint_owned.as_ref().is_some_and(|(_, hr)| hr.is_void());
+        // body's own type.
         let declared_ret = annotated_ret.unwrap_or_else(|| body_ret.clone());
         let effective_ret = if contextual_ret_is_void && matches!(declared_ret.peel(), Type::Never)
         {
@@ -9211,9 +9217,16 @@ impl Inferer<'_> {
         } else {
             declared_ret
         };
+        // A return the call's context rejected is reported in the body, so the
+        // call's result must not be reported against that context again.
+        let call_result_reported = returns_into_call && self.error_count() > errors_before;
         let arrow_ty = Type::Function {
             params: typed_params.iter().map(|p| p.ty.clone()).collect(),
-            ret: Box::new(effective_ret.clone()),
+            ret: Box::new(if call_result_reported {
+                Type::Error
+            } else {
+                effective_ret.clone()
+            }),
             predicate: predicate.map(Box::new),
             // arrows can declare rest params via
             // `(...xs: T[]) => …`; the parser lowers that into a
@@ -9247,6 +9260,118 @@ impl Inferer<'_> {
             arrow_ty,
             hint_owned.is_some() && self.error_count() > errors_before,
         ))
+    }
+
+    /// The return type of a block-bodied function literal whose body has
+    /// just been inferred, from its `annotated_ret`, the returns `collected`
+    /// from it and the context's return type `ret_hint`. The rules apply in
+    /// order: the annotation; an `unknown` context; a body that only throws;
+    /// a context taking `undefined` for a body with no `return`; diverging
+    /// returns beside a reachable end; a `void` context the returns don't
+    /// agree under; the context joining the returns; and last the returns
+    /// unified, with falling off the end at `span` returning `undefined`.
+    fn block_body_return_type(
+        &mut self,
+        annotated_ret: Option<&Type>,
+        mut collected: Vec<(Type, Span)>,
+        ret_hint: Option<&Type>,
+        contextual_ret_is_void: bool,
+        span: Span,
+    ) -> Type {
+        let returns_into_unknown =
+            ret_hint.is_some_and(|hint| matches!(hint.peel(), Type::Unknown));
+        let context_takes_undefined = ret_hint.is_some_and(|hint| {
+            !hint.is_void()
+                && assignable(&Type::Undefined, hint, self.resolver())
+                && !matches!(hint.peel(), Type::Unknown)
+        });
+        if let Some(t) = annotated_ret {
+            t.clone()
+        } else if returns_into_unknown && !collected.is_empty() {
+            // Any return fits an `unknown` context, so the returns need
+            // not agree and the body may fall off the end, as an
+            // annotated `unknown` body may. A body with no `return`
+            // stays `void`.
+            Type::Unknown
+        } else if collected.is_empty() && !self.reachable {
+            // No `return`, and the end of the body can't be reached: the
+            // closure only throws, so it never returns, as tsc infers.
+            Type::Never
+        } else if collected.is_empty() && context_takes_undefined {
+            // `const done: () => undefined = () => {}`, as in TypeScript 5.1.
+            Type::Undefined
+        } else if self.reachable
+            && collected
+                .iter()
+                .all(|(ty, _)| matches!(ty.peel(), Type::Never))
+        {
+            // Every `return` diverges, but the body can also end, which
+            // returns nothing: tsc infers `void`, not `never`.
+            Type::Void
+        } else if contextual_ret_is_void && !self.returned_values_agree(&collected) {
+            // A `void` context discards whatever the closure returns, so
+            // returns that share no type are fine, as in tsc. The closure
+            // returns `unknown`, so its values still reach a caller that
+            // holds it as returning `unknown`.
+            Type::Unknown
+        } else {
+            // Falling off the end returns `undefined`, as a bare `return;` does.
+            if self.reachable && !collected.is_empty() {
+                collected.push((Type::Undefined, span));
+            }
+            let collected = self.returned_types(collected);
+            match self.returns_joined_by_context(&collected, ret_hint) {
+                Some(joined) => joined,
+                None => self.unify_returns(&collected),
+            }
+        }
+    }
+
+    /// Whether the returns other than `undefined`, `void` and `null` share
+    /// one type the rest are assignable to, so they unify (see
+    /// `join_nullish_returns`).
+    fn returned_values_agree(&self, collected: &[(Type, Span)]) -> bool {
+        let values: Vec<(Type, Span)> = collected
+            .iter()
+            .filter(|(ty, _)| !matches!(ty.peel(), Type::Undefined | Type::Void | Type::Null))
+            .cloned()
+            .collect();
+        values.is_empty() || self.widest_return(&values).is_some()
+    }
+
+    /// The context a function literal at `span` takes besides `expected`:
+    /// called on the spot, it returns into its call's context; the operand
+    /// of a cast, it is checked as the cast's target.
+    fn arrow_context(&mut self, span: Span, expected: Option<&Type>) -> ArrowContext {
+        let immediately_invoked = self.immediately_invoked.take() == Some(span);
+        let cast_target = self
+            .cast_operand
+            .take()
+            .and_then(|(operand, target)| (operand == span).then_some(target));
+        // A context that still holds a type parameter is the inference of
+        // the call it is an argument of, which binds from the value itself.
+        let invoked_ret = if immediately_invoked {
+            self.invoked_return_hint
+                .take()
+                .filter(|ret| expected.is_none() && !type_contains_type_var(ret))
+        } else {
+            None
+        };
+        // tsc gives such a function no contextual signature, so the literals
+        // it returns widen.
+        let invoked_context = invoked_ret.map(|ret| Type::Function {
+            params: Vec::new(),
+            optional: 0,
+            ret: Box::new(ret.peel().widen_literal()),
+            predicate: None,
+            has_rest: false,
+        });
+        ArrowContext {
+            immediately_invoked,
+            is_cast_operand: cast_target.is_some(),
+            returns_into_call: invoked_context.is_some(),
+            own_expected: invoked_context.or(cast_target),
+        }
     }
 
     /// The types of a block body's returns to unify. Literal types kept for a
@@ -9291,16 +9416,44 @@ impl Inferer<'_> {
         if let Some(joined) = self.join_nullish_returns(collected) {
             return joined;
         }
-        let widest = collected.iter().find(|(candidate, _)| {
-            collected
-                .iter()
-                .all(|(other, _)| assignable(other, candidate, self.resolver()))
-        });
-        if let Some((widest, _)) = widest {
-            return widest.clone();
+        if let Some(widest) = self.widest_return(collected) {
+            return widest;
         }
         self.report_conflicting_return(collected);
         Type::Error
+    }
+
+    /// The union of returns that share no one type but each fit the closure's
+    /// contextual return type, as tsc infers a closure returning `null` on one
+    /// path and a number on another where a `number | null` is expected.
+    fn returns_joined_by_context(
+        &self,
+        collected: &[(Type, Span)],
+        context: Option<&Type>,
+    ) -> Option<Type> {
+        let context = context?;
+        if collected.is_empty()
+            || type_contains_type_var(context)
+            || self.widest_return(collected).is_some()
+        {
+            return None;
+        }
+        collected
+            .iter()
+            .all(|(ty, _)| !ty.carries_void() && assignable(ty, context, self.resolver()))
+            .then(|| Type::union(collected.iter().map(|(ty, _)| ty.clone()).collect()))
+    }
+
+    /// The return every other one is assignable to, if any.
+    fn widest_return(&self, collected: &[(Type, Span)]) -> Option<Type> {
+        collected
+            .iter()
+            .find(|(candidate, _)| {
+                collected
+                    .iter()
+                    .all(|(other, _)| assignable(other, candidate, self.resolver()))
+            })
+            .map(|(widest, _)| widest.clone())
     }
 
     /// `return 1; … return;` infers `number | undefined`, as in TypeScript: the
@@ -10008,26 +10161,36 @@ impl Inferer<'_> {
 
     /// `a ?? b`. Result type is `union(strip_nullish(lhs), rhs)`.
     /// Emits a `Severity::Warning` when `lhs` is statically
-    /// non-nullable (the `??` clause is unreachable).
+    /// non-nullable (the `??` clause is unreachable). The right side takes
+    /// the context, as a ternary's branches do.
     fn infer_nullish_coalesce(
         &mut self,
         lhs: ExprId,
         rhs: ExprId,
+        expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
         // The right side runs only where the left is `null` or `undefined`.
         let rhs_env = self.nullish_operand_env(typed_lhs)?;
-        // `tags ?? []` and `onDone ?? (() => {})` take their type from the
-        // left operand, as in TypeScript; other operands keep their own.
+        // An unreachable right side is never the result, so it is not held
+        // to the context. Without one, `tags ?? []` and `onDone ?? (() => {})`
+        // take their type from the left operand, as in TypeScript; other
+        // operands keep their own.
+        let rhs_expected = expected
+            .filter(|_| type_admits_nullish(&lhs_ty, self.resolver()))
+            .cloned();
         let fallback_hint = (cannot_be_typed_alone(self.ast, rhs)?
             && !matches!(
                 lhs_ty.peel(),
                 Type::Error | Type::Null | Type::Undefined | Type::Void
             ))
         .then(|| super::narrowing::strip_nullish(&lhs_ty));
-        let (typed_rhs, rhs_ty) =
-            self.infer_conditional_operand(rhs, &rhs_env, fallback_hint.as_ref())?;
+        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(
+            rhs,
+            &rhs_env,
+            rhs_expected.as_ref().or(fallback_hint.as_ref()),
+        )?;
         let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
         let typed_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
 
@@ -10560,6 +10723,7 @@ impl Inferer<'_> {
                                 args: typed_args,
                                 optional: true,
                                 result_ty: ret_ty.clone(),
+                                union_signature: None,
                                 span,
                             },
                             ret_ty,
@@ -10579,7 +10743,9 @@ impl Inferer<'_> {
                 }
 
                 // Closure-typed receiver: ordinary `Call` part.
-                let (ret_ty, typed_args) = match receiver_ty.peel() {
+                let union_signature = self.union_signature_of(receiver_ty);
+                let callee_ty = union_signature.as_ref().unwrap_or(receiver_ty);
+                let (ret_ty, typed_args) = match callee_ty.peel() {
                     Type::Function {
                         params,
                         ret,
@@ -10592,7 +10758,7 @@ impl Inferer<'_> {
                             &param_tys,
                             &ret_ty,
                             has_rest,
-                            CallLift::Anon { ty: receiver_ty },
+                            CallLift::Anon { ty: callee_ty },
                             &args,
                             span,
                         )?;
@@ -10622,6 +10788,7 @@ impl Inferer<'_> {
                         args: typed_args,
                         optional,
                         result_ty: ret_ty.clone(),
+                        union_signature,
                         span,
                     },
                     ret_ty,
@@ -11180,6 +11347,16 @@ impl Inferer<'_> {
         let operand_hint = if holds_empty_array_literal(self.ast, inner)? {
             empty_array_cast_hint(&target_ty)
         } else {
+            if let Some(function) = function_literal(self.ast, inner)? {
+                // A function literal's unannotated parameters have no type until
+                // a context gives one, and tsc takes the target as that context.
+                let function_span = self
+                    .ast
+                    .try_expr(function)
+                    .map_err(super::arena_failure)?
+                    .span;
+                self.cast_operand = Some((function_span, target_ty.clone()));
+            }
             None
         };
         let (inner_id, inner_ty) = self.infer_expr(inner, operand_hint)?;
@@ -12171,6 +12348,19 @@ fn matched_elements(running_is_first: bool) -> &'static str {
     }
 }
 
+/// Where a function literal's context comes from (see
+/// [`Inferer::arrow_context`]).
+struct ArrowContext {
+    immediately_invoked: bool,
+    is_cast_operand: bool,
+    /// It is called on the spot, and its returns are checked against the
+    /// call's context.
+    returns_into_call: bool,
+    /// The function type standing for that context when `expected` gives
+    /// none.
+    own_expected: Option<Type>,
+}
+
 #[derive(Clone, Copy)]
 struct ElementJoin {
     /// Whether a later element may widen the element type to its own, or by
@@ -12224,6 +12414,22 @@ pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, 
             _ => return Ok(expr),
         }
     }
+}
+
+/// The function literal `expr` is through parentheses: the arrow itself, or
+/// the function of an anonymous function expression.
+pub(super) fn function_literal(
+    ast: &crate::Ast,
+    expr: ExprId,
+) -> Result<Option<ExprId>, CompilerFailure> {
+    let id = peel_parens(ast, expr)?;
+    Ok(
+        match &ast.try_expr(id).map_err(super::arena_failure)?.kind {
+            ExprKind::Arrow { .. } => Some(id),
+            ExprKind::FunctionExpression { function, .. } => Some(*function),
+            _ => None,
+        },
+    )
 }
 
 /// Whether `expr` is an empty `[]`, or holds one as a ternary branch or an

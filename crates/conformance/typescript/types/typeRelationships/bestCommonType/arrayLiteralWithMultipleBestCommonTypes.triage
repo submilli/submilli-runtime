@@ -1,1 +1,0 @@
-line 14, 15 type: bug SUB-1454 an array literal of functions keeps the one function type they all fit, where tsc makes their union, because a union of function types can't be called
