@@ -1,0 +1,1 @@
+line 51, 52 type: bug SUB-1543 a conditional of two functions reduces to the wider function type, where tsc keeps the union (a method read from a union of two interfaces)
