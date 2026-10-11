@@ -35,7 +35,7 @@ function main(): void {
   assert(i.m() === 2, "single-line interface body");
   const t: T = { m: (): number => 3, x: 4, opt: (): number => 5 };
   assert(t.m() === 3 && t.x === 4, "a type literal accepts method members");
-  assert(t.opt !== null && t.opt() === 5, "an optional type-literal method member");
+  assert(t.opt !== undefined && t.opt() === 5, "an optional type-literal method member");
 
   // A block sitting inside a call's parentheses is statement context again.
   const doubled = [1, 2, 3].map((v: number): number => {

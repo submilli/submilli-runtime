@@ -1,5 +1,5 @@
 function tick(i: number, n: number): IteratorResult<number> {
-  if (i >= n) { const ret: IteratorResult<number> = { done: true }; return ret; }
+  if (i >= n) { const ret: IteratorResult<number> = { done: true, value: undefined }; return ret; }
   const r: IteratorResult<number> = { done: false, value: i }; return r;
 }
 

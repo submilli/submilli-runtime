@@ -14,7 +14,7 @@ function main(): void {
 
   let built = "";
   try {
-    built = build("https", "example.com", 70000, "/", new Map<string, string>(), null);
+    built = build("https", "example.com", 70000, "/", new Map<string, string>(), undefined);
     assert(false, "out-of-range port should have thrown");
   } catch (e: TypeError) {
     built = e.name + ":" + e.message;

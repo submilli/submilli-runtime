@@ -794,9 +794,11 @@ impl<'a> Unifier<'a> {
             // its positions — the same element type that routing gives it. Without this,
             // `Array.from(pair)` and `xs.concat(pair)` reject a value `const a: number[] =
             // pair` accepts.
-            (Type::Array(a), Type::Tuple(elems)) => self.unify(a, &Type::union(elems.clone())),
+            (Type::Array(a), Type::Tuple(elems)) => {
+                self.unify(a, &Type::union(elems.elements.clone()))
+            }
             (Type::Tuple(aa), Type::Tuple(ab)) => {
-                if aa.len() != ab.len() {
+                if ab.required_len() < aa.required_len() || ab.len() > aa.len() {
                     return Err(UnifyError::Mismatch {
                         expected: param_ty.clone(),
                         got: arg_ty.clone(),
@@ -818,20 +820,25 @@ impl<'a> Unifier<'a> {
                     params: pb,
                     ret: rb,
                     has_rest: rest_b,
+                    optional: optional_b,
                     ..
                 },
             ) => {
                 if *rest_b && !rest_a {
                     return self.unify_rest_function(param_ty, arg_ty, pa, pb, ra, rb);
                 }
-                if !Type::function_arity_fits(pb.len(), pa.len(), *rest_a || *rest_b) {
+                // A callback may also declare more parameters than the slot
+                // passes, when the extra ones are optional.
+                let fits = Type::function_arity_fits(pb.len(), pa.len(), *rest_a || *rest_b)
+                    || (!*rest_a && !*rest_b && pb.len().saturating_sub(*optional_b) <= pa.len());
+                if !fits {
                     return Err(UnifyError::Mismatch {
                         expected: param_ty.clone(),
                         got: arg_ty.clone(),
                     });
                 }
                 for (p, a) in pa.iter().zip(pb.iter()) {
-                    self.in_function_parameter(|u| u.unify(p, a))?;
+                    self.unify_callback_parameter(p, a)?;
                 }
                 self.in_function_result(|u| u.unify(ra, rb))
             }
@@ -1094,6 +1101,7 @@ impl<'a> Unifier<'a> {
             }
         }
     }
+
     fn new(
         sub: &'a mut TypeParamSubstitution,
         types: Option<TypeResolver<'a>>,
@@ -1136,6 +1144,37 @@ impl<'a> Unifier<'a> {
         }
     }
 
+    #[allow(clippy::result_large_err)]
+    fn unify_callback_parameter(
+        &mut self,
+        expected: &Type,
+        actual: &Type,
+    ) -> Result<(), UnifyError> {
+        // The expected result's binding is only a hint (see `replaceable`):
+        // the callback's own parameter type is the first candidate.
+        let bound_by_hint =
+            matches!(expected.peel(), Type::TypeVar(name) if self.sub.replaceable.contains(name));
+        if self.subtype_widening
+            && !bound_by_hint
+            && let Some(types) = self.types
+        {
+            let resolved = self.sub.apply_or_record(expected, self.limits);
+            if !super::infer::expr::type_contains_type_var(&resolved) {
+                // The caller supplies the expected input; the callback must accept it.
+                // Its return type can still contain variables that need inference.
+                return if assignable(&resolved, actual, types) {
+                    Ok(())
+                } else {
+                    Err(UnifyError::Mismatch {
+                        expected: resolved,
+                        got: actual.clone(),
+                    })
+                };
+            }
+        }
+        self.in_function_parameter(|u| u.unify(expected, actual))
+    }
+
     /// Whether an argument that failed to unify with an already-bound type
     /// parameter is still acceptable, because it is assignable to the binding.
     fn accepts_as_subtype(&self, arg: &Type, bound: &Type) -> bool {
@@ -1148,8 +1187,8 @@ impl<'a> Unifier<'a> {
     /// What `name`'s binding widens to for a covariant argument it doesn't
     /// take, as tsc infers the common supertype of an argument's candidates:
     /// the argument's own type when it is a supertype of the binding, and
-    /// with `null` set aside and added back otherwise (`pick(1, null)` is a
-    /// `number | null`). `None` when the binding is not a candidate an
+    /// with `null` and `undefined` set aside and added back otherwise
+    /// (`pick(1, null)` is a `number | null`). `None` when the binding is not a candidate an
     /// argument may widen, or the two have no common supertype.
     fn widened_binding(
         &self,
@@ -1173,18 +1212,20 @@ impl<'a> Unifier<'a> {
         if bound.literal_base().is_some() && bound.literal_base() == arg.literal_base() {
             return Some(Type::union(vec![bound.clone(), arg.clone()]));
         }
-        // tsc sets a `null` candidate aside and adds it back to the common
-        // supertype of the rest; `None` stands for a candidate that is just
-        // `null`.
-        let non_null = |ty: &Type| {
-            (!matches!(ty.peel(), Type::Null)).then(|| super::infer::narrowing::strip_null(ty))
+        // tsc sets `null` and `undefined` candidates aside and adds them back
+        // to the common supertype of the rest; `None` stands for a candidate
+        // that is only nullish.
+        let nullish = |member: &Type| matches!(member, Type::Null | Type::Undefined);
+        let non_nullish = |ty: &Type| {
+            (!ty.all_members(&nullish)).then(|| super::infer::narrowing::strip_nullish(ty))
         };
-        let involves_null = |ty: &Type| non_null(ty).as_ref() != Some(ty);
-        if !involves_null(bound) && !involves_null(arg) {
+        let involves_nullish = |ty: &Type| non_nullish(ty).as_ref() != Some(ty);
+        if !involves_nullish(bound) && !involves_nullish(arg) {
             return None;
         }
-        let supertype = match (non_null(bound), non_null(arg)) {
-            (None, None) => return None,
+        let supertype = match (non_nullish(bound), non_nullish(arg)) {
+            // Only nullish candidates: tsc infers their union.
+            (None, None) => return Some(Type::union(vec![bound.clone(), arg.clone()])),
             (Some(only), None) | (None, Some(only)) => only,
             (Some(bound), Some(arg)) if assignable(&arg, &bound, types) => bound,
             (Some(bound), Some(arg)) if assignable(&bound, &arg, types) => arg,
@@ -1195,7 +1236,18 @@ impl<'a> Unifier<'a> {
             }
             _ => return None,
         };
-        Some(Type::union(vec![supertype, Type::Null]))
+        let spelled = |absent: &Type| {
+            [bound, arg]
+                .iter()
+                .any(|ty| ty.any_member(&|m| m == absent))
+        };
+        let mut members = vec![supertype];
+        members.extend(
+            [Type::Null, Type::Undefined]
+                .into_iter()
+                .filter(|absent| spelled(absent)),
+        );
+        Some(Type::union(members))
     }
 
     /// An argument against the type parameter `name` once it is bound to
@@ -1995,7 +2047,8 @@ fn holds_class_instance(ty: &Type) -> bool {
     match ty {
         Type::ClassRef { .. } => true,
         Type::Array(elem) | Type::Readonly(elem) => holds_class_instance(elem),
-        Type::Tuple(elems) | Type::Union(elems) => elems.iter().any(holds_class_instance),
+        Type::Tuple(tuple) => tuple.elements.iter().any(holds_class_instance),
+        Type::Union(elems) => elems.iter().any(holds_class_instance),
         Type::Function { ret, .. } => holds_class_instance(ret),
         Type::Object { fields, index } => {
             index
@@ -2050,6 +2103,35 @@ mod tests {
             index: None,
             fields,
         }
+    }
+
+    #[test]
+    fn union_inference_removes_fixed_nullish_arms() {
+        let mut substitution = TypeParamSubstitution::new();
+        let parameter = Type::union(vec![t("T"), Type::Null, Type::Undefined]);
+        let argument = Type::union(vec![Type::String, Type::Undefined]);
+        unify_bare(&mut substitution, &parameter, &argument).expect("infer remainder");
+        assert_eq!(substitution.get("T"), Some(&Type::String));
+    }
+
+    #[test]
+    fn union_inference_collects_multiple_remaining_members() {
+        let mut substitution = TypeParamSubstitution::new();
+        let parameter = Type::union(vec![t("T"), Type::Undefined]);
+        let remainder = Type::union(vec![Type::Number, Type::String]);
+        let argument = Type::union(vec![Type::Number, Type::String, Type::Undefined]);
+        unify_bare(&mut substitution, &parameter, &argument).expect("infer union remainder");
+        assert_eq!(substitution.get("T"), Some(&remainder));
+    }
+
+    #[test]
+    fn union_inference_preserves_an_existing_binding() {
+        let mut substitution = TypeParamSubstitution::new();
+        unify_bare(&mut substitution, &t("T"), &Type::Number).expect("initial binding");
+        let parameter = Type::union(vec![t("T"), Type::Null, Type::Undefined]);
+        let argument = Type::union(vec![Type::String, Type::Undefined]);
+        assert!(unify_bare(&mut substitution, &parameter, &argument).is_err());
+        assert_eq!(substitution.get("T"), Some(&Type::Number));
     }
 
     #[test]
@@ -2154,6 +2236,7 @@ mod tests {
             ret: Box::new(t("U")),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         assert_eq!(
             s.apply(&f, &crate::type_size::TypeLimits::default())
@@ -2163,6 +2246,7 @@ mod tests {
                 ret: Box::new(Type::String),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             }
         );
     }
@@ -2273,12 +2357,14 @@ mod tests {
             ret: Box::new(t("U")),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let arg = Type::Function {
             params: vec![Type::Number],
             ret: Box::new(Type::String),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         unify_bare(&mut s, &param, &arg).unwrap();
         assert_eq!(s.get("T"), Some(&Type::Number));
@@ -2293,12 +2379,14 @@ mod tests {
             ret: Box::new(t("U")),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let arg = Type::Function {
             params: vec![Type::Number, Type::String],
             ret: Box::new(Type::String),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let err = unify_bare(&mut s, &param, &arg).expect_err("arity mismatch");
         assert!(matches!(err, UnifyError::Mismatch { .. }));
@@ -2312,12 +2400,14 @@ mod tests {
             ret: Box::new(t("U")),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let arg = Type::Function {
             params: vec![Type::String],
             ret: Box::new(Type::Boolean),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         unify_bare(&mut s, &param, &arg).unwrap();
         assert_eq!(s.get("T"), Some(&Type::String));

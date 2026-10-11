@@ -1,0 +1,56 @@
+=== undefinedExactOptionalProperties.ts ===
+// Written: exact optional property writes deliberately differ from Submilli's
+// ordinary TypeScript optional-property policy; preserve that comparison.
+function acceptsOptional(value: { a?: number }): void {}
+>acceptsOptional : (value: { a?: number; }) => void
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : { a?: number; }
+>      : ^^^^^^^^^^^^^^^
+>a : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+function acceptsExplicit(value: { a?: number | undefined }): void {}
+>acceptsExplicit : (value: { a?: number | undefined; }) => void
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>value : { a?: number | undefined; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+acceptsOptional({});
+>acceptsOptional({}) : void
+>                    : ^^^^
+>acceptsOptional : (value: { a?: number; }) => void
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+acceptsOptional({ a: undefined });
+>acceptsOptional({ a: undefined }) : void
+>                                  : ^^^^
+>acceptsOptional : (value: { a?: number; }) => void
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: undefined } : { a: undefined; }
+>                 : ^^^^^^^^^^^^^^^^^
+>a : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+acceptsExplicit({ a: undefined });
+>acceptsExplicit({ a: undefined }) : void
+>                                  : ^^^^
+>acceptsExplicit : (value: { a?: number | undefined; }) => void
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: undefined } : { a: undefined; }
+>                 : ^^^^^^^^^^^^^^^^^
+>a : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

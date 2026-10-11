@@ -229,7 +229,7 @@ fn documented_real_service_package_and_blueprint_agree() {
     fs::write(root.path().join("package/src/lib.ts"), source).unwrap();
     fs::write(
         root.path().join("package/tests/lib.test.ts"),
-        "import { buildPageQuery } from \"@acme/orders\";\nfunction main(): void { assert(buildPageQuery(null) === \"?limit=50\"); }\n",
+        "import { buildPageQuery } from \"@acme/orders\";\nfunction main(): void { assert(buildPageQuery() === \"?limit=50\"); }\n",
     )
     .unwrap();
     let check = cli(&["build", "check"]);

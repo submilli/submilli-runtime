@@ -1,4 +1,4 @@
-// expect-error: expected `Headers | null`, got `Map<string, number>`
+// expect-error: expected `Headers | undefined`, got `Map<string, number>`
 
 import { get } from "submilli:http";
 

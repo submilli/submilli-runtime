@@ -34,8 +34,15 @@ let c: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                             
-/*pruned*/;                       
+let d: void = null as unknown as (void);
+>d : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
 let f: { a: string } = null as unknown as ({ a: string });
 >f : { a: string; }
 >  : ^^^^^^^^^^^^^^
@@ -48,7 +55,7 @@ let f: { a: string } = null as unknown as ({ a: string });
 >a : string
 >  : ^^^^^^
 
-/*pruned*/;                               
+/*pruned*/;
 
 function foo<T, U>(t: T, u: U): void {
 >foo : <T, U>(t: T, u: U) => void
@@ -174,8 +181,17 @@ function foo<T, U>(t: T, u: U): void {
 >c : string
 >  : ^^^^^^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    let r1a4 = t < d;
+>r1a4 : boolean
+>     : ^^^^^^^
+>t < d : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>d : void
+>  : ^^^^
+
+    /*pruned*/;
     let r1a6 = t < f;
 >r1a6 : boolean
 >     : ^^^^^^^
@@ -186,7 +202,7 @@ function foo<T, U>(t: T, u: U): void {
 >f : { a: string; }
 >  : ^^^^^^^^^^^^^^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     let r1b1 = a < t;
 >r1b1 : boolean
@@ -218,8 +234,8 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    /*pruned*/;
+    /*pruned*/;
     let r1b6 = f < t;
 >r1b6 : boolean
 >     : ^^^^^^^
@@ -230,7 +246,7 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     // operator >
     let r2a1 = t < a;
@@ -263,8 +279,17 @@ function foo<T, U>(t: T, u: U): void {
 >c : string
 >  : ^^^^^^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    let r2a4 = t < d;
+>r2a4 : boolean
+>     : ^^^^^^^
+>t < d : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>d : void
+>  : ^^^^
+
+    /*pruned*/;
     let r2a6 = t < f;
 >r2a6 : boolean
 >     : ^^^^^^^
@@ -275,7 +300,7 @@ function foo<T, U>(t: T, u: U): void {
 >f : { a: string; }
 >  : ^^^^^^^^^^^^^^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     let r2b1 = a < t;
 >r2b1 : boolean
@@ -307,8 +332,8 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    /*pruned*/;
+    /*pruned*/;
     let r2b6 = f < t;
 >r2b6 : boolean
 >     : ^^^^^^^
@@ -319,7 +344,7 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     // operator <=
     let r3a1 = t < a;
@@ -352,8 +377,17 @@ function foo<T, U>(t: T, u: U): void {
 >c : string
 >  : ^^^^^^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    let r3a4 = t < d;
+>r3a4 : boolean
+>     : ^^^^^^^
+>t < d : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>d : void
+>  : ^^^^
+
+    /*pruned*/;
     let r3a6 = t < f;
 >r3a6 : boolean
 >     : ^^^^^^^
@@ -364,7 +398,7 @@ function foo<T, U>(t: T, u: U): void {
 >f : { a: string; }
 >  : ^^^^^^^^^^^^^^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     let r3b1 = a < t;
 >r3b1 : boolean
@@ -396,8 +430,8 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    /*pruned*/;
+    /*pruned*/;
     let r3b6 = f < t;
 >r3b6 : boolean
 >     : ^^^^^^^
@@ -408,7 +442,7 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     // operator >=
     let r4a1 = t < a;
@@ -441,8 +475,17 @@ function foo<T, U>(t: T, u: U): void {
 >c : string
 >  : ^^^^^^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    let r4a4 = t < d;
+>r4a4 : boolean
+>     : ^^^^^^^
+>t < d : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>d : void
+>  : ^^^^
+
+    /*pruned*/;
     let r4a6 = t < f;
 >r4a6 : boolean
 >     : ^^^^^^^
@@ -453,7 +496,7 @@ function foo<T, U>(t: T, u: U): void {
 >f : { a: string; }
 >  : ^^^^^^^^^^^^^^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     let r4b1 = a < t;
 >r4b1 : boolean
@@ -485,8 +528,8 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    /*pruned*/;
+    /*pruned*/;
     let r4b6 = f < t;
 >r4b6 : boolean
 >     : ^^^^^^^
@@ -497,7 +540,7 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     // operator ==
     let r5a1 = t < a;
@@ -530,8 +573,17 @@ function foo<T, U>(t: T, u: U): void {
 >c : string
 >  : ^^^^^^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    let r5a4 = t < d;
+>r5a4 : boolean
+>     : ^^^^^^^
+>t < d : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>d : void
+>  : ^^^^
+
+    /*pruned*/;
     let r5a6 = t < f;
 >r5a6 : boolean
 >     : ^^^^^^^
@@ -542,7 +594,7 @@ function foo<T, U>(t: T, u: U): void {
 >f : { a: string; }
 >  : ^^^^^^^^^^^^^^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     let r5b1 = a < t;
 >r5b1 : boolean
@@ -574,8 +626,8 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    /*pruned*/;
+    /*pruned*/;
     let r5b6 = f < t;
 >r5b6 : boolean
 >     : ^^^^^^^
@@ -586,7 +638,7 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     // operator !=
     let r6a1 = t < a;
@@ -619,8 +671,17 @@ function foo<T, U>(t: T, u: U): void {
 >c : string
 >  : ^^^^^^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    let r6a4 = t < d;
+>r6a4 : boolean
+>     : ^^^^^^^
+>t < d : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>d : void
+>  : ^^^^
+
+    /*pruned*/;
     let r6a6 = t < f;
 >r6a6 : boolean
 >     : ^^^^^^^
@@ -631,7 +692,7 @@ function foo<T, U>(t: T, u: U): void {
 >f : { a: string; }
 >  : ^^^^^^^^^^^^^^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     let r6b1 = a < t;
 >r6b1 : boolean
@@ -663,8 +724,8 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    /*pruned*/;
+    /*pruned*/;
     let r6b6 = f < t;
 >r6b6 : boolean
 >     : ^^^^^^^
@@ -675,7 +736,7 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     // operator ===
     let r7a1 = t < a;
@@ -708,8 +769,17 @@ function foo<T, U>(t: T, u: U): void {
 >c : string
 >  : ^^^^^^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    let r7a4 = t < d;
+>r7a4 : boolean
+>     : ^^^^^^^
+>t < d : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>d : void
+>  : ^^^^
+
+    /*pruned*/;
     let r7a6 = t < f;
 >r7a6 : boolean
 >     : ^^^^^^^
@@ -720,7 +790,7 @@ function foo<T, U>(t: T, u: U): void {
 >f : { a: string; }
 >  : ^^^^^^^^^^^^^^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     let r7b1 = a < t;
 >r7b1 : boolean
@@ -752,8 +822,8 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    /*pruned*/;
+    /*pruned*/;
     let r7b6 = f < t;
 >r7b6 : boolean
 >     : ^^^^^^^
@@ -764,7 +834,7 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     // operator !==
     let r8a1 = t < a;
@@ -797,8 +867,17 @@ function foo<T, U>(t: T, u: U): void {
 >c : string
 >  : ^^^^^^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    let r8a4 = t < d;
+>r8a4 : boolean
+>     : ^^^^^^^
+>t < d : boolean
+>      : ^^^^^^^
+>t : T
+>  : ^
+>d : void
+>  : ^^^^
+
+    /*pruned*/;
     let r8a6 = t < f;
 >r8a6 : boolean
 >     : ^^^^^^^
@@ -809,7 +888,7 @@ function foo<T, U>(t: T, u: U): void {
 >f : { a: string; }
 >  : ^^^^^^^^^^^^^^
 
-    /*pruned*/;      
+    /*pruned*/;
 
     let r8b1 = a < t;
 >r8b1 : boolean
@@ -841,8 +920,8 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
-    /*pruned*/;      
+    /*pruned*/;
+    /*pruned*/;
     let r8b6 = f < t;
 >r8b6 : boolean
 >     : ^^^^^^^
@@ -853,7 +932,7 @@ function foo<T, U>(t: T, u: U): void {
 >t : T
 >  : ^
 
-    /*pruned*/;      
+    /*pruned*/;
 }
 
 function main(): void {}

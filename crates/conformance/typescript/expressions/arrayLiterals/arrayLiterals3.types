@@ -91,12 +91,12 @@ let temp2: [number[], string[]] = [[1, 2, 3], ["hello", "string"]];
 >         : ^^^^^^^^
 
 
-/*pruned*/;    
-                         
-                         
- 
-/*pruned*/;                                
-/*pruned*/;                                        
+/*pruned*/;
+
+
+
+/*pruned*/;
+/*pruned*/;
 /*pruned*/;                                       // Error
 let c1: [number, number, number] = [...temp1];    // Error cannot assign number[] to [number, number, number]
 >c1 : [number, number, number]

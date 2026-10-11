@@ -148,12 +148,13 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
         },
         Type::Array(elem) => Type::Array(Box::new(erase_generic_params(elem))),
         Type::Readonly(inner) => Type::Readonly(Box::new(erase_generic_params(inner))),
-        Type::Tuple(elements) => Type::Tuple(elements.iter().map(erase_generic_params).collect()),
+        Type::Tuple(elements) => Type::Tuple(elements.map(erase_generic_params)),
         Type::Function {
             params,
             ret,
             predicate,
             has_rest,
+            optional,
         } => Type::Function {
             params: params.iter().map(erase_generic_params).collect(),
             ret: Box::new(erase_generic_params(ret)),
@@ -164,6 +165,7 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
                 })
             }),
             has_rest: *has_rest,
+            optional: *optional,
         },
         Type::InterfaceRef {
             mangled,
@@ -223,6 +225,7 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::Null
+        | Type::Undefined
         | Type::Void
         | Type::Never
         | Type::Unknown
@@ -323,12 +326,9 @@ impl Inferer<'_> {
         &mut self,
         annot: &TypeAnnotation,
         subject: &str,
-        allow_void: bool,
     ) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type(annot)?;
-        if let Some(offender) =
-            super::void_type_arguments::invalid_argument(&resolved, allow_void, self.resolver())
-        {
+        if let Some(offender) = super::value_operand::valueless_within_type_argument(&resolved) {
             let offender = offender.clone();
             self.error(
                 annot.span,
@@ -339,50 +339,6 @@ impl Inferer<'_> {
             return Ok(Type::Error);
         }
         Ok(resolved)
-    }
-
-    fn type_parameter_allows_void(&self, name: &str, params: &[crate::Param], ret: &Type) -> bool {
-        let sub = crate::typechecker::type_param_substitution::TypeParamSubstitution::from_pairs(
-            &[name.to_string()],
-            &[Type::Void],
-        );
-        let admits_void = |ty: &Type, return_position: bool| {
-            let substituted = sub.apply_or_record(ty, &self.type_limits);
-            super::void_type_arguments::invalid_position(
-                &substituted,
-                return_position,
-                self.resolver(),
-            )
-            .is_none()
-        };
-        params.iter().all(|p| admits_void(&p.ty, false)) && admits_void(ret, true)
-    }
-
-    fn check_inferred_void_arguments(
-        &mut self,
-        params: &[crate::Param],
-        ret: &Type,
-        sub: &crate::typechecker::type_param_substitution::TypeParamSubstitution,
-        span: Span,
-    ) {
-        let void_position = |ty: &Type, return_position: bool| {
-            let substituted = sub.apply_or_record(ty, &self.type_limits);
-            super::void_type_arguments::invalid_position(
-                &substituted,
-                return_position,
-                self.resolver(),
-            )
-        };
-        let invalid = params
-            .iter()
-            .find_map(|p| void_position(&p.ty, false))
-            .or_else(|| void_position(ret, true));
-        if let Some(position) = invalid {
-            self.error(
-                span,
-                format!("type argument containing `void` requires {position} — use a value type"),
-            );
-        }
     }
 
     /// Structural retry for unification: when a direct param/arg unify fails
@@ -517,16 +473,12 @@ impl Inferer<'_> {
                     ty: ty.clone(),
                     boxed: false,
                     rest: p.rest,
+                    optional: p.is_omittable(),
                     default: default.clone(),
                 })
                 .collect();
             let stored_return = sig_ret_type.clone();
             self.scopes.push();
-            for (p, body_ty) in params.iter().zip(body_param_types.iter()) {
-                let body_ty = self.local_storage_ty(&p.name, body_ty.clone());
-                self.scopes
-                    .insert_annotated_param(p.name.name.clone(), body_ty, p.name.span);
-            }
             let prev_return = self.current_return.replace(body_ret_type.clone());
             // Reset to `true`: a previous function that ended unreachable would
             // otherwise taint this body's reachability joins, dropping post-if
@@ -543,11 +495,13 @@ impl Inferer<'_> {
             // only those need GP erasure.
             let exprs_before = self.typed_ast.exprs_len();
             let stmts_before = self.typed_ast.stmts_len();
+            let prologue = self.infer_parameter_defaults(&params, &body_param_types)?;
             let body_id = self
                 .infer_body_with_narrowing_boundary(body)?
                 .ok_or_else(|| {
                     super::inference_failure("function body is a Block, never a type-only decl")
                 })?;
+            let body_id = self.prepend_parameter_defaults(prologue, body_id)?;
             self.current_return = prev_return;
             self.current_type_predicate = prev_predicate;
             self.restore_reachability(prev_reachable);
@@ -616,21 +570,14 @@ impl Inferer<'_> {
         let mut sig = sig;
         if iface_mangled == crate::mangle::prelude("ArrayConstructor")
             && name.name == "from"
-            && (args.len() == 1
-                || match args.get(1) {
-                    Some(id) => matches!(
-                        self.ast.try_expr(*id).map_err(super::arena_failure)?.kind,
-                        crate::ExprKind::Null
-                    ),
-                    None => false,
-                })
+            && args.len() == 1
         {
             sig.generics = vec!["T".into()];
             sig.ret = Type::Array(Box::new(Type::TypeVar("T".into())));
             sig.params
                 .get_mut(1)
                 .ok_or_else(|| super::inference_failure("missing Array.from map parameter"))?
-                .ty = Type::Null;
+                .ty = Type::Undefined;
         }
 
         let receiver_ty = self
@@ -665,11 +612,7 @@ impl Inferer<'_> {
             }
             let subject = format!("method `{}`", name.name);
             for (gname, annot) in sig.generics.iter().zip(targs.iter()) {
-                let resolved = self.resolve_call_type_argument(
-                    annot,
-                    &subject,
-                    self.type_parameter_allows_void(gname, &sig.params, &sig.ret),
-                )?;
+                let resolved = self.resolve_call_type_argument(annot, &subject)?;
                 sub.insert(gname.clone(), resolved);
             }
         }
@@ -685,11 +628,7 @@ impl Inferer<'_> {
         } else {
             sig.params.len()
         };
-        let min_args = sig
-            .params
-            .iter()
-            .take_while(|p| !p.rest && p.default.is_none())
-            .count();
+        let min_args = super::expr::required_parameter_count(&sig.params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
         if !arity_ok {
             let help = self.format_signature(SignatureKind::Method {
@@ -795,13 +734,18 @@ impl Inferer<'_> {
         {
             sub.insert(element.clone(), Type::Unknown);
         }
-        if array_from_mapper {
+        let array_like = if array_from {
+            self.array_like_source(&typed_args)?
+        } else {
+            None
+        };
+        if array_from_mapper && array_like.is_some() {
             self.reject_array_like_element_annotation(&typed_args, mapper_type.as_ref())?;
         }
         if array_from_mapper
             && mapper_type
                 .as_ref()
-                .is_some_and(|ty| ty.peel() == &Type::Null)
+                .is_some_and(|ty| ty.peel() == &Type::Undefined)
         {
             let element = sub
                 .apply(&Type::TypeVar("T".into()), &self.type_limits)
@@ -842,10 +786,13 @@ impl Inferer<'_> {
         }
 
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
-        self.check_inferred_void_arguments(&sig.params, &sig.ret, &sub, span);
+        if array_from && !array_from_mapper && array_like.is_some() {
+            let element = self.instantiate(&sub, &Type::TypeVar("T".into()), span)?;
+            self.reject_array_like_element_type(&element, span);
+        }
         let mut result_ty = self.instantiate(&sub, &sig.ret, span)?;
         if array_from_mapper && mapper_type.as_ref().is_some_and(|ty| {
-            matches!(ty.peel(), Type::Union(members) if members.iter().any(|member| member.peel() == &Type::Null))
+            matches!(ty.peel(), Type::Union(members) if members.iter().any(|member| member.peel() == &Type::Undefined))
         }) {
             result_ty = Type::Array(Box::new(Type::union(vec![
                 self.instantiate(&sub, &Type::TypeVar("T".into()), span)?,
@@ -1729,7 +1676,8 @@ impl Inferer<'_> {
             .enumerate()
             .map(|(i, &arg_id)| {
                 let param_ty = match params.get(i) {
-                    Some(param) if i < fixed_count => param.ty.clone(),
+                    // An omittable parameter takes an explicit `undefined` too.
+                    Some(param) if i < fixed_count => super::expr::callable_parameter_type(param),
                     _ if has_rest => rest_elem_ty.clone(),
                     _ => Type::Error,
                 };
@@ -2061,6 +2009,7 @@ impl Inferer<'_> {
         }
         let Type::Function {
             params,
+            optional,
             ret,
             predicate,
             has_rest,
@@ -2070,6 +2019,7 @@ impl Inferer<'_> {
         };
         Ok(Type::Function {
             params: params.clone(),
+            optional: *optional,
             ret: Box::new(expand_hint_interfaces(
                 ret,
                 inferred_generics,
@@ -2095,43 +2045,121 @@ impl Inferer<'_> {
         )
     }
 
+    /// The source of an `Array.from` call when it is an array-like `{ length }`
+    /// rather than an array, iterator or iterable. Only an object type is an
+    /// array-like: TypeScript's `ArrayLike` has a number index signature,
+    /// which an object type has implicitly and an interface or class doesn't.
+    /// A source with a string index signature or an index-named field is
+    /// rejected too, since those entries would be its elements.
+    fn array_like_source(
+        &mut self,
+        typed_args: &[ExprId],
+    ) -> Result<Option<Type>, crate::compiler_error::CompilerFailure> {
+        let Some(source) = typed_args.first() else {
+            return Ok(None);
+        };
+        let source = self
+            .typed_ast
+            .try_expr(*source)
+            .map_err(crate::typechecker::arena_failure)?;
+        let (source_ty, source_span) = (source.ty.clone(), source.span);
+        if matches!(source_ty.peel(), Type::Error | Type::Unknown) {
+            return Ok(None);
+        }
+        let iterable = Type::union(vec![
+            Type::Readonly(Box::new(Type::Array(Box::new(Type::Unknown)))),
+            Type::prelude_interface("Iterator".to_string(), vec![Type::Unknown]),
+            Type::prelude_interface("Iterable".to_string(), vec![Type::Unknown]),
+        ]);
+        let has_length = crate::runtime::prelude::array::array_like_type();
+        // A source that is neither was already reported against the parameter.
+        if super::assignable(&source_ty, &iterable, self.resolver())
+            || !super::assignable(&source_ty, &has_length, self.resolver())
+        {
+            return Ok(None);
+        }
+        if self.has_keyed_entries(&source_ty) {
+            self.error_with_help(
+                source_span,
+                format!(
+                    "`Array.from` doesn't read the keyed entries of `{source_ty}`: Submilli \
+                     treats an array-like `{{ length }}` as having no elements"
+                ),
+                vec!["convert the entries to an array first, or pass an array".to_string()],
+            );
+            return Ok(None);
+        }
+        if !matches!(source_ty.peel(), Type::Object { .. }) {
+            self.error_with_help(
+                source_span,
+                format!(
+                    "`Array.from` takes an array-like only as an object type: `{source_ty}` \
+                     has no number index signature, so it isn't an `ArrayLike`"
+                ),
+                vec![
+                    "annotate the value with an object type such as `{ length: number }`, or \
+                     pass an array"
+                        .to_string(),
+                ],
+            );
+            return Ok(None);
+        }
+        Ok(Some(source_ty))
+    }
+
+    /// Whether an array-like source may hold entries JavaScript reads as its
+    /// elements: a string index signature, or a field named by an array index.
+    fn has_keyed_entries(&self, source: &Type) -> bool {
+        if self.resolver().index_signature(source).is_some() {
+            return true;
+        }
+        match source.peel() {
+            Type::Object { fields, .. } => fields.keys().any(|name| is_array_index(name)),
+            Type::Union(members) => members.iter().any(|member| self.has_keyed_entries(member)),
+            _ => false,
+        }
+    }
+
+    /// `Array.from` of an array-like with no callback makes an array of
+    /// `undefined`, which only an element type admitting it can hold.
+    fn reject_array_like_element_type(&mut self, element: &Type, span: Span) {
+        if admits_undefined(element) {
+            return;
+        }
+        self.error_with_help(
+            span,
+            format!(
+                "`Array.from` of an array-like `{{ length }}` has no elements, so it makes an \
+                 array of `undefined`, not of `{element}`"
+            ),
+            vec![
+                "give the array an element type that admits `undefined`, such as \
+                 `(number | undefined)[]`, or pass a callback that builds each element from its \
+                 index"
+                    .to_string(),
+            ],
+        );
+    }
+
     /// `Array.from({ length }, mapFn)` calls `mapFn` with `undefined` for each
-    /// element, which has no type here: the element arrives as `null`. A
-    /// callback whose element type doesn't admit `null` would read that
-    /// `null` as its declared type (`v: number` gives `null + i`, not
-    /// JavaScript's `NaN`), so it is refused rather than run with a wrong value.
+    /// element. A callback whose element type doesn't admit `undefined` would
+    /// read it as its declared type (`v: number` gives `undefined + i`, not a
+    /// number), so it is refused rather than run with a wrong value.
     fn reject_array_like_element_annotation(
         &mut self,
         typed_args: &[ExprId],
         mapper_type: Option<&Type>,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let (Some(source), Some(mapper)) = (typed_args.first(), typed_args.get(1)) else {
+        let Some(mapper) = typed_args.get(1) else {
             return Ok(());
         };
-        let source_ty = self
-            .typed_ast
-            .try_expr(*source)
-            .map_err(crate::typechecker::arena_failure)?
-            .ty
-            .clone();
-        let Type::Object { fields, .. } = source_ty.peel() else {
-            return Ok(());
-        };
-        if !fields.contains_key("length") {
-            return Ok(());
-        }
         let Some(Type::Function { params, .. }) = mapper_type.map(Type::peel) else {
             return Ok(());
         };
         let Some(element) = params.first() else {
             return Ok(());
         };
-        let admits_null = match element.peel() {
-            Type::Unknown | Type::Error | Type::Null => true,
-            Type::Union(members) => members.iter().any(|m| m.peel() == &Type::Null),
-            _ => false,
-        };
-        if admits_null {
+        if admits_undefined(element) {
             return Ok(());
         }
         let span = self
@@ -2146,7 +2174,7 @@ impl Inferer<'_> {
                  element parameter receives `undefined`, not a `{element}`"
             ),
             vec![
-                "declare the element parameter as `unknown` or a type that admits `null`, or \
+                "declare the element parameter as `unknown` or a type that admits `undefined`, or \
                  leave it unannotated, and build the value from the index"
                     .to_string(),
             ],
@@ -2185,7 +2213,7 @@ impl Inferer<'_> {
                 );
                 self.error_with_help(
                     arg_span,
-                    format!("expected `{expected}`, got `{got}`"),
+                    super::diagnostics::mismatch_message(&expected, &got),
                     help,
                 );
             }
@@ -2284,11 +2312,12 @@ impl Inferer<'_> {
         // ordinary generic call; the two sites below are the two halves of that
         // one decision, so it is read once here.
         let checked_get = crate::stdlib::session::declaration::is_checked_get(&mangled);
-        // `llm.call<T>` / `llm.batch<T>` lower the same way and for the same
-        // reason. They differ from `session.get` only in what a bare call means
-        // — the `Completion` envelope rather than an unchecked `unknown` — and
-        // in carrying a compile-time schema into the trailing argument.
-        let checked_llm = crate::stdlib::llm::declaration::is_checked_call(&mangled);
+        // Schema-checked calls (`llm.call<T>`, `llm.batch<T>`, `agents.run<T>`)
+        // lower the same way and for the same reason. They differ from
+        // `session.get` only in what a bare call means — a typed default such as
+        // the `Completion` envelope rather than an unchecked `unknown` — and in
+        // carrying a compile-time schema into the trailing argument.
+        let schema_checked = crate::stdlib::schema_checked_call(&mangled);
 
         if let Some(targs) = &type_args {
             if targs.len() != generics.len() {
@@ -2307,12 +2336,7 @@ impl Inferer<'_> {
             }
             let subject = callee.subject(&callee_ident.name, &generics);
             for (name, annot) in generics.iter().zip(targs.iter()) {
-                let resolved = self.resolve_call_type_argument(
-                    annot,
-                    &subject,
-                    callee == GenericCallee::Function
-                        && self.type_parameter_allows_void(name, &params, &ret),
-                )?;
+                let resolved = self.resolve_call_type_argument(annot, &subject)?;
                 sub.insert(name.clone(), resolved);
             }
         }
@@ -2324,10 +2348,7 @@ impl Inferer<'_> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
         let max_args = if has_rest { usize::MAX } else { params.len() };
-        let min_args = params
-            .iter()
-            .take_while(|p| !p.rest && p.default.is_none())
-            .count();
+        let min_args = super::expr::required_parameter_count(&params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
         if !arity_ok {
             let help = self.generic_callee_lift(callee, &callee_ident, &generics, &params, &ret);
@@ -2411,11 +2432,13 @@ impl Inferer<'_> {
         // is not an unchecked read, it is a different fully-typed result. `T`
         // appears only in the return type, so it is never inferable from an
         // argument and would otherwise always trip the unbound-parameter error.
-        if checked_llm && !type_args_written {
+        if let Some(checked) = &schema_checked
+            && !type_args_written
+        {
             bind_remaining(
                 &mut sub,
                 &generics,
-                crate::stdlib::llm::declaration::untyped_result_type(&mangled),
+                checked.untyped_result.clone(),
                 &self.type_limits,
             )
             .map_err(type_limit_at(span))?;
@@ -2449,7 +2472,6 @@ impl Inferer<'_> {
         }
 
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
-        self.check_inferred_void_arguments(&params, &ret, &sub, span);
         let result_ty = self.instantiate(&sub, &ret, span)?;
 
         // A typed `llm.call<T>` is rewritten before the argument list is frozen,
@@ -2472,30 +2494,34 @@ impl Inferer<'_> {
         // unaffected in behavior — `substitute_schema_argument` overwrites the
         // slot — but a written argument there is equally meaningless, so both
         // forms are refused and no working program changes.
-        if checked_llm && args.len() > 2 {
+        if let Some(checked) = &schema_checked
+            && args.len() > checked.written_param_count
+        {
             let name = &callee_ident.name;
+            let written = checked.written_params;
+            let extra = checked.schema_argument_ordinal();
             self.error_with_help(
                 span,
                 format!(
-                    "`{name}` takes the model and the prompt; the schema argument is filled by \
+                    "`{name}` takes {written}; the schema argument is filled by \
                      the compiler from the type argument"
                 ),
                 vec![format!(
-                    "drop the third argument — write `{name}<T>(...)` to send a schema for `T`, \
+                    "drop the {extra} argument — write `{name}<T>(...)` to send a schema for `T`, \
                      or `{name}(...)` for an untyped call"
                 )],
             );
             return Ok((TypedExprKind::Null, Type::Error));
         }
 
-        let mut llm_schema = None;
-        if checked_llm {
-            match self.llm_call_schema(&result_ty, type_args_written, span) {
-                Ok(schema) => llm_schema = schema,
+        let mut emitted_schema = None;
+        if let Some(checked) = &schema_checked {
+            match self.schema_checked_call_schema(checked, &result_ty, type_args_written, span) {
+                Ok(schema) => emitted_schema = schema,
                 Err(()) => return Ok((TypedExprKind::Null, Type::Error)),
             }
         }
-        if let Some(schema) = &llm_schema {
+        if let Some(schema) = &emitted_schema {
             self.substitute_schema_argument(&params, &mut typed_args, schema, span)?;
         }
         self.record_generic_call_arguments(&typed_args, &params, &ret, type_args_written);
@@ -2538,7 +2564,7 @@ impl Inferer<'_> {
             mangled,
             type_args: runtime_args,
             args: generic_args,
-            return_cast: if checked_get || checked_llm {
+            return_cast: if checked_get || schema_checked.is_some() {
                 None
             } else {
                 return_cast
@@ -2548,10 +2574,10 @@ impl Inferer<'_> {
         if checked_get {
             return self.checked_session_get(call, &result_ty, type_args_written, span);
         }
-        // An untyped `llm.call` emitted no schema and needs no check: it returns
-        // the `Completion` envelope the declaration already typed.
-        if checked_llm && llm_schema.is_some() {
-            return self.checked_llm_cast(call, &result_ty, span);
+        // An untyped schema-checked call emitted no schema and needs no check: it
+        // returns the default the declaration already typed.
+        if schema_checked.is_some() && emitted_schema.is_some() {
+            return self.schema_checked_cast(call, &result_ty, span);
         }
         Ok((call, result_ty))
     }
@@ -2667,9 +2693,10 @@ fn expected_field_hint(
     expected_fields: Option<&BTreeMap<String, crate::ObjectField>>,
     expected_index: Option<&crate::IndexSignature>,
 ) -> Option<Type> {
+    // An optional field also takes `undefined`; a record key's value doesn't.
     expected_fields
         .and_then(|fields| fields.get(name))
-        .map(|field| field.ty.clone())
+        .map(crate::ObjectField::read_ty)
         .or_else(|| expected_index.map(|index| (*index.value).clone()))
 }
 
@@ -2851,12 +2878,7 @@ fn expand_inferred_interfaces(
                 .map(|index| index.map_value(|value| expand(value, expansion))),
         },
         Type::Array(element) => Type::Array(Box::new(expand(element, expansion))),
-        Type::Tuple(elements) => Type::Tuple(
-            elements
-                .iter()
-                .map(|element| expand(element, expansion))
-                .collect(),
-        ),
+        Type::Tuple(elements) => Type::Tuple(elements.map(|element| expand(element, expansion))),
         Type::Union(members) => {
             expansion.union_depth += 1;
             let expanded = members
@@ -2962,6 +2984,7 @@ impl ShapeKind {
             | Type::NumberEnum { .. }
             | Type::StringEnum { .. }
             | Type::Null
+            | Type::Undefined
             | Type::Void
             | Type::Never => Self::Primitive,
             _ => Self::Any,
@@ -3027,6 +3050,25 @@ fn builds_from_type_parameters(ty: &Type) -> bool {
     !matches!(ty.peel(), Type::TypeVar(_)) && super::expr::type_contains_type_var(ty)
 }
 
+/// Whether a property name is a canonical array index, such as `"0"` or `"12"`.
+fn is_array_index(name: &str) -> bool {
+    name.parse::<u32>()
+        .is_ok_and(|index| index != u32::MAX && index.to_string() == name)
+}
+
+/// Whether an `undefined` element fits `ty`. A type parameter doesn't count,
+/// unlike in `type_admits_undefined`: the caller may instantiate it with a
+/// type that can't hold `undefined`.
+fn admits_undefined(ty: &Type) -> bool {
+    let holds_undefined =
+        |ty: &Type| matches!(ty.peel(), Type::Undefined | Type::Void | Type::Unknown);
+    match ty.peel() {
+        Type::Error => true,
+        Type::Union(members) => members.iter().any(holds_undefined),
+        other => holds_undefined(other),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3057,6 +3099,7 @@ mod tests {
             ret: Box::new(Type::TypeVar("T".into())),
             predicate: None,
             has_rest: false,
+            optional: 0,
         };
         let out = substitute_typevars(&func, &bindings, &crate::type_size::TypeLimits::default())
             .unwrap();
@@ -3067,6 +3110,7 @@ mod tests {
                 ret: Box::new(Type::String),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             }
         );
     }
@@ -3094,14 +3138,14 @@ mod tests {
     fn substitute_typevars_charges_each_copy_of_a_binding_inner() {
         use crate::compiler_limits::{MAX_TYPE_DEPTH, MAX_TYPE_NODES};
         use crate::type_size::{TypeLimits, TypeTooLarge};
-        let pair = Type::Tuple(vec![Type::TypeVar("T".into()), Type::TypeVar("T".into())]);
+        let pair = Type::Tuple(vec![Type::TypeVar("T".into()), Type::TypeVar("T".into())].into());
         let limits = TypeLimits::default();
         // The tuple itself plus two copies of the binding, each a tuple of
         // numbers: MAX_TYPE_NODES - 1 nodes, then MAX_TYPE_NODES + 1.
-        let half = Type::Tuple(vec![Type::Number; (MAX_TYPE_NODES / 2 - 2) as usize]);
+        let half = Type::Tuple(vec![Type::Number; (MAX_TYPE_NODES / 2 - 2) as usize].into());
         let bindings = BTreeMap::from([("T".to_string(), half)]);
         assert!(substitute_typevars(&pair, &bindings, &limits).is_ok());
-        let over = Type::Tuple(vec![Type::Number; (MAX_TYPE_NODES / 2 - 1) as usize]);
+        let over = Type::Tuple(vec![Type::Number; (MAX_TYPE_NODES / 2 - 1) as usize].into());
         let bindings = BTreeMap::from([("T".to_string(), over)]);
         assert_eq!(
             substitute_typevars(&pair, &bindings, &limits),
@@ -3125,6 +3169,47 @@ mod tests {
             }
         }
         panic!("no top-level let/const init found");
+    }
+
+    #[test]
+    fn hof_map_infers_return_with_defaulted_callback_parameter() {
+        let (ta, diags) = run(r#"
+            function addDefault(value: number, index: number = 100): number {
+                return value + index;
+            }
+            let result = [1, 2, 3].map(addDefault);
+            "#);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        assert_eq!(
+            last_call_resolved_ty(&ta),
+            Type::Array(Box::new(Type::Number))
+        );
+    }
+
+    #[test]
+    fn hof_map_infers_return_with_wider_callback_parameter() {
+        let (ta, diags) = run(r#"
+            function describe(value: number | null): string { return "value"; }
+            let result = [1, 2, 3].map(describe);
+            "#);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        assert_eq!(
+            last_call_resolved_ty(&ta),
+            Type::Array(Box::new(Type::String))
+        );
+    }
+
+    #[test]
+    fn hof_map_rejects_narrower_callback_parameter() {
+        let (_, diags) = run(r#"
+            function describe(value: number): string { return "value"; }
+            let values: (number | null)[] = [1, null];
+            let result = values.map(describe);
+            "#);
+        assert!(
+            !diags.is_empty(),
+            "narrow callback must reject nullable inputs"
+        );
     }
 
     #[test]

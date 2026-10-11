@@ -9,7 +9,7 @@ interface Opt {
 }
 
 function pickName(o: Opt | null, fallback: string): string {
-    return o !== null && o.name !== null ? o.name : fallback;
+    return o !== null && o.name !== undefined ? o.name : fallback;
 }
 
 function main(): void {

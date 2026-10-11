@@ -27,7 +27,7 @@ Porting adaptations used throughout (README rules):
 
 - Sparse arrays appear in many otherwise-behavioral Sputnik cases
   (`x[0] = 0; x[3] = 3`); ports keep the dense rows and drop the holes.
-- `x[i] === undefined` probes past the end become `x.at(i) === null`
+- `x[i] === undefined` probes past the end become `x.at(i) === undefined`
   (indexed OOB reads throw here — pinned in `cases/Array/divergence/`).
 - HOF callbacks receive `(value, index, array)`, pinned by
   `find/predicate-call-parameters`. Ports written before they did branch on
@@ -44,7 +44,6 @@ Porting adaptations used throughout (README rules):
 
 | Case | Gap |
 |:--|:--|
-| `prototype/includes/samevaluezero` | `includes` dispatches through the `equals` vtable (NaN !== NaN) instead of SameValueZero — `[NaN].includes(NaN)` returns `false`, standard says `true`. (`indexOf`'s StrictEquality NaN behavior is correct — `indexOf/15.4.4.14-9-10` passes.) |
 | `prototype/push/S15.4.4.7_A1_T2` | Standard `push` is variadic; ours is `push(elem: T)` — a multi-argument push is a compile-time arity error. (`unshift` *is* variadic.) |
 | `prototype/concat/S15.4.4.4_A1_T2` | Standard `concat` appends non-array arguments as elements; ours is `concat(...others: T[][])` — a scalar argument is a compile-time type error. |
 
@@ -53,7 +52,7 @@ Porting adaptations used throughout (README rules):
 | Pattern | Reason |
 |:--|:--|
 | Sparse/holey-array cases everywhere (`sparse.js`, `fill-holes.js`, `holes-not-preserved.js`, `*-undefined-for-holes-*`, the `x[0]=0; x[3]=3` Sputnik bodies, `new Array(10)` length-only arrays, `length =` truncation tricks) | Holes are unrepresentable: OOB writes throw instead of sparse-extending (spec.md §1.2). Copied: `rejected/Array/prototype/includes/sparse.js`. |
-| `undefined`-semantics cases (`at/returns-undefined-*`, pop/shift/find on empty returning undefined, `join(undefined)`, `Array.of(undefined, ...)`) | No `undefined`; `null` replaces it (`at`/`pop`/`shift`/`find` return `T \| null`). The null-returning behavior is ported. Copied: `rejected/Array/prototype/at/returns-undefined-for-out-of-range-index.js`. |
+| `undefined`-semantics cases (`at/returns-undefined-*`, pop/shift/find on empty, `join`, `Array.of`) | Undefined results and null/undefined elements are preserved by the ports; sparse-array variants remain excluded separately. |
 | Receiver-coercion matrix (`15.4.4.x-1-*` / `-2-*` / `-3-*`, `S15.4.4.x_A2_T*` generic-receiver rows, `throws-with-string-receiver.js`, `call-with-boolean.js`, array-like receivers with mutable `length`) | Array methods exist only on real arrays; `Array.prototype.m.call(obj)` has no equivalent (no prototypes). Copied: `rejected/Array/prototype/every/15.4.4.16-1-1.js`. |
 | Species/ctor-realm construction (`create-species-*`, `create-ctor-*`, `create-proxy*`, `proto-from-ctor-realm*`, `this-value-ctor-*`) | No species constructors, prototypes, or realms; every producing method returns a plain array. Copied: `rejected/Array/prototype/slice/create-species.js`. |
 | Mid-iteration length manipulation through getters/proxies (`length-decreased-while-iterating.js`, `comparefn-grow/shrink.js`, `coerced-*-resize.js`, `precise-getter-*`) | Requires property descriptors / array-like receivers; plain-array mutation during HOFs is exercised by the interpreter fixtures instead. Copied: `rejected/Array/prototype/toSpliced/length-decreased-while-iterating.js`. |

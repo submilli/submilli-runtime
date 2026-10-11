@@ -1,6 +1,6 @@
 === controlFlowTypeofObject.ts ===
 
-/*pruned*/;                      
+/*pruned*/;
 
 function f1(x: unknown): void {
 >f1 : (x: unknown) => void
@@ -26,7 +26,7 @@ function f1(x: unknown): void {
 >'object' : "object"
 >         : ^^^^^^^^
 
-        /**/;  
+        /**/;
     }
 }
 
@@ -54,7 +54,7 @@ function f2(x: unknown): void {
 >'object' : "object"
 >         : ^^^^^^^^
 
-        /**/;  
+        /**/;
     }
 }
 
@@ -82,7 +82,7 @@ function f3(x: unknown): void {
 >'object' : "object"
 >         : ^^^^^^^^
 
-        /**/;  
+        /**/;
     }
 }
 
@@ -92,11 +92,13 @@ function f4(x: unknown): void {
 >x : unknown
 >  : ^^^^^^^
 
-    if (x == null) {
->x == null : boolean
->          : ^^^^^^^
+    if (x == undefined) {
+>x == undefined : boolean
+>               : ^^^^^^^
 >x : unknown
 >  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         return;
     }
@@ -110,7 +112,7 @@ function f4(x: unknown): void {
 >'object' : "object"
 >         : ^^^^^^^^
 
-        /**/;  
+        /**/;
     }
 }
 
@@ -157,7 +159,7 @@ function f5(x: unknown): void {
 >'object' : "object"
 >         : ^^^^^^^^
 
-        /**/;  
+        /**/;
     }
 }
 
@@ -193,7 +195,7 @@ function f6(x: unknown): void {
 >'object' : "object"
 >         : ^^^^^^^^
 
-            /**/;  
+            /**/;
         }
     }
     if (typeof x === 'object') {

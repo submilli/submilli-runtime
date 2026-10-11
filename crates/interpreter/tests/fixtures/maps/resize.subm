@@ -9,11 +9,11 @@ function main(): void {
 
   i = 0;
   while (i < 100) {
-    const v: number | null = m.get(i);
-    assert(v !== null && v === i * 10, "get round-trips after resize");
+    const v: number | undefined = m.get(i);
+    assert(v !== undefined && v === i * 10, "get round-trips after resize");
     i = i + 1;
   }
 
-  assert(m.get(100) === null, "absent key still returns null");
-  assert(m.get(-1) === null, "neg absent key still null");
+  assert(m.get(100) === undefined, "absent key still returns undefined");
+  assert(m.get(-1) === undefined, "neg absent key still undefined");
 }

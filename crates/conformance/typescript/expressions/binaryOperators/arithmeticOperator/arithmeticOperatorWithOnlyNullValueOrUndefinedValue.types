@@ -6,23 +6,31 @@ let ra1 = null * null;
 >null * null : number
 >            : ^^^^^^
 
-let ra2 = null * null;
+let ra2 = null * undefined;
 >ra2 : number
 >    : ^^^^^^
->null * null : number
->            : ^^^^^^
+>null * undefined : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let ra3 = null * null;
+let ra3 = undefined * null;
 >ra3 : number
 >    : ^^^^^^
->null * null : number
->            : ^^^^^^
+>undefined * null : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let ra4 = null * null;
+let ra4 = undefined * undefined;
 >ra4 : number
 >    : ^^^^^^
->null * null : number
->            : ^^^^^^
+>undefined * undefined : number
+>                      : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator /
@@ -32,23 +40,31 @@ let rb1 = null / null;
 >null / null : number
 >            : ^^^^^^
 
-let rb2 = null / null;
+let rb2 = null / undefined;
 >rb2 : number
 >    : ^^^^^^
->null / null : number
->            : ^^^^^^
+>null / undefined : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rb3 = null / null;
+let rb3 = undefined / null;
 >rb3 : number
 >    : ^^^^^^
->null / null : number
->            : ^^^^^^
+>undefined / null : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rb4 = null / null;
+let rb4 = undefined / undefined;
 >rb4 : number
 >    : ^^^^^^
->null / null : number
->            : ^^^^^^
+>undefined / undefined : number
+>                      : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator %
@@ -58,23 +74,31 @@ let rc1 = null % null;
 >null % null : number
 >            : ^^^^^^
 
-let rc2 = null % null;
+let rc2 = null % undefined;
 >rc2 : number
 >    : ^^^^^^
->null % null : number
->            : ^^^^^^
+>null % undefined : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rc3 = null % null;
+let rc3 = undefined % null;
 >rc3 : number
 >    : ^^^^^^
->null % null : number
->            : ^^^^^^
+>undefined % null : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rc4 = null % null;
+let rc4 = undefined % undefined;
 >rc4 : number
 >    : ^^^^^^
->null % null : number
->            : ^^^^^^
+>undefined % undefined : number
+>                      : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator -
@@ -84,60 +108,236 @@ let rd1 = null - null;
 >null - null : number
 >            : ^^^^^^
 
-let rd2 = null - null;
+let rd2 = null - undefined;
 >rd2 : number
 >    : ^^^^^^
->null - null : number
->            : ^^^^^^
+>null - undefined : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rd3 = null - null;
+let rd3 = undefined - null;
 >rd3 : number
 >    : ^^^^^^
->null - null : number
->            : ^^^^^^
+>undefined - null : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rd4 = null - null;
+let rd4 = undefined - undefined;
 >rd4 : number
 >    : ^^^^^^
->null - null : number
->            : ^^^^^^
+>undefined - undefined : number
+>                      : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // operator <<
-/*pruned*/;            
-/*pruned*/;            
-/*pruned*/;            
-/*pruned*/;            
+let re1 = null << null;
+>re1 : number
+>    : ^^^^^^
+>null << null : number
+>             : ^^^^^^
+
+let re2 = null << undefined;
+>re2 : number
+>    : ^^^^^^
+>null << undefined : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let re3 = undefined << null;
+>re3 : number
+>    : ^^^^^^
+>undefined << null : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let re4 = undefined << undefined;
+>re4 : number
+>    : ^^^^^^
+>undefined << undefined : number
+>                       : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
 
 // operator >>
-/*pruned*/;            
-/*pruned*/;            
-/*pruned*/;            
-/*pruned*/;            
+let rf1 = null >> null;
+>rf1 : number
+>    : ^^^^^^
+>null >> null : number
+>             : ^^^^^^
+
+let rf2 = null >> undefined;
+>rf2 : number
+>    : ^^^^^^
+>null >> undefined : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let rf3 = undefined >> null;
+>rf3 : number
+>    : ^^^^^^
+>undefined >> null : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let rf4 = undefined >> undefined;
+>rf4 : number
+>    : ^^^^^^
+>undefined >> undefined : number
+>                       : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
 
 // operator >>>
-/*pruned*/;             
-/*pruned*/;             
-/*pruned*/;             
-/*pruned*/;             
+let rg1 = null >>> null;
+>rg1 : number
+>    : ^^^^^^
+>null >>> null : number
+>              : ^^^^^^
+
+let rg2 = null >>> undefined;
+>rg2 : number
+>    : ^^^^^^
+>null >>> undefined : number
+>                   : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let rg3 = undefined >>> null;
+>rg3 : number
+>    : ^^^^^^
+>undefined >>> null : number
+>                   : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let rg4 = undefined >>> undefined;
+>rg4 : number
+>    : ^^^^^^
+>undefined >>> undefined : number
+>                        : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
 
 // operator &
-/*pruned*/;           
-/*pruned*/;           
-/*pruned*/;           
-/*pruned*/;           
+let rh1 = null & null;
+>rh1 : number
+>    : ^^^^^^
+>null & null : number
+>            : ^^^^^^
+
+let rh2 = null & undefined;
+>rh2 : number
+>    : ^^^^^^
+>null & undefined : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let rh3 = undefined & null;
+>rh3 : number
+>    : ^^^^^^
+>undefined & null : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let rh4 = undefined & undefined;
+>rh4 : number
+>    : ^^^^^^
+>undefined & undefined : number
+>                      : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
 
 // operator ^
-/*pruned*/;           
-/*pruned*/;           
-/*pruned*/;           
-/*pruned*/;           
+let ri1 = null ^ null;
+>ri1 : number
+>    : ^^^^^^
+>null ^ null : number
+>            : ^^^^^^
+
+let ri2 = null ^ undefined;
+>ri2 : number
+>    : ^^^^^^
+>null ^ undefined : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let ri3 = undefined ^ null;
+>ri3 : number
+>    : ^^^^^^
+>undefined ^ null : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let ri4 = undefined ^ undefined;
+>ri4 : number
+>    : ^^^^^^
+>undefined ^ undefined : number
+>                      : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
 
 // operator |
-/*pruned*/;           
-/*pruned*/;           
-/*pruned*/;           
-/*pruned*/;           
+let rj1 = null | null;
+>rj1 : number
+>    : ^^^^^^
+>null | null : number
+>            : ^^^^^^
+
+let rj2 = null | undefined;
+>rj2 : number
+>    : ^^^^^^
+>null | undefined : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let rj3 = undefined | null;
+>rj3 : number
+>    : ^^^^^^
+>undefined | null : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let rj4 = undefined | undefined;
+>rj4 : number
+>    : ^^^^^^
+>undefined | undefined : number
+>                      : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
 
 function main(): void {}
 >main : () => void

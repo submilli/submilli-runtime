@@ -1,8 +1,1 @@
 types: 43 of 64 tsc entries compared, 0 differ
-
-errors:
-line 7: tsc TS2451: Cannot redeclare block-scoped variable 'o1'. (we accept)
-line 10: tsc TS2451: Cannot redeclare block-scoped variable 'o2'. (we accept)
-line 13: tsc TS2451: Cannot redeclare block-scoped variable 'o3'. (we accept)
-line 17: tsc TS2451: Cannot redeclare block-scoped variable 'o4'. (we accept)
-line 20: tsc TS2451: Cannot redeclare block-scoped variable 'o5'. (we accept)

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f5f03b7e4f6462ebb85e331c9cb877cc9922e81b4d350234af45c38305e64c7b"
+  contentHash: "58bae69ee88f836986b017c2dd674d903ca65dab8b5df2ee0ed26def4090ad3e"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -223,7 +223,7 @@ object.
 | --- | --- | --- |
 | `execution_id` | string | The run, as named in the [audit trail](/docs/reference/audit-trail#execution) |
 | `session_id` | string | The session the program ran in |
-| `result` | string or null | What `main` returned: a string as is, any other value as JSON text, `null` for no value or on failure |
+| `result` | string or null | What `main` returned: a string as is, other concrete values as JSON text (including `"null"` for a null return), `null` for an undefined return, no value, or failure |
 | `console` | string[] | Lines the program logged. Empty after a successful run. On failure, what it logged before it stopped |
 | `error` | object or null | `null` on success |
 | `error.kind` | string | One of the kinds below |

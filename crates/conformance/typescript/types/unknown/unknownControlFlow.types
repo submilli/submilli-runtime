@@ -37,23 +37,23 @@ function f01(u: unknown): void {
 >u : unknown
 >  : ^^^^^^^
 
-    let x2: {} | null | null = u;
->x2 : {} | null
->   : ^^^^^^^^^
+    let x2: {} | null | undefined = u;
+>x2 : {} | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^
 >u : unknown
 >  : ^^^^^^^
 
-    let x3: {} | { x: string } | null | null = u;
->x3 : {} | { x: string; } | null
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    let x3: {} | { x: string } | null | undefined = u;
+>x3 : {} | { x: string; } | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x : string
 >  : ^^^^^^
 >u : unknown
 >  : ^^^^^^^
 
-    let x4: ThisOrThatNode | null | null = u;
->x4 : ThisOrThatNode | null
->   : ^^^^^^^^^^^^^^^^^^^^^
+    let x4: ThisOrThatNode | null | undefined = u;
+>x4 : ThisOrThatNode | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >u : unknown
 >  : ^^^^^^^
 
@@ -141,14 +141,14 @@ function f11<T>(x: T): void {
     }
 }
 
-/*pruned*/;                             
-            
-                
-     
-          
-                
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
 
 function f20(x: unknown): void {
 >f20 : (x: unknown) => void
@@ -156,21 +156,23 @@ function f20(x: unknown): void {
 >x : unknown
 >  : ^^^^^^^
 
-    if (x !== null) {
->x !== null : boolean
->           : ^^^^^^^
+    if (x !== undefined) {
+>x !== undefined : boolean
+>                : ^^^^^^^
 >x : unknown
 >  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         x;  // {} | null
->x : {} | undefined
->  : ^^^^^^^^^^^^^^
+>x : {} | null
+>  : ^^^^^^^^^
 
     }
     else {
         x;  // undefined
->x : null
->  : ^^^^
+>x : undefined
+>  : ^^^^^^^^^
 
     }
     if (x !== null) {
@@ -190,34 +192,38 @@ function f20(x: unknown): void {
 >  : ^^^^
 
     }
-    if (x !== null && x !== null) {
->x !== null && x !== null : boolean
->                         : ^^^^^^^
->x !== null : boolean
->           : ^^^^^^^
+    if (x !== undefined && x !== null) {
+>x !== undefined && x !== null : boolean
+>                              : ^^^^^^^
+>x !== undefined : boolean
+>                : ^^^^^^^
 >x : unknown
 >  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >x !== null : boolean
 >           : ^^^^^^^
->x : {} | undefined
->  : ^^^^^^^^^^^^^^
+>x : {} | null
+>  : ^^^^^^^^^
 
         x;  // {}
->x : {} | undefined
->  : ^^^^^^^^^^^^^^
+>x : {}
+>  : ^^
 
     }
     else {
         x;  // null | undefined
->x : null
->  : ^^^^
+>x : null | undefined
+>  : ^^^^^^^^^^^^^^^^
 
     }
-    if (x != null) {
->x != null : boolean
->          : ^^^^^^^
+    if (x != undefined) {
+>x != undefined : boolean
+>               : ^^^^^^^
 >x : unknown
 >  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         x;  // {}
 >x : {}
@@ -257,15 +263,17 @@ function f21<T>(x: T): void {
 >x : T
 >  : ^
 
-    if (x !== null) {
->x !== null : boolean
->           : ^^^^^^^
+    if (x !== undefined) {
+>x !== undefined : boolean
+>                : ^^^^^^^
 >x : T
 >  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         x;  // T & ({} | null)
->x : T & ({} | undefined)
->  : ^^^^^^^^^^^^^^^^^^^^
+>x : T & ({} | null)
+>  : ^^^^^^^^^^^^^^^
 
     }
     else {
@@ -291,21 +299,23 @@ function f21<T>(x: T): void {
 >  : ^
 
     }
-    if (x !== null && x !== null) {
->x !== null && x !== null : boolean
->                         : ^^^^^^^
->x !== null : boolean
->           : ^^^^^^^
+    if (x !== undefined && x !== null) {
+>x !== undefined && x !== null : boolean
+>                              : ^^^^^^^
+>x !== undefined : boolean
+>                : ^^^^^^^
 >x : T
 >  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
 >x !== null : boolean
 >           : ^^^^^^^
->x : T & ({} | undefined)
->  : ^^^^^^^^^^^^^^^^^^^^
+>x : T & ({} | null)
+>  : ^^^^^^^^^^^^^^^
 
         x;  // T & {}
->x : T & ({} | undefined)
->  : ^^^^^^^^^^^^^^^^^^^^
+>x : T & {}
+>  : ^^^^^^
 
     }
     else {
@@ -314,11 +324,13 @@ function f21<T>(x: T): void {
 >  : ^
 
     }
-    if (x != null) {
->x != null : boolean
->          : ^^^^^^^
+    if (x != undefined) {
+>x != undefined : boolean
+>               : ^^^^^^^
 >x : T
 >  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         x;  // T & {}
 >x : NonNullable<T>
@@ -350,74 +362,78 @@ function f21<T>(x: T): void {
     }
 }
 
-/*pruned*/;                                    
-                     
-                     
-     
-          
-                
-     
-                     
-                
-     
-          
-                
-     
-                                   
-                     
-     
-          
-                
-     
-                    
-                     
-     
-          
-                
-     
-                    
-                     
-     
-          
-                
-     
- 
+/*pruned*/;
 
-function f23<T>(x: T | null | null): void {
->f23 : <T>(x: T | null | null) => void
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function f23<T>(x: T | undefined | null): void {
+>f23 : <T>(x: T | undefined | null) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >T : T
 >  : ^
->x : T | null
->  : ^^^^^^^^
+>x : T | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^
 
-    if (x !== null) {
->x !== null : boolean
->           : ^^^^^^^
->x : T | null
->  : ^^^^^^^^
+    if (x !== undefined) {
+>x !== undefined : boolean
+>                : ^^^^^^^
+>x : T | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         x;  // T & {} | null
->x : T & ({} | undefined)
->  : ^^^^^^^^^^^^^^^^^^^^
+>x : (T & {}) | null
+>  : ^^^^^^^^^^^^^^^
 
     }
     if (x !== null) {
 >x !== null : boolean
 >           : ^^^^^^^
->x : T | null
->  : ^^^^^^^^
+>x : T | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^
 
         x;  // T & {} | undefined
->x : T & ({} | undefined)
+>x : (T & {}) | undefined
 >  : ^^^^^^^^^^^^^^^^^^^^
 
     }
-    if (x != null) {
->x != null : boolean
->          : ^^^^^^^
->x : T | null
->  : ^^^^^^^^
+    if (x != undefined) {
+>x != undefined : boolean
+>               : ^^^^^^^
+>x : T | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         x;  // T & {}
 >x : NonNullable<T>
@@ -427,8 +443,8 @@ function f23<T>(x: T | null | null): void {
     if (x != null) {
 >x != null : boolean
 >          : ^^^^^^^
->x : T | null
->  : ^^^^^^^^
+>x : T | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^
 
         x;  // T & {}
 >x : NonNullable<T>
@@ -523,11 +539,11 @@ function f31<T>(x: T): void {
     }
 }
 
-/*pruned*/;                                    
-                                
-                         
-     
- 
+/*pruned*/;
+
+
+
+
 
 function possiblyNull<T>(x: T): T | null {
 >possiblyNull : <T>(x: T) => T | null
@@ -551,17 +567,17 @@ function possiblyNull<T>(x: T): T | null {
 
 }
 
-function possiblyUndefined<T>(x: T): T | null {
->possiblyUndefined : <T>(x: T) => T | null
->                  : ^^^^^^^^^^^^^^^^^^^^^
+function possiblyUndefined<T>(x: T): T | undefined {
+>possiblyUndefined : <T>(x: T) => T | undefined
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >T : T
 >  : ^
 >x : T
 >  : ^
 
-    return !!true ? x : null;  // T | undefined
->!!true ? x : null : T | null
->                  : ^^^^^^^^
+    return !!true ? x : undefined;  // T | undefined
+>!!true ? x : undefined : T | undefined
+>                       : ^^^^^^^^^^^^^
 >!!true : true
 >       : ^^^^
 >!true : false
@@ -570,22 +586,24 @@ function possiblyUndefined<T>(x: T): T | null {
 >     : ^^^^
 >x : T
 >  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 }
 
-function possiblyNullOrUndefined<T>(x: T): T | null {
->possiblyNullOrUndefined : <T>(x: T) => T | null
->                        : ^^^^^^^^^^^^^^^^^^^^^
+function possiblyNullOrUndefined<T>(x: T): T | null | undefined {
+>possiblyNullOrUndefined : <T>(x: T) => T | null | undefined
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >T : T
 >  : ^
 >x : T
 >  : ^
 
     return possiblyUndefined(possiblyNull(x));  // T | null | undefined
->possiblyUndefined(possiblyNull(x)) : T | null
->                                   : ^^^^^^^^
->possiblyUndefined : <T>(x: T) => T | null
->                  : ^^^^^^^^^^^^^^^^^^^^^
+>possiblyUndefined(possiblyNull(x)) : T | null | undefined
+>                                   : ^^^^^^^^^^^^^^^^^^^^
+>possiblyUndefined : <T>(x: T) => T | undefined
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >possiblyNull(x) : T | null
 >                : ^^^^^^^^
 >possiblyNull : <T>(x: T) => T | null
@@ -595,33 +613,33 @@ function possiblyNullOrUndefined<T>(x: T): T | null {
 
 }
 
-/*pruned*/;                                       
-                                  
-                                      
- 
+/*pruned*/;
 
-/*pruned*/;                                            
-                                  
-                                 
- 
 
-/*pruned*/;                                                        
-                                                           
- 
 
-function f40(a: string | null, b: number | null | null): void {
->f40 : (a: string | null, b: number | null | null) => void
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->b : number | null
->  : ^^^^^^^^^^^^^
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+function f40(a: string | undefined, b: number | null | undefined): void {
+>f40 : (a: string | undefined, b: number | null | undefined) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b : number | null | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
     /*pruned*/;                            // string
     /*pruned*/;                            // number
 }
 
-/*pruned*/;                                           
+/*pruned*/;
 
 function f41<T>(a: T): void {
 >f41 : <T>(a: T) => void
@@ -816,17 +834,17 @@ function ff1<T>(t: T, k: keyof T): void {
 
 }
 
-/*pruned*/;                                   
-         
- 
+/*pruned*/;
 
-/*pruned*/;                                     
-                   
- 
 
-/*pruned*/;                                          
-         
- 
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
 
 ff1(null, 'foo');  // Error
 >ff1(null, 'foo') : void
@@ -837,71 +855,71 @@ ff1(null, 'foo');  // Error
 >      : ^^^^^
 
 /*pruned*/;        // Error
-/*pruned*/;      
+/*pruned*/;
 /*pruned*/;        // Error
 
 // Repro from #49681
 
-/*pruned*/;                           
-/*pruned*/;                   
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;                                              
+/*pruned*/;
 
 // Generics and intersections with {}
 
-/*pruned*/;                                    
-                       
-                         
-     
-          
-                                  
-     
- 
+/*pruned*/;
 
-/*pruned*/;                                                    
-                       
-                         
-     
-          
-                                  
-     
- 
 
-/*pruned*/;                                               
-                       
-                         
-     
-          
-                                  
-     
- 
 
-/*pruned*/;                                                      
-                       
-                         
-     
-          
-                                  
-     
- 
 
-/*pruned*/;                                                      
-                       
-                         
-     
-          
-                                  
-     
- 
 
-/*pruned*/;                                                             
-                       
-                         
-     
-          
-                                  
-     
- 
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
 
 // Double-equals narrowing
 
@@ -961,17 +979,19 @@ function SendBlob(encoding: unknown): void {
 >encoding : unknown
 >         : ^^^^^^^
 
-    if (encoding !== null && encoding !== 'utf8') {
->encoding !== null && encoding !== 'utf8' : boolean
->                                         : ^^^^^^^
->encoding !== null : boolean
->                  : ^^^^^^^
+    if (encoding !== undefined && encoding !== 'utf8') {
+>encoding !== undefined && encoding !== 'utf8' : boolean
+>                                              : ^^^^^^^
+>encoding !== undefined : boolean
+>                       : ^^^^^^^
 >encoding : unknown
 >         : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >encoding !== 'utf8' : boolean
 >                    : ^^^^^^^
->encoding : {} | undefined
->         : ^^^^^^^^^^^^^^
+>encoding : {} | null
+>         : ^^^^^^^^^
 >'utf8' : "utf8"
 >       : ^^^^^^
 
@@ -985,20 +1005,20 @@ function SendBlob(encoding: unknown): void {
 
     }
     encoding;
->encoding : "utf8" | null
->         : ^^^^^^^^^^^^^
+>encoding : "utf8" | undefined
+>         : ^^^^^^^^^^^^^^^^^^
 
 };
 
-/*pruned*/;                                            
-                         
-                     
-     
-                       
-                                             
-     
-                 
- 
+/*pruned*/;
+
+
+
+
+
+
+
+
 
 function doSomething2(value: unknown): void {
 >doSomething2 : (value: unknown) => void
@@ -1006,19 +1026,21 @@ function doSomething2(value: unknown): void {
 >value : unknown
 >      : ^^^^^^^
 
-    if (value === null) {
->value === null : boolean
->               : ^^^^^^^
+    if (value === undefined) {
+>value === undefined : boolean
+>                    : ^^^^^^^
 >value : unknown
 >      : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         return;
     }
     if (value === 42) {
 >value === 42 : boolean
 >             : ^^^^^^^
->value : {} | undefined
->      : ^^^^^^^^^^^^^^
+>value : {} | null
+>      : ^^^^^^^^^
 >42 : 42
 >   : ^^
 
@@ -1063,11 +1085,11 @@ type TypeB = {
 
 }
 
-/*pruned*/;                    
-                                                         
+/*pruned*/;
 
-/*pruned*/;                     
-                                                                                         
+
+/*pruned*/;
+
 
 // Repro from #51041
 
@@ -1076,9 +1098,9 @@ type AB = "A" | "B";
 >   : ^^
 
 
-/*pruned*/;                                                
-                                     
-  
+/*pruned*/;
+
+
 
 // Repro from #51538
 
@@ -1086,8 +1108,8 @@ type Left = 'left';
 >Left : "left"
 >     : ^^^^^^
 
-/*pruned*/;                               
-/*pruned*/;                
+/*pruned*/;
+/*pruned*/;
 
 function assertNever(v: never): never {
 >assertNever : (v: never) => never
@@ -1105,17 +1127,17 @@ function assertNever(v: never): never {
 
 }
 
-/*pruned*/;                         
-                           
-                                  
-     
-                                 
-                                   
-     
-          
-                           
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
 
 
 function main(): void {}

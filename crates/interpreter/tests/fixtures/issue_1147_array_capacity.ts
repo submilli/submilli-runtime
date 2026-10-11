@@ -83,7 +83,7 @@ function main(): void {
     refs.push(null);
     assert(refs.pop() === null);
     const last = refs.pop();
-    assert(last !== null && last.value === 99);
+    assert(last !== null && last !== undefined && last.value === 99);
     refs.push({value: 123});
     assert(refs.length === 100);
     const copy = refs.map((value: {value: number} | null) => {

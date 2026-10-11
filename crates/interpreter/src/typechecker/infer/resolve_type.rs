@@ -4,7 +4,6 @@ use crate::{Package, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeSym
 use super::Inferer;
 use super::format_definition;
 use super::reserved::{is_reserved_object_field, override_field_signature};
-use super::void_value::ValuePosition;
 
 /// An already-resolved class identity in type position: how the source spelled
 /// it (`Box`, `ns.Box`) alongside the symbol it resolved to.
@@ -220,9 +219,7 @@ impl<'a> Inferer<'a> {
         for (annot, resolved) in args.iter().zip(&resolved_args) {
             // The argument itself needs a value slot, but an interface or
             // callback inside it may legitimately have void returns.
-            if let Some(offender) =
-                super::void_type_arguments::invalid_argument(resolved, false, self.resolver())
-            {
+            if let Some(offender) = super::value_operand::valueless_within_type_argument(resolved) {
                 self.error(
                     annot.span,
                     format!(
@@ -242,8 +239,8 @@ impl<'a> Inferer<'a> {
     /// The body pass needs the type in the body's generic scope (`T` as a
     /// `GenericParam` rather than a signature `TypeVar`), so it cannot reuse
     /// the stored one — and re-resolving replays every diagnostic the
-    /// signature pass raised, including the nested `void` screens inside
-    /// [`resolve_type`]'s composite arms. Drop only the replays: `bind_class`
+    /// signature pass raised, including checks inside [`resolve_type`]'s
+    /// composite arms. Drop only the replays: `bind_class`
     /// skips an accessor's annotation on a duplicate-member or
     /// duplicate-accessor error, and the body pass is then the *only* pass to
     /// resolve it, so discarding wholesale would lose a real diagnostic.
@@ -266,7 +263,7 @@ impl<'a> Inferer<'a> {
     }
 
     pub(super) fn resolve_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
-        // Checks of the resolved type (the void-argument scan, index fields)
+        // Checks of the resolved type (index fields and callable signatures)
         // record limits they cannot return; report one met here at this
         // annotation, as `infer_expr` does for expressions.
         let limit_was_pending = self.type_limits.limit_reached();
@@ -280,18 +277,6 @@ impl<'a> Inferer<'a> {
     fn resolve_and_check_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type_inner(annot)?;
         self.check_callable_type(&resolved, annot.span);
-        if matches!(
-            resolved.peel(),
-            Type::InterfaceRef { .. } | Type::AliasRef { .. }
-        ) && let Some(position) =
-            super::void_type_arguments::invalid_position(&resolved, false, self.resolver())
-        {
-            self.error(
-                annot.span,
-                format!("type argument containing `void` requires {position} — use a value type"),
-            );
-            return Ok(Type::Error);
-        }
         if let Some(index) = self.resolver().index_signature(&resolved)
             && let Type::InterfaceRef {
                 mangled,
@@ -376,6 +361,7 @@ impl<'a> Inferer<'a> {
                     "boolean" => Some(Type::Boolean),
                     "void" => Some(Type::Void),
                     "null" => Some(Type::Null),
+                    "undefined" => Some(Type::Undefined),
                     // Resolves to Type::Uint8Array (not InterfaceRef) — the prelude interface exists for method dispatch only.
                     "Uint8Array" => Some(Type::Uint8Array),
                     "unknown" => Some(Type::Unknown),
@@ -407,7 +393,7 @@ impl<'a> Inferer<'a> {
                         );
                         return Ok(Type::Error);
                     }
-                    let elem_ty = self.resolve_value_type(&args[0], ValuePosition::ArrayElement)?;
+                    let elem_ty = self.resolve_type(&args[0])?;
                     return Ok(Type::Array(Box::new(elem_ty)));
                 }
                 // `ReadonlyArray<T>` is likewise the library spelling of `readonly T[]`.
@@ -426,7 +412,7 @@ impl<'a> Inferer<'a> {
                         );
                         return Ok(Type::Error);
                     }
-                    let elem_ty = self.resolve_value_type(&args[0], ValuePosition::ArrayElement)?;
+                    let elem_ty = self.resolve_type(&args[0])?;
                     return Ok(readonly_of(Type::Array(Box::new(elem_ty))));
                 }
                 if let Some(sym) = self.lookup_named_type(text) {
@@ -673,15 +659,26 @@ impl<'a> Inferer<'a> {
                 Type::Error
             }
             TypeAnnotationKind::Array(elem) => {
-                let elem_ty = self.resolve_value_type(elem, ValuePosition::ArrayElement)?;
+                let elem_ty = self.resolve_type(elem)?;
                 Type::Array(Box::new(elem_ty))
             }
             TypeAnnotationKind::Tuple(elements) => {
                 let resolved: Vec<Type> = elements
                     .iter()
-                    .map(|e| self.resolve_value_type(e, ValuePosition::TupleElement))
+                    .map(|e| self.resolve_type(e))
                     .collect::<Result<_, _>>()?;
-                Type::Tuple(resolved)
+                let optional = elements
+                    .iter()
+                    .rev()
+                    .take_while(|e| matches!(e.kind, TypeAnnotationKind::Optional(_)))
+                    .count();
+                Type::Tuple(crate::types::TupleType {
+                    elements: resolved,
+                    optional,
+                })
+            }
+            TypeAnnotationKind::Optional(inner) => {
+                Type::union(vec![self.resolve_type(inner)?, Type::Undefined])
             }
             TypeAnnotationKind::Readonly(operand) => readonly_of(self.resolve_type(operand)?),
             TypeAnnotationKind::Object { fields, index } => {
@@ -695,7 +692,7 @@ impl<'a> Inferer<'a> {
                         );
                         return Ok(Type::Error);
                     }
-                    let ty = self.resolve_value_type(&field.ty, ValuePosition::FieldType)?;
+                    let ty = self.resolve_type(&field.ty)?;
                     if let Some(expected) = override_field_signature(&field.name.name)
                         && !super::assignable(&ty, &expected, self.resolver())
                     {
@@ -734,7 +731,10 @@ impl<'a> Inferer<'a> {
                 self.report_duplicate_params(params.iter().map(|f| &f.name));
                 let resolved_params: Vec<Type> = params
                     .iter()
-                    .map(|f| self.resolve_value_type(&f.ty, ValuePosition::Parameter))
+                    .map(|f| {
+                        self.resolve_type(&f.ty)
+                            .map(|ty| crate::ObjectField::widen_optional(f.optional, ty))
+                    })
                     .collect::<Result<_, _>>()?;
                 // The return position is the one place `void` belongs.
                 let resolved_ret = self.resolve_type(return_type)?;
@@ -745,12 +745,18 @@ impl<'a> Inferer<'a> {
                     // Predicate types not supported in function-type annotations (only in function/arrow bodies).
                     predicate: None,
                     has_rest,
+                    optional: params
+                        .iter()
+                        .rev()
+                        .skip_while(|p| p.rest)
+                        .take_while(|p| p.optional)
+                        .count(),
                 }
             }
             TypeAnnotationKind::Union(members) => {
                 let resolved: Vec<Type> = members
                     .iter()
-                    .map(|m| self.resolve_value_type(m, ValuePosition::UnionMember))
+                    .map(|m| self.resolve_type(m))
                     .collect::<Result<_, _>>()?;
                 Type::union(resolved)
             }
@@ -870,7 +876,10 @@ impl<'a> Inferer<'a> {
         if self.is_later_global(name) {
             return None;
         }
-        Some(match &self.top_symbols.get(name)?.kind {
+        let Some(symbol) = self.top_symbols.get(name) else {
+            return (name == "undefined").then_some(Type::Undefined);
+        };
+        Some(match &symbol.kind {
             crate::ValueKind::Let { ty, .. } | crate::ValueKind::Const { ty, .. } => ty.clone(),
             crate::ValueKind::Function {
                 params,
@@ -878,10 +887,14 @@ impl<'a> Inferer<'a> {
                 type_predicate,
                 ..
             } => Type::Function {
-                params: params.iter().map(|p| p.ty.clone()).collect(),
+                params: params
+                    .iter()
+                    .map(super::expr::callable_parameter_type)
+                    .collect(),
                 ret: Box::new(ret.clone()),
                 predicate: type_predicate.clone().map(Box::new),
                 has_rest: params.last().is_some_and(|p| p.rest),
+                optional: crate::package_declaration::optional_parameter_count(params),
             },
         })
     }
@@ -917,7 +930,7 @@ impl<'a> Inferer<'a> {
     /// eager answer and would need a deferred type node, so it is rejected by name
     /// rather than resolved to something narrower than it should be.
     fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Result<Type, CompilerFailure> {
-        let resolved = self.resolve_value_type(operand, ValuePosition::UnionMember)?;
+        let resolved = self.resolve_type(operand)?;
         if matches!(resolved.peel(), Type::Unknown) {
             return Ok(Type::Never);
         }
@@ -1552,6 +1565,7 @@ mod tests {
         methods.insert(
             "get".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: Vec::new(),
                 ret: t(),
@@ -1562,6 +1576,7 @@ mod tests {
         methods.insert(
             "put".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: vec![Param::new("v", t())],
                 ret: Type::Void,
@@ -1652,19 +1667,14 @@ mod tests {
     }
 
     #[test]
-    fn package_generic_class_void_type_arg_diagnoses() {
+    fn package_generic_class_void_type_arg_is_value_backed() {
         let package = generic_class_test_package();
         let (_ta, diags) = run_with_packages(
             r#"import { Crate } from "test:ns";
                function main(x: Crate<void> | null): void { }"#,
             &[&package],
         );
-        assert!(
-            diags.iter().any(|d| d
-                .message
-                .contains("`void` cannot be used as a type argument to class `Crate`")),
-            "expected void-arg diagnostic, got: {diags:?}",
-        );
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
     }
 }
 

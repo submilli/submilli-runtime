@@ -76,12 +76,12 @@ export interface SlackMessage {
 
 interface ApiMessage {
     ts: string;
-    text?: string;
-    user?: string;
-    bot_id?: string;
-    thread_ts?: string;
-    reply_count?: number;
-    reactions?: SlackReaction[];
+    text?: string | null;
+    user?: string | null;
+    bot_id?: string | null;
+    thread_ts?: string | null;
+    reply_count?: number | null;
+    reactions?: SlackReaction[] | null;
 }
 
 /** Curated channel, group, or direct-message metadata. */
@@ -108,14 +108,14 @@ export interface SlackConversation {
 
 interface ApiConversation {
     id: string;
-    name?: string;
-    is_private?: boolean;
-    is_member?: boolean;
-    is_archived?: boolean;
-    is_im?: boolean;
-    is_mpim?: boolean;
-    topic?: { value: string };
-    purpose?: { value: string };
+    name?: string | null;
+    is_private?: boolean | null;
+    is_member?: boolean | null;
+    is_archived?: boolean | null;
+    is_im?: boolean | null;
+    is_mpim?: boolean | null;
+    topic?: { value: string } | null;
+    purpose?: { value: string } | null;
 }
 
 /** Curated workspace user data. */
@@ -138,11 +138,11 @@ export interface SlackUser {
 
 interface ApiUser {
     id: string;
-    name?: string;
-    real_name?: string;
-    deleted?: boolean;
-    is_bot?: boolean;
-    profile?: { display_name?: string; email?: string };
+    name?: string | null;
+    real_name?: string | null;
+    deleted?: boolean | null;
+    is_bot?: boolean | null;
+    profile?: { display_name?: string | null; email?: string | null } | null;
 }
 
 /** Cursor pagination accepted by Slack list methods. */
@@ -236,7 +236,7 @@ export function getIdentity(): SlackIdentity {
     const data = slackPost("auth.test", {}).json() as IdentityResponse;
     requireOk(data, 200);
     return {
-        userId: data.user_id, user: data.user, botId: str(data.bot_id),
+        userId: data.user_id, user: data.user, botId: data.bot_id ?? "",
         teamId: data.team_id, team: data.team, url: data.url,
     };
 }
@@ -253,9 +253,9 @@ export function sendMessage(input: SendMessageInput): SlackMessage {
     const { channelId, text, threadTs, unfurlLinks, unfurlMedia } = input;
     check("slack.com/bot/sendMessage", { channelId: channelId });
     const body: MessageWriteRequest = { channel: channelId, text: text };
-    if (threadTs !== null) body.thread_ts = threadTs;
-    if (unfurlLinks !== null) body.unfurl_links = unfurlLinks;
-    if (unfurlMedia !== null) body.unfurl_media = unfurlMedia;
+    if (threadTs !== undefined) body.thread_ts = threadTs;
+    if (unfurlLinks !== undefined) body.unfurl_links = unfurlLinks;
+    if (unfurlMedia !== undefined) body.unfurl_media = unfurlMedia;
     const data = slackPost("chat.postMessage", body).json() as MessageResponse;
     requireOk(data, 200);
     return messageFrom(data.message);
@@ -352,7 +352,7 @@ export function getMessage(ref: MessageRef): SlackMessage | null {
     const { channelId, ts, threadTs } = ref;
     check("slack.com/bot/getMessage", { channelId: channelId });
     let rootTs = ts;
-    if (threadTs !== null) rootTs = threadTs;
+    if (threadTs !== undefined) rootTs = threadTs;
     const data = messages("conversations.replies", { channel: channelId, ts: rootTs, limit: 100 });
     for (const item of data.messages) if (item.ts === ts) return messageFrom(item);
     return null;
@@ -362,25 +362,21 @@ export function getMessage(ref: MessageRef): SlackMessage | null {
  * Return one cursor page of messages from a conversation the bot can read.
  * Timestamp bounds are Slack timestamps represented as strings.
  * @param channelId Conversation whose history should be read.
- * @param options Optional page size, cursor, and timestamp bounds.
+ * @param options Optional page size, cursor, and timestamp bounds; omit it for Slack's defaults.
   * @returns One page of messages and a `nextCursor` that is empty on the last page.
  * @capability slack.com/bot/listMessages { channelId: string }
  */
-export function listMessages(channelId: string, options: MessageListOptions | null = null): MessagePage {
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.cursor;
-    const oldest = options === null ? null : options.oldest;
-    const latest = options === null ? null : options.latest;
-    const inclusive = options === null ? null : options.inclusive;
+export function listMessages(channelId: string, options: MessageListOptions = {}): MessagePage {
+    const { limit, cursor, oldest, latest, inclusive } = options;
     check("slack.com/bot/listMessages", { channelId: channelId });
-    const body: HistoryRequest = { channel: channelId };
-    applyMessageOptions(body, {
+    const body: HistoryRequest = {
+        channel: channelId,
         limit: limit,
         cursor: cursor,
         oldest: oldest,
         latest: latest,
         inclusive: inclusive,
-    });
+    };
     return messagePage(messages("conversations.history", body));
 }
 
@@ -388,16 +384,14 @@ export function listMessages(channelId: string, options: MessageListOptions | nu
  * Return one cursor page containing a thread root and its replies.
  * @param channelId Conversation containing the thread.
  * @param threadTs Timestamp of the thread's root message.
- * @param page Optional page size and continuation cursor.
+ * @param page Optional page size and continuation cursor; omit it for Slack's defaults.
   * @returns The thread root and replies on this page, with a `nextCursor` that is empty on the last page.
  * @capability slack.com/bot/getThread { channelId: string }
  */
-export function getThread(channelId: string, threadTs: string, page: PageOptions | null = null): MessagePage {
-    const limit = page === null ? null : page.limit;
-    const cursor = page === null ? null : page.cursor;
+export function getThread(channelId: string, threadTs: string, page: PageOptions = {}): MessagePage {
+    const { limit, cursor } = page;
     check("slack.com/bot/getThread", { channelId: channelId });
-    const body: HistoryRequest = { channel: channelId, ts: threadTs };
-    applyPage(body, limit, cursor);
+    const body: HistoryRequest = { channel: channelId, ts: threadTs, limit: limit, cursor: cursor };
     return messagePage(messages("conversations.replies", body));
 }
 
@@ -420,16 +414,14 @@ export function getConversation(channelId: string): SlackConversation {
 /**
  * List channels, private groups, DMs, and group DMs visible to the bot token.
  * A returned public channel is not necessarily one the bot has joined.
- * @param page Optional page size and continuation cursor.
+ * @param page Optional page size and continuation cursor; omit it for Slack's defaults.
   * @returns One page of conversations and a `nextCursor` that is empty on the last page.
  * @capability slack.com/bot/listConversations {}
  */
-export function listConversations(page: PageOptions | null = null): ConversationPage {
-    const limit = page === null ? null : page.limit;
-    const cursor = page === null ? null : page.cursor;
+export function listConversations(page: PageOptions = {}): ConversationPage {
+    const { limit, cursor } = page;
     check("slack.com/bot/listConversations", {});
-    const body: PageRequest = { types: "public_channel,private_channel,mpim,im" };
-    applyPage(body, limit, cursor);
+    const body: PageRequest = { types: "public_channel,private_channel,mpim,im", limit: limit, cursor: cursor };
     const data = slackGet("conversations.list", pageQuery(body)).json() as ConversationsResponse;
     requireOk(data, 200);
     const conversations: SlackConversation[] = [];
@@ -440,24 +432,19 @@ export function listConversations(page: PageOptions | null = null): Conversation
 /**
  * List the Slack user IDs belonging to a conversation.
  * @param channelId Conversation whose membership should be read.
- * @param page Optional page size and continuation cursor.
+ * @param page Optional page size and continuation cursor; omit it for Slack's defaults.
   * @returns One page of member user IDs and a `nextCursor` that is empty on the last page.
  * @capability slack.com/bot/listMembers { channelId: string }
  */
-export function listMembers(channelId: string, page: PageOptions | null = null): MemberPage {
-    const limit = page === null ? null : page.limit;
-    const cursor = page === null ? null : page.cursor;
+export function listMembers(channelId: string, page: PageOptions = {}): MemberPage {
+    const { limit, cursor } = page;
     check("slack.com/bot/listMembers", { channelId: channelId });
-    const body: MembersRequest = { channel: channelId };
-    applyPage(body, limit, cursor);
-    const query = pageQuery(body);
-    query.set("channel", body.channel);
+    const query = pageQuery({ limit: limit, cursor: cursor });
+    query.set("channel", channelId);
     const data = slackGet("conversations.members", query).json() as MembersResponse;
     requireOk(data, 200);
     return { memberIds: data.members, nextCursor: cursorOf(data.response_metadata) };
 }
-
-interface MembersRequest { channel: string; limit?: number; cursor?: string; }
 
 /**
  * Open or resume a 1:1 direct-message conversation without sending a message.
@@ -508,17 +495,14 @@ export function getUser(userId: string): SlackUser {
 
 /**
  * List workspace users visible to the bot token, including deactivated users and bots.
- * @param page Optional page size and continuation cursor.
+ * @param page Optional page size and continuation cursor; omit it for Slack's defaults.
   * @returns One page of users and a `nextCursor` that is empty on the last page.
  * @capability slack.com/bot/listUsers {}
  */
-export function listUsers(page: PageOptions | null = null): UserPage {
-    const limit = page === null ? null : page.limit;
-    const cursor = page === null ? null : page.cursor;
+export function listUsers(page: PageOptions = {}): UserPage {
+    const { limit, cursor } = page;
     check("slack.com/bot/listUsers", {});
-    const body: PageRequest = {};
-    applyPage(body, limit, cursor);
-    const data = slackGet("users.list", pageQuery(body)).json() as UsersResponse;
+    const data = slackGet("users.list", pageQuery({ limit: limit, cursor: cursor })).json() as UsersResponse;
     requireOk(data, 200);
     const users: SlackUser[] = [];
     for (const item of data.members) users.push(userFrom(item));
@@ -557,27 +541,6 @@ function reaction(method: string, channelId: string, ts: string, emoji: string):
 interface PageRequest { limit?: number; cursor?: string; types?: string; }
 interface HistoryRequest { channel: string; ts?: string; limit?: number; cursor?: string; oldest?: string; latest?: string; inclusive?: boolean; }
 
-function applyPage(body: PageRequest, limit: number | null, cursor: string | null): void {
-    if (limit !== null) body.limit = limit;
-    if (cursor !== null) body.cursor = cursor;
-}
-
-interface MessageListFields {
-    limit: number | null;
-    cursor: string | null;
-    oldest: string | null;
-    latest: string | null;
-    inclusive: boolean | null;
-}
-
-function applyMessageOptions(body: HistoryRequest, fields: MessageListFields): void {
-    const { limit, cursor, oldest, latest, inclusive } = fields;
-    applyPage(body, limit, cursor);
-    if (oldest !== null) body.oldest = oldest;
-    if (latest !== null) body.latest = latest;
-    if (inclusive !== null) body.inclusive = inclusive;
-}
-
 function messages(method: string, body: HistoryRequest): MessagesResponse {
     const query = pageQuery(body);
     query.set("channel", body.channel);
@@ -585,10 +548,10 @@ function messages(method: string, body: HistoryRequest): MessagesResponse {
     const oldest = body.oldest;
     const latest = body.latest;
     const inclusive = body.inclusive;
-    if (ts !== null) query.set("ts", ts);
-    if (oldest !== null) query.set("oldest", oldest);
-    if (latest !== null) query.set("latest", latest);
-    if (inclusive !== null) query.set("inclusive", inclusive.toString());
+    if (ts !== undefined) query.set("ts", ts);
+    if (oldest !== undefined) query.set("oldest", oldest);
+    if (latest !== undefined) query.set("latest", latest);
+    if (inclusive !== undefined) query.set("inclusive", inclusive.toString());
     const data = slackGet(method, query).json() as MessagesResponse;
     requireOk(data, 200);
     return data;
@@ -625,15 +588,15 @@ function pageQuery(page: PageRequest): Map<string, string> {
     const limit = page.limit;
     const cursor = page.cursor;
     const types = page.types;
-    if (limit !== null) query.set("limit", limit.toString());
-    if (cursor !== null) query.set("cursor", cursor);
-    if (types !== null) query.set("types", types);
+    if (limit !== undefined) query.set("limit", limit.toString());
+    if (cursor !== undefined) query.set("cursor", cursor);
+    if (types !== undefined) query.set("types", types);
     return query;
 }
 
 function authHeaders(): Map<string, string> {
     const token = secrets.get("SLACK_BOT_TOKEN");
-    if (token === null) throw new SlackError("missing_token", "SLACK_BOT_TOKEN is not bound", 200);
+    if (token === undefined) throw new SlackError("missing_token", "SLACK_BOT_TOKEN is not bound", 200);
     const headers = new Map<string, string>();
     headers.set("Authorization", `Bearer ${token}`);
     return headers;
@@ -650,40 +613,39 @@ function singleUserId(value: string): string {
 
 function requireOk(envelope: SlackEnvelope, status: number): void {
     if (!envelope.ok) {
-        const code = envelope.error !== null ? envelope.error : "unknown_error";
+        const code = envelope.error ?? "unknown_error";
         throw new SlackError(code, `Slack API error: ${code}`, status);
     }
 }
 
 function messageFrom(item: ApiMessage): SlackMessage {
+    let reactions: SlackReaction[] = [];
+    if (item.reactions) reactions = item.reactions;
     return {
-        ts: item.ts, text: str(item.text), user: str(item.user), botId: str(item.bot_id),
-        threadTs: str(item.thread_ts), replyCount: num(item.reply_count),
-        reactions: item.reactions !== null ? item.reactions : [],
+        ts: item.ts, text: item.text ?? "", user: item.user ?? "", botId: item.bot_id ?? "",
+        threadTs: item.thread_ts ?? "", replyCount: item.reply_count ?? 0,
+        reactions: reactions,
     };
 }
 
 function conversationFrom(channel: ApiConversation): SlackConversation {
     return {
-        id: channel.id, name: str(channel.name), isPrivate: bool(channel.is_private),
-        isMember: bool(channel.is_member), isArchived: bool(channel.is_archived),
-        isIm: bool(channel.is_im), isMpim: bool(channel.is_mpim),
-        topic: channel.topic !== null ? channel.topic.value : "",
-        purpose: channel.purpose !== null ? channel.purpose.value : "",
+        id: channel.id, name: channel.name ?? "", isPrivate: channel.is_private === true,
+        isMember: channel.is_member === true, isArchived: channel.is_archived === true,
+        isIm: channel.is_im === true, isMpim: channel.is_mpim === true,
+        topic: channel.topic?.value ?? "",
+        purpose: channel.purpose?.value ?? "",
     };
 }
 
 function userFrom(user: ApiUser): SlackUser {
     const profile = user.profile;
     return {
-        id: user.id, name: str(user.name), realName: str(user.real_name),
-        displayName: profile !== null ? str(profile.display_name) : "",
-        email: profile !== null ? str(profile.email) : "",
-        deleted: bool(user.deleted), isBot: bool(user.is_bot),
+        id: user.id, name: user.name ?? "", realName: user.real_name ?? "",
+        displayName: profile?.display_name ?? "",
+        email: profile?.email ?? "",
+        deleted: user.deleted === true, isBot: user.is_bot === true,
     };
 }
 
-function cursorOf(metadata: Metadata | null): string { return metadata !== null ? str(metadata.next_cursor) : ""; }
-function str(value: string | null): string { return value !== null ? value : ""; }
-function num(value: number | null): number { return value !== null ? value : 0; }
-function bool(value: boolean | null): boolean { return value === true; }
+function cursorOf(metadata: Metadata | undefined): string { return metadata?.next_cursor ?? ""; }

@@ -81,15 +81,15 @@ function f2(s: string): void {
     }
 }
 
-function f3(s: string): "foo" | "bar" | null {
->f3 : (s: string) => "foo" | "bar" | null
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+function f3(s: string): "foo" | "bar" | undefined {
+>f3 : (s: string) => "foo" | "bar" | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >s : string
 >  : ^^^^^^
 
-    return s === "foo" || s === "bar" ? s : null;  // "foo" | "bar" | undefined
->s === "foo" || s === "bar" ? s : null : "foo" | "bar" | null
->                                      : ^^^^^^^^^^^^^^^^^^^^
+    return s === "foo" || s === "bar" ? s : undefined;  // "foo" | "bar" | undefined
+>s === "foo" || s === "bar" ? s : undefined : "foo" | "bar" | undefined
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >s === "foo" || s === "bar" : boolean
 >                           : ^^^^^^^
 >s === "foo" : boolean
@@ -106,6 +106,8 @@ function f3(s: string): "foo" | "bar" | null {
 >      : ^^^^^
 >s : "foo" | "bar"
 >  : ^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 }
 

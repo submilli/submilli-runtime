@@ -8,8 +8,8 @@ function main(): void {
   w.close();
 
   assert(exists("/output.txt"), "writer output exists after close");
-  const back: string | null = readText("/output.txt");
-  if (back === null) {
+  const back: string | undefined = readText("/output.txt");
+  if (back === undefined) {
     assert(false, "readText returned null");
     return;
   }

@@ -57,9 +57,9 @@ class Derived2 extends Base { baz: string; }
 >baz : string
 >    : ^^^^^^
 
-/*pruned*/;                                
-/*pruned*/;                                         
-/*pruned*/;                                            
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 let r = true ? 1 : 2;
 >r : number
@@ -125,7 +125,7 @@ let r6 = true ? (x: number) => { } : (x: Object) => { }; // returns number => vo
 >x : Object
 >  : ^^^^^^
 
-let r7: (x: Object) => void = true ? (x: number) => { } : (x: Object) => { }; 
+let r7: (x: Object) => void = true ? (x: number) => { } : (x: Object) => { };
 >r7 : (x: Object) => void
 >   : ^^^^^^^^^^^^^^^^^^^
 >x : Object
@@ -160,7 +160,7 @@ let r8 = true ? (x: Object) => { } : (x: number) => { }; // returns Object => vo
 >  : ^^^^^^
 
 /*pruned*/;                                // no error since we use the contextual type in BCT
-/*pruned*/;                      
+/*pruned*/;
 
 function foo5<T, U>(t: T, u: U): Object {
 >foo5 : <T, U>(t: T, u: U) => Object

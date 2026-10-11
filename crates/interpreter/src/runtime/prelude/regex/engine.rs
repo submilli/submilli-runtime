@@ -84,22 +84,6 @@ pub fn translate_js_pattern(pattern: &str, flags: &str) -> Result<TranslatedRege
     let flag_set = parse_flags(flags)?;
     let mut translated = String::with_capacity(pattern.len());
 
-    // Without `u`, JS `\d`/`\w`/`\s` are ASCII but `.` is Unicode. The `regex` crate
-    // can't express this combo (disabling Unicode makes `.` byte-mode, rejected for str
-    // input), so we keep Unicode on and rewrite the shorthand classes to ASCII equivalents.
-    let escape_rewrites: &[(u8, &str)] = if flag_set.has(FlagSet::U) {
-        &[]
-    } else {
-        &[
-            (b'd', "0-9"),
-            (b'D', "^0-9"),
-            (b'w', "A-Za-z0-9_"),
-            (b'W', "^A-Za-z0-9_"),
-            (b's', " \\t\\r\\n\\x0B\\x0C"),
-            (b'S', "^ \\t\\r\\n\\x0B\\x0C"),
-        ]
-    };
-
     let mut chars = pattern.chars();
     let mut in_class = false;
     while let Some(c) = chars.next() {
@@ -112,17 +96,10 @@ pub fn translate_js_pattern(pattern: &str, flags: &str) -> Result<TranslatedRege
                 if !in_class && ((escaped.is_ascii_digit() && escaped != '0') || escaped == 'k') {
                     return Err(TranslateError::Backreference);
                 }
-                if let Some((_, replacement)) = escape_rewrites
-                    .iter()
-                    .find(|(byte, _)| char::from(*byte) == escaped)
+                if let Some(replacement) =
+                    shorthand_class(escaped).or_else(|| word_boundary(escaped, in_class))
                 {
-                    if !in_class {
-                        translated.push('[');
-                    }
                     translated.push_str(replacement);
-                    if !in_class {
-                        translated.push(']');
-                    }
                     continue;
                 }
                 if escaped.is_ascii() || flag_set.has(FlagSet::U) {
@@ -156,6 +133,43 @@ pub fn translate_js_pattern(pattern: &str, flags: &str) -> Result<TranslatedRege
         pattern: translated,
         flags: flag_set,
     })
+}
+
+/// The JS WhiteSpace and LineTerminator code points, as `regex` class items.
+macro_rules! js_space {
+    () => {
+        r"\t\n\x0B\x0C\r \x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}"
+    };
+}
+
+/// The `regex` crate spelling of a JS shorthand class escape, or `None` if
+/// `escaped` isn't one. JS keeps `\d`/`\w` ASCII even under `u`, and its `\s`
+/// is WhiteSpace plus LineTerminator, which differs from Unicode `White_Space`
+/// (JS adds U+FEFF and leaves out U+0085). The crate keeps Unicode on so that
+/// `.` matches whole characters, so each class is spelled out. Each one is
+/// bracketed, which the crate reads as a nested class inside `[...]`; that keeps
+/// a negated one like `[a\S]` a union rather than a class with a literal `^`.
+fn shorthand_class(escaped: char) -> Option<&'static str> {
+    Some(match escaped {
+        'd' => "[0-9]",
+        'D' => "[^0-9]",
+        'w' => "[A-Za-z0-9_]",
+        'W' => "[^A-Za-z0-9_]",
+        's' => concat!("[", js_space!(), "]"),
+        'S' => concat!("[^", js_space!(), "]"),
+        _ => return None,
+    })
+}
+
+/// JS `\b`/`\B` test ASCII word characters, as `\w` does. Inside a class `\b`
+/// is a backspace instead.
+fn word_boundary(escaped: char, in_class: bool) -> Option<&'static str> {
+    match (escaped, in_class) {
+        ('b', false) => Some(r"(?-u:\b)"),
+        ('B', false) => Some(r"(?-u:\B)"),
+        ('b', true) => Some(r"\x08"),
+        _ => None,
+    }
 }
 
 fn parse_flags(flags: &str) -> Result<FlagSet, TranslateError> {
@@ -357,32 +371,64 @@ mod tests {
     }
 
     #[test]
-    fn translate_u_flag_passes_pattern_through_unchanged() {
-        let t = translate_js_pattern("\\d+", "u").expect("translates");
-        assert_eq!(t.pattern, "\\d+");
-        assert!(t.flags.has(FlagSet::U));
+    fn translate_substitutes_digit_class_with_or_without_u() {
+        for flags in ["", "u"] {
+            let t = translate_js_pattern("\\d+", flags).expect("translates");
+            assert_eq!(t.pattern, "[0-9]+");
+        }
     }
 
     #[test]
-    fn translate_no_u_flag_substitutes_digit_class() {
-        let t = translate_js_pattern("\\d+", "").expect("translates");
-        assert_eq!(t.pattern, "[0-9]+");
-        assert!(!t.flags.has(FlagSet::U));
-    }
-
-    #[test]
-    fn translate_no_u_flag_substitutes_word_and_space_classes() {
-        let t = translate_js_pattern("\\w\\s\\W\\S", "").expect("translates");
-        assert_eq!(
-            t.pattern,
-            "[A-Za-z0-9_][ \\t\\r\\n\\x0B\\x0C][^A-Za-z0-9_][^ \\t\\r\\n\\x0B\\x0C]"
-        );
-    }
-
-    #[test]
-    fn translate_substitutes_inside_char_class_without_brackets() {
+    fn translate_brackets_a_shorthand_class_inside_a_class() {
         let t = translate_js_pattern("[a-z\\d]", "").expect("translates");
-        assert_eq!(t.pattern, "[a-z0-9]");
+        assert_eq!(t.pattern, "[a-z[0-9]]");
+    }
+
+    #[test]
+    fn translate_reads_backspace_inside_a_class() {
+        let t = translate_js_pattern("[\\b]", "").expect("translates");
+        assert_eq!(t.pattern, "[\\x08]");
+    }
+
+    /// The JS WhiteSpace and LineTerminator characters, and two that look
+    /// like spaces but aren't in the set.
+    const JS_SPACES: [char; 25] = [
+        '\t', '\n', '\u{B}', '\u{C}', '\r', ' ', '\u{A0}', '\u{1680}', '\u{2000}', '\u{2001}',
+        '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}',
+        '\u{2009}', '\u{200A}', '\u{2028}', '\u{2029}', '\u{202F}', '\u{205F}', '\u{3000}',
+        '\u{FEFF}',
+    ];
+    const NOT_JS_SPACES: [char; 2] = ['\u{85}', '\u{200B}'];
+
+    #[test]
+    fn build_regex_space_class_matches_the_js_set() {
+        for flags in ["", "u"] {
+            for pattern in ["^\\s$", "^[\\s]$", "^[a\\s]$"] {
+                let (re, _) = build_regex(pattern, flags).expect("builds");
+                for c in JS_SPACES {
+                    assert!(re.is_match(&c.to_string()), "{pattern}/{flags} on {c:?}");
+                }
+                for c in NOT_JS_SPACES {
+                    assert!(!re.is_match(&c.to_string()), "{pattern}/{flags} on {c:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn build_regex_negated_space_class_is_the_complement() {
+        let (re, _) = build_regex("^[a\\S]$", "").expect("builds");
+        assert!(re.is_match("a"));
+        assert!(re.is_match("\u{85}"));
+        assert!(!re.is_match(" "));
+        assert!(!re.is_match("\u{3000}"));
+    }
+
+    #[test]
+    fn build_regex_word_boundary_is_ascii() {
+        let (re, _) = build_regex("\\bx", "u").expect("builds");
+        assert!(re.is_match("\u{E9}x"));
+        assert!(!re.is_match("ax"));
     }
 
     #[test]
@@ -442,7 +488,7 @@ mod tests {
     #[test]
     fn translate_passes_through_named_capture() {
         let t = translate_js_pattern("(?<year>\\d{4})", "u").expect("translates");
-        assert_eq!(t.pattern, "(?<year>\\d{4})");
+        assert_eq!(t.pattern, "(?<year>[0-9]{4})");
     }
 
     #[test]
@@ -496,11 +542,12 @@ mod tests {
     }
 
     #[test]
-    fn build_regex_no_u_flag_makes_digit_ascii_only() {
-        let (re_u, _) = build_regex("\\d+", "u").expect("builds u");
-        let (re_no_u, _) = build_regex("\\d+", "").expect("builds no-u");
-        assert!(re_u.is_match("\u{0660}"));
-        assert!(!re_no_u.is_match("\u{0660}"));
+    fn build_regex_digit_class_is_ascii_even_with_u() {
+        for flags in ["", "u"] {
+            let (re, _) = build_regex("\\d+", flags).expect("builds");
+            assert!(!re.is_match("\u{0660}"));
+            assert!(re.is_match("7"));
+        }
     }
 
     #[test]

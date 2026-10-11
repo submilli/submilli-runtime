@@ -1,0 +1,1 @@
+emitArrowFunctionWhenUsingArguments14_ES6.ts(8,13): error TS1100: Invalid use of 'arguments' in strict mode.

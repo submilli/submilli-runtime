@@ -3,7 +3,7 @@ import secrets from "submilli:secrets";
 import { getIdentity, listConversations, listUsers } from "@submilli/slack-bot";
 
 function main(): void {
-    if (secrets.get("SLACK_BOT_TOKEN") === null) return;
+    if (secrets.get("SLACK_BOT_TOKEN") === undefined) return;
 
     label("bot token identity");
     const identity = getIdentity();

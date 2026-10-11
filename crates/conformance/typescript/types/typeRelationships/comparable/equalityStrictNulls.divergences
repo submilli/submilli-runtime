@@ -1,4 +1,19 @@
-types: 60 of 67 tsc entries compared, 0 differ
+types: 77 of 84 tsc entries compared, 0 differ
 
 errors:
-line 75: ours: duplicate `case` label (tsc accepts)
+line 5: ours: `x == undefined` does not also match `null`: `==` compares like `===` (tsc accepts)
+line 7: ours: `x != undefined` does not also match `null`: `==` compares like `===` (tsc accepts)
+line 13: ours: `x == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 15: ours: `x != null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 21: ours: `undefined == x` does not also match `null`: `==` compares like `===` (tsc accepts)
+line 23: ours: `undefined != x` does not also match `null`: `==` compares like `===` (tsc accepts)
+line 29: ours: `null == x` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 31: ours: `null != x` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 40: ours: `undefined == undefined` compares two nullish values: `==` compares like `===` (tsc accepts)
+line 42: ours: `undefined == null` compares two nullish values: `==` compares like `===` (tsc accepts)
+line 44: ours: `null == undefined` compares two nullish values: `==` compares like `===` (tsc accepts)
+line 46: ours: `null == null` compares two nullish values: `==` compares like `===` (tsc accepts)
+line 51: ours: `a == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 53: ours: `b == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 55: ours: `c == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 57: ours: `d == null` does not also match `undefined`: `==` compares like `===` (tsc accepts)

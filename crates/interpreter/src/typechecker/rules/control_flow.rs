@@ -2,8 +2,8 @@
 
 use super::declarations::TypeDeclarations;
 use crate::{
-    EnumVariantPayload, MangledName, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind,
-    TypedSwitchCase, TypedSwitchValue, typechecker::infer::narrowing,
+    MangledName, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind, TypedSwitchCase,
+    TypedSwitchValue, typechecker::infer::narrowing,
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -258,15 +258,11 @@ fn switch_is_exhaustive(
     if ta.exhaustive_switches.contains(&discriminant) {
         return Ok(true);
     }
-    let mut seen: std::collections::BTreeSet<narrowing::LiteralValue> =
-        std::collections::BTreeSet::new();
-    for case in cases {
-        for value in &case.values {
-            if let Some(key) = literal_value_of(value) {
-                seen.insert(key);
-            }
-        }
-    }
+    let seen: std::collections::BTreeSet<narrowing::LiteralValue> = cases
+        .iter()
+        .flat_map(|case| &case.values)
+        .filter_map(narrowing::switch_value_literal)
+        .collect();
     let disc_expr = ta
         .try_expr(discriminant)
         .map_err(crate::typechecker::arena_failure)?;
@@ -281,7 +277,7 @@ fn switch_is_exhaustive(
             .iter()
             .flat_map(|case| &case.values)
             .filter(|value| matches!(value, TypedSwitchValue::Enum { .. }))
-            .filter_map(literal_value_of)
+            .filter_map(narrowing::switch_value_literal)
             .collect();
         return Ok(enum_is_covered(declarations, mangled, name, &named));
     }
@@ -291,10 +287,9 @@ fn switch_is_exhaustive(
             .map_err(crate::typechecker::arena_failure)?
             .ty
             .peel()
-        && let Some((disc_key, table)) = narrowing::union_discriminant(members)
-        && disc_key == name.name
+        && let Some(table) = narrowing::inline_union_discriminant_for_key(members, &name.name)
     {
-        return Ok(table.iter().all(|(lit, _)| seen.contains(lit)));
+        return Ok(table.uncovered(&seen).is_empty());
     }
     Ok(matches!(
         narrowing::subtract_literals(&disc_expr.ty, &seen),
@@ -314,24 +309,4 @@ fn enum_is_covered(
     declarations
         .enum_values(mangled, name)
         .is_some_and(|values| !values.is_empty() && values.iter().all(|v| seen.contains(v)))
-}
-
-fn literal_value_of(value: &TypedSwitchValue) -> Option<narrowing::LiteralValue> {
-    match value {
-        TypedSwitchValue::String { value, .. } => {
-            Some(narrowing::LiteralValue::String(value.clone()))
-        }
-        TypedSwitchValue::Number { value, .. } => Some(narrowing::LiteralValue::Number(
-            crate::types::LiteralF64(*value),
-        )),
-        TypedSwitchValue::Boolean { value, .. } => Some(narrowing::LiteralValue::Boolean(*value)),
-        TypedSwitchValue::Null { .. } => None,
-        TypedSwitchValue::Expr { literal, .. } => literal.clone(),
-        TypedSwitchValue::Enum { value, .. } => match value {
-            EnumVariantPayload::Number(n) => Some(narrowing::LiteralValue::Number(
-                crate::types::LiteralF64(*n),
-            )),
-            EnumVariantPayload::String(s) => Some(narrowing::LiteralValue::String(s.clone())),
-        },
-    }
 }

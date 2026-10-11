@@ -57,8 +57,8 @@ function f1(...args: readonly string[]): void {
 >'def' : "def"
 >      : ^^^^^
 
-    /*pruned*/;        
-    /*pruned*/; 
+    /*pruned*/;
+    /*pruned*/;
 }
 
 function f2(...args: readonly [string, string]): void {
@@ -67,7 +67,7 @@ function f2(...args: readonly [string, string]): void {
 >args : readonly [string, string]
 >     : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    /*pruned*/; 
+    /*pruned*/;
     f1('abc', 'def');
 >f1('abc', 'def') : void
 >                 : ^^^^
@@ -78,8 +78,8 @@ function f2(...args: readonly [string, string]): void {
 >'def' : "def"
 >      : ^^^^^
 
-    /*pruned*/;        
-    /*pruned*/; 
+    /*pruned*/;
+    /*pruned*/;
     f2('abc', 'def');
 >f2('abc', 'def') : void
 >                 : ^^^^
@@ -91,7 +91,7 @@ function f2(...args: readonly [string, string]): void {
 >      : ^^^^^
 
     /*pruned*/;          // Error
-    /*pruned*/; 
+    /*pruned*/;
 }
 
 function f4(...args: readonly string[]): void {

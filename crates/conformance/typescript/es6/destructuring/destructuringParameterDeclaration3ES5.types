@@ -10,7 +10,7 @@ type arrayString = Array<String>
 >arrayString : arrayString
 >            : ^^^^^^^^^^^
 
-/*pruned*/;                               
+/*pruned*/;
 type stringOrNumArray = Array<String|Number>;
 >stringOrNumArray : stringOrNumArray
 >                 : ^^^^^^^^^^^^^^^^
@@ -22,22 +22,22 @@ function a1(...x: (number|string)[]): void { }
 >x : (string | number)[]
 >  : ^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;                
+/*pruned*/;
 function a3(...a: Array<String>): void { }
 >a3 : (...a: Array<String>) => void
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >a : String[]
 >  : ^^^^^^^^
 
-/*pruned*/;                             
+/*pruned*/;
 function a5(...a: stringOrNumArray): void { }
 >a5 : (...a: stringOrNumArray) => void
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >a : stringOrNumArray
 >  : ^^^^^^^^^^^^^^^^
 
-/*pruned*/;                         
-/*pruned*/;                                
+/*pruned*/;
+/*pruned*/;
 function a11([a, b, c, ...x]: number[]): void { }
 >a11 : ([a, b, c, ...x]: number[]) => void
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -76,8 +76,8 @@ let array2 = [true, false, "hello"];
 >"hello" : "hello"
 >        : ^^^^^^^
 
-/*pruned*/;    
-/*pruned*/;  
+/*pruned*/;
+/*pruned*/;
 
 /*pruned*/;                              // Parameter type is [any, any, [[any]]]
 
@@ -137,10 +137,10 @@ enum E { a, b }
 >b : E.b
 >  : ^^^
 
-/*pruned*/;           
-/*pruned*/;                                         
-/*pruned*/;        
-/*pruned*/;              
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 
 

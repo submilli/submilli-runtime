@@ -1,0 +1,1 @@
+line 8 missed: by-design spec §1.2 optional properties follow ordinary TypeScript semantics and admit explicit undefined; exactOptionalPropertyTypes is not a language mode

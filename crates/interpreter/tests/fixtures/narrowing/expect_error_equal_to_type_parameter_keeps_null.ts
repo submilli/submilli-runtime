@@ -1,4 +1,4 @@
-// expect-error: expected `T`, got `null | T`
+// expect-error: expected `T`, got `T | null`
 // `null` is comparable to a type parameter, so equality with a `T` keeps it,
 // as in TypeScript.
 function f<T>(x: T | null, y: T): T | string {

@@ -1,6 +1,6 @@
 // Statics, `readonly`, and optional (`?`) fields on a generic class. Statics are
 // namespaced module artifacts with no `T` binding; an optional `T` field reads
-// as `T | null` before it is assigned.
+// as `T | undefined` before it is assigned.
 class Box<T> {
   static readonly kind: string = "box";
   static describe(): string {
@@ -29,8 +29,8 @@ function main(): void {
 
   const b = new Box<string>(7);
   assert(b.created === 7, "readonly field on a generic class");
-  assert(b.v === null, "unassigned optional T field reads null");
-  assert(b.note === null, "unassigned optional non-generic field reads null");
+  assert(b.v === undefined, "unassigned optional T field reads undefined");
+  assert(b.note === undefined, "unassigned optional non-generic field reads undefined");
   b.put("q");
-  assert(b.v !== null && b.v.length === 1, "optional T field narrows after assignment");
+  assert(b.v !== undefined && b.v.length === 1, "optional T field narrows after assignment");
 }

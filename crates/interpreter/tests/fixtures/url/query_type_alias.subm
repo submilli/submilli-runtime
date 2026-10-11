@@ -13,8 +13,8 @@ function main(): void {
 
   parsed.set("d", "4");
   assert(parsed.size === 4, "Map.set on Query-typed value");
-  const a: string | null = parsed.get("a");
-  assert(a !== null && a === "1", "Map.get on Query-typed value");
+  const a: string | undefined = parsed.get("a");
+  assert(a !== undefined && a === "1", "Map.get on Query-typed value");
 
   const s: string = encodeQuery(parsed);
   const reparsed: Query = decodeQuery(s);

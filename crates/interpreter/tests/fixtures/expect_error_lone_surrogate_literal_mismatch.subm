@@ -1,0 +1,7 @@
+// expect-error: expected `"\uD800"`, got `"\uDC00"`
+// expect-error-count: 1
+// A diagnostic prints a lone surrogate in a literal type as its escape.
+function main(): void {
+  const high: "\uD800" = "\uDC00";
+  console.log(high);
+}

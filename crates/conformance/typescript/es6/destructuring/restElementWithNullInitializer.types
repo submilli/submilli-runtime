@@ -1,0 +1,45 @@
+=== restElementWithNullInitializer.ts ===
+function foo1([...r] = null): void {
+>foo1 : ([...r]?: null) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^
+>r : any[]
+>  : ^^^^^
+
+}
+
+function foo2([...r] = undefined): void {
+>foo2 : ([...r]?: undefined) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>r : any[]
+>  : ^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+}
+
+function foo3([...r] = {}): void {
+>foo3 : ([...r]?: {}) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>r : any[]
+>  : ^^^^^
+>{} : {}
+>   : ^^
+
+}
+
+function foo4([...r] = []): void {
+>foo4 : ([...r]?: never[]) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>r : never[]
+>  : ^^^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

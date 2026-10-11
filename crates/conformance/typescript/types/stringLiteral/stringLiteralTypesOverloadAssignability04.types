@@ -1,6 +1,6 @@
 === stringLiteralTypesOverloadAssignability04.ts ===
 
-/*pruned*/;                  
+/*pruned*/;
 function f(x: "foo"): number {
 >f : (x: "foo") => number
 >  : ^^^^^^^^^^^^^^^^^^^^
@@ -13,7 +13,7 @@ function f(x: "foo"): number {
 
 }
 
-/*pruned*/;                  
+/*pruned*/;
 function g(x: "foo"): number {
 >g : (x: "foo") => number
 >  : ^^^^^^^^^^^^^^^^^^^^

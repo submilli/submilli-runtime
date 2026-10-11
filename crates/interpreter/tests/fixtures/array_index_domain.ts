@@ -79,7 +79,7 @@ function main(): void {
   // `.at(i)` is the documented non-throwing alternative and keeps JS clamping.
   assert(a.at(-1) === 2, "`.at` counts from the end");
   assert(a.at(0.5) === 7, "`.at` truncates a fractional index");
-  assert(a.at(9) === null, "`.at` returns null past the end");
+  assert(a.at(9) === undefined, "`.at` returns undefined past the end");
 }
 
 let order: string = "";

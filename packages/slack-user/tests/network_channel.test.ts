@@ -22,7 +22,7 @@ function findChannel(name: string): SlackChannel {
 
 function main(): void {
     const channelName = secrets.get("SLACK_TEST_CHANNEL");
-    if (secrets.get("SLACK_USER_TOKEN") === null || channelName === null) return;
+    if (secrets.get("SLACK_USER_TOKEN") === undefined || channelName === undefined) return;
 
     label("user channel and message reads");
     const channel = findChannel(channelName);

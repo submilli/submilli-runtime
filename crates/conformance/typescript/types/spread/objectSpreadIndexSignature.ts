@@ -11,7 +11,7 @@ let ii = { ...indexed1, ...indexed2 };
 /*pruned*/
 
 const b: boolean = null as unknown as (boolean);
-/*pruned*/
+indexed3 = { ...b ? indexed3 : undefined };
 
 let roindex: { readonly [x:string]: number } = null as unknown as ({ readonly [x:string]: number });
 let writable = { ...roindex };

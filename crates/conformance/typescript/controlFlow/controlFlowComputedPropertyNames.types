@@ -39,23 +39,25 @@ function f1(obj: Record<string, unknown>, key: string): void {
     }
 }
 
-function f2(obj: Record<string, string | null>, key: string): void {
->f2 : (obj: Record<string, string | null>, key: string) => void
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->obj : Record<string, string | null>
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+function f2(obj: Record<string, string | undefined>, key: string): void {
+>f2 : (obj: Record<string, string | undefined>, key: string) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : Record<string, string | undefined>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >key : string
 >    : ^^^^^^
 
-    if (obj[key] !== null) {
->obj[key] !== null : boolean
->                  : ^^^^^^^
->obj[key] : string | null
->         : ^^^^^^^^^^^^^
->obj : Record<string, string | null>
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    if (obj[key] !== undefined) {
+>obj[key] !== undefined : boolean
+>                       : ^^^^^^^
+>obj[key] : string | undefined
+>         : ^^^^^^^^^^^^^^^^^^
+>obj : Record<string, string | undefined>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >key : string
 >    : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         obj[key].toUpperCase();
 >obj[key].toUpperCase() : string
@@ -64,8 +66,8 @@ function f2(obj: Record<string, string | null>, key: string): void {
 >                     : ^^^^^^^^^^^^
 >obj[key] : string
 >         : ^^^^^^
->obj : Record<string, string | null>
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : Record<string, string | undefined>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >key : string
 >    : ^^^^^^
 >toUpperCase : () => string
@@ -82,15 +84,17 @@ function f2(obj: Record<string, string | null>, key: string): void {
 >key : string
 >    : ^^^^^^
 
-    if (obj[key2] !== null) {
->obj[key2] !== null : boolean
->                   : ^^^^^^^
->obj[key2] : string | null
->          : ^^^^^^^^^^^^^
->obj : Record<string, string | null>
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    if (obj[key2] !== undefined) {
+>obj[key2] !== undefined : boolean
+>                        : ^^^^^^^
+>obj[key2] : string | undefined
+>          : ^^^^^^^^^^^^^^^^^^
+>obj : Record<string, string | undefined>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >key2 : string
 >     : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         obj[key2].toUpperCase();
 >obj[key2].toUpperCase() : string
@@ -99,8 +103,8 @@ function f2(obj: Record<string, string | null>, key: string): void {
 >                      : ^^^^^^^^^^^^
 >obj[key2] : string
 >          : ^^^^^^
->obj : Record<string, string | null>
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : Record<string, string | undefined>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >key2 : string
 >     : ^^^^^^
 >toUpperCase : () => string
@@ -117,15 +121,17 @@ function f2(obj: Record<string, string | null>, key: string): void {
 >key : string
 >    : ^^^^^^
 
-    if (obj[key3] !== null) {
->obj[key3] !== null : boolean
->                   : ^^^^^^^
->obj[key3] : string | null
->          : ^^^^^^^^^^^^^
->obj : Record<string, string | null>
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    if (obj[key3] !== undefined) {
+>obj[key3] !== undefined : boolean
+>                        : ^^^^^^^
+>obj[key3] : string | undefined
+>          : ^^^^^^^^^^^^^^^^^^
+>obj : Record<string, string | undefined>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >key3 : string
 >     : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         obj[key3].toUpperCase();
 >obj[key3].toUpperCase() : string
@@ -134,8 +140,8 @@ function f2(obj: Record<string, string | null>, key: string): void {
 >                      : ^^^^^^^^^^^^
 >obj[key3] : string
 >          : ^^^^^^
->obj : Record<string, string | null>
->    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : Record<string, string | undefined>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >key3 : string
 >     : ^^^^^^
 >toUpperCase : () => string
@@ -163,23 +169,25 @@ function f3(obj: Thing, key: keyof Thing): void {
 >key : keyof Thing
 >    : ^^^^^^^^^^^
 
-    if (obj[key] !== null) {
->obj[key] !== null : boolean
->                  : ^^^^^^^
+    if (obj[key] !== undefined) {
+>obj[key] !== undefined : boolean
+>                       : ^^^^^^^
 >obj[key] : string | number | undefined
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >obj : Thing
 >    : ^^^^^
 >key : keyof Thing
 >    : ^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
         if (typeof obj[key] === "string") {
 >typeof obj[key] === "string" : boolean
 >                             : ^^^^^^^
 >typeof obj[key] : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
 >                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->obj[key] : string | number | undefined
->         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj[key] : string | number
+>         : ^^^^^^^^^^^^^^^
 >obj : Thing
 >    : ^^^^^
 >key : keyof Thing
@@ -207,8 +215,8 @@ function f3(obj: Thing, key: keyof Thing): void {
 >                             : ^^^^^^^
 >typeof obj[key] : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
 >                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->obj[key] : string | number | undefined
->         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj[key] : string | number
+>         : ^^^^^^^^^^^^^^^
 >obj : Thing
 >    : ^^^^^
 >key : keyof Thing
@@ -234,11 +242,11 @@ function f3(obj: Thing, key: keyof Thing): void {
     }
 }
 
-/*pruned*/;                                                                 
-                   
-                               
-     
- 
+/*pruned*/;
+
+
+
+
 
 
 function main(): void {}

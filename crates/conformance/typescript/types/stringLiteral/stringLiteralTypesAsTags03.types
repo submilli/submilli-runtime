@@ -47,8 +47,8 @@ interface B extends Entity {
 // interpreting respective overloads as "specialized" signatures.
 // That way, we can avoid the need to look for a compatible overload
 // signature and simply check compatibility with the implementation.
-/*pruned*/;                                                    
-/*pruned*/;                                                    
+/*pruned*/;
+/*pruned*/;
 function hasKind(entity: Entity, kind: Kind): entity is Entity {
 >hasKind : (entity: Entity, kind: Kind) => entity is Entity
 >        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

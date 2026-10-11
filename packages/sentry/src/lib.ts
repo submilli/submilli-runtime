@@ -433,197 +433,196 @@ export class SentryError extends Error {
 }
 
 interface ApiStatus {
-    id?: string;
-    name?: string;
+    id?: string | null;
+    name?: string | null;
 }
 
 interface ApiOrganization {
-    id?: string;
-    slug?: string;
-    name?: string;
+    id?: string | null;
+    slug?: string | null;
+    name?: string | null;
     status?: unknown;
-    dateCreated?: string;
-    isEarlyAdopter?: boolean;
-    require2FA?: boolean;
+    dateCreated?: string | null;
+    isEarlyAdopter?: boolean | null;
+    require2FA?: boolean | null;
 }
 
 interface ApiOrganizationRef {
-    slug?: string;
+    slug?: string | null;
 }
 
 interface ApiProject {
-    id?: string;
-    slug?: string;
-    name?: string;
-    platform?: string;
+    id?: string | null;
+    slug?: string | null;
+    name?: string | null;
+    platform?: string | null;
     status?: unknown;
-    dateCreated?: string;
-    hasAccess?: boolean;
-    isBookmarked?: boolean;
-    organization?: ApiOrganizationRef;
+    dateCreated?: string | null;
+    hasAccess?: boolean | null;
+    isBookmarked?: boolean | null;
+    organization?: ApiOrganizationRef | null;
 }
 
 interface ApiActor {
-    type?: string;
-    id?: string;
-    name?: string;
-    email?: string;
+    type?: string | null;
+    id?: string | null;
+    name?: string | null;
+    email?: string | null;
 }
 
 interface ApiIssueMetadata {
-    type?: string;
-    value?: string;
-    title?: string;
+    type?: string | null;
+    value?: string | null;
+    title?: string | null;
 }
 
 interface ApiIssue {
-    id?: string;
-    shortId?: string;
-    title?: string;
-    culprit?: string;
-    level?: string;
-    status?: string;
-    substatus?: string;
-    priority?: string;
-    permalink?: string;
-    count?: string;
-    userCount?: number;
-    numComments?: number;
-    firstSeen?: string;
-    lastSeen?: string;
-    isUnhandled?: boolean;
-    project?: ApiProject;
-    assignedTo?: ApiActor;
-    metadata?: ApiIssueMetadata;
+    id?: string | null;
+    shortId?: string | null;
+    title?: string | null;
+    culprit?: string | null;
+    level?: string | null;
+    status?: string | null;
+    substatus?: string | null;
+    priority?: string | null;
+    permalink?: string | null;
+    count?: string | null;
+    userCount?: number | null;
+    numComments?: number | null;
+    firstSeen?: string | null;
+    lastSeen?: string | null;
+    isUnhandled?: boolean | null;
+    project?: ApiProject | null;
+    assignedTo?: ApiActor | null;
+    metadata?: ApiIssueMetadata | null;
 }
 
 interface ApiShortIdLookup {
-    groupId?: string;
-    group?: ApiIssue;
+    groupId?: string | null;
+    group?: ApiIssue | null;
 }
 
 interface ApiTag {
-    key?: string;
-    value?: string;
+    key?: string | null;
+    value?: string | null;
 }
 
 interface ApiEventUser {
-    id?: string;
-    email?: string;
-    username?: string;
-    ip_address?: string;
-    name?: string;
+    id?: string | null;
+    email?: string | null;
+    username?: string | null;
+    ip_address?: string | null;
+    name?: string | null;
 }
 
 interface ApiMechanism {
-    type?: string;
-    handled?: boolean;
+    type?: string | null;
+    handled?: boolean | null;
 }
 
 interface ApiFrame {
-    filename?: string;
-    function?: string;
-    module?: string;
-    package?: string;
-    platform?: string;
-    instructionOffset?: string;
-    lineNo?: number;
-    colNo?: number;
-    inApp?: boolean;
-    sourceLink?: string;
-    context?: unknown[];
-    preContext?: string[];
-    contextLine?: string;
-    postContext?: string[];
+    filename?: string | null;
+    function?: string | null;
+    module?: string | null;
+    package?: string | null;
+    platform?: string | null;
+    instructionOffset?: string | null;
+    lineNo?: number | null;
+    colNo?: number | null;
+    inApp?: boolean | null;
+    sourceLink?: string | null;
+    context?: unknown[] | null;
+    preContext?: string[] | null;
+    contextLine?: string | null;
+    postContext?: string[] | null;
 }
 
 interface ApiStacktrace {
-    frames?: ApiFrame[];
+    frames?: ApiFrame[] | null;
 }
 
 interface ApiException {
-    type?: string;
-    value?: string;
-    module?: string;
+    type?: string | null;
+    value?: string | null;
+    module?: string | null;
     threadId?: unknown;
-    mechanism?: ApiMechanism;
-    stacktrace?: ApiStacktrace;
+    mechanism?: ApiMechanism | null;
+    stacktrace?: ApiStacktrace | null;
 }
 
 interface ApiExceptionData {
-    values?: ApiException[];
+    values?: ApiException[] | null;
 }
 
 interface ApiBreadcrumbData {
-    url?: string;
-    method?: string;
+    url?: string | null;
+    method?: string | null;
     status_code?: unknown;
 }
 
 interface ApiBreadcrumb {
-    type?: string;
-    category?: string;
-    message?: string;
-    level?: string;
-    timestamp?: string;
-    data?: ApiBreadcrumbData;
+    type?: string | null;
+    category?: string | null;
+    message?: string | null;
+    level?: string | null;
+    timestamp?: string | null;
+    data?: ApiBreadcrumbData | null;
 }
 
 interface ApiBreadcrumbsData {
-    values?: ApiBreadcrumb[];
+    values?: ApiBreadcrumb[] | null;
 }
 
 interface ApiRequestData {
-    url?: string;
-    method?: string;
-    fragment?: string;
-    headers?: unknown[];
-    query?: unknown[];
+    url?: string | null;
+    method?: string | null;
+    fragment?: string | null;
+    headers?: unknown[] | null;
+    query?: unknown[] | null;
 }
 
 interface ApiEventEntry {
-    type?: string;
+    type?: string | null;
     data?: unknown;
 }
 
 interface ApiRelease {
-    version?: string;
-    shortVersion?: string;
-    dateReleased?: string;
-    url?: string;
+    version?: string | null;
+    shortVersion?: string | null;
+    dateReleased?: string | null;
+    url?: string | null;
 }
 
 interface ApiEvent {
-    id?: string;
-    eventID?: string;
-    groupID?: string;
-    projectID?: string;
-    title?: string;
-    message?: string;
-    culprit?: string;
-    platform?: string;
-    dateCreated?: string;
-    dateReceived?: string;
-    tags?: ApiTag[];
-    entries?: ApiEventEntry[];
-    user?: ApiEventUser;
-    release?: ApiRelease;
+    id?: string | null;
+    eventID?: string | null;
+    groupID?: string | null;
+    projectID?: string | null;
+    title?: string | null;
+    message?: string | null;
+    culprit?: string | null;
+    platform?: string | null;
+    dateCreated?: string | null;
+    dateReceived?: string | null;
+    tags?: ApiTag[] | null;
+    entries?: ApiEventEntry[] | null;
+    user?: ApiEventUser | null;
+    release?: ApiRelease | null;
 }
 
 interface ApiErrorEnvelope {
-    detail?: string;
-    error?: string;
-    message?: string;
+    detail?: string | null;
+    error?: string | null;
+    message?: string | null;
 }
 
 /** List organizations visible to the token.
- * @param page Optional `limit` (1–100, default 50) and `cursor`; `null` requests the first page of 50.
+ * @param page Optional `limit` (1–100, default 50) and `cursor`; omit it to request the first page of 50.
  * @returns One page of organizations visible to the token, with the cursor for the next page.
  * @capability sentry.io/organizations.list {}
  */
-export function listOrganizations(page: PageOptions | null = null): PageResult<Organization> {
-    const limit = page === null ? null : page.limit;
-    const cursor = page === null ? null : page.cursor;
+export function listOrganizations(page: PageOptions = {}): PageResult<Organization> {
+    const { limit, cursor } = page;
     check("sentry.io/organizations.list", {});
     const response = sentryGet("/organizations/" + buildPageQuery(limit, cursor));
     const items: Organization[] = [];
@@ -633,14 +632,13 @@ export function listOrganizations(page: PageOptions | null = null): PageResult<O
 
 /** List projects in an organization.
  * @param organization Organization slug, as returned by `listOrganizations`.
- * @param page Optional `limit` (1–100, default 50) and `cursor`; `null` requests the first page of 50.
+ * @param page Optional `limit` (1–100, default 50) and `cursor`; omit it to request the first page of 50.
  * @returns One page of the organization's projects, with the cursor for the next page.
  * @capability sentry.io/projects.list { organization: string }
  */
-export function listProjects(organization: string, page: PageOptions | null = null): PageResult<Project> {
+export function listProjects(organization: string, page: PageOptions = {}): PageResult<Project> {
     const slug = requireText(organization, "organization");
-    const limit = page === null ? null : page.limit;
-    const cursor = page === null ? null : page.cursor;
+    const { limit, cursor } = page;
     check("sentry.io/projects.list", { organization: slug });
     const response = sentryGet("/organizations/" + encodeComponent(slug) + "/projects/" + buildPageQuery(limit, cursor));
     const items: Project[] = [];
@@ -650,41 +648,46 @@ export function listProjects(organization: string, page: PageOptions | null = nu
 
 /** List issues in an organization. Omitting query keeps Sentry's unresolved default; query "" lists all.
  * @param organization Organization slug, as returned by `listOrganizations`.
- * @param options Optional filters, sort order and pagination; `null` returns Sentry's default unresolved issues, first 50.
+ * @param options Optional filters, sort order and pagination; omit it for Sentry's default unresolved issues, first 50.
  * @returns One page of issues, with the cursor for the next page; empty `items` when nothing matches.
  * @capability sentry.io/issues.list { organization: string, projects: string[] }
  */
-export function listIssues(organization: string, options: ListIssuesOptions | null = null): PageResult<Issue> {
+export function listIssues(organization: string, options: ListIssuesOptions = {}): PageResult<Issue> {
     const slug = requireText(organization, "organization");
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.cursor;
-    const requestedProjects = options === null ? null : options.projects;
-    const requestedEnvironments = options === null ? null : options.environments;
-    const query = options === null ? null : options.query;
-    const statsPeriod = options === null ? null : options.statsPeriod;
-    const start = options === null ? null : options.start;
-    const end = options === null ? null : options.end;
-    const groupStatsPeriod = options === null ? null : options.groupStatsPeriod;
-    const shortIdLookup = options === null ? null : options.shortIdLookup;
-    const sort = options === null ? null : options.sort;
+    const {
+        limit,
+        cursor,
+        projects: requestedProjects,
+        environments: requestedEnvironments,
+        query,
+        statsPeriod,
+        start,
+        end,
+        groupStatsPeriod,
+        shortIdLookup,
+        sort,
+    } = options;
     const projects: string[] = [];
-    if (requestedProjects !== null) {
+    if (requestedProjects !== undefined) {
         for (const project of requestedProjects) projects.push(project);
     }
     const environments: string[] = [];
-    if (requestedEnvironments !== null) {
+    if (requestedEnvironments !== undefined) {
         for (const environment of requestedEnvironments) environments.push(environment);
     }
-    const issueOptions: ListIssuesOptions = { projects: projects, environments: environments };
-    if (limit !== null) issueOptions.limit = limit;
-    if (cursor !== null) issueOptions.cursor = cursor;
-    if (query !== null) issueOptions.query = query;
-    if (statsPeriod !== null) issueOptions.statsPeriod = statsPeriod;
-    if (start !== null) issueOptions.start = start;
-    if (end !== null) issueOptions.end = end;
-    if (groupStatsPeriod !== null) issueOptions.groupStatsPeriod = groupStatsPeriod;
-    if (shortIdLookup !== null) issueOptions.shortIdLookup = shortIdLookup;
-    if (sort !== null) issueOptions.sort = sort;
+    const issueOptions: ListIssuesOptions = {
+        limit: limit,
+        cursor: cursor,
+        projects: projects,
+        environments: environments,
+        query: query,
+        statsPeriod: statsPeriod,
+        start: start,
+        end: end,
+        groupStatsPeriod: groupStatsPeriod,
+        shortIdLookup: shortIdLookup,
+        sort: sort,
+    };
     check("sentry.io/issues.list", { organization: slug, projects: projects });
     const response = sentryGet("/organizations/" + encodeComponent(slug) + "/issues/" + buildIssueQuery(issueOptions));
     const items: Issue[] = [];
@@ -711,7 +714,7 @@ export function getIssue(organization: string, project: string, issueId: string)
  * @param organization Organization slug, as returned by `listOrganizations`.
  * @param project Project slug, as returned by `listProjects`.
  * @param issueId Numeric group ID or short ID such as `PROJECT-7E`.
- * @param options Optional event filters and pagination; `null` returns the first 50 events.
+ * @param options Optional event filters and pagination; omit it for the first 50 events.
  * @returns One page of event summaries for the issue, with the cursor for the next page.
  * @capability sentry.io/issueEvents.list { organization: string, project: string, issue: string }
  */
@@ -719,33 +722,27 @@ export function listIssueEvents(
     organization: string,
     project: string,
     issueId: string,
-    options: ListIssueEventsOptions | null = null,
+    options: ListIssueEventsOptions = {},
 ): PageResult<EventSummary> {
     const slug = requireText(organization, "organization");
     const projectSlug = requireText(project, "project");
     const issue = requireText(issueId, "issueId");
-    const limit = options === null ? null : options.limit;
-    const cursor = options === null ? null : options.cursor;
-    const requestedEnvironments = options === null ? null : options.environments;
-    const query = options === null ? null : options.query;
-    const statsPeriod = options === null ? null : options.statsPeriod;
-    const start = options === null ? null : options.start;
-    const end = options === null ? null : options.end;
-    const full = options === null ? null : options.full;
-    const sample = options === null ? null : options.sample;
+    const { limit, cursor, environments: requestedEnvironments, query, statsPeriod, start, end, full, sample } = options;
     const environments: string[] = [];
-    if (requestedEnvironments !== null) {
+    if (requestedEnvironments !== undefined) {
         for (const environment of requestedEnvironments) environments.push(environment);
     }
-    const eventOptions: ListIssueEventsOptions = { environments: environments };
-    if (limit !== null) eventOptions.limit = limit;
-    if (cursor !== null) eventOptions.cursor = cursor;
-    if (query !== null) eventOptions.query = query;
-    if (statsPeriod !== null) eventOptions.statsPeriod = statsPeriod;
-    if (start !== null) eventOptions.start = start;
-    if (end !== null) eventOptions.end = end;
-    if (full !== null) eventOptions.full = full;
-    if (sample !== null) eventOptions.sample = sample;
+    const eventOptions: ListIssueEventsOptions = {
+        limit: limit,
+        cursor: cursor,
+        environments: environments,
+        query: query,
+        statsPeriod: statsPeriod,
+        start: start,
+        end: end,
+        full: full,
+        sample: sample,
+    };
     check("sentry.io/issueEvents.list", { organization: slug, project: projectSlug, issue: issue });
     const loaded = requireIssueForProject(slug, projectSlug, issue);
     const response = sentryGet(issuePath(slug, loaded.id) + "/events/" + buildEventQuery(eventOptions));
@@ -792,12 +789,13 @@ export function updateIssue(organization: string, project: string, issueId: stri
     const projectSlug = requireText(project, "project");
     const issue = requireText(issueId, "issueId");
     const { status, substatus, assignedTo, clearAssignee, priority } = input;
-    const changes: UpdateIssueInput = {};
-    if (status !== null) changes.status = status;
-    if (substatus !== null) changes.substatus = substatus;
-    if (assignedTo !== null) changes.assignedTo = assignedTo;
-    if (clearAssignee !== null) changes.clearAssignee = clearAssignee;
-    if (priority !== null) changes.priority = priority;
+    const changes: UpdateIssueInput = {
+        status: status,
+        substatus: substatus,
+        assignedTo: assignedTo,
+        clearAssignee: clearAssignee,
+        priority: priority,
+    };
     validateUpdate(changes);
     check("sentry.io/issues.update", { organization: slug, project: projectSlug, issue: issue });
     const loaded = requireIssueForProject(slug, projectSlug, issue);
@@ -809,27 +807,24 @@ export function updateIssue(organization: string, project: string, issueId: stri
 
 /**
  * Build Sentry's repeated-parameter issue query. Exported for deterministic diagnostics and tests.
- * @param options Issue filters and pagination, or `null` for the default page size only.
+ * @param options Issue filters and pagination; omit it for the default page size only.
  * @returns Query string beginning with `?`, with each project and environment as a repeated parameter.
  */
-export function buildIssueQuery(options: ListIssuesOptions | null): string {
+export function buildIssueQuery(options: ListIssuesOptions = {}): string {
+    const { limit, projects, environments, cursor, query, statsPeriod, start, end, groupStatsPeriod, sort, shortIdLookup } = options;
     const parts: string[] = [];
-    const limit = pageLimit(options === null ? null : options.limit);
-    addQuery(parts, "limit", limit.toString());
-    if (options !== null) {
-        const actual = options as ListIssuesOptions;
-        addRepeated(parts, "project", actual.projects);
-        addRepeated(parts, "environment", actual.environments);
-        addOptionalQuery(parts, "cursor", actual.cursor, false);
-        addOptionalQuery(parts, "query", actual.query, true);
-        addOptionalQuery(parts, "statsPeriod", actual.statsPeriod, false);
-        addOptionalQuery(parts, "start", actual.start, false);
-        addOptionalQuery(parts, "end", actual.end, false);
-        addOptionalQuery(parts, "groupStatsPeriod", actual.groupStatsPeriod, false);
-        addOptionalQuery(parts, "sort", actual.sort, false);
-        if (actual.shortIdLookup !== null) addQuery(parts, "shortIdLookup", actual.shortIdLookup ? "1" : "0");
-        validateTimeRange(actual.statsPeriod, actual.start, actual.end);
-    }
+    addQuery(parts, "limit", pageLimit(limit).toString());
+    addRepeated(parts, "project", projects);
+    addRepeated(parts, "environment", environments);
+    addOptionalQuery(parts, "cursor", cursor, false);
+    addOptionalQuery(parts, "query", query, true);
+    addOptionalQuery(parts, "statsPeriod", statsPeriod, false);
+    addOptionalQuery(parts, "start", start, false);
+    addOptionalQuery(parts, "end", end, false);
+    addOptionalQuery(parts, "groupStatsPeriod", groupStatsPeriod, false);
+    addOptionalQuery(parts, "sort", sort, false);
+    if (shortIdLookup !== undefined) addQuery(parts, "shortIdLookup", shortIdLookup ? "1" : "0");
+    validateTimeRange(statsPeriod, start, end);
     return "?" + parts.join("&");
 }
 
@@ -841,11 +836,11 @@ export function buildIssueQuery(options: ListIssuesOptions | null): string {
 export function buildUpdateIssueBody(input: UpdateIssueInput): string {
     validateUpdate(input);
     const fields: string[] = [];
-    if (input.status !== null) fields.push(jsonProperty("status", JSON.stringify(input.status)));
-    if (input.substatus !== null) fields.push(jsonProperty("substatus", JSON.stringify(input.substatus)));
-    if (input.assignedTo !== null) fields.push(jsonProperty("assignedTo", JSON.stringify(input.assignedTo)));
+    if (input.status !== undefined) fields.push(jsonProperty("status", JSON.stringify(input.status)));
+    if (input.substatus !== undefined) fields.push(jsonProperty("substatus", JSON.stringify(input.substatus)));
+    if (input.assignedTo !== undefined) fields.push(jsonProperty("assignedTo", JSON.stringify(input.assignedTo)));
     if (input.clearAssignee === true) fields.push(jsonProperty("assignedTo", "null"));
-    if (input.priority !== null) fields.push(jsonProperty("priority", JSON.stringify(input.priority)));
+    if (input.priority !== undefined) fields.push(jsonProperty("priority", JSON.stringify(input.priority)));
     return "{" + fields.join(",") + "}";
 }
 
@@ -931,10 +926,11 @@ export function sentryFailureMessage(status: number, statusText: string, body: s
     const fallback = "Sentry request failed: HTTP " + status.toString() + " " + statusText;
     if (body.startsWith("{")) {
         try {
-            const envelope = JSON.parse(body) as ApiErrorEnvelope;
-            if (envelope.detail !== null && envelope.detail.length > 0) return envelope.detail;
-            if (envelope.error !== null && envelope.error.length > 0) return envelope.error;
-            if (envelope.message !== null && envelope.message.length > 0) return envelope.message;
+            const { detail, error, message } = JSON.parse(body) as ApiErrorEnvelope;
+            // An empty string is no more useful than the status line.
+            if (detail) return detail;
+            if (error) return error;
+            if (message) return message;
         } catch (_cause) {
             return fallback;
         }
@@ -942,38 +938,36 @@ export function sentryFailureMessage(status: number, statusText: string, body: s
     return fallback;
 }
 
-function buildPageQuery(limit: number | null, cursor: string | null): string {
+function buildPageQuery(limit: number | undefined, cursor: string | undefined): string {
     const parts: string[] = [];
     addQuery(parts, "per_page", pageLimit(limit).toString());
     addOptionalQuery(parts, "cursor", cursor, false);
     return "?" + parts.join("&");
 }
 
-function buildEventQuery(options: ListIssueEventsOptions | null): string {
+function buildEventQuery(options: ListIssueEventsOptions): string {
+    const { limit, environments, cursor, query, statsPeriod, start, end, full, sample } = options;
     const parts: string[] = [];
-    addQuery(parts, "per_page", pageLimit(options === null ? null : options.limit).toString());
-    if (options !== null) {
-        const actual = options as ListIssueEventsOptions;
-        addRepeated(parts, "environment", actual.environments);
-        addOptionalQuery(parts, "cursor", actual.cursor, false);
-        addOptionalQuery(parts, "query", actual.query, true);
-        addOptionalQuery(parts, "statsPeriod", actual.statsPeriod, false);
-        addOptionalQuery(parts, "start", actual.start, false);
-        addOptionalQuery(parts, "end", actual.end, false);
-        if (actual.full !== null) addQuery(parts, "full", actual.full ? "1" : "0");
-        if (actual.sample !== null) addQuery(parts, "sample", actual.sample ? "1" : "0");
-        validateTimeRange(actual.statsPeriod, actual.start, actual.end);
-    }
+    addQuery(parts, "per_page", pageLimit(limit).toString());
+    addRepeated(parts, "environment", environments);
+    addOptionalQuery(parts, "cursor", cursor, false);
+    addOptionalQuery(parts, "query", query, true);
+    addOptionalQuery(parts, "statsPeriod", statsPeriod, false);
+    addOptionalQuery(parts, "start", start, false);
+    addOptionalQuery(parts, "end", end, false);
+    if (full !== undefined) addQuery(parts, "full", full ? "1" : "0");
+    if (sample !== undefined) addQuery(parts, "sample", sample ? "1" : "0");
+    validateTimeRange(statsPeriod, start, end);
     return "?" + parts.join("&");
 }
 
-function addRepeated(parts: string[], key: string, values: string[] | null): void {
-    if (values === null) return;
+function addRepeated(parts: string[], key: string, values: string[] | undefined): void {
+    if (values === undefined) return;
     for (const value of values) addQuery(parts, key, value);
 }
 
-function addOptionalQuery(parts: string[], key: string, value: string | null, allowEmpty: boolean): void {
-    if (value === null || (!allowEmpty && value.length === 0)) return;
+function addOptionalQuery(parts: string[], key: string, value: string | undefined, allowEmpty: boolean): void {
+    if (value === undefined || (!allowEmpty && value.length === 0)) return;
     addQuery(parts, key, value);
 }
 
@@ -981,30 +975,30 @@ function addQuery(parts: string[], key: string, value: string): void {
     parts.push(encodeComponent(key) + "=" + encodeComponent(value));
 }
 
-function pageLimit(value: number | null): number {
-    const limit = value === null ? DEFAULT_LIMIT : value;
+function pageLimit(value: number | undefined): number {
+    const limit = value ?? DEFAULT_LIMIT;
     if (limit < 1 || limit > MAX_LIMIT || limit !== Math.floor(limit)) {
         throw validationError("invalid_page_size", "limit must be an integer between 1 and 100");
     }
     return limit;
 }
 
-function validateTimeRange(statsPeriod: string | null, start: string | null, end: string | null): void {
-    if (statsPeriod !== null && (start !== null || end !== null)) {
+function validateTimeRange(statsPeriod: string | undefined, start: string | undefined, end: string | undefined): void {
+    if (statsPeriod !== undefined && (start !== undefined || end !== undefined)) {
         throw validationError("invalid_time_range", "statsPeriod cannot be combined with start or end");
     }
-    if ((start === null) !== (end === null)) {
+    if ((start === undefined) !== (end === undefined)) {
         throw validationError("invalid_time_range", "start and end must be provided together");
     }
 }
 
 function validateUpdate(input: UpdateIssueInput): void {
-    const status: string = input.status === null ? "" : input.status;
-    const substatus: string = input.substatus === null ? "" : input.substatus;
-    if (input.assignedTo !== null && input.clearAssignee === true) {
+    const status: string = input.status ?? "";
+    const substatus: string = input.substatus ?? "";
+    if (input.assignedTo !== undefined && input.clearAssignee === true) {
         throw validationError("invalid_update", "assignedTo and clearAssignee cannot be combined");
     }
-    if (input.assignedTo !== null && input.assignedTo.length === 0) {
+    if (input.assignedTo !== undefined && input.assignedTo.length === 0) {
         throw validationError("invalid_update", "assignedTo cannot be empty; use clearAssignee instead");
     }
     if (substatus.length > 0 && status.length === 0) {
@@ -1020,8 +1014,8 @@ function validateUpdate(input: UpdateIssueInput): void {
         throw validationError("invalid_update", "unresolved status cannot use an archived substatus");
     }
     if (
-        input.status === null && input.substatus === null && input.assignedTo === null &&
-        input.clearAssignee !== true && input.priority === null
+        input.status === undefined && input.substatus === undefined && input.assignedTo === undefined &&
+        input.clearAssignee !== true && input.priority === undefined
     ) {
         throw validationError("empty_update", "updateIssue requires at least one change");
     }
@@ -1042,8 +1036,10 @@ function resolveIssueId(organization: string, issueId: string): string | null {
     );
     if (response === null) return null;
     const data = response.json() as ApiShortIdLookup;
-    if (data.groupId !== null && data.groupId.length > 0) return data.groupId;
-    if (data.group !== null && data.group.id !== null && data.group.id.length > 0) return data.group.id;
+    const groupId = data.groupId;
+    if (groupId) return groupId;
+    const embeddedId = data.group?.id;
+    if (embeddedId) return embeddedId;
     throw validationError("invalid_response", "Sentry short-ID response did not include a group ID");
 }
 
@@ -1094,7 +1090,7 @@ function sentryPut(path: string, body: string): Response {
 
 function authHeaders(): Map<string, string> {
     const token = secrets.get("SENTRY_AUTH_TOKEN");
-    if (token === null) throw validationError("missing_token", "SENTRY_AUTH_TOKEN is not bound");
+    if (token === undefined) throw validationError("missing_token", "SENTRY_AUTH_TOKEN is not bound");
     const headers = new Map<string, string>();
     headers.set("Authorization", "Bearer " + token);
     headers.set("Accept", "application/json");
@@ -1129,18 +1125,17 @@ function validationError(code: string, message: string): SentryError {
 
 function firstHeader(response: Response, first: string, second: string): string {
     const value = response.headers.get(first);
-    if (value !== null) return value;
+    if (value !== undefined) return value;
     return header(response, second);
 }
 
 function header(response: Response, name: string): string {
-    const value = response.headers.get(name);
-    return value === null ? "" : value;
+    return response.headers.get(name) ?? "";
 }
 
 function numberHeader(response: Response, name: string): number | null {
     const value = response.headers.get(name);
-    if (value === null || value.length === 0) return null;
+    if (value === undefined || value.length === 0) return null;
     const parsed = Number(value);
     return isNaN(parsed) ? null : parsed;
 }
@@ -1152,11 +1147,11 @@ function pageFrom<T>(response: Response, items: T[]): PageResult<T> {
 
 function organizationFrom(data: ApiOrganization): Organization {
     return {
-        id: str(data.id),
-        slug: str(data.slug),
-        name: str(data.name),
+        id: data.id ?? "",
+        slug: data.slug ?? "",
+        name: data.name ?? "",
         status: statusFrom(data.status),
-        dateCreated: str(data.dateCreated),
+        dateCreated: data.dateCreated ?? "",
         isEarlyAdopter: data.isEarlyAdopter === true,
         require2FA: data.require2FA === true,
     };
@@ -1165,49 +1160,49 @@ function organizationFrom(data: ApiOrganization): Organization {
 function projectFrom(data: ApiProject, fallbackOrganizationSlug: string): Project {
     const organization = data.organization;
     return {
-        id: str(data.id),
-        slug: str(data.slug),
-        name: str(data.name),
-        platform: data.platform,
+        id: data.id ?? "",
+        slug: data.slug ?? "",
+        name: data.name ?? "",
+        platform: data.platform ?? null,
         status: statusFrom(data.status),
-        dateCreated: str(data.dateCreated),
+        dateCreated: data.dateCreated ?? "",
         hasAccess: data.hasAccess === true,
         isBookmarked: data.isBookmarked === true,
-        organizationSlug: organization === null ? fallbackOrganizationSlug : str(organization.slug),
+        organizationSlug: organization ? organization.slug ?? "" : fallbackOrganizationSlug,
     };
 }
 
-function projectSummaryFrom(data: ApiProject | null): ProjectSummary {
-    if (data === null) return { id: "", slug: "", name: "", platform: null };
-    return { id: str(data.id), slug: str(data.slug), name: str(data.name), platform: data.platform };
+function projectSummaryFrom(data: ApiProject | null | undefined): ProjectSummary {
+    if (!data) return { id: "", slug: "", name: "", platform: null };
+    return { id: data.id ?? "", slug: data.slug ?? "", name: data.name ?? "", platform: data.platform ?? null };
 }
 
-function actorFrom(data: ApiActor | null): Actor | null {
-    if (data === null) return null;
-    return { type: str(data.type), id: str(data.id), name: str(data.name), email: str(data.email) };
+function actorFrom(data: ApiActor | null | undefined): Actor | null {
+    if (!data) return null;
+    return { type: data.type ?? "", id: data.id ?? "", name: data.name ?? "", email: data.email ?? "" };
 }
 
-function metadataFrom(data: ApiIssueMetadata | null): IssueMetadata {
-    if (data === null) return { type: "", value: "", title: "" };
-    return { type: str(data.type), value: str(data.value), title: str(data.title) };
+function metadataFrom(data: ApiIssueMetadata | null | undefined): IssueMetadata {
+    if (!data) return { type: "", value: "", title: "" };
+    return { type: data.type ?? "", value: data.value ?? "", title: data.title ?? "" };
 }
 
 function issueFrom(data: ApiIssue): Issue {
     return {
-        id: str(data.id),
-        shortId: str(data.shortId),
-        title: str(data.title),
-        culprit: str(data.culprit),
-        level: str(data.level),
-        status: str(data.status),
-        substatus: str(data.substatus),
-        priority: str(data.priority),
-        permalink: str(data.permalink),
-        count: str(data.count),
-        userCount: num(data.userCount),
-        numComments: num(data.numComments),
-        firstSeen: str(data.firstSeen),
-        lastSeen: str(data.lastSeen),
+        id: data.id ?? "",
+        shortId: data.shortId ?? "",
+        title: data.title ?? "",
+        culprit: data.culprit ?? "",
+        level: data.level ?? "",
+        status: data.status ?? "",
+        substatus: data.substatus ?? "",
+        priority: data.priority ?? "",
+        permalink: data.permalink ?? "",
+        count: data.count ?? "",
+        userCount: data.userCount ?? 0,
+        numComments: data.numComments ?? 0,
+        firstSeen: data.firstSeen ?? "",
+        lastSeen: data.lastSeen ?? "",
         isUnhandled: data.isUnhandled === true,
         project: projectSummaryFrom(data.project),
         assignedTo: actorFrom(data.assignedTo),
@@ -1217,17 +1212,17 @@ function issueFrom(data: ApiIssue): Issue {
 
 function eventSummaryFrom(data: ApiEvent): EventSummary {
     const tags: Tag[] = [];
-    for (const tag of typedArray(data.tags)) tags.push({ key: str(tag.key), value: str(tag.value) });
+    for (const tag of listed(data.tags)) tags.push({ key: tag.key ?? "", value: tag.value ?? "" });
     return {
-        id: str(data.id),
-        eventId: data.eventID === null ? str(data.id) : data.eventID,
-        issueId: str(data.groupID),
-        projectId: str(data.projectID),
-        title: str(data.title),
-        message: str(data.message),
-        culprit: str(data.culprit),
-        platform: str(data.platform),
-        dateCreated: str(data.dateCreated),
+        id: data.id ?? "",
+        eventId: data.eventID ?? data.id ?? "",
+        issueId: data.groupID ?? "",
+        projectId: data.projectID ?? "",
+        title: data.title ?? "",
+        message: data.message ?? "",
+        culprit: data.culprit ?? "",
+        platform: data.platform ?? "",
+        dateCreated: data.dateCreated ?? "",
         tags: tags,
     };
 }
@@ -1236,20 +1231,21 @@ function eventDetailsFrom(data: ApiEvent): EventDetails {
     let request: EventRequest | null = null;
     const exceptions: EventException[] = [];
     const breadcrumbs: Breadcrumb[] = [];
-    for (const entry of typedArray(data.entries)) {
-        if (entry.type === "exception" && entry.data !== null) {
-            const exceptionData = entry.data as ApiExceptionData;
-            for (const item of typedArray(exceptionData.values)) exceptions.push(exceptionFrom(item));
-        } else if (entry.type === "breadcrumbs" && entry.data !== null) {
-            const breadcrumbData = entry.data as ApiBreadcrumbsData;
-            for (const item of typedArray(breadcrumbData.values)) breadcrumbs.push(breadcrumbFrom(item));
-        } else if (entry.type === "request" && entry.data !== null) {
-            request = requestFrom(entry.data as ApiRequestData);
+    for (const entry of listed(data.entries)) {
+        // `data` is unknown until the entry type says which shape to cast it to.
+        const entryData = entry.data;
+        if (entryData === null || entryData === undefined) continue;
+        if (entry.type === "exception") {
+            for (const item of listed((entryData as ApiExceptionData).values)) exceptions.push(exceptionFrom(item));
+        } else if (entry.type === "breadcrumbs") {
+            for (const item of listed((entryData as ApiBreadcrumbsData).values)) breadcrumbs.push(breadcrumbFrom(item));
+        } else if (entry.type === "request") {
+            request = requestFrom(entryData as ApiRequestData);
         }
     }
     return {
         summary: eventSummaryFrom(data),
-        dateReceived: str(data.dateReceived),
+        dateReceived: data.dateReceived ?? "",
         exceptions: exceptions,
         breadcrumbs: breadcrumbs,
         request: request,
@@ -1260,17 +1256,14 @@ function eventDetailsFrom(data: ApiEvent): EventDetails {
 
 function exceptionFrom(data: ApiException): EventException {
     const frames: StackFrame[] = [];
-    if (data.stacktrace !== null) {
-        for (const frame of typedArray(data.stacktrace.frames)) frames.push(frameFrom(frame));
-    }
+    for (const frame of listed(data.stacktrace?.frames)) frames.push(frameFrom(frame));
     let mechanism: ExceptionMechanism | null = null;
-    if (data.mechanism !== null) {
-        mechanism = { type: str(data.mechanism.type), handled: data.mechanism.handled };
-    }
+    const captured = data.mechanism;
+    if (captured) mechanism = { type: captured.type ?? "", handled: captured.handled ?? null };
     return {
-        type: str(data.type),
-        value: str(data.value),
-        module: str(data.module),
+        type: data.type ?? "",
+        value: data.value ?? "",
+        module: data.module ?? "",
         threadId: scalarString(data.threadId),
         mechanism: mechanism,
         frames: frames,
@@ -1279,37 +1272,39 @@ function exceptionFrom(data: ApiException): EventException {
 
 function frameFrom(data: ApiFrame): StackFrame {
     return {
-        filename: str(data.filename),
-        functionName: str(data.function),
-        module: str(data.module),
-        packageName: str(data.package),
-        platform: str(data.platform),
-        instructionOffset: str(data.instructionOffset),
-        lineNumber: data.lineNo,
-        columnNumber: data.colNo,
-        inApp: data.inApp,
-        sourceLink: str(data.sourceLink),
+        filename: data.filename ?? "",
+        functionName: data.function ?? "",
+        module: data.module ?? "",
+        packageName: data.package ?? "",
+        platform: data.platform ?? "",
+        instructionOffset: data.instructionOffset ?? "",
+        lineNumber: data.lineNo ?? null,
+        columnNumber: data.colNo ?? null,
+        inApp: data.inApp ?? null,
+        sourceLink: data.sourceLink ?? "",
         context: sourceContextFrom(data),
     };
 }
 
 function sourceContextFrom(data: ApiFrame): SourceLine[] {
     const lines: SourceLine[] = [];
-    if (data.context !== null) {
-        for (const raw of data.context) {
-            if (raw === null) continue;
+    const context = data.context;
+    if (context) {
+        for (const raw of context) {
+            if (raw === null || raw === undefined) continue;
             const pair = raw as unknown[];
             if (pair.length >= 2) lines.push({ lineNumber: scalarNumber(pair[0]), text: scalarString(pair[1]) });
         }
         return lines;
     }
-    const lineNumber = data.lineNo === null ? 0 : data.lineNo;
-    const before = typedArray(data.preContext);
+    const lineNumber = data.lineNo ?? 0;
+    const before = listed(data.preContext);
     for (let i = 0; i < before.length; i += 1) {
         lines.push({ lineNumber: lineNumber - before.length + i, text: before[i] });
     }
-    if (data.contextLine !== null) lines.push({ lineNumber: lineNumber, text: data.contextLine });
-    const after = typedArray(data.postContext);
+    const contextLine = data.contextLine;
+    if (contextLine !== null && contextLine !== undefined) lines.push({ lineNumber: lineNumber, text: contextLine });
+    const after = listed(data.postContext);
     for (let i = 0; i < after.length; i += 1) {
         lines.push({ lineNumber: lineNumber + i + 1, text: after[i] });
     }
@@ -1319,64 +1314,63 @@ function sourceContextFrom(data: ApiFrame): SourceLine[] {
 function breadcrumbFrom(data: ApiBreadcrumb): Breadcrumb {
     const details = data.data;
     return {
-        type: str(data.type),
-        category: str(data.category),
-        message: str(data.message),
-        level: str(data.level),
-        timestamp: str(data.timestamp),
-        url: details === null ? "" : str(details.url),
-        method: details === null ? "" : str(details.method),
-        statusCode: details === null ? "" : scalarString(details.status_code),
+        type: data.type ?? "",
+        category: data.category ?? "",
+        message: data.message ?? "",
+        level: data.level ?? "",
+        timestamp: data.timestamp ?? "",
+        url: details?.url ?? "",
+        method: details?.method ?? "",
+        statusCode: scalarString(details?.status_code),
     };
 }
 
 function requestFrom(data: ApiRequestData): EventRequest {
     return {
-        url: str(data.url),
-        method: str(data.method),
-        fragment: str(data.fragment),
+        url: data.url ?? "",
+        method: data.method ?? "",
+        fragment: data.fragment ?? "",
         headers: keyValuesFrom(data.headers),
         query: keyValuesFrom(data.query),
     };
 }
 
-function keyValuesFrom(values: unknown[] | null): KeyValue[] {
+function keyValuesFrom(values: unknown[] | null | undefined): KeyValue[] {
     const items: KeyValue[] = [];
-    for (const raw of array(values)) {
-        if (raw === null) continue;
+    for (const raw of listed(values)) {
+        if (raw === null || raw === undefined) continue;
         const pair = raw as unknown[];
         if (pair.length >= 2) items.push({ key: scalarString(pair[0]), value: scalarString(pair[1]) });
     }
     return items;
 }
 
-function userFrom(data: ApiEventUser | null): EventUser | null {
-    if (data === null) return null;
+function userFrom(data: ApiEventUser | null | undefined): EventUser | null {
+    if (!data) return null;
     return {
-        id: str(data.id),
-        email: str(data.email),
-        username: str(data.username),
-        ipAddress: str(data.ip_address),
-        name: str(data.name),
+        id: data.id ?? "",
+        email: data.email ?? "",
+        username: data.username ?? "",
+        ipAddress: data.ip_address ?? "",
+        name: data.name ?? "",
     };
 }
 
-function releaseFrom(data: ApiRelease | null): ReleaseSummary | null {
-    if (data === null) return null;
+function releaseFrom(data: ApiRelease | null | undefined): ReleaseSummary | null {
+    if (!data) return null;
     return {
-        version: str(data.version),
-        shortVersion: str(data.shortVersion),
-        dateReleased: str(data.dateReleased),
-        url: str(data.url),
+        version: data.version ?? "",
+        shortVersion: data.shortVersion ?? "",
+        dateReleased: data.dateReleased ?? "",
+        url: data.url ?? "",
     };
 }
 
 function statusFrom(value: unknown): string {
     if (typeof value === "string") return value;
-    if (value === null) return "";
+    if (value === null || value === undefined) return "";
     const status = value as ApiStatus;
-    if (status.id !== null) return status.id;
-    return str(status.name);
+    return status.id ?? status.name ?? "";
 }
 
 function scalarString(value: unknown): string {
@@ -1404,18 +1398,7 @@ function jsonProperty(name: string, value: string): string {
     return JSON.stringify(name) + ":" + value;
 }
 
-function str(value: string | null): string {
-    return value === null ? "" : value;
-}
-
-function num(value: number | null): number {
-    return value === null ? 0 : value;
-}
-
-function array(value: unknown[] | null): unknown[] {
-    return value === null ? [] : value;
-}
-
-function typedArray<T>(value: T[] | null): T[] {
-    return value === null ? [] : value;
+function listed<T>(value: T[] | null | undefined): T[] {
+    if (value) return value;
+    return [];
 }

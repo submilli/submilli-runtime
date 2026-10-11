@@ -1,0 +1,7 @@
+callWithMissingVoid.ts(25,8): error TS2554: Expected 1 arguments, but got 0.
+callWithMissingVoid.ts(39,35): error TS2554: Expected 1 arguments, but got 0.
+callWithMissingVoid.ts(40,33): error TS2554: Expected 1 arguments, but got 0.
+callWithMissingVoid.ts(51,1): error TS2554: Expected 2-3 arguments, but got 1.
+callWithMissingVoid.ts(58,1): error TS2554: Expected 4 arguments, but got 2.
+callWithMissingVoid.ts(59,1): error TS2554: Expected 4 arguments, but got 3.
+callWithMissingVoid.ts(60,1): error TS2554: Expected 4 arguments, but got 1.

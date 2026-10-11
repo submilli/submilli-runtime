@@ -14,6 +14,7 @@ pub(super) fn is_primitive(ty: &Type) -> bool {
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::Null
+        | Type::Undefined
         | Type::Void
         | Type::Never
         | Type::NumberEnum { .. }

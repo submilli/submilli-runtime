@@ -1,6 +1,6 @@
 // @target: es2015
 // @strictNullChecks: true
-const envVar: string | null = null as unknown as (string | null);
+const envVar: string | undefined = null as unknown as (string | undefined);
 if (typeof envVar === `string`) {
   envVar.slice(0)
 }

@@ -13,7 +13,7 @@ interface Opt {
 function main(): void {
     const partial: Opt = { a: "x" };
     assert(JSON.stringify(partial) === "{\"a\":\"x\"}", "absent optionals omitted, not null");
-    assert(partial.b === null, "absent optional still reads null");
+    assert(partial.b === undefined, "absent optional reads undefined");
 
     const empty: Opt = {};
     assert(JSON.stringify(empty) === "{}", "all-absent interface serializes empty");

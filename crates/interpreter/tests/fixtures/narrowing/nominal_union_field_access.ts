@@ -105,10 +105,10 @@ function byPresence(v: HasA | HasB): number {
   return v.b;
 }
 
-// One member's field is optional, so the read widens to `number | null`.
+// One member's field is optional, so the read widens to `number | undefined`.
 function optionalMember(v: Maybe | IA): string {
   const r = v.x;
-  return r === null ? "absent" : `${r}`;
+  return r === undefined ? "absent" : `${r}`;
 }
 
 // Class members with literal-typed tags: the discriminant analysis expands a

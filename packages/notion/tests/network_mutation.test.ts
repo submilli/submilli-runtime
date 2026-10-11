@@ -17,10 +17,10 @@ import {
 
 function main(): void {
     label("live enhanced Markdown page lifecycle");
-    if (secrets.get("NOTION_ACCESS_TOKEN") === null) return;
+    if (secrets.get("NOTION_ACCESS_TOKEN") === undefined) return;
     if (secrets.get("NOTION_LIVE_MUTATIONS") !== "true") return;
     const parentId = secrets.get("NOTION_TEST_PARENT_PAGE_ID");
-    if (parentId === null) return;
+    if (parentId === undefined) return;
 
     const stamp = Temporal.Now.instant().epochMilliseconds.toString();
     const page = createPage({

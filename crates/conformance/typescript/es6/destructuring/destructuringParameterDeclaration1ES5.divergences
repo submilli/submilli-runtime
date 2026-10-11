@@ -1,0 +1,29 @@
+types: 40 of 103 tsc entries compared, 7 differ
+
+line 27: a
+  tsc:  undefined
+  ours: null | undefined
+
+line 27: z
+  tsc:  null
+  ours: null | undefined
+
+line 27: y
+  tsc:  undefined
+  ours: null | undefined
+
+line 27: [undefined, null, undefined]
+  tsc:  [undefined, null, undefined]
+  ours: (null | undefined)[]
+
+line 30: [1, 2, 3]
+  tsc:  number[]
+  ours: (null | undefined)[]
+
+line 33: b6
+  tsc:  ([a, z, y]?: [undefined, null, undefined]) => void
+  ours: (arg0?: (null | undefined)[]) => void
+
+line 33: ["string", 1, 2]
+  tsc:  [string, number, number]
+  ours: (null | undefined)[]

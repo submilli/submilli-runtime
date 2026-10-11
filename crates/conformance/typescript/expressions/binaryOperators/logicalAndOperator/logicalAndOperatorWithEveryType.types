@@ -13,7 +13,7 @@ enum E { a, b, c }
 >  : ^^^
 
 
-/*pruned*/;                            
+/*pruned*/;
 let a2: boolean = null as unknown as (boolean);
 >a2 : boolean
 >   : ^^^^^^^
@@ -38,8 +38,15 @@ let a4: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                              
-/*pruned*/;                        
+let a5: void = null as unknown as (void);
+>a5 : void
+>   : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
 let a7: {} = null as unknown as ({});
 >a7 : {}
 >   : ^^
@@ -57,18 +64,18 @@ let a8: string[] = null as unknown as (string[]);
 >                : ^^^^^^^
 
 
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;          
-/*pruned*/;           
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;        
+/*pruned*/;
 let rb2 = a2 && a2;
 >rb2 : boolean
 >    : ^^^^^^^
@@ -99,8 +106,17 @@ let rb4 = a4 && a2;
 >a2 : boolean
 >   : ^^^^^^^
 
-/*pruned*/;        
-/*pruned*/;        
+let rb5 = a5 && a2;
+>rb5 : void
+>    : ^^^^
+>a5 && a2 : void
+>         : ^^^^
+>a5 : void
+>   : ^^^^
+>a2 : boolean
+>   : ^^^^^^^
+
+/*pruned*/;
 let rb7 = a7 && a2;
 >rb7 : boolean
 >    : ^^^^^^^
@@ -129,16 +145,18 @@ let rb9 = null && a2;
 >a2 : boolean
 >   : ^^^^^^^
 
-let rb10 = null && a2;
->rb10 : null
->     : ^^^^
->null && a2 : null
->           : ^^^^
+let rb10 = undefined && a2;
+>rb10 : undefined
+>     : ^^^^^^^^^
+>undefined && a2 : undefined
+>                : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >a2 : boolean
 >   : ^^^^^^^
 
 
-/*pruned*/;        
+/*pruned*/;
 let rc2 = a2 && a3;
 >rc2 : number | false
 >    : ^^^^^^^^^^^^^^
@@ -169,8 +187,17 @@ let rc4 = a4 && a3;
 >a3 : number
 >   : ^^^^^^
 
-/*pruned*/;        
-/*pruned*/;        
+let rc5 = a5 && a3;
+>rc5 : void
+>    : ^^^^
+>a5 && a3 : void
+>         : ^^^^
+>a5 : void
+>   : ^^^^
+>a3 : number
+>   : ^^^^^^
+
+/*pruned*/;
 let rc7 = a7 && a3;
 >rc7 : number
 >    : ^^^^^^
@@ -199,16 +226,18 @@ let rc9 = null && a3;
 >a3 : number
 >   : ^^^^^^
 
-let rc10 = null && a3;
->rc10 : null
->     : ^^^^
->null && a3 : null
->           : ^^^^
+let rc10 = undefined && a3;
+>rc10 : undefined
+>     : ^^^^^^^^^
+>undefined && a3 : undefined
+>                : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >a3 : number
 >   : ^^^^^^
 
 
-/*pruned*/;        
+/*pruned*/;
 let rd2 = a2 && a4;
 >rd2 : string | false
 >    : ^^^^^^^^^^^^^^
@@ -239,8 +268,17 @@ let rd4 = a4 && a4;
 >a4 : string
 >   : ^^^^^^
 
-/*pruned*/;        
-/*pruned*/;        
+let rd5 = a5 && a4;
+>rd5 : void
+>    : ^^^^
+>a5 && a4 : void
+>         : ^^^^
+>a5 : void
+>   : ^^^^
+>a4 : string
+>   : ^^^^^^
+
+/*pruned*/;
 let rd7 = a7 && a4;
 >rd7 : string
 >    : ^^^^^^
@@ -269,38 +307,110 @@ let rd9 = null && a4;
 >a4 : string
 >   : ^^^^^^
 
-let rd10 = null && a4;
->rd10 : null
->     : ^^^^
->null && a4 : null
->           : ^^^^
+let rd10 = undefined && a4;
+>rd10 : undefined
+>     : ^^^^^^^^^
+>undefined && a4 : undefined
+>                : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >a4 : string
 >   : ^^^^^^
 
 
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;          
-/*pruned*/;           
+/*pruned*/;
+let re2 = a2 && a5;
+>re2 : false | void
+>    : ^^^^^^^^^^^^
+>a2 && a5 : false | void
+>         : ^^^^^^^^^^^^
+>a2 : boolean
+>   : ^^^^^^^
+>a5 : void
+>   : ^^^^
 
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;        
-/*pruned*/;          
-/*pruned*/;           
+let re3 = a3 && a5;
+>re3 : void | 0
+>    : ^^^^^^^^
+>a3 && a5 : void | 0
+>         : ^^^^^^^^
+>a3 : number
+>   : ^^^^^^
+>a5 : void
+>   : ^^^^
 
-/*pruned*/;        
+let re4 = a4 && a5;
+>re4 : void | ""
+>    : ^^^^^^^^^
+>a4 && a5 : void | ""
+>         : ^^^^^^^^^
+>a4 : string
+>   : ^^^^^^
+>a5 : void
+>   : ^^^^
+
+let re5 = a5 && a5;
+>re5 : void
+>    : ^^^^
+>a5 && a5 : void
+>         : ^^^^
+>a5 : void
+>   : ^^^^
+>a5 : never
+>   : ^^^^^
+
+/*pruned*/;
+let re7 = a7 && a5;
+>re7 : void
+>    : ^^^^
+>a7 && a5 : void
+>         : ^^^^
+>a7 : {}
+>   : ^^
+>a5 : void
+>   : ^^^^
+
+let re8 = a8 && a5;
+>re8 : void
+>    : ^^^^
+>a8 && a5 : void
+>         : ^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+>a5 : void
+>   : ^^^^
+
+let re9 = null && a5;
+>re9 : null
+>    : ^^^^
+>null && a5 : null
+>           : ^^^^
+>a5 : void
+>   : ^^^^
+
+let re10 = undefined && a5;
+>re10 : undefined
+>     : ^^^^^^^^^
+>undefined && a5 : undefined
+>                : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a5 : void
+>   : ^^^^
+
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
 let rg2 = a2 && a7;
 >rg2 : false | {}
 >    : ^^^^^^^^^^
@@ -331,8 +441,17 @@ let rg4 = a4 && a7;
 >a7 : {}
 >   : ^^
 
-/*pruned*/;        
-/*pruned*/;        
+let rg5 = a5 && a7;
+>rg5 : void
+>    : ^^^^
+>a5 && a7 : void
+>         : ^^^^
+>a5 : void
+>   : ^^^^
+>a7 : {}
+>   : ^^
+
+/*pruned*/;
 let rg7 = a7 && a7;
 >rg7 : {}
 >    : ^^
@@ -361,16 +480,18 @@ let rg9 = null && a7;
 >a7 : {}
 >   : ^^
 
-let rg10 = null && a7;
->rg10 : null
->     : ^^^^
->null && a7 : null
->           : ^^^^
+let rg10 = undefined && a7;
+>rg10 : undefined
+>     : ^^^^^^^^^
+>undefined && a7 : undefined
+>                : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >a7 : {}
 >   : ^^
 
 
-/*pruned*/;        
+/*pruned*/;
 let rh2 = a2 && a8;
 >rh2 : false | string[]
 >    : ^^^^^^^^^^^^^^^^
@@ -401,8 +522,17 @@ let rh4 = a4 && a8;
 >a8 : string[]
 >   : ^^^^^^^^
 
-/*pruned*/;        
-/*pruned*/;        
+let rh5 = a5 && a8;
+>rh5 : void
+>    : ^^^^
+>a5 && a8 : void
+>         : ^^^^
+>a5 : void
+>   : ^^^^
+>a8 : string[]
+>   : ^^^^^^^^
+
+/*pruned*/;
 let rh7 = a7 && a8;
 >rh7 : string[]
 >    : ^^^^^^^^
@@ -431,16 +561,18 @@ let rh9 = null && a8;
 >a8 : string[]
 >   : ^^^^^^^^
 
-let rh10 = null && a8;
->rh10 : null
->     : ^^^^
->null && a8 : null
->           : ^^^^
+let rh10 = undefined && a8;
+>rh10 : undefined
+>     : ^^^^^^^^^
+>undefined && a8 : undefined
+>                : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >a8 : string[]
 >   : ^^^^^^^^
 
 
-/*pruned*/;          
+/*pruned*/;
 let ri2 = a2 && null;
 >ri2 : false | null
 >    : ^^^^^^^^^^^^
@@ -465,8 +597,15 @@ let ri4 = a4 && null;
 >a4 : string
 >   : ^^^^^^
 
-/*pruned*/;          
-/*pruned*/;          
+let ri5 = a5 && null;
+>ri5 : void
+>    : ^^^^
+>a5 && null : void
+>           : ^^^^
+>a5 : void
+>   : ^^^^
+
+/*pruned*/;
 let ri7 = a7 && null;
 >ri7 : null
 >    : ^^^^
@@ -489,67 +628,94 @@ let ri9 = null && null;
 >null && null : null
 >             : ^^^^
 
-let ri10 = null && null;
->ri10 : null
->     : ^^^^
->null && null : null
->             : ^^^^
+let ri10 = undefined && null;
+>ri10 : undefined
+>     : ^^^^^^^^^
+>undefined && null : undefined
+>                  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
-/*pruned*/;          
-let rj2 = a2 && null;
->rj2 : false | null
->    : ^^^^^^^^^^^^
->a2 && null : false | null
->           : ^^^^^^^^^^^^
+/*pruned*/;
+let rj2 = a2 && undefined;
+>rj2 : false | undefined
+>    : ^^^^^^^^^^^^^^^^^
+>a2 && undefined : false | undefined
+>                : ^^^^^^^^^^^^^^^^^
 >a2 : boolean
 >   : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rj3 = a3 && null;
->rj3 : 0 | null
->    : ^^^^^^^^
->a3 && null : 0 | null
->           : ^^^^^^^^
+let rj3 = a3 && undefined;
+>rj3 : 0 | undefined
+>    : ^^^^^^^^^^^^^
+>a3 && undefined : 0 | undefined
+>                : ^^^^^^^^^^^^^
 >a3 : number
 >   : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rj4 = a4 && null;
->rj4 : "" | null
->    : ^^^^^^^^^
->a4 && null : "" | null
->           : ^^^^^^^^^
+let rj4 = a4 && undefined;
+>rj4 : "" | undefined
+>    : ^^^^^^^^^^^^^^
+>a4 && undefined : "" | undefined
+>                : ^^^^^^^^^^^^^^
 >a4 : string
 >   : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-/*pruned*/;          
-/*pruned*/;          
-let rj7 = a7 && null;
->rj7 : null
+let rj5 = a5 && undefined;
+>rj5 : void
 >    : ^^^^
->a7 && null : null
->           : ^^^^
+>a5 && undefined : void
+>                : ^^^^
+>a5 : void
+>   : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+let rj7 = a7 && undefined;
+>rj7 : undefined
+>    : ^^^^^^^^^
+>a7 && undefined : undefined
+>                : ^^^^^^^^^
 >a7 : {}
 >   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rj8 = a8 && null;
->rj8 : null
->    : ^^^^
->a8 && null : null
->           : ^^^^
+let rj8 = a8 && undefined;
+>rj8 : undefined
+>    : ^^^^^^^^^
+>a8 && undefined : undefined
+>                : ^^^^^^^^^
 >a8 : string[]
 >   : ^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rj9 = null && null;
+let rj9 = null && undefined;
 >rj9 : null
 >    : ^^^^
->null && null : null
->             : ^^^^
+>null && undefined : null
+>                  : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rj10 = null && null;
->rj10 : null
->     : ^^^^
->null && null : null
->             : ^^^^
+let rj10 = undefined && undefined;
+>rj10 : undefined
+>     : ^^^^^^^^^
+>undefined && undefined : undefined
+>                       : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 function main(): void {}

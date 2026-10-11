@@ -1190,8 +1190,8 @@ fn call_operands(
         .chain(args.iter().map(|argument| argument.expr))
 }
 
-/// Whether `ty` is made only of `string`, `number`, `boolean`, `null` and
-/// their literal types.
+/// Whether `ty` is made only of `string`, `number`, `boolean`, `null`,
+/// `undefined` and their literal types.
 pub(super) fn is_primitive_union(ty: &Type) -> bool {
     flattened_union_members(ty).into_iter().all(|member| {
         matches!(
@@ -1200,6 +1200,7 @@ pub(super) fn is_primitive_union(ty: &Type) -> bool {
                 | Type::Number
                 | Type::Boolean
                 | Type::Null
+                | Type::Undefined
                 | Type::StringLiteral(_)
                 | Type::NumberLiteral(_)
                 | Type::BooleanLiteral(_)
@@ -1436,7 +1437,8 @@ fn deep_literals(ty: &Type) -> BTreeSet<Type> {
             literal if literal.is_literal_type() => {
                 literals.insert(literal.clone());
             }
-            Type::Union(members) | Type::Tuple(members) => pending.extend(members),
+            Type::Union(members) => pending.extend(members),
+            Type::Tuple(tuple) => pending.extend(&tuple.elements),
             Type::Array(inner) | Type::Readonly(inner) => pending.push(inner),
             Type::Refined { ty, .. } => pending.push(ty),
             Type::Function { params, ret, .. } => {

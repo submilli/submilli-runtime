@@ -2,7 +2,7 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use interpreter::{Asi, FileId, TokenKind, parse, parse_script};
+use submilli_engine::{Asi, FileId, TokenKind, parse, parse_script};
 
 #[test]
 fn parser_depth_is_bounded() {

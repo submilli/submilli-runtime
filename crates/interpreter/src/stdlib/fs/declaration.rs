@@ -14,8 +14,8 @@ pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);
 
     let path_param = Param::new("path", Type::String);
-    let bytes_or_null = Type::union(vec![Type::Uint8Array, Type::Null]);
-    let string_or_null = Type::union(vec![Type::String, Type::Null]);
+    let bytes_or_undefined = Type::union(vec![Type::Uint8Array, Type::Undefined]);
+    let string_or_undefined = Type::union(vec![Type::String, Type::Undefined]);
 
     insert_stat_interface(&mut defs);
     insert_peek_interface(&mut defs);
@@ -36,7 +36,7 @@ pub fn package_declaration() -> PackageDeclaration {
         "maxReadSize",
         Vec::new(),
         Type::Number,
-        "/**\n * Maximum number of bytes `read` / `readText` will load whole; past this they return `null`. Also the upper bound on `readBytes(path, offset, length)`'s `length`. Configured by the harness per Store; defaults to the 50 MB tier memory cap.\n */",
+        "/**\n * Maximum number of bytes `read` / `readText` will load whole; past this they return `undefined`. Also the upper bound on `readBytes(path, offset, length)`'s `length`. Configured by the harness per Store; defaults to the 50 MB tier memory cap.\n */",
     );
     insert_fn(
         &mut defs,
@@ -75,9 +75,9 @@ pub fn package_declaration() -> PackageDeclaration {
                 name: "Stat".to_string(),
                 args: Vec::new(),
             },
-            Type::Null,
+            Type::Undefined,
         ]),
-        "/**\n * Metadata about an entry under the VFS root. Returns `null` when the path does not exist; otherwise returns a `Stat` carrying `kind` / `size` / `modifiedAt`.\n * @param path File path under the VFS root.\n * @capability fs.stat { path }\n */",
+        "/**\n * Metadata about an entry under the VFS root. Returns `undefined` when the path does not exist; otherwise returns a `Stat` carrying `kind` / `size` / `modifiedAt`.\n * @param path File path under the VFS root.\n * @capability fs.stat { path }\n */",
     );
     insert_fn(
         &mut defs,
@@ -95,15 +95,15 @@ pub fn package_declaration() -> PackageDeclaration {
         &mut defs,
         "read",
         vec![path_param.clone()],
-        bytes_or_null.clone(),
-        "/**\n * Read the whole file as a `Uint8Array`. Returns `null` when the file is larger than `maxReadSize()` — the typechecker forces narrowing before use. Traps on missing paths or directories.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
+        bytes_or_undefined.clone(),
+        "/**\n * Read the whole file as a `Uint8Array`. Returns `undefined` when the file is larger than `maxReadSize()` — the typechecker forces narrowing before use. Traps on missing paths or directories.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
     );
     insert_fn(
         &mut defs,
         "readText",
         vec![path_param.clone()],
-        string_or_null.clone(),
-        "/**\n * Read the whole file as a UTF-8 string. Returns `null` when the file is larger than `maxReadSize()`. Strips a leading UTF-8 BOM by default; invalid bytes are replaced by U+FFFD.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
+        string_or_undefined.clone(),
+        "/**\n * Read the whole file as a UTF-8 string. Returns `undefined` when the file is larger than `maxReadSize()`. Strips a leading UTF-8 BOM by default; invalid bytes are replaced by U+FFFD.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
     );
     insert_fn(
         &mut defs,
@@ -499,6 +499,7 @@ fn insert_file_writer_interface(defs: &mut PackageDeclaration) {
     methods.insert(
         "close".to_string(),
         MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: Vec::new(),
             ret: Type::Void,
@@ -511,6 +512,7 @@ fn insert_file_writer_interface(defs: &mut PackageDeclaration) {
     methods.insert(
         "writeBytes".to_string(),
         MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: vec![Param::new("bytes", Type::Uint8Array)],
             ret: Type::Void,
@@ -523,6 +525,7 @@ fn insert_file_writer_interface(defs: &mut PackageDeclaration) {
     methods.insert(
         "writeLine".to_string(),
         MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: vec![Param::new("line", Type::String)],
             ret: Type::Void,

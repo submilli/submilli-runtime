@@ -1,8 +1,7 @@
 // A function returning `void` fits where a function returning `unknown` is
-// expected, as in tsc: its result is `undefined`, which Submilli spells
-// `null`. An unannotated arrow with no `return`, a named `void` function and a
-// `void` method all qualify, and a predicate callback that returns nothing is
-// falsy.
+// expected, as in tsc: its result is `undefined`. An unannotated arrow with
+// no `return`, a named `void` function and a `void` method all qualify, and a
+// predicate callback that returns nothing is falsy.
 interface Runner {
   run(): unknown;
 }
@@ -30,20 +29,20 @@ function main(): void {
     calls = calls + 1;
   };
   const h: () => unknown = noop;
-  assert(g() === null, "an annotated variable");
-  assert(h() === null, "a named void function");
-  assert(takes(() => {}) === null, "a call argument");
+  assert(g() === undefined, "an annotated variable");
+  assert(h() === undefined, "a named void function");
+  assert(takes(() => {}) === undefined, "a call argument");
   assert(calls === 2, "each function ran");
 
   const r: Runner = new Quiet();
-  assert(r.run() === null, "a void method for an unknown one");
+  assert(r.run() === undefined, "a void method for an unknown one");
   assert(each([1, 2], (x) => {}).length === 2, "a generic callback");
 
   const xs = [1, 2, 3];
   assert(xs.filter(() => {}).length === 0, "filter treats no result as falsy");
   assert(!xs.some((x) => {}), "some");
-  assert(xs.find(() => {}) === null, "find");
+  assert(xs.find(() => {}) === undefined, "find");
 
   const fs: Array<() => unknown> = [() => {}, () => 1];
-  assert(fs[0]() === null && fs[1]() === 1, "an array of such functions");
+  assert(fs[0]() === undefined && fs[1]() === 1, "an array of such functions");
 }

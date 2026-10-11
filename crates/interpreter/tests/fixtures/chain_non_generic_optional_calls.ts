@@ -19,7 +19,7 @@ export function main(): string {
     assert(b?.plain() === 7, "a user method works");
 
     const n: number[] | null = null as number[] | null;
-    assert(n?.indexOf(2) === null, "a null receiver short-circuits");
+    assert(n?.indexOf(2) === undefined, "a null receiver short-circuits");
 
     const s: string | null = "abc";
     assert(s?.toUpperCase() === "ABC", "a string method works");

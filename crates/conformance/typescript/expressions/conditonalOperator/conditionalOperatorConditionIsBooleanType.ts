@@ -34,9 +34,9 @@ true ? exprString1 : exprBoolean1; // union
 /*pruned*/;                 
 typeof "123" == "string" ? exprBoolean1 : exprBoolean2;
 2 > 1 ? exprNumber1 : exprNumber2;
-null === null ? exprString1 : exprString2;
+null === undefined ? exprString1 : exprString2;
 /*pruned*/;                                   
-null === null ? exprString1 : exprBoolean1; // union
+null === undefined ? exprString1 : exprBoolean1; // union
 
 //Results shoud be same as Expr1 and Expr2
 /*pruned*/;                                          
@@ -57,7 +57,7 @@ let resultIsStringOrBoolean3 = false ? exprString1 : exprBoolean1; // union
 /*pruned*/;                                    
 let resultIsBoolean3 = typeof "123" == "string" ? exprBoolean1 : exprBoolean2;
 let resultIsNumber3 = 2 > 1 ? exprNumber1 : exprNumber2;
-let resultIsString3 = null === null ? exprString1 : exprString2;
+let resultIsString3 = null === undefined ? exprString1 : exprString2;
 /*pruned*/;                                                         
 let resultIsStringOrBoolean4 = typeof "123" === "string" ? exprString1 : exprBoolean1; // union
 

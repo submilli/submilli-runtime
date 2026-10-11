@@ -32,5 +32,5 @@ function main(): void {
   assert(chained === "RangeError", `chain index, got ${chained}`);
 
   const none: Bag | null = null as Bag | null;
-  assert(none?.arr[99] === null, "a short-circuit never reaches the index");
+  assert(none?.arr[99] === undefined, "a short-circuit never reaches the index");
 }

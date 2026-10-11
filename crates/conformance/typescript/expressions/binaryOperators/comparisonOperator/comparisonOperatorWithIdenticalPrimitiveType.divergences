@@ -1,7 +1,11 @@
-types: 137 of 142 tsc entries compared, 0 differ
+types: 172 of 177 tsc entries compared, 0 differ
 
 errors:
 line 12: ours: `<` not defined for `boolean` and `boolean` (tsc accepts)
 line 21: ours: `>` not defined for `boolean` and `boolean` (tsc accepts)
 line 30: ours: `<=` not defined for `boolean` and `boolean` (tsc accepts)
 line 39: ours: `>=` not defined for `boolean` and `boolean` (tsc accepts)
+line 52: ours: `null == null` compares two nullish values: `==` compares like `===` (tsc accepts)
+line 53: ours: `undefined == undefined` compares two nullish values: `==` compares like `===` (tsc accepts)
+line 61: ours: `null != null` compares two nullish values: `==` compares like `===` (tsc accepts)
+line 62: ours: `undefined != undefined` compares two nullish values: `==` compares like `===` (tsc accepts)

@@ -141,7 +141,18 @@ pub fn emit_box(
             // null lowers to (ref null none) — the bottom of the WasmGC ref
             // hierarchy — a subtype of every nullable ref; no instruction needed.
         }
-        Type::Void | Type::Error => {
+        Type::Undefined => {
+            let idx = ctx
+                .symbols
+                .intrinsic_type_indices()
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("undefined intrinsic not registered")
+                })?
+                .undefined;
+            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(idx)));
+        }
+        Type::Void => {}
+        Type::Error => {
             return Err(crate::codegen::internal_failure(
                 "invalid type representation during cast lowering",
             ));
@@ -298,14 +309,6 @@ pub fn emit_coerce_to_return_slot(
     match emitter.return_target().clone() {
         ReturnTarget::Slot(slot) => emit_coerce_to_wasm_slot(emitter, ctx, source_ty, slot)?,
         ReturnTarget::Declared(ret) => emit_coerce_to_slot(emitter, ctx, source_ty, &ret)?,
-        // On the `return` route the drop is redundant, `return` being
-        // polymorphic; it is the expression body that would otherwise fall off
-        // the end unbalanced.
-        ReturnTarget::VoidClosure => {
-            if !source_ty.is_void() {
-                emitter.instruction(Instruction::Drop);
-            }
-        }
         ReturnTarget::NoResult => {}
     };
     Ok(())
@@ -355,7 +358,11 @@ fn emit_ref_truthiness(
     let classes: Vec<TruthinessClass> = members
         .iter()
         .filter(|m| !matches!(m.peel(), Type::Null))
-        .map(|m| truthiness_class(m))
+        .map(|m| match m.peel() {
+            Type::Void => Dynamic,
+            Type::Undefined => AlwaysFalsy,
+            _ => truthiness_class(m),
+        })
         .collect();
 
     if classes.iter().all(|c| *c == AlwaysTruthy) {
@@ -383,6 +390,10 @@ fn emit_ref_truthiness(
     let test_number = needs(NumberLike, |m| matches!(m, Type::NumberLiteral(_)));
     let test_boolean = needs(BooleanLike, |m| matches!(m, Type::BooleanLiteral(_)));
     let test_bigint = needs(BigIntLike, |_| false);
+    let test_undefined = classes.contains(&Dynamic)
+        || members
+            .iter()
+            .any(|member| matches!(member.peel(), Type::Undefined));
 
     let slot = ctx.symbols.value_type(cond_ty)?;
     let tmp = emitter.add_anonymous_local(slot)?;
@@ -394,6 +405,14 @@ fn emit_ref_truthiness(
     if nullable {
         emitter.instruction(Instruction::LocalGet(tmp));
         emitter.instruction(Instruction::RefIsNull);
+        emitter.emit_if(BlockType::Result(ValType::I32));
+        emitter.instruction(Instruction::I32Const(0));
+        emitter.emit_else();
+        open_blocks += 1;
+    }
+    if test_undefined {
+        emitter.instruction(Instruction::LocalGet(tmp));
+        super::expr::emit_is_undefined(emitter, ctx)?;
         emitter.emit_if(BlockType::Result(ValType::I32));
         emitter.instruction(Instruction::I32Const(0));
         emitter.emit_else();
@@ -662,7 +681,18 @@ pub fn emit_cast_to(
         Type::Null => {
             // Null lowers to (ref null $Object) — already a subtype of any nullable ref.
         }
-        Type::Void | Type::Error => {
+        Type::Undefined => {
+            let idx = ctx
+                .symbols
+                .intrinsic_type_indices()
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("undefined intrinsic not registered")
+                })?
+                .undefined;
+            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(idx)));
+        }
+        Type::Void => {}
+        Type::Error => {
             return Err(crate::codegen::internal_failure(
                 "invalid type representation during cast lowering",
             ));
@@ -756,6 +786,7 @@ pub fn target_allows_null(
     Ok(matches!(
         ty,
         Type::Null
+            | Type::Void
             | Type::Unknown
             | Type::Never
             | Type::TypeVar(_)

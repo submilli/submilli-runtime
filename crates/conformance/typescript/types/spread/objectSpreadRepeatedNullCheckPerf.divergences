@@ -1,109 +1,109 @@
-types: 213 of 378 tsc entries compared, 27 differ
+types: 239 of 404 tsc entries compared, 27 differ
 
-line 33: { ...config.a !== null && { a: config.a.toString() }, ...config.b !== null && { b: config.b.toString() }, ...config.c !== null && { c: config.c.toString() }, ...config.d !== null && { d: config.d.toString() }, ...config.e !== null && { e: config.e.toString() }, ...config.f !== null && { f: config.f.toString() }, ...config.g !== null && { g: config.g.toString() }, ...config.h !== null && { h: config.h.toString() }, ...config.i !== null && { i: config.i.toString() }, ...config.j !== null && { j: config.j.toString() }, ...config.k !== null && { k: config.k.toString() }, ...config.l !== null && { l: config.l.toString() }, ...config.m !== null && { m: config.m.toString() }, ...config.n !== null && { n: config.n.toString() }, ...config.o !== null && { o: config.o.toString() }, ...config.p !== null && { p: config.p.toString() }, ...config.q !== null && { q: config.q.toString() }, ...config.r !== null && { r: config.r.toString() }, ...config.s !== null && { s: config.s.toString() }, ...config.t !== null && { t: config.t.toString() }, ...config.u !== null && { u: config.u.toString() }, ...config.v !== null && { v: config.v.toString() }, ...config.w !== null && { w: config.w.toString() }, ...config.x !== null && { x: config.x.toString() }, ...config.y !== null && { y: config.y.toString() }, ...config.z !== null && { z: config.z.toString() } }
+line 33: { ...config.a !== undefined && { a: config.a.toString() }, ...config.b !== undefined && { b: config.b.toString() }, ...config.c !== undefined && { c: config.c.toString() }, ...config.d !== undefined && { d: config.d.toString() }, ...config.e !== undefined && { e: config.e.toString() }, ...config.f !== undefined && { f: config.f.toString() }, ...config.g !== undefined && { g: config.g.toString() }, ...config.h !== undefined && { h: config.h.toString() }, ...config.i !== undefined && { i: config.i.toString() }, ...config.j !== undefined && { j: config.j.toString() }, ...config.k !== undefined && { k: config.k.toString() }, ...config.l !== undefined && { l: config.l.toString() }, ...config.m !== undefined && { m: config.m.toString() }, ...config.n !== undefined && { n: config.n.toString() }, ...config.o !== undefined && { o: config.o.toString() }, ...config.p !== undefined && { p: config.p.toString() }, ...config.q !== undefined && { q: config.q.toString() }, ...config.r !== undefined && { r: config.r.toString() }, ...config.s !== undefined && { s: config.s.toString() }, ...config.t !== undefined && { t: config.t.toString() }, ...config.u !== undefined && { u: config.u.toString() }, ...config.v !== undefined && { v: config.v.toString() }, ...config.w !== undefined && { w: config.w.toString() }, ...config.x !== undefined && { x: config.x.toString() }, ...config.y !== undefined && { y: config.y.toString() }, ...config.z !== undefined && { z: config.z.toString() } }
   tsc:  { z?: string | undefined; y?: string | undefined; x?: string | undefined; w?: string | undefined; v?: string | undefined; u?: string | undefined; t?: string | undefined; s?: string | undefined; r?: string | undefined; q?: string | undefined; p?: string | undefined; o?: string | undefined; n?: string | undefined; m?: string | undefined; l?: string | undefined; k?: string | undefined; j?: string | undefined; i?: string | undefined; h?: string | undefined; g?: string | undefined; f?: string | undefined; e?: string | undefined; d?: string | undefined; c?: string | undefined; b?: string | undefined; a?: string | undefined; }
   ours: Props
 
 line 34: config.a
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 35: config.b
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 36: config.c
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 37: config.d
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 38: config.e
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 39: config.f
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 40: config.g
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 41: config.h
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 42: config.i
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 43: config.j
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 44: config.k
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 45: config.l
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 46: config.m
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 47: config.n
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 48: config.o
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 49: config.p
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 50: config.q
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 51: config.r
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 52: config.s
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 53: config.t
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 54: config.u
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 55: config.v
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 56: config.w
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 57: config.x
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 58: config.y
   tsc:  number
-  ours: number | null
+  ours: number | undefined
 
 line 59: config.z
   tsc:  number
-  ours: number | null
+  ours: number | undefined

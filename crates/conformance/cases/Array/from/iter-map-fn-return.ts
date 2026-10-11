@@ -14,7 +14,7 @@ function twoNumbers(): TwoNumbers {
       const it: Iterator<number> = {
         next: (): IteratorResult<number> => {
           if (i >= 2) {
-            const done: IteratorResult<number> = { done: true };
+            const done: IteratorResult<number> = { done: true, value: undefined };
             return done;
           }
           i = i + 1;

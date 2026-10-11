@@ -1,5 +1,6 @@
 //! `FunctionEmitter` — single-pass builder for the body of one Wasm function.
 
+pub(super) mod binding_cells;
 pub mod cast;
 pub mod expr;
 mod finally;
@@ -7,7 +8,7 @@ pub mod json;
 pub mod mcp;
 pub mod stmt;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use wasm_encoder::{BlockType, Encode, Function, Instruction, ValType};
 
@@ -24,13 +25,9 @@ pub enum ExprContext {
 /// Where a `return` in a body coerces to. Exactly one applies to any body.
 #[derive(Clone, Debug, Default)]
 pub enum ReturnTarget {
-    /// A void function, method, or constructor: no result at all.
+    /// A constructor initializer or compiler-generated body with no result.
     #[default]
     NoResult,
-    /// A void closure has no result slot either, yet a diverging body still
-    /// pushes the callee's value — Wasm can't see that the call never returns —
-    /// so an expression body would fall off the end unbalanced without a drop.
-    VoidClosure,
     /// A *recorded* Wasm result: a closure's funcref result, or a class
     /// method's vtable slot, which this body's own annotation may lower either
     /// wider or narrower than.
@@ -93,6 +90,13 @@ pub struct FunctionEmitter<'a> {
     /// evaluation: `a[i] += v` synthesizes its read from the very receiver and
     /// index nodes the write uses.
     single_evaluations: Vec<(ExprId, u32)>,
+    parameter_input_slots: BTreeMap<String, (u32, Type)>,
+    uninitialized_parameters: HashSet<Ident>,
+    parameter_binding_cells: HashMap<Ident, u32>,
+    /// Binding cells a read can reach before their initializer has run: a
+    /// parameter or pattern cell a default can observe, or a capture that may
+    /// be one. Every other cell is initialized when it is created.
+    pub(super) uninitialized_cells: HashSet<u32>,
 }
 
 /// A name's two slots. `declared` is the binding's storage — the slot every
@@ -197,6 +201,10 @@ impl<'a> FunctionEmitter<'a> {
             body_limit_instruction: None,
             local_entry_bytes: 0,
             single_evaluations: Vec::new(),
+            parameter_input_slots: BTreeMap::new(),
+            uninitialized_parameters: HashSet::new(),
+            parameter_binding_cells: HashMap::new(),
+            uninitialized_cells: HashSet::new(),
             cast_diagnostic: None,
         };
         let mut scope = Scope::new();
@@ -449,6 +457,8 @@ impl<'a> FunctionEmitter<'a> {
             if self.require_local_slot(&p.name.name)? != typed_slot {
                 return Err(self.state_failure("typed parameter slot does not match its binding"));
             }
+            self.parameter_input_slots
+                .insert(p.name.name.clone(), (typed_slot, p.ty.clone()));
             if !p.boxed {
                 continue;
             }
@@ -471,7 +481,12 @@ impl<'a> FunctionEmitter<'a> {
                 heap_type: wasm_encoder::HeapType::Concrete(box_idx),
             });
             let shadow_idx = self.add_anonymous_local(box_val)?;
+            let uninitialized = self.uninitialized_parameters.contains(&p.name);
+            if uninitialized {
+                self.uninitialized_cells.insert(shadow_idx);
+            }
             self.instruction(Instruction::LocalGet(typed_slot));
+            self.instruction(Instruction::I32Const(i32::from(!uninitialized)));
             self.instruction(Instruction::StructNew(box_idx));
             self.instruction(Instruction::LocalSet(shadow_idx));
             self.rebind_in_innermost_scope(&p.name.name, shadow_idx, box_val)?;
@@ -482,6 +497,10 @@ impl<'a> FunctionEmitter<'a> {
     /// Prefer the structured helpers (emit_block/if/loop) to keep depth tracking consistent.
     pub fn instruction(&mut self, inst: Instruction<'static>) {
         self.instructions.push(inst);
+    }
+
+    pub fn instructions(&mut self, insts: impl IntoIterator<Item = Instruction<'static>>) {
+        self.instructions.extend(insts);
     }
 
     /// The encoded size the function body would have if it ended here: its
@@ -633,7 +652,7 @@ impl<'a> FunctionEmitter<'a> {
         Ok(match &self.return_target {
             ReturnTarget::Slot(slot) => Some(*slot),
             ReturnTarget::Declared(ret) => Some(ctx.symbols.value_type(ret)?),
-            ReturnTarget::VoidClosure | ReturnTarget::NoResult => None,
+            ReturnTarget::NoResult => None,
         })
     }
 
@@ -1070,10 +1089,9 @@ pub fn emit_function(
         crate::codegen::wasm_u32(params.len())?,
     )?;
 
-    if !return_type.is_void() {
-        emitter.set_return_target(ReturnTarget::Declared(return_type.clone()));
-    }
+    emitter.set_return_target(ReturnTarget::Declared(return_type.clone()));
     let typed_slots: Vec<u32> = (0..crate::codegen::wasm_u32(params.len())?).collect();
+    emitter.prepare_parameter_initialization(Some(body))?;
     emitter.emit_boxed_param_prologue(params, &typed_slots)?;
     stmt::emit_statement(&mut emitter, ctx, body)?;
     emit_body_end(&mut emitter, ctx, return_type)?;
@@ -1087,9 +1105,7 @@ pub fn emit_closure_function(
     meta: &crate::codegen::closures::ClosureMeta,
 ) -> Result<(Function, Vec<(u64, Span)>), crate::compiler_error::CompilerFailure> {
     let signature = crate::codegen::closures::classify(&meta.signature)?;
-    if usize::from(signature.arity) != meta.params.len()
-        || signature.is_void != meta.return_type.is_void()
-    {
+    if usize::from(signature.arity) != meta.params.len() {
         return Err(crate::codegen::internal_failure(
             "closure body disagrees with its registered signature",
         ));
@@ -1219,6 +1235,10 @@ pub fn emit_closure_function(
             ctx.symbols.value_type(&c.ty)?
         };
         let captured_local = emitter.define_local(&c.name, local_ty)?;
+        // A closure a default creates can run before a later parameter is set.
+        if c.boxed && !ctx.ta.parameter_default_prologues.is_empty() {
+            emitter.uninitialized_cells.insert(captured_local);
+        }
         emitter
             .instructions
             .push(Instruction::LocalGet(env_typed_local));
@@ -1253,6 +1273,10 @@ pub fn emit_closure_function(
         }
     }
 
+    emitter.prepare_parameter_initialization(match meta.body {
+        crate::ClosureBody::Block(body) => Some(body),
+        crate::ClosureBody::Expr(_) => None,
+    })?;
     emitter.emit_boxed_param_prologue(&meta.params, &typed_slots)?;
 
     emitter.set_return_target(closure_return_target(ctx, &meta.return_type)?);
@@ -1287,9 +1311,7 @@ fn closure_return_target(
     ctx: &CodegenCtx<'_>,
     ret: &Type,
 ) -> Result<ReturnTarget, CompilerFailure> {
-    if ret.is_void() {
-        return Ok(ReturnTarget::VoidClosure);
-    }
+    let _ = ret;
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -1300,24 +1322,22 @@ fn closure_return_target(
     })))
 }
 
-/// Ends a block body that may produce a value. Control reaches the end of a
-/// body returning `unknown` when it falls off without a `return`, which
-/// yields `null` as JavaScript yields `undefined`. For every other value type
-/// the missing-return rule rejects such a body unless the fall-through runs
-/// through an exhaustive `switch`. A narrowing that a call left stale can
-/// still bring a value no case matches, so a module with such a switch
-/// throws a `TypeError` there. Elsewhere the end is unreachable; the trap
-/// keeps the function statically total for Wasm validation, which cannot
-/// prove that.
+/// Ends a block body that may produce a value. A body falling off its end
+/// completes with `undefined` when its return type permits it. For every other
+/// type the missing-return rule rejects such a body unless the fall-through
+/// runs through an exhaustive `switch`. A narrowing that a call left stale can
+/// still bring a value no case matches, so a module with such a switch throws
+/// a `TypeError` there. Elsewhere the end is unreachable; the trap keeps the
+/// function statically total for Wasm validation, which cannot prove that.
 pub(crate) fn emit_body_end(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
     return_type: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    if return_type.is_void() {
-        return Ok(());
-    }
-    if !matches!(return_type.peel(), Type::Unknown) {
+    let accepts_undefined = return_type.is_void()
+        || matches!(return_type.peel(), Type::Unknown | Type::Undefined)
+        || matches!(return_type.peel(), Type::Union(members) if members.iter().any(|member| matches!(member.peel(), Type::Undefined | Type::Void)));
+    if !accepts_undefined {
         use crate::codegen::throw;
         if throw::body_end_may_be_reached(ctx.ta) {
             throw::emit_type_error_throw(emitter, ctx, throw::MISSING_RETURN_VALUE_MESSAGE);
@@ -1325,11 +1345,8 @@ pub(crate) fn emit_body_end(
         emitter.instruction(Instruction::Unreachable);
         return Ok(());
     }
-    emitter.instruction(Instruction::RefNull(wasm_encoder::HeapType::Abstract {
-        shared: false,
-        ty: wasm_encoder::AbstractHeapType::None,
-    }));
-    cast::emit_coerce_to_return_slot(emitter, ctx, &Type::Null)?;
+    expr::emit_undefined(emitter, ctx)?;
+    cast::emit_coerce_to_return_slot(emitter, ctx, &Type::Undefined)?;
     emitter.instruction(Instruction::Return);
     Ok(())
 }
@@ -1659,6 +1676,7 @@ mod tests {
         crate::TypedParam {
             name: ident(name),
             ty,
+            optional: false,
             boxed,
             rest: false,
             default: None,
@@ -1909,10 +1927,10 @@ mod tests {
             super::closure_return_target(&cx, &crate::Type::Number),
             "intrinsics",
         );
-        assert!(matches!(
-            super::closure_return_target(&cx, &crate::Type::Void).unwrap(),
-            super::ReturnTarget::VoidClosure
-        ));
+        assert_internal(
+            super::closure_return_target(&cx, &crate::Type::Void),
+            "intrinsics",
+        );
     }
 
     #[test]

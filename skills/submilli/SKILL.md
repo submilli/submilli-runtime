@@ -71,6 +71,6 @@ assumption in the deliverable. An explanation alone needs no installation.
 Report outcomes, not machinery: say what was built and which allowed and
 denied cases were exercised, not which references were loaded.
 
-Submilli is a TypeScript subset, not Node.js: no npm imports, `any`, `undefined`,
+Submilli is a TypeScript subset, not Node.js: no npm imports, `any`,
 or `async`/`await` inside runtime programs/packages. The surrounding application
 uses its normal language and dependencies. Discover APIs from CLI/MCP docs.

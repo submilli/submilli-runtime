@@ -3,14 +3,16 @@
 //! The directory is owner-only (0700) and every file in it is 0600. It holds a
 //! self-ignoring `.gitignore`, the lock and ready files, the tokens, the start
 //! lock that serializes concurrent starts, the instance lock the serving process
-//! holds for its whole life, the detached child's log, and the embedded server's
-//! blueprint, session, VFS, and volume directories, and the run store.
+//! holds for its whole life, the detached child's log, the remembered binding
+//! (variable values and secret names, never a secret's value), and the embedded
+//! server's blueprint, session, VFS, and volume directories, and the run store.
 //!
 //! Nothing here is trusted as found: the directory and `.submilli` above it must
 //! be real directories (not symlinks) owned by this user, and a file the
 //! playground reads or opens must be a regular file owned by this user, tightened
 //! to 0600 if it was looser.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -47,6 +49,20 @@ pub(crate) struct InstanceRecord {
 
 pub(crate) struct StateDir {
     root: PathBuf,
+}
+
+/// What `bind` leaves for the next start, in `binding.json`: the variables, the last
+/// value each variable had (kept after it is unset), and the names of the harness
+/// secrets bound. A secret's value is never written: it lives in the running
+/// playground's memory only, and the names are kept only to say, after a restart,
+/// that a secret has to be bound again. A field it does not know (one a newer playground
+/// wrote) is ignored, so the variables saved beside it are still read.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct RememberedBinding {
+    pub(crate) variables: BTreeMap<String, String>,
+    pub(crate) last: BTreeMap<String, String>,
+    pub(crate) secret_names: BTreeSet<String>,
 }
 
 /// The process holding the instance lock, as another command sees it.
@@ -172,6 +188,11 @@ impl StateDir {
 
     pub(crate) fn log_path(&self) -> PathBuf {
         self.root.join("playground.log")
+    }
+
+    /// The remembered binding; see [`RememberedBinding`].
+    pub(crate) fn binding_path(&self) -> PathBuf {
+        self.root.join("binding.json")
     }
 
     pub(crate) fn token_path(&self, name: &str) -> PathBuf {
@@ -300,6 +321,12 @@ impl StateDir {
 
     pub(crate) fn write_ready(&self, record: &InstanceRecord) -> Result<()> {
         write_private(&self.ready_path(), &serde_json::to_vec(record)?)
+    }
+
+    /// The binding the last `bind` left, or `None` when none was ever saved. A symlink,
+    /// a file of another user, or text that is not a binding is an error.
+    pub(crate) fn read_binding(&self) -> Result<Option<RememberedBinding>> {
+        read_binding_at(&self.binding_path())
     }
 
     /// Remove the instance record (the file named `lock`) and the ready file if they
@@ -562,6 +589,21 @@ fn open_existing_private(path: &Path) -> Result<Option<File>> {
     Ok(Some(file))
 }
 
+/// The binding saved at `path`; see [`StateDir::read_binding`].
+pub(crate) fn read_binding_at(path: &Path) -> Result<Option<RememberedBinding>> {
+    let Some(text) = read_private(path)? else {
+        return Ok(None);
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .with_context(|| format!("{} is not a saved binding", path.display()))
+}
+
+/// Saves `binding` at `path` as a 0600 file, in one rename.
+pub(crate) fn write_binding_at(path: &Path, binding: &RememberedBinding) -> Result<()> {
+    write_private(path, &serde_json::to_vec_pretty(binding)?)
+}
+
 /// Write `bytes` to `path` as a 0600 file, replacing it in one rename so a reader
 /// never sees a partial record.
 pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -643,6 +685,49 @@ mod tests {
         fs::write(&elsewhere, STANDARD.encode([7_u8; 32])).unwrap();
         symlink(&elsewhere, &path).unwrap();
         assert!(state.session_cipher().is_err());
+    }
+
+    #[test]
+    fn a_saved_binding_reads_back_owner_only_and_a_symlink_in_its_place_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = StateDir::for_project(dir.path());
+        state.create().unwrap();
+        assert_eq!(state.read_binding().unwrap(), None);
+        let binding = RememberedBinding {
+            variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+            last: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
+            secret_names: BTreeSet::from(["API_KEY".into()]),
+        };
+        let path = state.binding_path();
+        write_binding_at(&path, &binding).unwrap();
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(state.read_binding().unwrap(), Some(binding.clone()));
+        // A rewrite replaces it whole and stays owner-only.
+        let cleared = RememberedBinding {
+            variables: BTreeMap::new(),
+            ..binding
+        };
+        write_binding_at(&path, &cleared).unwrap();
+        assert_eq!(state.read_binding().unwrap(), Some(cleared));
+        assert_eq!(mode(&path), 0o600);
+
+        // A field a newer playground added is ignored; the variables are kept.
+        fs::write(
+            &path,
+            "{\"variables\": {\"customerId\": \"cus_initech\"}, \"added_later\": true}",
+        )
+        .unwrap();
+        let read = state.read_binding().unwrap().expect("a binding");
+        assert_eq!(read.variables["customerId"], "cus_initech");
+
+        fs::write(&path, "{\"variables\": 3}").unwrap();
+        assert!(state.read_binding().is_err());
+        fs::remove_file(&path).unwrap();
+        let elsewhere = dir.path().join("elsewhere.json");
+        fs::write(&elsewhere, "{}").unwrap();
+        symlink(&elsewhere, &path).unwrap();
+        let error = state.read_binding().unwrap_err();
+        assert!(format!("{error:#}").contains("symlink"), "{error:#}");
     }
 
     #[test]

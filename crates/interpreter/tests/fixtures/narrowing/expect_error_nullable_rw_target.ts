@@ -8,16 +8,16 @@
 // statement. A compound assignment's right-hand side stays elided, since it is
 // whatever the caller wrote.
 //
-// expect-error: `f` on `CBox` is nullable; `+=` requires a non-null field
+// expect-error: `f` on `CBox` is nullable; `+=` requires a field that is never `null`
 // expect-error: write the assignment out: `if (c.f !== null) { c.f = c.f + …; }`
-// expect-error: `f` on `IBox` is nullable; `+=` requires a non-null field
+// expect-error: `f` on `IBox` is nullable; `+=` requires a field that is never `null`
 // expect-error: write the assignment out: `if (i.f !== null) { i.f = i.f + …; }`
-// expect-error: `f` on `{ f: number | null }` is nullable; `+=` requires a non-null field
-// expect-error: `f` on `Opt` is optional; `++` requires a non-null field
-// expect-error: write the assignment out: `if (o.f !== null) { o.f = o.f + 1; }`
-// expect-error: `n` on `CBox` is nullable; `--` requires a non-null field
+// expect-error: `f` on `{ f: number | null }` is nullable; `+=` requires a field that is never `null`
+// expect-error: `f` on `Opt` is optional; `++` requires a field that is never `undefined`
+// expect-error: write the assignment out: `if (o.f !== undefined) { o.f = o.f + 1; }`
+// expect-error: `n` on `CBox` is nullable; `--` requires a field that is never `null`
 // expect-error: write the assignment out: `if (c.n !== null) { c.n = c.n - 1; }`
-// expect-error: `b` on `CBox` is nullable; `*=` requires a non-null field
+// expect-error: `b` on `CBox` is nullable; `*=` requires a field that is never `null`
 // expect-error: write the assignment out: `if (c.b !== null) { c.b = c.b * …; }`
 //
 // A field whose non-null form has no `+=` at all is NOT a nullability problem —

@@ -1,4 +1,4 @@
-types: 187 of 273 tsc entries compared, 39 differ
+types: 198 of 284 tsc entries compared, 41 differ
 
 line 30: x
   tsc:  {}
@@ -17,7 +17,7 @@ line 54: x
   ours: T
 
 line 69: x
-  tsc:  {} | undefined
+  tsc:  {} | null
   ours: unknown
 
 line 75: x
@@ -25,23 +25,31 @@ line 75: x
   ours: unknown
 
 line 80: x
-  tsc:  {} | undefined
+  tsc:  {} | null
   ours: unknown
 
 line 81: x
-  tsc:  {} | undefined
+  tsc:  {}
   ours: unknown
 
 line 87: x
   tsc:  {}
   ours: unknown
 
+line 90: x
+  tsc:  null | undefined
+  ours: undefined
+
 line 93: x
   tsc:  {}
   ours: unknown
 
+line 96: x
+  tsc:  null | undefined
+  ours: null
+
 line 102: x
-  tsc:  T & ({} | undefined)
+  tsc:  T & ({} | null)
   ours: T
 
 line 108: x
@@ -49,11 +57,11 @@ line 108: x
   ours: T
 
 line 113: x
-  tsc:  T & ({} | undefined)
+  tsc:  T & ({} | null)
   ours: T
 
 line 114: x
-  tsc:  T & ({} | undefined)
+  tsc:  T & {}
   ours: T
 
 line 120: x
@@ -65,20 +73,20 @@ line 126: x
   ours: T
 
 line 168: x
-  tsc:  T & ({} | undefined)
-  ours: T
+  tsc:  (T & {}) | null
+  ours: T | null
 
 line 171: x
-  tsc:  T & ({} | undefined)
-  ours: T
+  tsc:  (T & {}) | undefined
+  ours: T | undefined
 
 line 174: x
   tsc:  NonNullable<T>
-  ours: T
+  ours: T | null
 
 line 177: x
   tsc:  NonNullable<T>
-  ours: T
+  ours: T | undefined
 
 line 183: x
   tsc:  object
@@ -149,16 +157,25 @@ line 375: x
   ours: number
 
 line 382: encoding
-  tsc:  {} | undefined
+  tsc:  {} | null
   ours: unknown
 
 line 402: value
-  tsc:  {} | undefined
+  tsc:  {} | null
   ours: unknown
 
 errors:
 line 294: tsc TS2345: Argument of type '"foo"' is not assignable to parameter of type 'never'. (we accept)
+line 23: ours: expected `{} | null | undefined`, got `unknown` (tsc accepts)
+line 24: ours: expected `{} | { x: string } | null | undefined`, got `unknown` (tsc accepts)
+line 25: ours: expected `ThisOrThatNode | null | undefined`, got `unknown` (tsc accepts)
 line 29: ours: cannot use `unknown` as a condition (tsc accepts)
 line 35: ours: cannot use `unknown` in a boolean context (tsc accepts)
+line 86: ours: `x != undefined` does not also match `null`: `==` compares like `===` (tsc accepts)
+line 92: ours: `x != null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 119: ours: `x != undefined` does not also match `null`: `==` compares like `===` (tsc accepts)
+line 125: ours: `x != null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
+line 173: ours: `x != undefined` does not also match `null`: `==` compares like `===` (tsc accepts)
+line 176: ours: `x != null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
 line 278: ours: `keyof` needs an object type or interface, got `T` (tsc accepts)
 line 279: ours: cannot index into non-array type `T` (tsc accepts)

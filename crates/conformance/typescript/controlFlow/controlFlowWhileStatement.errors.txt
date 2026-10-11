@@ -1,2 +1,2 @@
-controlFlowWhileStatement.ts(24,9): error TS2322: Type 'null' is not assignable to type 'string | number'.
+controlFlowWhileStatement.ts(24,9): error TS2322: Type 'undefined' is not assignable to type 'string | number'.
 controlFlowWhileStatement.ts(82,12): error TS2365: Operator '>' cannot be applied to types 'string | number' and 'number'.

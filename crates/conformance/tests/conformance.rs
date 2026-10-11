@@ -22,6 +22,9 @@
 #[path = "support/conformance_gate.rs"]
 mod conformance_gate;
 
+#[path = "support/case_selection.rs"]
+mod case_selection;
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -50,6 +53,10 @@ fn conformance() {
     let mut paths = Vec::new();
     collect(&root.join("cases"), &mut paths);
     paths.sort();
+    if let Some(selected) = case_selection::read("CONFORMANCE_CASES").expect("read selected cases")
+    {
+        case_selection::retain(&mut paths, &root.join("cases"), &selected).expect("select cases");
+    }
     let filter = std::env::var("CONFORMANCE_FILTER").ok();
     if let Some(filter) = filter {
         paths.retain(|p| p.to_string_lossy().contains(&filter));

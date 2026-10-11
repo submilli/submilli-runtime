@@ -31,67 +31,67 @@ class Joiner {
   }
 }
 
-function joined(a: string[] | null): string | null {
+function joined(a: string[] | null): string | undefined {
   return a?.join();
 }
 
-function split(s: string | null): string[] | null {
+function split(s: string | null): string[] | undefined {
   return s?.split(",");
 }
 
-function concatenated(a: number[] | null): number[] | null {
+function concatenated(a: number[] | null): number[] | undefined {
   return a?.concat([3, 4]);
 }
 
-function sorted(a: number[] | null): number[] | null {
+function sorted(a: number[] | null): number[] | undefined {
   return a?.sort();
 }
 
-function wrapped(j: Joiner | null, parts: string[]): string | null {
+function wrapped(j: Joiner | null, parts: string[]): string | undefined {
   return j?.wrap(parts);
 }
 
-function counted(j: Joiner | null): string | null {
+function counted(j: Joiner | null): string | undefined {
   return j?.count("n", 1, 2, 3);
 }
 
-function greeted(g: Greeter | null): string | null {
+function greeted(g: Greeter | null): string | undefined {
   return g?.greet("world", "!");
 }
 
-function called(f: Adder | null): number | null {
+function called(f: Adder | null): number | undefined {
   return f?.(2, 3);
 }
 
-function formatted(f: Formatter | null): string | null {
+function formatted(f: Formatter | null): string | undefined {
   return f?.fmt(3);
 }
 
 function main(): void {
   assert(joined(["a", "b"]) === "a,b", "join's defaulted separator");
-  assert(joined(null) === null, "null receiver short-circuits");
+  assert(joined(null) === undefined, "null receiver short-circuits");
 
   const parts = split("a,b,c");
-  assert(parts !== null && parts.length === 3, "split's defaulted limit");
-  assert(split(null) === null, "null receiver short-circuits");
+  assert(parts !== undefined && parts.length === 3, "split's defaulted limit");
+  assert(split(null) === undefined, "null receiver short-circuits");
 
   const c = concatenated([1, 2]);
-  assert(c !== null && c.join(",") === "1,2,3,4", "concat's rest tail packed");
+  assert(c !== undefined && c.join(",") === "1,2,3,4", "concat's rest tail packed");
 
   const s = sorted([3, 1, 2]);
-  assert(s !== null && s.join(",") === "1,2,3", "sort's defaulted comparator");
+  assert(s !== undefined && s.join(",") === "1,2,3", "sort's defaulted comparator");
 
   const j = new Joiner("-");
   assert(wrapped(j, ["a", "b"]) === "<a-b", "user default synthesized");
   assert(counted(j) === "n:3", "user rest tail packed");
-  assert(counted(null) === null, "null receiver short-circuits");
+  assert(counted(null) === undefined, "null receiver short-circuits");
 
-  assert(greeted(null) === null, "interface method on a null receiver");
+  assert(greeted(null) === undefined, "interface method on a null receiver");
 
   assert(called((a: number, b: number): number => a + b) === 5, "closure call");
-  assert(called(null) === null, "null closure short-circuits");
+  assert(called(null) === undefined, "null closure short-circuits");
 
   const f: Formatter = { fmt: (n: number): string => "n=" + n.toString() };
   assert(formatted(f) === "n=3", "function-typed property called in a chain");
-  assert(formatted(null) === null, "null receiver short-circuits");
+  assert(formatted(null) === undefined, "null receiver short-circuits");
 }

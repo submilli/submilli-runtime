@@ -67,6 +67,7 @@ pub fn package_declaration() -> PackageDeclaration {
                     Param::new(
                         "fn",
                         Type::Function {
+                            optional: 0,
                             params: Vec::new(),
                             ret: Box::new(Type::Void),
                             predicate: None,
@@ -74,6 +75,7 @@ pub fn package_declaration() -> PackageDeclaration {
                         },
                     ),
                     Param {
+                        optional: false,
                         name: "errorType".to_string(),
                         ty: Type::String,
                         default: Some(crate::DefaultValue::String(String::new())),

@@ -1,5 +1,5 @@
-// `a ?? f()` with a `void` right side has no value: it calls `f` when `a` is
-// null, and is usable only where the result is discarded.
+// `a ?? f()` preserves a present left value and calls `f` for a nullish left.
+// The result combines the left value type with the right-side void return.
 let log: string[] = [];
 
 function f(): void {
@@ -21,7 +21,7 @@ function present(): string | null {
   return "s";
 }
 
-function returned(value: string | null): void {
+function returned(value: string | null): string | void {
   return value ?? f();
 }
 
@@ -48,7 +48,7 @@ function main(): void {
   assert(log.join(",") === "n,f", "a left side that is never null, and one that always is");
 
   log = [];
-  returned(null);
-  returned("s");
-  assert(log.join(",") === "f", "returned from a void function");
+  assert(returned(null) === undefined);
+  assert(returned("s") === "s");
+  assert(log.join(",") === "f", "returned from a coalescing function");
 }

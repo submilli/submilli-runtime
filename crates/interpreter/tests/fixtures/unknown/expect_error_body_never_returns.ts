@@ -2,9 +2,9 @@
 // expect-error: function `inner` returns `unknown` but has no `return`
 // expect-error: function `Box.make` returns `unknown` but has no `return`
 // expect-error: method `Box.peek` returns `unknown` but has no `return`
-// expect-error: getter `Box.label` returns `unknown` but has no `return`
+// expect-error: getter `Box.label` has no `return`; a getter must return a value
 // expect-error: arrow function returns `unknown` but has no `return`
-// expect-error: add a `return` with a value, or a bare `return;`
+// expect-error: add a `return` with a value, or a bare `return;`, which yields `undefined`
 // expect-error-count: 6
 // `unknown` lets a body that returns somewhere fall off the end, but one with
 // no `return` of its own is a mistake, as in TypeScript; a `return` in a
@@ -42,5 +42,5 @@ function main(): void {
   nothing();
   Box.make();
   new Box().peek();
-  console.log(new Box().label === null);
+  console.log(new Box().label === undefined);
 }

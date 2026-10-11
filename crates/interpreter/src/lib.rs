@@ -17,6 +17,7 @@ pub mod diagnostics;
 pub mod did_you_mean;
 pub mod doc_comment;
 pub mod lexer;
+pub(crate) mod literal_units;
 pub mod lower_patterns;
 pub mod mangle;
 pub mod package_declaration;
@@ -80,6 +81,7 @@ pub use runtime::{RunResult, RuntimeConfig, dispatch_main_async, instantiate_pro
 pub use shape::Shape;
 pub use source::{ModulePath, SourceFile, Sources};
 pub use span::{FileId, LineIndex, Span};
+pub use stdlib::{OptionalPackage, Stdlib};
 pub use token::{Token, TokenKind};
 pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoIndex, TypeInfoKind, TypeInfoTable};
 pub use typechecker::{capability_binding_type, capture, check, desugar, infer, infer_package};
@@ -94,4 +96,4 @@ pub use typed_ast::{
     TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl, TypedStringEnumMember,
     TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
 };
-pub use types::{IndexSignature, ObjectField, Package, Type, TypePredicate};
+pub use types::{IndexSignature, ObjectField, Package, TupleType, Type, TypePredicate};

@@ -488,7 +488,7 @@ d1.pos.b;
 >  : ^^^^^^^^^^^^^^^^^^
 
 
-/*pruned*/;                                                       
+/*pruned*/;
 let data: { a: 1, b: "abc", c: true } = null as unknown as ({ a: 1, b: "abc", c: true });
 >data : { a: 1; b: "abc"; c: true; }
 >     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -515,10 +515,10 @@ let data: { a: 1, b: "abc", c: true } = null as unknown as ({ a: 1, b: "abc", c:
 
 
 // Object literals are inferred as a single normalized union type
-/*pruned*/;                                  
-/*pruned*/;                                  
-/*pruned*/;                
-/*pruned*/;                
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 
 function main(): void {}

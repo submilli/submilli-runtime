@@ -52,7 +52,7 @@ function f(foo: T): S {
 >    : ^
 
     }
-    else { 
+    else {
         return foo[0];
 >foo[0] : S
 >       : ^

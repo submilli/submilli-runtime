@@ -5,32 +5,32 @@ enum E {
 
 let cond: boolean = null as unknown as (boolean);
 
-/*pruned*/;                                                 
-               
-                  
-                   
-                   
-                
-                           
-                  
-                 
-               
-                  
-                   
-                   
-                
-                           
-                  
-                 
-                 
-                    
-                     
-                     
-                  
-                             
-                    
-                   
- 
+function f1(p1: number = 1, p2: string = "abc", p3: boolean = true, p4: E = E.A): void {
+    let v1 = 1;
+    let v2 = -123;
+    let v3 = 3 + 4;
+    let v4 = "abc";
+    let v5 = "";
+    let v6 = "abc" + "def";
+    let v7 = true;
+    let v8 = E.A;
+    let x1 = 1;
+    let x2 = -123;
+    let x3 = 3 + 4;
+    let x4 = "abc";
+    let x5 = "";
+    let x6 = "abc" + "def";
+    let x7 = true;
+    let x8 = E.A;
+    const c1 = 1;
+    const c2 = -123;
+    const c3 = 3 + 4;
+    const c4 = "abc";
+    const c5 = "";
+    const c6 = "abc" + "def";
+    const c7 = true;
+    const c8 = E.A;
+}
 
 /*pruned*/;                                                                      
                   
@@ -50,7 +50,7 @@ function f3(): void {
     const c2 = cond ? 1 : "two";
     const c3 = cond ? E.A : cond ? true : 123;
     const c4 = cond ? "abc" : null;
-    const c5 = cond ? 456 : null;
+    const c5 = cond ? 456 : undefined;
     const c6: { kind: 123 } = { kind: 123 };
     const c7: [1 | 2, "foo" | "bar"] = [1, "bar"];
     const c8 = cond ? c6 : cond ? c7 : "hello";
@@ -99,10 +99,10 @@ function f5(): void {
     let x3: [1, "foo"] = [1, "foo"];
 }
 
-/*pruned*/;          
-                                                                              
-                                                                            
- 
+function f6(): void {
+    const { c1 = true, c2 = 0, c3 = "foo" } = { c1: false, c2: 1, c3: "bar" };
+    let { x1 = true, x2 = 0, x3 = "foo" } = { x1: false, x2: 1, x3: "bar" };
+}
 
 function f10(): string {
     return "hello";

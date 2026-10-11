@@ -114,6 +114,32 @@ async fn local_repository_round_trip() {
 }
 
 #[tokio::test]
+async fn undefined_method_completion_and_optional_options() {
+    run_source(
+        r#"
+        import { Repository } from "submilli:git";
+        import { writeText } from "submilli:fs";
+        function main(): void {
+            const repo = Repository.init("/repo", undefined);
+            writeText("/repo/hello.txt", "hello\n");
+            assert(Object.is(repo.add(["hello.txt"]), undefined));
+            repo.commit("initial");
+            assert(Object.is(repo.createBranch("topic", undefined), undefined));
+            assert(Object.is(repo.switchBranch("topic"), undefined));
+            assert(repo.status().branch === "topic");
+            assert(Object.is(repo.addRemote("origin", "https://example.com/old.git"), undefined));
+            const changeUrl = () => repo.setRemoteUrl("origin", "https://example.com/new.git");
+            assert(Object.is(changeUrl(), undefined));
+            assert(repo.remotes()[0].url === "https://example.com/new.git");
+            assert(repo.log(undefined).commits[0].message === "initial");
+        }
+        "#,
+        test_data(Vfs::tempdir().unwrap()),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn repository_class_construction_and_dispatch() {
     run_source(
         r#"
@@ -122,17 +148,28 @@ async fn repository_class_construction_and_dispatch() {
             constructor(path: string) { super(path); }
             clean(): boolean { return this.status().clean; }
         }
+        function optionalClean(repo: Repository | null | undefined): boolean | undefined {
+            return repo?.status?.().clean;
+        }
         function main(): void {
             const created: Repository = Repository.init("/repo");
             assert(created instanceof Repository);
             const opened = new Repository("/repo");
             assert(opened instanceof Repository);
+            assert(opened.status?.().clean === true);
+            assert(optionalClean(opened) === true);
+            assert(optionalClean(null) === undefined);
+            assert(optionalClean(undefined) === undefined);
             const status = () => opened.status();
             assert(status().clean);
             const checkout = new Checkout("/repo");
             assert(checkout instanceof Repository);
             assert(checkout instanceof Checkout);
             assert(checkout.clean());
+            assert(checkout.status?.().clean === true);
+            const nativeBase: Repository = checkout;
+            assert(nativeBase.status?.().clean === true);
+            assert(optionalClean(nativeBase) === true);
             let rejected = false;
             try { new Repository("/missing"); } catch (error) { rejected = true; }
             assert(rejected);
@@ -514,7 +551,8 @@ async fn smart_http_clone_and_fast_forward_pull() {
         import { Repository } from "submilli:git";
         function main(): void {
             const repo = Repository.open("/repo");
-            const update = repo.pull();
+            repo.fetch(undefined, undefined);
+            const update = repo.pull(undefined, undefined);
             assert(update.previous !== update.current);
             assert(repo.status().clean);
             assert(repo.status().branch === "trunk");

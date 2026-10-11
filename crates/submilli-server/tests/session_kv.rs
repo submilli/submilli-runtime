@@ -42,7 +42,7 @@ const SET: &str =
 const SET_V2: &str =
     r#"import session from "submilli:session"; function main(): void { session.set("k", "v2"); }"#;
 const GET: &str = r#"import session from "submilli:session";
-function main(): string { const v = session.get("k"); return v === null ? "MISSING" : (v as string); }"#;
+function main(): string { const v = session.get("k"); return v === undefined ? "MISSING" : (v as string); }"#;
 
 fn blueprint(name: &str, vfs: VfsConfig) -> Blueprint {
     Blueprint {

@@ -32,8 +32,9 @@ function main(): void {
     const refund = noulQuestion(instructions, rubric);
     assert(refund.type === "noul", "noul discriminator");
     assert(JSON.stringify(refund.instructions) === JSON.stringify(instructions), "structured instructions");
-    assert(refund.criteria !== null && refund.criteria.get("false") === "No request", "optional rubric");
-    assert(noulQuestion("Is a refund requested?").criteria === null, "rubric is optional");
+    assert(refund.criteria !== undefined && refund.criteria.get("false") === "No request", "optional rubric");
+    assert(noulQuestion("Is a refund requested?").criteria === undefined, "rubric is optional");
+    assert(noulQuestion("Is a refund requested?", undefined).criteria === undefined, "undefined rubric is omitted");
     const options = new Map<string, unknown>();
     options.set("match", "Relevant to the query");
     options.set("none", null);
@@ -70,10 +71,14 @@ function main(): void {
     blankId.set(" ", noulQuestion("q"));
     expectCode("invalid_argument", () => { batch({ state: "text", questions: blankId }); });
 
+    label("undefined descriptions fail before credentials or HTTP");
+    expectCode("invalid_argument", () => { noul(undefined, "Question"); });
+    expectCode("invalid_argument", () => { noul("state", undefined); });
+
     label("single-question calls validate before credentials or HTTP");
     expectCode("invalid_argument", () => { noul(null, "Is a refund requested?"); });
     expectCode("invalid_argument", () => { noul("text", " "); });
-    expectCode("invalid_argument", () => { noul("text", "q", null, { model: " " }); });
+    expectCode("invalid_argument", () => { noul("text", "q", undefined, { model: " " }); });
     const singleOptions = new Map<string, unknown>();
     singleOptions.set("match", null);
     expectCode("invalid_argument", () => { choice(null, "q", singleOptions); });
@@ -115,7 +120,9 @@ function testAnswerGuards(): void {
     const picked = answers.get("choice");
     const graded = answers.get("score");
     const missing = answers.get("missing");
-    assert(!isNoulAnswer(missing) && !isChoiceAnswer(missing) && !isScoreAnswer(missing), "null is not an answer");
+    assert(missing === undefined, "Map misses preserve undefined");
+    assert(!isNoulAnswer(null) && !isChoiceAnswer(null) && !isScoreAnswer(null), "null is not an answer");
+    assert(!isNoulAnswer(missing) && !isChoiceAnswer(missing) && !isScoreAnswer(missing), "a missing answer is undefined");
     assert(!isChoiceAnswer(yes) && !isScoreAnswer(yes), "noul rejects other guards");
     assert(!isNoulAnswer(picked) && !isScoreAnswer(picked), "choice rejects other guards");
     assert(!isNoulAnswer(graded) && !isChoiceAnswer(graded), "score rejects other guards");

@@ -26,29 +26,29 @@ let b: { a?: string } = null as unknown as ({ a?: string });
 >a : string | undefined
 >  : ^^^^^^^^^^^^^^^^^^
 
-let c: { a: string | null } = null as unknown as ({ a: string | null });
->c : { a: string | null; }
->  : ^^^^^^^^^^^^^^^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
->null as unknown as ({ a: string | null }) : { a: string | null; }
->                                          : ^^^^^^^^^^^^^^^^^^^^^
+let c: { a: string | undefined } = null as unknown as ({ a: string | undefined });
+>c : { a: string | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ a: string | undefined }) : { a: string | undefined; }
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
-let d: { a?: string | null } = null as unknown as ({ a?: string | null });
->d : { a?: string | null; }
->  : ^^^^^^^^^^^^^^^^^^^^^^
->a : string | null | undefined
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^
->null as unknown as ({ a?: string | null }) : { a?: string | null; }
->                                           : ^^^^^^^^^^^^^^^^^^^^^^
+let d: { a?: string | undefined } = null as unknown as ({ a?: string | undefined });
+>d : { a?: string | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ a?: string | undefined }) : { a?: string | undefined; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
->a : string | null | undefined
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
 
 let t: boolean = null as unknown as (boolean);
@@ -84,29 +84,29 @@ let b1 = { a: 123, ...b };  // string | number
 >b : { a?: string; }
 >  : ^^^^^^^^^^^^^^^
 
-let c1 = { a: 123, ...c };  // string | null (Error)
->c1 : { a: string | null; }
->   : ^^^^^^^^^^^^^^^^^^^^^
->{ a: 123, ...c } : { a: string | null; }
->                 : ^^^^^^^^^^^^^^^^^^^^^
+let c1 = { a: 123, ...c };  // string | undefined (Error)
+>c1 : { a: string | undefined; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...c } : { a: string | undefined; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >a : number
 >  : ^^^^^^
 >123 : 123
 >    : ^^^
->c : { a: string | null; }
->  : ^^^^^^^^^^^^^^^^^^^^^
+>c : { a: string | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 let d1 = { a: 123, ...d };  // string | number
->d1 : { a: string | number | null; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->{ a: 123, ...d } : { a: string | number | null; }
->                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>d1 : { a: string | number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...d } : { a: string | number; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^
 >a : number
 >  : ^^^^^^
 >123 : 123
 >    : ^^^
->d : { a?: string | null; }
->  : ^^^^^^^^^^^^^^^^^^^^^^
+>d : { a?: string | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 let a2 = { a: 123, ...(t ? a : {}) };  // string | number
@@ -150,42 +150,42 @@ let b2 = { a: 123, ...(t ? b : {}) };  // string | number
 >   : ^^
 
 let c2 = { a: 123, ...(t ? c : {}) };  // string | number
->c2 : { a: string | number | null; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->{ a: 123, ...(t ? c : {}) } : { a: string | number | null; }
->                            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>c2 : { a: string | number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...(t ? c : {}) } : { a: string | number; }
+>                            : ^^^^^^^^^^^^^^^^^^^^^^^
 >a : number
 >  : ^^^^^^
 >123 : 123
 >    : ^^^
->(t ? c : {}) : { a: string | null; } | {}
->             : ^^^^^^^^^^^^^^^^^^^^^^^^^^
->t ? c : {} : { a: string | null; } | {}
->           : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t ? c : {}) : { a: string | undefined; } | {}
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>t ? c : {} : { a: string | undefined; } | {}
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >t : boolean
 >  : ^^^^^^^
->c : { a: string | null; }
->  : ^^^^^^^^^^^^^^^^^^^^^
+>c : { a: string | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >{} : {}
 >   : ^^
 
 let d2 = { a: 123, ...(t ? d : {}) };  // string | number
->d2 : { a: string | number | null; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->{ a: 123, ...(t ? d : {}) } : { a: string | number | null; }
->                            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>d2 : { a: string | number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 123, ...(t ? d : {}) } : { a: string | number; }
+>                            : ^^^^^^^^^^^^^^^^^^^^^^^
 >a : number
 >  : ^^^^^^
 >123 : 123
 >    : ^^^
->(t ? d : {}) : { a?: string | null; }
->             : ^^^^^^^^^^^^^^^^^^^^^^
->t ? d : {} : { a?: string | null; }
->           : ^^^^^^^^^^^^^^^^^^^^^^
+>(t ? d : {}) : { a?: string | undefined; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>t ? d : {} : { a?: string | undefined; }
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >t : boolean
 >  : ^^^^^^^
->d : { a?: string | null; }
->  : ^^^^^^^^^^^^^^^^^^^^^^
+>d : { a?: string | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >{} : {}
 >   : ^^
 

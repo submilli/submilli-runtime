@@ -10,7 +10,7 @@ type B = {
   type: 'B';
 }
 
-function funcTwo(arg: A | B | null): void {
+function funcTwo(arg: A | B | undefined): void {
   if (arg?.type === 'B') {
     arg; // `B`
     return;
@@ -30,12 +30,12 @@ function funcThree(arg: A | B | null): void {
   arg?.name;
 }
 
-type U = { kind: null, u: 'u' }
+type U = { kind: undefined, u: 'u' }
 type N = { kind: null, n: 'n' }
 type X = { kind: 'X', x: 'x' }
 
-function f1(x: X | U | null): void {
-    if (x?.kind === null) {
+function f1(x: X | U | undefined): void {
+    if (x?.kind === undefined) {
         x; // U | undefined
     }
     else {
@@ -43,8 +43,8 @@ function f1(x: X | U | null): void {
     }
 }
 
-function f2(x: X | N | null): void {
-    if (x?.kind === null) {
+function f2(x: X | N | undefined): void {
+    if (x?.kind === undefined) {
         x; // undefined
     }
     else {
@@ -53,7 +53,7 @@ function f2(x: X | N | null): void {
 }
 
 function f3(x: X | U | null): void {
-    if (x?.kind === null) {
+    if (x?.kind === undefined) {
         x; // U | null
     }
     else {
@@ -62,7 +62,7 @@ function f3(x: X | U | null): void {
 }
 
 function f4(x: X | N | null): void {
-    if (x?.kind === null) {
+    if (x?.kind === undefined) {
         x; // null
     }
     else {
@@ -70,7 +70,7 @@ function f4(x: X | N | null): void {
     }
 }
 
-function f5(x: X | U | null): void {
+function f5(x: X | U | undefined): void {
     if (x?.kind === null) {
         x; // never
     }
@@ -79,7 +79,7 @@ function f5(x: X | U | null): void {
     }
 }
 
-function f6(x: X | N | null): void {
+function f6(x: X | N | undefined): void {
     if (x?.kind === null) {
         x; // N
     }

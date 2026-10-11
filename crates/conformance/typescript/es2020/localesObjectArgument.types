@@ -43,7 +43,7 @@ const jaJP = new Intl.Locale("ja-JP");
 >        : ^^^^^^^
 
 
-/*pruned*/;            
+/*pruned*/;
 const num = 1000;
 >num : 1000
 >    : ^^^^
@@ -63,14 +63,14 @@ const str = "";
 >   : ^^
 
 
-/*pruned*/;                                                    
+/*pruned*/;
 
-/*pruned*/;              
-/*pruned*/;                  
-/*pruned*/;                  
-/*pruned*/;                      
-/*pruned*/;                          
-/*pruned*/;                          
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 num.toLocaleString(enUS);
 >num.toLocaleString(enUS) : string
@@ -247,7 +247,7 @@ new Intl.PluralRules([deDE, jaJP]);
 >jaJP : Intl.Locale
 >     : ^^^^^^^^^^^
 
-/*pruned*/;                           
+/*pruned*/;
 Intl.PluralRules.supportedLocalesOf(enUS);
 >Intl.PluralRules.supportedLocalesOf(enUS) : string[]
 >                                          : ^^^^^^^^
@@ -284,7 +284,7 @@ Intl.PluralRules.supportedLocalesOf([deDE, jaJP]);
 >jaJP : Intl.Locale
 >     : ^^^^^^^^^^^
 
-/*pruned*/;                                          
+/*pruned*/;
 
 new Intl.RelativeTimeFormat(enUS);
 >new Intl.RelativeTimeFormat(enUS) : Intl.RelativeTimeFormat
@@ -314,7 +314,7 @@ new Intl.RelativeTimeFormat([deDE, jaJP]);
 >jaJP : Intl.Locale
 >     : ^^^^^^^^^^^
 
-/*pruned*/;                                  
+/*pruned*/;
 Intl.RelativeTimeFormat.supportedLocalesOf(enUS);
 >Intl.RelativeTimeFormat.supportedLocalesOf(enUS) : string[]
 >                                                 : ^^^^^^^^
@@ -351,7 +351,7 @@ Intl.RelativeTimeFormat.supportedLocalesOf([deDE, jaJP]);
 >jaJP : Intl.Locale
 >     : ^^^^^^^^^^^
 
-/*pruned*/;                                                 
+/*pruned*/;
 
 new Intl.Collator(enUS);
 >new Intl.Collator(enUS) : Intl.Collator
@@ -381,7 +381,7 @@ new Intl.Collator([deDE, jaJP]);
 >jaJP : Intl.Locale
 >     : ^^^^^^^^^^^
 
-/*pruned*/;                        
+/*pruned*/;
 Intl.Collator.supportedLocalesOf(enUS);
 >Intl.Collator.supportedLocalesOf(enUS) : string[]
 >                                       : ^^^^^^^^
@@ -447,7 +447,7 @@ new Intl.DateTimeFormat([deDE, jaJP]);
 >jaJP : Intl.Locale
 >     : ^^^^^^^^^^^
 
-/*pruned*/;                              
+/*pruned*/;
 Intl.DateTimeFormat.supportedLocalesOf(enUS);
 >Intl.DateTimeFormat.supportedLocalesOf(enUS) : string[]
 >                                             : ^^^^^^^^
@@ -484,7 +484,7 @@ Intl.DateTimeFormat.supportedLocalesOf([deDE, jaJP]);
 >jaJP : Intl.Locale
 >     : ^^^^^^^^^^^
 
-/*pruned*/;                                             
+/*pruned*/;
 
 new Intl.NumberFormat(enUS);
 >new Intl.NumberFormat(enUS) : Intl.NumberFormat
@@ -514,7 +514,7 @@ new Intl.NumberFormat([deDE, jaJP]);
 >jaJP : Intl.Locale
 >     : ^^^^^^^^^^^
 
-/*pruned*/;                            
+/*pruned*/;
 Intl.NumberFormat.supportedLocalesOf(enUS);
 >Intl.NumberFormat.supportedLocalesOf(enUS) : string[]
 >                                           : ^^^^^^^^
@@ -531,7 +531,7 @@ Intl.NumberFormat.supportedLocalesOf(enUS);
 >enUS : Intl.Locale
 >     : ^^^^^^^^^^^
 
-/*pruned*/;                                           
+/*pruned*/;
 
 
 function main(): void {}

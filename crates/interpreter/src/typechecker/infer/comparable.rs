@@ -28,8 +28,10 @@ const MAX_PROOF_DEPTH: usize = 100;
 
 /// Whether a value of `left` can ever equal a value of `right`.
 pub(super) fn comparable(left: &Type, right: &Type, types: TypeResolver) -> bool {
-    // `null` compares with anything, as `tsc` exempts its nullable types.
-    if matches!(left.peel(), Type::Null) || matches!(right.peel(), Type::Null) {
+    // `null` and `undefined` compare with anything, as `tsc` exempts its
+    // nullable types. `void` is not exempt: `v() === 5` is TS2367 in tsc.
+    let nullish = |ty: &Type| matches!(ty.peel(), Type::Null | Type::Undefined);
+    if nullish(left) || nullish(right) {
         return true;
     }
     if assignable(left, right, types) || assignable(right, left, types) {
@@ -421,6 +423,7 @@ fn is_primitive_like(ty: &Type) -> bool {
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Null
+            | Type::Undefined
             | Type::Void
             | Type::NumberEnum { .. }
             | Type::StringEnum { .. }

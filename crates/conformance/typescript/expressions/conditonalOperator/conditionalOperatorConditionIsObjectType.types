@@ -1,8 +1,8 @@
 === conditionalOperatorConditionIsObjectType.ts ===
 //Cond ? Expr1 : Expr2,  Cond is of object type, Expr1 and Expr2 have the same type
-/*pruned*/;                                          
+/*pruned*/;
 
-/*pruned*/;                                  
+/*pruned*/;
 let exprBoolean1: boolean = null as unknown as (boolean);
 >exprBoolean1 : boolean
 >             : ^^^^^^^
@@ -27,9 +27,9 @@ let exprString1: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                             
+/*pruned*/;
 
-/*pruned*/;                                  
+/*pruned*/;
 let exprBoolean2: boolean = null as unknown as (boolean);
 >exprBoolean2 : boolean
 >             : ^^^^^^^
@@ -54,7 +54,7 @@ let exprString2: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                             
+/*pruned*/;
 
 function foo(): void { };
 >foo : () => void
@@ -68,15 +68,15 @@ class C { static doIt: () => void };
 
 
 //Cond is an object type variable
-/*pruned*/;                      
-/*pruned*/;                              
-/*pruned*/;                            
-/*pruned*/;                            
-/*pruned*/;                                
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 /*pruned*/;                              // union
 
 //Cond is an object type literal
-/*pruned*/;                                     
+/*pruned*/;
 ((a: string) => a.length) ? exprBoolean1 : exprBoolean2;
 >((a: string) => a.length) ? exprBoolean1 : exprBoolean2 : boolean
 >                                                        : ^^^^^^^
@@ -129,7 +129,7 @@ class C { static doIt: () => void };
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                        
+/*pruned*/;
 ({ a: 1, b: "s" }) ? exprString1: exprBoolean1; // union
 >({ a: 1, b: "s" }) ? exprString1: exprBoolean1 : string | boolean
 >                                               : ^^^^^^^^^^^^^^^^
@@ -152,8 +152,8 @@ class C { static doIt: () => void };
 
 
 //Cond is an object type expression
-/*pruned*/;                 
-/*pruned*/;                              
+/*pruned*/;
+/*pruned*/;
 new C() ? exprNumber1 : exprNumber2;
 >new C() ? exprNumber1 : exprNumber2 : number
 >                                    : ^^^^^^
@@ -182,18 +182,18 @@ C.doIt() ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                          
+/*pruned*/;
 /*pruned*/;                              // union
 
 //Results shoud be same as Expr1 and Expr2
-/*pruned*/;                                         
-/*pruned*/;                                                     
-/*pruned*/;                                                  
-/*pruned*/;                                                  
-/*pruned*/;                                                      
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 /*pruned*/;                                                             // union
 
-/*pruned*/;                                                        
+/*pruned*/;
 let resultIsBoolean2 = ((a: string) => a.length) ? exprBoolean1 : exprBoolean2;
 >resultIsBoolean2 : boolean
 >                 : ^^^^^^^
@@ -252,7 +252,7 @@ let resultIsString2 = ({ a: 1, b: "s" }) ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                                              
+/*pruned*/;
 let resultIsStringOrBoolean2 = ({ a: 1, b: "s" }) ? exprString1 : exprBoolean1; // union
 >resultIsStringOrBoolean2 : string | boolean
 >                         : ^^^^^^^^^^^^^^^^
@@ -276,8 +276,8 @@ let resultIsStringOrBoolean2 = ({ a: 1, b: "s" }) ? exprString1 : exprBoolean1; 
 >             : ^^^^^^^
 
 
-/*pruned*/;                                    
-/*pruned*/;                                                     
+/*pruned*/;
+/*pruned*/;
 let resultIsNumber3 = new C() ? exprNumber1 : exprNumber2;
 >resultIsNumber3 : number
 >                : ^^^^^^
@@ -310,7 +310,7 @@ let resultIsString3 = C.doIt() ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                                                
+/*pruned*/;
 let resultIsStringOrBoolean3 = C.doIt() ? exprString1 : exprBoolean1; // union
 >resultIsStringOrBoolean3 : string | boolean
 >                         : ^^^^^^^^^^^^^^^^

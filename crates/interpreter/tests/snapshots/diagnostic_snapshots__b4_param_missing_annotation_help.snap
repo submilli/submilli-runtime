@@ -9,7 +9,7 @@ error: parameter requires a type annotation
   |             ^
 2 | function main(): void { }
   |
-help: function name(x: T, y: U): R { … }
+help: add a type (`x: T`) or a default initializer (`x = value`)
 ---
 error: expected expression
  --> test.subm:1:35

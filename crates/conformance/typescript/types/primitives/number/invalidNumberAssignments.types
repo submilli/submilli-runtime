@@ -1,0 +1,105 @@
+=== invalidNumberAssignments.ts ===
+let x = 1;
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+
+let a: boolean = x;
+>a : boolean
+>  : ^^^^^^^
+>x : number
+>  : ^^^^^^
+
+let b: string = x;
+>b : string
+>  : ^^^^^^
+>x : number
+>  : ^^^^^^
+
+let c: void = x;
+>c : void
+>  : ^^^^
+>x : number
+>  : ^^^^^^
+
+let d: typeof undefined = x;
+>d : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+
+class C { foo: string; }
+>C : C
+>  : ^
+>foo : string
+>    : ^^^^^^
+
+let e: C = x;
+>e : C
+>  : ^
+>x : number
+>  : ^^^^^^
+
+
+interface I { bar: string; }
+>I : I
+>  : ^
+>bar : string
+>    : ^^^^^^
+
+let f: I = x;
+>f : I
+>  : ^
+>x : number
+>  : ^^^^^^
+
+
+let g: { baz: string } = 1;
+>g : { baz: string; }
+>  : ^^^^^^^^^^^^^^^^
+>baz : string
+>    : ^^^^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+
+/*pruned*/;
+/**/;
+
+function i<T>(a: T): void {
+>i : <T>(a: T) => void
+>  : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : T
+>  : ^
+
+    a = x;
+>a = x : number
+>      : ^^^^^^
+>a : T
+>  : ^
+>x : number
+>  : ^^^^^^
+
+}
+i = x;
+>i = x : number
+>      : ^^^^^^
+>i : any
+>  : ^^^
+>x : number
+>  : ^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

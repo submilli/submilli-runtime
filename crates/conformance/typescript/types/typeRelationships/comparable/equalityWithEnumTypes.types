@@ -20,10 +20,10 @@ enum E1 {
 }
 
 // Numeric enum type
-/**/;    
-               
-              
- 
+/**/;
+
+
+
 
 function f1(v: E1): void {
 >f1 : (v: E1) => void
@@ -85,20 +85,20 @@ function f1(v: E1): void {
     }
 }
 
-/*pruned*/;               
-                  
-          
-     
-                  
-          
-     
-                  
-          
-     
-                  
-          
-     
- 
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 function main(): void {}

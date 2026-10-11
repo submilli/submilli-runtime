@@ -58,14 +58,14 @@ pub fn package_declaration() -> PackageDeclaration {
                     Param::new("path", Type::String),
                     Param::with_default(
                         "options",
-                        nullable_download_options_type(),
-                        DefaultValue::Null,
+                        optional_download_options_type(),
+                        DefaultValue::Undefined,
                     ),
                 ],
                 ret: download_result_type(),
                 type_predicate: None,
                 doc: crate::doc(crate::FileId::HTTP,
-                    "/**\n * Download a remote file directly to the VFS — wget-style. Streams the response body to disk so memory stays bounded regardless of file size. Atomic: a crash mid-download leaves a `.tmp` sibling rather than a half-written final file. Traps on transport failure (DNS, connect, TLS, timeout), oversize response, refuse-on-exists, or VFS path escape.\n * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.\n * @param path Destination VFS path (e.g. `\"/workspace/dataset.csv\"`). The parent directory must exist — call `fs.mkdir` first if needed.\n * @param options Optional `DownloadOptions` bag: `overwrite` (default `false`), `maxBytes` (default and upper bound: tier-configured), `headers`, `timeout` (default and upper bound: 60_000 ms, or a lower operator limit), `decompress` (default `false`). Omit or pass `null` to take every default.\n * @capability http.download { host: $url.host, url_path: $url.path, vfs_path: $path, max_bytes: number, overwrite: boolean, decompress: boolean }\n * @capability fs.write { path, max_bytes: number }\n */",
+                    "/**\n * Download a remote file directly to the VFS — wget-style. Streams the response body to disk so memory stays bounded regardless of file size. Atomic: a crash mid-download leaves a `.tmp` sibling rather than a half-written final file. Traps on transport failure (DNS, connect, TLS, timeout), oversize response, refuse-on-exists, or VFS path escape.\n * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.\n * @param path Destination VFS path (e.g. `\"/workspace/dataset.csv\"`). The parent directory must exist — call `fs.mkdir` first if needed.\n * @param options Optional `DownloadOptions` bag: `overwrite` (default `false`), `maxBytes` (default and upper bound: tier-configured), `headers`, `timeout` (default and upper bound: 60_000 ms, or a lower operator limit), `decompress` (default `false`). Omit or pass `undefined` to take every default.\n * @capability http.download { host: $url.host, url_path: $url.path, vfs_path: $path, max_bytes: number, overwrite: boolean, decompress: boolean }\n * @capability fs.write { path, max_bytes: number }\n */",
                 ),
             },
         },
@@ -84,19 +84,19 @@ pub fn package_declaration() -> PackageDeclaration {
                     Param::new("url", Type::String),
                     Param::with_default(
                         "body",
-                        nullable_body_type(),
-                        DefaultValue::Null,
+                        optional_body_type(),
+                        DefaultValue::Undefined,
                     ),
                     Param::with_default(
                         "headers",
-                        nullable_headers_type(),
-                        DefaultValue::Null,
+                        optional_headers_type(),
+                        DefaultValue::Undefined,
                     ),
                 ],
                 ret: response_type(),
                 type_predicate: None,
                 doc: crate::doc(crate::FileId::HTTP,
-                    "/**\n * Issue an HTTP request with a runtime-chosen verb. Returns the full response (status, headers, UTF-8-decoded body). Traps on transport failure (DNS, connect, TLS, timeout) — surfaced as a guest `Error`.\n * @param method HTTP method (case-insensitive). Common verbs: `\"GET\"` / `\"POST\"` / `\"PUT\"` / `\"PATCH\"` / `\"DELETE\"` / `\"HEAD\"` / `\"OPTIONS\"`.\n * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.\n * @param body Optional request body. `string` is UTF-8 encoded and auto-tagged `Content-Type: text/plain; charset=utf-8` unless the caller overrides; a structural object or array is JSON-encoded and auto-tagged `Content-Type: application/json` unless the caller overrides; `Uint8Array` sends the bytes verbatim with no defaulted Content-Type; `null` (or omitted) sends an empty body.\n * @param headers Optional request headers. Omit or pass `null` to send no extra headers.\n * @capability http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.delete { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n */",
+                    "/**\n * Issue an HTTP request with a runtime-chosen verb. Returns the full response (status, headers, UTF-8-decoded body). Traps on transport failure (DNS, connect, TLS, timeout) — surfaced as a guest `Error`.\n * @param method HTTP method (case-insensitive). Common verbs: `\"GET\"` / `\"POST\"` / `\"PUT\"` / `\"PATCH\"` / `\"DELETE\"` / `\"HEAD\"` / `\"OPTIONS\"`.\n * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.\n * @param body Optional request body. `string` is UTF-8 encoded and auto-tagged `Content-Type: text/plain; charset=utf-8` unless the caller overrides; a structural object or array is JSON-encoded and auto-tagged `Content-Type: application/json` unless the caller overrides; `Uint8Array` sends the bytes verbatim with no defaulted Content-Type; `null` sends the JSON payload `null` with default `Content-Type: application/json`; `undefined` (or omitted) sends an empty body.\n * @param headers Optional request headers. Omit or pass `undefined` to send no extra headers.\n * @capability http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.delete { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n * @capability http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }\n */",
                 ),
             },
         },
@@ -109,11 +109,11 @@ fn insert_verb_fn(defs: &mut PackageDeclaration, verb: &str, has_body: bool) {
     let upper = verb.to_uppercase();
     let doc = if has_body {
         format!(
-            "/**\n * Issue a synchronous HTTP {upper}. Returns the full response (status, headers, UTF-8-decoded body). Traps on transport failure (DNS, connect, TLS, timeout) — surfaced as a guest `Error`.\n * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.\n * @param body Optional request body. `string` is UTF-8 encoded and auto-tagged `Content-Type: text/plain; charset=utf-8` unless the caller overrides; a structural object or array is JSON-encoded and auto-tagged `Content-Type: application/json` unless the caller overrides; `Uint8Array` sends the bytes verbatim with no defaulted Content-Type; `null` (or omitted) sends an empty body.\n * @param headers Optional request headers. Omit or pass `null` to send no extra headers.\n */",
+            "/**\n * Issue a synchronous HTTP {upper}. Returns the full response (status, headers, UTF-8-decoded body). Traps on transport failure (DNS, connect, TLS, timeout) — surfaced as a guest `Error`.\n * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.\n * @param body Optional request body. `string` is UTF-8 encoded and auto-tagged `Content-Type: text/plain; charset=utf-8` unless the caller overrides; a structural object or array is JSON-encoded and auto-tagged `Content-Type: application/json` unless the caller overrides; `Uint8Array` sends the bytes verbatim with no defaulted Content-Type; `null` sends the JSON payload `null` with default `Content-Type: application/json`; `undefined` (or omitted) sends an empty body.\n * @param headers Optional request headers. Omit or pass `undefined` to send no extra headers.\n */",
         )
     } else {
         format!(
-            "/**\n * Issue a synchronous HTTP {upper}. Returns the full response (status, headers, UTF-8-decoded body). Traps on transport failure (DNS, connect, TLS, timeout) — surfaced as a guest `Error`.\n * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.\n * @param headers Optional request headers. Omit or pass `null` to send no extra headers.\n */",
+            "/**\n * Issue a synchronous HTTP {upper}. Returns the full response (status, headers, UTF-8-decoded body). Traps on transport failure (DNS, connect, TLS, timeout) — surfaced as a guest `Error`.\n * @param url Absolute URL. A path with a `.` or `..` segment, in any spelling such as `%2E%2E`, throws `TypeError` and sends nothing.\n * @param headers Optional request headers. Omit or pass `undefined` to send no extra headers.\n */",
         )
     };
     let capability = format!(
@@ -124,14 +124,14 @@ fn insert_verb_fn(defs: &mut PackageDeclaration, verb: &str, has_body: bool) {
     if has_body {
         params.push(Param::with_default(
             "body",
-            nullable_body_type(),
-            DefaultValue::Null,
+            optional_body_type(),
+            DefaultValue::Undefined,
         ));
     }
     params.push(Param::with_default(
         "headers",
-        nullable_headers_type(),
-        DefaultValue::Null,
+        optional_headers_type(),
+        DefaultValue::Undefined,
     ));
     defs.values.insert(
         verb.to_string(),
@@ -150,11 +150,11 @@ fn insert_verb_fn(defs: &mut PackageDeclaration, verb: &str, has_body: bool) {
     );
 }
 
-fn nullable_headers_type() -> Type {
-    Type::Union(vec![headers_type(), Type::Null])
+fn optional_headers_type() -> Type {
+    Type::Union(vec![headers_type(), Type::Undefined])
 }
 
-fn nullable_body_type() -> Type {
+fn optional_body_type() -> Type {
     Type::Union(vec![
         Type::String,
         Type::Uint8Array,
@@ -167,6 +167,7 @@ fn nullable_body_type() -> Type {
         },
         Type::Array(Box::new(Type::Unknown)),
         Type::Null,
+        Type::Undefined,
     ])
 }
 
@@ -197,8 +198,8 @@ fn download_options_type() -> Type {
     }
 }
 
-fn nullable_download_options_type() -> Type {
-    Type::Union(vec![download_options_type(), Type::Null])
+fn optional_download_options_type() -> Type {
+    Type::Union(vec![download_options_type(), Type::Undefined])
 }
 
 fn headers_type() -> Type {
@@ -259,6 +260,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
     methods.insert(
         "throwForStatus".to_string(),
         MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: Vec::new(),
             ret: Type::Void,
@@ -271,6 +273,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
     methods.insert(
         "toString".to_string(),
         MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: Vec::new(),
             ret: Type::String,
@@ -286,6 +289,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
     methods.insert(
         "json".to_string(),
         MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: Vec::new(),
             ret: Type::Unknown,
@@ -332,7 +336,7 @@ fn insert_download_options_interface(defs: &mut PackageDeclaration) {
     insert_optional_property(
         &mut properties,
         "headers",
-        nullable_headers_type(),
+        optional_headers_type(),
         "/** Request headers — typically used for auth (`Authorization: Bearer …`). */",
     );
     insert_optional_property(
@@ -361,7 +365,7 @@ fn insert_download_options_interface(defs: &mut PackageDeclaration) {
                 // VTable: fields read via inline field-name scan, no per-field imports emitted.
                 dispatch: Dispatch::VTable,
                 doc: crate::doc(crate::FileId::HTTP,
-                    "/** Options bag for [`download`]. All fields optional. Pass `null` (or omit the param) to take every default. */",
+                    "/** Options bag for [`download`]. All fields optional. Pass `undefined` (or omit the param) to take every default. */",
                 ),
             },
         },
@@ -429,6 +433,7 @@ fn insert_download_result_interface(defs: &mut PackageDeclaration) {
     methods.insert(
         "toString".to_string(),
         MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: Vec::new(),
             ret: Type::String,

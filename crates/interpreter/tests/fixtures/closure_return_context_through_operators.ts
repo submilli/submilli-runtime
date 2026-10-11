@@ -27,7 +27,7 @@ function main(): void {
   const c: unknown = (() => {
     return;
   })();
-  assert(c === null, "an immediately invoked closure");
+  assert(c === undefined, "an immediately invoked closure");
 
   const d: number | null = (() => {
     if (flag) {

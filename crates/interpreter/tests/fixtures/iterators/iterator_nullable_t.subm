@@ -2,7 +2,7 @@ function tick(i: number): IteratorResult<string | null> {
   if (i === 0) { const r: IteratorResult<string | null> = { done: false, value: "first" }; return r; }
   if (i === 1) { const r: IteratorResult<string | null> = { done: false, value: null }; return r; }
   if (i === 2) { const r: IteratorResult<string | null> = { done: false, value: "third" }; return r; }
-  const ret: IteratorResult<string | null> = { done: true }; return ret;
+  const ret: IteratorResult<string | null> = { done: true, value: undefined }; return ret;
 }
 
 function rangeNullable(): Iterator<string | null> {

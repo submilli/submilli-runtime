@@ -9,7 +9,7 @@ let condNumber: number = null as unknown as (number);
 >                : ^^^^^^^
 
 
-/*pruned*/;                                  
+/*pruned*/;
 let exprBoolean1: boolean = null as unknown as (boolean);
 >exprBoolean1 : boolean
 >             : ^^^^^^^
@@ -34,9 +34,9 @@ let exprString1: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                             
+/*pruned*/;
 
-/*pruned*/;                                  
+/*pruned*/;
 let exprBoolean2: boolean = null as unknown as (boolean);
 >exprBoolean2 : boolean
 >             : ^^^^^^^
@@ -61,10 +61,10 @@ let exprString2: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                             
+/*pruned*/;
 
 //Cond is a number type variable
-/*pruned*/;                      
+/*pruned*/;
 condNumber ? exprBoolean1 : exprBoolean2;
 >condNumber ? exprBoolean1 : exprBoolean2 : boolean
 >                                         : ^^^^^^^
@@ -95,7 +95,7 @@ condNumber ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                
+/*pruned*/;
 condNumber ? exprString1 : exprBoolean1; // Union
 >condNumber ? exprString1 : exprBoolean1 : string | boolean
 >                                        : ^^^^^^^^^^^^^^^^
@@ -108,7 +108,7 @@ condNumber ? exprString1 : exprBoolean1; // Union
 
 
 //Cond is a number type literal
-/*pruned*/;             
+/*pruned*/;
 0 ? exprBoolean1 : exprBoolean2;
 >0 ? exprBoolean1 : exprBoolean2 : boolean
 >                                : ^^^^^^^
@@ -141,7 +141,7 @@ condNumber ? exprString1 : exprBoolean1; // Union
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                   
+/*pruned*/;
 10000 ? exprString1 : exprBoolean1; // Union
 >10000 ? exprString1 : exprBoolean1 : string | boolean
 >                                   : ^^^^^^^^^^^^^^^^
@@ -173,7 +173,7 @@ let array = [1, 2, 3];
 >  : ^
 
 
-/*pruned*/;                 
+/*pruned*/;
 1 + 1 ? exprBoolean1 : exprBoolean2;
 >1 + 1 ? exprBoolean1 : exprBoolean2 : boolean
 >                                    : ^^^^^^^
@@ -214,7 +214,7 @@ foo() ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                      
+/*pruned*/;
 foo() ? exprString1 : exprBoolean1; // Union
 >foo() ? exprString1 : exprBoolean1 : string | boolean
 >                                   : ^^^^^^^^^^^^^^^^
@@ -229,7 +229,7 @@ foo() ? exprString1 : exprBoolean1; // Union
 
 
 //Results shoud be same as Expr1 and Expr2
-/*pruned*/;                                         
+/*pruned*/;
 let resultIsBoolean1 = condNumber ? exprBoolean1 : exprBoolean2;
 >resultIsBoolean1 : boolean
 >                 : ^^^^^^^
@@ -266,7 +266,7 @@ let resultIsString1 = condNumber ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                                      
+/*pruned*/;
 let resultIsStringOrBoolean1 = condNumber ? exprString1 : exprBoolean1; // Union
 >resultIsStringOrBoolean1 : string | boolean
 >                         : ^^^^^^^^^^^^^^^^
@@ -280,7 +280,7 @@ let resultIsStringOrBoolean1 = condNumber ? exprString1 : exprBoolean1; // Union
 >             : ^^^^^^^
 
 
-/*pruned*/;                                
+/*pruned*/;
 let resultIsBoolean2 = 0 ? exprBoolean1 : exprBoolean2;
 >resultIsBoolean2 : boolean
 >                 : ^^^^^^^
@@ -319,7 +319,7 @@ let resultIsString2 = - 10000000000000 ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                                         
+/*pruned*/;
 let resultIsStringOrBoolean2 = 10000 ? exprString1 : exprBoolean1; // Union
 >resultIsStringOrBoolean2 : string | boolean
 >                         : ^^^^^^^^^^^^^^^^
@@ -333,7 +333,7 @@ let resultIsStringOrBoolean2 = 10000 ? exprString1 : exprBoolean1; // Union
 >             : ^^^^^^^
 
 
-/*pruned*/;                                    
+/*pruned*/;
 let resultIsBoolean3 = 1 + 1 ? exprBoolean1 : exprBoolean2;
 >resultIsBoolean3 : boolean
 >                 : ^^^^^^^
@@ -380,7 +380,7 @@ let resultIsString3 = foo() ? exprString1 : exprString2;
 >exprString2 : string
 >            : ^^^^^^
 
-/*pruned*/;                                                            
+/*pruned*/;
 let resultIsStringOrBoolean3 = foo() / array[1] ? exprString1 : exprBoolean1; // Union
 >resultIsStringOrBoolean3 : string | boolean
 >                         : ^^^^^^^^^^^^^^^^

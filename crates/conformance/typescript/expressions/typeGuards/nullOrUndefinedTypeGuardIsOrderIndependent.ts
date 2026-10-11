@@ -1,6 +1,6 @@
 // @target: es2015
 // @strictNullChecks: true
-function test(strOrNull: string | null, strOrUndefined: string | null): void {
+function test(strOrNull: string | null, strOrUndefined: string | undefined): void {
     let str: string = "original";
     let nil: null = null as unknown as (null);
     if (null === strOrNull) {
@@ -9,7 +9,7 @@ function test(strOrNull: string | null, strOrUndefined: string | null): void {
     else {
         str = strOrNull;
     }
-    if (null !== strOrUndefined) {
+    if (undefined !== strOrUndefined) {
         str = strOrUndefined;
     }
 }

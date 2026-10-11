@@ -4,22 +4,22 @@ function main(): void {
   writeText("/file.txt", "hello");
   mkdir("/dir", false);
 
-  const f: Stat | null = stat("/file.txt");
-  if (f === null) {
+  const f: Stat | undefined = stat("/file.txt");
+  if (f === undefined) {
     assert(false, "stat(file) should not be null");
     return;
   }
   assert(f.kind === "file", "file kind");
   assert(f.size === 5, "file size");
 
-  const d: Stat | null = stat("/dir");
-  if (d === null) {
+  const d: Stat | undefined = stat("/dir");
+  if (d === undefined) {
     assert(false, "stat(dir) should not be null");
     return;
   }
   assert(d.kind === "directory", "directory kind");
   assert(d.size === 0, "non-file size is 0");
 
-  const missing: Stat | null = stat("/nope");
-  assert(missing === null, "stat returns null on missing path");
+  const missing: Stat | undefined = stat("/nope");
+  assert(missing === undefined, "stat returns undefined on missing path");
 }

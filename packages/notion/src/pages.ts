@@ -68,10 +68,10 @@ export function validateCreatePageInput(input: CreatePageInput): void {
  * @param input Page creation input whose properties, content, icon, and cover are validated.
  */
 export function validatePageFields(input: CreatePageInput): void {
-    if (input.properties !== null) propertyObject(input.properties);
-    if (input.content !== null) contentJson(input.content);
-    if (input.icon !== null) fileReferenceJson(input.icon);
-    if (input.cover !== null) fileReferenceJson(input.cover);
+    if (input.properties !== undefined) propertyObject(input.properties);
+    if (input.content !== undefined) contentJson(input.content);
+    if (input.icon !== undefined) fileReferenceJson(input.icon);
+    if (input.cover !== undefined) fileReferenceJson(input.cover);
 }
 
 /**
@@ -83,10 +83,10 @@ export function validatePageFields(input: CreatePageInput): void {
  */
 export function createPage(parentId: string, input: CreatePageInput): NotionPage {
     const fields: string[] = [parentJson(input.parent.type, parentId)];
-    if (input.properties !== null) fields.push(mapFieldJson("properties", propertyObject(input.properties)));
-    if (input.content !== null) fields.push(contentJson(input.content));
-    if (input.icon !== null) fields.push(fileField("icon", input.icon));
-    if (input.cover !== null) fields.push(fileField("cover", input.cover));
+    if (input.properties !== undefined) fields.push(mapFieldJson("properties", propertyObject(input.properties)));
+    if (input.content !== undefined) fields.push(contentJson(input.content));
+    if (input.icon !== undefined) fields.push(fileField("icon", input.icon));
+    if (input.cover !== undefined) fields.push(fileField("cover", input.cover));
     return pageFrom(notionPost("/pages", objectJson(fields)).json());
 }
 
@@ -94,19 +94,21 @@ export function createPage(parentId: string, input: CreatePageInput): NotionPage
  * Update page properties, icon, cover, or apply a template.
  *
  * @param pageId Page ID or Notion URL.
- * @param input Fields to change; at least one must be set.
+ * @param input Fields to change; at least one must be set. A `null` icon or cover removes it, as the clear flags do.
  * @returns The updated page.
  */
 export function updatePage(pageId: string, input: UpdatePageInput): NotionPage {
     const fields: string[] = [];
-    if (input.properties !== null) fields.push(mapFieldJson("properties", propertyObject(input.properties)));
-    if (input.clearIcon === true) fields.push("\"icon\":null");
-    else if (input.icon !== null) fields.push(fileField("icon", input.icon));
-    if (input.clearCover === true) fields.push("\"cover\":null");
-    else if (input.cover !== null) fields.push(fileField("cover", input.cover));
-    if (input.templateId !== null) {
+    const icon = input.icon;
+    const cover = input.cover;
+    if (input.properties !== undefined) fields.push(mapFieldJson("properties", propertyObject(input.properties)));
+    if (input.clearIcon === true || icon === null) fields.push("\"icon\":null");
+    else if (icon !== undefined) fields.push(fileField("icon", icon));
+    if (input.clearCover === true || cover === null) fields.push("\"cover\":null");
+    else if (cover !== undefined) fields.push(fileField("cover", cover));
+    if (input.templateId !== undefined) {
         const templateFields: string[] = [fieldJson("type", "template_id"), fieldJson("template_id", idFromRef(input.templateId))];
-        if (input.templateTimeZone !== null) templateFields.push(fieldJson("timezone", input.templateTimeZone));
+        if (input.templateTimeZone !== undefined) templateFields.push(fieldJson("timezone", input.templateTimeZone));
         fields.push("\"template\":" + objectJson(templateFields));
     }
     if (fields.length === 0) throw validationError("empty_update", "updatePage requires at least one changed field");
@@ -132,18 +134,18 @@ export function readPageMarkdown(pageId: string, includeTranscript: boolean = fa
  * @param pageId Page ID or Notion URL.
  * @param oldText Existing Markdown text to find; must not be empty.
  * @param newText Replacement Markdown text.
- * @param replaceAll True replaces every match; `null` or false replaces one.
+ * @param replaceAll True replaces every match; false, the default, replaces one.
  * @returns The updated page Markdown.
  */
 export function updatePageMarkdown(
     pageId: string,
     oldText: string,
     newText: string,
-    replaceAll: boolean | null,
+    replaceAll: boolean = false,
 ): PageMarkdown {
     if (oldText.length === 0) throw validationError("invalid_markdown_update", "oldText cannot be empty");
     const content: string[] = [fieldJson("old_str", oldText), fieldJson("new_str", newText)];
-    if (replaceAll === true) content.push(fieldJson("replace_all_matches", true));
+    if (replaceAll) content.push(fieldJson("replace_all_matches", true));
     const body = "{\"type\":\"update_content\",\"update_content\":{\"content_updates\":["
         + objectJson(content) + "]}}";
     return markdownFrom(notionPatch("/pages/" + pathId(pageId) + "/markdown", body).json());
@@ -248,12 +250,12 @@ export function restorePage(pageId: string): NotionPage {
  * A workspace parent has no ID and resolves to "workspace"; any other parent requires a reference.
  *
  * @param parentType Parent type: "page_id", "data_source_id", or "workspace".
- * @param parentRef Parent ID, URL, or reference; may be `null` only for a workspace parent.
+ * @param parentRef Parent ID, URL, or reference; may be omitted only for a workspace parent.
  * @returns The validated parent ID, or "workspace".
  */
-export function parentIdFrom(parentType: string, parentRef: string | null): string {
+export function parentIdFrom(parentType: string, parentRef: string | undefined): string {
     if (parentType === "workspace") return "workspace";
-    if (parentRef === null) throw validationError("invalid_parent", parentType + " parent requires an ID");
+    if (parentRef === undefined) throw validationError("invalid_parent", parentType + " parent requires an ID");
     const expected = parentType === "page_id" ? "page" : "data_source";
     return idFromRef(parentRef, expected);
 }
@@ -266,24 +268,23 @@ function parentJson(parentType: string, parentId: string): string {
 function contentJson(content: PageContent): string {
     if (content.type === "none") return "\"template\":{\"type\":\"none\"}";
     if (content.type === "markdown") {
-        if (content.markdown === null) throw validationError("invalid_content", "markdown content requires markdown");
+        if (content.markdown === undefined) throw validationError("invalid_content", "markdown content requires markdown");
         return fieldJson("markdown", content.markdown);
     }
     if (content.type === "blocks") {
-        if (content.children === null) throw validationError("invalid_content", "blocks content requires children");
+        if (content.children === undefined) throw validationError("invalid_content", "blocks content requires children");
         return fieldJson("children", content.children);
     }
-    if (content.template === null) throw validationError("invalid_template", "template content requires a template type");
+    if (content.template === undefined) throw validationError("invalid_template", "template content requires a template type");
     const fields: string[] = [fieldJson("type", content.template)];
     if (content.template === "template_id") {
-        if (content.templateId === null) throw validationError("invalid_template", "template_id content requires templateId");
+        if (content.templateId === undefined) throw validationError("invalid_template", "template_id content requires templateId");
         fields.push(fieldJson("template_id", idFromRef(content.templateId)));
     }
-    if (content.timeZone !== null) fields.push(fieldJson("timezone", content.timeZone));
+    if (content.timeZone !== undefined) fields.push(fieldJson("timezone", content.timeZone));
     return "\"template\":" + objectJson(fields);
 }
 
-function fileField(name: string, file: FileReference | null): string {
-    if (file === null) return JSON.stringify(name) + ":null";
+function fileField(name: string, file: FileReference): string {
     return JSON.stringify(name) + ":" + fileReferenceJson(file);
 }

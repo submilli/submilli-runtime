@@ -18,10 +18,13 @@ function main(): void {
     assert(html.includes('"formats":["html"]') && html.includes('"maxAge":0') && html.includes('"onlyMainContent":false'), "explicit controls");
     const json = buildScrapeBody("https://example.com", { formats: [], json: { schema: { type: "object", properties: { title: { type: "string" } } }, prompt: 'Read "title"' } });
     assert(json.includes('"formats":[{"type":"json","schema":') && !json.includes('"markdown"'), "optional structured extraction");
+    const withoutSchema = buildScrapeBody("https://example.com", { formats: [], json: { schema: undefined, prompt: "Read title" } });
+    assert(!withoutSchema.includes('"schema"') && withoutSchema.includes('"prompt":"Read title"'), "undefined unknown option is omitted");
     assert(buildBatchBody(["https://example.com/a", "https://other.example/b"]).includes('"ignoreInvalidURLs":false'), "no silent provider URL drops");
     assert(urlHost("https://EXAMPLE.com:443/a") === "example.com", "canonical host");
     assert(urlHost("https://example.com./a") === "example.com" && urlHost("https://EXAMPLE.com../a") === "example.com", "trailing dots are not part of the permission host");
     assert(buildMapBody("https://example.com").includes('"limit":100,"includeSubdomains":false'), "bounded map default");
+    assert(buildMapBody("https://example.com", { limit: undefined, sitemap: undefined }) === buildMapBody("https://example.com"), "undefined map options use defaults");
     const crawl = buildCrawlBody("https://example.com/docs", { limit: 5, maxDiscoveryDepth: 1, sitemap: "skip",
         includePaths: ["docs/.*"], excludePaths: ["docs/archive/.*"], scrapeOptions: { formats: ["markdown", "html"] } });
     assert(crawl.includes('"allowExternalLinks":false') && crawl.includes('"allowSubdomains":false') && crawl.includes('"limit":5'), "explicit crawl limits");
@@ -43,10 +46,17 @@ function main(): void {
     label("content, source URLs, arbitrary metadata and per-page failures survive");
     const page = normalizeScrapeJson('{"success":true,"data":{"markdown":"full text","html":"<p>full text</p>","json":{"title":"Example"},"metadata":{"sourceURL":"https://example.com/start","url":"https://example.com/final","title":"Example","statusCode":200,"custom":{"value":42}},"warning":"cached"}}');
     assert(page.markdown === "full text" && page.sourceURL === "https://example.com/start" && page.url === "https://example.com/final", "attribution");
-    assert(JSON.stringify(page.metadata).includes('"custom":{"value":42}') && JSON.stringify(page.json) === '{"title":"Example"}', "no lost JSON fields");
+    const metadataJson = JSON.stringify(page.metadata);
+    assert(metadataJson !== undefined && metadataJson.includes('"custom":{"value":42}') && JSON.stringify(page.json) === '{"title":"Example"}', "no lost JSON fields");
     assert(page.warning === "cached" && page.error === null, "optional metadata");
+    const nullMetadata = normalizeScrapeJson('{"success":true,"data":{"markdown":"text","metadata":{"sourceURL":"https://example.com","url":null,"title":null,"description":null,"language":null,"statusCode":null,"error":null}}}');
+    assert(nullMetadata.sourceURL === "https://example.com" && nullMetadata.title === null && nullMetadata.statusCode === null, "JSON null metadata fields are absent, not invalid");
+    const nullJobPage = normalizeJobPageJson('{"status":"completed","total":1,"completed":1,"next":null,"data":[{"markdown":"ok","metadata":{"title":null,"error":null}}]}', "batch", "11111111-1111-4111-8111-111111111111");
+    assert(nullJobPage.next === null && nullJobPage.data[0].title === null && nullJobPage.data[0].markdown === "ok", "JSON null job page metadata");
     const links = normalizeMapJson('{"success":true,"links":[{"url":"https://example.com/a","title":"A"},{"url":"https://example.com/b"}]}', 2);
     assert(links.links.length === 2 && links.limit === 2, "map does not trim");
+    const nullLinks = normalizeMapJson('{"success":true,"links":[{"url":"https://example.com/a","title":null,"description":null}]}', 1);
+    assert(nullLinks.links[0].title === undefined && nullLinks.links[0].description === undefined, "JSON null link metadata is omitted");
     const job = normalizeJobJson('{"success":true,"id":"11111111-1111-4111-8111-111111111111","invalidURLs":["provider-rejected"]}');
     assert(job.id === "11111111-1111-4111-8111-111111111111" && job.invalidURLs.length === 1, "submission preserves rejected URLs");
     const partial = normalizeJobPageJson('{"status":"scraping","total":3,"completed":1,"creditsUsed":1,"next":"https://api.firecrawl.dev/v2/crawl/11111111-1111-4111-8111-111111111111?skip=1","data":[{"markdown":"ok","metadata":{"sourceURL":"https://example.com/a"}},{"metadata":{"sourceURL":"https://example.com/b","error":"timeout","statusCode":408}}]}', "crawl", "11111111-1111-4111-8111-111111111111");
@@ -57,6 +67,9 @@ function main(): void {
     }
     const errors = normalizeJobErrorsJson('{"errors":[{"id":"p1","timestamp":null,"url":"https://example.com/fail","error":"timeout"}],"robotsBlocked":["https://example.com/private"]}');
     assert(errors.errors[0].error === "timeout" && errors.robotsBlocked.length === 1, "separate failures endpoint");
+    assert(errors.errors[0].id === "p1" && errors.errors[0].timestamp === null, "failure identifiers");
+    const sparseErrors = normalizeJobErrorsJson('{"errors":[{"id":null,"url":"https://example.com/a","error":"timeout"},{"url":"https://example.com/b","error":"blocked"}],"robotsBlocked":[]}');
+    assert(sparseErrors.errors[0].id === null && sparseErrors.errors[1].id === null && sparseErrors.errors[1].timestamp === null, "null or omitted failure IDs normalize to null");
     assert(normalizeCancellationJson('{"status":"cancelled"}').status === "cancelled", "v2 cancellation");
 
     label("pagination cannot redirect credentials or cross job boundaries");
@@ -78,6 +91,7 @@ function main(): void {
     rejects("invalid_argument", () => { getJob("crawl", "11111111-1111-4111-8111-111111111111", "https://evil.example"); });
     rejects("invalid_argument", () => { downloadJobPage("crawl", "11111111-1111-4111-8111-111111111111", "/page.json", "https://api.firecrawl.dev/v2/crawl/other?skip=1"); });
     rejects("invalid_argument", () => { downloadJobPage("crawl", "11111111-1111-4111-8111-111111111111", "/page.json", null, { maxBytes: 0 }); });
+    rejects("invalid_argument", () => { downloadJobPage("crawl", "11111111-1111-4111-8111-111111111111", "/page.json", undefined, { maxBytes: 0 }); });
     rejects("invalid_argument", () => { cancelJob("batch", "../crawl/11111111-1111-4111-8111-111111111111"); });
 
     label("large content is preserved rather than silently shortened");

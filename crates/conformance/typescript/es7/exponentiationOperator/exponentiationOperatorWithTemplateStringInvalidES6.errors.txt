@@ -1,0 +1,13 @@
+exponentiationOperatorWithTemplateStringInvalidES6.ts(3,14): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(4,14): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(5,14): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(6,14): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(7,9): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(8,9): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(9,9): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(10,9): error TS2362: The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(13,7): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(14,7): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(15,7): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(16,1): error TS2304: Cannot find name 'kj'.
+exponentiationOperatorWithTemplateStringInvalidES6.ts(16,8): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.

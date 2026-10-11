@@ -41,5 +41,5 @@ function main(): void {
     threw = true;
   }
   assert(threw, "OOB read throws");
-  assert(a.at(99) === null, "at() is the null-returning accessor");
+  assert(a.at(99) === undefined, "at() is the undefined-returning accessor");
 }

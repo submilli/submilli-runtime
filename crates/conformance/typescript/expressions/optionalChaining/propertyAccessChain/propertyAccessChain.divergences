@@ -1,4 +1,4 @@
-types: 36 of 93 tsc entries compared, 1 differ
+types: 35 of 93 tsc entries compared, 1 differ
 
 line 24: b
   tsc:  string | undefined

@@ -4,7 +4,7 @@ import { listCalendars, queryFreeBusy } from "@submilli/google-calendar";
 
 function main(): void {
     label("live calendar list when GOOGLE_ACCESS_TOKEN is available");
-    if (secrets.get("GOOGLE_ACCESS_TOKEN") === null) return;
+    if (secrets.get("GOOGLE_ACCESS_TOKEN") === undefined) return;
     const page = listCalendars({ limit: 1 });
     assert(page.items.length <= 1, "respects the requested bound");
 

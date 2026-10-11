@@ -1,0 +1,29 @@
+=== validVoidValues.ts ===
+let x: void = null as unknown as (void);
+>x : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+x = undefined;
+>x = undefined : undefined
+>              : ^^^^^^^^^
+>x : void
+>  : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+x = null;
+>x = null : null
+>         : ^^^^
+>x : void
+>  : ^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

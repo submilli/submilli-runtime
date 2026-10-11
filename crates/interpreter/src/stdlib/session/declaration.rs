@@ -44,14 +44,16 @@ pub fn package_declaration() -> PackageDeclaration {
         SESSION_GET,
         vec![GET_TYPE_PARAM.to_string()],
         vec![Param::new("key", Type::String)],
-        Type::TypeVar(GET_TYPE_PARAM.to_string()),
+        Type::union(vec![
+            Type::TypeVar(GET_TYPE_PARAM.to_string()),
+            Type::Undefined,
+        ]),
         "/**\n * Read a session value, checked against `T`. The stored value is tested \
          structurally — every field, element, and union arm — and a mismatch throws a \
          catchable `TypeError` rather than handing back a wrongly-typed value, so \
-         `get<Progress>(\"progress\")` either returns a real `Progress` or throws.\n *\n \
-         * Returns `null` for a missing key *and* for a stored `null` — use `has` to \
-         tell them apart — so a key that may be absent wants a nullable `T`, as in \
-         `get<Progress | null>(\"progress\")`.\n *\n * `T` must be a type the runtime can \
+         `get<Progress>(\"progress\")` returns a real `Progress`, `undefined` for a missing key, or throws.\n *\n \
+         * Returns `T | undefined`: a missing key returns `undefined`; a stored `null` \
+         is preserved when `T` permits it and otherwise throws a `TypeError`.\n *\n * `T` must be a type the runtime can \
          verify: object, array, tuple, union, and primitive shapes. A bare `unknown`, a \
          generic parameter of the calling function, a class, or an interface with \
          methods is rejected at compile time.\n * @param key Session key. Exact UTF-16 \
@@ -97,7 +99,11 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![
             Param::new("prefix", Type::String),
             Param::new("limit", Type::Number),
-            Param::new("cursor", Type::union(vec![Type::String, Type::Null])),
+            Param::with_default(
+                "cursor",
+                Type::union(vec![Type::String, Type::Undefined]),
+                crate::DefaultValue::Undefined,
+            ),
         ],
         page_type(),
         &format!(
@@ -105,8 +111,8 @@ pub fn package_declaration() -> PackageDeclaration {
              order. Returns metadata only — `key` and `sizeBytes` — never the stored \
              values; read one with `get`. Pass `\"\"` to list every key.\n *\n * Each \
              page holds at most `limit` entries. `nextCursor` is a `string` when the \
-             listing is unfinished and `null` only when no further matching key remains, \
-             so page until it is `null` rather than until a page is short: a page can be \
+             listing is unfinished and `undefined` only when no further matching key remains, \
+             so page until it is `undefined` rather than until a page is short: a page can be \
              short because the scan bound was reached, not because the keys ran out. Pass \
              the previous page's `nextCursor` back unchanged; a cursor minted for a \
              different prefix, or one this runtime did not issue, throws.\n *\n * Each \
@@ -117,7 +123,7 @@ pub fn package_declaration() -> PackageDeclaration {
              exact UTF-16 code units — no normalization, no path semantics. `\"\"` \
              matches every key.\n * @param limit Maximum entries in the page; 1 to \
              {MAX_LIST_LIMIT}. Outside that range throws.\n * @param cursor The previous \
-             page's `nextCursor`, or `null` to start at the first key.\n * @capability \
+             page's `nextCursor`; omit it to start at the first key.\n * @capability \
              session.list {{ prefix: $prefix }}\n * @capability \
              session.read {{ key: $key }} per candidate key\n */"
         ),
@@ -171,13 +177,13 @@ fn insert_page_interface(defs: &mut PackageDeclaration) {
         &mut properties,
         "entries",
         Type::Array(Box::new(entry_type())),
-        "/** The keys this page discloses, in UTF-16 code-unit order. May be shorter than `limit`, or empty, while `nextCursor` is still non-null. */",
+        "/** The keys this page discloses, in UTF-16 code-unit order. May be shorter than `limit`, or empty, while `nextCursor` is still defined. */",
     );
     insert_property(
         &mut properties,
         "nextCursor",
-        Type::union(vec![Type::String, Type::Null]),
-        "/** Opaque cursor for the next page, or `null` when no further matching key remains. Pass it back to `list` unchanged, with the same prefix. */",
+        Type::union(vec![Type::String, Type::Undefined]),
+        "/** Opaque cursor for the next page, or `undefined` when no further matching key remains. Pass it back to `list` unchanged, with the same prefix. */",
     );
     insert_interface(
         defs,

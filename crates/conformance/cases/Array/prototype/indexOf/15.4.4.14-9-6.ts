@@ -1,12 +1,14 @@
 // test262: test/built-ins/Array/prototype/indexOf/15.4.4.14-9-6.js
-// Adapted: null-or-number element type replaces the heterogeneous sample;
-// the coercion-vehicle rows (objects with toString) are type-rejected.
+// Adapted: the heterogeneous sample keeps its boolean/undefined/number/
+// string/null elements under a union element type; the coercion-vehicle
+// element (an object with toString) is dropped, so the trailing indices
+// shift but the first null stays at index 4.
 
-type NumberOrNull = number | null;
+type Element = boolean | undefined | number | string | null;
 
 function main(): void {
-  const a: NumberOrNull[] = [0, 1, 0, null, 1, 0, 1, null];
+  const _null = null;
+  const a: Element[] = [true, undefined, 0, false, _null, 1, "str", 0, 1, true, false, null];
 
-  assertSameValue(a.indexOf(null), 3, "a[3]=_null");
-  assertSameValue(a.indexOf(1), 1, "first matching index wins");
+  assertSameValue(a.indexOf(null), 4, "a[4]=_null");
 }

@@ -129,13 +129,13 @@ pub(super) fn field_array(
     }
 }
 
-/// A nullable optional slot has a separate presence flag on its field name.
+/// An optional nullish slot has a separate presence flag on its field name.
 pub(crate) fn field_is_present(
     caller: &mut Caller<'_, StoreData>,
     name: &Val,
     value: &Val,
 ) -> wasmtime::Result<bool> {
-    if !matches!(value, Val::AnyRef(None)) {
+    if !super::undefined::is_nullish(caller, value)? {
         return Ok(true);
     }
     let name = as_struct(caller, name, "field name")?;
@@ -151,9 +151,9 @@ fn enumerate(
     obj: &Val,
     kind: Enumerate,
 ) -> wasmtime::Result<Val> {
-    if matches!(obj, Val::AnyRef(None)) {
+    if super::undefined::is_nullish(caller, obj)? {
         return Err(wasmtime::Error::msg(format!(
-            "Object.{} called on null",
+            "Object.{} called on null or undefined",
             kind.method()
         )));
     }
@@ -249,7 +249,10 @@ fn spread(
             let name = names.get(&mut *caller, index)?;
             let units = read_string_units(caller, &name, FIELD_NAME)?;
             if let std::collections::btree_map::Entry::Vacant(entry) = entries.entry(units) {
-                entry.insert((copy_field_name(caller, name, false)?, Val::AnyRef(None)));
+                entry.insert((
+                    copy_field_name(caller, name, false)?,
+                    super::undefined::value(caller)?,
+                ));
             }
         }
     }
@@ -472,8 +475,10 @@ fn spread_omitted_fields(
 }
 
 fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime::Result<bool> {
-    if matches!(obj, Val::AnyRef(None)) {
-        return Err(wasmtime::Error::msg("Object.hasOwn called on null"));
+    if super::undefined::is_nullish(caller, obj)? {
+        return Err(wasmtime::Error::msg(
+            "Object.hasOwn called on null or undefined",
+        ));
     }
     let Some((names, values)) = shape_arrays(caller, obj)? else {
         return Ok(false);
@@ -746,7 +751,9 @@ pub fn declare(defs: &mut PackageDeclaration) {
         "entries",
         ctor_key("entries"),
         vec![obj()],
-        Type::Array(Box::new(Type::Tuple(vec![Type::String, Type::Unknown]))),
+        Type::Array(Box::new(Type::Tuple(
+            vec![Type::String, Type::Unknown].into(),
+        ))),
     );
     declare_method(
         defs,
@@ -760,8 +767,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
         "is",
         ctor_key("is"),
         vec![
-            Param::new("a", Type::Unknown),
-            Param::new("b", Type::Unknown),
+            Param::with_default("a", Type::Unknown, crate::DefaultValue::Undefined),
+            Param::with_default("b", Type::Unknown, crate::DefaultValue::Undefined),
         ],
         Type::Boolean,
     );
@@ -788,6 +795,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toString".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::String,
@@ -798,6 +806,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toJson".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::String,
@@ -830,45 +839,49 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "keys".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("obj", Type::Unknown)],
                             ret: Type::Array(Box::new(Type::String)),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the object's field names in canonical sorted order (the same order JSON output uses).\n * Optional fields are included even when they currently hold `null`. Non-object values yield `[]`; `null` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
+                                "/**\n * Returns the object's field names in canonical sorted order (the same order JSON output uses).\n * An omitted optional field is not listed; one set to `undefined` or `null` is. Non-object values yield `[]`; `null` or `undefined` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
                             ),
                         },
                     ),
                     (
                         "values".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("obj", Type::Unknown)],
                             ret: Type::Array(Box::new(Type::Unknown)),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the object's field values, aligned with `Object.keys` order. Element types are erased to `unknown` — narrow with `typeof` / `as`.\n * Non-object values yield `[]`; `null` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
+                                "/**\n * Returns the object's field values, aligned with `Object.keys` order. Element types are erased to `unknown` — narrow with `typeof` / `as`.\n * Non-object values yield `[]`; `null` or `undefined` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
                             ),
                         },
                     ),
                     (
                         "entries".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("obj", Type::Unknown)],
                             ret: Type::Array(Box::new(Type::Tuple(vec![
                                 Type::String,
                                 Type::Unknown,
-                            ]))),
+                            ].into()))),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns `[name, value]` pairs in canonical sorted key order. Values are erased to `unknown` — narrow with `typeof` / `as`.\n * Non-object values yield `[]`; `null` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
+                                "/**\n * Returns `[name, value]` pairs in canonical sorted key order. Values are erased to `unknown` — narrow with `typeof` / `as`.\n * Non-object values yield `[]`; `null` or `undefined` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
                             ),
                         },
                     ),
                     (
                         "hasOwn".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("obj", Type::Unknown),
@@ -877,17 +890,18 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns `true` when `obj` declares a field named `key`. Non-object values have no fields; `null` throws a catchable `Error`.\n * @param obj The object to test.\n * @param key The field name.\n */",
+                                "/**\n * Returns `true` when `obj` has a field named `key`: an omitted optional field answers `false`, one holding `undefined` answers `true`. Non-object values have no fields; `null` or `undefined` throws a catchable `Error`.\n * @param obj The object to test.\n * @param key The field name.\n */",
                             ),
                         },
                     ),
                     (
                         "is".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
-                                Param::new("a", Type::Unknown),
-                                Param::new("b", Type::Unknown),
+                                Param::with_default("a", Type::Unknown, crate::DefaultValue::Undefined),
+                                Param::with_default("b", Type::Unknown, crate::DefaultValue::Undefined),
                             ],
                             ret: Type::Boolean,
                             predicate: None,

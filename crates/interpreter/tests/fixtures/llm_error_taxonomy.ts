@@ -25,20 +25,20 @@ function main(): void {
   // Not one element is `ok` — each is a distinct way of not being clean.
   for (const r of results) {
     assert(!r.ok, "every element in this batch is a failure of some kind");
-    assert(r.reason !== null, "a failed element always names its category");
-    assert(r.message !== null, "and carries a classification message");
+    assert(r.reason !== undefined, "a failed element always names its category");
+    assert(r.message !== undefined, "and carries a classification message");
   }
 
   // Truncated: hit the output ceiling mid-answer, and the partial text is
   // retained — the whole reason the failure arm has a `text` field.
   assert(results[0].reason === "truncated", "a length stop is `truncated`");
-  assert(results[0].text !== null, "a truncated element keeps the text it produced");
+  assert(results[0].text !== undefined, "a truncated element keeps the text it produced");
   assert(results[0].finishReason === "length", "the provider's raw stop reason travels separately");
 
   // Content-filtered: stopped or redacted by a safety filter, and also still
   // carrying partial text.
   assert(results[1].reason === "content-filtered", "a safety stop is `content-filtered`");
-  assert(results[1].text !== null, "a filtered element can still carry partial text");
+  assert(results[1].text !== undefined, "a filtered element can still carry partial text");
 
   // Invalid output: the model answered, but not usably. Nothing was cut off —
   // what arrived was wrong, which is why it is distinct from `truncated`.
@@ -62,10 +62,10 @@ function main(): void {
   assert(results[5].retryable, "an unavailable provider may serve the same request later");
 
   // Transport: the connection failed after dispatch began, so no status was
-  // ever observed. A null status is meaningful rather than missing — it is
+  // ever observed. An undefined status is meaningful rather than missing — it is
   // what distinguishes a dead connection from a provider that answered.
   assert(results[6].reason === "transport", "a mid-flight connection failure is `transport`");
-  assert(results[6].status === null, "a transport death never observed a status");
+  assert(results[6].status === undefined, "a transport death never observed a status");
 
   // Cancelled: abandoned on this side — deadline, shutdown, abort — rather
   // than on the wire, which is why it is not folded into `transport`.

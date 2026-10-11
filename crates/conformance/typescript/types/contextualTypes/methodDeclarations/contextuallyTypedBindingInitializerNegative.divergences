@@ -1,0 +1,21 @@
+types: 10 of 47 tsc entries compared, 5 differ
+
+line 6: showRename
+  tsc:  (x: number) => string
+  ours: ((arg0: number) => number) | ((arg0: number) => string)
+
+line 13: { show: v => v }
+  tsc:  { show: (v: number) => number; }
+  ours: Show
+
+line 18: { stringIdentity: x => x}
+  tsc:  { stringIdentity: (x: string) => string; }
+  ours: StringIdentity
+
+line 23: [101, 1234]
+  tsc:  [number, number]
+  ours: [string, number]
+
+line 28: prop
+  tsc:  "foo" | "bar"
+  ours: "bar" | "baz" | "foo"

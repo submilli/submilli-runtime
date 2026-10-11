@@ -34,13 +34,13 @@ interface S extends T {
 
 }
 
-/*pruned*/;   
-            
- 
+/*pruned*/;
 
-/*pruned*/;              
-                         
- 
+
+
+/*pruned*/;
+
+
 
 interface T3 {
 >T3 : T3

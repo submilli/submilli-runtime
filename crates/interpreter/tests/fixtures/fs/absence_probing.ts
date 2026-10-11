@@ -7,14 +7,14 @@ function main(): void {
   mkdir("/real", true);
   writeText("/real/file.txt", "x");
 
-  const missingLeaf: Stat | null = stat("/real/nope.txt");
-  assert(missingLeaf === null, "stat returns null for a missing leaf");
+  const missingLeaf: Stat | undefined = stat("/real/nope.txt");
+  assert(missingLeaf === undefined, "stat returns undefined for a missing leaf");
 
-  const missingAncestor: Stat | null = stat("/no/such/dir/f.txt");
-  assert(missingAncestor === null, "stat returns null when an ancestor is missing");
+  const missingAncestor: Stat | undefined = stat("/no/such/dir/f.txt");
+  assert(missingAncestor === undefined, "stat returns undefined when an ancestor is missing");
 
-  const throughAFile: Stat | null = stat("/real/file.txt/child");
-  assert(throughAFile === null, "stat returns null when a component is a file");
+  const throughAFile: Stat | undefined = stat("/real/file.txt/child");
+  assert(throughAFile === undefined, "stat returns undefined when a component is a file");
 
   assert(exists("/real/file.txt"), "exists finds a real file");
   assert(exists("/real/nope.txt") === false, "exists reports a missing leaf as absent");

@@ -2,17 +2,17 @@ function main(): void {
   let a: number[] = [1, 2, 3];
 
   let first = a.shift();
-  if (first !== null) {
+  if (first !== undefined) {
     assert(first === 1, "shift returns the first element");
   } else {
-    assert(false, "shift on non-empty should not return null");
+    assert(false, "shift on non-empty should not return undefined");
   }
   assert(a.length === 2 && a[0] === 2, "remaining elements move forward");
 
   a.shift();
   a.shift();
   assert(a.length === 0, "shifting all elements empties the array");
-  assert(a.shift() === null, "shift on empty array returns null");
+  assert(a.shift() === undefined, "shift on empty array returns undefined");
 
   let len = a.unshift(5);
   assert(len === 1 && a[0] === 5, "unshift prepends and returns the new length");

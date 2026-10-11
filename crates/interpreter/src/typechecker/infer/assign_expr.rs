@@ -70,28 +70,27 @@ impl Inferer<'_> {
             return Ok(expr.ty.clone());
         };
         let value_ty = expr.ty.clone();
-        let Some(assignment) = stmts
-            .last()
-            .map(|&s| {
-                Ok::<_, crate::compiler_error::CompilerFailure>(
-                    &self
-                        .typed_ast
-                        .try_stmt(s)
-                        .map_err(crate::typechecker::arena_failure)?
-                        .kind,
-                )
-            })
-            .transpose()?
-        else {
+        let Some(&last) = stmts.last() else {
             return Ok(value_ty);
         };
-        let (target_ty, value, annotated) = match assignment {
+        let statement = &self
+            .typed_ast
+            .try_stmt(last)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind;
+        let (declared, value, annotated) = match statement {
             TypedStmtKind::AssignLocal {
                 ident,
                 target_ty,
                 value,
                 ..
-            } => (target_ty, value, self.is_local_annotated(&ident.name)),
+            } => (
+                self.scopes
+                    .get(&ident.name)
+                    .map_or(target_ty, |entry| &entry.ty),
+                value,
+                self.is_local_annotated(&ident.name),
+            ),
             TypedStmtKind::AssignGlobal {
                 mangled,
                 target_ty,
@@ -100,8 +99,8 @@ impl Inferer<'_> {
             } => (target_ty, value, self.is_global_annotated(mangled)),
             _ => return Ok(value_ty),
         };
-        let flow_ty = self.assigned_flow_type(target_ty, annotated, *value, value_ty)?;
-        Ok(self.assignment_narrowed_ty(target_ty, flow_ty))
+        let flow_ty = self.assigned_flow_type(declared, annotated, *value, value_ty)?;
+        Ok(self.assignment_narrowed_ty(declared, flow_ty))
     }
 
     /// A field or index assignment, with its receiver, index, and value held.

@@ -234,10 +234,10 @@ let propertyNested: { a: { a: number, b: string } } =
 
 // accessors don't copy the descriptor
 // (which means that readonly getters become read/write properties)
-/*pruned*/;                        
-/*pruned*/;                           
-                   
-/*pruned*/;   
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
 
 // functions result in { }
 let spreadFunc = { ...(function () { }) };
@@ -261,13 +261,13 @@ type Header = { head: string, body: string, authToken: string }
 >authToken : string
 >          : ^^^^^^
 
-/*pruned*/;                                                                              
-            
-                       
-                  
-                                     
-     
- 
+/*pruned*/;
+
+
+
+
+
+
 // boolean && T results in Partial<T>
 function conditionalSpreadBoolean(b: boolean) : { x: number, y: number } {
 >conditionalSpreadBoolean : (b: boolean) => { x: number; y: number; }
@@ -481,17 +481,17 @@ function conditionalSpreadString(st: string): { x: string, y: number } {
 }
 
 // any results in any
-/*pruned*/;                                  
-/*pruned*/;                     
+/*pruned*/;
+/*pruned*/;
 
 // methods are not enumerable
-/*pruned*/;                     
-/*pruned*/;       
-/*pruned*/;                          
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 // own methods are enumerable
-/*pruned*/;                                                                      
-/*pruned*/;  
+/*pruned*/;
+/*pruned*/;
 
 // new field's type conflicting with existing field is OK
 let changeTypeAfter: { a: string, b: string } =
@@ -530,21 +530,21 @@ let changeTypeBoth: { a: string, b: number } =
 
 
 // optional
-/*pruned*/;        
-                                     
-                                   
-                                    
-                                            
-                                                                                                                             
-                                                                                                                                           
-                                                                                         
+/*pruned*/;
 
-                        
-                                                                              
-                                                     
-                                                                       
-                                               
- 
+
+
+
+
+
+
+
+
+
+
+
+
+
 // shortcut syntax
 let a = 12;
 >a : number
@@ -567,22 +567,22 @@ let shortCutted: { a: number, b: string } = { ...o, a }
 >  : ^^^^^^
 
 // non primitive
-/*pruned*/;                               
+/*pruned*/;
 
 // generic spreads
 
-/*pruned*/;                                            
-                                    
- 
+/*pruned*/;
 
-/*pruned*/;                                                                 
-                                                
-/*pruned*/;                                        
-                                     
-/*pruned*/;                                    
-                                  
-/*pruned*/;                                                       
-                                            
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+
 
 function genericSpread<T, U>(t: T, u: U, v: T | U, w: T | { s: string }, obj: { x: number }): void {
 >genericSpread : <T, U>(t: T, u: U, v: T | U, w: T | { s: string; }, obj: { x: number; }) => void

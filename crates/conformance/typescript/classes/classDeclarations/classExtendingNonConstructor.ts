@@ -5,7 +5,7 @@ function foo(): void {
     this.x = 1;
 }
 
-class C1 extends null { }
+class C1 extends undefined { }
 class C2 extends true { }
 class C3 extends false { }
 class C4 extends 42 { }

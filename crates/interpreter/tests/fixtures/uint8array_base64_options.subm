@@ -20,8 +20,8 @@ function main(): void {
   let padded_url: Uint8Array = Uint8Array.fromBase64("AQ==", {alphabet: "base64url"});
   assert(padded_url.length === 1 && padded_url[0] === 1, "padded under base64url");
 
-  // Null options = defaults (smoke check — wrapping null shouldn't
+  // Undefined options = defaults (smoke check — wrapping undefined shouldn't
   // crash the field-getter dispatch).
-  assert(bytes.toBase64(null) === "//79", "null options → default");
-  assert(Uint8Array.fromBase64("//79", null).equals(bytes), "null options on decode");
+  assert(bytes.toBase64(undefined) === "//79", "undefined options → default");
+  assert(Uint8Array.fromBase64("//79", undefined).equals(bytes), "undefined options on decode");
 }

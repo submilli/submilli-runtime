@@ -312,10 +312,7 @@ impl<'a> Inferer<'a> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
         let max_args = if has_rest { usize::MAX } else { params.len() };
-        let min_args = params
-            .iter()
-            .take_while(|p| !p.rest && p.default.is_none())
-            .count();
+        let min_args = super::expr::required_parameter_count(&params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
         if !arity_ok {
             let path = path_string(root, segments);
@@ -347,7 +344,7 @@ impl<'a> Inferer<'a> {
             let hint_owned: Option<Type> = if has_rest && i >= fixed_count {
                 rest_elem_ty.clone()
             } else {
-                params.get(i).map(|p| p.ty.clone())
+                params.get(i).map(super::expr::callable_parameter_type)
             };
             let (typed_arg, _) = self.infer_expr(*arg, hint_owned.as_ref())?;
             typed_args.push(typed_arg);
@@ -460,10 +457,15 @@ impl<'a> Inferer<'a> {
             return None;
         }
         let fn_ty = Type::Function {
-            params: sig.params.iter().map(|p| p.ty.clone()).collect(),
+            params: sig
+                .params
+                .iter()
+                .map(super::expr::callable_parameter_type)
+                .collect(),
             ret: Box::new(sig.ret.clone()),
             predicate: sig.predicate.clone().map(Box::new),
             has_rest: sig.params.last().is_some_and(|p| p.rest),
+            optional: crate::package_declaration::optional_parameter_count(&sig.params),
         };
         Some((
             TypedExprKind::FunctionRef {

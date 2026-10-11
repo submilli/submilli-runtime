@@ -1,0 +1,5 @@
+contextuallyTypedBindingInitializerNegative.ts(6,38): error TS2322: Type 'number' is not assignable to type 'string'.
+contextuallyTypedBindingInitializerNegative.ts(13,51): error TS2322: Type 'number' is not assignable to type 'string'.
+contextuallyTypedBindingInitializerNegative.ts(18,35): error TS2322: Type 'number' is not assignable to type 'string'.
+contextuallyTypedBindingInitializerNegative.ts(23,22): error TS2322: Type 'number' is not assignable to type 'string'.
+contextuallyTypedBindingInitializerNegative.ts(28,14): error TS2322: Type '"baz"' is not assignable to type '"foo" | "bar"'.

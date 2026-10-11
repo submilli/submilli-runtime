@@ -17,7 +17,7 @@ export interface ChoiceQuestion {
     type: "choice";
     /** The complete selection question. */
     instructions: unknown;
-    /** Option names mapped to JSON descriptions, or null. */
+    /** Option names mapped to JSON descriptions; a description may be null. */
     criteria: Map<string, unknown>;
 }
 /** Rate one dimension against independently meaningful descriptions. */
@@ -114,14 +114,14 @@ export class TypeSafeError extends Error {
 /** Evaluate one yes/no judgment in one HTTP call; returns probability of yes.
  * @param state Evidence for the judgment: text or a JSON object/array. The call does not fetch missing evidence.
  * @param instructions The full question, as a string or a JSON object/array; must not be blank.
- * @param criteria Optional descriptions of the outcomes, keyed `"true"` and `"false"`; `null` omits them.
- * @param options Optional call settings (such as `model`); `null` uses the default model `jev-latest`.
+ * @param criteria Optional descriptions of the outcomes, keyed `"true"` and `"false"`; omit it (or pass `undefined`) to send none.
+ * @param options Optional call settings (such as `model`); omit it to use the default model `jev-latest`.
  * @returns The probability of yes, from zero to one.
  * @capability typesafe.ai/systemone {}
  */
-export function noul(state: unknown, instructions: unknown, criteria: Map<string, unknown> | null = null,
-    options: CallOptions | null = null): NoulAnswer {
-    const model = options === null ? null : options.model;
+export function noul(state: unknown, instructions: unknown, criteria?: Map<string, unknown>,
+    options: CallOptions = {}): NoulAnswer {
+    const model = options.model;
     check("typesafe.ai/systemone", {});
     const answer = evaluateSingle(state, noulQuestion(instructions, criteria), model);
     if (!isNoulAnswer(answer)) throw invalidResponse();
@@ -132,13 +132,13 @@ export function noul(state: unknown, instructions: unknown, criteria: Map<string
  * @param state Evidence for the judgment: text or a JSON object/array. The call does not fetch missing evidence.
  * @param instructions The full question, as a string or a JSON object/array; must not be blank.
  * @param criteria Option names mapped to their JSON descriptions; 1-255 options.
- * @param options Optional call settings (such as `model`); `null` uses the default model `jev-latest`.
+ * @param options Optional call settings (such as `model`); omit it to use the default model `jev-latest`.
  * @returns The highest-probability option, the probability of every option, and the confidence.
  * @capability typesafe.ai/systemone {}
  */
 export function choice(state: unknown, instructions: unknown, criteria: Map<string, unknown>,
-    options: CallOptions | null = null): ChoiceAnswer {
-    const model = options === null ? null : options.model;
+    options: CallOptions = {}): ChoiceAnswer {
+    const model = options.model;
     check("typesafe.ai/systemone", {});
     const answer = evaluateSingle(state, choiceQuestion(instructions, criteria), model);
     if (!isChoiceAnswer(answer)) throw invalidResponse();
@@ -149,13 +149,13 @@ export function choice(state: unknown, instructions: unknown, criteria: Map<stri
  * @param state Evidence for the judgment: text or a JSON object/array. The call does not fetch missing evidence.
  * @param instructions The full question, as a string or a JSON object/array; must not be blank.
  * @param criteria Ordered descriptions of 2-10 levels; level indices start at zero.
- * @param options Optional call settings (such as `model`); `null` uses the default model `jev-latest`.
+ * @param options Optional call settings (such as `model`); omit it to use the default model `jev-latest`.
  * @returns The fractional score, the legend of level descriptions, per-level probabilities and the confidence.
  * @capability typesafe.ai/systemone {}
  */
 export function score(state: unknown, instructions: unknown, criteria: unknown[],
-    options: CallOptions | null = null): ScoreAnswer {
-    const model = options === null ? null : options.model;
+    options: CallOptions = {}): ScoreAnswer {
+    const model = options.model;
     check("typesafe.ai/systemone", {});
     const answer = evaluateSingle(state, scoreQuestion(instructions, criteria), model);
     if (!isScoreAnswer(answer)) throw invalidResponse();
@@ -165,12 +165,12 @@ export function score(state: unknown, instructions: unknown, criteria: unknown[]
 /**
  * Build a yes/no question without HTTP. Optional criteria keys are true and false.
  * @param instructions The full proposition to judge, as a string or a JSON object/array.
- * @param criteria Optional descriptions keyed `"true"` and `"false"`; `null` omits them.
+ * @param criteria Optional descriptions keyed `"true"` and `"false"`; omit it to send none.
  * @returns A validated yes/no question for use in a `batch` request.
  */
-export function noulQuestion(instructions: unknown, criteria: Map<string, unknown> | null = null): NoulQuestion {
+export function noulQuestion(instructions: unknown, criteria?: Map<string, unknown>): NoulQuestion {
     const question: NoulQuestion = { type: "noul", instructions: instructions };
-    if (criteria !== null) question.criteria = criteria;
+    if (criteria !== undefined) question.criteria = criteria;
     validateQuestion(question);
     return question;
 }
@@ -210,46 +210,46 @@ export function batch(request: BatchRequest): BatchResponse {
 }
 
 /**
- * Narrow an already-decoded answer to NoulAnswer; returns false for null.
- * @param answer A decoded answer, or `null`.
+ * Narrow an already-decoded answer to NoulAnswer; returns false for null or undefined.
+ * @param answer A decoded answer, `null`, or a missing Map result (`undefined`).
  * @returns `true` when `answer` is a `NoulAnswer`.
  */
-export function isNoulAnswer(answer: Answer | null): answer is NoulAnswer {
-    return answer !== null && answer.type === "noul";
+export function isNoulAnswer(answer: Answer | null | undefined): answer is NoulAnswer {
+    return answer !== null && answer !== undefined && answer.type === "noul";
 }
 
 /**
- * Narrow an already-decoded answer to ChoiceAnswer; returns false for null.
- * @param answer A decoded answer, or `null`.
+ * Narrow an already-decoded answer to ChoiceAnswer; returns false for null or undefined.
+ * @param answer A decoded answer, `null`, or a missing Map result (`undefined`).
  * @returns `true` when `answer` is a `ChoiceAnswer`.
  */
-export function isChoiceAnswer(answer: Answer | null): answer is ChoiceAnswer {
-    return answer !== null && answer.type === "choice";
+export function isChoiceAnswer(answer: Answer | null | undefined): answer is ChoiceAnswer {
+    return answer !== null && answer !== undefined && answer.type === "choice";
 }
 
 /**
- * Narrow an already-decoded answer to ScoreAnswer; returns false for null.
- * @param answer A decoded answer, or `null`.
+ * Narrow an already-decoded answer to ScoreAnswer; returns false for null or undefined.
+ * @param answer A decoded answer, `null`, or a missing Map result (`undefined`).
  * @returns `true` when `answer` is a `ScoreAnswer`.
  */
-export function isScoreAnswer(answer: Answer | null): answer is ScoreAnswer {
-    return answer !== null && answer.type === "score";
+export function isScoreAnswer(answer: Answer | null | undefined): answer is ScoreAnswer {
+    return answer !== null && answer !== undefined && answer.type === "score";
 }
 
-function evaluateSingle(state: unknown, question: Question, requestedModel: string | null): Answer {
+function evaluateSingle(state: unknown, question: Question, requestedModel: string | undefined): Answer {
     const questions = new Map<string, Question>();
     questions.set("answer", question);
     const model = requestedModel ?? "jev-latest";
     const result = evaluate({ state: state, questions: questions, model: model });
     const answer = result.answers.get("answer");
-    if (answer === null) throw invalidResponse();
+    if (answer === undefined) throw invalidResponse();
     return answer;
 }
 
 function evaluate(request: BatchRequest): BatchResponse {
     const body = buildRequestBody(request);
     const response = post("https://api.typesafe.ai/v1/systemone", body, authHeaders());
-    if (!response.ok) throw typesafeHttpError(response.status, response.headers.get("retry-after"));
+    if (!response.ok) throw typesafeHttpError(response.status, response.headers.get("retry-after") ?? null);
     return decodeResponse(response.body, request.questions);
 }
 
@@ -269,7 +269,7 @@ function buildRequestBody(request: BatchRequest): string {
     }
     const fields: string[] = [];
     for (const [id, question] of request.questions) fields.push(field(id, questionJson(question)));
-    return "{" + field("state", JSON.stringify(request.state)) + "," + field("model", JSON.stringify(model)) +
+    return "{" + field("state", jsonValue(request.state)) + "," + field("model", JSON.stringify(model)) +
         ",\"questions\":{" + fields.join(",") + "}}";
 }
 
@@ -291,7 +291,7 @@ function decodeResponse(body: string, questions: Map<string, Question>): BatchRe
         requireCount(response.usage.output_tokens);
         for (const [id, question] of questions) {
             const answer = response.answers.get(id);
-            if (answer === null || answer.type !== question.type) throw invalidResponse();
+            if (answer === undefined || answer.type !== question.type) throw invalidResponse();
             validateAnswer(answer, question);
         }
         return response;
@@ -306,7 +306,7 @@ function decodeResponse(body: string, questions: Map<string, Question>): BatchRe
  * @param retryAfter The `retry-after` response header value, or `null` when absent.
  * @returns A `TypeSafeError` carrying a code derived from the status.
  */
-function typesafeHttpError(status: number, retryAfter: string | null = null): TypeSafeError {
+function typesafeHttpError(status: number, retryAfter: string | null): TypeSafeError {
     let code = "http_error";
     if (status === 400 || status === 422) code = "invalid_request";
     else if (status === 401) code = "unauthorized";
@@ -317,16 +317,22 @@ function typesafeHttpError(status: number, retryAfter: string | null = null): Ty
 }
 
 function questionJson(question: Question): string {
-    const fields = [field("type", JSON.stringify(question.type)), field("instructions", JSON.stringify(question.instructions))];
+    const fields = [field("type", JSON.stringify(question.type)), field("instructions", jsonValue(question.instructions))];
     if (question.type === "score") fields.push(field("criteria", JSON.stringify(question.criteria)));
-    else if (question.criteria !== null) fields.push(field("criteria", criteriaJson(question.criteria)));
+    else if (question.criteria !== undefined) fields.push(field("criteria", criteriaJson(question.criteria)));
     return "{" + fields.join(",") + "}";
 }
 
 function criteriaJson(criteria: Map<string, unknown>): string {
     const fields: string[] = [];
-    for (const [key, value] of criteria) fields.push(field(key, JSON.stringify(value)));
+    for (const [key, value] of criteria) fields.push(field(key, jsonValue(value)));
     return "{" + fields.join(",") + "}";
+}
+
+function jsonValue(value: unknown): string {
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) throw invalidArgument("value must have a JSON representation");
+    return encoded;
 }
 
 function field(name: string, json: string): string { return JSON.stringify(name) + ":" + json; }
@@ -359,7 +365,7 @@ function requireObject(value: unknown): void {
 
 function authHeaders(): Map<string, string> {
     const key = secrets.get("TYPESAFE_AI_KEY");
-    if (key === null || key.trim().length === 0) {
+    if (key === undefined || key.trim().length === 0) {
         throw new TypeSafeError("missing_credentials", "Bind TYPESAFE_AI_KEY in the blueprint before using TypeSafe");
     }
     const headers = new Map<string, string>();
@@ -378,7 +384,7 @@ function validateQuestion(question: Question): void {
         return;
     }
     const criteria = question.criteria;
-    if (criteria === null) return;
+    if (criteria === undefined) return;
     if (question.type === "choice") {
         if (criteria.size < 1 || criteria.size > 255) throw invalidArgument("choice requires 1–255 options");
     }

@@ -1,0 +1,43 @@
+function main(): void {
+  const empty: number[] = [];
+  assert(empty.at(0) === undefined, "array at miss");
+  assert(empty.pop() === undefined, "array pop miss");
+  assert(empty.shift() === undefined, "array shift miss");
+  assert(empty.find((value) => value === 1) === undefined, "array find miss");
+  assert(empty.findLast((value) => value === 1) === undefined, "array findLast miss");
+  const values: (number | null | undefined)[] = [undefined, null, 3];
+  assert(values.indexOf(undefined) === 0, "undefined search");
+  assert(values.indexOf(null) === 1, "null search stays distinct");
+  assert(values.includes(undefined), "undefined includes");
+  assert(values.join() === ",,3", "join omits nullish contents");
+  const sorted: (number | undefined)[] = [undefined, 3, undefined, 1];
+  sorted.sort((a, b) => {
+    assert(a !== undefined && b !== undefined, "comparator never sees undefined");
+    return (a as number) - (b as number);
+  });
+  assert(sorted[0] === 1 && sorted[1] === 3, "defined values sort first");
+  assert(sorted[2] === undefined && sorted[3] === undefined, "undefined sorts last");
+  assert(Array.from([1, 2], undefined).join() === "1,2", "optional map callback");
+  const map = new Map<number | null | undefined, number | null | undefined>();
+  assert(map.get(1) === undefined, "map missing result");
+  map.set(null, null);
+  map.set(undefined, undefined);
+  assert(map.size === 2 && map.has(null) && map.has(undefined), "distinct nullish keys");
+  assert(map.get(null) === null, "stored null preserved");
+  assert(map.delete(undefined) && map.has(null), "delete only undefined key");
+  const set = new Set<number | null | undefined>([null, undefined, undefined]);
+  assert(set.size === 2 && set.has(null) && set.has(undefined), "distinct set entries");
+  assert(new Map<number, number>(undefined).size === 0, "undefined map initializer");
+  assert(new Set<number>(undefined).size === 0, "undefined set initializer");
+  assert(new Map<number, number>(null).size === 0, "null map initializer");
+  assert(new Set<number>(null).size === 0, "null set initializer");
+  const bytes = Uint8Array.of(3, 1);
+  assert(bytes.at(2) === undefined, "byte at miss");
+  assert(bytes.find((value) => value === 9) === undefined, "byte find miss");
+  assert(bytes.findLast((value) => value === 9) === undefined, "byte findLast miss");
+  assert(bytes.toSorted(undefined).join() === "1,3", "optional numeric comparator");
+  assert(bytes.toBase64(undefined) === bytes.toBase64(), "optional base64 options");
+  assert(bytes.toBase64({ alphabet: undefined, omitPadding: undefined }) === bytes.toBase64(), "optional option fields");
+  const completed = empty.values().next();
+  assert(completed.done && completed.value === undefined, "iterator completion");
+}

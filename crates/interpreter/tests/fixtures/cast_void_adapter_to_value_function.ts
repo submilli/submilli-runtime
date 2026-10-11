@@ -1,20 +1,12 @@
 // A value-returning function stored as a `void` function type still returns its
 // value, so a cast back through `unknown` to a value-returning type succeeds at
 // its own arity or a larger one, and a value function casts to a `void` type as
-// it assigns to one. A function declared `void` has no value to give, so a cast
-// to a value type rejects it, also when a generic stored it as a value function.
+// it assigns to one. A function declared `void` returns `undefined`, so a cast
+// to a value type gives `undefined` when called, as in JavaScript, also when a
+// generic stored it as a value function.
 type Unary = (a: number) => number;
 type Binary = (a: number, b: number) => number;
 type Ternary = (a: number, b: number, c: number) => number;
-
-function rejects(cast: () => void): boolean {
-  try {
-    cast();
-  } catch (e: TypeError) {
-    return e.message.includes("type mismatch");
-  }
-  return false;
-}
 
 function keep<T>(f: (a: number) => T): unknown {
   return f;
@@ -31,8 +23,10 @@ function main(): void {
   assert(((droppedSum as unknown) as Ternary)(1, 2, 3) === 6, "three parameters");
 
   const nothing = (a: number): void => {};
-  assert(rejects(() => { const f = (nothing as unknown) as Unary; }), "declared void");
-  assert(rejects(() => { const f = keep(nothing) as Unary; }), "declared void through a generic");
+  const cast = (nothing as unknown) as Unary;
+  assert((cast(1) as unknown) === undefined, "declared void");
+  const kept = keep(nothing) as Unary;
+  assert((kept(1) as unknown) === undefined, "declared void through a generic");
 
   let total = 0;
   const record: unknown = (a: number): number => {

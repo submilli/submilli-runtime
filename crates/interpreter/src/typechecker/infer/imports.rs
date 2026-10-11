@@ -257,15 +257,8 @@ impl<'a> Inferer<'a> {
                     );
                     continue;
                 }
-                if module == crate::stdlib::test::MODULE_NAME {
-                    self.error_with_help(
-                        module_span,
-                        format!("package `{module}` not found"),
-                        vec![
-                            "`submilli:test` is only available to test files run via `submilli build test`; it is not importable from a program run with `submilli run`"
-                                .to_string(),
-                        ],
-                    );
+                if let Some((message, help)) = crate::stdlib::unavailable_import(&module) {
+                    self.error_with_help(module_span, message, help);
                     continue;
                 }
                 // In the closure but not declared here: the types resolve, the

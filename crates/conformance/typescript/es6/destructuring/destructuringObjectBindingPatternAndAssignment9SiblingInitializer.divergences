@@ -1,0 +1,15 @@
+types: 22 of 64 tsc entries compared, 2 differ
+
+line 18: { a1: 'hi', b1: 1 }
+  tsc:  { a1: string; b1?: number; }
+  ours: { a1: string; b1: number }
+
+line 19: { a2: 'hi', b2: 1 }
+  tsc:  { a2: string; b2?: number; }
+  ours: { a2: string; b2: number }
+
+errors:
+line 6: ours: field `b1` does not exist on `{ a1: number }` (tsc accepts)
+line 7: ours: field `b2` does not exist on `{ a2: number }` (tsc accepts)
+line 12: ours: field `b1` does not exist on `{ a1: string }` (tsc accepts)
+line 13: ours: field `b2` does not exist on `{ a2: string }` (tsc accepts)

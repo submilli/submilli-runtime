@@ -24,7 +24,7 @@ function main(): void {
       geminiSeen = true;
       assert(m.maxInputTokens === 2048, "the Google token limit is reported");
       assert(m.maxInputBytes === 2032, "gemini-001 is bounded at 2,032 bytes, not 3 x 2,048");
-      assert(m.description === null, "an undeclared description is null");
+      assert(m.description === undefined, "an undeclared description is undefined");
     }
   }
   assert(normalSeen, "the ordinary alias is listed");

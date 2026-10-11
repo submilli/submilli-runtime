@@ -1,14 +1,14 @@
 // @target: es2015
 // @strict: true
 
-const o1: null | { b: string } = null as unknown as (null | { b: string });
+const o1: undefined | { b: string } = null as unknown as (undefined | { b: string });
 o1?.["b"];
 
-const o2: null | { b: { c: string } } = null as unknown as (null | { b: { c: string } });
+const o2: undefined | { b: { c: string } } = null as unknown as (undefined | { b: { c: string } });
 o2?.["b"].c;
 o2?.b["c"];
 
-const o3: { b: null | { c: string } } = null as unknown as ({ b: null | { c: string } });
+const o3: { b: undefined | { c: string } } = null as unknown as ({ b: undefined | { c: string } });
 o3["b"]?.c;
 o3.b?.["c"];
 
@@ -23,7 +23,7 @@ o5["b"]?.()["c"].d?.e;
 o5["b"]?.()["c"].d?.["e"];
 
 // GH#33744
-/*pruned*/;                                                                                      
+/*pruned*/;                                                                                                
 /*pruned*/;         
 
 // GH#36031

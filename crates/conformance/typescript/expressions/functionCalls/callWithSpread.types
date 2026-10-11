@@ -43,8 +43,8 @@ let z: number[] = null as unknown as (number[]);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                         
-/*pruned*/;                            
+/*pruned*/;
+/*pruned*/;
 
 foo(1, 2, "abc");
 >foo(1, 2, "abc") : void
@@ -58,30 +58,30 @@ foo(1, 2, "abc");
 >"abc" : "abc"
 >      : ^^^^^
 
-/*pruned*/;     
-/*pruned*/;            
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;          
-/*pruned*/;         
-/*pruned*/;                
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;                          
-/*pruned*/;                         
-/*pruned*/;                                
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;            
-/*pruned*/;           
-/*pruned*/;                  
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;                              
-/*pruned*/;                             
-/*pruned*/;                                    
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;            
-/*pruned*/;           
-/*pruned*/;                  
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;                             
+/*pruned*/;
 
 class C {
 >C : C
@@ -109,7 +109,7 @@ class C {
 >y : number
 >  : ^^^^^^
 
-        /*pruned*/;          
+        /*pruned*/;
     }
     foo(x: number, y: number, ...z: string[]): void {
 >foo : (x: number, y: number, ...z: string[]) => void
@@ -141,7 +141,7 @@ class D extends C {
 >2 : 2
 >  : ^
 
-        /*pruned*/;       
+        /*pruned*/;
     }
     foo(): void {
 >foo : () => void
@@ -161,7 +161,7 @@ class D extends C {
 >2 : 2
 >  : ^
 
-        /*pruned*/;           
+        /*pruned*/;
     }
 }
 

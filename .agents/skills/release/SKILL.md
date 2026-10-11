@@ -44,7 +44,9 @@ Default to stable releases. Prereleases and older maintenance lines require
 checking container aliases and GitHub prerelease/latest flags; do not move stable
 aliases back to an older release. This workflow does not publish crates,
 TypeScript packages or `skill-v*` releases unless
-separately requested.
+separately requested. The release workflow also publishes `submilli-engine` to
+crates.io, after a reviewer approves its job in the `crates-io` environment; the
+`Publish engine` workflow does the same by hand.
 
 ## 2. Prepare versions and documentation
 
@@ -123,7 +125,7 @@ not satisfy these gates.
 
   ```sh
   SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
-    cargo test --locked -p interpreter --test determinism -- --nocapture
+    cargo test --locked -p submilli-engine --test determinism -- --nocapture
   ```
 
   `SUBMILLI_FULL_TEST` does not enable determinism. Require successful execution
@@ -157,7 +159,7 @@ not satisfy these gates.
 
   ```sh
   SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
-    cargo test --locked -p interpreter --test type_limits -- --nocapture
+    cargo test --locked -p submilli-engine --test type_limits -- --nocapture
   ```
 
   Require all test bodies to execute successfully. Record the candidate and
@@ -166,7 +168,7 @@ not satisfy these gates.
 
   ```sh
   SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
-    cargo test --locked -p interpreter --test git_memory -- --nocapture
+    cargo test --locked -p submilli-engine --test git_memory -- --nocapture
   ```
 
   Require both memory-limit test bodies to execute successfully. The optional
@@ -176,7 +178,7 @@ not satisfy these gates.
 
   ```sh
   SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
-    cargo test --locked -p interpreter --test host_memory -- --nocapture
+    cargo test --locked -p submilli-engine --test host_memory -- --nocapture
   SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 \
     cargo test --locked -p submilli-server --test memory_cap -- --nocapture
   ```

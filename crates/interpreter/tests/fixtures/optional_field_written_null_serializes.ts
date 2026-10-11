@@ -1,14 +1,10 @@
-// A write of `null` to an optional field leaves it present, holding `null`, as
-// JavaScript does. Serializing it must write `null` even when the field's
-// declared type has none, as with `note?: string`: a write to `x?: T` accepts
-// `T | null`.
-
-type Plain = { id: number; note?: string };
+// Explicitly nullable optional fields retain null when written and serialized.
+type Plain = { id: number; note?: string | null };
 type Nullable = { id: number; note?: string | null };
-interface Named { id: number; note?: string }
+interface Named { id: number; note?: string | null }
 class Holder {
   id: number = 1;
-  note?: string;
+  note?: string | null;
 }
 
 function main(): void {

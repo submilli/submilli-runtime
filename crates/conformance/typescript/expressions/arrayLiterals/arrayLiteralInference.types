@@ -180,9 +180,9 @@ const appTypeStylesWithError: Map<AppType, Array<AppStyle>> = new Map([
 
 // Repro from #31204
 
-/*pruned*/;                                                            
-/*pruned*/;                                               
-/*pruned*/;                                
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 
 function main(): void {}

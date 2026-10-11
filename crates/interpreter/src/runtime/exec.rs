@@ -31,15 +31,15 @@ pub async fn dispatch_main_async(
         .get_func(&mut *store, "main")
         .ok_or_else(|| wasmtime::Error::msg("module has no `main` export"))?;
 
-    // Codegen owns the result encoding: for any non-`void` return it emits a
-    // `__main_output` shim that calls `main` and encodes the value to a `$string`
-    // (scalars via `toString`, structured returns as JSON), which is read verbatim
-    // here. A `void` `main` has no shim and no output, so `main` is invoked directly
-    // for its side effects.
+    // The output shim encodes a concrete result as a string and undefined as
+    // a null reference in this private ABI. Language null encodes as "null".
     if let Some(to_output) = instance.get_func(&mut *store, "__main_output") {
         let mut out = [Val::null_any_ref()];
         let r = to_output.call_async(&mut *store, &[], &mut out).await;
         r.map_err(|err| uncaught_error(store, err))?;
+        if matches!(super::host::abi_arg(&out, 0)?, Val::AnyRef(None)) {
+            return Ok(None);
+        }
         Ok(Some(read_main_string(&mut *store, &out)?))
     } else {
         let r = main.call_async(&mut *store, &[], &mut []).await;
@@ -195,7 +195,7 @@ fn rooted_any(val: Val) -> Option<Rooted<wasmtime::AnyRef>> {
     }
 }
 
-/// `null`, or the field's value when its vtable is a host primitive singleton;
+/// `null`, `undefined`, or the field's value when its vtable is a host primitive singleton;
 /// `None` for everything else (closures, arrays, nested objects, bigints).
 fn render_primitive_field(
     store: &mut Store<StoreData>,
@@ -212,6 +212,13 @@ fn render_primitive_field(
         _ => return None,
     };
     let value_struct = any.unwrap_struct(&mut *store).ok()?;
+    let undefined = crate::runtime::intrinsic_types::intrinsic_types(&mut *store)
+        .ok()?
+        .undefined
+        .clone();
+    if wasmtime::StructType::eq(&value_struct.ty(&*store).ok()?, &undefined) {
+        return Some("undefined".to_string());
+    }
     let Val::AnyRef(Some(vt)) = value_struct.field(&mut *store, 0).ok()? else {
         return None;
     };
@@ -323,6 +330,38 @@ mod tests {
         let result = RuntimeConfig::default().run(&bytes).await.expect("runs");
         assert!(result.value.is_none());
         assert_eq!(result.console, "");
+    }
+
+    #[tokio::test]
+    async fn undefined_main_results_are_absent_and_null_is_concrete() {
+        for source in [
+            "function main(): undefined { return undefined; }",
+            "function main(): unknown { return undefined; }",
+            "function main(): unknown { return; }",
+            "function main(): string | undefined { return undefined; }",
+        ] {
+            let result = RuntimeConfig::default()
+                .run(&compile(source))
+                .await
+                .expect("runs");
+            assert_eq!(result.value, None, "{source}");
+        }
+        let result = RuntimeConfig::default()
+            .run(&compile("function main(): null { return null; }"))
+            .await
+            .expect("runs");
+        assert_eq!(result.value.as_deref(), Some("null"));
+    }
+
+    #[tokio::test]
+    async fn optional_string_main_preserves_verbatim_output() {
+        let result = RuntimeConfig::default()
+            .run(&compile(
+                "function main(): string | undefined { return 'hello'; }",
+            ))
+            .await
+            .expect("runs");
+        assert_eq!(result.value.as_deref(), Some("hello"));
     }
 
     #[tokio::test]

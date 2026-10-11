@@ -27,7 +27,7 @@ for (const x of array);
 /*pruned*/;                                                                                     
 /*pruned*/;                                                                                   
 /*pruned*/;                                                                                           
-const i15: Iterable<number, null> = null as unknown as (Iterable<number, null>);
+const i15: Iterable<number, undefined> = null as unknown as (Iterable<number, undefined>);
 /*pruned*/;                                                                   
 const i17: Iterable<number, boolean> = null as unknown as (Iterable<number, boolean>);
 

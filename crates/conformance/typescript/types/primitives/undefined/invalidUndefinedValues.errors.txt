@@ -1,0 +1,12 @@
+invalidUndefinedValues.ts(4,1): error TS2322: Type '1' is not assignable to type 'undefined'.
+invalidUndefinedValues.ts(5,1): error TS2322: Type '""' is not assignable to type 'undefined'.
+invalidUndefinedValues.ts(6,1): error TS2322: Type 'true' is not assignable to type 'undefined'.
+invalidUndefinedValues.ts(8,1): error TS2322: Type 'void' is not assignable to type 'undefined'.
+invalidUndefinedValues.ts(9,1): error TS2322: Type 'null' is not assignable to type 'undefined'.
+invalidUndefinedValues.ts(11,11): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+invalidUndefinedValues.ts(13,1): error TS2322: Type 'typeof C' is not assignable to type 'undefined'.
+invalidUndefinedValues.ts(18,1): error TS2322: Type 'I' is not assignable to type 'undefined'.
+invalidUndefinedValues.ts(23,1): error TS2322: Type '{ f(): void; }' is not assignable to type 'undefined'.
+invalidUndefinedValues.ts(26,5): error TS2322: Type 'T' is not assignable to type 'undefined'.
+invalidUndefinedValues.ts(31,1): error TS2322: Type 'typeof E' is not assignable to type 'undefined'.
+invalidUndefinedValues.ts(32,1): error TS2322: Type 'E' is not assignable to type 'undefined'.

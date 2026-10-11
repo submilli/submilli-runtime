@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { contractHost, loadPackage, nullableFields } from '../../../scripts/package-contract-host.mjs';
+import { contractHost, loadPackage } from '../../../scripts/package-contract-host.mjs';
 const host = contractHost();
 const drive = await loadPackage(new URL('../src/lib.ts', import.meta.url), host);
-const options = (value = {}) => nullableFields({ name: 'report.txt', mimeType: 'text/plain', ...value });
+const options = (value = {}) => ({ name: 'report.txt', mimeType: 'text/plain', ...value });
 const folder = { id: 'parent', mimeType: 'application/vnd.google-apps.folder', driveId: 'actual-drive' };
 
 test('upload authorization uses the resolved destination even without a drive hint', () => {

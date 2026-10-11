@@ -1,0 +1,35 @@
+=== nullishCoalescingOperatorInParameterInitializer.ts ===
+
+// https://github.com/microsoft/TypeScript/issues/36295
+const a = (): string | undefined => undefined;
+>a : () => string | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>(): string | undefined => undefined : () => string | undefined
+>                                    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+((b: string = a() ?? "d") => {})();
+>((b: string = a() ?? "d") => {})() : void
+>                                   : ^^^^
+>((b: string = a() ?? "d") => {}) : (b?: string) => void
+>                                 : ^^^^^^^^^^^^^^^^^^^^
+>(b: string = a() ?? "d") => {} : (b?: string) => void
+>                               : ^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+>a() ?? "d" : string
+>           : ^^^^^^
+>a() : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+>a : () => string | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>"d" : "d"
+>    : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

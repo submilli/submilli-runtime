@@ -29,16 +29,16 @@ jobs:
         run: cargo test --locked -p conformance --test typescript -- --nocapture
       - name: Compiler determinism
         if: ${{ !cancelled() }}
-        run: cargo test --locked -p interpreter --test determinism -- --nocapture
+        run: cargo test --locked -p submilli-engine --test determinism -- --nocapture
       - name: Compiler type limits
         if: ${{ !cancelled() }}
-        run: cargo test --locked -p interpreter --test type_limits -- --nocapture
+        run: cargo test --locked -p submilli-engine --test type_limits -- --nocapture
       - name: Git memory limits
         if: ${{ !cancelled() }}
-        run: cargo test --locked -p interpreter --test git_memory -- --nocapture
+        run: cargo test --locked -p submilli-engine --test git_memory -- --nocapture
       - name: Host memory bounds
         if: ${{ !cancelled() }}
-        run: cargo test --locked -p interpreter --test host_memory -- --nocapture
+        run: cargo test --locked -p submilli-engine --test host_memory -- --nocapture
       - name: Server memory caps
         if: ${{ !cancelled() }}
         run: cargo test --locked -p submilli-server --test memory_cap -- --nocapture

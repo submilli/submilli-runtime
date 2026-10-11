@@ -1,0 +1,13 @@
+types: 14 of 16 tsc entries compared, 3 differ
+
+line 4: a1
+  tsc:  any
+  ours: null
+
+line 5: a2
+  tsc:  any
+  ours: undefined
+
+line 8: b1
+  tsc:  any[]
+  ours: never[]

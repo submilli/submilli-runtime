@@ -27,7 +27,7 @@ function foo<T, U>(arg: { cb: (t: T) => U }): U {
 
 }
 
-/*pruned*/;                       
+/*pruned*/;
 /*pruned*/;       // {}
 // more args not allowed
 /*pruned*/;                                  // error

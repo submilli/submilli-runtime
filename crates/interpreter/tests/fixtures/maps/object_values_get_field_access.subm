@@ -8,7 +8,7 @@ function main(): void {
   const aliased = new Map<string, Point>();
   aliased.set("a", { x: 1, y: 2 });
   const a = aliased.get("a");
-  if (a !== null) {
+  if (a !== undefined) {
     assert(a.x === 1, "aliased value field read");
     assert(a.y === 2, "aliased second field");
   }
@@ -16,9 +16,9 @@ function main(): void {
   // Same shape without the alias — the cast lives in codegen, not the alias.
   const inline = new Map<string, { x: number; y: number }>();
   inline.set("b", { x: 3, y: 4 });
-  const b: { x: number; y: number } | null = inline.get("b");
-  assert(b !== null && b.x === 3, "inline object value field read");
+  const b: { x: number; y: number } | undefined = inline.get("b");
+  assert(b !== undefined && b.x === 3, "inline object value field read");
 
   const miss = aliased.get("z");
-  assert(miss === null, "absent key returns null");
+  assert(miss === undefined, "absent key returns undefined");
 }

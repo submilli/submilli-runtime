@@ -13,7 +13,7 @@ function main(): void {
   assert(denied === "session.write:main", "set is gated on session.write");
 
   // Reads are a different capability and stay allowed.
-  assert(session.get("triage/progress") === null, "get still runs");
+  assert(session.get("triage/progress") === undefined, "get still runs");
   assert(!session.has("triage/progress"), "has still runs");
 
   // So is remove, which the policy did not deny.

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "169898dd77e59935fee5bce478135e4dd0852de4f6a86b436fcac0f0a967a35f"
-  confirmedAt: "2026-10-05T17:36:35.000Z"
+  contentHash: "6d2936edfc8b81ae1a48ee217ec6c55614caa9bd1443831882fd2db6e666092f"
+  confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
 This page describes how the `permissions` and `default` blocks of a
@@ -105,8 +105,8 @@ be an object, whose members a filter names with a dot.
 
 ### Fields only some calls report
 
-A call that doesn't supply a field leaves it out, and a condition on a
-missing field is false.
+A call that doesn't supply a field, or passes it as `undefined`, leaves it
+out, and a condition on a missing field is false.
 
 | Capability | Field | Reported by |
 | --- | --- | --- |

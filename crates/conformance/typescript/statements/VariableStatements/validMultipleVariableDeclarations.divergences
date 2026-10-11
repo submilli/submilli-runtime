@@ -1,7 +1,7 @@
-types: 43 of 98 tsc entries compared, 3 differ
+types: 47 of 102 tsc entries compared, 3 differ
 
-line 21: { x: 0, y: null }
-  tsc:  { x: number; y: null; }
+line 21: { x: 0, y: undefined }
+  tsc:  { x: number; y: undefined; }
   ours: Point
 
 line 36: []

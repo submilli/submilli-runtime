@@ -1,0 +1,9 @@
+types: 17 of 89 tsc entries compared, 2 differ
+
+line 28: ({ u = 22 } = { u: 23 }) => u
+  tsc:  ({ u }?: { u?: number; }) => number
+  ours: (arg0?: { u: number }) => number
+
+line 28: { u: 23 }
+  tsc:  { u?: number; }
+  ours: { u: number }

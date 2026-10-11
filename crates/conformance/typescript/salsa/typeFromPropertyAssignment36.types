@@ -1,36 +1,36 @@
 === typeFromPropertyAssignment36.ts ===
-/*pruned*/;                                                                         
-                        
-     
-            
-       
+/*pruned*/;
 
-            
-                   
-     
-                                      
-       
-            
-                   
-     
-          
-                  
-     
-       
-            
-               
-     
-          
-               
-     
-       
-            
-                  
-     
-            
- 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // OK to access possibly-unassigned properties outside the initialising scope
-/*pruned*/;         
+/*pruned*/;
 
 function d(): void {
 >d : typeof d

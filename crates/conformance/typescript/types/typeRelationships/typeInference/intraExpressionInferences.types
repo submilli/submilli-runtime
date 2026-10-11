@@ -215,12 +215,12 @@ interface MyInterface<T> {
 
 }
 
-/*pruned*/;                                                 
+/*pruned*/;
 
-/*pruned*/;                    
-                                    
-                                                    
-   
+/*pruned*/;
+
+
+
 
 // Repro #38623
 
@@ -490,54 +490,54 @@ test({
 
 // Repro from #41712
 
-/*pruned*/;             
-                     
- 
+/*pruned*/;
 
-/*pruned*/;                               
-/*pruned*/;                          
-                                                              
-  
 
-/*pruned*/;                                                          
-                                       
-                                           
-  
 
-/*pruned*/;                                                                                                       
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;             
-             
-                
-                     
-                                           
-                                          
-              
-                      
-                                             
-                                          
-             
-          
-      
-                 
-                
-                                     
-                                             
-         
-     
-   
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // Repro from #48279
 
-/*pruned*/;                                                                            
+/*pruned*/;
 
-/*pruned*/;                                                                                   
+/*pruned*/;
 
-/*pruned*/;                                                                        
+/*pruned*/;
 
-/*pruned*/;                                                              
-/*pruned*/;                                                                        
-/*pruned*/;                                               
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 // Repro from #48466
 
@@ -740,8 +740,8 @@ example({
 
 // Repro from #45255
 
-/*pruned*/;  
-                                                                                                                                                                                                   
+/*pruned*/;
+
 
 const x: "a" | "b" = null as unknown as ("a" | "b");
 >x : "a" | "b"
@@ -752,13 +752,13 @@ const x: "a" | "b" = null as unknown as ("a" | "b");
 >                : ^^^^^^^
 
 
-/**/;   
-          
-                                 
-              
-                      
-   
-  
+/**/;
+
+
+
+
+
+
 
 interface Props<T> {
 >Props : Props<T>
@@ -794,129 +794,129 @@ function Foo<T>(props: Props<T>): null { return null as unknown as (null); }
 
 
 /**/;
-      
-                 
-                 
-                     
-      
-    
-   
 
-/*pruned*/;              
-         
-                                 
-                               
-    
-                                        
 
-/*pruned*/;               
-         
-                        
-                                    
-    
-   
 
-/*pruned*/;                    
-                        
-                              
-                              
-                                        
 
-/*pruned*/;                           
-                    
-                         
-                         
-   
 
-/*pruned*/;                                            
-                        
-                         
-                              
-                               
-                                                    
 
-/*pruned*/;                                                                   
-                    
-                          
-                         
-                         
-   
 
-/*pruned*/;                                         
-                         
-                     
-                      
-                                                            
 
-/*pruned*/;                                                     
-                    
-                                                                         
-                           
-   
+/*pruned*/;
 
-/*pruned*/;                     
-                         
-           
-                       
-              
-                          
-      
-    
-                                                            
 
-/*pruned*/;             
-                    
-           
-                              
-              
-                               
-      
-    
-   
 
-/*pruned*/;                          
-                         
-           
-                       
-                       
-              
-                          
-      
-    
-                                                                    
 
-/*pruned*/;               
-                    
-           
-                              
-                            
-              
-                               
-      
-    
-   
 
-/*pruned*/;                
-        
-          
-            
-                                     
-        
-      
-    
-                                
-                                        
 
-/*pruned*/;                 
-        
-          
-            
-                             
-        
-      
-    
-                        
-   
+/*pruned*/;
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
 
 
 function main(): void {}

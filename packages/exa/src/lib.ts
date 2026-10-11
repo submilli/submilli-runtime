@@ -105,71 +105,30 @@ export class ExaError extends Error {
 
 /** Retrieve web sources with highlights for the calling agent to use.
  * @param query Natural-language search text; must not be blank.
- * @param options Optional result count, domain and date filters and content settings; `null` uses Exa's defaults with highlights.
+ * @param options Optional result count, domain and date filters and content settings; omit it to use Exa's defaults with highlights.
  * @returns Sources in provider order with request metadata; `results` is empty when nothing matched.
  * @capability exa.ai/search {}
  */
-export function search(query: string, options: SearchOptions | null = null): SearchResponse {
-    const numResults = options === null ? null : options.numResults;
-    const requestedIncludeDomains = options === null ? null : options.includeDomains;
-    const requestedExcludeDomains = options === null ? null : options.excludeDomains;
-    const startPublishedDate = options === null ? null : options.startPublishedDate;
-    const endPublishedDate = options === null ? null : options.endPublishedDate;
-    const requestedContents = options === null ? null : options.contents;
-    const mode = requestedContents === null ? null : requestedContents.mode;
-    const maxCharacters = requestedContents === null ? null : requestedContents.maxCharacters;
-    const maxAgeHours = requestedContents === null ? null : requestedContents.maxAgeHours;
-    const livecrawlTimeout = requestedContents === null ? null : requestedContents.livecrawlTimeout;
-    let includeDomains: string[] | null = null;
-    if (requestedIncludeDomains !== null) {
-        const copied: string[] = [];
-        for (const domain of requestedIncludeDomains) copied.push(domain);
-        includeDomains = copied;
-    }
-    let excludeDomains: string[] | null = null;
-    if (requestedExcludeDomains !== null) {
-        const copied: string[] = [];
-        for (const domain of requestedExcludeDomains) copied.push(domain);
-        excludeDomains = copied;
-    }
-    const contents: ContentOptions = {};
-    if (mode !== null) contents.mode = mode;
-    if (maxCharacters !== null) contents.maxCharacters = maxCharacters;
-    if (maxAgeHours !== null) contents.maxAgeHours = maxAgeHours;
-    if (livecrawlTimeout !== null) contents.livecrawlTimeout = livecrawlTimeout;
-    const searchOptions: SearchOptions = { contents: contents };
-    if (numResults !== null) searchOptions.numResults = numResults;
-    if (startPublishedDate !== null) searchOptions.startPublishedDate = startPublishedDate;
-    if (endPublishedDate !== null) searchOptions.endPublishedDate = endPublishedDate;
-    if (includeDomains !== null) searchOptions.includeDomains = includeDomains;
-    if (excludeDomains !== null) searchOptions.excludeDomains = excludeDomains;
+export function search(query: string, options: SearchOptions = {}): SearchResponse {
     check("exa.ai/search", {});
-    const body = buildSearchBody(query, searchOptions);
+    const body = buildSearchBody(query, options);
     const response = post("https://api.exa.ai/search", body, authHeaders());
     return normalizeSearchJson(requireOk(response));
 }
 
 /** Extract known URLs. Every host must be allowed before any request is sent.
  * @param urls Absolute HTTP or HTTPS URLs to extract, 1–100 entries of at most 2048 characters each.
- * @param options Optional extraction settings; `null` uses highlights with Exa's defaults.
+ * @param options Optional extraction settings; omit it to use highlights with Exa's defaults.
  * @returns Extracted sources plus a per-URL status list; crawl failures appear in `statuses` rather than throwing.
  * @capability exa.ai/contents { host: string }
  */
-export function getContents(urls: string[], options: ContentOptions | null = null): ContentsResponse {
+export function getContents(urls: string[], options: ContentOptions = {}): ContentsResponse {
+    // The checked hosts and the request body come from one copy of the caller's array.
     const ownedUrls: string[] = [];
     for (const url of urls) ownedUrls.push(url);
-    const mode = options === null ? null : options.mode;
-    const maxCharacters = options === null ? null : options.maxCharacters;
-    const maxAgeHours = options === null ? null : options.maxAgeHours;
-    const livecrawlTimeout = options === null ? null : options.livecrawlTimeout;
-    const contentOptions: ContentOptions = {};
-    if (mode !== null) contentOptions.mode = mode;
-    if (maxCharacters !== null) contentOptions.maxCharacters = maxCharacters;
-    if (maxAgeHours !== null) contentOptions.maxAgeHours = maxAgeHours;
-    if (livecrawlTimeout !== null) contentOptions.livecrawlTimeout = livecrawlTimeout;
     const hosts = contentsHosts(ownedUrls);
     for (const host of hosts) check("exa.ai/contents", { host: host });
-    const body = buildContentsBody(ownedUrls, contentOptions);
+    const body = buildContentsBody(ownedUrls, options);
     const response = post("https://api.exa.ai/contents", body, authHeaders());
     return normalizeContentsJson(requireOk(response));
 }
@@ -177,23 +136,23 @@ export function getContents(urls: string[], options: ContentOptions | null = nul
 /**
  * Build the exact search payload without credentials or network access.
  * @param query Search text; must not be blank.
- * @param options Optional search settings; `null` uses the defaults. Throws `ExaError` with code `invalid_argument` on out-of-range values.
+ * @param options Optional search settings; omit it to use the defaults. Throws `ExaError` with code `invalid_argument` on out-of-range values.
  * @returns JSON request body for the search endpoint.
  */
-export function buildSearchBody(query: string, options: SearchOptions | null = null): string {
+export function buildSearchBody(query: string, options: SearchOptions = {}): string {
     requireText(query, "query");
-    const opts: SearchOptions = options === null ? {} : options;
-    const fields: string[] = [field("query", JSON.stringify(query)), field("contents", contentBody(opts.contents))];
-    if (opts.numResults !== null) {
-        integerRange(opts.numResults, 1, 100, "numResults");
-        fields.push(field("numResults", JSON.stringify(opts.numResults)));
+    const { numResults, includeDomains, excludeDomains, startPublishedDate, endPublishedDate, contents } = options;
+    const fields: string[] = [field("query", JSON.stringify(query)), field("contents", contentBody(contents))];
+    if (numResults !== undefined) {
+        integerRange(numResults, 1, 100, "numResults");
+        fields.push(field("numResults", JSON.stringify(numResults)));
     }
-    addDomains(fields, "includeDomains", opts.includeDomains);
-    addDomains(fields, "excludeDomains", opts.excludeDomains);
-    addDate(fields, "startPublishedDate", opts.startPublishedDate);
-    addDate(fields, "endPublishedDate", opts.endPublishedDate);
-    if (opts.startPublishedDate !== null && opts.endPublishedDate !== null &&
-        Temporal.Instant.from(opts.startPublishedDate).epochMilliseconds > Temporal.Instant.from(opts.endPublishedDate).epochMilliseconds) {
+    addDomains(fields, "includeDomains", includeDomains);
+    addDomains(fields, "excludeDomains", excludeDomains);
+    addDate(fields, "startPublishedDate", startPublishedDate);
+    addDate(fields, "endPublishedDate", endPublishedDate);
+    if (startPublishedDate !== undefined && endPublishedDate !== undefined &&
+        Temporal.Instant.from(startPublishedDate).epochMilliseconds > Temporal.Instant.from(endPublishedDate).epochMilliseconds) {
         throw invalidArgument("startPublishedDate must not be after endPublishedDate");
     }
     return "{" + fields.join(",") + "}";
@@ -202,10 +161,10 @@ export function buildSearchBody(query: string, options: SearchOptions | null = n
 /**
  * Build a known-URL request with extraction fields at the top level.
  * @param urls URLs to extract; validated like `contentsHosts`.
- * @param options Optional extraction settings; `null` uses the defaults.
+ * @param options Optional extraction settings; omit it to use the defaults.
  * @returns JSON request body for the contents endpoint, with extraction fields at the top level.
  */
-export function buildContentsBody(urls: string[], options: ContentOptions | null = null): string {
+export function buildContentsBody(urls: string[], options: ContentOptions = {}): string {
     contentsHosts(urls);
     const extraction = contentBody(options);
     return "{" + field("urls", JSON.stringify(urls)) + "," + extraction.slice(1);
@@ -235,20 +194,20 @@ export function contentsHosts(urls: string[]): string[] {
 }
 
 interface ApiResult {
-    id?: string;
+    id?: string | null;
     url: string;
-    title?: string;
-    author?: string;
-    publishedDate?: string;
-    highlights?: string[];
-    text?: string;
+    title?: string | null;
+    author?: string | null;
+    publishedDate?: string | null;
+    highlights?: string[] | null;
+    text?: string | null;
 }
 
-interface ApiCost { total?: number; }
-interface ApiSearch { results: ApiResult[]; requestId?: string; costDollars?: ApiCost; }
-interface ApiCrawlError { tag?: string; httpStatusCode?: number; }
-interface ApiStatus { id: string; status: string; source?: string; error?: ApiCrawlError; }
-interface ApiContents { results: ApiResult[]; statuses: ApiStatus[]; requestId?: string; costDollars?: ApiCost; }
+interface ApiCost { total?: number | null; }
+interface ApiSearch { results: ApiResult[]; requestId?: string | null; costDollars?: ApiCost | null; }
+interface ApiCrawlError { tag?: string | null; httpStatusCode?: number | null; }
+interface ApiStatus { id: string; status: string; source?: string | null; error?: ApiCrawlError | null; }
+interface ApiContents { results: ApiResult[]; statuses: ApiStatus[]; requestId?: string | null; costDollars?: ApiCost | null; }
 
 /**
  * Normalize search metadata and reject malformed response shapes.
@@ -258,7 +217,7 @@ interface ApiContents { results: ApiResult[]; statuses: ApiStatus[]; requestId?:
 export function normalizeSearchJson(body: string): SearchResponse {
     try {
         const data = JSON.parse(body) as ApiSearch;
-        return { results: resultsFrom(data.results), requestId: data.requestId, costDollars: totalCost(data.costDollars) };
+        return { results: resultsFrom(data.results), requestId: data.requestId ?? null, costDollars: data.costDollars?.total ?? null };
     } catch (cause) {
         throw invalidResponse();
     }
@@ -275,13 +234,11 @@ export function normalizeContentsJson(body: string): ContentsResponse {
         const statuses: ContentStatus[] = [];
         for (const item of data.statuses) {
             if (item.id.length === 0 || item.status.length === 0) throw invalidResponse();
-            const error = item.error;
-            statuses.push({ id: item.id, status: item.status, source: item.source,
-                errorTag: error === null ? null : error.tag,
-                httpStatusCode: error === null ? null : error.httpStatusCode });
+            statuses.push({ id: item.id, status: item.status, source: item.source ?? null,
+                errorTag: item.error?.tag ?? null, httpStatusCode: item.error?.httpStatusCode ?? null });
         }
         return { results: resultsFrom(data.results), statuses: statuses,
-            requestId: data.requestId, costDollars: totalCost(data.costDollars) };
+            requestId: data.requestId ?? null, costDollars: data.costDollars?.total ?? null };
     } catch (cause) {
         throw invalidResponse();
     }
@@ -315,30 +272,30 @@ export function exaHttpError(status: number, retryAfter: string | null = null): 
     return new ExaError(code, message, status, retryAfter);
 }
 
-function contentBody(options: ContentOptions | null): string {
-    const opts: ContentOptions = options === null ? {} : options;
-    const mode = opts.mode ?? "highlights";
+function contentBody(options: ContentOptions = {}): string {
+    const { maxCharacters, maxAgeHours, livecrawlTimeout } = options;
+    const mode = options.mode ?? "highlights";
     if (mode !== "highlights" && mode !== "text") throw invalidArgument("mode must be highlights or text");
     let extraction = "true";
-    if (opts.maxCharacters !== null) {
-        integerRange(opts.maxCharacters, 1, 9007199254740991, "maxCharacters");
-        extraction = "{" + field("maxCharacters", JSON.stringify(opts.maxCharacters)) + "}";
+    if (maxCharacters !== undefined) {
+        integerRange(maxCharacters, 1, 9007199254740991, "maxCharacters");
+        extraction = "{" + field("maxCharacters", JSON.stringify(maxCharacters)) + "}";
     }
     const fields: string[] = [field(mode, extraction)];
-    if (opts.maxAgeHours !== null) {
-        integerRange(opts.maxAgeHours, -1, 720, "maxAgeHours");
-        fields.push(field("maxAgeHours", JSON.stringify(opts.maxAgeHours)));
+    if (maxAgeHours !== undefined) {
+        integerRange(maxAgeHours, -1, 720, "maxAgeHours");
+        fields.push(field("maxAgeHours", JSON.stringify(maxAgeHours)));
     }
-    if (opts.livecrawlTimeout !== null) {
-        integerRange(opts.livecrawlTimeout, 1, 90000, "livecrawlTimeout");
-        fields.push(field("livecrawlTimeout", JSON.stringify(opts.livecrawlTimeout)));
+    if (livecrawlTimeout !== undefined) {
+        integerRange(livecrawlTimeout, 1, 90000, "livecrawlTimeout");
+        fields.push(field("livecrawlTimeout", JSON.stringify(livecrawlTimeout)));
     }
     return "{" + fields.join(",") + "}";
 }
 
 function authHeaders(): Map<string, string> {
     const key = secrets.get("EXA_API_KEY");
-    if (key === null || key.trim().length === 0) {
+    if (key === undefined || key.trim().length === 0) {
         throw new ExaError("missing_credentials", "Bind EXA_API_KEY in the blueprint before using Exa");
     }
     const headers = new Map<string, string>();
@@ -349,7 +306,7 @@ function authHeaders(): Map<string, string> {
 }
 
 function requireOk(response: Response): string {
-    if (!response.ok) throw exaHttpError(response.status, response.headers.get("retry-after"));
+    if (!response.ok) throw exaHttpError(response.status, response.headers.get("retry-after") ?? null);
     return response.body;
 }
 
@@ -357,26 +314,22 @@ function resultsFrom(values: ApiResult[]): Result[] {
     const results: Result[] = [];
     for (const item of values) {
         if (item.url.trim().length === 0) throw invalidResponse();
-        const highlights: string[] = item.highlights === null ? [] : item.highlights;
-        results.push({ id: item.id, url: item.url, title: item.title ?? "", author: item.author,
-            publishedDate: item.publishedDate, highlights: highlights, text: item.text ?? "" });
+        const highlights: string[] = (item.highlights === null || item.highlights === undefined) ? [] : item.highlights;
+        results.push({ id: item.id ?? null, url: item.url, title: item.title ?? "", author: item.author ?? null,
+            publishedDate: item.publishedDate ?? null, highlights: highlights, text: item.text ?? "" });
     }
     return results;
 }
 
-function totalCost(cost: ApiCost | null): number | null {
-    return cost === null ? null : cost.total;
-}
-
-function addDomains(fields: string[], name: string, domains: string[] | null): void {
-    if (domains === null) return;
+function addDomains(fields: string[], name: string, domains: string[] | undefined): void {
+    if (domains === undefined) return;
     integerRange(domains.length, 1, 1200, name + " count");
     for (const domain of domains) requireText(domain, name + " entry");
     fields.push(field(name, JSON.stringify(domains)));
 }
 
-function addDate(fields: string[], name: string, value: string | null): void {
-    if (value === null) return;
+function addDate(fields: string[], name: string, value: string | undefined): void {
+    if (value === undefined) return;
     try {
         Temporal.Instant.from(value);
     } catch (cause) {

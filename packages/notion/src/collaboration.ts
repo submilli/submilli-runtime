@@ -42,7 +42,7 @@ interface ApiMeetingNotes {
 }
 
 interface ApiDiscussionComment {
-    discussion_id?: string;
+    discussion_id?: string | null;
 }
 
 /** A comment to create, as the package read it from the caller's input. */
@@ -53,8 +53,8 @@ export interface CommentRequest {
     targetRef: string;
     /** Comment text. */
     markdown: string;
-    /** Files to attach, or null for none. */
-    attachments: FileReference[] | null;
+    /** Files to attach; omitted for none. */
+    attachments?: FileReference[];
 }
 
 /**
@@ -76,7 +76,7 @@ export function createCommentBody(request: CommentRequest): string {
         const parentType = targetType === "page" ? "page_id" : "block_id";
         fields.push("\"parent\":{\"" + parentType + "\":" + JSON.stringify(targetId) + "}");
     }
-    if (attachments !== null) {
+    if (attachments !== undefined) {
         if (attachments.length > 3) throw validationError("invalid_attachments", "comments support at most three attachments");
         fields.push(attachmentsJson(attachments));
     }
@@ -95,12 +95,12 @@ export function createCommentBody(request: CommentRequest): string {
 export function commentPageId(
     targetType: "page" | "block" | "discussion",
     targetRef: string,
-    discussionParentRef: string | null,
+    discussionParentRef: string | undefined,
 ): string {
     const targetId = idFromRef(targetRef);
     if (targetType === "block") return resolvePageContext(targetId).pageId;
     if (targetType !== "discussion") return targetId;
-    if (discussionParentRef === null) {
+    if (discussionParentRef === undefined) {
         throw validationError(
             "missing_discussion_parent",
             "discussion comments require target.discussionParentRef for page capability context",
@@ -125,14 +125,14 @@ export function createComment(body: string): NotionComment {
  * List open comments for the page or block a context was resolved from.
  *
  * @param context Page context of the page or block to list comments for.
- * @param requestedSize Comments per page, 1 to 100; `null` uses 100.
- * @param startCursor Cursor from a previous page's `nextCursor`; `null` starts at the first comment.
+ * @param requestedSize Comments per page, 1 to 100; undefined uses 100.
+ * @param startCursor Cursor from a previous page's `nextCursor`; undefined starts at the first comment.
  * @returns One page of open comments; an empty `results` means there are none.
  */
 export function getComments(
     context: PageContext,
-    requestedSize: number | null,
-    startCursor: string | null,
+    requestedSize: number | undefined,
+    startCursor: string | undefined,
 ): PageResult<NotionComment> {
     const query = new Map<string, string>();
     query.set("block_id", context.blockId);
@@ -152,16 +152,16 @@ export function getComments(
 /**
  * Query AI meeting-note blocks visible to the integration user.
  *
- * @param options Filter, sorts, and limit (1 to 50, default 50); `null` sends no filter or sort and uses the API defaults.
+ * @param options Filter, sorts, and limit (1 to 50, default 50); omit it to send no filter, sort, or limit and use the API defaults.
  * @returns Matching meeting-note blocks and whether more exist.
  */
-export function queryMeetingNotes(options: MeetingNotesOptions | null = null): MeetingNotesResult {
+export function queryMeetingNotes(options?: MeetingNotesOptions): MeetingNotesResult {
     const fields: string[] = [];
-    if (options !== null) {
-        const actual = options as MeetingNotesOptions;
-        if (actual.filter !== null) fields.push(fieldJson("filter", actual.filter));
-        if (actual.sorts !== null) fields.push(fieldJson("sort", actual.sorts));
-        fields.push(fieldJson("limit", pageSize(actual.limit, 50, 50)));
+    if (options !== undefined) {
+        // A null filter, like an omitted one, sends no filter.
+        if (options.filter !== null && options.filter !== undefined) fields.push(fieldJson("filter", options.filter));
+        if (options.sorts !== undefined) fields.push(fieldJson("sort", options.sorts));
+        fields.push(fieldJson("limit", pageSize(options.limit, 50, 50)));
     }
     const data = notionPost("/blocks/meeting_notes/query", objectJson(fields)).json() as ApiMeetingNotes;
     const results: NotionBlock[] = [];

@@ -4,6 +4,9 @@
 // don't carry properties) is documented in README.md.
 
 function show(v: unknown): string {
+  if (v === undefined) {
+    return "undefined";
+  }
   if (v === null) {
     return "null";
   }

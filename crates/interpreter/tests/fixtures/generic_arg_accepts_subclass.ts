@@ -15,7 +15,7 @@ class Sub extends Base {
 class Box<T> {
   private items: T[] = [];
   add(v: T): void { this.items.push(v); }
-  first(): T | null { return this.items.at(0); }
+  first(): T | undefined { return this.items.at(0); }
   size(): number { return this.items.length; }
 }
 
@@ -39,8 +39,8 @@ function main(): void {
   // The binding is not widened: the element still reads at the declared type,
   // and dispatch is still the instance's own.
   const held = box.first();
-  assert(held !== null, "the element is there");
-  if (held !== null) {
+  assert(held !== undefined, "the element is there");
+  if (held !== undefined) {
     assert(held.x === 1, "reads at the bound type `Base`");
     assert(held.tag() === "sub", "but dispatches to the runtime class");
   }

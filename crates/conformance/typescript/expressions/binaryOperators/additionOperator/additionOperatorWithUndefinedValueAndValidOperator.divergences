@@ -1,0 +1,7 @@
+types: 26 of 67 tsc entries compared, 0 differ
+
+errors:
+line 28: ours: `+` not defined for `undefined` and `string` (tsc accepts)
+line 29: ours: `+` not defined for `undefined` and `string` (tsc accepts)
+line 30: ours: `+` not defined for `string` and `undefined` (tsc accepts)
+line 31: ours: `+` not defined for `string` and `undefined` (tsc accepts)

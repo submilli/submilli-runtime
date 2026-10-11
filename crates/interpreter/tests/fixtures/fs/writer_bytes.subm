@@ -8,8 +8,8 @@ function main(): void {
   w.writeBytes(payload);
   w.close();
 
-  const back: Uint8Array | null = read("/bin.dat");
-  if (back === null) {
+  const back: Uint8Array | undefined = read("/bin.dat");
+  if (back === undefined) {
     assert(false, "read returned null");
     return;
   }

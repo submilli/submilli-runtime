@@ -88,7 +88,7 @@ impl<'a> TypeDeclarations<'a> {
             Type::Union(alternatives) => {
                 let mut names = std::collections::BTreeSet::new();
                 for alternative in alternatives {
-                    if matches!(alternative.peel(), Type::Null) {
+                    if matches!(alternative.peel(), Type::Null | Type::Undefined) {
                         continue;
                     }
                     names.extend(self.property_names_within(alternative, remaining)?);
@@ -233,6 +233,7 @@ impl<'a> TypeDeclarations<'a> {
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Null
+        | Type::Undefined
             | Type::Void
             | Type::Unknown
             | Type::Function { .. }
@@ -254,7 +255,7 @@ impl<'a> TypeDeclarations<'a> {
         let mut found = Vec::new();
         let mut unresolved = false;
         for alternative in alternatives {
-            if matches!(alternative.peel(), Type::Null) {
+            if matches!(alternative.peel(), Type::Null | Type::Undefined) {
                 continue;
             }
             match self.member_within(alternative, member, expansions_left) {

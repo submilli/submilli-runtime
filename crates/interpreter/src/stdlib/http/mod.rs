@@ -151,14 +151,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let method = method.clone();
                 Box::pin(async move {
                     let url = read_string_arg(&mut *caller, abi_arg(params, 0)?, "http (url)")?;
-                    *abi_result(results, 0)? = perform_request(
-                        caller,
-                        &method,
-                        &url,
-                        &Val::AnyRef(None),
-                        abi_arg(params, 1)?,
-                    )
-                    .await?;
+                    let body = crate::runtime::prelude::undefined::value(caller)?;
+                    *abi_result(results, 0)? =
+                        perform_request(caller, &method, &url, &body, abi_arg(params, 1)?).await?;
                     Ok(())
                 })
             },
@@ -289,15 +284,18 @@ impl RequestBody {
     }
 }
 
-/// Discriminate the `string | Uint8Array | object | Array | null` body union.
+/// Discriminate the `string | Uint8Array | object | Array | null | undefined` body union.
 /// Objects and arrays serialize through their `toJson` vtable slot (which may
 /// re-enter the guest for user classes).
 async fn read_request_body(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
 ) -> wasmtime::Result<RequestBody> {
-    if matches!(val, Val::AnyRef(None)) {
+    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
         return Ok(RequestBody::Empty);
+    }
+    if matches!(val, Val::AnyRef(None)) {
+        return Ok(RequestBody::Json(b"null".to_vec()));
     }
     let intr = intrinsic_types(&mut *caller)?;
     if is_a(caller, val, &intr.string)? {
@@ -316,13 +314,13 @@ async fn read_request_body(
     Ok(RequestBody::Json(json.into_bytes()))
 }
 
-/// Read a `Headers | null` param into name/value pairs, names as given —
+/// Read a `Headers | undefined` param into name/value pairs, names as given —
 /// casing is the caller's; lookups here are case-insensitive.
 fn read_headers(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
 ) -> wasmtime::Result<Vec<(String, String)>> {
-    if matches!(val, Val::AnyRef(None)) {
+    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
         return Ok(Vec::new());
     }
     map::string_entries(caller, val)
@@ -605,7 +603,7 @@ struct DownloadOptions {
     decompress: bool,
 }
 
-/// Unpack a `DownloadOptions | null` param, filling defaults for absent fields.
+/// Unpack a `DownloadOptions | undefined` param, filling defaults for absent fields.
 fn read_download_options(
     caller: &mut Caller<'_, StoreData>,
     val: &Val,
@@ -617,7 +615,7 @@ fn read_download_options(
         timeout_ms: DOWNLOAD_TIMEOUT_MS.min(caller.data().http_max_download_timeout_ms),
         decompress: false,
     };
-    if matches!(val, Val::AnyRef(None)) {
+    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
         return Ok(options);
     }
     if let Some(v) = present_field(caller, val, "overwrite")? {
@@ -651,13 +649,19 @@ fn download_limit(value: f64, ceiling: u64, name: &str) -> wasmtime::Result<u64>
 }
 
 /// An options-bag field, `None` when absent — an omitted optional field may
-/// still occupy a slot holding `null`, which reads as absent.
+/// still occupy a slot holding `undefined`, which reads as absent.
 fn present_field(
     caller: &mut Caller<'_, StoreData>,
     obj: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<Val>> {
-    Ok(object_field(caller, obj, name)?.filter(|v| !matches!(v, Val::AnyRef(None))))
+    let Some(value) = object_field(caller, obj, name)? else {
+        return Ok(None);
+    };
+    if crate::runtime::prelude::undefined::is_undefined(caller, &value)? {
+        return Ok(None);
+    }
+    Ok(Some(value))
 }
 
 /// `download(url, path, options?)`: two security checks (`http.download` then
@@ -1530,7 +1534,7 @@ function main(): void {
                  * @param value Value to encode.
                  * @returns `value` as JSON.
                  */
-                export function passthrough(value: unknown): string {
+                export function passthrough(value: unknown): string | undefined {
                     return JSON.stringify(value);
                 }
                 "#,
@@ -2337,11 +2341,44 @@ function main(): void {
     }
 
     #[tokio::test]
-    async fn post_null_body_sends_empty() {
+    async fn null_body_is_json_and_undefined_body_is_empty() {
+        let source = r#"
+            import { post, request } from "submilli:http";
+            function main(): void {
+                post("https://example.test/p", null);
+                request("POST", "https://example.test/p", null);
+                post("https://example.test/p", undefined);
+            }
+        "#;
+        let mock = run_with_mock(source, vec![ok_response(200, ""); 3]).await;
+        let seen = mock.seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        for req in seen.iter().take(2) {
+            assert_eq!(req.body, b"null");
+            let content_types: Vec<&str> = req
+                .headers
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.as_str())
+                .collect();
+            assert_eq!(content_types, vec!["application/json"]);
+        }
+        let absent = &seen[2];
+        assert!(absent.body.is_empty());
+        assert!(
+            !absent
+                .headers
+                .iter()
+                .any(|(name, _)| { name.eq_ignore_ascii_case("content-type") })
+        );
+    }
+
+    #[tokio::test]
+    async fn post_undefined_body_sends_empty() {
         let source = r#"
             import { post, Response } from "submilli:http";
             function main(): void {
-                const r: Response = post("https://example.test/p", null);
+                const r: Response = post("https://example.test/p", undefined);
                 assert(r.status === 200, "status round-tripped");
                 const r2: Response = post("https://example.test/p");
                 assert(r2.status === 200, "omitted body round-tripped");
@@ -2351,14 +2388,17 @@ function main(): void {
         let seen = mock.seen.lock().unwrap();
         assert_eq!(seen.len(), 2);
         for req in seen.iter() {
-            assert!(req.body.is_empty(), "null body must wire as zero bytes");
+            assert!(
+                req.body.is_empty(),
+                "undefined body must wire as zero bytes"
+            );
             let ct_present = req
                 .headers
                 .iter()
                 .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
             assert!(
                 !ct_present,
-                "null body must not trigger CT default; saw headers={:?}",
+                "undefined body must not trigger CT default; saw headers={:?}",
                 req.headers
             );
         }

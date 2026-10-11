@@ -3,7 +3,7 @@
 // literal is `never[]`, which no such target relates to, as in tsc.
 // expect-error: cannot cast `never[]` to `string`
 // expect-error: cannot cast `never[]` to `number`
-// expect-error: cannot cast `never[]` to `null | [number]`
+// expect-error: cannot cast `never[]` to `[number] | null`
 // expect-error-count: 3
 function main(): void {
   const s = [] as string;

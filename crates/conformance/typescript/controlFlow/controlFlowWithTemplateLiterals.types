@@ -1,9 +1,9 @@
 === controlFlowWithTemplateLiterals.ts ===
-const envVar: string | null = null as unknown as (string | null);
->envVar : string | null
->       : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+const envVar: string | undefined = null as unknown as (string | undefined);
+>envVar : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
@@ -12,8 +12,8 @@ if (typeof envVar === `string`) {
 >                           : ^^^^^^^
 >typeof envVar : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
 >              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->envVar : string | null
->       : ^^^^^^^^^^^^^
+>envVar : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
 >`string` : "string"
 >         : ^^^^^^^^
 

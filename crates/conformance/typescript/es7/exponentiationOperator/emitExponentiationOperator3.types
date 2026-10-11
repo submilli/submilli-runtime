@@ -7,8 +7,8 @@ let temp = 10;
 >   : ^^
 
 
-/*pruned*/;    
-/*pruned*/;    
+/*pruned*/;
+/*pruned*/;
 (-temp++) ** 3;
 >(-temp++) ** 3 : number
 >               : ^^^^^^
@@ -37,8 +37,8 @@ let temp = 10;
 >3 : 3
 >  : ^
 
-/*pruned*/;           
-/*pruned*/;           
+/*pruned*/;
+/*pruned*/;
 (-(1 ** temp++)) ** 3;
 >(-(1 ** temp++)) ** 3 : number
 >                      : ^^^^^^
@@ -108,8 +108,8 @@ let temp = 10;
 >temp : number
 >     : ^^^^^^
 
-/*pruned*/;    
-/*pruned*/;    
+/*pruned*/;
+/*pruned*/;
 (+3) ** temp++;
 >(+3) ** temp++ : number
 >               : ^^^^^^
@@ -138,8 +138,8 @@ let temp = 10;
 >temp : number
 >     : ^^^^^^
 
-/*pruned*/;    
-/*pruned*/;    
+/*pruned*/;
+/*pruned*/;
 (-3) ** temp++ ** 2;
 >(-3) ** temp++ ** 2 : number
 >                    : ^^^^^^
@@ -176,8 +176,8 @@ let temp = 10;
 >2 : 2
 >  : ^
 
-/*pruned*/;         
-/*pruned*/;         
+/*pruned*/;
+/*pruned*/;
 (+3) ** temp++ ** 2;
 >(+3) ** temp++ ** 2 : number
 >                    : ^^^^^^
@@ -214,8 +214,8 @@ let temp = 10;
 >2 : 2
 >  : ^
 
-/*pruned*/;         
-/*pruned*/;         
+/*pruned*/;
+/*pruned*/;
 
 3 ** -temp++;
 >3 ** -temp++ : number
@@ -241,8 +241,8 @@ let temp = 10;
 >temp : number
 >     : ^^^^^^
 
-/*pruned*/;  
-/*pruned*/;  
+/*pruned*/;
+/*pruned*/;
 3 ** (-temp++) ** 2;
 >3 ** (-temp++) ** 2 : number
 >                    : ^^^^^^
@@ -315,8 +315,8 @@ let temp = 10;
 >2 : 2
 >  : ^
 
-/*pruned*/;         
-/*pruned*/;         
+/*pruned*/;
+/*pruned*/;
 
 
 function main(): void {}

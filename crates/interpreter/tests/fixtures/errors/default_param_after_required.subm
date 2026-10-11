@@ -1,9 +1,0 @@
-// expect-error: cannot follow a parameter with a default value
-
-function f(a: number = 0, b: number): void {
-  return;
-}
-
-function main(): void {
-  f(1, 2);
-}

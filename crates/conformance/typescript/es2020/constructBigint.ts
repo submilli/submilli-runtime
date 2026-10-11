@@ -9,7 +9,7 @@ BigInt(false);
 BigInt(Symbol());
 BigInt({ e: 1, m: 1 })
 BigInt(null);
-BigInt(null)
+BigInt(undefined)
 
 
 

@@ -5,6 +5,7 @@
 //! every known secret is cut out of the serialized form, and only that is written.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -48,7 +49,7 @@ const END_EVENT_GRACE: Duration = Duration::from_secs(2);
 
 /// How long a finished run's ids stay known, for its late events (what its caller
 /// received arrives after its end).
-const FINISHED_RUN_MEMORY: Duration = Duration::from_secs(60);
+pub(super) const FINISHED_RUN_MEMORY: Duration = Duration::from_secs(60);
 
 /// The playground's [`RunRecorderFactory`].
 #[derive(Clone)]
@@ -61,6 +62,12 @@ struct Shared {
     secrets: KnownSecrets,
     /// Runs in progress or recently finished, by the server's execution id.
     tracks: Mutex<HashMap<String, Track>>,
+    /// Runs the store could not take, by the server's execution id, with when their end
+    /// event arrived: they run unrecorded, and their events are logged without a run id.
+    untracked: Mutex<HashMap<String, Option<Instant>>>,
+    /// The server-wide sequence number of the last event delivered; a jump past the next
+    /// one means the server dropped events in between.
+    last_seq: AtomicU64,
 }
 
 /// What the recorder knows of one run while its events arrive.
@@ -74,6 +81,15 @@ struct Track {
     seen: HashSet<EventKey>,
     /// The run's end event arrived, with the count of its events the server dropped.
     end_event: Option<u64>,
+    /// Decision events delivered for the run: the last one's number in the run, while
+    /// none was dropped before it.
+    decisions_delivered: u64,
+    /// The server dropped an event while the run's events were still coming, so a
+    /// decision's number can no longer be told from the count. The server's sequence
+    /// shows that an event was dropped, not whose, so a drop marks every run whose end
+    /// has not arrived, including runs that lost nothing: their later decisions go
+    /// unnumbered. Numbers are never wrong, only missing.
+    numbering_lost: bool,
     /// The run's record, once it finished; what a backfill reads.
     record: Option<Backfill>,
     backfilled: bool,
@@ -126,12 +142,45 @@ impl Recorder {
                 store,
                 secrets,
                 tracks: Mutex::new(HashMap::new()),
+                untracked: Mutex::new(HashMap::new()),
+                last_seq: AtomicU64::new(0),
             }),
         }
     }
 
     pub(crate) fn store(&self) -> &Arc<Store> {
         &self.shared.store
+    }
+
+    /// The server's execution id of run `id` while it is in flight: started, and not yet
+    /// finished. A run's id is handed out when it starts, so this is how a playground run
+    /// id reaches the server's cancellation.
+    pub(crate) fn in_flight(&self, id: u64) -> Option<String> {
+        self.shared
+            .tracks()
+            .values()
+            .find(|track| track.id == id && track.finished_at.is_none())
+            .map(|track| track.execution_id.clone())
+    }
+
+    /// Whether the run with server execution id `execution_id` started under this
+    /// recorder (recorded, or left unrecorded when the store could not take it) and is
+    /// still followed: in flight, or finished less than [`FINISHED_RUN_MEMORY`] ago. A
+    /// run a previous playground started is never followed.
+    pub(crate) fn follows(&self, execution_id: &str) -> bool {
+        self.follows_at(execution_id, Instant::now())
+    }
+
+    /// [`Self::follows`], as of `now`.
+    pub(super) fn follows_at(&self, execution_id: &str, now: Instant) -> bool {
+        let finished_at = match self.shared.tracks().get(execution_id) {
+            Some(track) => track.finished_at,
+            None => match self.shared.untracked().get(execution_id) {
+                Some(finished_at) => *finished_at,
+                None => return false,
+            },
+        };
+        still_followed(finished_at, now)
     }
 }
 
@@ -143,6 +192,9 @@ impl RunRecorderFactory for Recorder {
             Ok(id) => id,
             Err(error) => {
                 warn(&format!("run not recorded: {error}"));
+                let mut untracked = shared.untracked();
+                untracked.retain(|_, finished_at| still_followed(*finished_at, Instant::now()));
+                untracked.insert(run.execution_id.clone(), None);
                 return None;
             }
         };
@@ -163,12 +215,21 @@ impl RunRecorderFactory for Recorder {
                 started_at_micros,
                 seen: HashSet::new(),
                 end_event: None,
+                decisions_delivered: 0,
+                numbering_lost: false,
                 record: None,
                 backfilled: false,
                 finished_at: None,
             },
         );
         drop(tracks);
+        if let Err(error) =
+            shared
+                .store
+                .mark_running(id, &run.label, run.session_id.as_deref(), started_at_micros)
+        {
+            warn(&format!("run {id} not listed as running: {error}"));
+        }
         Some(Arc::new(RunRecording {
             shared: Arc::clone(shared),
             start: run,
@@ -209,6 +270,13 @@ impl Shared {
         self.tracks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Taken alone, or after [`Self::tracks`], never before it.
+    fn untracked(&self) -> MutexGuard<'_, HashMap<String, Option<Instant>>> {
+        self.untracked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// The store's id for a server execution id: a run in memory, or one stored earlier.
     fn run_id_of(&self, execution_id: &str) -> Option<u64> {
         if let Some(track) = self.tracks().get(execution_id) {
@@ -219,18 +287,38 @@ impl Shared {
 
     fn event(&self, event: SessionEvent) {
         let mut tracks = self.tracks();
+        let previous = self.last_seq.swap(event.seq, Ordering::Relaxed);
+        if event.seq > previous.saturating_add(1) {
+            // The dropped events may be any run's whose end has not arrived yet.
+            for track in tracks
+                .values_mut()
+                .filter(|track| track.end_event.is_none())
+            {
+                track.numbering_lost = true;
+            }
+        }
         let track = event
             .run_id
             .as_ref()
             .and_then(|run_id| tracks.get_mut(run_id));
         let Some(track) = track else {
-            let position = Position {
-                at_micros: event.at_micros,
+            if let (Some(run_id), EventKind::RunFinished { .. }) = (&event.run_id, &event.kind)
+                && let Some(finished_at) = self.untracked().get_mut(run_id)
+            {
+                finished_at.get_or_insert_with(Instant::now);
+            }
+            let placement = Placement {
+                position: Position {
+                    at_micros: event.at_micros,
+                    run: None,
+                    call_index: None,
+                    rank: 0,
+                },
                 run: None,
-                call_index: None,
-                rank: 0,
+                decision: None,
+                backfilled: false,
             };
-            self.append(event.session_id.clone(), position, None, false, event);
+            self.append(event.session_id.clone(), placement, event);
             return;
         };
         let key = EventKey::of(&event.kind);
@@ -241,6 +329,15 @@ impl Shared {
             track.seen.insert(key.clone());
         }
         let position = position_of(&event.kind, event.at_micros, track);
+        // A run's log keeps each decision and reports it from the run's own thread, so its
+        // decision events arrive in the order the record holds them.
+        let decision = match &event.kind {
+            EventKind::Decision { .. } => {
+                track.decisions_delivered = track.decisions_delivered.saturating_add(1);
+                (!track.numbering_lost).then_some(track.decisions_delivered)
+            }
+            _ => None,
+        };
         let run = Some(track.id);
         let session = track.session.clone();
         let end = match &event.kind {
@@ -251,7 +348,13 @@ impl Shared {
             // The backfill already wrote this run's end from its record.
             return;
         }
-        self.append(session, position, run, false, event);
+        let placement = Placement {
+            position,
+            run,
+            decision,
+            backfilled: false,
+        };
+        self.append(session, placement, event);
         if let Some(dropped) = end {
             track.end_event = Some(dropped);
             if dropped > 0 && track.record.is_some() {
@@ -277,6 +380,15 @@ impl Shared {
                 drop(tracks);
                 self.backfill_later(execution_id.to_owned());
             }
+        }
+    }
+
+    /// The run's recording was dropped. A run dropped without finishing has no record and
+    /// will deliver no more events, so it ends here: no longer in flight, and pruned in time
+    /// like a finished run.
+    fn dropped(&self, execution_id: &str) {
+        if let Some(track) = self.tracks().get_mut(execution_id) {
+            track.finished_at.get_or_insert_with(Instant::now);
         }
     }
 
@@ -311,27 +423,28 @@ impl Shared {
             return;
         };
         track.backfilled = true;
-        let mut recovered: Vec<(Position, EventKind)> = Vec::new();
-        for decision in &record.decisions {
+        // Each with its decision's number in the run, which the record's order gives.
+        let mut recovered: Vec<(Position, Option<u64>, EventKind)> = Vec::new();
+        for (n, decision) in (1_u64..).zip(&record.decisions) {
             if track.seen.insert(EventKey::decision(decision)) {
                 let kind = EventKind::Decision {
                     record: Box::new(decision.clone()),
                 };
-                recovered.push((position_of(&kind, 0, track), kind));
+                recovered.push((position_of(&kind, 0, track), Some(n), kind));
             }
         }
         for call in record.calls.iter().filter(|call| call.outcome.is_some()) {
             if track.seen.insert(EventKey::CallFinished(call.call_index)) {
                 let kind = call_finished(call);
-                recovered.push((position_of(&kind, 0, track), kind));
+                recovered.push((position_of(&kind, 0, track), None, kind));
             }
         }
         let end_missing = track.end_event.is_none();
         if end_missing {
             let at = now_micros();
-            recovered.push((position_of(&record.end, at, track), record.end));
+            recovered.push((position_of(&record.end, at, track), None, record.end));
         }
-        recovered.sort_by_key(|(position, _)| *position);
+        recovered.sort_by_key(|(position, _, _)| *position);
         let execution_id = track.execution_id.clone();
         let gap = Gap {
             run_id: execution_id.clone(),
@@ -345,15 +458,20 @@ impl Shared {
             call_index: None,
             rank: u8::MAX,
         };
-        self.append_body(
+        self.append_stored(
             track.session.clone(),
-            format!("{execution_id}-gap"),
-            gap_position,
-            Some(track.id),
-            false,
-            EventBody::Gap(gap),
+            StoredEvent {
+                format: FORMAT,
+                session_seq: 0,
+                event_id: format!("{execution_id}-gap"),
+                position: gap_position,
+                run: Some(track.id),
+                backfilled: false,
+                decision: None,
+                body: EventBody::Gap(gap),
+            },
         );
-        for (n, (position, kind)) in recovered.into_iter().enumerate() {
+        for (n, (position, decision, kind)) in recovered.into_iter().enumerate() {
             let event = SessionEvent {
                 schema: EVENT_SCHEMA,
                 event_id: format!("{execution_id}-backfill-{n}"),
@@ -364,47 +482,32 @@ impl Shared {
                 tool_call_id: track.tool_call_id.clone(),
                 kind,
             };
-            self.append(track.session.clone(), position, Some(track.id), true, event);
+            let placement = Placement {
+                position,
+                run: Some(track.id),
+                decision,
+                backfilled: true,
+            };
+            self.append(track.session.clone(), placement, event);
         }
     }
 
-    fn append(
-        &self,
-        session: Option<String>,
-        position: Position,
-        run: Option<u64>,
-        backfilled: bool,
-        event: SessionEvent,
-    ) {
-        let event_id = event.event_id.clone();
-        self.append_body(
-            session,
-            event_id,
-            position,
-            run,
-            backfilled,
-            EventBody::Event(Box::new(event)),
-        );
-    }
-
-    fn append_body(
-        &self,
-        session: Option<String>,
-        event_id: String,
-        position: Position,
-        run: Option<u64>,
-        backfilled: bool,
-        body: EventBody,
-    ) {
-        let event = StoredEvent {
+    fn append(&self, session: Option<String>, placement: Placement, event: SessionEvent) {
+        let stored = StoredEvent {
             format: FORMAT,
             session_seq: 0,
-            event_id,
-            position,
-            run,
-            backfilled,
-            body,
+            event_id: event.event_id.clone(),
+            position: placement.position,
+            run: placement.run,
+            backfilled: placement.backfilled,
+            decision: placement.decision,
+            body: EventBody::Event(Box::new(event)),
         };
+        self.append_stored(session, stored);
+    }
+
+    /// Appends `event` to `session`'s log, which numbers it.
+    fn append_stored(&self, session: Option<String>, event: StoredEvent) {
         let appended = self
             .store
             .events
@@ -425,13 +528,27 @@ impl Shared {
     }
 }
 
+/// Where a server event goes in its session's log, and what the log says of it.
+struct Placement {
+    position: Position,
+    /// The store's id of its run, when the recorder follows the run.
+    run: Option<u64>,
+    /// Its number among its run's decisions, when it is a decision whose number is known.
+    decision: Option<u64>,
+    /// Recovered from the run's record rather than delivered.
+    backfilled: bool,
+}
+
 /// Forgets runs that finished long enough ago that no more of their events can come.
 fn prune(tracks: &mut HashMap<String, Track>) {
-    tracks.retain(|_, track| {
-        track
-            .finished_at
-            .is_none_or(|finished| finished.elapsed() < FINISHED_RUN_MEMORY)
-    });
+    let now = Instant::now();
+    tracks.retain(|_, track| still_followed(track.finished_at, now));
+}
+
+/// Whether a run that finished at `finished_at`, if it did, may still deliver events at
+/// `now`.
+fn still_followed(finished_at: Option<Instant>, now: Instant) -> bool {
+    finished_at.is_none_or(|finished| now.saturating_duration_since(finished) < FINISHED_RUN_MEMORY)
 }
 
 /// Where an event of `track`'s run happened. Call events are placed by the run's own
@@ -516,6 +633,9 @@ impl RunRecorder for RunRecording {
         if let Err(error) = self.shared.store.write_run(&stored) {
             warn(&format!("run {} not stored: {error}", self.id));
         }
+        if let Err(error) = self.shared.store.unmark_running(self.id) {
+            warn(&format!("run {} still listed as running: {error}", self.id));
+        }
         let backfill = Backfill {
             decisions: stored.recording.decisions.clone(),
             calls: stored
@@ -534,6 +654,16 @@ impl RunRecorder for RunRecording {
             truncated: stored.recording.log_truncated,
         };
         self.shared.finished(&self.start.execution_id, backfill);
+    }
+}
+
+impl Drop for RunRecording {
+    /// However the run ended, finished or dropped, it is no longer in flight.
+    fn drop(&mut self) {
+        if let Err(error) = self.shared.store.unmark_running(self.id) {
+            warn(&format!("run {} still listed as running: {error}", self.id));
+        }
+        self.shared.dropped(&self.start.execution_id);
     }
 }
 

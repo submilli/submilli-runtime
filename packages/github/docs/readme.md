@@ -8,7 +8,7 @@ internally from `GITHUB_TOKEN`; never pass tokens as function arguments.
   `invalid_input`.
 - A policy may limit file reads by `ref` and pull requests by `head` and `base`. Name
   the `ref` when reading a file under such a policy; an unnamed ref is the default
-  branch and is checked as null. These fields are compared as written, and one branch has
+  branch and is checked as null, as is any other field the operation does not name. These fields are compared as written, and one branch has
   several spellings (`main`, `heads/main`, a commit SHA), so such rules are written as
   allow rules that name the permitted values.
 - Prefer `searchCode`, `searchIssues`, and `searchPullRequests` for repository-scoped
@@ -119,14 +119,14 @@ import github from "@submilli/github";
 function main(): string {
     const page = github.searchIssuesAcrossRepositories("wasmgc is:public", { limit: 30 });
     const ranked = page.items.sort((a, b) => {
-        const aReactions = a.issue.reactions == null ? 0 : (a.issue.reactions.totalCount ?? 0);
-        const bReactions = b.issue.reactions == null ? 0 : (b.issue.reactions.totalCount ?? 0);
+        const aReactions = a.issue.reactions?.totalCount ?? 0;
+        const bReactions = b.issue.reactions?.totalCount ?? 0;
         return (b.issue.comments + bReactions) - (a.issue.comments + aReactions);
     });
     const lines: string[] = [];
     for (const hit of ranked) {
-        const reactions = hit.issue.reactions == null || hit.issue.reactions.totalCount === null
-            ? "unknown" : hit.issue.reactions.totalCount.toString();
+        const count = hit.issue.reactions?.totalCount ?? null;
+        const reactions = count === null ? "unknown" : count.toString();
         lines.push(hit.issue.htmlUrl + " comments=" + hit.issue.comments.toString() + " reactions=" + reactions);
     }
     return lines.join("\n");

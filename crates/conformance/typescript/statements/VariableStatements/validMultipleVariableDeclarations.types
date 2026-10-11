@@ -32,11 +32,13 @@ if (true) {
 >  : ^
 
 }
-let x_3 = <number>null;
+let x_3 = <number>undefined;
 >x_3 : number
 >    : ^^^^^^
-><number>null : number
->             : ^^^^^^
+><number>undefined : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 // new declaration space, making redeclaring x as a string valid
@@ -83,31 +85,35 @@ let p_2 = { x: 1, y: 2 };
 >2 : 2
 >  : ^
 
-let p_3: Point = { x: 0, y: null };
+let p_3: Point = { x: 0, y: undefined };
 >p_3 : Point
 >    : ^^^^^
->{ x: 0, y: null } : { x: number; y: null; }
->                  : ^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 0, y: undefined } : { x: number; y: undefined; }
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x : number
 >  : ^^^^^^
 >0 : 0
 >  : ^
->y : null
->  : ^^^^
+>y : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let p_4 = { x: 1, y: <number>null };
+let p_4 = { x: 1, y: <number>undefined };
 >p_4 : { x: number; y: number; }
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^
->{ x: 1, y: <number>null } : { x: number; y: number; }
->                          : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, y: <number>undefined } : { x: number; y: number; }
+>                               : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >x : number
 >  : ^^^^^^
 >1 : 1
 >  : ^
 >y : number
 >  : ^^^^^^
-><number>null : number
->             : ^^^^^^
+><number>undefined : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 let p_5: { x: number; y: number; } = { x: 1, y: 2 };
 >p_5 : { x: number; y: number; }
@@ -127,23 +133,25 @@ let p_5: { x: number; y: number; } = { x: 1, y: 2 };
 >2 : 2
 >  : ^
 
-let p_6 = <{ x: number; y: number; }>{ x: 0, y: null };
+let p_6 = <{ x: number; y: number; }>{ x: 0, y: undefined };
 >p_6 : { x: number; y: number; }
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^
-><{ x: number; y: number; }>{ x: 0, y: null } : { x: number; y: number; }
->                                             : ^^^^^^^^^^^^^^^^^^^^^^^^^
+><{ x: number; y: number; }>{ x: 0, y: undefined } : { x: number; y: number; }
+>                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^
 >x : number
 >  : ^^^^^^
 >y : number
 >  : ^^^^^^
->{ x: 0, y: null } : { x: number; y: null; }
->                  : ^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 0, y: undefined } : { x: number; y: undefined; }
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x : number
 >  : ^^^^^^
 >0 : 0
 >  : ^
->y : null
->  : ^^^^
+>y : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 let p_7: typeof p = null as unknown as (typeof p);
 >p_7 : Point
@@ -190,7 +198,7 @@ let fn_3: (s: string) => number = null as unknown as ((s: string) => number);
 >s : string
 >  : ^^^^^^
 
-/*pruned*/;                                                                      
+/*pruned*/;
 let fn_5 = <(s: string) => number> null;
 >fn_5 : (s: string) => number
 >     : ^^^^^^^^^^^^^^^^^^^^^
@@ -212,7 +220,7 @@ let fn_6: typeof fn = null as unknown as (typeof fn);
 >   : ^^^^^^^^^^^^^^^^^^^^^
 
 
-let a: string[] = null as unknown as (string[]); 
+let a: string[] = null as unknown as (string[]);
 >a : string[]
 >  : ^^^^^^^^
 >null as unknown as (string[]) : string[]
@@ -244,7 +252,7 @@ let a_4: string[] = [];
 >[] : never[]
 >   : ^^^^^^^
 
-/*pruned*/;                   
+/*pruned*/;
 let a_6: typeof a = null as unknown as (typeof a);
 >a_6 : string[]
 >    : ^^^^^^^^

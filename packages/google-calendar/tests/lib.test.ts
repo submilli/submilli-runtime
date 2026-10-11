@@ -7,6 +7,7 @@ import {
     AgendaOptions,
     queryFreeBusy,
     createEvent,
+    listEvents,
 } from "@submilli/google-calendar";
 
 function main(): void {
@@ -70,6 +71,9 @@ function main(): void {
         });
     });
     assert(bracketed !== "invalid_timestamp:timeMin", "bracketed bounds pass normalization");
+
+    label("an unbound access token is reported before any request");
+    assert(errorCode(() => { listEvents(); }) === "missing_token", "no token");
 }
 
 function errorCode(operation: () => void): string {

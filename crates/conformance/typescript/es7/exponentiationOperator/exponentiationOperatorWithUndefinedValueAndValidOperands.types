@@ -16,7 +16,7 @@ enum E {
 
 }
 
-/*pruned*/;                           
+/*pruned*/;
 let b: number = null as unknown as (number);
 >b : number
 >  : ^^^^^^
@@ -27,28 +27,34 @@ let b: number = null as unknown as (number);
 
 
 // operator *
-/*pruned*/;         
-let rk2 = null ** b;
+/*pruned*/;
+let rk2 = undefined ** b;
 >rk2 : number
 >    : ^^^^^^
->null ** b : number
->          : ^^^^^^
+>undefined ** b : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >b : number
 >  : ^^^^^^
 
-let rk3 = null ** 1;
+let rk3 = undefined ** 1;
 >rk3 : number
 >    : ^^^^^^
->null ** 1 : number
->          : ^^^^^^
+>undefined ** 1 : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >1 : 1
 >  : ^
 
-let rk4 = null ** E.a;
+let rk4 = undefined ** E.a;
 >rk4 : number
 >    : ^^^^^^
->null ** E.a : number
->            : ^^^^^^
+>undefined ** E.a : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 >E.a : E.a
 >    : ^^^
 >E : typeof E
@@ -56,34 +62,40 @@ let rk4 = null ** E.a;
 >a : E.a
 >  : ^^^
 
-/*pruned*/;         
-let rk6 = b ** null;
+/*pruned*/;
+let rk6 = b ** undefined;
 >rk6 : number
 >    : ^^^^^^
->b ** null : number
->          : ^^^^^^
+>b ** undefined : number
+>               : ^^^^^^
 >b : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rk7 = 0 ** null;
+let rk7 = 0 ** undefined;
 >rk7 : number
 >    : ^^^^^^
->0 ** null : number
->          : ^^^^^^
+>0 ** undefined : number
+>               : ^^^^^^
 >0 : 0
 >  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let rk8 = E.b ** null;
+let rk8 = E.b ** undefined;
 >rk8 : number
 >    : ^^^^^^
->E.b ** null : number
->            : ^^^^^^
+>E.b ** undefined : number
+>                 : ^^^^^^
 >E.b : E.b
 >    : ^^^
 >E : typeof E
 >  : ^^^^^^^^
 >b : E.b
 >  : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 function main(): void {}

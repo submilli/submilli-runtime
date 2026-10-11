@@ -211,6 +211,7 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
 #[derive(Clone)]
 pub(super) enum Primitive {
     Null,
+    Undefined,
     Number(f64),
     Boolean(bool),
     String(Vec<u16>),
@@ -361,8 +362,11 @@ pub(super) async fn conversion_method(
     value: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<Val>> {
+    // An optional conversion field left out holds `undefined` (or `null`), and
+    // the value then converts as if it declared none.
     if let Some(method) = super::collection::object_field(caller, value, name)? {
-        return Ok(Some(method));
+        let declared = !super::undefined::is_nullish(caller, &method)?;
+        return Ok(declared.then_some(method));
     }
     let Val::AnyRef(Some(reference)) = value else {
         return Ok(None);
@@ -420,7 +424,7 @@ pub(super) async fn to_number(
 
 pub(super) fn truthy(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<bool> {
     Ok(match read_primitive(caller, value)? {
-        Some(Primitive::Null) => false,
+        Some(Primitive::Null | Primitive::Undefined) => false,
         Some(Primitive::Boolean(value)) => value,
         Some(Primitive::Number(value)) => value != 0.0 && !value.is_nan(),
         Some(Primitive::String(value)) => !value.is_empty(),
@@ -440,6 +444,9 @@ fn read_primitive(
         return Ok(None);
     };
     let intr = intrinsic_types(&mut *caller)?;
+    if object.matches_ty(&*caller, &intr.undefined)? {
+        return Ok(Some(Primitive::Undefined));
+    }
     if object.matches_ty(&*caller, &intr.boxed_number)? {
         let Val::F64(bits) = object.field(&mut *caller, 1)? else {
             return Err(crate::runtime::host::invariant_trap(
@@ -513,6 +520,7 @@ fn arithmetic(
 fn number(value: Primitive) -> wasmtime::Result<f64> {
     Ok(match value {
         Primitive::Null => 0.0,
+        Primitive::Undefined => f64::NAN,
         Primitive::Number(value) => value,
         Primitive::Boolean(value) => {
             if value {
@@ -537,6 +545,7 @@ pub(super) fn string(
     let text = match value {
         Primitive::String(units) => return Ok(units),
         Primitive::Null => "null".to_owned(),
+        Primitive::Undefined => "undefined".to_owned(),
         Primitive::Number(value) => format_number_js(value),
         Primitive::Boolean(value) => value.to_string(),
         Primitive::BigInt(value) => super::bigint::ops::format_bigint(caller, &value, 10)?,

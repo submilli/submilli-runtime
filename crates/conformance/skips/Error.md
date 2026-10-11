@@ -17,7 +17,7 @@ constructor requires a message, and an empty message reaches the same
 |:--------|:------------|:-------|
 | `message_property.js` | ported, passing | Value check and write kept; descriptor half dropped. |
 | `prototype/toString/15.11.4.4-{6-1,6-2,8-1,8-2,9-1,10-1}.js` | ported, passing | The name/message combinations of `toString`. |
-| `isError/{errors,error-subclass,primitives,bigints,non-error-objects,fake-errors}.js` | ported, passing | Arms for `EvalError`/`ReferenceError`/`URIError`/`AggregateError`/`SuppressedError`, `undefined`/no-argument calls, and constructors passed as values are dropped. `fake-errors` becomes an object literal with Error's fields. |
+| `isError/{errors,error-subclass,primitives,bigints,non-error-objects,fake-errors}.js` | ported, passing | Arms for `EvalError`/`ReferenceError`/`URIError`/`AggregateError`/`SuppressedError`, and constructors passed as values are dropped. `fake-errors` becomes an object literal with Error's fields. |
 | `cause_property.js` | ported, `expect-error` | `new Error(message, { cause })` isn't in §1.8. Pinned to ``constructor of `Error` expects 1 argument(s), got 2``. |
 | `the-initial-value-of-errorprototypemessage-is-the-empty-string.js` | ported, `expect-error` | `Error('a')` without `new`: a class isn't callable. Pinned to ``` `Error` is a class, not a value ```. |
 | `prototype/toString/S15.11.4.4_A2.js` (`toString()` is not `undefined`) | not ported | Redundant with `15.11.4.4-6-2`. |

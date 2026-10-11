@@ -17,8 +17,8 @@ use wasm_encoder::{HeapType, Instruction};
 use crate::codegen::CodegenCtx;
 use crate::codegen::function_emitter::{FunctionEmitter, emit_const_string_by_text};
 
-/// Thrown by `x!` when the value turns out to be `null`.
-pub const NON_NULL_ASSERT_MESSAGE: &str = "non-null assertion failed: value is null";
+/// Thrown by `x!` when the value turns out to be `null` or `undefined`.
+pub const NON_NULL_ASSERT_MESSAGE: &str = "non-null assertion failed: value is null or undefined";
 
 /// Thrown when a property write resolves, at runtime, to a getter with no
 /// setter — reachable only through a receiver whose static type does not say

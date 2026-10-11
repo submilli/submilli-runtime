@@ -848,7 +848,13 @@ impl Options {
     }
 }
 fn present(caller: &mut Caller<'_, StoreData>, obj: &Val, field: &str) -> Result<Option<Val>> {
-    Ok(object_field(caller, obj, field)?.filter(|v| !matches!(v, Val::AnyRef(None))))
+    let Some(value) = object_field(caller, obj, field)? else {
+        return Ok(None);
+    };
+    if crate::runtime::prelude::undefined::is_undefined(caller, &value)? {
+        return Ok(None);
+    }
+    Ok(Some(value))
 }
 fn option_number(
     caller: &mut Caller<'_, StoreData>,

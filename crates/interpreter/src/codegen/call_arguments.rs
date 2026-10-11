@@ -25,11 +25,15 @@ pub(crate) fn metadata<'a>(
 }
 
 pub(crate) fn typed_metadata(params: &[TypedParam]) -> Option<String> {
-    metadata(
-        params
-            .iter()
-            .map(|param| (param.default.as_ref(), param.rest)),
-    )
+    metadata(params.iter().map(|param| {
+        (
+            param
+                .default
+                .as_ref()
+                .or(param.optional.then_some(&crate::DefaultValue::Undefined)),
+            param.rest,
+        )
+    }))
 }
 
 pub(crate) fn wrap(

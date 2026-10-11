@@ -250,7 +250,7 @@ pub(super) fn attach(
     ctx: &CodegenCtx,
     result: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let class = crate::typechecker::infer::narrowing::strip_null(result);
+    let class = crate::typechecker::infer::narrowing::strip_nullish(result);
     if ctx.symbols.instance_field_guards(&class).next().is_none() {
         return Ok(());
     }
@@ -261,7 +261,7 @@ pub(super) fn attach(
     let value = emitter.add_anonymous_local(ctx.symbols.value_type(result)?)?;
     emitter.instruction(Instruction::LocalSet(value));
     emitter.instruction(Instruction::LocalGet(value));
-    emitter.instruction(Instruction::RefIsNull);
+    super::function_emitter::expr::emit_is_nullish(emitter, ctx)?;
     emitter.emit_if(wasm_encoder::BlockType::Empty);
     emitter.emit_else();
     emitter.instruction(Instruction::LocalGet(value));

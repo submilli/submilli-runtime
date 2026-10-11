@@ -32,7 +32,7 @@ function f3(x: unknown): void {
 }
 
 function f4(x: unknown): void {
-    if (x == null) {
+    if (x == undefined) {
         return;
     }
     if (typeof x === 'object') {

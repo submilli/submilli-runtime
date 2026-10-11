@@ -13,5 +13,5 @@ function main(): void {
   assert(present.note === "hi", "present optional reads value");
 
   const absent: Tagged = { tag: "b" };
-  assert(absent.note === null, "absent optional reads null");
+  assert(absent.note === undefined, "absent optional reads undefined");
 }

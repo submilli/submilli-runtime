@@ -1,6 +1,0 @@
-// expect-error: narrow
-
-function main(): void {
-  const n: string | null = null;
-  const s: string = `n=${n}`;
-}

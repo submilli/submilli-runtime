@@ -5,7 +5,7 @@
 >LoggerAdapter : LoggerAdapter
 >              : ^^^^^^^^^^^^^
 
-        constructor (public logger: ILogger) { 
+        constructor (public logger: ILogger) {
 >logger : ILogger
 >       : ^^^^^^^
 

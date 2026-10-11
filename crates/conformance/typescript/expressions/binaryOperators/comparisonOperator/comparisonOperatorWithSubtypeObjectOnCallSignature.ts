@@ -34,8 +34,8 @@ let b8: { fn(): Base } = null as unknown as ({ fn(): Base });
 let a9: { fn(): Base } = null as unknown as ({ fn(): Base });
 let b9: { fn(): Derived } = null as unknown as ({ fn(): Derived });
 
-/*pruned*/;                                                                   
-/*pruned*/;                                                                         
+let a10: { fn(a?: Base): void } = null as unknown as ({ fn(a?: Base): void });
+let b10: { fn(a?: Derived): void } = null as unknown as ({ fn(a?: Derived): void });
 
 let a11: { fn(...a: Base[]): void } = null as unknown as ({ fn(...a: Base[]): void });
 let b11: { fn(...a: Derived[]): void } = null as unknown as ({ fn(...a: Derived[]): void });
@@ -53,7 +53,7 @@ let r1a6 = a6 < b6;
 let r1a7 = a7 < b7;
 let r1a8 = a8 < b8;
 let r1a9 = a9 < b9;
-/*pruned*/;           
+let r1a10 = a10 < b10;
 let r1a11 = a11 < b11;
 //var r1a12 = a12 < b12;
 
@@ -66,7 +66,7 @@ let r1b6 = b6 < a6;
 let r1b7 = b7 < a7;
 let r1b8 = b8 < a8;
 let r1b9 = b9 < a9;
-/*pruned*/;           
+let r1b10 = b10 < a10;
 let r1b11 = b11 < a11;
 //var r1b12 = b12 < a12;
 
@@ -80,7 +80,7 @@ let r2a6 = a6 > b6;
 let r2a7 = a7 > b7;
 let r2a8 = a8 > b8;
 let r2a9 = a9 > b9;
-/*pruned*/;           
+let r2a10 = a10 > b10;
 let r2a11 = a11 > b11;
 //var r2a12 = a12 > b12;
 
@@ -93,7 +93,7 @@ let r2b6 = b6 > a6;
 let r2b7 = b7 > a7;
 let r2b8 = b8 > a8;
 let r2b9 = b9 > a9;
-/*pruned*/;           
+let r2b10 = b10 > a10;
 let r2b11 = b11 > a11;
 //var r2b12 = b12 > a12;
 
@@ -107,7 +107,7 @@ let r3a6 = a6 <= b6;
 let r3a7 = a7 <= b7;
 let r3a8 = a8 <= b8;
 let r3a9 = a9 <= b9;
-/*pruned*/;            
+let r3a10 = a10 <= b10;
 let r3a11 = a11 <= b11;
 //var r3a12 = a12 <= b12;
 
@@ -120,7 +120,7 @@ let r3b6 = b6 <= a6;
 let r3b7 = b7 <= a7;
 let r3b8 = b8 <= a8;
 let r3b9 = b9 <= a9;
-/*pruned*/;            
+let r3b10 = b10 <= a10;
 let r3b11 = b11 <= a11;
 //var r3b12 = b12 <= a12;
 
@@ -134,7 +134,7 @@ let r4a6 = a6 >= b6;
 let r4a7 = a7 >= b7;
 let r4a8 = a8 >= b8;
 let r4a9 = a9 >= b9;
-/*pruned*/;            
+let r4a10 = a10 >= b10;
 let r4a11 = a11 >= b11;
 //var r4a12 = a12 >= b12;
 
@@ -147,7 +147,7 @@ let r4b6 = b6 >= a6;
 let r4b7 = b7 >= a7;
 let r4b8 = b8 >= a8;
 let r4b9 = b9 >= a9;
-/*pruned*/;            
+let r4b10 = b10 >= a10;
 let r4b11 = b11 >= a11;
 //var r4b12 = b12 >= a12;
 
@@ -161,7 +161,7 @@ let r5a6 = a6 == b6;
 let r5a7 = a7 == b7;
 let r5a8 = a8 == b8;
 let r5a9 = a9 == b9;
-/*pruned*/;            
+let r5a10 = a10 == b10;
 let r5a11 = a11 == b11;
 //var r5a12 = a12 == b12;
 
@@ -174,7 +174,7 @@ let r5b6 = b6 == a6;
 let r5b7 = b7 == a7;
 let r5b8 = b8 == a8;
 let r5b9 = b9 == a9;
-/*pruned*/;            
+let r5b10 = b10 == a10;
 let r5b11 = b11 == a11;
 //var r5b12 = b12 == a12;
 
@@ -188,7 +188,7 @@ let r6a6 = a6 != b6;
 let r6a7 = a7 != b7;
 let r6a8 = a8 != b8;
 let r6a9 = a9 != b9;
-/*pruned*/;            
+let r6a10 = a10 != b10;
 let r6a11 = a11 != b11;
 //var r6a12 = a12 != b12;
 
@@ -201,7 +201,7 @@ let r6b6 = b6 != a6;
 let r6b7 = b7 != a7;
 let r6b8 = b8 != a8;
 let r6b9 = b9 != a9;
-/*pruned*/;            
+let r6b10 = b10 != a10;
 let r6b11 = b11 != a11;
 //var r6b12 = b12 != a12;
 
@@ -215,7 +215,7 @@ let r7a6 = a6 === b6;
 let r7a7 = a7 === b7;
 let r7a8 = a8 === b8;
 let r7a9 = a9 === b9;
-/*pruned*/;             
+let r7a10 = a10 === b10;
 let r7a11 = a11 === b11;
 //var r7a12 = a12 === b12;
 
@@ -228,7 +228,7 @@ let r7b6 = b6 === a6;
 let r7b7 = b7 === a7;
 let r7b8 = b8 === a8;
 let r7b9 = b9 === a9;
-/*pruned*/;             
+let r7b10 = b10 === a10;
 let r7b11 = b11 === a11;
 //var r7b12 = b12 === a12;
 
@@ -242,7 +242,7 @@ let r8a6 = a6 !== b6;
 let r8a7 = a7 !== b7;
 let r8a8 = a8 !== b8;
 let r8a9 = a9 !== b9;
-/*pruned*/;             
+let r8a10 = a10 !== b10;
 let r8a11 = a11 !== b11;
 //var r8a12 = a12 !== b12;
 
@@ -255,7 +255,7 @@ let r8b6 = b6 !== a6;
 let r8b7 = b7 !== a7;
 let r8b8 = b8 !== a8;
 let r8b9 = b9 !== a9;
-/*pruned*/;             
+let r8b10 = b10 !== a10;
 let r8b11 = b11 !== a11;
 //var r8b12 = b12 !== a12;
 

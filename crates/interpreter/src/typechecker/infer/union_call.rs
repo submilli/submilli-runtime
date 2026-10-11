@@ -72,27 +72,33 @@ impl Inferer<'_> {
             match member.peel() {
                 Type::Function {
                     params,
+                    optional,
                     ret,
                     has_rest: false,
                     ..
-                } => signatures.push((params, ret)),
+                } => signatures.push((params, *optional, ret)),
                 _ => return None,
             }
         }
-        let returns_void = signatures.first()?.1.is_void();
+        let returns_void = signatures.first()?.2.is_void();
         if signatures
             .iter()
-            .any(|(_, ret)| ret.is_void() != returns_void)
+            .any(|(_, _, ret)| ret.is_void() != returns_void)
         {
             return None;
         }
-        let arity = signatures.iter().map(|(params, _)| params.len()).max()?;
+        let arity = signatures.iter().map(|(params, _, _)| params.len()).max()?;
+        // An argument is required where any member requires it.
+        let required = signatures
+            .iter()
+            .map(|(params, optional, _)| params.len().saturating_sub(*optional))
+            .max()?;
         let mut params = Vec::with_capacity(arity);
         let mut fields_left = MERGE_FIELDS;
         for position in 0..arity {
             let at_position: Vec<&Type> = signatures
                 .iter()
-                .filter_map(|(params, _)| params.get(position))
+                .filter_map(|(params, _, _)| params.get(position))
                 .collect();
             params.push(self.common_subtype(&at_position, MERGE_DEPTH, &mut fields_left)?);
         }
@@ -102,11 +108,12 @@ impl Inferer<'_> {
             Type::union(
                 signatures
                     .iter()
-                    .map(|(_, ret)| ret.as_ref().clone())
+                    .map(|(_, _, ret)| ret.as_ref().clone())
                     .collect(),
             )
         };
         Some(Type::Function {
+            optional: params.len() - required,
             params,
             ret: Box::new(ret),
             predicate: None,

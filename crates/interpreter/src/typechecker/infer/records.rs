@@ -7,7 +7,6 @@ use crate::{IndexSignature, ObjectField, Span, Type, TypeAnnotation};
 
 use super::assignable::TypeResolver;
 use super::generic::{substitute_or_record, substitute_typevars};
-use super::void_value::ValuePosition;
 use super::{Inferer, assignable, type_limit_at, type_limit_unlocated};
 use crate::type_size::{TypeLimits, TypeTooLarge};
 
@@ -54,7 +53,7 @@ impl Inferer<'_> {
             return Ok(Type::Error);
         };
         let key = self.resolve_type(key)?;
-        let value = self.resolve_value_type(value, ValuePosition::FieldType)?;
+        let value = self.resolve_type(value)?;
         if matches!(key.peel(), Type::String) {
             return Ok(Type::Object {
                 fields: BTreeMap::new(),
@@ -84,7 +83,7 @@ impl Inferer<'_> {
         annotation: &crate::IndexSignatureAnnotation,
     ) -> Result<IndexSignature, CompilerFailure> {
         Ok(IndexSignature {
-            value: Box::new(self.resolve_value_type(&annotation.value, ValuePosition::FieldType)?),
+            value: Box::new(self.resolve_type(&annotation.value)?),
             readonly: annotation.readonly,
         })
     }
@@ -185,12 +184,12 @@ impl Inferer<'_> {
             crate::TypedExprKind::NullishCoalesce { lhs, rhs } => {
                 let left = self.object_key_type(*lhs)?;
                 let right = self.object_key_type(*rhs)?;
-                if matches!(left.peel(), Type::Null) {
+                if matches!(left.peel(), Type::Null | Type::Undefined) {
                     right
-                } else if !super::expr::type_admits_null(&left, self.resolver()) {
+                } else if !super::expr::type_admits_nullish(&left, self.resolver()) {
                     left
                 } else {
-                    Type::union(vec![super::narrowing::strip_null(&left), right])
+                    Type::union(vec![super::narrowing::strip_nullish(&left), right])
                 }
             }
             _ => super::expr::literal_comparison_type(&self.typed_ast, expr)?,
@@ -283,7 +282,7 @@ impl Inferer<'_> {
                     if field.readonly {
                         self.error(span, format!("cannot assign to readonly property `{key}`"));
                     }
-                    targets.push(field.ty.clone());
+                    targets.push(field.read_ty());
                 } else if let Some(index) = &index {
                     if index.readonly {
                         self.error(
@@ -310,7 +309,7 @@ impl Inferer<'_> {
                         format!("dynamic write may target readonly property `{name}`"),
                     );
                 }
-                targets.push(field.ty);
+                targets.push(field.read_ty());
             }
         }
         targets
@@ -452,19 +451,15 @@ impl Inferer<'_> {
             ) {
                 self.object_this_hint = Some(receiver_hint.clone());
             }
-            let operand = self.infer_value_operand(
-                value,
-                hint.as_ref(),
-                ValuePosition::FieldValue,
-                inferred_fields.remove(&value),
-            )?;
+            let operand =
+                self.infer_value_operand(value, hint.as_ref(), inferred_fields.remove(&value))?;
             self.object_this_hint = previous_hint;
             let value = operand.typed_expr;
             let value_ty = operand.ty;
             if let Some(hint) = &hint
                 && !assignable(&value_ty, hint, self.resolver())
             {
-                self.error(span, format!("expected `{hint}`, got `{value_ty}`"));
+                self.error(span, super::diagnostics::mismatch_message(&hint, &value_ty));
             }
             // A fresh literal widens as it would without a hint.
             let asks_for_type = hint
@@ -1069,16 +1064,25 @@ fn interface_member_contracts(
             params: method
                 .params
                 .iter()
-                .map(|p| substitute_typevars(&p.ty, &bindings, limits))
+                .map(|p| {
+                    substitute_typevars(&p.ty, &bindings, limits)
+                        .map(|ty| crate::ObjectField::widen_optional(p.is_omittable(), ty))
+                })
                 .collect::<Result<_, _>>()?,
             ret: Box::new(substitute_typevars(&method.ret, &bindings, limits)?),
             predicate: None,
             has_rest: method.params.last().is_some_and(|p| p.rest),
+            optional: crate::package_declaration::optional_parameter_count(&method.params),
         };
         fields.insert(
             name.clone(),
             InterfaceMemberContract {
-                field: ObjectField::required(ty),
+                field: ObjectField {
+                    ty,
+                    optional: method.optional,
+                    readonly: false,
+                    method: true,
+                },
                 generic_count: method.generics.len(),
             },
         );

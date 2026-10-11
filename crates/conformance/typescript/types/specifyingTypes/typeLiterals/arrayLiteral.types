@@ -7,7 +7,7 @@ let x = [];
 >[] : never[]
 >   : ^^^^^^^
 
-/*pruned*/;            
+/*pruned*/;
 
 let y = [1];
 >y : number[]
@@ -27,7 +27,7 @@ let y_2 = [1, 2];
 >2 : 2
 >  : ^
 
-/*pruned*/;                   
+/*pruned*/;
 
 let x2: number[] = [];
 >x2 : number[]
@@ -35,7 +35,7 @@ let x2: number[] = [];
 >[] : never[]
 >   : ^^^^^^^
 
-/*pruned*/;                       
+/*pruned*/;
 
 let y2: number[] = [1];
 >y2 : number[]
@@ -55,7 +55,7 @@ let y2_2: number[] = [1, 2];
 >2 : 2
 >  : ^
 
-/*pruned*/;                              
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

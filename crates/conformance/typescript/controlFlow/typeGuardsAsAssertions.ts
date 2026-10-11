@@ -60,7 +60,7 @@ function foo2(): void {
 // Type guards as assertions
 
 function f1(): void {
-    let x: string | number | null = null;
+    let x: string | number | undefined = undefined;
     x;  // undefined
     if (x) {
         x;  // string | number (guard as assertion)
@@ -69,7 +69,7 @@ function f1(): void {
 }
 
 function f2(): void {
-    let x: string | number | null = null;
+    let x: string | number | undefined = undefined;
     x;  // undefined
     if (typeof x === "string") {
         x;  // string (guard as assertion)
@@ -78,7 +78,7 @@ function f2(): void {
 }
 
 function f3(): void {
-    let x: string | number | null = null;
+    let x: string | number | undefined = undefined;
     x;  // undefined
     if (!x) {
         return;
@@ -87,7 +87,7 @@ function f3(): void {
 }
 
 function f4(): void {
-    let x: string | number | null = null;
+    let x: string | number | undefined = undefined;
     x;  // undefined
     if (typeof x === "boolean") {
         x;  // nothing (boolean not in declared type)
@@ -106,17 +106,17 @@ function f5(x: string | number): void {
 }
 
 function f6(): void {
-    let x: string | null | null = null as unknown as (string | null | null);
+    let x: string | undefined | null = null as unknown as (string | undefined | null);
     x!.slice();
     x = "";
     x!.slice();
-    x = null;
+    x = undefined;
     x!.slice();
     x = null;
     x!.slice();
-    x = <null | null>null;
+    x = <undefined | null>undefined;
     x!.slice();
-    x = <string | null>"";
+    x = <string | undefined>"";
     x!.slice();
     x = <string | null>"";
     x!.slice();

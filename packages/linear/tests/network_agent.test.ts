@@ -13,9 +13,9 @@ function main(): void {
         return;
     }
     const issueId = secrets.get("LINEAR_TEST_ISSUE_ID");
-    assert(secrets.get("LINEAR_API_KEY") !== null, "bind an app OAuth token as LINEAR_API_KEY");
-    assert(issueId !== null, "bind a disposable LINEAR_TEST_ISSUE_ID");
-    if (issueId === null) return;
+    assert(secrets.get("LINEAR_API_KEY") !== undefined, "bind an app OAuth token as LINEAR_API_KEY");
+    assert(issueId !== undefined, "bind a disposable LINEAR_TEST_ISSUE_ID");
+    if (issueId === undefined) return;
 
     label("create a session on the test issue and acknowledge it");
     const session = createAgentSessionOnIssue({ issueId: issueId });
@@ -54,8 +54,7 @@ function main(): void {
     label("create a comment thread and a session on its root");
     const root = createComment({ issueId: issueId, body: "Submilli agent API smoke test." });
     const reply = createComment({ issueId: issueId, parentId: root.id, body: "Threaded reply smoke test." });
-    assert(reply.parent !== null, "reply has a parent");
-    if (reply.parent !== null) assert(reply.parent.id === root.id, "reply belongs to the correct thread");
+    assert(reply.parent?.id === root.id, "reply belongs to the correct thread");
     assert(listComments(issueId, { first: 10 }).nodes.length > 0, "comments can be listed");
     const commentSession = createAgentSessionOnComment({ commentId: root.id });
     createAgentActivity({

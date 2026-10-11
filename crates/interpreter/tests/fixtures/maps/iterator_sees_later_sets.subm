@@ -1,0 +1,25 @@
+// Map#iterator walks the map live, as in JavaScript: an entry set after
+// iterator() is visited, even when the set resizes the map.
+
+function main(): void {
+  const m = new Map<string, number>();
+  m.set("a", 1);
+  m.set("b", 2);
+  m.set("c", 3);
+  m.set("d", 4);
+  m.set("e", 5);
+  m.set("f", 6);
+
+  const it = m.iterator();
+
+  m.set("g", 7);
+
+  let visits: number = 0;
+  while (true) {
+    const r = it.next();
+    if (r.done) { break; }
+    visits = visits + 1;
+  }
+  assert(visits === 7, "cursor visits the entry set after iterator()");
+  assert(m.size === 7, "map sees all inserts including post-iterator()");
+}

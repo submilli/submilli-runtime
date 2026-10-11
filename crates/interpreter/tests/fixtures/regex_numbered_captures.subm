@@ -22,6 +22,6 @@ function main(): void {
   if (m3 !== null) {
     assert(m3.groups.length === 2, "two capture groups");
     assert(m3.groups[0] === "a", "first arm matched");
-    assert(m3.groups[1] === null, "second arm did NOT match → null");
+    assert(m3.groups[1] === undefined, "second arm did NOT match → undefined");
   }
 }

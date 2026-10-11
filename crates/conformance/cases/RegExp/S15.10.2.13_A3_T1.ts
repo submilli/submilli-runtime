@@ -1,5 +1,4 @@
 // test262: test/built-ins/RegExp/S15.10.2.13_A3_T1.js
-// expect-fail: [\b] (backspace inside a character class) is valid in ECMA-262; the engine rejects it at compile time with "invalid escape sequence found in character class"
 
 function main(): void {
   const m = /.[\b]./.exec("abc\bdef");

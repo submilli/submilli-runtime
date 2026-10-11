@@ -3,7 +3,7 @@ import secrets from "submilli:secrets";
 import { getIdentity, listChannels, listUsers } from "@submilli/slack-user";
 
 function main(): void {
-    if (secrets.get("SLACK_USER_TOKEN") === null) return;
+    if (secrets.get("SLACK_USER_TOKEN") === undefined) return;
 
     label("user token identity");
     const identity = getIdentity();

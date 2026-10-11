@@ -1,0 +1,2 @@
+line 1 extra: artifact our parser stops reporting after 20 errors (`MAX_ERRORS` in parser.rs), before it reaches `main`
+line 9, 10, 18, 19, 101, 102, 103, 104, 106, 107, 109, 110, 111, 112, 114, 115, 118, 119, 120, 121 extra: by-design spec §1.6 `==` and `!=` against `null` or `undefined` are rejected, since they compare like `===` and would miss the other nullish value

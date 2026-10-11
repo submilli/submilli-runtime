@@ -1,0 +1,184 @@
+=== additionOperatorWithUndefinedValueAndValidOperator.ts ===
+// If one operand is the null or undefined value, it is treated as having the type of the other operand.
+
+enum E { a, b, c }
+>E : E
+>  : ^
+>a : E.a
+>  : ^^^
+>b : E.b
+>  : ^^^
+>c : E.c
+>  : ^^^
+
+
+/*pruned*/;
+let b: number = null as unknown as (number);
+>b : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let d: string = null as unknown as (string);
+>d : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+// undefined + any
+/*pruned*/;
+/*pruned*/;
+
+// undefined + number/enum
+let r3 = undefined + b;
+>r3 : any
+>   : ^^^
+>undefined + b : any
+>              : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+let r4 = undefined + 1;
+>r4 : any
+>   : ^^^
+>undefined + 1 : any
+>              : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+let r6 = undefined + E.a;
+>r6 : any
+>   : ^^^
+>undefined + E.a : any
+>                : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+
+let r7 = undefined + E['a'];
+>r7 : any
+>   : ^^^
+>undefined + E['a'] : any
+>                   : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>E['a'] : E.a
+>       : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>'a' : "a"
+>    : ^^^
+
+let r8 = b + undefined;
+>r8 : any
+>   : ^^^
+>b + undefined : any
+>              : ^^^
+>b : number
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r9 = 1 + undefined;
+>r9 : any
+>   : ^^^
+>1 + undefined : any
+>              : ^^^
+>1 : 1
+>  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+let r11 = E.a + undefined;
+>r11 : any
+>    : ^^^
+>E.a + undefined : any
+>                : ^^^
+>E.a : E.a
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>a : E.a
+>  : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r12 = E['a'] + undefined;
+>r12 : any
+>    : ^^^
+>E['a'] + undefined : any
+>                   : ^^^
+>E['a'] : E.a
+>       : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>'a' : "a"
+>    : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// undefined + string
+let r13 = undefined + d;
+>r13 : string
+>    : ^^^^^^
+>undefined + d : string
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>d : string
+>  : ^^^^^^
+
+let r14 = undefined + '';
+>r14 : string
+>    : ^^^^^^
+>undefined + '' : string
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r15 = d + undefined;
+>r15 : string
+>    : ^^^^^^
+>d + undefined : string
+>              : ^^^^^^
+>d : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r16 = '' + undefined;
+>r16 : string
+>    : ^^^^^^
+>'' + undefined : string
+>               : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

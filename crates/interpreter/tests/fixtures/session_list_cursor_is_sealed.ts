@@ -54,13 +54,13 @@ function main(): void {
   // Page one key at a time so a cursor is minted after each, including after
   // the key in the middle.
   const cursors: string[] = [];
-  let cursor: string | null = null;
+  let cursor: string | undefined;
   let guard = 0;
   while (guard < 10) {
     guard = guard + 1;
     const page = session.list("", 1, cursor);
     const next = page.nextCursor;
-    if (next === null) {
+    if (next === undefined) {
       break;
     }
     cursors.push(next);
@@ -78,14 +78,14 @@ function main(): void {
 
   // Sealing must not cost correctness: the cursors still page the keyspace.
   let seen = 0;
-  let next: string | null = null;
+  let next: string | undefined;
   let steps = 0;
   while (steps < 10) {
     steps = steps + 1;
     const page = session.list("", 1, next);
     seen = seen + page.entries.length;
     next = page.nextCursor;
-    if (next === null) {
+    if (next === undefined) {
       break;
     }
   }

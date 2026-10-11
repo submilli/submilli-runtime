@@ -1,10 +1,10 @@
 === nullishCoalescingOperator10.ts ===
 
-function f(): string | null { return null as unknown as (string | null); }
->f : () => string | null
->  : ^^^^^^^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+function f(): string | undefined { return null as unknown as (string | undefined); }
+>f : () => string | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
@@ -14,10 +14,10 @@ let gg = f() ?? 'foo'
 >   : ^^^^^^
 >f() ?? 'foo' : string
 >             : ^^^^^^
->f() : string | null
->    : ^^^^^^^^^^^^^
->f : () => string | null
->  : ^^^^^^^^^^^^^^^^^^^
+>f() : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+>f : () => string | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
 >'foo' : "foo"
 >      : ^^^^^
 

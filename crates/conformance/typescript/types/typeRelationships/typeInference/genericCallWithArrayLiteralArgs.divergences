@@ -1,4 +1,4 @@
-types: 20 of 37 tsc entries compared, 5 differ
+types: 20 of 37 tsc entries compared, 4 differ
 
 line 10: []
   tsc:  never[]
@@ -16,10 +16,5 @@ line 11: [1, '']
   tsc:  (string | number)[]
   ours: number[]
 
-line 13: [1, '']
-  tsc:  (string | number)[]
-  ours: Object[]
-
 errors:
 line 11: ours: expected `number` (matching first element), got `string` (tsc accepts)
-line 13: ours: expected `Object`, got `number` (tsc accepts)

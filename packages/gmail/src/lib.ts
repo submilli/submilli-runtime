@@ -244,51 +244,51 @@ interface ApiHeader {
 }
 
 interface ApiBody {
-    attachmentId?: string;
-    size?: number;
-    data?: string;
+    attachmentId?: string | null;
+    size?: number | null;
+    data?: string | null;
 }
 
 interface ApiPart {
-    partId?: string;
-    mimeType?: string;
-    filename?: string;
-    headers?: ApiHeader[];
-    body?: ApiBody;
-    parts?: ApiChildPart[];
+    partId?: string | null;
+    mimeType?: string | null;
+    filename?: string | null;
+    headers?: ApiHeader[] | null;
+    body?: ApiBody | null;
+    parts?: ApiChildPart[] | null;
 }
 
 interface ApiChildPart {
-    partId?: string;
-    mimeType?: string;
-    filename?: string;
-    headers?: ApiHeader[];
-    body?: ApiBody;
-    parts?: ApiLeafPart[];
+    partId?: string | null;
+    mimeType?: string | null;
+    filename?: string | null;
+    headers?: ApiHeader[] | null;
+    body?: ApiBody | null;
+    parts?: ApiLeafPart[] | null;
 }
 
 interface ApiLeafPart {
-    partId?: string;
-    mimeType?: string;
-    filename?: string;
-    headers?: ApiHeader[];
-    body?: ApiBody;
+    partId?: string | null;
+    mimeType?: string | null;
+    filename?: string | null;
+    headers?: ApiHeader[] | null;
+    body?: ApiBody | null;
 }
 
 interface ApiMessage {
     id: string;
     threadId: string;
-    labelIds?: string[];
-    snippet?: string;
-    internalDate?: string;
-    payload?: ApiPart;
+    labelIds?: string[] | null;
+    snippet?: string | null;
+    internalDate?: string | null;
+    payload?: ApiPart | null;
 }
 
 interface ApiThread {
     id: string;
-    historyId?: string;
-    messages?: ApiMessage[];
-    snippet?: string;
+    historyId?: string | null;
+    messages?: ApiMessage[] | null;
+    snippet?: string | null;
 }
 
 interface ApiDraft {
@@ -313,9 +313,9 @@ interface LabelListResponse {
 interface ApiLabel {
     id: string;
     name: string;
-    type?: string;
-    messageListVisibility?: string;
-    labelListVisibility?: string;
+    type?: string | null;
+    messageListVisibility?: string | null;
+    labelListVisibility?: string | null;
 }
 
 interface AttachmentResponse {
@@ -382,14 +382,12 @@ export function getProfile(): Profile {
 /**
  * Search Gmail threads using Gmail's query syntax.
  * @param query Gmail search query, such as `from:dana@example.com is:unread newer_than:7d`.
- * @param options Optional page size (1-100, default 20), continuation token, and spam/trash inclusion; `null` uses the defaults.
+ * @param options Optional page size (1-100, default 20), continuation token, and spam/trash inclusion; omit it to use the defaults.
  * @returns One page of lightweight thread results (ID, snippet, history ID) matching the query; `items` is empty when nothing matches and `nextPageToken` is empty on the last page.
  * @capability submilli/gmail.searchThreads {}
  */
-export function searchThreads(query: string, options: SearchOptions | null = null): Page<ThreadRef> {
-    const limit = options === null ? null : options.limit;
-    const pageToken = options === null ? null : options.pageToken;
-    const includeSpamTrash = options === null ? null : options.includeSpamTrash;
+export function searchThreads(query: string, options: SearchOptions = {}): Page<ThreadRef> {
+    const { limit, pageToken, includeSpamTrash } = options;
     check("submilli/gmail.searchThreads", {});
     const params = new Map<string, string>();
     params.set("q", query);
@@ -398,27 +396,25 @@ export function searchThreads(query: string, options: SearchOptions | null = nul
     putBool(params, "includeSpamTrash", includeSpamTrash);
     const data = gmailGet("/threads", params).json() as ThreadListResponse;
     const items: ThreadRef[] = [];
-    if (data.threads !== null) {
-        for (const item of data.threads) {
-            items.push({ id: item.id, snippet: str(item.snippet), historyId: str(item.historyId) });
+    const threads = data.threads;
+    if (threads) {
+        for (const item of threads) {
+            items.push({ id: item.id, snippet: item.snippet ?? "", historyId: item.historyId ?? "" });
         }
     }
-    return { items: items, nextPageToken: str(data.nextPageToken) };
+    return { items: items, nextPageToken: data.nextPageToken ?? "" };
 }
 
 /**
  * Return a bounded page of unread inbox threads.
- * @param options Optional page size (1-50, default 20) and continuation token; `null` uses the defaults.
+ * @param options Optional page size (1-50, default 20) and continuation token; omit it to use the defaults.
  * @returns One page of unread inbox threads (lightweight references) and a `nextPageToken` that is empty on the last page.
  * @capability submilli/gmail.triage {}
  */
-export function triage(options: PageOptions | null = null): TriageResult {
-    const limit = options === null ? null : options.limit;
-    const pageToken = options === null ? null : options.pageToken;
+export function triage(options: PageOptions = {}): TriageResult {
+    const { limit, pageToken } = options;
     check("submilli/gmail.triage", {});
-    const search: SearchOptions = { limit: bounded(limit, 20, 1, 50) };
-    if (pageToken !== null) search.pageToken = pageToken;
-    const page = searchThreads("in:inbox is:unread", search);
+    const page = searchThreads("in:inbox is:unread", { limit: bounded(limit, 20, 1, 50), pageToken: pageToken });
     return { threads: page.items, nextPageToken: page.nextPageToken };
 }
 
@@ -449,22 +445,22 @@ export function getMessage(messageId: string): Message | null {
 
 /**
  * List one page of drafts.
- * @param page Optional page size (1-100, default 20) and continuation token; `null` uses the defaults.
+ * @param page Optional page size (1-100, default 20) and continuation token; omit it to use the defaults.
  * @returns One page of drafts with their draft, message and thread IDs but no message content (use `getDraft` for that); `items` is empty when there are no drafts and `nextPageToken` is empty on the last page.
  * @capability submilli/gmail.listDrafts {}
  */
-export function listDrafts(page: PageOptions | null = null): Page<Draft> {
-    const limit = page === null ? null : page.limit;
-    const pageToken = page === null ? null : page.pageToken;
+export function listDrafts(page: PageOptions = {}): Page<Draft> {
+    const { limit, pageToken } = page;
     check("submilli/gmail.listDrafts", {});
     const query = new Map<string, string>();
     applyPage(query, limit, pageToken, 20, 100);
     const data = gmailGet("/drafts", query).json() as DraftListResponse;
     const items: Draft[] = [];
-    if (data.drafts !== null) {
-        for (const draft of data.drafts) items.push({ id: draft.id, message: messageFrom(draft.message) });
+    const drafts = data.drafts;
+    if (drafts) {
+        for (const draft of drafts) items.push({ id: draft.id, message: messageFrom(draft.message) });
     }
-    return { items: items, nextPageToken: str(data.nextPageToken) };
+    return { items: items, nextPageToken: data.nextPageToken ?? "" };
 }
 
 /**
@@ -490,17 +486,15 @@ export function createDraft(input: EmailInput): Draft {
     const { to: requestedTo, subject, text, cc: requestedCc, bcc: requestedBcc, html, from } = input;
     const to: string[] = [];
     for (const entry of requestedTo) to.push(entry);
-    let cc: string[] | null = null;
-    if (requestedCc !== null) {
-        const copied: string[] = [];
-        for (const entry of requestedCc) copied.push(entry);
-        cc = copied;
+    let cc: string[] | undefined;
+    if (requestedCc !== undefined) {
+        cc = [];
+        for (const entry of requestedCc) cc.push(entry);
     }
-    let bcc: string[] | null = null;
-    if (requestedBcc !== null) {
-        const copied: string[] = [];
-        for (const entry of requestedBcc) copied.push(entry);
-        bcc = copied;
+    let bcc: string[] | undefined;
+    if (requestedBcc !== undefined) {
+        bcc = [];
+        for (const entry of requestedBcc) bcc.push(entry);
     }
     const attachments = input.attachments;
     const mail = composeInput({
@@ -512,7 +506,7 @@ export function createDraft(input: EmailInput): Draft {
         html: html,
         from: from,
     });
-    check("submilli/gmail.createDraft", { recipients: messageRecipients(mail), from: mail.from });
+    check("submilli/gmail.createDraft", { recipients: messageRecipients(mail), from: mail.from ?? null });
     const raw = composeEmail(mail, attachments);
     const response = post(API + "/drafts", { message: { raw: raw } }, authHeaders());
     requireOk(response);
@@ -565,17 +559,15 @@ export function sendEmail(input: EmailInput): Message {
     const { to: requestedTo, subject, text, cc: requestedCc, bcc: requestedBcc, html, from } = input;
     const to: string[] = [];
     for (const entry of requestedTo) to.push(entry);
-    let cc: string[] | null = null;
-    if (requestedCc !== null) {
-        const copied: string[] = [];
-        for (const entry of requestedCc) copied.push(entry);
-        cc = copied;
+    let cc: string[] | undefined;
+    if (requestedCc !== undefined) {
+        cc = [];
+        for (const entry of requestedCc) cc.push(entry);
     }
-    let bcc: string[] | null = null;
-    if (requestedBcc !== null) {
-        const copied: string[] = [];
-        for (const entry of requestedBcc) copied.push(entry);
-        bcc = copied;
+    let bcc: string[] | undefined;
+    if (requestedBcc !== undefined) {
+        bcc = [];
+        for (const entry of requestedBcc) bcc.push(entry);
     }
     const attachments = input.attachments;
     const mail = composeInput({
@@ -587,7 +579,7 @@ export function sendEmail(input: EmailInput): Message {
         html: html,
         from: from,
     });
-    check("submilli/gmail.sendEmail", { recipients: messageRecipients(mail), from: mail.from });
+    check("submilli/gmail.sendEmail", { recipients: messageRecipients(mail), from: mail.from ?? null });
     const response = post(API + "/messages/send", { raw: composeEmail(mail, attachments) }, authHeaders());
     requireOk(response);
     return messageFrom(response.json() as ApiMessage);
@@ -642,7 +634,8 @@ export function listLabels(): Label[] {
     check("submilli/gmail.listLabels", {});
     const data = gmailGet("/labels", new Map<string, string>()).json() as LabelListResponse;
     const labels: Label[] = [];
-    if (data.labels !== null) for (const item of data.labels) labels.push(labelFrom(item));
+    const items = data.labels;
+    if (items) for (const item of items) labels.push(labelFrom(item));
     return labels;
 }
 
@@ -667,18 +660,18 @@ export function createLabel(name: string): Label {
 /**
  * Add and remove labels from every message in a thread.
  * @param threadId ID of the thread whose messages are modified.
- * @param changes Label IDs to add and remove; `null` fields add or remove nothing.
+ * @param changes Label IDs to add and remove; an omitted field adds or removes nothing.
  * @returns The thread with its messages after the label change.
  * @capability submilli/gmail.modifyThreadLabels {}
  */
 export function modifyThreadLabels(threadId: string, changes: LabelChanges): Thread {
     const { addLabelIds: requestedAddLabelIds, removeLabelIds: requestedRemoveLabelIds } = changes;
     const addLabelIds: string[] = [];
-    if (requestedAddLabelIds !== null) {
+    if (requestedAddLabelIds !== undefined) {
         for (const id of requestedAddLabelIds) addLabelIds.push(id);
     }
     const removeLabelIds: string[] = [];
-    if (requestedRemoveLabelIds !== null) {
+    if (requestedRemoveLabelIds !== undefined) {
         for (const id of requestedRemoveLabelIds) removeLabelIds.push(id);
     }
     const request: LabelModifyRequest = { addLabelIds: addLabelIds, removeLabelIds: removeLabelIds };
@@ -695,18 +688,18 @@ export function modifyThreadLabels(threadId: string, changes: LabelChanges): Thr
 /**
  * Add and remove labels from one message.
  * @param messageId ID of the message to modify.
- * @param changes Label IDs to add and remove; `null` fields add or remove nothing.
+ * @param changes Label IDs to add and remove; an omitted field adds or removes nothing.
  * @returns The message after the label change.
  * @capability submilli/gmail.modifyMessageLabels {}
  */
 export function modifyMessageLabels(messageId: string, changes: LabelChanges): Message {
     const { addLabelIds: requestedAddLabelIds, removeLabelIds: requestedRemoveLabelIds } = changes;
     const addLabelIds: string[] = [];
-    if (requestedAddLabelIds !== null) {
+    if (requestedAddLabelIds !== undefined) {
         for (const id of requestedAddLabelIds) addLabelIds.push(id);
     }
     const removeLabelIds: string[] = [];
-    if (requestedRemoveLabelIds !== null) {
+    if (requestedRemoveLabelIds !== undefined) {
         for (const id of requestedRemoveLabelIds) removeLabelIds.push(id);
     }
     const request: LabelModifyRequest = { addLabelIds: addLabelIds, removeLabelIds: removeLabelIds };
@@ -805,17 +798,17 @@ interface EmailFields {
     to: string[];
     subject: string;
     text: string;
-    cc: string[] | null;
-    bcc: string[] | null;
-    html: string | null;
-    from: string | null;
+    cc?: string[];
+    bcc?: string[];
+    html?: string;
+    from?: string;
 }
 
 interface ReplyFields {
     messageId: string;
     text: string;
-    html: string | null;
-    replyAll: boolean | null;
+    html?: string;
+    replyAll?: boolean;
 }
 
 function replyEmail(fields: ReplyFields): ResolvedEmail {
@@ -837,17 +830,17 @@ function replyEmail(fields: ReplyFields): ResolvedEmail {
     };
     if (recipients.cc.length > 0) mail.cc = recipients.cc;
     const html = fields.html;
-    if (html !== null) mail.html = html;
+    if (html !== undefined) mail.html = html;
     return { mail: mail, threadId: original.threadId };
 }
 
 function composeInput(fields: EmailFields): ComposeInput {
     const { to, subject, text, cc, bcc, html, from } = fields;
     const result: ComposeInput = { to: bareAddresses(to, "to"), subject: subject, text: text };
-    if (cc !== null) result.cc = bareAddresses(cc, "cc");
-    if (bcc !== null) result.bcc = bareAddresses(bcc, "bcc");
-    if (html !== null) result.html = html;
-    if (from !== null) result.from = senderAddress(from);
+    if (cc !== undefined) result.cc = bareAddresses(cc, "cc");
+    if (bcc !== undefined) result.bcc = bareAddresses(bcc, "bcc");
+    if (html !== undefined) result.html = html;
+    if (from !== undefined) result.from = senderAddress(from);
     return result;
 }
 
@@ -857,25 +850,25 @@ function messageRecipients(mail: ComposeInput): string[] {
     const recipients: string[] = [];
     appendUnseen(recipients, mail.to, seen);
     const cc = mail.cc;
-    if (cc !== null) appendUnseen(recipients, cc, seen);
+    if (cc !== undefined) appendUnseen(recipients, cc, seen);
     const bcc = mail.bcc;
-    if (bcc !== null) appendUnseen(recipients, bcc, seen);
+    if (bcc !== undefined) appendUnseen(recipients, bcc, seen);
     return recipients;
 }
 
-function composeEmail(input: ComposeInput, requestedAttachments: OutgoingAttachment[] | null): string {
+function composeEmail(input: ComposeInput, attachments: OutgoingAttachment[] = []): string {
     if (input.to.length === 0) throw new GmailError("missing_recipient", "at least one recipient is required", 0);
     validateHeader(input.subject);
     let headers = addressHeader("To", input.to, "to");
-    if (input.cc !== null && input.cc.length > 0) headers += addressHeader("Cc", input.cc, "cc");
-    if (input.bcc !== null && input.bcc.length > 0) headers += addressHeader("Bcc", input.bcc, "bcc");
-    if (input.from !== null) headers += addressHeader("From", [input.from], "from");
+    if (input.cc !== undefined && input.cc.length > 0) headers += addressHeader("Cc", input.cc, "cc");
+    if (input.bcc !== undefined && input.bcc.length > 0) headers += addressHeader("Bcc", input.bcc, "bcc");
+    if (input.from !== undefined) headers += addressHeader("From", [input.from], "from");
     headers += "Subject: " + encodeHeader(input.subject) + "\r\n";
-    if (input.inReplyTo !== null && input.inReplyTo.length > 0) {
+    if (input.inReplyTo !== undefined && input.inReplyTo.length > 0) {
         validateHeader(input.inReplyTo);
         headers += "In-Reply-To: " + input.inReplyTo + "\r\n";
     }
-    if (input.references !== null && input.references.length > 0) {
+    if (input.references !== undefined && input.references.length > 0) {
         validateHeader(input.references);
         headers += "References: " + input.references + "\r\n";
     }
@@ -883,17 +876,16 @@ function composeEmail(input: ComposeInput, requestedAttachments: OutgoingAttachm
     const textBytes = new TextEncoder().encode(input.text);
     const html = input.html;
     let bodyBytes = textBytes.length;
-    if (html !== null) bodyBytes += new TextEncoder().encode(html).length;
+    if (html !== undefined) bodyBytes += new TextEncoder().encode(html).length;
     if (bodyBytes > MAX_BODY_BYTES) throw new GmailError("body_too_large", "combined text and HTML bodies exceed 1 MiB", 0);
-    const attachments: OutgoingAttachment[] = requestedAttachments !== null ? requestedAttachments : [];
     const boundary = "submilli_" + Temporal.Now.instant().epochMilliseconds.toString();
-    if (attachments.length === 0 && html === null) {
+    if (attachments.length === 0 && html === undefined) {
         const message = headers + "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + textBytes.toBase64();
         return encodeRawMessage(message);
     }
     let mime = headers + "Content-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n";
     const alternative = boundary + "_alternative";
-    if (html !== null) {
+    if (html !== undefined) {
         mime += "--" + boundary + "\r\nContent-Type: multipart/alternative; boundary=\"" + alternative + "\"\r\n\r\n";
         mime += "--" + alternative + "\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n";
         mime += textBytes.toBase64() + "\r\n";
@@ -907,16 +899,16 @@ function composeEmail(input: ComposeInput, requestedAttachments: OutgoingAttachm
     for (const attachment of attachments) {
         // One read of the path, so the size checked is the size of the file sent.
         const path = attachment.path;
-        const filename = attachment.filename !== null ? attachment.filename : basename(path);
-        const mimeType = attachment.mimeType !== null ? attachment.mimeType : "application/octet-stream";
+        const filename = attachment.filename ?? basename(path);
+        const mimeType = attachment.mimeType ?? "application/octet-stream";
         validateFilename(filename);
         validateHeader(mimeType);
         const metadata = stat(path);
-        if (metadata === null || metadata.kind !== "file") throw new GmailError("attachment_not_found", "attachment is not a VFS file: " + path, 0);
+        if (metadata === undefined || metadata.kind !== "file") throw new GmailError("attachment_not_found", "attachment is not a VFS file: " + path, 0);
         total += metadata.size;
         if (total > MAX_ATTACHMENT_BYTES) throw new GmailError("attachments_too_large", "combined attachment contents exceed 10 MiB", 0);
         const bytes = read(path);
-        if (bytes === null) throw new GmailError("attachment_unreadable", "attachment exceeds the VFS whole-read limit", 0);
+        if (bytes === undefined) throw new GmailError("attachment_unreadable", "attachment exceeds the VFS whole-read limit", 0);
         mime += "--" + boundary + "\r\nContent-Type: " + mimeType + "; name=\"" + filename + "\"\r\n";
         mime += "Content-Disposition: attachment; filename=\"" + filename + "\"\r\nContent-Transfer-Encoding: base64\r\n\r\n";
         mime += bytes.toBase64() + "\r\n";
@@ -953,16 +945,19 @@ function fetchDraft(draftId: string, query: Map<string, string>): ApiDraft | nul
 function messageFrom(item: ApiMessage): Message {
     let parsed: ParsedPart = { text: "", html: "", attachments: [] };
     let headers: Header[] = [];
-    if (item.payload !== null) {
-        parsed = parsePart(item.payload);
-        headers = headersFrom(item.payload.headers);
+    const payload = item.payload;
+    if (payload) {
+        parsed = parsePart(payload);
+        headers = headersFrom(payload.headers);
     }
+    let labelIds: string[] = [];
+    if (item.labelIds) labelIds = item.labelIds;
     return {
         id: item.id,
         threadId: item.threadId,
-        labelIds: item.labelIds !== null ? item.labelIds : [],
-        snippet: str(item.snippet),
-        internalDate: str(item.internalDate),
+        labelIds: labelIds,
+        snippet: item.snippet ?? "",
+        internalDate: item.internalDate ?? "",
         headers: headers,
         text: parsed.text,
         html: parsed.html,
@@ -972,63 +967,23 @@ function messageFrom(item: ApiMessage): Message {
 
 function threadFrom(item: ApiThread): Thread {
     const messages: Message[] = [];
-    if (item.messages !== null) for (const message of item.messages) messages.push(messageFrom(message));
-    return { id: item.id, historyId: str(item.historyId), messages: messages };
+    const items = item.messages;
+    if (items) for (const message of items) messages.push(messageFrom(message));
+    return { id: item.id, historyId: item.historyId ?? "", messages: messages };
 }
 
 function parsePart(part: ApiPart): ParsedPart {
-    let text = "";
-    let html = "";
-    const attachments: Attachment[] = [];
+    const parsed: ParsedPart = { text: "", html: "", attachments: [] };
     const children = part.parts;
-    if (children !== null) {
-        for (const child of children) {
-            const parsed = parseChildPart(child);
-            text += parsed.text;
-            html += parsed.html;
-            for (const attachment of parsed.attachments) attachments.push(attachment);
-        }
-    }
-    const mimeType = str(part.mimeType).toLowerCase();
-    const filename = str(part.filename);
-    const body = part.body;
-    if (body !== null) {
-        const attachmentId = str(body.attachmentId);
-        const bodySize = body.size;
-        const bodyData = body.data;
-        if (filename.length > 0 || attachmentId.length > 0) {
-            attachments.push({
-                partId: str(part.partId),
-                attachmentId: attachmentId,
-                filename: filename,
-                mimeType: mimeType,
-                size: bodySize !== null ? bodySize : 0,
-            });
-        } else if (bodyData !== null) {
-            const decoded = new TextDecoder().decode(Uint8Array.fromBase64(bodyData, { alphabet: "base64url" }));
-            if (mimeType.startsWith("text/plain")) text += decoded;
-            if (mimeType.startsWith("text/html")) html += decoded;
-        }
-    }
-    return { text: text, html: html, attachments: attachments };
+    if (children) for (const child of children) appendParsed(parsed, parseChildPart(child));
+    appendParsed(parsed, parsePartBody(part.partId, part.mimeType, part.filename, part.body));
+    return parsed;
 }
 
 function parseChildPart(part: ApiChildPart): ParsedPart {
-    let parsed = parsePartBody(
-        part.partId,
-        part.mimeType,
-        part.filename,
-        part.body,
-    );
+    const parsed = parsePartBody(part.partId, part.mimeType, part.filename, part.body);
     const children = part.parts;
-    if (children !== null) {
-        for (const child of children) {
-            const leaf = parseLeafPart(child);
-            parsed.text += leaf.text;
-            parsed.html += leaf.html;
-            for (const attachment of leaf.attachments) parsed.attachments.push(attachment);
-        }
-    }
+    if (children) for (const child of children) appendParsed(parsed, parseLeafPart(child));
     return parsed;
 }
 
@@ -1036,30 +991,35 @@ function parseLeafPart(part: ApiLeafPart): ParsedPart {
     return parsePartBody(part.partId, part.mimeType, part.filename, part.body);
 }
 
+function appendParsed(target: ParsedPart, source: ParsedPart): void {
+    target.text += source.text;
+    target.html += source.html;
+    for (const attachment of source.attachments) target.attachments.push(attachment);
+}
+
 function parsePartBody(
-    partIdValue: string | null,
-    mimeTypeValue: string | null,
-    filenameValue: string | null,
-    body: ApiBody | null,
+    partId: string | null | undefined,
+    mimeTypeValue: string | null | undefined,
+    filenameValue: string | null | undefined,
+    body: ApiBody | null | undefined,
 ): ParsedPart {
     let text = "";
     let html = "";
     const attachments: Attachment[] = [];
-    const mimeType = str(mimeTypeValue).toLowerCase();
-    const filename = str(filenameValue);
-    if (body !== null) {
-        const attachmentId = str(body.attachmentId);
-        const bodySize = body.size;
+    const mimeType = (mimeTypeValue ?? "").toLowerCase();
+    const filename = filenameValue ?? "";
+    if (body) {
+        const attachmentId = body.attachmentId ?? "";
         const bodyData = body.data;
         if (filename.length > 0 || attachmentId.length > 0) {
             attachments.push({
-                partId: str(partIdValue),
+                partId: partId ?? "",
                 attachmentId: attachmentId,
                 filename: filename,
                 mimeType: mimeType,
-                size: bodySize !== null ? bodySize : 0,
+                size: body.size ?? 0,
             });
-        } else if (bodyData !== null) {
+        } else if (bodyData) {
             const decoded = new TextDecoder().decode(Uint8Array.fromBase64(bodyData, { alphabet: "base64url" }));
             if (mimeType.startsWith("text/plain")) text += decoded;
             if (mimeType.startsWith("text/html")) html += decoded;
@@ -1068,9 +1028,9 @@ function parsePartBody(
     return { text: text, html: html, attachments: attachments };
 }
 
-function headersFrom(values: ApiHeader[] | null): Header[] {
+function headersFrom(values: ApiHeader[] | null | undefined): Header[] {
     const headers: Header[] = [];
-    if (values !== null) for (const header of values) headers.push({ name: header.name, value: decodeHeader(header.value) });
+    if (values) for (const header of values) headers.push({ name: header.name, value: decodeHeader(header.value) });
     return headers;
 }
 
@@ -1080,11 +1040,8 @@ function headersFrom(values: ApiHeader[] | null): Header[] {
 // reader of any other header unfolds it.
 function sentHeaders(item: ApiMessage): Header[] {
     const headers: Header[] = [];
-    const payload = item.payload;
-    if (payload === null) return headers;
-    const values = payload.headers;
-    if (values === null) return headers;
-    for (const header of values) headers.push({ name: header.name, value: header.value });
+    const values = item.payload?.headers;
+    if (values) for (const header of values) headers.push({ name: header.name, value: header.value });
     return headers;
 }
 
@@ -1355,9 +1312,9 @@ function labelFrom(item: ApiLabel): Label {
     return {
         id: item.id,
         name: item.name,
-        type: str(item.type),
-        messageListVisibility: str(item.messageListVisibility),
-        labelListVisibility: str(item.labelListVisibility),
+        type: item.type ?? "",
+        messageListVisibility: item.messageListVisibility ?? "",
+        labelListVisibility: item.labelListVisibility ?? "",
     };
 }
 
@@ -1385,7 +1342,7 @@ function gmailRawGet(path: string, query: Map<string, string>): Response {
 
 function authHeaders(): Map<string, string> {
     const token = secrets.get("GOOGLE_ACCESS_TOKEN");
-    if (token === null) throw new GmailError("missing_token", "GOOGLE_ACCESS_TOKEN is not bound", 0);
+    if (token === undefined) throw new GmailError("missing_token", "GOOGLE_ACCESS_TOKEN is not bound", 0);
     const headers = new Map<string, string>();
     headers.set("Authorization", "Bearer " + token);
     return headers;
@@ -1398,44 +1355,40 @@ function requireOk(response: Response): Response {
     if (response.body.startsWith("{")) {
         const envelope = response.json() as GoogleErrorEnvelope;
         const body = envelope.error;
-        if (body !== null) {
+        if (body !== undefined) {
             const errors = body.errors;
             const bodyStatus = body.status;
             const bodyMessage = body.message;
-            if (errors !== null && errors.length > 0) {
+            if (errors !== undefined && errors.length > 0) {
                 const reason = errors[0].reason;
-                if (reason !== null) code = reason;
-            } else if (bodyStatus !== null) {
+                if (reason !== undefined) code = reason;
+            } else if (bodyStatus !== undefined) {
                 code = bodyStatus;
             }
-            if (bodyMessage !== null) message = bodyMessage;
+            if (bodyMessage !== undefined) message = bodyMessage;
         }
     }
     throw new GmailError(code, message, response.status);
 }
 
-function applyPage(query: Map<string, string>, limit: number | null, pageToken: string | null, fallback: number, max: number): void {
+function applyPage(query: Map<string, string>, limit: number | undefined, pageToken: string | undefined, fallback: number, max: number): void {
     query.set("maxResults", bounded(limit, fallback, 1, max).toString());
     putQuery(query, "pageToken", pageToken);
 }
 
-function putQuery(query: Map<string, string>, name: string, value: string | null): void {
-    if (value !== null) query.set(name, value);
+function putQuery(query: Map<string, string>, name: string, value: string | undefined): void {
+    if (value !== undefined) query.set(name, value);
 }
 
-function putBool(query: Map<string, string>, name: string, value: boolean | null): void {
-    if (value !== null) query.set(name, value ? "true" : "false");
+function putBool(query: Map<string, string>, name: string, value: boolean | undefined): void {
+    if (value !== undefined) query.set(name, value ? "true" : "false");
 }
 
-function bounded(value: number | null, fallback: number, min: number, max: number): number {
-    const actual = value === null ? fallback : value;
+function bounded(value: number | undefined, fallback: number, min: number, max: number): number {
+    const actual = value ?? fallback;
     if (actual < min) return min;
     if (actual > max) return max;
     return actual;
-}
-
-function str(value: string | null): string {
-    return value === null ? "" : value;
 }
 
 function basename(path: string): string {

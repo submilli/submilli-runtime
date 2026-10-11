@@ -1,5 +1,25 @@
-types: 36 of 74 tsc entries compared, 1 differ
+types: 36 of 74 tsc entries compared, 6 differ
 
 line 16: r3
   tsc:  {}
   ours: number | {}
+
+line 19: r6
+  tsc:  ((x: number) => void) | ((x: Object) => void)
+  ours: (arg0: number) => void
+
+line 19: true ? (x: number) => { } : (x: Object) => { }
+  tsc:  ((x: number) => void) | ((x: Object) => void)
+  ours: (arg0: number) => void
+
+line 20: true ? (x: number) => { } : (x: Object) => { }
+  tsc:  ((x: number) => void) | ((x: Object) => void)
+  ours: (arg0: number) => void
+
+line 21: r8
+  tsc:  ((x: Object) => void) | ((x: number) => void)
+  ours: (arg0: number) => void
+
+line 21: true ? (x: Object) => { } : (x: number) => { }
+  tsc:  ((x: Object) => void) | ((x: number) => void)
+  ours: (arg0: number) => void

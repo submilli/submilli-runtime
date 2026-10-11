@@ -13,11 +13,15 @@ let nu = null / null;
 >null / null : number
 >            : ^^^^^^
 
-let u = null / null;
+let u = undefined / undefined;
 >u : number
 >  : ^^^^^^
->null / null : number
->            : ^^^^^^
+>undefined / undefined : number
+>                      : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 let b: boolean = null as unknown as (boolean);
@@ -140,12 +144,12 @@ let s_3 = "";
 >"" : ""
 >   : ^^
 
-/*pruned*/;    
-         
-/*pruned*/;    
-         
+/*pruned*/;
 
-/*pruned*/;                                 
+/*pruned*/;
+
+
+/*pruned*/;
 let r_2 = /what/;
 >r_2 : RegExp
 >    : ^^^^^^

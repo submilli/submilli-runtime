@@ -625,7 +625,7 @@ impl Inferer<'_> {
             other => vec![other],
         };
         let mut tuples = members.into_iter().filter_map(|member| match member {
-            Type::Tuple(slots) if slots.len() == len => Some(slots.clone()),
+            Type::Tuple(tuple) if tuple.elements.len() == len => Some(tuple.elements.clone()),
             _ => None,
         });
         match (tuples.next(), tuples.next()) {
@@ -793,7 +793,8 @@ pub(super) fn holds_error_type(ty: &Type) -> bool {
         Type::Array(elem) | Type::Readonly(elem) | Type::Refined { ty: elem, .. } => {
             holds_error_type(elem)
         }
-        Type::Tuple(members) | Type::Union(members) => members.iter().any(holds_error_type),
+        Type::Tuple(tuple) => tuple.elements.iter().any(holds_error_type),
+        Type::Union(members) => members.iter().any(holds_error_type),
         Type::Function { params, ret, .. } => {
             params.iter().any(holds_error_type) || holds_error_type(ret)
         }

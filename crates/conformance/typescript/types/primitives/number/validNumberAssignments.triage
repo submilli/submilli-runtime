@@ -1,2 +1,1 @@
-line 5 extra: bug SUB-1196 (primitive to `{}`) a primitive isn't assignable to `{}` or `Object`
 line 8, 10 extra: by-design spec §1.2 enums are nominal, so a `number` isn't assignable to a numeric enum

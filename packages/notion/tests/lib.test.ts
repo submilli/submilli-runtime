@@ -6,7 +6,9 @@ import {
     PropertyBag,
     PropertyValue,
     createComment,
+    createDatabase,
     notionId,
+    updatePage,
 } from "@submilli/notion";
 
 function main(): void {
@@ -49,8 +51,8 @@ function main(): void {
         content: { type: "markdown", markdown: "# Launch plan" },
         icon: icon,
     };
-    assert(input.properties !== null, "property bag is represented");
-    assert(input.content !== null && input.content.type === "markdown", "content strategy is explicit");
+    assert(input.properties !== undefined, "property bag is represented");
+    assert(input.content !== undefined && input.content.type === "markdown", "content strategy is explicit");
 
     label("NotionError preserves request and retry metadata");
     const error = new NotionError("rate_limited", "slow down", 429, "request-1", "2");
@@ -70,4 +72,26 @@ function main(): void {
         if (cause instanceof NotionError) missingParent = cause.code === "missing_discussion_parent";
     }
     assert(missingParent, "bare discussion IDs cannot claim an arbitrary page context");
+
+    label("a raw map entry without a JSON value is rejected, not silently dropped");
+    const schema = new Map<string, unknown>();
+    schema.set("Name", JSON.parse("{\"title\":{}}"));
+    schema.set("Missing", undefined);
+    let rejected = "";
+    try {
+        createDatabase({ parentPage: compact, title: "Tasks", properties: schema });
+    } catch (cause) {
+        if (cause instanceof NotionError) rejected = cause.code;
+    }
+    assert(rejected === "invalid_body", "undefined map value throws invalid_body, got " + rejected);
+
+    label("a null icon is a change that removes the icon, not an empty update");
+    let iconOutcome = "no error";
+    try {
+        updatePage(compact, { icon: null });
+    } catch (cause) {
+        if (cause instanceof NotionError) iconOutcome = cause.code;
+    }
+    // Without a bound token the request stops at the credential; the update itself was accepted.
+    assert(iconOutcome !== "empty_update", "icon: null counts as a changed field");
 }

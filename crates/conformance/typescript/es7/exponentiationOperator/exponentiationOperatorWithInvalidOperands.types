@@ -12,7 +12,7 @@ enum E { a, b, c }
 >  : ^^^
 
 
-/*pruned*/;                           
+/*pruned*/;
 let b: boolean = null as unknown as (boolean);
 >b : boolean
 >  : ^^^^^^^
@@ -49,18 +49,18 @@ let e: { a: number } = null as unknown as ({ a: number });
 >a : number
 >  : ^^^^^^
 
-/*pruned*/;                                 
+/*pruned*/;
 
 // All of the below should be an error unless otherwise noted
 // operator **
 /*pruned*/;        //ok
-/*pruned*/;       
+/*pruned*/;
 /*pruned*/;        //ok
-/*pruned*/;       
-/*pruned*/;       
-/*pruned*/;       
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;       
+/*pruned*/;
 let r1b2 = b ** b;
 >r1b2 : number
 >     : ^^^^^^
@@ -101,7 +101,7 @@ let r1b5 = b ** e;
 >e : { a: number; }
 >  : ^^^^^^^^^^^^^^
 
-/*pruned*/;       
+/*pruned*/;
 
 /*pruned*/;        //ok
 let r1c2 = c ** b;
@@ -144,9 +144,9 @@ let r1c5 = c ** e;
 >e : { a: number; }
 >  : ^^^^^^^^^^^^^^
 
-/*pruned*/;       
+/*pruned*/;
 
-/*pruned*/;       
+/*pruned*/;
 let r1d2 = d ** b;
 >r1d2 : number
 >     : ^^^^^^
@@ -187,9 +187,9 @@ let r1d5 = d ** e;
 >e : { a: number; }
 >  : ^^^^^^^^^^^^^^
 
-/*pruned*/;       
+/*pruned*/;
 
-/*pruned*/;       
+/*pruned*/;
 let r1e2 = e ** b;
 >r1e2 : number
 >     : ^^^^^^
@@ -230,14 +230,14 @@ let r1e5 = e ** e;
 >e : { a: number; }
 >  : ^^^^^^^^^^^^^^
 
-/*pruned*/;       
+/*pruned*/;
 
-/*pruned*/;       
-/*pruned*/;       
-/*pruned*/;       
-/*pruned*/;       
-/*pruned*/;       
-/*pruned*/;       
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 /*pruned*/;          //ok
 let r1g2 = E.a ** b;
@@ -296,7 +296,7 @@ let r1g5 = E.a ** e;
 >e : { a: number; }
 >  : ^^^^^^^^^^^^^^
 
-/*pruned*/;         
+/*pruned*/;
 
 /*pruned*/;          //ok
 let r1h2 = b ** E.b;
@@ -355,7 +355,7 @@ let r1h5 = e ** E.b;
 >b : E.b
 >  : ^^^
 
-/*pruned*/;        
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

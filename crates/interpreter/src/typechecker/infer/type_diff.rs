@@ -7,9 +7,6 @@ thread_local! {
     static FAIL_RENDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-const VOID_IS_NOT_A_VALUE: &str = "`void` is not a value: a function declared `: void` produces nothing. \
-Call it as its own statement, then produce the value separately.";
-
 pub(super) fn type_mismatch_help(expected: &Type, got: &Type) -> Result<Vec<String>, RenderError> {
     let mut help = Vec::new();
     help.try_reserve(2).map_err(|_| RenderError::Allocation)?;
@@ -19,7 +16,45 @@ pub(super) fn type_mismatch_help(expected: &Type, got: &Type) -> Result<Vec<Stri
     if let Some(note) = guard_loss_note(got)? {
         help.push(note);
     }
+    if let Some(note) = weak_type_note(expected, got)? {
+        help.push(note);
+    }
     Ok(help)
+}
+
+/// Explains a rejection by the weak-type rule: an object type whose fields are
+/// all optional takes only a value that has at least one of them.
+fn weak_type_note(expected: &Type, got: &Type) -> Result<Option<String>, RenderError> {
+    let (
+        Type::Object {
+            fields: expected_fields,
+            index: None,
+        },
+        Type::Object {
+            fields: got_fields, ..
+        },
+    ) = (expected.peel(), got.peel())
+    else {
+        return Ok(None);
+    };
+    if !super::assignable::weak_type_rejects(got_fields, expected_fields) {
+        return Ok(None);
+    }
+    for ty in [expected, got] {
+        match crate::type_rendering::check_for_copy(ty) {
+            Ok(()) => {}
+            Err(RenderError::Truncated) => return Ok(Some(crate::rendering::TRUNCATED.into())),
+            Err(error) => return Err(error),
+        }
+    }
+    Writer::render(RenderLimits::default(), |out| {
+        out.push("every field of `")?;
+        write_type(out, expected)?;
+        out.push("` is optional, and `")?;
+        write_type(out, got)?;
+        out.push("` has none of them; as in TypeScript, a value must share at least one field with such a type")
+    })
+    .map(|rendered| Some(rendered.text))
 }
 
 pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<String>, RenderError> {
@@ -41,15 +76,11 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<Str
         (expected, got),
         (Type::Object { .. }, Type::Object { .. }) | (Type::Function { .. }, Type::Function { .. })
     );
-    let is_void = matches!(got.peel(), Type::Void) && !matches!(expected.peel(), Type::Void);
     let readonly = super::assignable::drops_readonly(got, expected);
-    if !has_diff && !is_void && !readonly {
+    if !has_diff && !readonly {
         return Ok(None);
     }
     Writer::render(RenderLimits::default(), |out| {
-        if is_void {
-            return out.push(VOID_IS_NOT_A_VALUE);
-        }
         if readonly {
             out.push("`")?;
             write_type(out, got)?;
@@ -75,6 +106,18 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<Str
                     write_expected(out, expected, got)
                 }
             }
+            // Differing optional counts make the parameter lists differ
+            // where no row shows it, so the plain mismatch says more.
+            (
+                Type::Function {
+                    optional: a_optional,
+                    ..
+                },
+                Type::Function {
+                    optional: b_optional,
+                    ..
+                },
+            ) if a_optional != b_optional => write_expected(out, expected, got),
             (
                 Type::Function {
                     params: a,
@@ -381,12 +424,14 @@ mod tests {
                 ret: Box::new(Type::Void),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
             &Type::Function {
                 params: vec![Type::Number, Type::Number],
                 ret: Box::new(Type::Void),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
         );
         insta::assert_snapshot!(out.unwrap());
@@ -400,12 +445,14 @@ mod tests {
                 ret: Box::new(Type::Boolean),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
             &Type::Function {
                 params: vec![Type::Number, Type::Number],
                 ret: Box::new(Type::Boolean),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
         );
         insta::assert_snapshot!(out.unwrap());
@@ -419,12 +466,14 @@ mod tests {
                 ret: Box::new(Type::Number),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
             &Type::Function {
                 params: vec![],
                 ret: Box::new(Type::String),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
         );
         insta::assert_snapshot!(out.unwrap());
@@ -438,12 +487,14 @@ mod tests {
                 ret: Box::new(Type::Boolean),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
             &Type::Function {
                 params: vec![Type::String, Type::String, Type::Number],
                 ret: Box::new(Type::Void),
                 predicate: None,
                 has_rest: false,
+                optional: 0,
             },
         );
         insta::assert_snapshot!(out.unwrap());

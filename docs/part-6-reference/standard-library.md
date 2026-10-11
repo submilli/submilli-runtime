@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2c3eb285d02288236f6512c2086fdaac71865f5b49c5179de7b54b8c291758fd"
-  confirmedAt: "2026-10-05T17:36:35.000Z"
+  contentHash: "8b2e285130d62bdc705ab4f93500a9b8576133777739e04cec5e209f79462dd3"
+  confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
 This page describes what each `submilli:` module does, the capabilities
@@ -214,7 +214,7 @@ Workspace tools: numbered reads, search, glob, tree, anchored edits and unified 
 | `glob(pattern: string): { entries: { depth: number; kind: string; modifiedAt: number; path: string }[]; truncated: boolean }` |  | Match file paths relative to /; newest modification first, path breaks ties. |
 | `insertAt(path: string, line: number, text: string): { changed: boolean; diagnostics: { hunk: number; line: number; message: string }[]; diff: string; success: boolean }` |  | Insert text literally before a one-based line; one past the last line appends. |
 | `read(path: string, offset?: number, limit?: number): { lines: { line: number; text: string }[]; path: string; truncated: boolean }` |  | Numbered UTF-8 lines; one-based offset, default 200 lines. |
-| `search(pattern: string, options?: null \| { caseSensitive?: boolean; context?: number; exclude?: string[]; include?: string[]; limit?: number; mode?: string; path?: string }): { counts: { count: number; path: string }[]; files: string[]; matches: { after: { line: number; text: string }[]; before: { line: number; text: string }[]; line: number; path: string; text: string }[]; truncated: boolean }` |  | Regex search, ignoring hidden and ignored paths. |
+| `search(pattern: string, options?: { caseSensitive?: boolean; context?: number; exclude?: string[]; include?: string[]; limit?: number; mode?: string; path?: string }): { counts: { count: number; path: string }[]; files: string[]; matches: { after: { line: number; text: string }[]; before: { line: number; text: string }[]; line: number; path: string; text: string }[]; truncated: boolean }` |  | Regex search, ignoring hidden and ignored paths. |
 | `tree(path: string, depth?: number): { entries: { depth: number; kind: string; modifiedAt: number; path: string }[]; truncated: boolean }` |  | Ignored/hidden paths omitted; symlinks listed but never traversed. |
 
 ## `submilli:crypto`
@@ -244,11 +244,11 @@ One alias this caller may embed with.
 
 | Member | Description |
 | --- | --- |
-| `readonly description: string \| null` | Operator-authored deployment intent, or `null` when none was declared. |
+| `readonly description: string \| undefined` | Operator-authored deployment intent, or `undefined` when none was declared. |
 | `readonly dimensions: number` | The length of every vector this alias returns. |
 | `readonly identity: string` | The embedding-space identity results from this alias carry. |
 | `readonly maxInputBytes: number` | The UTF-8 byte length above which one text is refused before sending. |
-| `readonly maxInputTokens: number \| null` | The alias's input limit in tokens, or `null` when none is known. |
+| `readonly maxInputTokens: number \| undefined` | The alias's input limit in tokens, or `undefined` when none is known. |
 | `readonly name: string` | The alias name, exactly as `embed` expects it. |
 
 ### `Embeddings`
@@ -260,7 +260,7 @@ The sealed result of `embed`: vectors held by the runtime at 4 bytes per number,
 | `readonly count: number` | The number of vectors, equal to the number of texts embedded. |
 | `readonly dimensions: number` | The length of every vector. |
 | `readonly identity: string` | The embedding-space identity of every vector here. |
-| `readonly inputTokens: number \| null` | Input tokens the provider reported for the whole call, or `null` when it reported none. |
+| `readonly inputTokens: number \| undefined` | Input tokens the provider reported for the whole call, or `undefined` when it reported none. |
 | `readonly model: string` | The alias these vectors were embedded with. |
 | `bytes(index: number): Uint8Array` | The vector of `texts[index]` as little-endian 32-bit floats: `dimensions * 4` bytes, the compact form for storing a vector. |
 | `vector(index: number): number[]` | The vector of `texts[index]` as a `number[]` of `dimensions` numbers. |
@@ -280,16 +280,16 @@ Sandbox filesystem: read/write/list/stat/remove/exists/info.
 | `info(): Info` |  | The active VFS configuration: the root's `mode` (`"none"` / `"ephemeral"` / `"per_session"` / `"named"`), `access`, `volume` and `sizeLimit` (the cap on the bytes its files may hold, or `-1` when none applies), plus `mounts`, the named volumes grafted below the root. |
 | `lines(path: string): Iterator<string>` | `fs.read { path }` | Stream the file at `path` as a constant-memory line iterator. |
 | `list(path: string, recursive: boolean): Iterator<DirEntry>` | `fs.list { path, recursive }` | List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. |
-| `maxReadSize(): number` |  | Maximum number of bytes `read` / `readText` will load whole; past this they return `null`. |
+| `maxReadSize(): number` |  | Maximum number of bytes `read` / `readText` will load whole; past this they return `undefined`. |
 | `mkdir(path: string, recursive: boolean): void` | `fs.mkdir { path, recursive }` | Create the directory at `path`. |
 | `move(from: string, to: string): void` | `fs.move { from, to }` | Move / rename. |
 | `peek(path: string): Peek` | `fs.stat { path }` | Quick file-only inspection: preview (first ~256 bytes decoded UTF-8 lossy), detected `encoding` (`utf-8` / `utf-16le` / `utf-16be` / `latin1`), `lineEnding` (`lf` / `crlf`), and total `size`. |
-| `read(path: string): Uint8Array \| null` | `fs.read { path }` | Read the whole file as a `Uint8Array`. |
+| `read(path: string): Uint8Array \| undefined` | `fs.read { path }` | Read the whole file as a `Uint8Array`. |
 | `readBytes(path: string, offset: number, length: number): Uint8Array` | `fs.read { path, length }` | Random-access byte-range read. |
-| `readText(path: string): string \| null` | `fs.read { path }` | Read the whole file as a UTF-8 string. |
+| `readText(path: string): string \| undefined` | `fs.read { path }` | Read the whole file as a UTF-8 string. |
 | `remove(path: string, recursive: boolean): void` | `fs.remove { path, recursive }` | Remove the entry at `path`. |
 | `size(path: string): number` | `fs.stat { path }` | File size in bytes. |
-| `stat(path: string): Stat \| null` | `fs.stat { path }` | Metadata about an entry under the VFS root. |
+| `stat(path: string): Stat \| undefined` | `fs.stat { path }` | Metadata about an entry under the VFS root. |
 | `write(path: string, content: Uint8Array): void` | `fs.write { path, length: number }` | Write `content` to `path` atomically (temp-file + rename). |
 | `writeText(path: string, content: string): void` | `fs.write { path, length: number }` | UTF-8 atomic write. |
 | `writer(path: string): FileWriter` | `fs.write { path }` | Open `path` as an append-only `FileWriter`. |
@@ -370,8 +370,8 @@ A repository under the VFS root.
 
 | Member | Capability | Description |
 | --- | --- | --- |
-| `static clone(url: string, path: string, options?: null \| { branch?: string }): Repository` | `git.clone { path, remote: $url, remoteName: "origin", branch: string }` | Clone HTTPS into an empty VFS directory, following remote HEAD unless branch is specified. |
-| `static init(path: string, options?: null \| { branch?: string }): Repository` | `git.init { path }` | Initialize a repository, default branch main. |
+| `static clone(url: string, path: string, options?: { branch?: string }): Repository` | `git.clone { path, remote: $url, remoteName: "origin", branch: string }` | Clone HTTPS into an empty VFS directory, following remote HEAD unless branch is specified. |
+| `static init(path: string, options?: { branch?: string }): Repository` | `git.init { path }` | Initialize a repository, default branch main. |
 | `static open(path: string): Repository` |  | Open an ordinary repository under the VFS root. |
 | `constructor(path: string)` |  |  |
 | `add(paths: string[]): void` |  | Stage explicit files or directories, including deletions. |
@@ -379,14 +379,14 @@ A repository under the VFS root.
 | `branches(): { current: boolean; id: string; name: string }[]` |  | List local branches. |
 | `commit(message: string): string` | `git.commit { path: string, branch: string }` | Commit staged changes with Blueprint identity and return the commit ID. |
 | `createBranch(name: string, start?: string): void` |  | Create a branch without overwriting an existing branch. |
-| `diff(options?: null \| { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string }` |  | Compare working (default), staged, or refs (requires from and to). |
+| `diff(options?: { from?: string; mode?: string; to?: string }): { binaryPaths: string[]; patch: string }` |  | Compare working (default), staged, or refs (requires from and to). |
 | `fetch(remote?: string, branch?: string): { branches: string[] }` | `git.fetch { path: string, remoteName: $remote, remote: string, branch: string }` | Fetch remote-tracking branches. |
-| `log(options?: null \| { limit?: number; offset?: number }): { commits: { authorEmail: string; authorName: string; id: string; message: string }[]; nextOffset: number \| null }` |  | Read history, default 50 commits; limit 1..1000, nonnegative integer offset. |
+| `log(options?: { limit?: number; offset?: number }): { commits: { authorEmail: string; authorName: string; id: string; message: string }[]; nextOffset?: number }` |  | Read history, default 50 commits; limit 1..1000, nonnegative integer offset. |
 | `pull(remote?: string, branch?: string): { current: string; previous: string }` | `git.fetch { path: string, remoteName: $remote, remote: string, branch: string }` | Fetch and fast-forward the current branch under git.fetch. |
 | `remotes(): { name: string; url: string }[]` |  | List named remotes without credentials. |
 | `setRemoteUrl(name: string, url: string): void` |  | Update an existing remote's HTTPS URL. |
 | `show(ref: string, path: string): Uint8Array` |  | Read file bytes from a commit. |
-| `status(): { branch: string \| null; clean: boolean; entries: { path: string; staged: string; unstaged: string; untracked: boolean }[] }` |  | Inspect staged, unstaged and untracked paths. |
+| `status(): { branch?: string; clean: boolean; entries: { path: string; staged: string; unstaged: string; untracked: boolean }[] }` |  | Inspect staged, unstaged and untracked paths. |
 | `switchBranch(name: string): void` |  | Switch local branches; requires a completely clean working tree. |
 
 ## `submilli:http`
@@ -395,15 +395,15 @@ Outbound HTTP: get/post/put/patch/delete/head.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `delete(url: string, headers?: Headers \| null): Response` | `http.delete { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP DELETE. |
-| `download(url: string, path: string, options?: DownloadOptions \| null): DownloadResult` | `http.download { host: $url.host, url_path: $url.path, vfs_path: $path, max_bytes: number, overwrite: boolean, decompress: boolean }`<br>`fs.write { path, max_bytes: number }` | Download a remote file directly to the VFS — wget-style. |
-| `get(url: string, headers?: Headers \| null): Response` | `http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP GET. |
-| `head(url: string, headers?: Headers \| null): Response` | `http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP HEAD. |
-| `options(url: string, headers?: Headers \| null): Response` | `http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP OPTIONS. |
-| `patch(url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers \| null): Response` | `http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PATCH. |
-| `post(url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers \| null): Response` | `http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP POST. |
-| `put(url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers \| null): Response` | `http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PUT. |
-| `request(method: string, url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers \| null): Response` | `http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.delete { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue an HTTP request with a runtime-chosen verb. |
+| `delete(url: string, headers?: Headers): Response` | `http.delete { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP DELETE. |
+| `download(url: string, path: string, options?: DownloadOptions): DownloadResult` | `http.download { host: $url.host, url_path: $url.path, vfs_path: $path, max_bytes: number, overwrite: boolean, decompress: boolean }`<br>`fs.write { path, max_bytes: number }` | Download a remote file directly to the VFS — wget-style. |
+| `get(url: string, headers?: Headers): Response` | `http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP GET. |
+| `head(url: string, headers?: Headers): Response` | `http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP HEAD. |
+| `options(url: string, headers?: Headers): Response` | `http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP OPTIONS. |
+| `patch(url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers): Response` | `http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PATCH. |
+| `post(url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers): Response` | `http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP POST. |
+| `put(url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers): Response` | `http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue a synchronous HTTP PUT. |
+| `request(method: string, url: string, body?: string \| Uint8Array \| {} \| unknown[] \| null, headers?: Headers): Response` | `http.get { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.post { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.put { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.patch { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.delete { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.head { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }`<br>`http.options { host: $url.host, path: $url.path, body_size: number, timeout_ms: number }` | Issue an HTTP request with a runtime-chosen verb. |
 
 ### `DownloadOptions`
 
@@ -412,7 +412,7 @@ Options bag for [`download`].
 | Member | Description |
 | --- | --- |
 | `decompress?: boolean` | When `true`, transparently gunzip / unzstd the response if the `Content-Encoding` header (or URL suffix `.gz` / `.zst`) advertises a compressed stream. |
-| `headers?: Headers \| null` | Request headers — typically used for auth (`Authorization: Bearer …`). |
+| `headers?: Headers \| undefined` | Request headers — typically used for auth (`Authorization: Bearer …`). |
 | `maxBytes?: number` | Maximum bytes to write to disk (post-decompression when `decompress` is true). |
 | `overwrite?: boolean` | When `true`, clobber an existing file at `path`. |
 | `timeout?: number` | Per-request timeout in milliseconds. |
@@ -461,8 +461,8 @@ Gated model calls: call/batch, and models() to discover them.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `batch<T>(model: string, prompts: string[], schema?: string \| null): T` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one completion each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
-| `call<T>(model: string, prompt: string, schema?: string \| null): T` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion. |
+| `batch<T>(model: string, prompts: string[], schema?: string): T` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one completion each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
+| `call<T>(model: string, prompt: string, schema?: string): T` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion. |
 | `models(): Model[]` | `llm.call { prompt_count: 0 }` | The models this runtime serves and this caller may call. |
 
 ### `Completion`
@@ -471,15 +471,15 @@ One prompt's outcome, positionally matched to the prompt that produced it.
 
 | Member | Description |
 | --- | --- |
-| `readonly finishReason: string \| null` | The provider's own raw stop reason, for diagnosis only. |
-| `readonly inputTokens: number \| null` | Prompt tokens the provider reported. |
-| `readonly message: string \| null` | A fixed classification of the failure, `null` when `ok`. |
+| `readonly finishReason: string \| undefined` | The provider's own raw stop reason, for diagnosis only. |
+| `readonly inputTokens: number \| undefined` | Prompt tokens the provider reported. |
+| `readonly message: string \| undefined` | A fixed classification of the failure, `undefined` when `ok`. |
 | `readonly ok: boolean` | Whether the model stopped naturally. |
-| `readonly outputTokens: number \| null` | Completion tokens the provider reported, with the same `null`-means-indeterminate rule as `inputTokens`. |
-| `readonly reason: string \| null` | Why this element is not a clean completion, `null` when `ok`. |
+| `readonly outputTokens: number \| undefined` | Completion tokens the provider reported, with the same `undefined`-means-indeterminate rule as `inputTokens`. |
+| `readonly reason: string \| undefined` | Why this element is not a clean completion, `undefined` when `ok`. |
 | `readonly retryable: boolean` | Whether re-sending this identical prompt could plausibly succeed. |
-| `readonly status: number \| null` | The HTTP status the provider answered with, `null` when none was observed — which is what distinguishes a dead connection from a provider that answered with an error. |
-| `readonly text: string \| null` | The completion text. |
+| `readonly status: number \| undefined` | The HTTP status the provider answered with, `undefined` when none was observed — which is what distinguishes a dead connection from a provider that answered with an error. |
+| `readonly text: string \| undefined` | The completion text. |
 
 ### `Model`
 
@@ -487,8 +487,8 @@ One model this caller may call.
 
 | Member | Description |
 | --- | --- |
-| `readonly contextWindow: number \| null` | The model's context window in tokens, or `null` when the operator declared none. |
-| `readonly description: string \| null` | Operator-authored deployment intent, or `null` when none was declared. |
+| `readonly contextWindow: number \| undefined` | The model's context window in tokens, or `undefined` when the operator declared none. |
+| `readonly description: string \| undefined` | Operator-authored deployment intent, or `undefined` when none was declared. |
 | `readonly name: string` | The model name, exactly as `call` and `batch` expect it. |
 
 ## `submilli:secrets`
@@ -497,7 +497,7 @@ Policy-gated access to Blueprint-declared secrets.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `get(secret: string): string \| null` | `secrets.get { name: $secret }` | Resolve a Blueprint-declared secret by name. |
+| `get(secret: string): string \| undefined` | `secrets.get { name: $secret }` | Resolve a Blueprint-declared secret by name. |
 
 ## `submilli:session`
 
@@ -505,9 +505,9 @@ Session-scoped key-value state: get/has/set/remove/list.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `get<T>(key: string): T` | `session.read { key }` | Read a session value, checked against `T`. |
+| `get<T>(key: string): T \| undefined` | `session.read { key }` | Read a session value, checked against `T`. |
 | `has(key: string): boolean` | `session.read { key }` | Whether the session holds an entry for `key`. |
-| `list(prefix: string, limit: number, cursor: string \| null): Page` | `session.list { prefix }`<br>`session.read { key } - per candidate key` | Enumerate session keys starting with `prefix`, in UTF-16 code-unit order. |
+| `list(prefix: string, limit: number, cursor?: string): Page` | `session.list { prefix }`<br>`session.read { key } - per candidate key` | Enumerate session keys starting with `prefix`, in UTF-16 code-unit order. |
 | `remove(key: string): boolean` | `session.remove { key }` | Delete `key`. |
 | `set(key: string, value: unknown): void` | `session.write { key }` | Store `value` under `key`, replacing any previous entry. |
 
@@ -527,7 +527,7 @@ One page of a `list` call: the `entries` it discloses and the `nextCursor` that 
 | Member | Description |
 | --- | --- |
 | `readonly entries: Entry[]` | The keys this page discloses, in UTF-16 code-unit order. |
-| `readonly nextCursor: string \| null` | Opaque cursor for the next page, or `null` when no further matching key remains. |
+| `readonly nextCursor: string \| undefined` | Opaque cursor for the next page, or `undefined` when no further matching key remains. |
 
 ## `submilli:url`
 
@@ -535,7 +535,7 @@ URL parse/build and query-string handling. Pure compute.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `build(protocol: string, host: string, port: number \| null, path: string, query: Query, fragment: string \| null): string` |  | Serialise URL parts to an absolute URL string. |
+| `build(protocol: string, host: string, port: number \| undefined, path: string, query: Query, fragment?: string): string` |  | Serialise URL parts to an absolute URL string. |
 | `decodeComponent(s: string): string` |  | Percent-decode `s`. |
 | `decodeQuery(s: string): Query` |  | Parse a URL-encoded query string into a `Query` (`Map<string, string>`). |
 | `encodeComponent(s: string): string` |  | Percent-encode `s` per RFC 3986 (UTF-8 then `%HH` for every byte that isn't an ASCII alphanumeric or one of `-`, `.`, `_`, `~`). |
@@ -556,10 +556,10 @@ Parsed URL parts — the return type of `parse`.
 
 | Member | Description |
 | --- | --- |
-| `readonly fragment: string \| null` | Fragment string (without the `#` prefix), or `null` when the URL has no `#` segment. |
+| `readonly fragment: string \| undefined` | Fragment string (without the `#` prefix), or `undefined` when the URL has no `#` segment. |
 | `readonly host: string` | Host name, e.g. `"api.acme.com"`. |
 | `readonly path: string` | Path component, including the leading `/`. |
-| `readonly port: number \| null` | Port number, or `null` when the URL omits one. |
+| `readonly port: number \| undefined` | Port number, or `undefined` when the URL omits one. |
 | `readonly protocol: string` | Scheme, e.g. `"https"`. |
 | `readonly query: Query` | Query parameters as a `Query` (`Map<string, string>`). |
 

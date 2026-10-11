@@ -1,6 +1,5 @@
 // A body returning `unknown` that ends without a `return`, or returns with a
-// bare `return;`, yields `null`, the value standing in for JavaScript's
-// `undefined`.
+// bare `return;`, yields `undefined`.
 type Anything = unknown;
 
 function pick(flag: boolean): unknown {
@@ -88,31 +87,31 @@ class Derived extends Base {
 }
 
 function main(): void {
-  assert(pick(false) === null);
+  assert(pick(false) === undefined);
   assert(pick(true) === 1);
-  assert(aliased(false) === null);
+  assert(aliased(false) === undefined);
   assert(aliased(true) === "x");
-  assert(early(true) === null);
+  assert(early(true) === undefined);
   assert(early(false) === 4);
-  assert(viaLoop(5) === null);
+  assert(viaLoop(5) === undefined);
   assert(viaLoop(1) === "done");
-  assert(viaFinally(false) === null);
+  assert(viaFinally(false) === undefined);
   assert(viaFinally(true) === 9);
-  assert(Base.make(true) === null);
+  assert(Base.make(true) === undefined);
   assert(Base.make(false) === "made");
 
   const base = new Base();
-  assert(base.read(false) === null);
+  assert(base.read(false) === undefined);
   assert(base.read(true) === true);
-  assert(base.value === null);
-  assert(base.skip(true) === null);
+  assert(base.value === undefined);
+  assert(base.skip(true) === undefined);
   assert(base.skip(false) === "kept");
-  assert(base.bare === null);
+  assert(base.bare === undefined);
   const reader: Reader = new Derived();
-  assert(reader.read(true) === null);
+  assert(reader.read(true) === undefined);
 
   const derived: Base = new Derived();
-  assert(derived.read(true) === null);
+  assert(derived.read(true) === undefined);
   assert(derived.read(false) === 7);
 
   const arrow = (flag: boolean): unknown => {
@@ -120,7 +119,7 @@ function main(): void {
       return 2;
     }
   };
-  assert(arrow(false) === null);
+  assert(arrow(false) === undefined);
   assert(arrow(true) === 2);
   const annotatedBare = (flag: boolean): unknown => {
     if (flag) {
@@ -128,7 +127,7 @@ function main(): void {
     }
     return 5;
   };
-  assert(annotatedBare(true) === null);
+  assert(annotatedBare(true) === undefined);
   assert(annotatedBare(false) === 5);
 
   // A closure typed `unknown` only by its context behaves as an annotated
@@ -136,7 +135,7 @@ function main(): void {
   const contextual: () => unknown = () => {
     return;
   };
-  assert(contextual() === null);
+  assert(contextual() === undefined);
   const mixed: (flag: boolean) => unknown = (flag) => {
     if (flag) {
       return null;
@@ -150,7 +149,7 @@ function main(): void {
       return "p";
     }
   };
-  assert(partial(false) === null);
+  assert(partial(false) === undefined);
   assert(partial(true) === "p");
 
   const mapped = [1, 2].map((x): unknown => {
@@ -158,7 +157,7 @@ function main(): void {
       return x;
     }
   });
-  assert(mapped[0] === null);
+  assert(mapped[0] === undefined);
   assert(mapped[1] === 2);
 
   const literal = {
@@ -169,7 +168,7 @@ function main(): void {
       return "lit";
     },
   };
-  assert(literal.get(true) === null);
+  assert(literal.get(true) === undefined);
   assert(literal.get(false) === "lit");
 
   function nested(flag: boolean): unknown {
@@ -180,6 +179,6 @@ function main(): void {
       return;
     }
   }
-  assert(nested(false) === null);
+  assert(nested(false) === undefined);
   assert(nested(true) === 3);
 }

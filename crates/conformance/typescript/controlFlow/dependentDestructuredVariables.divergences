@@ -1,0 +1,71 @@
+types: 172 of 316 tsc entries compared, 16 differ
+
+line 38: payload
+  tsc:  never
+  ours: number | string
+
+line 93: payload
+  tsc:  number
+  ours: number | undefined
+
+line 96: payload
+  tsc:  string
+  ours: string | undefined
+
+line 111: payload
+  tsc:  never
+  ours: number | string
+
+line 357: value
+  tsc:  number
+  ours: number | string
+
+line 362: value
+  tsc:  string
+  ours: number | string
+
+line 412: y
+  tsc:  2 | 4 | undefined
+  ours: <error>
+
+line 413: x
+  tsc:  1
+  ours: 1 | 3 | 5
+
+line 415: y
+  tsc:  2 | 4 | undefined
+  ours: never
+
+line 416: x
+  tsc:  3
+  ours: 1 | 3 | 5
+
+line 418: y
+  tsc:  2 | 4 | undefined
+  ours: never
+
+line 419: x
+  tsc:  5
+  ours: 1 | 3 | 5
+
+line 422: y
+  tsc:  2
+  ours: never
+
+line 425: y
+  tsc:  4
+  ours: never
+
+line 428: y
+  tsc:  undefined
+  ours: never
+
+line 435: y
+  tsc:  2 | 1 | undefined
+  ours: <error>
+
+errors:
+line 93: ours: cannot read field `toFixed` on `number | undefined`: the receiver can be `undefined` (tsc accepts)
+line 96: ours: cannot read field `toUpperCase` on `string | undefined`: the receiver can be `undefined` (tsc accepts)
+line 411: ours: destructuring pattern has 2 elements, but a tuple in the right-hand side union has only 1 element (tsc accepts)
+line 434: ours: destructuring pattern has 2 elements, but a tuple in the right-hand side union has only 1 element (tsc accepts)

@@ -113,6 +113,7 @@ const FEATURES = [
     { name: "`string`", spec: "1.1", type: typeWord("string"), node: is(K.StringKeyword) },
     { name: "`boolean`", spec: "1.1", type: typeWord("boolean"), node: is(K.BooleanKeyword) },
     { name: "`null`", spec: "1.1", type: typeWord("null"), node: isNull },
+    { name: "`undefined`", spec: "1.1", type: typeWord("undefined"), node: (n) => n.kind === K.UndefinedKeyword || (ts.isIdentifier(n) && n.text === "undefined") },
     { name: "`void`", spec: "1.1", type: typeWord("void"), node: is(K.VoidKeyword) },
     { name: "`never`", spec: "1.1", type: typeWord("never"), node: is(K.NeverKeyword) },
     { name: "`bigint`", spec: "1.1", type: typeWord("bigint"), node: is(K.BigIntKeyword, K.BigIntLiteral), test262: ["BigInt"] },
@@ -128,6 +129,8 @@ const FEATURES = [
     { name: "Optional properties (`a?: T`)", spec: "1.2", node: (n) => ts.isPropertySignature(n) && !!n.questionToken },
     { name: "Object literal shorthand (`{ x }`)", spec: "1.2", node: is(K.ShorthandPropertyAssignment) },
     { name: "Arrays (`T[]`)", spec: "1.2", type: /\[\]/, node: is(K.ArrayType, K.ArrayLiteralExpression), test262: ["Array"] },
+    { name: "Optional tuple elements", spec: "1.2", node: (n) => ts.isOptionalTypeNode(n) || (ts.isNamedTupleMember(n) && !!n.questionToken) },
+    { name: "Optional methods", spec: "1.2", node: (n) => (ts.isMethodDeclaration(n) || ts.isMethodSignature(n)) && !!n.questionToken },
     { name: "Tuples (`[T, U]`)", spec: "1.2", type: /^\[|[(:,|] \[/, node: is(K.TupleType) },
     { name: "`readonly` arrays and tuples", spec: "1.2", type: /\breadonly /, node: (n) => ts.isTypeOperatorNode(n) && n.operator === K.ReadonlyKeyword },
     { name: "Union types (`A | B`)", spec: "1.2", type: / \| /, node: is(K.UnionType) },
@@ -147,6 +150,7 @@ const FEATURES = [
     { name: "Nested function declarations", spec: "1.4", node: (n) => ts.isFunctionDeclaration(n) && inFunction(n), binds: declaredName((n) => ts.isFunctionDeclaration(n) && inFunction(n)), bindsInParent: true },
     { name: "Arrow functions", spec: "1.4", node: is(K.ArrowFunction) },
     { name: "Closures (function expressions and arrows in a function)", spec: "1.4", node: (n) => (ts.isArrowFunction(n) || ts.isFunctionExpression(n)) && inFunction(n) },
+    { name: "Optional parameters (`x?: T`)", spec: "1.4", node: (n) => ts.isParameter(n) && !!n.questionToken, binds: parametersOf((p) => !!p.questionToken) },
     { name: "Default parameters (`x = val`)", spec: "1.4", node: (n) => ts.isParameter(n) && !!n.initializer, binds: parametersOf((p) => !!p.initializer) },
     { name: "Rest parameters (`...args`)", spec: "2.9", node: (n) => ts.isParameter(n) && !!n.dotDotDotToken, binds: parametersOf((p) => !!p.dotDotDotToken) },
     { name: "Trailing commas", spec: "1.4", node: (n) => TRAILING_COMMA_FORMS.some((f) => f.node(n)), forms: TRAILING_COMMA_FORMS },
@@ -164,6 +168,7 @@ const FEATURES = [
     ] },
   ]],
   ["Operators", [
+    { name: "`void` expression", spec: "1.6", node: ts.isVoidExpression },
     { name: "Arithmetic (`+ - * / % **`)", spec: "1.6", node: binary(K.PlusToken, K.MinusToken, K.AsteriskToken, K.SlashToken, K.PercentToken, K.AsteriskAsteriskToken), forms: operatorForms(isBinary, [["+",K.PlusToken],["-",K.MinusToken],["*",K.AsteriskToken],["/",K.SlashToken],["%",K.PercentToken],["**",K.AsteriskAsteriskToken]]) },
     { name: "Strict equality (`===`, `!==`)", spec: "1.6", node: binary(K.EqualsEqualsEqualsToken, K.ExclamationEqualsEqualsToken), forms: operatorForms(isBinary, [["===",K.EqualsEqualsEqualsToken],["!==",K.ExclamationEqualsEqualsToken]]) },
     { name: "Loose equality (`==`, `!=`)", spec: "1.6", node: binary(K.EqualsEqualsToken, K.ExclamationEqualsToken), forms: operatorForms(isBinary, [["==",K.EqualsEqualsToken],["!=",K.ExclamationEqualsToken]]) },
@@ -173,7 +178,7 @@ const FEATURES = [
     { name: "Ternary (`? :`)", spec: "1.6", node: is(K.ConditionalExpression) },
     { name: "Assignment (`=`, `+=`, …)", spec: "1.6", node: (n) => ts.isBinaryExpression(n) && n.operatorToken.kind >= K.FirstAssignment && n.operatorToken.kind <= K.LastAssignment, forms: operatorForms(isBinary, [["=", K.EqualsToken], ["+=", K.PlusEqualsToken], ["-=", K.MinusEqualsToken], ["*=", K.AsteriskEqualsToken], ["/=", K.SlashEqualsToken], ["%=", K.PercentEqualsToken], ["**=", K.AsteriskAsteriskEqualsToken]]) },
     { name: "Postfix `++` / `--`", spec: "1.6", node: is(K.PostfixUnaryExpression), forms: operatorForms(is(K.PostfixUnaryExpression), [["++", K.PlusPlusToken], ["--", K.MinusMinusToken]]) },
-    { name: "`typeof x === \"T\"` narrowing", spec: "1.6", node: typeofComparison, forms: ["number", "string", "boolean", "object", "function"].map((tag) => ({ name: `"${tag}"`, node: typeofTag(tag) })) },
+    { name: "`typeof x === \"T\"` narrowing", spec: "1.6", node: typeofComparison, forms: ["number", "string", "boolean", "bigint", "undefined", "object", "function"].map((tag) => ({ name: `"${tag}"`, node: typeofTag(tag) })) },
     { name: "`x === null` narrowing", spec: "1.6", node: nullComparison, forms: [
       { name: "equal", node: (n) => nullComparison(n) && [K.EqualsEqualsEqualsToken, K.EqualsEqualsToken].includes(n.operatorToken.kind) },
       { name: "not equal", node: (n) => nullComparison(n) && [K.ExclamationEqualsEqualsToken, K.ExclamationEqualsToken].includes(n.operatorToken.kind) },
@@ -249,6 +254,7 @@ const FEATURES = [
     { name: "`export` on top-level declarations (ignored)", spec: "1.10", node: modifier(K.ExportKeyword) },
   ]],
   ["Destructuring", [
+    { name: "Destructuring defaults", spec: "1.6", node: (n) => ts.isBindingElement(n) && !!n.initializer },
     { name: "Object destructuring", spec: "1.6", node: is(K.ObjectBindingPattern), binds: (n) => ts.isObjectBindingPattern(n) ? boundNames(n) : [], forms: [
       { name: "shorthand", node: (n) => inPattern(ts.isObjectBindingPattern)(n) && !n.propertyName && !n.dotDotDotToken, binds: (n) => inPattern(ts.isObjectBindingPattern)(n) && !n.propertyName ? boundNames(n.name) : [], bindsInParent: true },
       { name: "renaming", node: (n) => inPattern(ts.isObjectBindingPattern)(n) && !!n.propertyName, binds: (n) => inPattern(ts.isObjectBindingPattern)(n) && n.propertyName ? boundNames(n.name) : [], bindsInParent: true },
@@ -300,7 +306,6 @@ const NOT_YET_SUPPORTED = [
   "Type parameters on instance methods",
   "User-declared namespaces",
   "Interface `extends`",
-  "Optional parameters (`x?`)",
   "Intersection types (`A & B`)",
   "Bitwise operators",
   "Utility types (`Partial`, `Pick`, …)",
@@ -337,8 +342,39 @@ function main() {
   }
   const inSuite = new Set(walk(path.join(conformanceDir, "typescript")).filter((f) => f.endsWith(".ts")).map((f) => path.relative(path.join(conformanceDir, "typescript"), f)));
   const excluded = excludedCases();
-  fs.writeFileSync(outputFile, render(features, test262Areas(), { upstream, inSuite, excluded }));
-  console.log(`wrote ${path.relative(workspace, outputFile)}`);
+  const selected = process.env.TYPESCRIPT_CHECKS_INPUT;
+  const reportPath = selected ? process.env.COVERAGE_OUTPUT : outputFile;
+  if (!reportPath) throw new Error("TYPESCRIPT_CHECKS_INPUT requires COVERAGE_OUTPUT so focused evidence cannot replace aggregate coverage");
+  const report = selected
+    ? renderFocused(features, byCase.size, inSuite, excluded)
+    : render(features, test262Areas(), { upstream, inSuite, excluded });
+  fs.writeFileSync(reportPath, report);
+  console.log(`wrote ${path.relative(workspace, reportPath)}`);
+}
+
+function renderFocused(features, caseCount, inSuite, excluded) {
+  const lines = [
+    "# Focused conformance coverage",
+    "",
+    "Generated by `typescript-baselines/coverage.cjs` from `TYPESCRIPT_CHECKS_INPUT`.",
+    `The runner compared types or errors in **${caseCount} selected TypeScript cases**.`,
+    "Counts describe comparisons, including documented divergences; they do not claim",
+    "that each expression agrees with TypeScript. Unselected cases supply no check",
+    "evidence here. The aggregate coverage report remains separate.",
+    "",
+    "A checked line is attributed by syntax, a declared name, or its TypeScript type.",
+    "Upstream counts use the pinned sources and current suite/exclusion inventory;",
+    "they are not additional test runs. Features with no selected check are omitted.",
+    "",
+    "| Feature | Selected cases | Lines checked | Upstream tests | In the suite | Excluded | Unaccounted |",
+    "|:--|--:|--:|--:|--:|--:|--:|",
+  ];
+  for (const feature of features.filter((f) => f.sites.size)) {
+    const brought = [...feature.upstream].filter((rel) => inSuite.has(rel)).length;
+    const left = [...feature.upstream].filter((rel) => !inSuite.has(rel) && excluded(rel)).length;
+    lines.push(`| ${feature.name} | ${feature.cases.size} | ${feature.sites.size} | ${feature.upstream.size} | ${brought} | ${left} | ${feature.upstream.size - brought - left} |`);
+  }
+  return lines.join("\n") + "\n";
 }
 
 // Every single-file upstream TypeScript case, recording in each feature the
@@ -383,8 +419,9 @@ function excludedCases() {
 
 // Every check the TypeScript runner makes, from a run of it.
 function typescriptChecks() {
-  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "coverage-")), "checks.tsv");
-  execFileSync("cargo", ["test", "--release", "-p", "conformance", "--test", "typescript"], {
+  const supplied = process.env.TYPESCRIPT_CHECKS_INPUT;
+  const out = supplied ?? path.join(fs.mkdtempSync(path.join(os.tmpdir(), "coverage-")), "checks.tsv");
+  if (!supplied) execFileSync("cargo", ["test", "--release", "-p", "conformance", "--test", "typescript"], {
     cwd: workspace,
     env: { ...process.env, SUBMILLI_TEST_NIGHTLY_ONLY: "1", TYPESCRIPT_CHECKS_OUT: out },
     stdio: ["ignore", "ignore", "inherit"],

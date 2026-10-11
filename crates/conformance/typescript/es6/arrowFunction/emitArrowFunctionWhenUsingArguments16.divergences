@@ -1,0 +1,5 @@
+types: 4 of 14 tsc entries compared, 0 differ
+
+errors:
+line 7: tsc TS1100: Invalid use of 'arguments' in strict mode. (we accept)
+line 9: ours: cannot index into non-array type `string` (tsc accepts)

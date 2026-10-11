@@ -2,6 +2,7 @@ import { label } from "submilli:test";
 import {
     SentryError,
     buildIssueQuery,
+    listOrganizations,
     buildUpdateIssueBody,
     isShortIssueId,
     normalizeEventJson,
@@ -22,7 +23,8 @@ function expectCode(code: string, action: () => void): void {
 
 function main(): void {
     label("issue query keeps Sentry defaults and validates page size");
-    assert(buildIssueQuery(null) === "?limit=50", "default page size only");
+    assert(buildIssueQuery() === "?limit=50", "default page size only");
+    assert(buildIssueQuery({}) === "?limit=50", "empty options match omitted options");
     assert(buildIssueQuery({ limit: 1, cursor: "0:100:0" }) === "?limit=1&cursor=0%3A100%3A0", "cursor encoded");
     expectCode("invalid_page_size", () => { buildIssueQuery({ limit: 0 }); });
     expectCode("invalid_page_size", () => { buildIssueQuery({ limit: 4.5 }); });
@@ -97,11 +99,25 @@ function main(): void {
     assert(minimal.exceptions.length === 0, "missing entries default empty");
     assert(minimal.request === null, "missing request defaults null");
 
+    label("JSON nulls read like missing fields");
+    const nulls = normalizeEventJson(
+        "{\"id\":\"e2\",\"eventID\":null,\"tags\":null,\"user\":null,\"release\":null,\"entries\":[{\"type\":\"request\",\"data\":null},{\"type\":\"exception\",\"data\":{\"values\":[{\"stacktrace\":null,\"mechanism\":null,\"threadId\":null}]}}]}"
+    );
+    assert(nulls.summary.eventId === "e2", "a null event ID falls back to the row ID");
+    assert(nulls.summary.tags.length === 0, "null tags default empty");
+    assert(nulls.user === null && nulls.release === null, "null contexts stay null");
+    assert(nulls.request === null, "a request entry without data is skipped");
+    assert(nulls.exceptions[0].frames.length === 0 && nulls.exceptions[0].mechanism === null, "null stacktrace and mechanism default");
+
     label("HTTP errors expose stable codes and actionable messages");
     assert(sentryErrorCode(401) === "unauthorized", "401 mapping");
     assert(sentryErrorCode(429) === "rate_limited", "429 mapping");
     assert(sentryErrorCode(503) === "http_error", "fallback mapping");
     assert(sentryFailureMessage(400, "Bad Request", "{\"detail\":\"Invalid query\"}") === "Invalid query", "detail lifted");
+    assert(
+        sentryFailureMessage(400, "Bad Request", "{\"detail\":\"\",\"error\":null,\"message\":\"Bad cursor\"}") === "Bad cursor",
+        "empty and null fields fall through to the next one",
+    );
     assert(
         sentryFailureMessage(502, "Bad Gateway", "<html>upstream</html>") === "Sentry request failed: HTTP 502 Bad Gateway",
         "non-JSON body falls back",
@@ -110,4 +126,7 @@ function main(): void {
         sentryFailureMessage(502, "Bad Gateway", "{malformed") === "Sentry request failed: HTTP 502 Bad Gateway",
         "malformed JSON body falls back",
     );
+
+    label("an unbound auth token is reported before any request");
+    expectCode("missing_token", () => { listOrganizations(); });
 }

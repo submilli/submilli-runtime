@@ -59,6 +59,9 @@ async-trait = "0.1"
 pollster = "0.3"
 serde_path_to_error = "0.1"
 serde_yml = "0.0.12"
+# Position-reporting YAML event parser: `serde_yml` exposes no spans, so the
+# blueprint rule locator and duplicate-key diagnostics read marks from this.
+saphyr-parser = "0.1"
 tempfile = "3"
 # Capability-based filesystem sandboxing for the VFS (SUB-699 / SUB-775). Both are
 # first-party to the same project and version in lockstep; `cap-fs-ext` supplies the

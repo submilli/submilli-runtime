@@ -201,7 +201,7 @@ let q = !abcOrXyzOrNumber;
 >abcOrXyzOrNumber : number | "ABC" | "XYZ"
 >                 : ^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;               
+/*pruned*/;
 let s = abcOrXyzOrNumber < abcOrXyzOrNumber;
 >s : boolean
 >  : ^^^^^^^

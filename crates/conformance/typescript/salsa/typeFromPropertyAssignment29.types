@@ -258,14 +258,14 @@ ExpandoArrow.m = function(n: number) {
 
 }
 
-/*pruned*/;                                                                 
-                                         
-                     
-      
-                                 
-                  
- 
-/*pruned*/;             
+/*pruned*/;
+
+
+
+
+
+
+/*pruned*/;
 
 function ExpandoMerge(n: number): number {
 >ExpandoMerge : typeof ExpandoMerge
@@ -294,21 +294,21 @@ ExpandoMerge.p1 = 111
 >111 : 111
 >    : ^^^
 
-/*pruned*/;             
-                        
- 
-/*pruned*/;             
-                        
- 
-/*pruned*/;                                                                     
+/*pruned*/;
 
-/*pruned*/;   
-                                        
-                             
-                                                      
-                                
-     
- 
+
+/*pruned*/;
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+
+
+
+
+
 
 // Should not work in Typescript -- must be const
 let ExpandoExpr2 = function (n: number) {
@@ -481,14 +481,14 @@ let n_5 = ExpandoClass.prop + ExpandoClass.m(12) + new ExpandoClass().n
 
 
 // Class expressions shouldn't work in typescript either
-/*pruned*/;               
-                      
- 
-/*pruned*/;          
-/*pruned*/;                           
-                 
- 
-/*pruned*/;                                                            
+/*pruned*/;
+
+
+/*pruned*/;
+/*pruned*/;
+
+
+/*pruned*/;
 
 
 

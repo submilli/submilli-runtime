@@ -99,7 +99,7 @@ export function main(): string {
   const opt = accessor as Opt;
   assert(opt.area === 9, "an optional accessor property conforms and reads");
   const optAbsent = (new NoArea() as unknown) as Opt;
-  assert(optAbsent.area === null, "an absent optional property still conforms");
+  assert(optAbsent.area === undefined, "an absent optional property still conforms");
 
   const nested: unknown = { inner: new ByAccessor() };
   assert((nested as Outer).inner.area === 9, "a nested accessor conforms");

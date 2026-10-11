@@ -15,7 +15,7 @@ interface boolean { }
 >boolean : boolean
 >        : ^^^^^^^
 
-/*pruned*/;      
+/*pruned*/;
 interface unknown {}
 >unknown : unknown
 >        : ^^^^^^^

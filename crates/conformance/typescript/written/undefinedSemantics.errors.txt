@@ -1,0 +1,2 @@
+undefinedSemantics.ts(20,15): error TS2345: Argument of type '{}' is not assignable to parameter of type '{ a: string | undefined; }'.   Property 'a' is missing in type '{}' but required in type '{ a: string | undefined; }'.
+undefinedSemantics.ts(21,17): error TS2322: Type 'null' is not assignable to type 'string | undefined'.

@@ -20,10 +20,10 @@ class Dog extends Animal {
   }
 }
 
-// The narrowing case. `Dog | null` is assignable to `Animal | null`, so the
+// The narrowing case. `Dog | undefined` is assignable to `Animal | null | undefined`, so the
 // redeclaration is legal — but the parent's initializer stores an `Animal`.
 class NarrowBase {
-  v: Animal | null = new Animal();
+  v: Animal | null | undefined = new Animal();
 }
 
 class Narrowed extends NarrowBase {
@@ -111,7 +111,7 @@ class T3 extends T2 {
 
 // The inherited declaration is a parameter property.
 class PPBase {
-  constructor(public w: string | null) {}
+  constructor(public w: string | null | undefined) {}
 }
 
 class PPChild extends PPBase {
@@ -152,7 +152,7 @@ class GPass<T> extends GB<T> {
 
 // The parent writes the slot from its *constructor body*, not an initializer.
 class CtorAssignBase {
-  cv: string | null;
+  cv: string | null | undefined;
   ctag: string;
   constructor() {
     this.cv = "from-ctor";
@@ -174,25 +174,25 @@ class WinBase {
     this.seen = this.probe();
   }
   probe(): string {
-    return "base:" + (this.wv === null ? "null" : this.wv);
+    return "base:" + (this.wv === undefined ? "undefined" : this.wv);
   }
 }
 
 class WinChild extends WinBase {
   wv?: string;
   probe(): string {
-    return "child:" + (this.wv === null ? "null" : this.wv);
+    return "child:" + (this.wv === undefined ? "undefined" : this.wv);
   }
 }
 
 function main(): void {
   const n = new Narrowed();
-  assert(n.v === null, "a narrowing redeclaration starts empty, not with the parent's value");
+  assert(n.v === undefined, "a narrowing redeclaration starts empty, not with the parent's value");
   const asBase: NarrowBase = n;
-  assert(asBase.v === null, "the parent-typed read sees the same reset slot");
+  assert(asBase.v === undefined, "the parent-typed read sees the same reset slot");
 
   const s = new SameChild();
-  assert(s.p === null, "a same-typed redeclaration also starts empty");
+  assert(s.p === undefined, "a same-typed redeclaration also starts empty");
   assert(new SameBase().p === "parent-init", "the parent itself keeps its initializer");
 
   const w = new WithInit().v;
@@ -202,11 +202,12 @@ function main(): void {
   }
 
   const c = new CtorAssigned().v;
-  assert(c !== null, "a constructor assignment runs after the reset");
-  if (c !== null) {
+  assert(c !== undefined, "a constructor assignment runs after the reset");
+  if (c !== undefined) {
     assert(c.fetch() === "ball", "and stores the child's value");
   }
 
+  assert(new ParamProp(null).v === null, "an explicit null parameter property remains null");
   const p = new ParamProp(new Dog()).v;
   assert(p !== null, "a parameter property is auto-assigned, never reset");
   if (p !== null) {
@@ -214,40 +215,40 @@ function main(): void {
   }
 
   const l = new Leaf();
-  assert(l.v === null, "a redeclaration two levels down resets the same slot");
+  assert(l.v === undefined, "a redeclaration two levels down resets the same slot");
   assert(l.extra === "mid", "the intermediate class's own field is untouched");
 
   const u = new Untouched();
   const uv = u.v;
-  assert(uv !== null, "a field the child does not redeclare keeps the parent's value");
-  if (uv !== null) {
+  assert(uv !== null && uv !== undefined, "a field the child does not redeclare keeps the parent's value");
+  if (uv !== null && uv !== undefined) {
     assert(uv.speak() === "generic", "and the parent's initializer ran");
   }
   assert(u.other === "own", "the child's own new field is initialized");
 
-  assert(JSON.stringify(n) === '{"v":null}', "the reset slot serializes as null");
-  assert(JSON.stringify(s) === '{"p":null}', "and so does the same-typed one");
+  assert(JSON.stringify(n) === '{}', "the undefined reset slot is omitted from JSON");
+  assert(JSON.stringify(s) === '{}', "and so does the same-typed one");
 
   const pc = new PrimChild();
-  assert(pc.pn === null, "an optional number slot resets");
-  assert(pc.ps === null, "an optional string slot resets");
-  assert(pc.pb === null, "an optional boolean slot resets");
+  assert(pc.pn === undefined, "an optional number slot resets");
+  assert(pc.ps === undefined, "an optional string slot resets");
+  assert(pc.pb === undefined, "an optional boolean slot resets");
   const pb = new PrimBase();
   assert(pb.pn === 7 && pb.ps === "p" && pb.pb === true, "the parent keeps all three initializers");
   assert(
-    JSON.stringify(pc) === '{"pb":null,"pn":null,"ps":null}',
-    "reset primitives serialize as null",
+    JSON.stringify(pc) === '{}',
+    "undefined reset primitives are omitted from JSON",
   );
 
-  assert(new ROChild().r === null, "a `readonly` optional redeclaration resets");
+  assert(new ROChild().r === undefined, "a `readonly` optional redeclaration resets");
   assert(new ROBase().r === "parent", "the `readonly` parent keeps its initializer");
 
-  assert(new T3().tv === null, "the deepest level of a chain resets");
-  assert(new T2().tv === null, "and so does the middle one");
+  assert(new T3().tv === undefined, "the deepest level of a chain resets");
+  assert(new T2().tv === undefined, "and so does the middle one");
   assert(new T1().tv === "t1", "the root keeps its initializer");
 
   assert(
-    new PPChild().w === null,
+    new PPChild().w === undefined,
     "an optional redeclaration of an inherited parameter property resets",
   );
 
@@ -255,12 +256,12 @@ function main(): void {
   const asEqB: EqB = new EqC();
   assert(!(asEqB === new EqB()), "a reset child is not equal to its parent");
 
-  assert(new GConcrete().gv === null, "a concrete child of a generic parent resets");
-  assert(new GPass<string>("x").gv === null, "a generic passthrough resets");
+  assert(new GConcrete().gv === undefined, "a concrete child of a generic parent resets");
+  assert(new GPass<string>("x").gv === undefined, "a generic passthrough resets");
 
   assert(new CtorAssignBase().cv === "from-ctor", "the parent's constructor assignment stands");
   const cac = new CtorAssignChild();
-  assert(cac.cv === null, "the child's redeclaration resets it after `super()` returns");
+  assert(cac.cv === undefined, "the child's redeclaration resets it after `super()` returns");
   assert(cac.ctag === "base", "a field the child does not redeclare keeps the parent's ctor value");
 
   const win = new WinChild();
@@ -268,5 +269,5 @@ function main(): void {
     win.seen === "child:parent-init",
     "a virtual call from the parent's constructor runs before the child's reset, as ES2022 does",
   );
-  assert(win.wv === null, "and the reset lands once the child's field setup runs");
+  assert(win.wv === undefined, "and the reset lands once the child's field setup runs");
 }

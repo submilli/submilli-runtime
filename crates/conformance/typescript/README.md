@@ -46,8 +46,8 @@ suite when:
 - the port leaves it checking the same thing: `tsc` reports no error on it the
   upstream baseline lacks (such as a redeclaration from `var` becoming `let`, or one
   from making a `@strict: false` case strict), other than for a class field with no
-  initializer, and no `undefined` is left;
-- it isn't a copy of another case once `undefined` is `null`;
+  initializer;
+- it isn't a copy of another case after the mechanical port;
 - when pruning cut something, it kept at least a third of the case's code lines, and
   at least five, not counting the values the port supplies; and
 - it still checks at least five things: `tsc` types compared, plus lines `tsc`
@@ -65,7 +65,7 @@ reasons and a detail:
 |:-------|:-------|
 | not supported | The feature, for a listed directory or name. For a case pruning cut too much of, our first error that lacked support and the code it was on. |
 | multi-file or JavaScript | |
-| the port changes what it checks | The error `tsc` reports on the port and not upstream, or the `undefined` it left. |
+| the port changes what it checks | The error `tsc` reports on the port and not upstream. |
 | duplicate | The case it is a copy of. |
 | checks too little | How many things it checks, when pruning cut nothing. |
 | porter failure | What went wrong. A bug in the porter, to fix. |
@@ -88,6 +88,11 @@ recovery isn't compared: ours holding `<error>` on a line where we report an err
 which is recorded already, and `tsc`'s `any` on a line where the two errors agree.
 The result is written as the case's `.divergences`.
 
+Parameter probes use the authored declaration type and the semantic type of body
+reads. Synthetic incoming-argument loads and identity copies that establish runtime
+initialization are excluded; real defaults and destructured bindings remain
+eligible for comparison.
+
 The test fails when a case's divergences differ from its committed `.divergences`, in
 either direction. A newly fixed divergence fails it as surely as a new one, so every
 change shows up in review. When the change is intended, rewrite the files and commit
@@ -98,6 +103,8 @@ UPDATE_TYPESCRIPT_EXPECTED=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test -p conforma
 ```
 
 `CONFORMANCE_FILTER=<path substring>` limits the run to matching cases.
+`TYPESCRIPT_CASES=<absolute file>` selects exact `.ts` paths relative to this
+directory; blank lines and `#` comments are ignored. Missing paths fail.
 `TYPESCRIPT_CHECKS_OUT=<file>` writes every check the run makes, one per line, for
 `coverage.cjs`.
 
@@ -160,19 +167,19 @@ before comparing:
 - Tuple element labels are dropped: `tsc` prints `[x: number, y: number]`, we print
   `[number, number]`. Labels are documentation and do not change the type.
 - A method signature `m(): R` reads as the field `m: () => R`.
-- `tsc`'s `undefined` reads as `null`, because the port spells it that way.
 - `tsc`'s `Uint8Array<ArrayBuffer>` and `Uint8Array<ArrayBufferLike>` read as
   `Uint8Array`: the argument names the buffer behind the array, which ours has no
   choice of.
 - `Record<string, V>` reads as `{ [key: string]: V }`, the index signature it is
   defined as. Other key types are left alone.
 - `tsc`'s `ArrayIterator<T>` reads as our `Iterator<T>`.
-- An optional field's `undefined` is dropped: `a?: T | undefined` is `a?: T`
-  without `exactOptionalPropertyTypes`. A field typed only `undefined`,
-  `b?: undefined`, which `tsc` gives a normalized object literal for the fields
-  only other members have, is dropped whole. This is the one rule that can equate
-  slightly different types: `tsc`'s field forbids a defined `b`, and ours allows
-  it.
+- Optional properties discard a redundant undefined union member under ordinary
+  TypeScript semantics: `a?: T | undefined` is `a?: T`. Cases declaring
+  `@exactOptionalPropertyTypes: true` retain that distinction. An undefined-only
+  optional field remains present in the type; `{ a?: undefined }` is not `{}`.
+- Optional parameters discard redundant undefined union members, but remain
+  distinct from required parameters whose type includes undefined.
+- Null and undefined are always distinct, including inside unions and containers.
 - A destructured parameter, which `tsc` prints by its pattern, reads like any
   other parameter: `([a, b]: number[]) => void` is `(number[]) => void`.
 - A literal beside its own base type in a union is dropped: `string | "a"` is
@@ -197,7 +204,8 @@ Two kinds of entry are skipped, because they are not comparable:
 `typescript-baselines/port-case.cjs` does the port. It is mechanical, and keeps each
 line where it was:
 
-1. `var` becomes `let`, and `undefined` becomes `null`, outside strings and comments.
+1. `var` declarations become `let`. Undefined values and type annotations,
+   property names, strings, comments, and template text are preserved.
    A `var` declared again where the `let` would share its scope, which upstream uses
    to check a type (`var x: T; var x = e;`), binds `x_2` instead of redeclaring `x`;
    later reads still name the first. A case where `tsc` checks that such repeats
@@ -262,7 +270,7 @@ All in `typescript-baselines/`, except the last:
 |:-----|:-------------|
 | `port-case.cjs` | Ports one upstream case (see [Porting a case](#porting-a-case)). |
 | `prune-case.cjs` | Prunes one ported case (see [Pruning](#pruning)). |
-| `write-baselines.cjs` | Writes the `.types` and `.errors.txt` of every case, or those matching a path substring. |
+| `write-baselines.cjs` | Writes `.types` and `.errors.txt`, optionally using a path substring or `--case-list FILE`. |
 | `port-suite.cjs` | Picks the upstream cases that belong, runs the three above and the runner on each, and writes `EXCLUDED.md`. |
 | `tsc-case.cjs` | What the others share: the `tsc` options a case is checked with, and its errors. |
 | `coverage.cjs` | Writes `../COVERAGE.md`: for each supported feature, whether every upstream test about it has been dealt with, and what the suites check of it. |
@@ -342,6 +350,42 @@ example, update the divergences (step 2 above), and port again with `--refresh`
 the feature it is about; a change there only affects cases not yet in the suite, so
 remove any case it now excludes by hand, then run it to rewrite `EXCLUDED.md`.
 
+### Staging a semantic migration
+
+The [undefined migration record](migrations/undefined.md) includes the reviewed
+inventory, exact case lists and focused coverage for the null/undefined split.
+
+When committed expectations encode the old semantics, do not run the normal
+porter preflight first. Inventory affected syntax with `undefined-migration.cjs`
+against the pinned checkout, and supply an explicit list of upstream case paths:
+
+```sh
+node port-suite.cjs --case-list /tmp/affected.txt --stage-dir /tmp/undefined-stage <TypeScript> /absolute/path/to/typescript_case_errors
+node port-suite.cjs --apply-stage /tmp/undefined-stage --case-list /tmp/reviewed.txt
+node write-baselines.cjs --case-list /tmp/reviewed.txt
+```
+
+Staging includes existing whole and triaged cases. It saves every existing source,
+baseline and triage under `original/`, and generates proposed sources and baselines
+under `cases/`. Omit the optional compiler binary to stage before the frontend is
+ready; no pruning or compiler validation then occurs. Review adaptations before
+applying, edit proposed sources as needed, and regenerate their TypeScript
+baselines. Applying checks that all original files remain unchanged and leaves
+hand-written triage and old divergences in place for reconciliation. It never
+prunes, deduplicates, or deletes a committed case automatically.
+
+Then run only the selected cases from the repository root:
+
+```sh
+SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=0 SUBMILLI_TEST_NIGHTLY_ONLY=1 TYPESCRIPT_CASES=/tmp/reviewed.txt TYPESCRIPT_PORTED_CASES=/tmp/reviewed.txt UPDATE_TYPESCRIPT_EXPECTED=1 cargo test -p conformance --test typescript
+```
+
+Review `.divergences`, reconcile `.triage` by hand, and repeat the focused check
+without update mode. `TYPESCRIPT_PORTED_CASES` only allows listing new divergences;
+it does not select cases or excuse stale triage. The ordinary suite gates still
+apply after migration. `==` and `!=` against `null` or `undefined` are compile
+errors, since they compare like `===`; record any resulting upstream mismatch explicitly.
+
 ### Moving to another TypeScript commit
 
 Check out the new commit, change the hash here and in the setup above, and run
@@ -368,9 +412,9 @@ from the retained program.
 |:-----|:------------------|:--------------------------|
 | `expressions/propertyAccess/propertyAccessStringIndexSignature` | Dot/bracket reads through an interface indexer; missing members on an empty interface | None |
 | `types/objectTypeLiteral/indexSignatures/stringIndexingResults` | Named and absent string-key reads through interface and object indexers | Class index signatures and numeric-key reads |
-| `types/spread/objectSpreadIndexSignature` | Spreads with named fields, overlapping index values, and readonly-to-writable indexers | Numeric-key reads and spreading a possibly absent object |
+| `types/spread/objectSpreadIndexSignature` | Spreads with named fields, overlapping index values, and readonly-to-writable indexers | Numeric-key reads |
 | `types/typeRelationships/typeInference/genericCallWithObjectTypeArgsAndStringIndexer` | Generic identity inference with string-indexed values | `Date` and constrained-generic examples |
-| `types/typeRelationships/assignmentCompatibility/optionalPropertyAssignableToStringIndexSignature` | Optional string properties versus explicitly nullable values assigned to a dictionary | Numeric indexers and the separate generic/undefined-only examples |
+| `types/typeRelationships/assignmentCompatibility/optionalPropertyAssignableToStringIndexSignature` | Optional string properties, undefined-only values, and generic optional properties assigned to dictionaries | Numeric indexers |
 | `interfaces/interfaceDeclarations/interfaceWithStringIndexerHidingBaseTypeIndexer` | A narrowed inherited indexer rejects an incompatible named property | None |
 
 These are typechecker comparisons, not runtime tests: declaration placeholders
@@ -380,7 +424,7 @@ The generic dictionary local uses `{}` instead of the usual placeholder cast,
 because casting to an erased generic parameter is unsupported. Both compilers
 retain its declared index value type `T`.
 
-Open reads include `null` in Submilli even when an upstream case does not enable
+Open reads include `undefined` in Submilli even when an upstream case does not enable
 TypeScript's `noUncheckedIndexedAccess`; the committed divergences retain this
 intentional difference. Numeric/symbol keys, class index signatures, generic key
 parameters, and general mapped types remain outside these ports.

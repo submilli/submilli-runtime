@@ -88,8 +88,8 @@ export interface HTMLCollection {
 
 }
 
-/*pruned*/;                                                                                        
-/*pruned*/;                                                                                                    
+/*pruned*/;
+/*pruned*/;
 
 type EventTargetLike = {a: string} | HTMLCollection | NodeList;
 >EventTargetLike : EventTargetLike
@@ -98,18 +98,18 @@ type EventTargetLike = {a: string} | HTMLCollection | NodeList;
 >  : ^^^^^^
 
 
-/*pruned*/;                                
-/*pruned*/;                 
-                     
- 
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;                       
-                     
- 
 
-/*pruned*/;                                                
-                     
- 
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
 
 
 function main(): void {}

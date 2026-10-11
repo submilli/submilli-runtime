@@ -7,11 +7,12 @@
 //! `packages.*` / `builtins.docs` tools, the server's REST surface, and the
 //! `submilli docs` / `search` / `builtins` CLI commands.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use crate::runtime::prelude::declaration::prelude_package_declaration;
-use crate::stdlib::stdlib_package_declarations;
+use crate::stdlib::Stdlib;
 use crate::types::escape_string_literal;
 use crate::{
     ClassExtends, DocCapabilityBindingKind, DocCapabilityLiteral, DocComment, FileId,
@@ -40,28 +41,199 @@ pub struct ModuleSummary {
 /// handle `@mcp/*` and unknown names). Every module resolves, opt-in ones such
 /// as `submilli:git` included; what a caller's scope shows is its own decision.
 pub fn docs(name: &str) -> Option<ModuleDoc> {
-    user_modules()
-        .into_iter()
-        .find(|d| d.package_name == name)
-        .map(|defs| ModuleDoc {
-            name: defs.package_name.clone(),
-            description: module_description(&defs.package_name).to_string(),
-            declarations: render_declarations(&defs),
-        })
+    Stdlib::core().docs(name)
 }
 
 /// Modules whose name, description, or an exported symbol contains `query`
 /// (case-insensitive). An empty query lists every module.
 pub fn search(query: &str) -> Vec<ModuleSummary> {
-    let q = query.trim().to_lowercase();
-    user_modules()
-        .iter()
-        .filter(|defs| matches_query(defs, &q))
-        .map(|defs| ModuleSummary {
-            name: defs.package_name.clone(),
-            description: module_description(&defs.package_name).to_string(),
-        })
-        .collect()
+    Stdlib::core().search(query)
+}
+
+/// Discovery over the modules of a [`Stdlib`]: what the free functions above do
+/// for [`Stdlib::core`], for any set.
+impl Stdlib {
+    /// [`docs`] over the modules of this set.
+    pub fn docs(self, name: &str) -> Option<ModuleDoc> {
+        user_modules(self)
+            .into_iter()
+            .find(|d| d.package_name == name)
+            .map(|defs| ModuleDoc {
+                name: defs.package_name.clone(),
+                description: module_description(&defs.package_name).to_string(),
+                declarations: render_declarations(&defs),
+            })
+    }
+
+    /// [`search`] over the modules of this set.
+    pub fn search(self, query: &str) -> Vec<ModuleSummary> {
+        let q = query.trim().to_lowercase();
+        user_modules(self)
+            .iter()
+            .filter(|defs| matches_query(defs, &q))
+            .map(|defs| ModuleSummary {
+                name: defs.package_name.clone(),
+                description: module_description(&defs.package_name).to_string(),
+            })
+            .collect()
+    }
+
+    /// [`resolve`] over the modules of this set.
+    pub fn resolve(self, name: &str) -> Resolution {
+        if let Some(doc) = self.docs(name) {
+            return Resolution::Module(doc);
+        }
+        match builtin_lookup(name) {
+            BuiltinLookup::Found(declarations) => Resolution::Builtin {
+                name: name.to_string(),
+                declarations,
+            },
+            BuiltinLookup::UnknownMember {
+                path,
+                member,
+                members,
+            } => Resolution::UnknownMember {
+                path,
+                member,
+                members,
+            },
+            BuiltinLookup::Unknown => Resolution::Unknown,
+        }
+    }
+
+    /// [`suggest_filtered`] over the modules of this set.
+    pub fn suggest_filtered(
+        self,
+        name: &str,
+        extra: &[String],
+        visible: impl Fn(&str) -> bool,
+    ) -> Option<String> {
+        let mut candidates: Vec<String> = self.search("").into_iter().map(|m| m.name).collect();
+        let builtins = builtins();
+        candidates.extend(builtins.types);
+        candidates.extend(builtins.namespaces);
+        candidates.extend(extra.iter().cloned());
+        candidates.retain(|candidate| visible(candidate));
+
+        // Only the head segment is in question: `Temporel.Instant` misses because
+        // of `Temporel`, and the tail only inflates the distance past threshold.
+        let query = name.split('.').find(|s| !s.is_empty()).unwrap_or(name);
+        // `closest_match` floors its threshold at 2 edits, so a one- or two-character
+        // query sits within reach of an unrelated name. Below that length there is no
+        // signal to match on.
+        if query.len() < 3 {
+            return None;
+        }
+
+        if let Some((_, replacement)) = OMITTED_GLOBALS
+            .iter()
+            .find(|(omitted, _)| omitted.eq_ignore_ascii_case(name))
+        {
+            return Some((*replacement).to_string());
+        }
+
+        // Never offer the query back to the caller: a name that resolved nowhere is
+        // not its own repair, however it was spelled.
+        let is_self = |c: &String| c.eq_ignore_ascii_case(name);
+        if let Some(hit) = candidates
+            .iter()
+            .find(|c| !is_self(c) && name_tail(c).eq_ignore_ascii_case(query))
+        {
+            return Some(hit.clone());
+        }
+        // Match full names and scheme-stripped tails in one pass, so the globally
+        // closest key wins: `htp` should reach `submilli:http` (one edit from its
+        // tail) rather than whichever unrelated full name lands inside threshold.
+        let mut keys: Vec<(&str, &str)> = Vec::new();
+        for c in candidates.iter().filter(|c| !is_self(c)) {
+            keys.push((c.as_str(), c.as_str()));
+            let tail = name_tail(c);
+            if tail != c.as_str() {
+                keys.push((tail, c.as_str()));
+            }
+        }
+        let hit = crate::did_you_mean::closest_match(query, keys.iter().map(|(k, _)| *k))?;
+        keys.iter()
+            .find(|(k, _)| *k == hit)
+            .map(|(_, owner)| (*owner).to_string())
+    }
+
+    /// [`catalog_filtered`] over the modules of this set.
+    pub fn catalog_filtered(
+        self,
+        extra: Vec<CatalogEntry>,
+        visible: impl Fn(&str) -> bool,
+    ) -> Catalog {
+        let mut entries: Vec<CatalogEntry> = self
+            .search("")
+            .into_iter()
+            .map(|m| CatalogEntry {
+                name: m.name,
+                source: SOURCE_STDLIB.to_string(),
+                description: m.description,
+            })
+            .collect();
+        entries.extend(extra);
+        entries.retain(|entry| visible(&entry.name));
+        let remaining = entries.len().saturating_sub(CATALOG_LIMIT);
+        entries.truncate(CATALOG_LIMIT);
+        Catalog { entries, remaining }
+    }
+
+    /// [`render_stdlib_d_ts`] for the modules of this set.
+    pub fn render_stdlib_d_ts(self) -> String {
+        let mut out = String::new();
+        for defs in &editor_stdlib_modules(self) {
+            render_declare_module(&mut out, defs);
+        }
+        out.trim_end().to_string()
+    }
+
+    /// [`render_packages_d_ts`] against the modules of this set.
+    pub fn render_packages_d_ts(
+        self,
+        packages: &[&PackageDeclaration],
+        context: &[&PackageDeclaration],
+    ) -> String {
+        let stdlib = editor_stdlib_modules(self);
+        let exporters = TypeExporters::new(
+            stdlib
+                .iter()
+                .chain(packages.iter().copied())
+                .chain(context.iter().copied()),
+        );
+        let globals = global_classes();
+        let mut out = String::new();
+        for defs in packages {
+            let _ = writeln!(out, "declare module \"{}\" {{", defs.package_name);
+            let imports = block_imports(defs, &exporters);
+            for (local, (public, module)) in &imports.types {
+                if local == public {
+                    let _ = writeln!(out, "  import type {{ {local} }} from \"{module}\";");
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "  import type {{ {public} as {local} }} from \"{module}\";"
+                    );
+                }
+            }
+            let parent = |extends: &ClassExtends| {
+                if let Some(local) = imports.parents.get(extends.parent.as_str()) {
+                    return Some(ts_named_type(local, &extends.args));
+                }
+                // A package value of the global's name would hide it; the class
+                // then renders without its parent rather than extend the value.
+                let global = globals.get(extends.parent.as_str())?;
+                if declares(defs, global, true) {
+                    return None;
+                }
+                Some(ts_named_type(global, &extends.args))
+            };
+            render_ts_declarations(&mut out, defs, "  ", "export ", &parent);
+            let _ = writeln!(out, "}}\n");
+        }
+        out.trim_end().to_string()
+    }
 }
 
 /// The language built-ins always in scope without an `import`: headline prelude
@@ -164,7 +336,7 @@ pub fn builtin_lookup(name: &str) -> BuiltinLookup {
     };
 
     if head.eq_ignore_ascii_case("Record") && rest.is_empty() {
-        return BuiltinLookup::Found("/** Record<K, V> accepts string keys. With K = string, reads return V | null and writes require V. Finite string-literal keys are all required. Equivalent open syntax: { [key: string]: V }. */\ntype Record<K extends string, V> = { [P in K]: V };\n".into());
+        return BuiltinLookup::Found("/** Record<K, V> accepts string keys. With K = string, reads return V | undefined and writes require V. Finite string-literal keys are all required. Equivalent open syntax: { [key: string]: V }. */\ntype Record<K extends string, V> = { [P in K]: V };\n".into());
     }
     if head.eq_ignore_ascii_case(JSON_BUILTIN) {
         let defs = json_package_declaration();
@@ -327,14 +499,17 @@ fn render_type_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Stri
         push_doc(&mut body, &prop.doc, "  ");
         let ro = if prop.readonly { "readonly " } else { "" };
         let opt = if prop.optional { "?" } else { "" };
+        let name = member_name(&name);
         let _ = writeln!(body, "  {ro}{name}{opt}: {};", prop.ty);
     } else {
         let name = resolve_ignore_case(methods.keys(), member)?;
         let m = &methods[&name];
         push_doc(&mut body, &m.doc, "  ");
+        let optional = if m.optional { "?" } else { "" };
+        let name = method_prefix(&name);
         let _ = writeln!(
             body,
-            "  {name}{}({}): {};",
+            "  {name}{optional}{}({}): {};",
             generics_str(&m.generics),
             params_str(&m.params, m.doc.as_ref()),
             m.ret
@@ -370,12 +545,14 @@ fn render_class_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Str
         let field = &static_fields[&name];
         push_doc(&mut body, &field.doc, "  ");
         let ro = if field.readonly { "readonly " } else { "" };
+        let name = member_name(&name);
         let _ = writeln!(body, "  static {ro}{name}: {};", field.ty);
     } else if let Some(name) = resolve_ignore_case(statics.keys(), member)
         .filter(|n| static_visibility.get(n) != Some(&crate::Visibility::Private))
     {
         let m = &statics[&name];
         push_doc(&mut body, &m.doc, "  ");
+        let name = member_name(&name);
         let _ = writeln!(
             body,
             "  static {name}{}({}): {};",
@@ -390,15 +567,18 @@ fn render_class_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Str
         push_doc(&mut body, &field.doc, "  ");
         let ro = if field.readonly { "readonly " } else { "" };
         let opt = if field.optional { "?" } else { "" };
+        let name = member_name(&name);
         let _ = writeln!(body, "  {ro}{name}{opt}: {};", field.ty);
     } else {
         let name = resolve_ignore_case(methods.keys(), member)
             .filter(|n| method_visibility.get(n) != Some(&crate::Visibility::Private))?;
         let m = &methods[&name];
         push_doc(&mut body, &m.doc, "  ");
+        let optional = if m.optional { "?" } else { "" };
+        let name = member_name(&name);
         let _ = writeln!(
             body,
-            "  {name}{}({}): {};",
+            "  {name}{optional}{}({}): {};",
             generics_str(&m.generics),
             params_str(&m.params, m.doc.as_ref()),
             m.ret
@@ -539,25 +719,7 @@ pub enum Resolution {
 /// Try `name` as a stdlib module, then as a built-in. Every discovery surface
 /// runs this same ladder so MCP, REST, and the CLI reach the same answer.
 pub fn resolve(name: &str) -> Resolution {
-    if let Some(doc) = docs(name) {
-        return Resolution::Module(doc);
-    }
-    match builtin_lookup(name) {
-        BuiltinLookup::Found(declarations) => Resolution::Builtin {
-            name: name.to_string(),
-            declarations,
-        },
-        BuiltinLookup::UnknownMember {
-            path,
-            member,
-            members,
-        } => Resolution::UnknownMember {
-            path,
-            member,
-            members,
-        },
-        BuiltinLookup::Unknown => Resolution::Unknown,
-    }
+    Stdlib::core().resolve(name)
 }
 
 /// A did-you-mean candidate for a name that resolved nowhere, drawn from the
@@ -583,54 +745,7 @@ pub fn suggest_filtered(
     extra: &[String],
     visible: impl Fn(&str) -> bool,
 ) -> Option<String> {
-    let mut candidates: Vec<String> = search("").into_iter().map(|m| m.name).collect();
-    let builtins = builtins();
-    candidates.extend(builtins.types);
-    candidates.extend(builtins.namespaces);
-    candidates.extend(extra.iter().cloned());
-    candidates.retain(|candidate| visible(candidate));
-
-    // Only the head segment is in question: `Temporel.Instant` misses because
-    // of `Temporel`, and the tail only inflates the distance past threshold.
-    let query = name.split('.').find(|s| !s.is_empty()).unwrap_or(name);
-    // `closest_match` floors its threshold at 2 edits, so a one- or two-character
-    // query sits within reach of an unrelated name. Below that length there is no
-    // signal to match on.
-    if query.len() < 3 {
-        return None;
-    }
-
-    if let Some((_, replacement)) = OMITTED_GLOBALS
-        .iter()
-        .find(|(omitted, _)| omitted.eq_ignore_ascii_case(name))
-    {
-        return Some((*replacement).to_string());
-    }
-
-    // Never offer the query back to the caller: a name that resolved nowhere is
-    // not its own repair, however it was spelled.
-    let is_self = |c: &String| c.eq_ignore_ascii_case(name);
-    if let Some(hit) = candidates
-        .iter()
-        .find(|c| !is_self(c) && name_tail(c).eq_ignore_ascii_case(query))
-    {
-        return Some(hit.clone());
-    }
-    // Match full names and scheme-stripped tails in one pass, so the globally
-    // closest key wins: `htp` should reach `submilli:http` (one edit from its
-    // tail) rather than whichever unrelated full name lands inside threshold.
-    let mut keys: Vec<(&str, &str)> = Vec::new();
-    for c in candidates.iter().filter(|c| !is_self(c)) {
-        keys.push((c.as_str(), c.as_str()));
-        let tail = name_tail(c);
-        if tail != c.as_str() {
-            keys.push((tail, c.as_str()));
-        }
-    }
-    let hit = crate::did_you_mean::closest_match(query, keys.iter().map(|(k, _)| *k))?;
-    keys.iter()
-        .find(|(k, _)| *k == hit)
-        .map(|(_, owner)| (*owner).to_string())
+    Stdlib::core().suggest_filtered(name, extra, visible)
 }
 
 /// The part of a package name after its scheme or scope: `submilli:http` and
@@ -700,19 +815,7 @@ pub fn catalog(extra: Vec<CatalogEntry>) -> Catalog {
 
 /// Filter before applying the catalog limit so omitted counts reflect visibility.
 pub fn catalog_filtered(extra: Vec<CatalogEntry>, visible: impl Fn(&str) -> bool) -> Catalog {
-    let mut entries: Vec<CatalogEntry> = search("")
-        .into_iter()
-        .map(|m| CatalogEntry {
-            name: m.name,
-            source: SOURCE_STDLIB.to_string(),
-            description: m.description,
-        })
-        .collect();
-    entries.extend(extra);
-    entries.retain(|entry| visible(&entry.name));
-    let remaining = entries.len().saturating_sub(CATALOG_LIMIT);
-    entries.truncate(CATALOG_LIMIT);
-    Catalog { entries, remaining }
+    Stdlib::core().catalog_filtered(extra, visible)
 }
 
 /// Name the head, then list what it actually has, so the repair is one edit.
@@ -771,8 +874,9 @@ fn resolve_ignore_case<'a>(keys: impl Iterator<Item = &'a String>, name: &str) -
 }
 
 /// The stdlib modules an agent may import, minus internal plumbing.
-fn user_modules() -> Vec<PackageDeclaration> {
-    stdlib_package_declarations()
+fn user_modules(stdlib: Stdlib) -> Vec<PackageDeclaration> {
+    stdlib
+        .package_declarations()
         .into_iter()
         .filter(|d| d.package_name != INTERNAL_MODULE)
         .collect()
@@ -782,6 +886,9 @@ fn user_modules() -> Vec<PackageDeclaration> {
 /// `packages.search`/`docs` and (manually mirrored) MVP.md §I.
 fn module_description(name: &str) -> &'static str {
     match name {
+        "submilli:agents" => {
+            "Harness sub-agents: run<T>(agent, input), and list() to discover them."
+        }
         "submilli:crypto" => "Hashing, HMAC, and random bytes.",
         "submilli:code" => {
             "Workspace tools: numbered reads, search, glob, tree, anchored edits and unified diffs."
@@ -797,6 +904,7 @@ fn module_description(name: &str) -> &'static str {
         "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
         "submilli:secrets" => "Policy-gated access to Blueprint-declared secrets.",
         "submilli:session" => "Session-scoped key-value state: get/has/set/remove/list.",
+        "submilli:skills" => "Harness skills: list(), load(name) and readFile(name, path).",
         "submilli:url" => "URL parse/build and query-string handling. Pure compute.",
         "submilli:uuid" => "UUID v4/v7 generation and validation.",
         _ => "",
@@ -842,11 +950,7 @@ pub fn render_declarations(defs: &PackageDeclaration) -> String {
 /// it — the editor should complete both; `build check` remains the gate
 /// against importing them elsewhere.
 pub fn render_stdlib_d_ts() -> String {
-    let mut out = String::new();
-    for defs in &editor_stdlib_modules() {
-        render_declare_module(&mut out, defs);
-    }
-    out.trim_end().to_string()
+    Stdlib::core().render_stdlib_d_ts()
 }
 
 /// Render editor-facing TypeScript declarations for `packages`, one
@@ -862,44 +966,7 @@ pub fn render_packages_d_ts(
     packages: &[&PackageDeclaration],
     context: &[&PackageDeclaration],
 ) -> String {
-    let stdlib = editor_stdlib_modules();
-    let exporters = TypeExporters::new(
-        stdlib
-            .iter()
-            .chain(packages.iter().copied())
-            .chain(context.iter().copied()),
-    );
-    let globals = global_classes();
-    let mut out = String::new();
-    for defs in packages {
-        let _ = writeln!(out, "declare module \"{}\" {{", defs.package_name);
-        let imports = block_imports(defs, &exporters);
-        for (local, (public, module)) in &imports.types {
-            if local == public {
-                let _ = writeln!(out, "  import type {{ {local} }} from \"{module}\";");
-            } else {
-                let _ = writeln!(
-                    out,
-                    "  import type {{ {public} as {local} }} from \"{module}\";"
-                );
-            }
-        }
-        let parent = |extends: &ClassExtends| {
-            if let Some(local) = imports.parents.get(extends.parent.as_str()) {
-                return Some(ts_named_type(local, &extends.args));
-            }
-            // A package value of the global's name would hide it; the class
-            // then renders without its parent rather than extend the value.
-            let global = globals.get(extends.parent.as_str())?;
-            if declares(defs, global, true) {
-                return None;
-            }
-            Some(ts_named_type(global, &extends.args))
-        };
-        render_ts_declarations(&mut out, defs, "  ", "export ", &parent);
-        let _ = writeln!(out, "}}\n");
-    }
-    out.trim_end().to_string()
+    Stdlib::core().render_packages_d_ts(packages, context)
 }
 
 /// The built-in classes a package's class may extend, such as `Error`, by
@@ -916,8 +983,8 @@ fn global_classes() -> BTreeMap<String, String> {
         .collect()
 }
 
-fn editor_stdlib_modules() -> Vec<PackageDeclaration> {
-    let mut modules = user_modules();
+fn editor_stdlib_modules(stdlib: Stdlib) -> Vec<PackageDeclaration> {
+    let mut modules = user_modules(stdlib);
     modules.push(crate::stdlib::test::package_declaration());
     modules.push(crate::stdlib::security::package_declaration());
     modules.sort_by(|a, b| a.package_name.cmp(&b.package_name));
@@ -1413,37 +1480,20 @@ fn render_ts_type(
                 push_doc(out, &prop.doc, &inner);
                 let ro = if prop.readonly { "readonly " } else { "" };
                 let opt = if prop.optional { "?" } else { "" };
+                let pname = member_name(pname);
                 let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {};", ts_type(&prop.ty));
             }
             for (mname, m) in methods {
                 push_doc(out, &m.doc, &inner);
                 let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
-                match mname.as_str() {
-                    "@call" => {
-                        let _ = writeln!(
-                            out,
-                            "{inner}{}({}): {ret};",
-                            generics_str(&m.generics),
-                            ts_params_str(&m.params, m.doc.as_ref())
-                        );
-                    }
-                    "new" => {
-                        let _ = writeln!(
-                            out,
-                            "{inner}new {}({}): {ret};",
-                            generics_str(&m.generics),
-                            ts_params_str(&m.params, m.doc.as_ref())
-                        );
-                    }
-                    _ => {
-                        let _ = writeln!(
-                            out,
-                            "{inner}{mname}{}({}): {ret};",
-                            generics_str(&m.generics),
-                            ts_params_str(&m.params, m.doc.as_ref())
-                        );
-                    }
-                }
+                let optional = if m.optional { "?" } else { "" };
+                let mname = method_prefix(mname);
+                let _ = writeln!(
+                    out,
+                    "{inner}{mname}{optional}{}({}): {ret};",
+                    generics_str(&m.generics),
+                    ts_params_str(&m.params, m.doc.as_ref())
+                );
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
@@ -1499,6 +1549,7 @@ fn render_ts_type(
                 }
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}static {ro}{fname}: {};", ts_type(&field.ty));
             }
             for (mname, m) in statics {
@@ -1507,6 +1558,7 @@ fn render_ts_type(
                 }
                 push_doc(out, &m.doc, &inner);
                 let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}static {mname}{}({}): {ret};",
@@ -1523,6 +1575,7 @@ fn render_ts_type(
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let opt = if field.optional { "?" } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}{ro}{fname}{opt}: {};", ts_type(&field.ty));
             }
             render_class_accessors(out, fields, accessors, &inner, ts_type);
@@ -1546,9 +1599,11 @@ fn render_ts_type(
                 }
                 push_doc(out, &m.doc, &inner);
                 let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                let optional = if m.optional { "?" } else { "" };
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
-                    "{inner}{mname}{}({}): {ret};",
+                    "{inner}{mname}{optional}{}({}): {ret};",
                     generics_str(&m.generics),
                     ts_params_str(&m.params, m.doc.as_ref())
                 );
@@ -1583,6 +1638,7 @@ fn render_class_accessors(
         if fields.get(name).map(|f| f.visibility) == Some(crate::Visibility::Private) {
             continue;
         }
+        let name = member_name(name);
         match (get, set) {
             (Some(r), Some(p)) if r == &p.ty => {
                 let _ = writeln!(out, "{inner}{name}: {};", fmt_ty(r));
@@ -1690,6 +1746,7 @@ fn ts_type(ty: &Type) -> String {
         Type::Boolean => "boolean".to_string(),
         Type::BooleanLiteral(value) => value.to_string(),
         Type::Null => "null".to_string(),
+        Type::Undefined => "undefined".to_string(),
         Type::Void => "void".to_string(),
         Type::Unknown => "unknown".to_string(),
         Type::Function {
@@ -1697,6 +1754,7 @@ fn ts_type(ty: &Type) -> String {
             ret,
             predicate,
             has_rest,
+            optional,
         } => {
             let params = params
                 .iter()
@@ -1707,7 +1765,13 @@ fn ts_type(ty: &Type) -> String {
                     } else {
                         ""
                     };
-                    format!("{prefix}arg{i}: {}", ts_type(p))
+                    let fixed = params.len().saturating_sub(usize::from(*has_rest));
+                    if i < fixed && i >= fixed.saturating_sub(*optional) {
+                        let shown = crate::types::shown_beside_optional_marker(p);
+                        format!("{prefix}arg{i}?: {}", ts_type(&shown))
+                    } else {
+                        format!("{prefix}arg{i}: {}", ts_type(p))
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -1723,6 +1787,7 @@ fn ts_type(ty: &Type) -> String {
                 .map(|(name, field)| {
                     let opt = if field.optional { "?" } else { "" };
                     let ro = if field.readonly { "readonly " } else { "" };
+                    let name = member_name(name);
                     format!("{ro}{name}{opt}: {}", ts_type(&field.ty))
                 })
                 .collect();
@@ -1738,7 +1803,18 @@ fn ts_type(ty: &Type) -> String {
         }
         Type::Array(elem) => format!("{}[]", ts_type_array_element(elem)),
         Type::Tuple(elements) => {
-            let elements = elements.iter().map(ts_type).collect::<Vec<_>>().join(", ");
+            let elements = elements
+                .iter()
+                .enumerate()
+                .map(|(index, ty)| {
+                    if index >= elements.len().saturating_sub(elements.optional) {
+                        format!("({})?", ts_type(ty))
+                    } else {
+                        ts_type(ty)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("[{elements}]")
         }
         Type::Readonly(inner) => format!("readonly {}", ts_type(inner)),
@@ -1749,8 +1825,8 @@ fn ts_type(ty: &Type) -> String {
         | Type::ClassRef { name, args, .. }
         | Type::Alias { name, args, .. } => ts_named_type(name, args),
         Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => name.clone(),
-        Type::Union(members) => members
-            .iter()
+        Type::Union(members) => crate::types::union_display_order(members)
+            .into_iter()
             .map(ts_type_union_member)
             .collect::<Vec<_>>()
             .join(" | "),
@@ -1857,20 +1933,22 @@ fn json_package_declaration() -> PackageDeclaration {
                     Param::new("value", Type::TypeVar("T".to_string())),
                     Param {
                         name: "replacer".to_string(),
-                        ty: Type::Null,
-                        default: Some(crate::DefaultValue::Null),
+                        ty: Type::union(vec![Type::Null, Type::Undefined]),
+                        default: Some(crate::DefaultValue::Undefined),
+                        optional: false,
                         rest: false,
                     },
                     Param {
                         name: "space".to_string(),
-                        ty: Type::union(vec![Type::Number, Type::String, Type::Null]),
-                        default: Some(crate::DefaultValue::Null),
+                        ty: Type::union(vec![Type::Number, Type::String, Type::Null, Type::Undefined]),
+                        default: Some(crate::DefaultValue::Undefined),
+                        optional: false,
                         rest: false,
                     },
                 ],
-                ret: Type::String,
+                ret: Type::union(vec![Type::String, Type::Undefined]),
                 type_predicate: None,
-                doc: crate::doc(FileId::JSON, "/** Serialize a value to a JSON string. */"),
+                doc: crate::doc(FileId::JSON, "/** Serialize a value to a JSON string, or return undefined when it has no JSON representation. */"),
             },
         },
     );
@@ -1934,13 +2012,16 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 push_doc(out, &prop.doc, &inner);
                 let ro = if prop.readonly { "readonly " } else { "" };
                 let opt = if prop.optional { "?" } else { "" };
+                let pname = member_name(pname);
                 let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {};", prop.ty);
             }
             for (mname, m) in methods {
                 push_doc(out, &m.doc, &inner);
+                let mname = method_prefix(mname);
                 let _ = writeln!(
                     out,
-                    "{inner}{mname}{}({}): {};",
+                    "{inner}{mname}{}{}({}): {};",
+                    if m.optional { "?" } else { "" },
                     generics_str(&m.generics),
                     params_str(&m.params, m.doc.as_ref()),
                     m.ret
@@ -1958,7 +2039,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
         TypeKind::StringEnum { variants, .. } => {
             let _ = writeln!(out, "{indent}enum {name} {{");
             for (v, value) in variants {
-                let _ = writeln!(out, "{inner}{v} = \"{value}\",");
+                let _ = writeln!(out, "{inner}{v} = \"{}\",", escape_string_literal(value));
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
@@ -1993,6 +2074,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 }
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}static {ro}{fname}: {};", field.ty);
             }
             for (mname, m) in statics {
@@ -2000,6 +2082,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                     continue;
                 }
                 push_doc(out, &m.doc, &inner);
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
                     "{inner}static {mname}{}({}): {};",
@@ -2017,6 +2100,7 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                 push_doc(out, &field.doc, &inner);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let opt = if field.optional { "?" } else { "" };
+                let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}{ro}{fname}{opt}: {};", field.ty);
             }
             render_class_accessors(out, fields, accessors, &inner, ToString::to_string);
@@ -2032,9 +2116,11 @@ fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
                     continue;
                 }
                 push_doc(out, &m.doc, &inner);
+                let mname = member_name(mname);
                 let _ = writeln!(
                     out,
-                    "{inner}{mname}{}({}): {};",
+                    "{inner}{mname}{}{}({}): {};",
+                    if m.optional { "?" } else { "" },
                     generics_str(&m.generics),
                     params_str(&m.params, m.doc.as_ref()),
                     m.ret
@@ -2120,10 +2206,26 @@ fn rendered_params(
     params
         .iter()
         .zip(names)
-        .map(|(p, name)| {
+        .enumerate()
+        .map(|(index, (p, name))| {
             let prefix = if p.rest { "..." } else { "" };
-            let opt = if p.default.is_some() { "?" } else { "" };
-            format!("{prefix}{name}{opt}: {}", format_type(&p.ty))
+            // A parameter a required one follows can't be written `x?`.
+            let later_required = params
+                .iter()
+                .skip(index.saturating_add(1))
+                .any(|later| !later.is_omittable() && !later.rest);
+            let opt = if p.is_omittable() && !later_required {
+                "?"
+            } else {
+                ""
+            };
+            // `x?: T` already admits `undefined`; printing it again is noise.
+            let ty = if opt.is_empty() {
+                p.ty.clone()
+            } else {
+                crate::types::shown_beside_optional_marker(&p.ty)
+            };
+            format!("{prefix}{name}{opt}: {}", format_type(&ty))
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -2269,9 +2371,43 @@ fn type_doc(kind: &TypeKind) -> &Option<DocComment> {
     }
 }
 
+/// What a method's declaration line starts with: nothing for a call signature
+/// (stored as the method `@call`), `new ` for a construct signature, else its
+/// member name.
+fn method_prefix(name: &str) -> Cow<'_, str> {
+    match name {
+        "@call" => Cow::Borrowed(""),
+        "new" => Cow::Borrowed("new "),
+        _ => member_name(name),
+    }
+}
+
+/// A member name as declaration source: bare when it is an ASCII identifier,
+/// else quoted and escaped, as `"a b"` or `"\uD800"` must be. A non-ASCII
+/// identifier is quoted too, since a TypeScript built on older Unicode tables
+/// may not read it.
+fn member_name(name: &str) -> Cow<'_, str> {
+    if name.is_ascii() && crate::type_rendering::is_identifier_name(name) {
+        return Cow::Borrowed(name);
+    }
+    Cow::Owned(format!("\"{}\"", escape_string_literal(name)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_names_are_quoted_unless_identifiers() {
+        let mut lone = String::new();
+        crate::literal_units::push_lone_surrogate(&mut lone, 0xD800);
+        assert_eq!(member_name("count"), "count");
+        assert_eq!(member_name("$el_2"), "$el_2");
+        assert_eq!(member_name("café"), "\"café\"");
+        assert_eq!(member_name("a b"), "\"a b\"");
+        assert_eq!(member_name("0"), "\"0\"");
+        assert_eq!(member_name(&lone), "\"\\uD800\"");
+    }
 
     #[test]
     fn destructured_display_names_are_valid_and_distinct() {
@@ -2668,9 +2804,17 @@ mod tests {
         assert!(builtin_no_import_note("Temporal").contains("import"));
     }
 
+    /// Every package any embedder can enable, so the declaration checks below
+    /// cover the optional packages too.
+    fn every_package() -> Stdlib {
+        crate::stdlib::OptionalPackage::ALL
+            .iter()
+            .fold(Stdlib::core(), |set, package| set.with(*package))
+    }
+
     #[test]
     fn stdlib_capability_tags_parse_cleanly() {
-        for module in user_modules() {
+        for module in user_modules(every_package()) {
             for symbol in module.values.values() {
                 let Some(doc) = value_doc(&symbol.kind) else {
                     continue;
@@ -2690,7 +2834,7 @@ mod tests {
 
     #[test]
     fn every_importable_stdlib_symbol_has_docs() {
-        for module in user_modules() {
+        for module in user_modules(every_package()) {
             for symbol in module.values.values() {
                 assert!(
                     value_doc(&symbol.kind).is_some(),
@@ -2707,6 +2851,15 @@ mod tests {
                     symbol.name
                 );
             }
+        }
+    }
+
+    #[test]
+    fn builtin_docs_print_a_call_signature_without_a_name() {
+        for name in ["Number", "Number.@call"] {
+            let docs = builtin_docs(name).expect("Number built-in");
+            assert!(docs.contains("  (value: "), "{docs}");
+            assert!(!docs.contains("@call"), "{docs}");
         }
     }
 
@@ -2735,7 +2888,7 @@ mod tests {
     fn builtin_docs_handles_json_intrinsic() {
         let docs = builtin_docs("JSON").expect("JSON built-in");
         assert!(docs.contains(
-            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string;"
+            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined;"
         ));
         assert!(docs.contains("function parse(text: string): unknown;"));
     }
@@ -3261,8 +3414,8 @@ mod tests {
 
     #[test]
     fn stdlib_d_ts_declares_each_user_module() {
-        let docs = render_stdlib_d_ts();
-        for module in user_modules() {
+        let docs = every_package().render_stdlib_d_ts();
+        for module in user_modules(every_package()) {
             assert!(
                 docs.contains(&format!("declare module \"{}\" {{", module.package_name)),
                 "missing declare module for {}",
@@ -3294,12 +3447,12 @@ mod tests {
         assert!(docs.contains("declare namespace Temporal {"));
         assert!(docs.contains("declare namespace JSON {"));
         assert!(docs.contains(
-            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string;"
+            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined;"
         ));
         assert!(docs.contains("interface Function {}"));
         assert!(docs.contains("interface IArguments {}"));
         assert!(docs.contains("declare class Error {"));
-        assert!(docs.contains("static isError(value: unknown): value is Error;"));
+        assert!(docs.contains("static isError(value?: unknown): value is Error;"));
         assert!(!docs.contains("ErrorConstructor"));
         assert!(!docs.contains("declare module"));
         assert!(!docs.contains("function string_concat"));
@@ -3308,7 +3461,7 @@ mod tests {
     #[test]
     fn d_ts_renderer_uses_typescript_call_and_predicate_signatures() {
         let docs = render_lib_submilli_d_ts();
-        assert!(docs.contains("(value: string | bigint): number;"));
+        assert!(docs.contains("(value: string | bigint | undefined): number;"));
         assert!(docs.contains("isArray<T>(value: T): value is T & unknown[];"));
         assert!(!docs.contains("@call"));
     }
@@ -3416,6 +3569,7 @@ mod tests {
             doc: None,
         };
         let method = |ret| MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: Vec::new(),
             ret,
@@ -3560,6 +3714,7 @@ mod tests {
         use crate::{FieldSig, MethodSig, Param, Visibility};
 
         let method = |ret: Type| MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: vec![Param::new("x", Type::Number)],
             ret,

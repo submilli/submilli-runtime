@@ -126,30 +126,30 @@ rList1 = rMyList1; // error, not nominally equal
 >         : ^^^^^^^^^^^^^^^^^^^^
 
 
-/*pruned*/;                                                                       
-                   
-                   
+/*pruned*/;
 
-                                                            
-                                                                
-                
-                   
-                   
-                
- 
 
-/*pruned*/;                                                             
-                   
-                                                                         
 
-                                                            
-                                                                
 
-                   
-                   
-                
-                
- 
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
 
 function main(): void {}
 >main : () => void

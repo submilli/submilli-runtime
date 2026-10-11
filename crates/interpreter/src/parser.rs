@@ -348,24 +348,47 @@ impl<'a> Parser<'a> {
             None
         };
 
-        if !matches!(self.peek().kind, TokenKind::Equals) {
-            let (msg, help) = if is_const {
-                (
-                    "`const` declaration requires an initializer",
-                    "const x: T = expr;".to_string(),
-                )
-            } else {
-                (
-                    "`let` declaration requires an initializer",
-                    "let x: T = expr;".to_string(),
-                )
-            };
-            self.error_at_peek_with_help(msg, vec![help]);
-            return None;
-        }
-        self.advance();
-
-        let value = self.parse_expression()?;
+        let implicit = !is_const
+            && ty.is_some()
+            && !matches!(self.peek().kind, TokenKind::Equals)
+            && matches!(self.peek().kind, TokenKind::Semicolon);
+        let value = if let (true, Some(name)) = (implicit, &name) {
+            // `let x: T;` starts as `undefined`; the typechecker requires `T` to allow it.
+            let value = parse_arena_result(
+                self.ast.try_push_expr(Expr {
+                    kind: ExprKind::Identifier(Ident {
+                        name: "undefined".to_string(),
+                        span: name.span,
+                    }),
+                    span: name.span,
+                }),
+                &mut self.fatal,
+            )?;
+            self.ast.implicit_initializers.insert(value);
+            self.ast.synthetic_undefined.insert(value);
+            value
+        } else {
+            if !matches!(self.peek().kind, TokenKind::Equals) {
+                let (msg, help) = if is_const {
+                    (
+                        "`const` declaration requires an initializer",
+                        vec!["const x: T = expr;".to_string()],
+                    )
+                } else {
+                    (
+                        "`let` declaration requires an initializer",
+                        vec![
+                            "let x: T = expr;".to_string(),
+                            "or declare one that starts empty: `let x: T | undefined;`".to_string(),
+                        ],
+                    )
+                };
+                self.error_at_peek_with_help(msg, help);
+                return None;
+            }
+            self.advance();
+            self.parse_expression()?
+        };
 
         if !self.at_statement_end() {
             self.error_at_peek("expected `;` after declaration");
@@ -490,18 +513,25 @@ impl<'a> Parser<'a> {
                 (source.clone(), end)
             };
 
-            // no `undefined` in Submilli, so TS-style `{ a = 1 }` defaults don't translate.
-            if matches!(self.peek().kind, TokenKind::Equals) {
-                self.error_at_peek_with_help(
-                    "default values inside destructuring patterns are not supported",
-                    vec!["bind first, then use `??`: const a = obj.a ?? 1;".to_string()],
-                );
-                return None;
-            }
+            let default = if matches!(self.peek().kind, TokenKind::Equals) {
+                self.advance();
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+            let field_end = match default {
+                Some(value) => {
+                    parse_arena_result(self.ast.try_expr(value), &mut self.fatal)?
+                        .span
+                        .end
+                }
+                None => field_end,
+            };
 
             fields.push(ObjectPatternField {
                 source,
                 local,
+                default,
                 span: self.span(field_span_start, field_end),
             });
 
@@ -536,6 +566,7 @@ impl<'a> Parser<'a> {
     fn parse_array_binding(&mut self) -> Option<Binding> {
         let open = self.advance();
         let mut elems: Vec<Option<Ident>> = Vec::new();
+        let mut defaults = Vec::new();
         let mut rest: Option<Ident> = None;
 
         if matches!(self.peek().kind, TokenKind::RightBracket) {
@@ -547,6 +578,7 @@ impl<'a> Parser<'a> {
             match self.peek().kind {
                 TokenKind::Comma => {
                     elems.push(None);
+                    defaults.push(None);
                     self.advance();
                     if matches!(self.peek().kind, TokenKind::RightBracket) {
                         break;
@@ -586,13 +618,13 @@ impl<'a> Parser<'a> {
                         self.expect_identifier("expected identifier in array pattern")?;
                     let name = self.ident_from_token(&name_tok);
 
-                    if matches!(self.peek().kind, TokenKind::Equals) {
-                        self.error_at_peek_with_help(
-                            "default values inside destructuring patterns are not supported",
-                            vec!["bind first, then use `??`: const a = arr[0] ?? 1;".to_string()],
-                        );
-                        return None;
-                    }
+                    let default = if matches!(self.peek().kind, TokenKind::Equals) {
+                        self.advance();
+                        Some(self.parse_expression()?)
+                    } else {
+                        None
+                    };
+                    defaults.push(default);
                     elems.push(Some(name));
 
                     match self.peek().kind {
@@ -620,6 +652,7 @@ impl<'a> Parser<'a> {
 
         Some(Binding::Array {
             elems,
+            defaults,
             rest,
             span: self.span(open.span.start, close.span.end),
         })
@@ -839,6 +872,12 @@ impl<'a> Parser<'a> {
         }
 
         let name = self.expect_property_ident("expected class member name")?;
+        let optional_span = if matches!(self.peek().kind, TokenKind::Question) {
+            Some(self.advance().span)
+        } else {
+            None
+        };
+        let optional = optional_span.is_some();
 
         // Method.
         if matches!(self.peek().kind, TokenKind::LessThan | TokenKind::LeftParen) {
@@ -855,7 +894,7 @@ impl<'a> Parser<'a> {
                 return None;
             }
             self.advance();
-            let params = self.parse_param_list(false)?;
+            let params = self.parse_class_member_params(false)?;
             self.advance(); // `)` — parse_param_list left us on it
             if !matches!(self.peek().kind, TokenKind::Colon) {
                 self.error_at_peek_with_help(
@@ -866,12 +905,50 @@ impl<'a> Parser<'a> {
             }
             self.advance();
             let return_type = self.parse_type_annotation()?;
+            if self.at_inserted_semicolon() && matches!(self.peek_at(1).kind, TokenKind::LeftBrace)
+            {
+                self.advance();
+            }
+            if optional
+                && matches!(
+                    self.peek().kind,
+                    TokenKind::Semicolon | TokenKind::RightBrace
+                )
+            {
+                if !generics.is_empty() {
+                    self.error_at(
+                        name.span,
+                        "generic optional method declarations are not supported",
+                    );
+                    return None;
+                }
+                let end = if matches!(self.peek().kind, TokenKind::Semicolon) {
+                    self.advance().span.end
+                } else {
+                    return_type.span.end
+                };
+                let ty = self.method_declaration_type(
+                    params,
+                    return_type,
+                    self.span(name.span.start, end),
+                )?;
+                return Some(crate::ClassMember::Field {
+                    name,
+                    modifiers,
+                    optional: true,
+                    ty,
+                    initializer: None,
+                    span: self.span(member_start, end),
+                    doc,
+                });
+            }
             let body = self.parse_class_member_body()?;
             let body_end = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?
                 .span
                 .end;
             return Some(crate::ClassMember::Method {
                 name,
+                optional,
                 modifiers,
                 generics,
                 params,
@@ -883,20 +960,15 @@ impl<'a> Parser<'a> {
         }
 
         // Field.
-        let optional = matches!(self.peek().kind, TokenKind::Question);
-        if optional {
-            let tok = self.advance();
-            if modifiers.static_span.is_some() {
-                self.error_at_with_help(
-                    tok.span,
-                    "a static field cannot be optional",
-                    vec![
-                        "a static field must be initialized; give it a value with `= …`"
-                            .to_string(),
-                    ],
-                );
-                return None;
-            }
+        if let Some(span) = optional_span
+            && modifiers.static_span.is_some()
+        {
+            self.error_at_with_help(
+                span,
+                "a static field cannot be optional",
+                vec!["a static field must be initialized; give it a value with `= …`".to_string()],
+            );
+            return None;
         }
         if !matches!(self.peek().kind, TokenKind::Colon) {
             if matches!(self.peek().kind, TokenKind::Equals) {
@@ -946,7 +1018,7 @@ impl<'a> Parser<'a> {
     ) -> Option<crate::ClassMember> {
         self.advance(); // `constructor`
         self.advance(); // `(` — guaranteed by the caller
-        let params = self.parse_param_list(true)?;
+        let params = self.parse_class_member_params(true)?;
         self.advance(); // `)` — parse_param_list left us on it
         if matches!(self.peek().kind, TokenKind::Colon) {
             let colon = self.advance();
@@ -984,7 +1056,7 @@ impl<'a> Parser<'a> {
         self.advance(); // `get` / `set`
         let name = self.expect_property_ident("expected accessor name")?;
         self.advance(); // `(` — guaranteed by the caller
-        let mut params = self.parse_param_list(false)?;
+        let mut params = self.parse_class_member_params(false)?;
         self.advance(); // `)`
         let param = match kind {
             crate::AccessorKind::Get => {
@@ -1120,6 +1192,17 @@ impl<'a> Parser<'a> {
         is_property_name(next) || matches!(next, TokenKind::StringLiteral(_))
     }
 
+    fn parse_class_member_params(
+        &mut self,
+        allow_param_properties: bool,
+    ) -> Option<Vec<ParamDecl>> {
+        let saved = self.class_member_body_depth;
+        self.class_member_body_depth = 1;
+        let params = self.parse_param_list(allow_param_properties);
+        self.class_member_body_depth = saved;
+        params
+    }
+
     fn parse_class_member_body(&mut self) -> Option<StmtId> {
         self.class_member_body_depth += 1;
         let body = self.parse_block();
@@ -1181,6 +1264,7 @@ impl<'a> Parser<'a> {
                 };
                 members.push(crate::InterfaceMember::Method {
                     name: sentinel,
+                    optional: false,
                     generics: Vec::new(),
                     params,
                     return_type,
@@ -1210,10 +1294,6 @@ impl<'a> Parser<'a> {
             let optional = matches!(self.peek().kind, TokenKind::Question);
             if optional {
                 self.advance();
-                if matches!(self.peek().kind, TokenKind::LeftParen | TokenKind::LessThan) {
-                    self.error_at_peek("optional interface methods are not supported");
-                    return None;
-                }
             }
             if matches!(self.peek().kind, TokenKind::Colon) {
                 self.advance();
@@ -1255,14 +1335,34 @@ impl<'a> Parser<'a> {
             let return_type = self.parse_type_annotation()?;
             let end = self.finish_interface_member(return_type.span.end)?;
             let span = self.span(member_name.span.start, end);
-            members.push(crate::InterfaceMember::Method {
-                name: member_name,
-                generics: m_generics,
-                params,
-                return_type,
-                span,
-                doc: member_doc,
-            });
+            if optional {
+                if !m_generics.is_empty() {
+                    self.error_at(
+                        member_name.span,
+                        "generic optional method declarations are not supported",
+                    );
+                    return None;
+                }
+                let ty = self.method_declaration_type(params, return_type, span)?;
+                members.push(crate::InterfaceMember::Property {
+                    name: member_name,
+                    ty,
+                    optional: true,
+                    readonly,
+                    span,
+                    doc: member_doc,
+                });
+            } else {
+                members.push(crate::InterfaceMember::Method {
+                    name: member_name,
+                    optional,
+                    generics: m_generics,
+                    params,
+                    return_type,
+                    span,
+                    doc: member_doc,
+                });
+            }
         }
 
         if !matches!(self.peek().kind, TokenKind::RightBrace) {
@@ -1284,6 +1384,42 @@ impl<'a> Parser<'a> {
             }),
             &mut self.fatal,
         )
+    }
+
+    fn method_declaration_type(
+        &mut self,
+        params: Vec<ParamDecl>,
+        return_type: TypeAnnotation,
+        span: Span,
+    ) -> Option<TypeAnnotation> {
+        let mut fields = Vec::new();
+        for param in params {
+            if param.pattern.is_some() || param.default.is_some() {
+                self.error_at(
+                    param.name.span,
+                    "a method declaration cannot contain a parameter pattern or default value",
+                );
+                return None;
+            }
+            let Some(ty) = param.ty else {
+                return self.invariant_failure("method parameter annotation was not retained");
+            };
+            fields.push(TypeAnnotationField {
+                name: param.name,
+                ty,
+                optional: param.optional,
+                readonly: false,
+                rest: param.rest,
+                method: false,
+            });
+        }
+        Some(TypeAnnotation {
+            kind: TypeAnnotationKind::Function {
+                params: fields,
+                return_type: Box::new(return_type),
+            },
+            span,
+        })
     }
 
     fn finish_interface_member(&mut self, body_end: u32) -> Option<u32> {
@@ -1994,23 +2130,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        let first_default = params.iter().position(|p| p.default.is_some());
-        if let Some(first) = first_default {
-            for p in &params[first + 1..] {
-                if p.default.is_none() && !p.rest {
-                    // Pattern params have an empty `name` pre-lowering; anchor at the pattern span.
-                    let (span, label) = match &p.pattern {
-                        Some(b) => (b.span(), "destructured parameter".to_string()),
-                        None => (p.name.span, format!("parameter `{}`", p.name.name)),
-                    };
-                    self.error_at(
-                        span,
-                        format!("required {label} cannot follow a parameter with a default value",),
-                    );
-                    return None;
-                }
-            }
-        }
+        self.check_parameter_order(params.iter().map(ParamOrder::of_param));
         Some(params)
     }
 
@@ -2082,11 +2202,13 @@ impl<'a> Parser<'a> {
             }
         };
 
-        if matches!(self.peek().kind, TokenKind::Question) {
-            self.error_at_peek("optional function parameters are not yet supported");
-            return None;
-        }
-        if !matches!(self.peek().kind, TokenKind::Colon) {
+        let optional = self.parse_parameter_optional(rest, pattern.is_some())?;
+        let ty = if matches!(self.peek().kind, TokenKind::Colon) {
+            self.advance();
+            Some(self.parse_type_annotation()?)
+        } else if !rest && matches!(self.peek().kind, TokenKind::Equals) {
+            None
+        } else {
             if rest {
                 self.error_at_peek_with_help(
                     "rest parameter requires a type annotation",
@@ -2095,47 +2217,94 @@ impl<'a> Parser<'a> {
             } else {
                 self.error_at_peek_with_help(
                     "parameter requires a type annotation",
-                    vec!["function name(x: T, y: U): R { … }".to_string()],
+                    vec!["add a type (`x: T`) or a default initializer (`x = value`)".to_string()],
                 );
             }
             return None;
-        }
-        self.advance();
-        let ty = self.parse_type_annotation()?;
-        let default = if matches!(self.peek().kind, TokenKind::Equals) {
-            // Rest's default is the empty array — no explicit default allowed.
-            if rest {
-                self.error_at_peek_with_help(
-                    "rest parameter cannot have a default value",
-                    vec!["omit the `= …`; an unspecified rest defaults to `[]`".to_string()],
-                );
-                return None;
-            }
-            // The lowering pass materialises a synthetic identifier for pattern params first;
-            // defaults can't compose with that before lowering.
-            if pattern.is_some() {
-                self.error_at_peek_with_help(
-                    "default values are not supported on destructured parameters",
-                    vec![
-                        "pass a defaulted whole object at the call site, or use `??` per binding inside the body"
-                            .to_string(),
-                    ],
-                );
-                return None;
-            }
-            self.advance();
-            Some(self.parse_expression()?)
-        } else {
-            None
         };
+        let default = self.parse_parameter_default(rest, optional)?;
         Some(ParamDecl {
             name,
-            ty: Some(ty),
+            ty,
             default,
+            optional,
             pattern,
             rest,
             modifiers,
         })
+    }
+
+    fn parse_parameter_optional(&mut self, rest: bool, pattern: bool) -> Option<bool> {
+        if !matches!(self.peek().kind, TokenKind::Question) {
+            return Some(false);
+        }
+        let question = self.advance();
+        if rest || pattern {
+            self.error_at(
+                question.span,
+                if rest {
+                    "a rest parameter cannot be optional"
+                } else {
+                    "a destructured parameter cannot be optional; use a default value"
+                },
+            );
+            return None;
+        }
+        Some(true)
+    }
+
+    /// The `= value` after a parameter, if any. An optional parameter's default is
+    /// reported but still parsed, so the rest of the list is checked too.
+    fn parse_parameter_default(&mut self, rest: bool, optional: bool) -> Option<Option<ExprId>> {
+        if !matches!(self.peek().kind, TokenKind::Equals) {
+            return Some(None);
+        }
+        if rest {
+            self.error_rest_parameter_default();
+            return None;
+        }
+        if optional {
+            self.error_at_peek_with_help(
+                "an optional parameter cannot have a default value",
+                vec!["drop the `?`: a parameter with a default is already optional".to_string()],
+            );
+        }
+        self.advance();
+        Some(Some(self.parse_expression()?))
+    }
+
+    /// Rest's default is the empty array, so an explicit one is rejected.
+    fn error_rest_parameter_default(&mut self) {
+        self.error_at_peek_with_help(
+            "rest parameter cannot have a default value",
+            vec!["omit the `= …`; an unspecified rest defaults to `[]`".to_string()],
+        );
+    }
+
+    /// A caller cannot skip an optional argument and still pass a later one, so a
+    /// required parameter after an optional one is reported. Only the first is, and
+    /// parsing continues.
+    fn check_parameter_order<'p>(&mut self, params: impl IntoIterator<Item = ParamOrder<'p>>) {
+        let mut follows_optional = false;
+        for param in params {
+            if param.optional {
+                follows_optional = true;
+                continue;
+            }
+            if !follows_optional || !param.required {
+                continue;
+            }
+            let label = match param.name {
+                Some(name) => format!("parameter `{name}`"),
+                None => "destructured parameter".to_string(),
+            };
+            self.error_at_with_help(
+                param.span,
+                format!("required {label} cannot follow an optional parameter"),
+                vec!["make it optional too (`x?: T`), give it a default (`x: T = …`), or move it before the optional parameters".to_string()],
+            );
+            return;
+        }
     }
 
     /// Drop a `;` that ASI inserted directly before `next`, where the grammar requires
@@ -3423,10 +3592,7 @@ impl<'a> Parser<'a> {
                     "expected parameter name in function-type annotation"
                 })?;
                 let name = self.ident_from_token(&name_tok);
-                if matches!(self.peek().kind, TokenKind::Question) {
-                    self.error_at_peek("optional function parameters are not yet supported");
-                    return None;
-                }
+                let optional = self.parse_parameter_optional(rest, false)?;
                 if !matches!(self.peek().kind, TokenKind::Colon) {
                     if rest {
                         self.error_at_peek_with_help(
@@ -3449,12 +3615,7 @@ impl<'a> Parser<'a> {
                 }
                 if matches!(self.peek().kind, TokenKind::Equals) {
                     if rest {
-                        self.error_at_peek_with_help(
-                            "rest parameter cannot have a default value",
-                            vec![
-                                "omit the `= …`; an unspecified rest defaults to `[]`".to_string(),
-                            ],
-                        );
+                        self.error_rest_parameter_default();
                     } else {
                         self.error_at_peek(
                             "default values in function-type annotations are not yet supported",
@@ -3465,7 +3626,7 @@ impl<'a> Parser<'a> {
                 params.push(TypeAnnotationField {
                     name,
                     ty,
-                    optional: false,
+                    optional,
                     readonly: false,
                     rest,
                     method: false,
@@ -3489,6 +3650,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            self.check_parameter_order(params.iter().map(ParamOrder::of_field));
         }
         if !matches!(self.peek().kind, TokenKind::RightParen) {
             self.error_at_peek("expected `)`");
@@ -3520,10 +3682,36 @@ impl<'a> Parser<'a> {
             }
             // Labels may be mixed with unlabeled elements, as TypeScript allows
             // since 5.2.
-            self.skip_tuple_element_label()?;
-            let ty = self.parse_type_annotation()?;
-            if matches!(self.peek().kind, TokenKind::Question) {
-                self.reject_optional_tuple_element(self.peek().span);
+            let label = self.skip_tuple_element_label();
+            let mut ty = self.parse_type_annotation()?;
+            let suffix_optional = matches!(self.peek().kind, TokenKind::Question);
+            if suffix_optional && label != TupleElementLabel::None {
+                self.error_at_peek_with_help(
+                    "put the optional marker after the tuple element label",
+                    vec!["write `name?: T` instead of `name: T?`".to_string()],
+                );
+                return None;
+            }
+            let optional = label == TupleElementLabel::Optional || suffix_optional;
+            if optional {
+                let end = if suffix_optional {
+                    self.advance().span.end
+                } else {
+                    ty.span.end
+                };
+                let span = self.span(ty.span.start, end);
+                ty = TypeAnnotation {
+                    kind: TypeAnnotationKind::Optional(Box::new(ty)),
+                    span,
+                };
+            } else if elements
+                .iter()
+                .any(|element| matches!(element.kind, TypeAnnotationKind::Optional(_)))
+            {
+                self.error_at(
+                    ty.span,
+                    "a required tuple element cannot follow an optional element",
+                );
                 return None;
             }
             elements.push(ty);
@@ -3552,37 +3740,25 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Consumes a tuple element's `name:` label, if it has one. Labels only document
-    /// the positions — `[x: number]` is the type `[number]` — so nothing of them is
-    /// kept. `None` after reporting an optional element (`name?:`), which tuples do
-    /// not support.
-    fn skip_tuple_element_label(&mut self) -> Option<()> {
+    /// Labels document positions; retain only whether the label was optional.
+    fn skip_tuple_element_label(&mut self) -> TupleElementLabel {
         if !is_property_name(&self.peek().kind) {
-            return Some(());
+            return TupleElementLabel::None;
         }
         match self.peek_at(1).kind {
             TokenKind::Colon => {
                 self.advance();
                 self.advance();
+                TupleElementLabel::Required
             }
             TokenKind::Question if matches!(self.peek_at(2).kind, TokenKind::Colon) => {
-                self.reject_optional_tuple_element(self.peek_at(1).span);
-                return None;
+                self.advance();
+                self.advance();
+                self.advance();
+                TupleElementLabel::Optional
             }
-            _ => {}
+            _ => TupleElementLabel::None,
         }
-        Some(())
-    }
-
-    fn reject_optional_tuple_element(&mut self, question: Span) {
-        self.error_at_with_help(
-            question,
-            "optional tuple elements are not supported",
-            vec![
-                "give the element a nullable type (`T | null`) and pass `null` where it is absent"
-                    .to_string(),
-            ],
-        );
     }
 
     /// `[]` or `[]: V` — an index signature with no parameter, which TypeScript
@@ -3772,7 +3948,7 @@ impl<'a> Parser<'a> {
         member_start: u32,
     ) -> Option<TypeAnnotationField> {
         let name = self.expect_property_ident("expected field name in object type")?;
-        // `name?: T` — omittable at construction; reads widen to `T | null`.
+        // `name?: T` — omittable at construction; reads widen to `T | undefined`.
         let optional = matches!(self.peek().kind, TokenKind::Question);
         if optional {
             self.advance();
@@ -4000,7 +4176,7 @@ impl<'a> Parser<'a> {
 
     fn parse_expression_inner(&mut self) -> Option<ExprId> {
         let written = self.parse_conditional()?;
-        let shift_assignment = self.peek_shift().filter(|(_, _, assignment)| *assignment);
+        let shift_assignment = self.peek_shift().filter(|shift| shift.assignment);
         if !is_assign_lookahead(&self.peek().kind) && shift_assignment.is_none() {
             return Some(written);
         }
@@ -4008,8 +4184,8 @@ impl<'a> Parser<'a> {
         let target = self.assignment_target(written)?;
         let op_tok = self.advance();
         let mut op_span = op_tok.span;
-        let op = if let Some((op, count, _)) = shift_assignment {
-            for _ in 1..count {
+        let op = if let Some(ShiftToken { op, tokens, .. }) = shift_assignment {
+            for _ in 1..tokens {
                 op_span.end = self.advance().span.end;
             }
             Some(op)
@@ -4309,6 +4485,7 @@ impl<'a> Parser<'a> {
                     name,
                     ty: None,
                     default: None,
+                    optional: false,
                     pattern: None,
                     rest: false,
                     modifiers: None,
@@ -4412,9 +4589,14 @@ impl<'a> Parser<'a> {
         let params = if matches!(self.peek().kind, TokenKind::RightParen) {
             Vec::new()
         } else {
-            // Shares the arrow parameter grammar, so parameter defaults are rejected here
-            // too — only named function *declarations* accept them.
-            self.parse_arrow_param_list()?
+            let saved_class = self.class_member_body_depth;
+            let saved_function = self.function_expression_body_depth;
+            self.class_member_body_depth = 0;
+            self.function_expression_body_depth = 1;
+            let params = self.parse_arrow_param_list();
+            self.class_member_body_depth = saved_class;
+            self.function_expression_body_depth = saved_function;
+            params?
         };
         if !matches!(self.peek().kind, TokenKind::RightParen) {
             self.error_at_peek("expected `)`");
@@ -4519,6 +4701,7 @@ impl<'a> Parser<'a> {
                     (name, None)
                 }
             };
+            let optional = self.parse_parameter_optional(rest, pattern.is_some())?;
             let ty = if matches!(self.peek().kind, TokenKind::Colon) {
                 self.advance();
                 Some(self.parse_type_annotation()?)
@@ -4527,30 +4710,12 @@ impl<'a> Parser<'a> {
                 // from a contextual function-type hint if available.
                 None
             };
-            // Only named function declarations support parameter defaults. This list also
-            // serves function expressions and shorthand methods, so the message names the
-            // parameter rather than the construct the user wrote.
-            if matches!(self.peek().kind, TokenKind::Equals) {
-                if rest {
-                    self.error_at_peek_with_help(
-                        "rest parameter cannot have a default value",
-                        vec!["omit the `= …`; an unspecified rest defaults to `[]`".to_string()],
-                    );
-                } else {
-                    self.error_at_peek_with_help(
-                        "default parameter values are only supported on function declarations",
-                        vec![
-                            "declare the function, or drop the default and use `??` in the body"
-                                .to_string(),
-                        ],
-                    );
-                }
-                return None;
-            }
+            let default = self.parse_parameter_default(rest, optional)?;
             params.push(ParamDecl {
                 name,
                 ty,
-                default: None,
+                default,
+                optional,
                 pattern,
                 rest,
                 modifiers: None,
@@ -4564,16 +4729,18 @@ impl<'a> Parser<'a> {
                     }
                     self.advance();
                     if matches!(self.peek().kind, TokenKind::RightParen) {
-                        return Some(params);
+                        break;
                     }
                 }
-                TokenKind::RightParen => return Some(params),
+                TokenKind::RightParen => break,
                 _ => {
                     self.error_at_peek("expected `,` or `)`");
                     return None;
                 }
             }
         }
+        self.check_parameter_order(params.iter().map(ParamOrder::of_param));
+        Some(params)
     }
 
     fn parse_binary(&mut self, min_prec: u8) -> Option<ExprId> {
@@ -4582,36 +4749,54 @@ impl<'a> Parser<'a> {
 
     /// Angle tokens stay separate for nested type arguments. Only adjacent
     /// source tokens form a shift; whitespace and comments cannot join them.
-    fn peek_shift(&self) -> Option<(BinOp, usize, bool)> {
+    fn peek_shift(&self) -> Option<ShiftToken> {
         let first = self.peek();
         let second = self.peek_at(1);
         if first.span.end != second.span.start {
             return None;
         }
         match (&first.kind, &second.kind) {
-            (TokenKind::LessThan, TokenKind::LessThan) => Some((BinOp::Shl, 2, false)),
-            (TokenKind::LessThan, TokenKind::LessEquals) => Some((BinOp::Shl, 2, true)),
-            (TokenKind::GreaterThan, TokenKind::GreaterEquals) => Some((BinOp::Shr, 2, true)),
+            (TokenKind::LessThan, TokenKind::LessThan) => {
+                Some(ShiftToken::new(BinOp::Shl, 2, false))
+            }
+            (TokenKind::LessThan, TokenKind::LessEquals) => {
+                Some(ShiftToken::new(BinOp::Shl, 2, true))
+            }
+            (TokenKind::GreaterThan, TokenKind::GreaterEquals) => {
+                Some(ShiftToken::new(BinOp::Shr, 2, true))
+            }
             (TokenKind::GreaterThan, TokenKind::GreaterThan) => {
                 let third = self.peek_at(2);
                 if second.span.end == third.span.start {
                     match third.kind {
-                        TokenKind::GreaterThan => return Some((BinOp::UnsignedShr, 3, false)),
-                        TokenKind::GreaterEquals => return Some((BinOp::UnsignedShr, 3, true)),
+                        TokenKind::GreaterThan => {
+                            return Some(ShiftToken::new(BinOp::UnsignedShr, 3, false));
+                        }
+                        TokenKind::GreaterEquals => {
+                            return Some(ShiftToken::new(BinOp::UnsignedShr, 3, true));
+                        }
                         _ => {}
                     }
                 }
-                Some((BinOp::Shr, 2, false))
+                Some(ShiftToken::new(BinOp::Shr, 2, false))
             }
             _ => None,
         }
     }
 
-    fn peek_binary(&self) -> Option<(BinOp, u8, usize)> {
-        if let Some((op, count, assignment)) = self.peek_shift() {
-            return (!assignment).then_some((op, 8, count));
+    fn peek_binary(&self) -> Option<BinaryToken> {
+        if let Some(shift) = self.peek_shift() {
+            return (!shift.assignment).then_some(BinaryToken {
+                op: shift.op,
+                precedence: SHIFT_PRECEDENCE,
+                tokens: shift.tokens,
+            });
         }
-        peek_binop(&self.peek().kind).map(|(op, prec)| (op, prec, 1))
+        peek_binop(&self.peek().kind).map(|(op, precedence)| BinaryToken {
+            op,
+            precedence,
+            tokens: 1,
+        })
     }
 
     fn parse_binary_inner(&mut self, min_prec: u8) -> Option<ExprId> {
@@ -4621,7 +4806,12 @@ impl<'a> Parser<'a> {
         // `right_operand_min_prec`), so `||` / `&&` after it is left for this check.
         let mut last_op: Option<BinOp> = None;
         let mut reported_mixing = false;
-        while let Some((op, prec, count)) = self.peek_binary() {
+        while let Some(BinaryToken {
+            op,
+            precedence: prec,
+            tokens: count,
+        }) = self.peek_binary()
+        {
             if prec < min_prec {
                 break;
             }
@@ -4643,7 +4833,10 @@ impl<'a> Parser<'a> {
             if op == BinOp::Pow
                 && matches!(
                     parse_arena_result(self.ast.try_expr(lhs), &mut self.fatal)?.kind,
-                    ExprKind::Unary { .. } | ExprKind::Typeof { .. } | ExprKind::Delete { .. }
+                    ExprKind::Unary { .. }
+                        | ExprKind::Typeof { .. }
+                        | ExprKind::Delete { .. }
+                        | ExprKind::Void { .. }
                 )
             {
                 let error_span = parse_arena_result(self.ast.try_expr(lhs), &mut self.fatal)?.span;
@@ -4654,12 +4847,16 @@ impl<'a> Parser<'a> {
                 );
                 return None;
             }
+            let loose = matches!(self.peek().kind, TokenKind::EqEq | TokenKind::BangEq);
             for _ in 0..count {
                 self.advance();
             }
             let rhs = self.parse_binary(right_operand_min_prec(op, prec))?;
             let lhs_span = parse_arena_result(self.ast.try_expr(lhs), &mut self.fatal)?.span;
             let rhs_span = parse_arena_result(self.ast.try_expr(rhs), &mut self.fatal)?.span;
+            if loose {
+                self.reject_loose_nullish_comparison(op, lhs, rhs)?;
+            }
             lhs = parse_arena_result(
                 self.ast.try_push_expr(Expr {
                     kind: ExprKind::Binary { op, lhs, rhs },
@@ -4711,6 +4908,9 @@ impl<'a> Parser<'a> {
         // the typechecker rejects `Typeof` outside the recognized equality fold position.
         if matches!(self.peek().kind, TokenKind::Typeof) {
             return self.parse_prefix_expr(|operand| ExprKind::Typeof { operand });
+        }
+        if matches!(self.peek().kind, TokenKind::Void) {
+            return self.parse_prefix_expr(|operand| ExprKind::Void { operand });
         }
         if self.at_delete_operator() {
             return self.parse_prefix_expr(|operand| ExprKind::Delete { operand });
@@ -4796,6 +4996,11 @@ impl<'a> Parser<'a> {
     /// Consume a prefix operator and its operand, spanning both.
     fn parse_prefix_expr(&mut self, kind: impl FnOnce(ExprId) -> ExprKind) -> Option<ExprId> {
         let op_tok = self.advance();
+        // ASI cannot distinguish the `void` type from the expression operator.
+        // In expression position a newline after the keyword still awaits an operand.
+        if matches!(op_tok.kind, TokenKind::Void) && self.at_inserted_semicolon() {
+            self.advance();
+        }
         let operand = self.parse_unary()?;
         let operand_span = parse_arena_result(self.ast.try_expr(operand), &mut self.fatal)?.span;
         parse_arena_result(
@@ -5346,6 +5551,11 @@ impl<'a> Parser<'a> {
                     }
                     members.push(ObjectLiteralMember::Field(field));
                 }
+                if self.at_inserted_semicolon()
+                    && matches!(self.peek_at(1).kind, TokenKind::RightBrace)
+                {
+                    self.advance();
+                }
                 match self.peek().kind {
                     TokenKind::Comma => {
                         self.advance();
@@ -5598,6 +5808,12 @@ impl<'a> Parser<'a> {
             .unwrap_or(&self.eof)
     }
 
+    /// ASI inserts its `;` as a zero-width token; a written `;` always has width.
+    fn at_inserted_semicolon(&self) -> bool {
+        let token = self.peek();
+        matches!(token.kind, TokenKind::Semicolon) && token.span.start == token.span.end
+    }
+
     fn advance(&mut self) -> Token {
         let tok = self.peek().clone();
         if self.pos < self.tokens.len().saturating_sub(1) {
@@ -5691,6 +5907,240 @@ impl<'a> Parser<'a> {
             help: vec![],
             notes: vec![],
         });
+    }
+
+    /// `==` is `===` here, so `x == null` would silently miss `undefined` — the
+    /// one case where TypeScript's loose equality differs in a way code relies on.
+    fn reject_loose_nullish_comparison(
+        &mut self,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+    ) -> Option<()> {
+        let lhs_span = parse_arena_result(self.ast.try_expr(lhs), &mut self.fatal)?.span;
+        let rhs_span = parse_arena_result(self.ast.try_expr(rhs), &mut self.fatal)?.span;
+        let (nullish, operand, nullish_first) =
+            match (self.nullish_operand(lhs)?, self.nullish_operand(rhs)?) {
+                (Some(left), Some(right)) => {
+                    self.reject_nullish_against_nullish(op, lhs_span, rhs_span, [left, right]);
+                    return Some(());
+                }
+                (None, Some(nullish)) => (nullish, lhs, false),
+                (Some(nullish), None) => (nullish, rhs, true),
+                (None, None) => return Some(()),
+            };
+        let comparison = LooseComparison {
+            nullish,
+            nullish_first,
+            negated: op == BinOp::NotEq,
+        };
+        let operand_span = parse_arena_result(self.ast.try_expr(operand), &mut self.fatal)?.span;
+        let x = self.single_line_source(operand_span).unwrap_or("x");
+        let strict = self.strict_suggestion(&comparison, x);
+        let either = self.either_suggestion(&comparison, operand, x)?;
+        let literal = comparison.nullish.literal.text();
+        // Quote the comparison as written, so `null == z` stays in that order.
+        let written = self
+            .single_line_source(self.span(lhs_span.start, rhs_span.end))
+            .map_or_else(
+                || {
+                    let written_op = if comparison.negated { "!=" } else { "==" };
+                    comparison.ordered(x, written_op, literal)
+                },
+                str::to_string,
+            );
+        self.error_at_with_help(
+            self.span(lhs_span.start, rhs_span.end),
+            format!(
+                "`{written}` does not also match `{}`: `==` compares like `===`",
+                comparison.nullish.literal.other().text()
+            ),
+            vec![
+                either,
+                format!("to test for `{literal}` alone, write `{strict}`"),
+            ],
+        );
+        Some(())
+    }
+
+    /// Both sides are always nullish. TypeScript's `==` treats `null` and
+    /// `undefined` as equal, so the comparison has one value, which the help
+    /// names; a `void` operand with effects still runs, as a statement.
+    fn reject_nullish_against_nullish(
+        &mut self,
+        op: BinOp,
+        lhs: Span,
+        rhs: Span,
+        sides: [NullishOperand; 2],
+    ) {
+        let span = self.span(lhs.start, rhs.end);
+        // A comparison written over several lines can't be quoted on one, so
+        // the message names it without the source.
+        let subject = self.single_line_source(span).map_or_else(
+            || "this comparison".to_string(),
+            |written| format!("`{written}`"),
+        );
+        let value = if op == BinOp::NotEq { "false" } else { "true" };
+        let effects: Vec<String> = sides
+            .iter()
+            .filter_map(|side| side.effect)
+            .map(|effect| {
+                self.single_line_source(effect.operand).map_or_else(
+                    || "the `void` operand's expression".to_string(),
+                    |statement| format!("`{statement};`"),
+                )
+            })
+            .collect();
+        let help = if effects.is_empty() {
+            format!("in TypeScript this is always `{value}`; write `{value}`")
+        } else {
+            format!(
+                "in TypeScript this is always `{value}`; run {} {}, then use `{value}`",
+                effects.join(" and "),
+                if effects.len() > 1 {
+                    "each as its own statement"
+                } else {
+                    "as its own statement"
+                }
+            )
+        };
+        self.error_at_with_help(
+            span,
+            format!("{subject} compares two nullish values: `==` compares like `===`"),
+            vec![help],
+        );
+    }
+
+    /// The strict comparison against the written nullish value. A `void`
+    /// operand with effects stays as written, so the operand runs once.
+    fn strict_suggestion(&self, comparison: &LooseComparison, x: &str) -> String {
+        let eq = comparison.strict_op();
+        match comparison.nullish.effect {
+            Some(effect) => {
+                let void = self.single_line_source(effect.void).unwrap_or("void expr");
+                comparison.ordered(x, eq, void)
+            }
+            None => format!("{x} {eq} {}", comparison.nullish.literal.text()),
+        }
+    }
+
+    /// "To test for either" names the operand twice, so one with effects is
+    /// bound to a `const` first, and a `void` operand's expression runs as a
+    /// statement of its own.
+    fn either_suggestion(
+        &mut self,
+        comparison: &LooseComparison,
+        operand: ExprId,
+        x: &str,
+    ) -> Option<String> {
+        let mut steps = Vec::new();
+        let tested = if self.repeats_without_effect(operand)? {
+            x
+        } else {
+            steps.push(format!("bind `{x}` to a `const` (`const value = {x};`)"));
+            "value"
+        };
+        if let Some(effect) = comparison.nullish.effect {
+            let statement = self.single_line_source(effect.operand).unwrap_or("expr");
+            let step = format!("run `{statement};` as its own statement");
+            if comparison.nullish_first {
+                steps.insert(0, step);
+            } else {
+                steps.push(step);
+            }
+        }
+        let eq = comparison.strict_op();
+        let joiner = if comparison.negated { "&&" } else { "||" };
+        let both = format!("{tested} {eq} null {joiner} {tested} {eq} undefined");
+        Some(if steps.is_empty() {
+            format!("to test for either, write `{both}`")
+        } else {
+            format!(
+                "to test for either, first {}, then write `{both}`",
+                steps.join(", then ")
+            )
+        })
+    }
+
+    /// Whether naming `id` twice evaluates it twice with no effect: a literal,
+    /// or a reference path.
+    fn repeats_without_effect(&mut self, id: ExprId) -> Option<bool> {
+        let unwrapped = self.unparenthesized(id)?;
+        let expr = parse_arena_result(self.ast.try_expr(unwrapped), &mut self.fatal)?;
+        if is_literal(&expr.kind) {
+            return Some(true);
+        }
+        if self
+            .nullish_operand(unwrapped)?
+            .is_some_and(|nullish| nullish.effect.is_none())
+        {
+            return Some(true);
+        }
+        self.is_reference_path(id)
+    }
+
+    /// `null`, `undefined` or `void e`, looking through parentheses.
+    fn nullish_operand(&mut self, id: ExprId) -> Option<Option<NullishOperand>> {
+        let id = self.unparenthesized(id)?;
+        let expr = parse_arena_result(self.ast.try_expr(id), &mut self.fatal)?;
+        let span = expr.span;
+        Some(match &expr.kind {
+            ExprKind::Null => Some(NullishOperand {
+                literal: Nullish::Null,
+                effect: None,
+            }),
+            ExprKind::Identifier(ident) if ident.name == "undefined" => Some(NullishOperand {
+                literal: Nullish::Undefined,
+                effect: None,
+            }),
+            ExprKind::Void { operand } => {
+                let operand_id = self.unparenthesized(*operand)?;
+                let operand =
+                    parse_arena_result(self.ast.try_expr(operand_id), &mut self.fatal)?.clone();
+                // A literal or a reference path reads with no effect to keep.
+                let effect_free =
+                    is_literal(&operand.kind) || self.is_reference_path(operand_id)?;
+                let effect = (!effect_free).then_some(VoidEffect {
+                    void: span,
+                    operand: operand.span,
+                });
+                Some(NullishOperand {
+                    literal: Nullish::Undefined,
+                    effect,
+                })
+            }
+            _ => None,
+        })
+    }
+
+    /// An identifier, `this`, or a `.field` chain on one: naming it twice evaluates
+    /// it twice with no effect.
+    fn is_reference_path(&mut self, id: ExprId) -> Option<bool> {
+        let mut id = id;
+        loop {
+            match &parse_arena_result(self.ast.try_expr(id), &mut self.fatal)?.kind {
+                ExprKind::Identifier(_) | ExprKind::This => return Some(true),
+                ExprKind::FieldAccess { receiver, .. } => id = *receiver,
+                ExprKind::Paren(inner) => id = *inner,
+                _ => return Some(false),
+            }
+        }
+    }
+
+    fn unparenthesized(&mut self, id: ExprId) -> Option<ExprId> {
+        let mut id = id;
+        loop {
+            match parse_arena_result(self.ast.try_expr(id), &mut self.fatal)?.kind {
+                ExprKind::Paren(inner) => id = inner,
+                _ => return Some(id),
+            }
+        }
+    }
+
+    fn single_line_source(&self, span: Span) -> Option<&'a str> {
+        self.source
+            .get(span.start as usize..span.end as usize)
+            .filter(|text| !text.contains('\n'))
     }
 
     fn error_at_with_help(&mut self, span: Span, message: impl Into<String>, help: Vec<String>) {
@@ -5871,6 +6321,151 @@ fn mixed_logical_help(prev: BinOp, next: BinOp) -> String {
 
 const LOGICAL_AND_PREC: u8 = 2;
 
+/// One side of a loose comparison that is always nullish.
+#[derive(Clone, Copy)]
+struct NullishOperand {
+    literal: Nullish,
+    /// Set for `void e` when `e` is not a literal and may have effects.
+    effect: Option<VoidEffect>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nullish {
+    Null,
+    Undefined,
+}
+
+impl Nullish {
+    fn text(self) -> &'static str {
+        match self {
+            Nullish::Null => "null",
+            Nullish::Undefined => "undefined",
+        }
+    }
+
+    /// The nullish value a loose comparison against `self` fails to match.
+    fn other(self) -> Self {
+        match self {
+            Nullish::Null => Nullish::Undefined,
+            Nullish::Undefined => Nullish::Null,
+        }
+    }
+}
+
+/// A rejected `x == null`-style comparison, as written.
+struct LooseComparison {
+    nullish: NullishOperand,
+    /// Whether the nullish side is written first, as in `null == x`.
+    nullish_first: bool,
+    /// `!=` rather than `==`.
+    negated: bool,
+}
+
+impl LooseComparison {
+    fn strict_op(&self) -> &'static str {
+        if self.negated { "!==" } else { "===" }
+    }
+
+    /// `x op nullish`, in the order the comparison was written.
+    fn ordered(&self, x: &str, op: &str, nullish: &str) -> String {
+        if self.nullish_first {
+            format!("{nullish} {op} {x}")
+        } else {
+            format!("{x} {op} {nullish}")
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct VoidEffect {
+    /// The whole `void e`.
+    void: Span,
+    /// The `e`, without enclosing parentheses.
+    operand: Span,
+}
+
+fn is_literal(kind: &ExprKind) -> bool {
+    matches!(
+        kind,
+        ExprKind::Number(_)
+            | ExprKind::BigInt(_)
+            | ExprKind::String(_)
+            | ExprKind::Boolean(_)
+            | ExprKind::Null
+    )
+}
+
+/// What `Parser::check_parameter_order` needs from either kind of parameter list.
+struct ParamOrder<'p> {
+    optional: bool,
+    /// Neither optional, defaulted, nor rest.
+    required: bool,
+    /// `None` for a destructuring pattern.
+    name: Option<&'p str>,
+    span: Span,
+}
+
+impl<'p> ParamOrder<'p> {
+    fn of_param(param: &'p ParamDecl) -> Self {
+        let (name, span) = match &param.pattern {
+            Some(binding) => (None, binding.span()),
+            None => (Some(param.name.name.as_str()), param.name.span),
+        };
+        Self {
+            optional: param.optional,
+            required: !param.is_omittable() && !param.rest,
+            name,
+            span,
+        }
+    }
+
+    fn of_field(field: &'p TypeAnnotationField) -> Self {
+        Self {
+            optional: field.optional,
+            required: !field.optional && !field.rest,
+            name: Some(field.name.name.as_str()),
+            span: field.name.span,
+        }
+    }
+}
+
+/// A binary operator at the cursor, which may span several tokens.
+struct BinaryToken {
+    op: BinOp,
+    precedence: u8,
+    tokens: usize,
+}
+
+/// `<<`, `>>`, `>>>` or their compound assignments, read from adjacent angle tokens.
+struct ShiftToken {
+    op: BinOp,
+    tokens: usize,
+    /// The operator ends in `=`: `<<=`, `>>=`, `>>>=`.
+    assignment: bool,
+}
+
+impl ShiftToken {
+    fn new(op: BinOp, tokens: usize, assignment: bool) -> Self {
+        Self {
+            op,
+            tokens,
+            assignment,
+        }
+    }
+}
+
+/// Between relational (7) and additive (9) in the `peek_binop` table.
+const SHIFT_PRECEDENCE: u8 = 8;
+
+#[derive(Clone, Copy, PartialEq)]
+enum TupleElementLabel {
+    None,
+    /// `name: T`
+    Required,
+    /// `name?: T`
+    Optional,
+}
+
 fn peek_binop(kind: &TokenKind) -> Option<(BinOp, u8)> {
     Some(match kind {
         TokenKind::QuestionQuestion => (BinOp::NullishCoalesce, 0),
@@ -5886,6 +6481,8 @@ fn peek_binop(kind: &TokenKind) -> Option<(BinOp, u8)> {
         TokenKind::LessEquals => (BinOp::Le, 7),
         TokenKind::GreaterEquals => (BinOp::Ge, 7),
         TokenKind::In => (BinOp::In, 7),
+        // Shifts take `SHIFT_PRECEDENCE` (8); they span several angle tokens, so
+        // `Parser::peek_shift` recognizes them rather than this table.
         TokenKind::Plus => (BinOp::Add, 9),
         TokenKind::Minus => (BinOp::Sub, 9),
         TokenKind::Star => (BinOp::Mul, 10),
@@ -7475,26 +8072,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_destructure_pattern_default_rejected() {
-        let (_ast, diags) = parse_str("const { a = 1 } = obj;");
-        assert!(
-            diags.iter().any(|d| d
-                .message
-                .contains("default values inside destructuring patterns")),
-            "expected pattern-default diagnostic, got: {diags:?}",
-        );
+    fn parse_destructure_pattern_defaults() {
+        let (ast, diags) = parse_str("const { a = 1, b: c = 2 } = obj;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let crate::StmtKind::ConstPattern { ref binding, .. } = single_stmt(&ast).kind else {
+            panic!("expected pattern")
+        };
+        let crate::Binding::Object { fields, .. } = binding else {
+            panic!("expected object")
+        };
+        assert_eq!(fields.len(), 2);
+        assert!(fields.iter().all(|field| field.default.is_some()));
+        assert_eq!(fields[1].local.name, "c");
     }
 
     #[test]
-    fn parse_destructure_param_default_rejected() {
-        let src = "function f({ a }: T = obj): void { return; }";
-        let (_ast, diags) = parse_str(src);
-        assert!(
-            diags.iter().any(|d| d
-                .message
-                .contains("default values are not supported on destructured parameters")),
-            "expected param-default-on-pattern diagnostic, got: {diags:?}",
-        );
+    fn parse_destructure_param_default() {
+        let (ast, diags) = parse_str("function f({ a = 1 }: T = obj): void { return; }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let crate::StmtKind::Function { ref params, .. } = single_stmt(&ast).kind else {
+            panic!("expected function")
+        };
+        assert!(params[0].default.is_some());
+        assert!(params[0].pattern.is_some());
     }
 
     #[test]
@@ -10077,25 +10677,31 @@ mod tests {
     }
 
     #[test]
-    fn parse_param_rejects_optional_marker() {
-        let (_ast, diags) = parse_str("function f(x?: number): void {}");
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("optional function parameters")),
-            "expected optional-param diagnostic, got {diags:?}"
-        );
+    fn parse_param_optional_marker() {
+        let (ast, diags) = parse_str("function f(x?: number): void {}");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let crate::StmtKind::Function { ref params, .. } = single_stmt(&ast).kind else {
+            panic!("expected function")
+        };
+        assert!(params[0].optional);
+        assert!(params[0].default.is_none());
     }
 
     #[test]
-    fn parse_interface_rejects_optional_method() {
-        let (_ast, diags) = parse_str("interface F { foo?(): void; }");
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("optional interface methods")),
-            "expected optional-method diagnostic, got {diags:?}"
-        );
+    fn parse_interface_optional_method() {
+        let (ast, diags) = parse_str("interface F { foo?(x?: number): void; }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let crate::StmtKind::InterfaceDecl { ref members, .. } = single_stmt(&ast).kind else {
+            panic!("expected interface")
+        };
+        let crate::InterfaceMember::Property { optional, ty, .. } = &members[0] else {
+            panic!("expected callable property")
+        };
+        assert!(*optional);
+        let crate::TypeAnnotationKind::Function { params, .. } = &ty.kind else {
+            panic!("expected function type")
+        };
+        assert!(params[0].optional);
     }
 
     #[test]
@@ -10270,14 +10876,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_labeled_optional_tuple_element_rejected() {
-        let (_ast, diags) = parse_str("let p: [first: number, second?: string] = null;");
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message == "optional tuple elements are not supported"),
-            "expected optional-element diagnostic, got: {diags:?}"
-        );
+    fn parse_labeled_optional_tuple_element() {
+        let (ast, diags) = parse_str("let p: [first: number, second?: string] = null;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let ty = type_of_let(single_stmt(&ast));
+        let crate::TypeAnnotationKind::Tuple(elements) = &ty.kind else {
+            panic!("expected tuple")
+        };
+        assert!(matches!(
+            elements[1].kind,
+            crate::TypeAnnotationKind::Optional(_)
+        ));
     }
 
     #[test]
@@ -11900,5 +12509,165 @@ class Dog extends Animal {
     fn this_inside_method_is_accepted_by_parser() {
         let (_ast, diags) = parse_str("class C { x: number; read(): number { return this.x; } }");
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+    }
+    #[test]
+    fn parse_void_expression_preserves_operand_and_precedence() {
+        let (ast, diags) = parse_str("void effect() === undefined;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let expression = expr_of_single_stmt(&ast);
+        let crate::ExprKind::Binary { lhs, rhs, .. } = expression.kind else {
+            panic!("expected equality")
+        };
+        let crate::ExprKind::Void { operand } = ast.try_expr(lhs).unwrap().kind else {
+            panic!("expected void")
+        };
+        assert!(matches!(
+            ast.try_expr(operand).unwrap().kind,
+            crate::ExprKind::Call { .. }
+        ));
+        assert!(matches!(
+            ast.try_expr(rhs).unwrap().kind,
+            crate::ExprKind::Identifier(_)
+        ));
+    }
+
+    #[test]
+    fn parse_void_newline_and_object_operands() {
+        for source in [
+            "void\n0;",
+            "void { value: 1 };",
+            "void\n{ value: 1 };",
+            "void /x/;",
+            "void void 0;",
+        ] {
+            let (_, diags) = parse_str(source);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
+        }
+        let (_, diags) = parse_str("void; 0;");
+        assert!(
+            !diags.is_empty(),
+            "an explicit semicolon cannot split void from its operand"
+        );
+    }
+
+    #[test]
+    fn parse_optional_parameters_and_defaults_in_callable_forms() {
+        for source in [
+            "function f(x = 1): number { return x; }",
+            "function f(x: number = 1, y: number): number { return y; }",
+            "function f({ x } = { x: 1 }): number { return x; }",
+            "const f = (x?: number) => x;",
+            "const f = (x: number = effect()) => x;",
+            "const f = function(x: number = effect()) { return x; };",
+            "const f = { m(x: number = effect()): number { return x; } };",
+            "const f = ([x = 1]: number[] = values) => x;",
+            "let f: (x?: number, ...rest: string[]) => void = value;",
+            "let f: { method?(x?: number): void } = value;",
+            "function f(x: number = 1, y?: number): void {}",
+        ] {
+            let (_, diags) = parse_str(source);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
+        }
+    }
+
+    #[test]
+    fn parse_invalid_optional_parameters() {
+        for source in [
+            "function f(x?: number, y: number): void {}",
+            "const f = (x?: number, y: number) => y;",
+            "let f: (x?: number, y: number) => void = value;",
+            "function f(...x?: number[]): void {}",
+            "function f(x?: number = 1): void {}",
+            "const f = (x?: number = 1) => x;",
+            "function f({x}?: T): void {}",
+        ] {
+            let (_, diags) = parse_str(source);
+            assert!(!diags.is_empty(), "expected diagnostic for {source}");
+        }
+    }
+
+    #[test]
+    fn parse_optional_tuple_forms_and_order() {
+        for source in [
+            "let x: [number, string?] = value;",
+            "let x: [x?: number, y?: string] = value;",
+            "let x: readonly [(number | null)?, string?] = value;",
+        ] {
+            let (_, diags) = parse_str(source);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
+        }
+        for source in [
+            "let x: [number?, string] = value;",
+            "let x: [x: number?] = value;",
+        ] {
+            let (_, diags) = parse_str(source);
+            assert!(!diags.is_empty(), "expected diagnostic for {source}");
+        }
+    }
+
+    #[test]
+    fn parse_array_pattern_defaults_preserve_holes() {
+        let (ast, diags) = parse_str("const [, a = effect(), b] = values;");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let crate::StmtKind::ConstPattern { ref binding, .. } = single_stmt(&ast).kind else {
+            panic!("expected pattern")
+        };
+        let crate::Binding::Array {
+            elems, defaults, ..
+        } = binding
+        else {
+            panic!("expected array")
+        };
+        assert_eq!(elems.len(), 3);
+        assert_eq!(defaults.len(), elems.len());
+        assert!(elems[0].is_none());
+        assert!(defaults[0].is_none());
+        assert!(defaults[1].is_some());
+        assert!(defaults[2].is_none());
+    }
+
+    #[test]
+    fn parse_optional_class_method_forms() {
+        let (ast, diags) =
+            parse_str("class C { declared?(x?: number): void; implemented?(): void\n{} }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let members = class_members(&ast);
+        assert!(matches!(
+            &members[0],
+            crate::ClassMember::Field {
+                optional: true,
+                initializer: None,
+                ty: crate::TypeAnnotation {
+                    kind: crate::TypeAnnotationKind::Function { .. },
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            &members[1],
+            crate::ClassMember::Method { optional: true, .. }
+        ));
+    }
+    #[test]
+    fn defaults_retain_their_callable_receiver_scope() {
+        for source in [
+            "class C { value: number = 1; method(value: number = this.value): number { return value; } }",
+            "class C { constructor(value: number = this.value) {} value: number = 1; }",
+            "const f = function(this: { value: number }, value: number = this.value): number { return value; };",
+        ] {
+            let (ast, diagnostics) = parse_str(source);
+            assert!(diagnostics.is_empty(), "{source}: {diagnostics:?}");
+            assert!(
+                ast.source_expressions()
+                    .iter()
+                    .any(|expr| matches!(expr.kind, ExprKind::This))
+            );
+            assert!(
+                !ast.source_expressions()
+                    .iter()
+                    .any(|expr| matches!(expr.kind, ExprKind::ThisOutsideReceiver))
+            );
+        }
     }
 }

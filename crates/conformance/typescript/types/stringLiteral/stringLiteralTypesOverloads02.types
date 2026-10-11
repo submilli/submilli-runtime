@@ -1,12 +1,12 @@
 === stringLiteralTypesOverloads02.ts ===
 
-/*pruned*/;                                     
-/*pruned*/;                                     
-/*pruned*/;                                       
-/*pruned*/;                                                           
-/*pruned*/;                                                           
-/*pruned*/;                                                         
-/*pruned*/;                                                                               
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 function getFalsyPrimitive(x: string): string | number | boolean {
 >getFalsyPrimitive : (x: string) => string | number | boolean
 >                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -60,11 +60,11 @@ function getFalsyPrimitive(x: string): string | number | boolean {
 
 }
 
-/*pruned*/;        
-                                                     
-                                             
-                                               
- 
+/*pruned*/;
+
+
+
+
 
 const string = "string"
 >string : "string"
@@ -126,16 +126,16 @@ const stringOrBooleanOrNumber = stringOrBoolean || number;
 >       : ^^^^^^^^
 
 
-/*pruned*/;        
-                                                   
-                                           
-                                             
+/*pruned*/;
 
-                                                
-                                                 
-                                                 
-                                                         
- 
+
+
+
+
+
+
+
+
 
 
 

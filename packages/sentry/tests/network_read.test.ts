@@ -3,12 +3,12 @@ import secrets from "submilli:secrets";
 import { getIssue, getIssueEvent, listIssueEvents, listIssues, listOrganizations, listProjects } from "@submilli/sentry";
 
 function main(): void {
-    if (secrets.get("SENTRY_AUTH_TOKEN") === null) {
+    if (secrets.get("SENTRY_AUTH_TOKEN") === undefined) {
         label("skip: SENTRY_AUTH_TOKEN is not bound");
         return;
     }
     const organization = secrets.get("SENTRY_TEST_ORGANIZATION");
-    if (organization === null) {
+    if (organization === undefined) {
         label("skip: SENTRY_TEST_ORGANIZATION is not bound");
         return;
     }

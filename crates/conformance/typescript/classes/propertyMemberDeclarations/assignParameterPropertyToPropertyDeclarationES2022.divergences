@@ -1,0 +1,5 @@
+types: 38 of 82 tsc entries compared, 0 differ
+
+errors:
+line 5: ours: property `foo` is used before its initialization (tsc accepts)
+line 15: ours: property `foo` is used before its initialization (tsc accepts)

@@ -115,7 +115,7 @@ class Relay<U> extends Holder<U> {
 
 // The optional-chain read shares `class_field_read_ty`, so it has to agree with
 // the plain read about which half answers.
-function readVia(a: AddsSetter | null): string | null {
+function readVia(a: AddsSetter | null): string | undefined {
   return a?.g;
 }
 
@@ -153,7 +153,7 @@ export function main(): string {
   assert(base.g === "go", "parent-typed read agrees with the child-typed one");
 
   assert(readVia(a) === "go", "the optional chain reads the inherited getter too");
-  assert(readVia(null) === null, "and still short-circuits on null");
+  assert(readVia(null) === undefined, "and still short-circuits on null");
 
   const rn = new Relay<number>(7);
   rn.item = 42;

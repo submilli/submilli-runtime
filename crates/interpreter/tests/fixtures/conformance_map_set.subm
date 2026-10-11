@@ -10,7 +10,7 @@ function main(): void {
   m.set("a", 3);
   assert(m.size === 2, "set overwrites existing keys");
   assert(m.get("a") === 3, "get returns the latest value");
-  assert(m.get("zz") === null, "missing key is null");
+  assert(m.get("zz") === undefined, "missing key is undefined");
   assert(m.has("b") && !m.has("zz"), "has");
   assert(m.delete("b") && !m.delete("b"), "delete reports presence");
   m.set("c", 4);
@@ -44,7 +44,7 @@ function main(): void {
   const nested = new Map<string, number[]>();
   nested.set("xs", [1, 2]);
   const xs = nested.get("xs");
-  if (xs !== null) {
+  if (xs !== undefined) {
     assert(xs.length === 2, "container values round-trip");
   } else {
     assert(false, "value should be present");

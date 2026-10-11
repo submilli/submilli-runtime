@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "83063a3d8b79c3dc5ad3a9855606de06bc24b786c6d3fefaa56b5fdffe785d36"
+  contentHash: "2bf9d007262790a2ca1413ed8de0831bc6ade87eb3608f1f5dcc421805774ae9"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -460,8 +460,8 @@ help: `submilli:test` is only available to test files run via `submilli build te
 
 ### Test credentials
 
-Tests receive no credentials by default, so `secrets.get` returns `null` for
-every name. These options supply them:
+Tests receive no credentials by default, so `secrets.get` returns
+`undefined` for every name. These options supply them:
 
 | Option | Supplies |
 | --- | --- |

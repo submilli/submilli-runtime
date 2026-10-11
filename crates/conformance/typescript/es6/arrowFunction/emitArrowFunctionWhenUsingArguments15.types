@@ -1,0 +1,42 @@
+=== emitArrowFunctionWhenUsingArguments15.ts ===
+
+function f(): (() => number) | undefined {
+>f : () => (() => number) | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    let arguments = "hello";
+>arguments : string
+>          : ^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+    if (Math.random()) {
+>Math.random() : number
+>              : ^^^^^^
+>Math.random : () => number
+>            : ^^^^^^^^^^^^
+>Math : Math
+>     : ^^^^
+>random : () => number
+>       : ^^^^^^^^^^^^
+
+        const arguments = 100;
+>arguments : 100
+>          : ^^^
+>100 : 100
+>    : ^^^
+
+        return () => arguments;
+>() => arguments : () => number
+>                : ^^^^^^^^^^^^
+>arguments : 100
+>          : ^^^
+
+    }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

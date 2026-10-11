@@ -256,7 +256,18 @@ fn status(snapshot: &Snapshot) -> Result<Value> {
             entries.push(json!({"path":path,"staged":staged,"unstaged":unstaged,"untracked":!index.contains_key(path) && !conflicts.contains(path) && work.contains_key(path)}));
         }
     }
-    Ok(json!({"branch": current_branch(snapshot)?, "entries":entries, "clean":entries.is_empty()}))
+    let clean = entries.is_empty();
+    Ok(without_absent(
+        json!({"branch": current_branch(snapshot)?, "entries":entries, "clean":clean}),
+    ))
+}
+
+/// A `null` member is an absent one: the guest reads the field as `undefined`.
+fn without_absent(mut value: Value) -> Value {
+    if let Value::Object(fields) = &mut value {
+        fields.retain(|_, field| !field.is_null());
+    }
+    value
 }
 
 pub fn current_branch(snapshot: &Snapshot) -> Result<Option<String>> {
@@ -286,7 +297,7 @@ fn log(snapshot: &Snapshot, opts: &Value) -> Result<Value> {
     }
     let mut commits = Vec::new();
     if snapshot.repo.head()?.is_unborn() {
-        return Ok(json!({"commits":[],"nextOffset":null}));
+        return Ok(json!({"commits":[]}));
     }
     let head = super::history::resolve_commit(snapshot, "HEAD")?.id;
     let cache = snapshot.history_cache.as_ref().ok_or_else(|| {
@@ -312,11 +323,11 @@ fn log(snapshot: &Snapshot, opts: &Value) -> Result<Value> {
     } else {
         None
     };
-    Ok(json!({"commits":commits,"nextOffset":next}))
+    Ok(without_absent(json!({"commits":commits,"nextOffset":next})))
 }
 
 fn page_number(options: &Value, name: &str, default: u64) -> Result<u64> {
-    match options.get(name).filter(|value| !value.is_null()) {
+    match options.get(name) {
         None => Ok(default),
         Some(value) => value.as_u64().ok_or_else(|| {
             wasmtime::Error::msg(format!("git.log: {name} must be a nonnegative integer"))
@@ -942,7 +953,7 @@ mod tests {
             ))
             .unwrap(),
         ));
-        let exhausted = json!({"commits":[],"nextOffset":null});
+        let exhausted = json!({"commits":[]});
         assert_eq!(
             log(&snapshot, &json!({"offset":10_001})).unwrap(),
             exhausted
@@ -963,7 +974,7 @@ mod tests {
         assert_eq!(first["nextOffset"], 1);
         let second = log(&snapshot, &json!({"limit":1,"offset":first["nextOffset"]})).unwrap();
         assert_eq!(second["commits"][0]["id"], ids[0]);
-        assert_eq!(second["nextOffset"], Value::Null);
+        assert!(second.get("nextOffset").is_none());
         for offset in [10_001, u64::MAX] {
             assert_eq!(
                 log(&snapshot, &json!({"offset":offset})).unwrap(),

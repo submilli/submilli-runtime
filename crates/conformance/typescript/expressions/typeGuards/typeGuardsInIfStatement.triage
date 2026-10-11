@@ -1,1 +1,3 @@
 line 121 missed: bug SUB-1154 tsc rejects a condition that is always truthy or always falsy
+
+line 11 type: bug SUB-1546 `x` in `x++` after a `typeof` guard is recorded with its declared type

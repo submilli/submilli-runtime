@@ -63,10 +63,10 @@ let a: {
 
 });
 
-/**/;    
-            
-            
- 
+/**/;
+
+
+
 
 function main(): void {}
 >main : () => void

@@ -5,7 +5,7 @@ function main(): void {
   if (m !== null) {
     assert(m.match === "alice@example", "full match (no trailing .com — \\w doesn't span `.`)");
     // Snapshot before assert() calls (which invalidate narrowing).
-    const groups: Map<string, string> = m.namedGroups;
+    const groups: Map<string, string | undefined> = m.namedGroups;
     assert(groups.get("user") === "alice", "user named capture");
     assert(groups.get("host") === "example", "host named capture");
   }
@@ -14,7 +14,7 @@ function main(): void {
   const m2: RegExpMatch | null = numbered.exec("hello");
   assert(m2 !== null, "match found");
   if (m2 !== null) {
-    const ng: Map<string, string> = m2.namedGroups;
+    const ng: Map<string, string | undefined> = m2.namedGroups;
     assert(ng.size === 0, "no named captures → empty map");
   }
 }

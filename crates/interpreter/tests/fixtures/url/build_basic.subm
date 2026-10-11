@@ -12,31 +12,31 @@ function main(): void {
   const parsed: URL = parse(s);
   assert(parsed.protocol === "https", "round-trip protocol");
   assert(parsed.host === "api.acme.com", "round-trip host");
-  const port: number | null = parsed.port;
-  assert(port !== null, "round-trip port present");
-  if (port !== null) {
+  const port: number | undefined = parsed.port;
+  assert(port !== undefined, "round-trip port present");
+  if (port !== undefined) {
     assert(port === 8443, "round-trip port value");
   }
   assert(parsed.path === "/v1/orders", "round-trip path");
-  const frag: string | null = parsed.fragment;
-  assert(frag !== null, "round-trip fragment present");
-  if (frag !== null) {
+  const frag: string | undefined = parsed.fragment;
+  assert(frag !== undefined, "round-trip fragment present");
+  if (frag !== undefined) {
     assert(frag === "section", "round-trip fragment value");
   }
   assert(parsed.query.size === 2, "round-trip query size");
-  const status: string | null = parsed.query.get("status");
-  assert(status !== null && status === "paid", "round-trip status");
-  const limit: string | null = parsed.query.get("limit");
-  assert(limit !== null && limit === "10", "round-trip limit");
+  const status: string | undefined = parsed.query.get("status");
+  assert(status !== undefined && status === "paid", "round-trip status");
+  const limit: string | undefined = parsed.query.get("limit");
+  assert(limit !== undefined && limit === "10", "round-trip limit");
 
   const empty: Map<string, string> = new Map<string, string>();
-  const minimal: string = build("http", "example.com", null, "/", empty, null);
+  const minimal: string = build("http", "example.com", undefined, "/", empty, undefined);
   assert(minimal.length > 0, "minimal build produces output");
   const reparsed: URL = parse(minimal);
   assert(reparsed.protocol === "http", "minimal protocol");
   assert(reparsed.host === "example.com", "minimal host");
-  assert(reparsed.port === null, "minimal port null");
+  assert(reparsed.port === undefined, "minimal port null");
   assert(reparsed.path === "/", "minimal path");
   assert(reparsed.query.size === 0, "minimal query empty");
-  assert(reparsed.fragment === null, "minimal fragment null");
+  assert(reparsed.fragment === undefined, "minimal fragment null");
 }

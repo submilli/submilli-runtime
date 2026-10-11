@@ -7,6 +7,6 @@ function main(): void {
   const pop = x.pop();
   assert(pop === 3, "x = [0,1,2,3]; x.pop() === 3");
   assert(x.length === 3, "x = [0,1,2,3]; x.pop(); x.length == 3");
-  assert(x.at(3) === null, "x = [0,1,2,3]; x.pop(); x.at(3) == null");
+  assert(x.at(3) === undefined, "x = [0,1,2,3]; x.pop(); x.at(3) == undefined");
   assert(x[2] === 2, "x = [0,1,2,3]; x.pop(); x[2] == 2");
 }

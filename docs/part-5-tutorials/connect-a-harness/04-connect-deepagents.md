@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "5032c4f3c6cd9f5cb9ee561cb6a586deb60998be22501e394fb27d8821540212"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "f2a51a916cbb34b77c9c80deec36f0c2733cd0ea8d12c69e983120a34014c220"
+  confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
 In this tutorial we will run the research agent on LangChain deepagents,
@@ -125,7 +125,7 @@ import jina from "@submilli/jina";
 
 function main(): string {
     const today = Temporal.Now.plainDateISO().toString();
-    const releases = jina.read("https://releases.rs/", null);
+    const releases = jina.read("https://releases.rs/");
     const search = jina.search("Rust blog.rust-lang.org latest stable release announcement", { timeout: 20 });
     return JSON.stringify({ today, releases, search }, null, 2);
 }

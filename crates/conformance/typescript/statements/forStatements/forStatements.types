@@ -1,0 +1,145 @@
+=== forStatements.ts ===
+
+interface I {
+>I : I
+>  : ^
+
+    id: number;
+>id : number
+>   : ^^^^^^
+
+}
+
+class C implements I {
+>C : C
+>  : ^
+
+    id: number;
+>id : number
+>   : ^^^^^^
+
+}
+
+/*pruned*/;
+
+
+
+
+
+function F(x: string): number { return 42; }
+>F : (x: string) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>42 : 42
+>   : ^^
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+for(let aNumber: number = 9.9;;){}
+>aNumber : number
+>        : ^^^^^^
+>9.9 : 9.9
+>    : ^^^
+
+for(let aString: string = 'this is a string';;){}
+>aString : string
+>        : ^^^^^^
+>'this is a string' : "this is a string"
+>                   : ^^^^^^^^^^^^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
+for(let aVoid: void = undefined;;){}
+>aVoid : void
+>      : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+for(let anInterface: I = new C();;){}
+>anInterface : I
+>            : ^
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+
+for(let aClass: C = new C();;){}
+>aClass : C
+>       : ^
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+
+/*pruned*/;
+for(let anObjectLiteral: I = { id: 12 };;){}
+>anObjectLiteral : I
+>                : ^
+>{ id: 12 } : { id: number; }
+>           : ^^^^^^^^^^^^^^^
+>id : number
+>   : ^^^^^^
+>12 : 12
+>   : ^^
+
+for(let anOtherObjectLiteral: { id: number } = new C();;){}
+>anOtherObjectLiteral : { id: number; }
+>                     : ^^^^^^^^^^^^^^^
+>id : number
+>   : ^^^^^^
+>new C() : C
+>        : ^
+>C : typeof C
+>  : ^^^^^^^^
+
+
+for(let aFunction: typeof F = F;;){}
+>aFunction : (x: string) => number
+>          : ^^^^^^^^^^^^^^^^^^^^^
+>F : (x: string) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>F : (x: string) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+
+for(let anOtherFunction: (x: string) => number = F;;){}
+>anOtherFunction : (x: string) => number
+>                : ^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>F : (x: string) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+
+for(let aLambda: typeof F = (x) => 2;;){}
+>aLambda : (x: string) => number
+>        : ^^^^^^^^^^^^^^^^^^^^^
+>F : (x: string) => number
+>  : ^^^^^^^^^^^^^^^^^^^^^
+>(x) => 2 : (x: string) => number
+>         : ^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

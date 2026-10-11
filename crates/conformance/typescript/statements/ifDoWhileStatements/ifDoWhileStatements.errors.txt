@@ -31,3 +31,5 @@ ifDoWhileStatements.ts(85,13): error TS2872: This kind of expression is always t
 ifDoWhileStatements.ts(87,5): error TS2872: This kind of expression is always truthy.
 ifDoWhileStatements.ts(88,8): error TS2872: This kind of expression is always truthy.
 ifDoWhileStatements.ts(89,13): error TS2872: This kind of expression is always truthy.
+ifDoWhileStatements.ts(155,30): error TS2322: Type 'null' is not assignable to type 'I'.
+ifDoWhileStatements.ts(160,5): error TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead?

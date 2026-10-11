@@ -15,6 +15,7 @@ function main(): void {
     assert(buildSearchBody("test") === '{"query":"test","contents":{"highlights":true}}', "minimal search");
     assert(buildContentsBody(["https://example.com"]) === '{"urls":["https://example.com"],"highlights":true}', "top-level extraction");
     assert(buildSearchBody("test", {}) === buildSearchBody("test"), "empty options keep defaults");
+    assert(buildSearchBody("test", { numResults: undefined, contents: undefined }) === buildSearchBody("test"), "undefined fields keep defaults");
     const quoted = buildSearchBody('a "quoted" query\nwith a newline');
     const parsed = JSON.parse(quoted) as { query: string };
     assert(parsed.query === 'a "quoted" query\nwith a newline', "JSON escaping round-trips");
@@ -76,6 +77,12 @@ function main(): void {
     assert(result.results[0].id === "doc1" && result.results[0].highlights[0] === "passage", "source association");
     assert(result.results[0].title === "" && result.results[0].author === null && result.results[0].text === "", "sparse metadata");
     assert(normalizeSearchJson('{"results":[]}').costDollars === null, "empty search is valid");
+    const nullable = normalizeSearchJson('{"results":[{"url":"https://example.com","author":null,"publishedDate":null,"highlights":null}]}');
+    assert(nullable.results[0].author === null && nullable.results[0].highlights.length === 0, "provider null metadata keeps its contract");
+    const nulls = normalizeSearchJson('{"requestId":null,"costDollars":null,"results":[{"id":null,"url":"https://example.com","title":null,"text":null}]}');
+    assert(nulls.requestId === null && nulls.costDollars === null, "JSON null request metadata");
+    assert(nulls.results[0].id === null && nulls.results[0].title === "" && nulls.results[0].text === "", "JSON null result fields");
+    assert(normalizeSearchJson('{"results":[],"costDollars":{"total":null}}').costDollars === null, "JSON null cost total");
     expectCode("invalid_response", () => { normalizeSearchJson("{}"); });
     expectCode("invalid_response", () => { normalizeSearchJson('{"results":[{"url":3}]}'); });
     expectCode("invalid_response", () => { normalizeSearchJson('{"results":[{"title":"missing URL"}]}'); });
@@ -86,6 +93,9 @@ function main(): void {
     assert(partial.results.length === 1 && partial.results[0].text === "page", "successful page");
     assert(partial.statuses[0].source === "cached" && partial.statuses[0].errorTag === null, "provenance");
     assert(partial.statuses[1].errorTag === "CRAWL_TIMEOUT" && partial.statuses[1].httpStatusCode === 504, "failure details");
+    const nullStatus = normalizeContentsJson('{"results":[],"statuses":[{"id":"bad","status":"error","source":null,"error":{"tag":null,"httpStatusCode":null}},{"id":"x","status":"error","error":null}]}');
+    assert(nullStatus.statuses[0].source === null && nullStatus.statuses[0].errorTag === null && nullStatus.statuses[0].httpStatusCode === null, "JSON null crawl error fields");
+    assert(nullStatus.statuses[1].errorTag === null, "JSON null crawl error");
     const failed = normalizeContentsJson('{"results":[],"statuses":[{"id":"bad","status":"error"}]}');
     assert(failed.results.length === 0 && failed.statuses[0].status === "error", "total crawl failure is not hidden");
     expectCode("invalid_response", () => { normalizeContentsJson('{"results":[]}'); });

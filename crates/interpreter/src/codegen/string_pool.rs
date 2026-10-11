@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use crate::ExprId;
 use crate::codegen::{internal_failure, wasm_u32};
 use crate::compiler_error::CompilerFailure;
+use crate::literal_units::literal_units;
 
 #[derive(Default, Clone, Debug)]
 pub struct StringPool {
@@ -42,13 +43,12 @@ impl StringPool {
 
     /// UTF-16 code unit count for the literal at `idx` (= JS `.length`).
     pub fn code_units(&self, idx: usize) -> Result<u32, CompilerFailure> {
-        wasm_u32(self.string(idx)?.encode_utf16().count())
+        wasm_u32(literal_units(self.string(idx)?).len())
     }
 
     pub fn utf16_le_bytes(&self, idx: usize) -> Result<Vec<u8>, CompilerFailure> {
-        Ok(self
-            .string(idx)?
-            .encode_utf16()
+        Ok(literal_units(self.string(idx)?)
+            .into_iter()
             .flat_map(u16::to_le_bytes)
             .collect())
     }

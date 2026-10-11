@@ -1,4 +1,4 @@
-types: 74 of 133 tsc entries compared, 12 differ
+types: 88 of 148 tsc entries compared, 12 differ
 
 line 105: b
   tsc:  any
@@ -18,19 +18,19 @@ line 108: b
 
 line 110: c
   tsc:  any
-  ours: null
+  ours: undefined
 
 line 111: c
   tsc:  any
-  ours: null
+  ours: undefined
 
 line 112: c
   tsc:  any
-  ours: null
+  ours: undefined
 
 line 113: c
   tsc:  any
-  ours: null
+  ours: undefined
 
 line 135: h
   tsc:  any[]
@@ -79,3 +79,4 @@ line 85: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 87: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 88: tsc TS2872: This kind of expression is always truthy. (we accept)
 line 89: tsc TS2872: This kind of expression is always truthy. (we accept)
+line 160: tsc TS2774: This condition will always return true since this function is always defined. Did you mean to call it instead? (we accept)

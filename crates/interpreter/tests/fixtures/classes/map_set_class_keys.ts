@@ -36,7 +36,7 @@ function main(): void {
   assert(m.size === 2);
   assert(m.get(new Key(1, "x")) === 10);
   assert(m.get(new Key(2, "y")) === 20);
-  assert(m.get(new Key(1, "y")) === null);
+  assert(m.get(new Key(1, "y")) === undefined);
   assert(m.has(new Key(1, "x")));
   assert(!m.has(new Key(3, "z")));
 

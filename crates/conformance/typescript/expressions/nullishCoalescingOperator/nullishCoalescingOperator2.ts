@@ -1,12 +1,12 @@
 // @target: es2015
 // @strict: true
 
-const a1: 'literal' | null | null = null as unknown as ('literal' | null | null);
-const a2: '' | null | null = null as unknown as ('' | null | null);
-const a3: 1 | null | null = null as unknown as (1 | null | null);
-const a4: 0 | null | null = null as unknown as (0 | null | null);
-const a5: true | null | null = null as unknown as (true | null | null);
-const a6: false | null | null = null as unknown as (false | null | null);
+const a1: 'literal' | undefined | null = null as unknown as ('literal' | undefined | null);
+const a2: '' | undefined | null = null as unknown as ('' | undefined | null);
+const a3: 1 | undefined | null = null as unknown as (1 | undefined | null);
+const a4: 0 | undefined | null = null as unknown as (0 | undefined | null);
+const a5: true | undefined | null = null as unknown as (true | undefined | null);
+const a6: false | undefined | null = null as unknown as (false | undefined | null);
 const a7: unknown | null = null as unknown as (unknown | null);
 const a8: never | null = null as unknown as (never | null);
 /*pruned*/;                                            

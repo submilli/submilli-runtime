@@ -121,9 +121,9 @@ interface I2<T> {
 
 }
 
-// a union type U has those members that are present in every one of its constituent types, 
+// a union type U has those members that are present in every one of its constituent types,
 // with types that are unions of the respective members in the constituent types
-/*pruned*/;                                                                    
+/*pruned*/;
 let str: string = null as unknown as (string);
 >str : string
 >    : ^^^^^^
@@ -152,15 +152,15 @@ let strOrNum: string | number = null as unknown as (string | number);
 // If each type in U has a property P, U has a property P of a union type of the types of P from each type in U.
 /*pruned*/;                 // string
 /*pruned*/;                    // (a: string) => string so result should be string
-/*pruned*/;                             
+/*pruned*/;
 /*pruned*/;                                        // string | union
 /*pruned*/;                           // No error - property exists
 /*pruned*/;                                     // error - no call signatures because the type of this property is ((a: string) => string) | (a: number) => number
                                                 // and the call signatures arent identical
-/*pruned*/;                                
-/*pruned*/;                                   
-/*pruned*/;                                   
-/*pruned*/;                                             
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 /*pruned*/;         // error
 /*pruned*/;         // error

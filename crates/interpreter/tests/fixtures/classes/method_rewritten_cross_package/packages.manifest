@@ -1,0 +1,2 @@
+@test/greeter lib -
+main app @test/greeter root

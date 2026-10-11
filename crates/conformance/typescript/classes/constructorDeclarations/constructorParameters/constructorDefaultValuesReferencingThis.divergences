@@ -1,0 +1,8 @@
+types: 7 of 22 tsc entries compared, 0 differ
+
+errors:
+line 16: tsc TS17009: 'super' must be called before accessing 'this' in the constructor of a derived class. (we accept)
+line 4: ours: `this` is only valid inside a class method or constructor body (tsc accepts)
+line 8: ours: `this` is only valid inside a class method or constructor body (tsc accepts)
+line 12: ours: `this` is only valid inside a class method or constructor body (tsc accepts)
+line 17: ours: `super(...)` must be called before accessing `this` or a `super` member (tsc accepts)

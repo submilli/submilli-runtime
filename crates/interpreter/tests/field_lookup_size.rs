@@ -1,4 +1,4 @@
-use interpreter::{ModulePath, PackageSourceModule, compile_package};
+use submilli_engine::{ModulePath, PackageSourceModule, compile_package};
 
 fn module_size(accesses: usize, write: bool) -> usize {
     let statement = if write {

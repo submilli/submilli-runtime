@@ -9,15 +9,14 @@ function main(): void {
         return;
     }
     const issueId = secrets.get("LINEAR_TEST_ISSUE_ID");
-    assert(issueId !== null, "bind LINEAR_TEST_ISSUE_ID");
-    assert(secrets.get("LINEAR_API_KEY") !== null, "bind LINEAR_API_KEY");
-    if (issueId === null) return;
+    assert(issueId !== undefined, "bind LINEAR_TEST_ISSUE_ID");
+    assert(secrets.get("LINEAR_API_KEY") !== undefined, "bind LINEAR_API_KEY");
+    if (issueId === undefined) return;
 
     label("create a comment and threaded reply without changing the issue");
     const root = createComment({ issueId: issueId, body: "Submilli comment API smoke test. This test does not change the issue status." });
     const reply = createComment({ issueId: issueId, parentId: root.id, body: "Threaded reply smoke test." });
-    assert(reply.parent !== null, "reply has a parent");
-    if (reply.parent !== null) assert(reply.parent.id === root.id, "reply belongs to the correct thread");
+    assert(reply.parent?.id === root.id, "reply belongs to the correct thread");
     const comments = listComments(issueId, { first: 10 });
     assert(comments.nodes.length > 0, "comments can be listed");
 }

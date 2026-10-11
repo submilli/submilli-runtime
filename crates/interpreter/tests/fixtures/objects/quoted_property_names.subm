@@ -15,7 +15,7 @@ function main(): void {
 
   const headers: Headers = { "content-type": "application/json" };
   assert(headers["content-type"] === "application/json", "object type quoted key bracket read");
-  assert(headers["x-request-id"] === null, "optional quoted key reads null when omitted");
+  assert(headers["x-request-id"] === undefined, "optional quoted key reads undefined when omitted");
 
   const parsed = JSON.parse(
     "{\"id\":\"2\",\"name\":\"Closed\",\"type\":\"completed\"}"

@@ -1,0 +1,521 @@
+---
+source: crates/interpreter/src/typechecker/infer/expr.rs
+assertion_line: 11231
+expression: ta
+---
+TypedAst {
+    parameter_default_prologues: {},
+    closure_this: {},
+    closure_names: {},
+    nested_function_names: {},
+    placeholder_closures: {},
+    authored_arguments: {},
+    authored_parameter_types: {
+        (
+            0,
+            14,
+            15,
+        ): Number,
+        (
+            0,
+            25,
+            26,
+        ): Number,
+    },
+    parameter_inputs: {},
+    parameter_initializations: {},
+    runtime_source_types: {},
+    runtime_chain_types: {},
+    spread_mask_fields: {},
+    spread_omitted_fields: {},
+    exhaustive_switches: {},
+    package_name: "main",
+    exprs: [
+        TypedExpr {
+            kind: FunctionRef {
+                mangled: MangledName(
+                    "main#add",
+                ),
+                name: Ident {
+                    name: "add",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 83,
+                        end: 86,
+                    },
+                },
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 83,
+                end: 86,
+            },
+            ty: Function {
+                params: [
+                    Number,
+                    Number,
+                ],
+                optional: 0,
+                ret: Number,
+                predicate: None,
+                has_rest: false,
+            },
+        },
+        TypedExpr {
+            kind: Number(
+                1.0,
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 87,
+                end: 88,
+            },
+            ty: Number,
+        },
+        TypedExpr {
+            kind: Number(
+                2.0,
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 90,
+                end: 91,
+            },
+            ty: Number,
+        },
+        TypedExpr {
+            kind: Call {
+                mangled: MangledName(
+                    "main#add",
+                ),
+                args: [
+                    ExprId(
+                        1,
+                    ),
+                    ExprId(
+                        2,
+                    ),
+                ],
+                type_predicate: None,
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 83,
+                end: 92,
+            },
+            ty: Number,
+        },
+        TypedExpr {
+            kind: LocalRef {
+                ident: Ident {
+                    name: "a",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 53,
+                        end: 54,
+                    },
+                },
+                boxed: false,
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 53,
+                end: 54,
+            },
+            ty: Number,
+        },
+        TypedExpr {
+            kind: LocalRef {
+                ident: Ident {
+                    name: "b",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 57,
+                        end: 58,
+                    },
+                },
+                boxed: false,
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 57,
+                end: 58,
+            },
+            ty: Number,
+        },
+        TypedExpr {
+            kind: Binary {
+                op: Add,
+                lhs: ExprId(
+                    4,
+                ),
+                rhs: ExprId(
+                    5,
+                ),
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 53,
+                end: 58,
+            },
+            ty: Number,
+        },
+        TypedExpr {
+            kind: GlobalRef {
+                mangled: MangledName(
+                    "main#result",
+                ),
+                name: Ident {
+                    name: "result",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 122,
+                        end: 128,
+                    },
+                },
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 122,
+                end: 128,
+            },
+            ty: Number,
+        },
+        TypedExpr {
+            kind: Number(
+                10.0,
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 131,
+                end: 133,
+            },
+            ty: Number,
+        },
+        TypedExpr {
+            kind: Binary {
+                op: Lt,
+                lhs: ExprId(
+                    7,
+                ),
+                rhs: ExprId(
+                    8,
+                ),
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 122,
+                end: 133,
+            },
+            ty: Boolean,
+        },
+    ],
+    stmts: [
+        TypedStmt {
+            kind: AssignGlobal {
+                ident: Ident {
+                    name: "result",
+                    span: Span {
+                        file: FileId(
+                            0,
+                        ),
+                        start: 66,
+                        end: 72,
+                    },
+                },
+                mangled: MangledName(
+                    "main#result",
+                ),
+                target_ty: Number,
+                value: ExprId(
+                    3,
+                ),
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 62,
+                end: 93,
+            },
+        },
+        TypedStmt {
+            kind: Return(
+                Some(
+                    ExprId(
+                        6,
+                    ),
+                ),
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 46,
+                end: 59,
+            },
+        },
+        TypedStmt {
+            kind: Block(
+                [
+                    StmtId(
+                        1,
+                    ),
+                ],
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 44,
+                end: 61,
+            },
+        },
+        TypedStmt {
+            kind: Block(
+                [],
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 135,
+                end: 138,
+            },
+        },
+        TypedStmt {
+            kind: If {
+                condition: ExprId(
+                    9,
+                ),
+                then_block: StmtId(
+                    3,
+                ),
+                else_block: None,
+            },
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 118,
+                end: 138,
+            },
+        },
+        TypedStmt {
+            kind: Block(
+                [
+                    StmtId(
+                        4,
+                    ),
+                ],
+            ),
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 116,
+                end: 140,
+            },
+        },
+    ],
+    globals: [
+        TypedGlobal {
+            name: Ident {
+                name: "result",
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 66,
+                    end: 72,
+                },
+            },
+            mangled_name: MangledName(
+                "main#result",
+            ),
+            ty: Number,
+            kind: Let,
+            doc: None,
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 62,
+                end: 93,
+            },
+        },
+    ],
+    rebindable_globals: {
+        MangledName(
+            "main#result",
+        ): "result",
+    },
+    functions: [
+        TypedFunction {
+            name: Ident {
+                name: "add",
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 10,
+                    end: 13,
+                },
+            },
+            mangled_name: MangledName(
+                "main#add",
+            ),
+            generics: [],
+            params: [
+                TypedParam {
+                    name: Ident {
+                        name: "a",
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 14,
+                            end: 15,
+                        },
+                    },
+                    optional: false,
+                    ty: Number,
+                    boxed: false,
+                    rest: false,
+                    default: None,
+                },
+                TypedParam {
+                    name: Ident {
+                        name: "b",
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 25,
+                            end: 26,
+                        },
+                    },
+                    optional: false,
+                    ty: Number,
+                    boxed: false,
+                    rest: false,
+                    default: None,
+                },
+            ],
+            return_type: Number,
+            type_predicate: None,
+            body: StmtId(
+                2,
+            ),
+            doc: None,
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 1,
+                end: 61,
+            },
+        },
+        TypedFunction {
+            name: Ident {
+                name: "main",
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 103,
+                    end: 107,
+                },
+            },
+            mangled_name: MangledName(
+                "main#main",
+            ),
+            generics: [],
+            params: [],
+            return_type: Void,
+            type_predicate: None,
+            body: StmtId(
+                5,
+            ),
+            doc: None,
+            span: Span {
+                file: FileId(
+                    0,
+                ),
+                start: 94,
+                end: 140,
+            },
+        },
+    ],
+    top_level_statements: [
+        StmtId(
+            0,
+        ),
+    ],
+    class_declaration_points: {},
+    types: [],
+    shapes: [],
+    exports: [],
+    imported_packages: {},
+    runtime_type_tests: {
+        Number: Shape(
+            Number,
+        ),
+        Boolean: Shape(
+            Boolean,
+        ),
+        Function {
+            params: [
+                Number,
+                Number,
+            ],
+            optional: 0,
+            ret: Number,
+            predicate: None,
+            has_rest: false,
+        }: Shape(
+            Function {
+                params: [
+                    Number,
+                    Number,
+                ],
+                optional: 0,
+                ret: Number,
+                predicate: None,
+                has_rest: false,
+            },
+        ),
+    },
+    runtime_class_fields: {},
+    runtime_class_parameters: {},
+    runtime_class_contexts: {},
+    runtime_field_guards: {},
+}

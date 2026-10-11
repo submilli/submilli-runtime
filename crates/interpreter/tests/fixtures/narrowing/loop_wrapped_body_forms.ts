@@ -6,7 +6,7 @@
 
 function tick(i: number, n: number): IteratorResult<number> {
   if (i >= n) {
-    const done: IteratorResult<number> = { done: true };
+    const done: IteratorResult<number> = { done: true, value: undefined };
     return done;
   }
   const r: IteratorResult<number> = { done: false, value: i };

@@ -1,4 +1,4 @@
-types: 700 of 780 tsc entries compared, 0 differ
+types: 770 of 858 tsc entries compared, 0 differ
 
 errors:
 line 47: ours: `<` not defined for `{ fn: () => void }` and `{ fn: () => void }` (tsc accepts)
@@ -10,6 +10,7 @@ line 52: ours: `<` not defined for `{ fn: (arg0: Derived, arg1: Base) => void }`
 line 53: ours: `<` not defined for `{ fn: () => void }` and `{ fn: () => Base }` (tsc accepts)
 line 54: ours: `<` not defined for `{ fn: () => Base }` and `{ fn: () => Base }` (tsc accepts)
 line 55: ours: `<` not defined for `{ fn: () => Base }` and `{ fn: () => Derived }` (tsc accepts)
+line 56: ours: `<` not defined for `{ fn: (arg0?: Base) => void }` and `{ fn: (arg0?: Derived) => void }` (tsc accepts)
 line 57: ours: `<` not defined for `{ fn: (...arg0: Base[]) => void }` and `{ fn: (...arg0: Derived[]) => void }` (tsc accepts)
 line 60: ours: `<` not defined for `{ fn: () => void }` and `{ fn: () => void }` (tsc accepts)
 line 61: ours: `<` not defined for `{ fn: (arg0: number, arg1: string) => void }` and `{ fn: (arg0: number, arg1: string) => void }` (tsc accepts)
@@ -20,6 +21,7 @@ line 65: ours: `<` not defined for `{ fn: (arg0: Base, arg1: Derived) => void }`
 line 66: ours: `<` not defined for `{ fn: () => Base }` and `{ fn: () => void }` (tsc accepts)
 line 67: ours: `<` not defined for `{ fn: () => Base }` and `{ fn: () => Base }` (tsc accepts)
 line 68: ours: `<` not defined for `{ fn: () => Derived }` and `{ fn: () => Base }` (tsc accepts)
+line 69: ours: `<` not defined for `{ fn: (arg0?: Derived) => void }` and `{ fn: (arg0?: Base) => void }` (tsc accepts)
 line 70: ours: `<` not defined for `{ fn: (...arg0: Derived[]) => void }` and `{ fn: (...arg0: Base[]) => void }` (tsc accepts)
 line 74: ours: `>` not defined for `{ fn: () => void }` and `{ fn: () => void }` (tsc accepts)
 line 75: ours: `>` not defined for `{ fn: (arg0: number, arg1: string) => void }` and `{ fn: (arg0: number, arg1: string) => void }` (tsc accepts)
@@ -30,6 +32,7 @@ line 79: ours: `>` not defined for `{ fn: (arg0: Derived, arg1: Base) => void }`
 line 80: ours: `>` not defined for `{ fn: () => void }` and `{ fn: () => Base }` (tsc accepts)
 line 81: ours: `>` not defined for `{ fn: () => Base }` and `{ fn: () => Base }` (tsc accepts)
 line 82: ours: `>` not defined for `{ fn: () => Base }` and `{ fn: () => Derived }` (tsc accepts)
+line 83: ours: `>` not defined for `{ fn: (arg0?: Base) => void }` and `{ fn: (arg0?: Derived) => void }` (tsc accepts)
 line 84: ours: `>` not defined for `{ fn: (...arg0: Base[]) => void }` and `{ fn: (...arg0: Derived[]) => void }` (tsc accepts)
 line 87: ours: `>` not defined for `{ fn: () => void }` and `{ fn: () => void }` (tsc accepts)
 line 88: ours: `>` not defined for `{ fn: (arg0: number, arg1: string) => void }` and `{ fn: (arg0: number, arg1: string) => void }` (tsc accepts)
@@ -40,6 +43,7 @@ line 92: ours: `>` not defined for `{ fn: (arg0: Base, arg1: Derived) => void }`
 line 93: ours: `>` not defined for `{ fn: () => Base }` and `{ fn: () => void }` (tsc accepts)
 line 94: ours: `>` not defined for `{ fn: () => Base }` and `{ fn: () => Base }` (tsc accepts)
 line 95: ours: `>` not defined for `{ fn: () => Derived }` and `{ fn: () => Base }` (tsc accepts)
+line 96: ours: `>` not defined for `{ fn: (arg0?: Derived) => void }` and `{ fn: (arg0?: Base) => void }` (tsc accepts)
 line 97: ours: `>` not defined for `{ fn: (...arg0: Derived[]) => void }` and `{ fn: (...arg0: Base[]) => void }` (tsc accepts)
 line 101: ours: `<=` not defined for `{ fn: () => void }` and `{ fn: () => void }` (tsc accepts)
 line 102: ours: `<=` not defined for `{ fn: (arg0: number, arg1: string) => void }` and `{ fn: (arg0: number, arg1: string) => void }` (tsc accepts)
@@ -50,6 +54,7 @@ line 106: ours: `<=` not defined for `{ fn: (arg0: Derived, arg1: Base) => void 
 line 107: ours: `<=` not defined for `{ fn: () => void }` and `{ fn: () => Base }` (tsc accepts)
 line 108: ours: `<=` not defined for `{ fn: () => Base }` and `{ fn: () => Base }` (tsc accepts)
 line 109: ours: `<=` not defined for `{ fn: () => Base }` and `{ fn: () => Derived }` (tsc accepts)
+line 110: ours: `<=` not defined for `{ fn: (arg0?: Base) => void }` and `{ fn: (arg0?: Derived) => void }` (tsc accepts)
 line 111: ours: `<=` not defined for `{ fn: (...arg0: Base[]) => void }` and `{ fn: (...arg0: Derived[]) => void }` (tsc accepts)
 line 114: ours: `<=` not defined for `{ fn: () => void }` and `{ fn: () => void }` (tsc accepts)
 line 115: ours: `<=` not defined for `{ fn: (arg0: number, arg1: string) => void }` and `{ fn: (arg0: number, arg1: string) => void }` (tsc accepts)
@@ -60,6 +65,7 @@ line 119: ours: `<=` not defined for `{ fn: (arg0: Base, arg1: Derived) => void 
 line 120: ours: `<=` not defined for `{ fn: () => Base }` and `{ fn: () => void }` (tsc accepts)
 line 121: ours: `<=` not defined for `{ fn: () => Base }` and `{ fn: () => Base }` (tsc accepts)
 line 122: ours: `<=` not defined for `{ fn: () => Derived }` and `{ fn: () => Base }` (tsc accepts)
+line 123: ours: `<=` not defined for `{ fn: (arg0?: Derived) => void }` and `{ fn: (arg0?: Base) => void }` (tsc accepts)
 line 124: ours: `<=` not defined for `{ fn: (...arg0: Derived[]) => void }` and `{ fn: (...arg0: Base[]) => void }` (tsc accepts)
 line 128: ours: `>=` not defined for `{ fn: () => void }` and `{ fn: () => void }` (tsc accepts)
 line 129: ours: `>=` not defined for `{ fn: (arg0: number, arg1: string) => void }` and `{ fn: (arg0: number, arg1: string) => void }` (tsc accepts)
@@ -70,6 +76,7 @@ line 133: ours: `>=` not defined for `{ fn: (arg0: Derived, arg1: Base) => void 
 line 134: ours: `>=` not defined for `{ fn: () => void }` and `{ fn: () => Base }` (tsc accepts)
 line 135: ours: `>=` not defined for `{ fn: () => Base }` and `{ fn: () => Base }` (tsc accepts)
 line 136: ours: `>=` not defined for `{ fn: () => Base }` and `{ fn: () => Derived }` (tsc accepts)
+line 137: ours: `>=` not defined for `{ fn: (arg0?: Base) => void }` and `{ fn: (arg0?: Derived) => void }` (tsc accepts)
 line 138: ours: `>=` not defined for `{ fn: (...arg0: Base[]) => void }` and `{ fn: (...arg0: Derived[]) => void }` (tsc accepts)
 line 141: ours: `>=` not defined for `{ fn: () => void }` and `{ fn: () => void }` (tsc accepts)
 line 142: ours: `>=` not defined for `{ fn: (arg0: number, arg1: string) => void }` and `{ fn: (arg0: number, arg1: string) => void }` (tsc accepts)
@@ -80,4 +87,5 @@ line 146: ours: `>=` not defined for `{ fn: (arg0: Base, arg1: Derived) => void 
 line 147: ours: `>=` not defined for `{ fn: () => Base }` and `{ fn: () => void }` (tsc accepts)
 line 148: ours: `>=` not defined for `{ fn: () => Base }` and `{ fn: () => Base }` (tsc accepts)
 line 149: ours: `>=` not defined for `{ fn: () => Derived }` and `{ fn: () => Base }` (tsc accepts)
+line 150: ours: `>=` not defined for `{ fn: (arg0?: Derived) => void }` and `{ fn: (arg0?: Base) => void }` (tsc accepts)
 line 151: ours: `>=` not defined for `{ fn: (...arg0: Derived[]) => void }` and `{ fn: (...arg0: Base[]) => void }` (tsc accepts)

@@ -297,7 +297,7 @@ async fn recording_failure_settles_idempotency_without_reexecuting() {
     let code = r#"import session from "submilli:session";
         function main(): number {
             const old = session.get("count");
-            const next = old === null ? 1 : (old as number) + 1;
+            const next = old === undefined ? 1 : (old as number) + 1;
             session.set("count", next);
             return next;
         }"#;

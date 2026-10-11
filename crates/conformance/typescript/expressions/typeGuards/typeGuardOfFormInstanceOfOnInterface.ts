@@ -15,10 +15,10 @@ interface C2 {
     prototype: C2;
     p2: number;
 }
-/*pruned*/;              
-                  
-               
- 
+interface D1 extends C1 {
+    prototype: D1;
+    p3: number;
+}
 let str: string = null as unknown as (string);
 let num: number = null as unknown as (number);
 let strOrNum: string | number = null as unknown as (string | number);

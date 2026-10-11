@@ -1,0 +1,4 @@
+types: 15 of 32 tsc entries compared, 0 differ
+
+errors:
+line 9: ours: `+` not defined for `number` and `string` (tsc accepts)

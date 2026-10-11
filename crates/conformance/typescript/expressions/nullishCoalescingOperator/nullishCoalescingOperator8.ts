@@ -1,8 +1,8 @@
 // @target: es2015
 // @strict: true
 
-const a: { p: string | null, m(): string | null } = null as unknown as ({ p: string | null, m(): string | null });
-const b: { p: string | null, m(): string | null } = null as unknown as ({ p: string | null, m(): string | null });
+const a: { p: string | undefined, m(): string | undefined } = null as unknown as ({ p: string | undefined, m(): string | undefined });
+const b: { p: string | undefined, m(): string | undefined } = null as unknown as ({ p: string | undefined, m(): string | undefined });
 
 const n1 = a.p ?? "default";
 const n2 = a.m() ?? "default";

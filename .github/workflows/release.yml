@@ -243,6 +243,17 @@ jobs:
       contents: read
       packages: write
 
+  # Waits for the release binaries to build, since a published crate version
+  # cannot be replaced.
+  engine:
+    name: Publish engine
+    needs: [prepare, build]
+    uses: ./.github/workflows/publish-engine.yml
+    with:
+      ref: ${{ needs.prepare.outputs.commit }}
+    permissions:
+      contents: read
+
   publish:
     name: Attach release executables and installers
     needs: [prepare, build, docker, chart]
