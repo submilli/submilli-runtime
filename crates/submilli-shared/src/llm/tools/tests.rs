@@ -95,7 +95,36 @@ fn anthropic_request_carries_tools_calls_and_results() {
 #[test]
 fn openai_request_carries_tools_calls_and_results() {
     let request = request(ProviderKind::OpenAi, "https://api.openai.com", "m");
-    assert_eq!(request.url, "https://api.openai.com/v1/chat/completions");
+    assert_eq!(request.url, "https://api.openai.com/v1/responses");
+    key_only_in(&request, "authorization");
+    assert_eq!(
+        request.body,
+        json!({
+            "model": "m", "max_output_tokens": 1024, "instructions": "Be brief.",
+            "input": [
+                { "role": "user", "content": "Total the charges." },
+                { "role": "assistant", "content": "Running it." },
+                { "type": "function_call", "call_id": "call_1",
+                  "name": "submilli__typescript__execute",
+                  "arguments": "{\"code\":\"function main() {}\"}" },
+                { "type": "function_call_output", "call_id": "call_1",
+                  "output": "{\"result\":42}" },
+            ],
+            "tools": [{ "type": "function", "name": "submilli__typescript__execute",
+                        "description": "Run a program.",
+                        "parameters": tools()[0].input_schema, "strict": false }],
+        })
+    );
+}
+
+#[test]
+fn an_openai_compatible_request_keeps_chat_completions() {
+    let request = request(
+        ProviderKind::OpenAiCompatible,
+        "http://localhost:11434",
+        "m",
+    );
+    assert_eq!(request.url, "http://localhost:11434/v1/chat/completions");
     key_only_in(&request, "authorization");
     assert_eq!(
         request.body,
@@ -168,7 +197,14 @@ fn each_provider_answer_parses_into_text_and_calls() {
         { "type": "tool_use", "id": "call_1", "name": "submilli__typescript__execute",
           "input": { "code": "x" } },
     ], "stop_reason": "tool_use" });
-    let openai = json!({ "choices": [{ "message": { "content": "Running it.", "tool_calls": [
+    let openai = json!({ "output": [
+        { "type": "reasoning", "id": "rs_1", "summary": [] },
+        { "type": "message", "role": "assistant", "content": [
+            { "type": "output_text", "text": "Running it." } ] },
+        { "type": "function_call", "id": "fc_1", "call_id": "call_1",
+          "name": "submilli__typescript__execute", "arguments": "{\"code\":\"x\"}" },
+    ]});
+    let compatible = json!({ "choices": [{ "message": { "content": "Running it.", "tool_calls": [
         { "id": "call_1", "type": "function", "function": {
             "name": "submilli__typescript__execute", "arguments": "{\"code\":\"x\"}" } },
     ]}, "finish_reason": "tool_calls" }] });
@@ -180,6 +216,7 @@ fn each_provider_answer_parses_into_text_and_calls() {
     for (kind, body) in [
         (ProviderKind::Anthropic, anthropic),
         (ProviderKind::OpenAi, openai),
+        (ProviderKind::OpenAiCompatible, compatible),
         (ProviderKind::Google, google),
     ] {
         let reply = parse_tool_response(kind, &body.to_string()).unwrap();
@@ -197,6 +234,11 @@ fn a_text_only_answer_has_no_calls() {
         ),
         (
             ProviderKind::OpenAi,
+            json!({ "output": [{ "type": "message", "role": "assistant",
+                                 "content": [{ "type": "output_text", "text": "Done." }] }] }),
+        ),
+        (
+            ProviderKind::OpenAiCompatible,
             json!({ "choices": [{ "message": { "content": "Done." } }] }),
         ),
         (
@@ -226,6 +268,7 @@ fn google_calls_without_ids_get_distinct_ones() {
 fn a_malformed_answer_says_so_and_errors_give_the_providers_message() {
     assert!(parse_tool_response(ProviderKind::Anthropic, "nope").is_err());
     assert!(parse_tool_response(ProviderKind::OpenAi, "{}").is_err());
+    assert!(parse_tool_response(ProviderKind::OpenAiCompatible, "{}").is_err());
     assert!(parse_tool_response(ProviderKind::Google, "{}").is_err());
     assert_eq!(
         error_message(r#"{"error":{"message":"invalid x-api-key"}}"#),

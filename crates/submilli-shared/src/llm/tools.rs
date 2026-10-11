@@ -73,8 +73,9 @@ pub fn build_tool_request(
             anthropic(base, model, system, turns, tools, max_tokens, api_key)
         }
         ProviderKind::Google => google(base, model, system, turns, tools, max_tokens, api_key),
-        ProviderKind::OpenAi | ProviderKind::OpenAiCompatible => {
-            openai(base, model, system, turns, tools, max_tokens, api_key)
+        ProviderKind::OpenAi => openai(base, model, system, turns, tools, max_tokens, api_key),
+        ProviderKind::OpenAiCompatible => {
+            chat_completions(base, model, system, turns, tools, max_tokens, api_key)
         }
     }
 }
@@ -86,7 +87,8 @@ pub fn parse_tool_response(kind: ProviderKind, body: &str) -> Result<Reply, Stri
     match kind {
         ProviderKind::Anthropic => parse_anthropic(&value),
         ProviderKind::Google => parse_google(&value),
-        ProviderKind::OpenAi | ProviderKind::OpenAiCompatible => parse_openai(&value),
+        ProviderKind::OpenAi => parse_openai(&value),
+        ProviderKind::OpenAiCompatible => parse_chat_completions(&value),
     }
 }
 
@@ -179,7 +181,85 @@ fn parse_anthropic(value: &Value) -> Result<Reply, String> {
 
 // ---- OpenAI --------------------------------------------------------------------------------
 
+// The Responses API: OpenAI's reasoning models refuse tools on chat completions.
 fn openai(
+    base: &str,
+    model: &str,
+    system: &str,
+    turns: &[Turn],
+    tools: &[ToolSpec],
+    max_tokens: u64,
+    api_key: &str,
+) -> WireRequest {
+    let mut input = Vec::new();
+    for turn in turns {
+        match turn {
+            Turn::User(text) => input.push(json!({ "role": "user", "content": text })),
+            Turn::Assistant { text, calls } => {
+                input.extend(
+                    text.iter()
+                        .map(|text| json!({ "role": "assistant", "content": text })),
+                );
+                input.extend(calls.iter().map(|call| {
+                    json!({ "type": "function_call", "call_id": call.id, "name": call.name,
+                            "arguments": call.arguments.to_string() })
+                }));
+            }
+            Turn::Results(results) => input.extend(results.iter().map(|result| {
+                json!({ "type": "function_call_output", "call_id": result.call_id,
+                        "output": result.content })
+            })),
+        }
+    }
+    // Strict mode would demand every property be required, which MCP schemas are not.
+    let tools: Vec<Value> = tools
+        .iter()
+        .map(|tool| {
+            json!({ "type": "function", "name": tool.name, "description": tool.description,
+                    "parameters": tool.input_schema, "strict": false })
+        })
+        .collect();
+    WireRequest {
+        url: format!("{base}/v1/responses"),
+        headers: vec![("authorization".into(), format!("Bearer {api_key}"))],
+        body: json!({
+            "model": model, "max_output_tokens": max_tokens, "instructions": system,
+            "input": input, "tools": tools,
+        }),
+    }
+}
+
+fn parse_openai(value: &Value) -> Result<Reply, String> {
+    let output = value["output"]
+        .as_array()
+        .ok_or("the model's answer has no output")?;
+    let text = joined(
+        output
+            .iter()
+            .filter(|item| item["type"] == "message")
+            .filter_map(|item| item["content"].as_array())
+            .flatten()
+            .filter(|part| part["type"] == "output_text")
+            .filter_map(|part| part["text"].as_str()),
+    );
+    let calls = output
+        .iter()
+        .filter(|item| item["type"] == "function_call")
+        .filter_map(|item| {
+            Some(ToolCall {
+                id: item["call_id"].as_str()?.to_owned(),
+                name: item["name"].as_str()?.to_owned(),
+                arguments: object_or_empty(&parsed_arguments(&item["arguments"])),
+            })
+        })
+        .collect();
+    Ok(Reply { text, calls })
+}
+
+// ---- OpenAI-compatible ---------------------------------------------------------------------
+
+// Chat completions, which compatible servers offer where they may lack the Responses API.
+fn chat_completions(
     base: &str,
     model: &str,
     system: &str,
@@ -238,7 +318,7 @@ fn openai(
     }
 }
 
-fn parse_openai(value: &Value) -> Result<Reply, String> {
+fn parse_chat_completions(value: &Value) -> Result<Reply, String> {
     let message = &value["choices"][0]["message"];
     if !message.is_object() {
         return Err("the model's answer has no message".to_owned());
@@ -254,14 +334,10 @@ fn parse_openai(value: &Value) -> Result<Reply, String> {
         .iter()
         .filter_map(|call| {
             let function = &call["function"];
-            let arguments = function["arguments"]
-                .as_str()
-                .and_then(|text| serde_json::from_str(text).ok())
-                .unwrap_or(Value::Null);
             Some(ToolCall {
                 id: call["id"].as_str()?.to_owned(),
                 name: function["name"].as_str()?.to_owned(),
-                arguments: object_or_empty(&arguments),
+                arguments: object_or_empty(&parsed_arguments(&function["arguments"])),
             })
         })
         .collect();
@@ -353,6 +429,14 @@ fn parse_google(value: &Value) -> Result<Reply, String> {
 fn joined<'a>(texts: impl Iterator<Item = &'a str>) -> Option<String> {
     let texts: Vec<&str> = texts.filter(|text| !text.trim().is_empty()).collect();
     (!texts.is_empty()).then(|| texts.join("\n\n"))
+}
+
+/// OpenAI sends a call's arguments as JSON text.
+fn parsed_arguments(arguments: &Value) -> Value {
+    arguments
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or(Value::Null)
 }
 
 /// A tool's arguments are an object; anything else is sent as none.
