@@ -23,7 +23,7 @@ pub(super) enum StaticWrite {
 
 /// `ty` with its literal types widened to their base types, through aliases.
 /// A type with none keeps its spelling.
-fn widen_literal_members(ty: Type) -> Type {
+pub(super) fn widen_literal_members(ty: Type) -> Type {
     fn widen(ty: &Type) -> Type {
         match ty.peel() {
             Type::Union(members) => Type::union(members.iter().map(widen).collect()),
@@ -2561,10 +2561,16 @@ impl Inferer<'_> {
             (typed_value, &value_ty),
             op_span,
         )?;
-        // The setter's type decides, even beside a getter typed `never`.
+        // The setter's type decides, even beside a getter typed `never`. Its
+        // literal types count as their base types, as in tsc: `p.c += 1` with
+        // `c: 0 | 1` is accepted.
         if !matches!(result_ty, Type::Error)
             && !matches!(rw.write, Type::Error)
-            && !assignable(&result_ty, &rw.write, self.resolver())
+            && !assignable(
+                &result_ty,
+                &widen_literal_members(rw.write.clone()),
+                self.resolver(),
+            )
         {
             self.error(
                 value_span,
@@ -2657,14 +2663,14 @@ impl Inferer<'_> {
             (typed_value, &value_ty),
             op_span,
         )?;
-        let check_ty = compound_result_target(&read_ty, &elem_ty);
+        let check_ty = widen_literal_members(compound_result_target(&read_ty, &elem_ty).clone());
         if !matches!(result_ty, Type::Error)
             && !matches!(check_ty, Type::Error)
-            && !assignable(&result_ty, check_ty, self.resolver())
+            && !assignable(&result_ty, &check_ty, self.resolver())
         {
             self.error(
                 value_span,
-                super::diagnostics::mismatch_message(check_ty, &result_ty),
+                super::diagnostics::mismatch_message(&check_ty, &result_ty),
             );
         }
         let synth_binary = self
