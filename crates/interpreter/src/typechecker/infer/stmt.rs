@@ -357,7 +357,8 @@ impl Inferer<'_> {
         let typed_value = match value {
             Some(v) => {
                 let hint = self.current_return.clone();
-                let (id, value_ty) = self.infer_returned_value(v, hint.as_ref())?;
+                let (id, value_ty, widened) =
+                    self.infer_returned_value_with_widened(v, hint.as_ref())?;
                 // A closure in a `void` context may return `unknown` (see
                 // `infer_arrow`), so a `void` value it returns is run and
                 // `undefined` returned in its place.
@@ -366,8 +367,16 @@ impl Inferer<'_> {
                 } else {
                     id
                 };
-                if let Some(collected) = self.inferred_returns.as_mut() {
-                    collected.push((value_ty, span));
+                if self.inferred_returns.is_some() {
+                    let fresh = self.fresh_literals(id)?;
+                    if let Some(collected) = self.inferred_returns.as_mut() {
+                        collected.push(super::ReturnedValue {
+                            ty: value_ty,
+                            widened,
+                            fresh,
+                            span,
+                        });
+                    }
                 }
                 if self.reachable {
                     self.validate_type_predicate_return(id, span)?;
@@ -404,7 +413,12 @@ impl Inferer<'_> {
             })
             .map_err(crate::typechecker::arena_failure)?;
         if let Some(collected) = self.inferred_returns.as_mut() {
-            collected.push((Type::Undefined, span));
+            collected.push(super::ReturnedValue {
+                ty: Type::Undefined,
+                widened: Type::Undefined,
+                fresh: std::collections::BTreeSet::new(),
+                span,
+            });
         }
         Ok(undefined)
     }

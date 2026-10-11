@@ -9143,6 +9143,10 @@ impl Inferer<'_> {
             self.inferred_returns.take()
         };
 
+        // The fresh literal types a block body returns, which a generic call
+        // taking this function literal may infer from (see
+        // `function_literal_returned_literals`).
+        let mut block_returned_fresh: Option<std::collections::BTreeSet<Type>> = None;
         let (typed_body, body_ret) = match body {
             ArrowBody::Expr(e) => {
                 let (id, t) = self.infer_returned_value(e, ret_hint.as_ref())?;
@@ -9158,7 +9162,14 @@ impl Inferer<'_> {
                     super::inference_failure("arrow block body is a Block, never a type-only decl")
                 })?;
                 let id = self.wrap_narrow_regions(id, &narrow_seed, span)?;
-                let collected = self.inferred_returns.take().unwrap_or_default();
+                let returned = self.inferred_returns.take().unwrap_or_default();
+                block_returned_fresh = Some(
+                    returned
+                        .iter()
+                        .flat_map(|value| value.fresh.iter().cloned())
+                        .collect(),
+                );
+                let collected = returned_value_types(returned);
                 let t = self.block_body_return_type(
                     annotated_ret.as_ref(),
                     collected,
@@ -9178,16 +9189,21 @@ impl Inferer<'_> {
         } else {
             let body = match typed_body {
                 ClosureBody::Block(body) => body,
-                ClosureBody::Expr(value) => self
-                    .typed_ast
-                    .try_push_stmt(crate::TypedStmt {
-                        kind: crate::TypedStmtKind::Return(Some(value)),
-                        span,
-                    })
-                    .map_err(super::arena_failure)?,
+                ClosureBody::Expr(value) => {
+                    block_returned_fresh = Some(self.fresh_literals(value)?);
+                    self.typed_ast
+                        .try_push_stmt(crate::TypedStmt {
+                            kind: crate::TypedStmtKind::Return(Some(value)),
+                            span,
+                        })
+                        .map_err(super::arena_failure)?
+                }
             };
             ClosureBody::Block(self.prepend_parameter_defaults(default_prologue, body)?)
         };
+        if let (ClosureBody::Block(body), Some(fresh)) = (&typed_body, block_returned_fresh) {
+            self.record_closure_returned_fresh(*body, fresh);
+        }
         // Restore frames.
         self.exit_closure_narrow_boundary()?;
         self.restore_reachability(prev_reachable);
@@ -12589,6 +12605,38 @@ pub(super) fn cannot_be_typed_alone(ast: &crate::Ast, id: ExprId) -> Result<bool
             _ => false,
         },
     )
+}
+
+/// The types a block body's returns contribute to its return type, as tsc
+/// infers it from their union. Literals of one primitive form their union
+/// (`if (b) return 1; return 2;` returns `1 | 2`), beside the `null` or
+/// `undefined` a path returns. A union that is one literal type widens where
+/// it is fresh, as do the returns of any other mix: `if (b) return 1; return
+/// 1;` returns `number`.
+fn returned_value_types(returned: Vec<super::ReturnedValue>) -> Vec<(Type, Span)> {
+    let own = Type::union(returned.iter().map(|value| value.ty.clone()).collect());
+    let is_nullish = |ty: &Type| matches!(ty.peel(), Type::Undefined | Type::Null | Type::Void);
+    let one_primitive = returned
+        .iter()
+        .find(|value| !is_nullish(&value.ty))
+        .and_then(|first| first.ty.literal_base());
+    let literals_of_one_primitive = one_primitive.is_some()
+        && returned
+            .iter()
+            .all(|value| is_nullish(&value.ty) || value.ty.literal_base() == one_primitive);
+    if own.peel().is_literal_type() || !literals_of_one_primitive {
+        return returned
+            .into_iter()
+            .map(|value| (value.widened, value.span))
+            .collect();
+    }
+    let (nullish, values): (Vec<_>, Vec<_>) =
+        returned.into_iter().partition(|value| is_nullish(&value.ty));
+    let span = values[0].span;
+    let union = Type::union(values.into_iter().map(|value| value.ty).collect());
+    std::iter::once((union, span))
+        .chain(nullish.into_iter().map(|value| (value.ty, value.span)))
+        .collect()
 }
 
 /// The context a spread's source takes from its literal's expected type `ty`:

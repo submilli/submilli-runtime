@@ -924,7 +924,7 @@ pub(super) struct Inferer<'a> {
     /// Source-declared cycles already diagnosed during signature validation.
     pub(super) invalid_class_hierarchies: std::collections::BTreeSet<crate::MangledName>,
     pub(super) current_type_predicate: Option<(crate::TypePredicate, String)>,
-    pub(super) inferred_returns: Option<Vec<(Type, Span)>>,
+    pub(super) inferred_returns: Option<Vec<ReturnedValue>>,
     /// Object literals inferred for their own type rather than checked against
     /// a declared one; see [`inference_sources`].
     pub(super) inference_source_literals: BTreeSet<crate::ExprId>,
@@ -1635,4 +1635,16 @@ pub(super) fn type_limit_at(
     span: Span,
 ) -> impl FnOnce(crate::type_size::TypeTooLarge) -> CompilerFailure {
     move |exceeded| exceeded.into_failure(CompilerStage::Infer, Some(span))
+}
+
+/// A value an unannotated function literal's `return` gives: its own type, the
+/// type it has when it is the literal type the function returns alone, which
+/// widens if it is fresh (see `Inferer::widen_returned_literals`), and which of
+/// its literal types are fresh.
+pub(super) struct ReturnedValue {
+    pub(super) ty: Type,
+    pub(super) widened: Type,
+    /// The literal types in `ty` known to be fresh.
+    pub(super) fresh: BTreeSet<Type>,
+    pub(super) span: Span,
 }
