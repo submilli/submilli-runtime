@@ -7,6 +7,7 @@
 
 pub mod dispatch;
 pub mod provider;
+pub mod tools;
 pub mod wire;
 
 pub use dispatch::{HttpModelDispatch, HttpModelDispatchError};

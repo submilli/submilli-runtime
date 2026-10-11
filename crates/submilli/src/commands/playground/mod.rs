@@ -19,6 +19,8 @@ use clap::{Args as ClapArgs, Subcommand};
 use ipnet::IpNet;
 
 #[cfg(unix)]
+mod agent;
+#[cfg(unix)]
 mod api;
 #[cfg(unix)]
 mod bridge;
@@ -142,6 +144,11 @@ pub enum PlaygroundCmd {
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
     /// runs are labeled `stand-in`.
     Mcp,
+    /// Run a task with your own model key against the playground's tools, as a
+    /// production agent would; prints its answer. The key comes from the playground's
+    /// environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from
+    /// SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
+    Chat(ChatArgs),
     /// Copy a coding assistant's stand-in conversation to the running playground: a
     /// Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks
     /// post anything. Always exits 0 and prints nothing.
@@ -218,6 +225,16 @@ pub struct SessionStartArgs {
 pub struct SessionEndArgs {
     #[arg(value_name = "ID")]
     session: String,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct ChatArgs {
+    /// What the agent should do.
+    #[arg(value_name = "TASK")]
+    task: String,
     /// Print JSON.
     #[arg(long)]
     json: bool,
@@ -476,6 +493,7 @@ impl Args {
             Some(PlaygroundCmd::Cancel(_)) => "playground.cancel",
             Some(PlaygroundCmd::Watch(_)) => "playground.watch",
             Some(PlaygroundCmd::Mcp) => "playground.mcp",
+            Some(PlaygroundCmd::Chat(_)) => "playground.chat",
             Some(PlaygroundCmd::ChatHook) => "playground.chat-hook",
         }
     }
@@ -561,6 +579,10 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
             execute_watch(args.session, args.follow, Output::from_json(args.json))
         }
         PlaygroundCmd::Mcp => bridge::execute(),
+        PlaygroundCmd::Chat(args) => act(
+            ActionRequest::Chat(controls::act::ChatRequest { task: args.task }),
+            args.json,
+        ),
         PlaygroundCmd::ChatHook => Ok(chat::execute_hook()),
     }
 }

@@ -22,8 +22,9 @@ use serde_json::json;
 use submilli_server::record::EventKind;
 
 use super::chat::ChatPost;
+use super::control_auth::Caller;
 use super::controls::act::{
-    ActError, Actions, Answer, BindRequest, DraftRequest, ExecRequest, RunRequest,
+    ActError, Actions, Answer, BindRequest, ChatRequest, DraftRequest, ExecRequest, RunRequest,
     SessionEndRequest, SessionStartRequest, TestRequest,
 };
 use super::controls::read::{self, AuditQuery, RunsQuery, Since};
@@ -246,6 +247,13 @@ pub(crate) const ROUTES: &[Route] = &[
         handler: || get(events),
     },
     Route {
+        method: "POST",
+        path: "/api/agent",
+        group: Group::Viewer,
+        command: Some("chat"),
+        handler: || post(agent),
+    },
+    Route {
         method: "GET",
         path: "/api/bridge/binding",
         group: Group::StandIn,
@@ -435,6 +443,23 @@ async fn cancel(
 
 async fn bridge_binding(State(state): State<ControlState>) -> Response {
     answered(state.actions().bridge_binding().await)
+}
+
+/// A task for the developer's own model key. Its runs are labeled by who asked: `chat`
+/// for the CLI, `browser-chat` for the page.
+async fn agent(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    request: Result<Json<ChatRequest>, JsonRejection>,
+) -> Response {
+    let label = match state.caller(&headers) {
+        Some(Caller::Browser) => "browser-chat",
+        _ => "chat",
+    };
+    act_with(&state, request, |actions, request| async move {
+        actions.chat(label, request).await
+    })
+    .await
 }
 
 /// The stand-in's chat, from `chat-hook`.

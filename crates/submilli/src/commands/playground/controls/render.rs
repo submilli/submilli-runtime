@@ -941,6 +941,54 @@ pub(crate) fn binding_text(result: &BindingResult) -> String {
     out
 }
 
+/// What `chat` did. The model's reply comes from reading run results, so it is run data.
+#[derive(Debug, Serialize)]
+pub(crate) struct ChatResult {
+    pub(crate) session: Option<String>,
+    pub(crate) provider: &'static str,
+    pub(crate) model: String,
+    pub(crate) tool_calls: usize,
+    /// `answered`, or `turn-limit`.
+    pub(crate) stopped: &'static str,
+    pub(crate) next: Vec<String>,
+    pub(crate) untrusted: ChatUntrusted,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ChatUntrusted {
+    pub(crate) reply: Option<String>,
+}
+
+pub(crate) fn chat_text(result: &ChatResult) -> String {
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "chat · {} {} · {} tool call{}",
+        result.provider,
+        clean(&result.model),
+        result.tool_calls,
+        if result.tool_calls == 1 { "" } else { "s" }
+    );
+    if let Some(session) = &result.session {
+        let _ = write!(out, " · session {}", clean(session));
+    }
+    let _ = writeln!(out);
+    if result.stopped == "turn-limit" {
+        let _ = writeln!(
+            out,
+            "stopped after {} model turns without a final answer",
+            crate::commands::playground::agent::MAX_TURNS
+        );
+    }
+    if let Some(reply) = &result.untrusted.reply {
+        let mut fence = Fence::default();
+        fence.text("reply", reply, 200);
+        fence.render(&mut out);
+    }
+    next_lines(&mut out, &result.next);
+    out
+}
+
 pub(crate) fn session_text(result: &SessionResult) -> String {
     let mut out = String::new();
     let session = clean(&result.session);

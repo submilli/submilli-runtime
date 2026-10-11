@@ -415,6 +415,8 @@ pub(crate) struct Actions {
     pub(crate) cancelling: Mutex<BTreeSet<u64>>,
     /// Where the stand-in's chat goes.
     pub(crate) chat: super::super::chat::ChatIntake,
+    /// The server listener's port, for chat's MCP connection.
+    pub(crate) server_port: u16,
 }
 
 impl Actions {
@@ -795,6 +797,71 @@ impl Actions {
             "secrets": secrets,
         });
         Ok(Answer::of(EXIT_SUCCESS, &result, |_| String::new()))
+    }
+
+    /// Runs `request`'s task with the developer's own model key, its runs labeled
+    /// `label`.
+    pub(crate) async fn chat(
+        self: &Arc<Self>,
+        label: &'static str,
+        request: ChatRequest,
+    ) -> Answer {
+        answer(self.try_chat(label, request).await)
+    }
+
+    async fn try_chat(
+        self: &Arc<Self>,
+        label: &'static str,
+        request: ChatRequest,
+    ) -> Result<Answer, ActError> {
+        if request.task.trim().is_empty() {
+            return Err(ActError::usage(
+                "empty-task",
+                "say what the agent should do",
+            ));
+        }
+        let choice = super::super::agent::configured()
+            .map_err(|message| ActError::new(EXIT_FAILURE, "no-provider", message))?;
+        let blueprint = self.blueprint(&self.blueprint_name).await?;
+        let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
+        let token = StateDir::for_project(&self.project_root)
+            .token(label)
+            .map_err(|error| ActError::failure(format!("{error:#}")))?;
+        let actions = Arc::clone(self);
+        let ran = tokio::task::spawn_blocking(move || {
+            let setup = super::super::agent::Setup {
+                choice,
+                server_port: actions.server_port,
+                blueprint: &actions.blueprint_name,
+                label,
+                token: &token,
+                variables: &variables,
+                secrets: &secrets,
+                recorder: &actions.recorder,
+            };
+            super::super::agent::run(&setup, &request.task)
+        })
+        .await
+        .map_err(|error| ActError::failure(format!("the chat failed: {error}")))?;
+        let outcome = ran.map_err(|message| ActError::failure(clean(&message)))?;
+        let follow = outcome.session.iter().flat_map(|session| {
+            [
+                Next::RunsInSession(session.clone()),
+                Next::Watch(session.clone()),
+            ]
+        });
+        let result = render::ChatResult {
+            session: outcome.session.clone(),
+            provider: outcome.provider,
+            model: outcome.model,
+            tool_calls: outcome.tool_calls,
+            stopped: outcome.stopped,
+            next: next(follow),
+            untrusted: render::ChatUntrusted {
+                reply: outcome.reply,
+            },
+        };
+        Ok(Answer::of(EXIT_SUCCESS, &result, render::chat_text))
     }
 
     // ---- sessions ----
@@ -1979,6 +2046,12 @@ fn write_blueprint(path: &Path, drafted_from: &[u8], new: &[u8]) -> Result<(), A
 
 // ---- the CLI's side ------------------------------------------------------------------------
 
+/// A task for `chat`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ChatRequest {
+    pub(crate) task: String,
+}
+
 /// An action as the CLI sends it to the running playground.
 pub(crate) enum ActionRequest {
     Exec(ExecRequest),
@@ -1991,6 +2064,7 @@ pub(crate) enum ActionRequest {
     Rerun(u64),
     Clear,
     Cancel(u64),
+    Chat(ChatRequest),
 }
 
 impl ActionRequest {
@@ -2016,6 +2090,7 @@ impl ActionRequest {
             Self::Rerun(run) => ("POST", "/api/rerun", Some(json!({ "run": run }))),
             Self::Clear => ("POST", "/api/clear", Some(json!({}))),
             Self::Cancel(run) => ("POST", "/api/cancel", Some(json!({ "run": run }))),
+            Self::Chat(request) => ("POST", "/api/agent", body(serde_json::to_value(request))),
         }
     }
 }

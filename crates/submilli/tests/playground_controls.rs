@@ -1522,6 +1522,175 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             assert!(output.stderr.is_empty(), "{}", stderr(&output));
         }
 
+        /// A model API on loopback that answers the `n`th request (from 0) with
+        /// `answer(n)`, and keeps each request's body.
+        fn model_api(
+            answer: impl Fn(usize) -> Value + Send + 'static,
+        ) -> (u16, Arc<Mutex<Vec<Value>>>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let bodies = Arc::new(Mutex::new(Vec::new()));
+            let kept = Arc::clone(&bodies);
+            std::thread::spawn(move || {
+                for (n, stream) in listener.incoming().enumerate() {
+                    let Ok(mut stream) = stream else { break };
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    reader.read_exact(&mut body).unwrap();
+                    kept.lock()
+                        .unwrap()
+                        .push(serde_json::from_slice(&body).unwrap_or(Value::Null));
+                    let reply = answer(n).to_string();
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    );
+                }
+            });
+            (port, bodies)
+        }
+
+        const MODEL_KEY: &str = "dummy-model-key-4f9a2c";
+        const PROGRAM: &str = "function main(): number { return 6 * 7; }";
+
+        fn call_execute(n: usize) -> Value {
+            json!({ "content": [
+                { "type": "text", "text": "Running it." },
+                { "type": "tool_use", "id": format!("call_{n}"),
+                  "name": "submilli__typescript__execute", "input": { "code": PROGRAM } },
+            ], "stop_reason": "tool_use" })
+        }
+
+        /// Starts the playground with the model API on `port` and the key set.
+        fn start_with_model(playground: &Playground, port: u16) {
+            let output = playground
+                .command(&["start", "--json"])
+                .env("ANTHROPIC_API_KEY", MODEL_KEY)
+                .env("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}"))
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "start: {}", stderr(&output));
+        }
+
+        #[test]
+        fn chat_runs_a_task_with_the_developers_own_key() {
+            let (port, bodies) = model_api(|n| match n {
+                0 => call_execute(0),
+                _ => json!({ "content": [{ "type": "text", "text": "The answer is 42." }],
+                             "stop_reason": "end_turn" }),
+            });
+            let playground = Playground::starter();
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+
+            let output = playground.run(&["chat", "Compute six times seven.", "--json"]);
+            assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+            let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["provider"], "anthropic");
+            assert_eq!(result["stopped"], "answered");
+            assert_eq!(result["tool_calls"], 1);
+            assert_eq!(result["untrusted"]["reply"], "The answer is 42.");
+            assert_only_untrusted(&result, "The answer is 42.");
+            let session = result["session"].as_str().unwrap().to_owned();
+
+            // The tools sent are the server's, and the run's result went back.
+            let bodies = bodies.lock().unwrap().clone();
+            assert_eq!(bodies.len(), 2);
+            let tools: Vec<&str> = bodies[0]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect();
+            assert!(
+                tools.contains(&"submilli__typescript__execute"),
+                "{tools:?}"
+            );
+            assert_eq!(
+                bodies[0]["messages"][0]["content"],
+                "Compute six times seven."
+            );
+            let results = bodies[1]["messages"][2]["content"].to_string();
+            assert!(
+                results.contains("tool_result") && results.contains("42"),
+                "{results}"
+            );
+
+            let runs = playground.expect(0, &["runs", "--limit", "1"]);
+            assert_eq!(runs["runs"][0]["source"], "chat", "{runs}");
+            let log = std::fs::read_to_string(
+                playground
+                    .state()
+                    .join(format!("store/events/{session}.jsonl")),
+            )
+            .unwrap();
+            let chat: Vec<String> = log
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter_map(|event| event["body"]["chat"]["text"].as_str().map(str::to_owned))
+                .collect();
+            assert_eq!(
+                chat,
+                [
+                    "Compute six times seven.",
+                    "Running it.",
+                    "The answer is 42."
+                ]
+            );
+
+            let text = playground.run(&["chat", "Compute six times seven."]);
+            let printed = String::from_utf8_lossy(&text.stdout);
+            assert!(
+                printed.contains("anthropic") && printed.contains("next:"),
+                "{printed}"
+            );
+
+            playground.stop();
+            assert!(!String::from_utf8_lossy(&output.stdout).contains(MODEL_KEY));
+            walk(&playground.state(), &mut |path| {
+                let bytes = std::fs::read(path).unwrap();
+                assert!(
+                    !String::from_utf8_lossy(&bytes).contains(MODEL_KEY),
+                    "{} holds the key",
+                    path.display()
+                );
+            });
+        }
+
+        #[test]
+        fn chat_stops_at_the_turn_limit_and_says_so_with_no_key() {
+            let (port, bodies) = model_api(call_execute);
+            let playground = Playground::starter();
+            // No key: no provider, and no request to anyone.
+            playground.start();
+            let refused = playground.run(&["chat", "anything"]);
+            assert_eq!(refused.status.code(), Some(1));
+            assert!(
+                stderr(&refused).contains("no provider configured"),
+                "{}",
+                stderr(&refused)
+            );
+            playground.stop();
+            assert!(bodies.lock().unwrap().is_empty());
+
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let result = playground.expect(0, &["chat", "Keep going."]);
+            assert_eq!(result["stopped"], "turn-limit");
+            assert_eq!(bodies.lock().unwrap().len(), 20);
+        }
+
         #[test]
         fn the_bridge_answers_every_request_with_why_it_cannot_connect() {
             let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
