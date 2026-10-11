@@ -1,8 +1,4 @@
-types: 19 of 34 tsc entries compared, 1 differ
-
-line 11: dinosaur
-  tsc:  "t-rex"
-  ours: RexOrRaptor
+types: 19 of 34 tsc entries compared, 0 differ
 
 errors:
 line 21: ours: expected `Error`, got `string` (tsc accepts)

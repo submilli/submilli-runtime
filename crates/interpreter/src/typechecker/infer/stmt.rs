@@ -1834,7 +1834,7 @@ impl Inferer<'_> {
         }
     }
 
-    fn pattern_binding_storage_type(
+    pub(super) fn pattern_binding_storage_type(
         &self,
         value: ExprId,
         declared: Type,
@@ -1848,7 +1848,7 @@ impl Inferer<'_> {
         ))
     }
 
-    fn pattern_binding_flow_type(&self, value: ExprId) -> Result<Option<Type>, CompilerFailure> {
+    pub(super) fn pattern_binding_flow_type(&self, value: ExprId) -> Result<Option<Type>, CompilerFailure> {
         use narrowing::{LiteralValue, PathElem};
         let Some((source, element)) = self.pattern_binding_source(value)? else {
             return Ok(None);
