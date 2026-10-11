@@ -9689,18 +9689,11 @@ impl Inferer<'_> {
         Ok(declared_holds_more.then_some(path))
     }
 
-    /// Whether `++` or `--` may write `result` back to a slot of `target`, as
-    /// in tsc. A `never` slot takes it: it holds no value unless an alias
-    /// filled a `never[]`, and then the result is the number it would be. A
-    /// literal-typed slot is checked against its base type, so `p.c++` with
-    /// `c: 0 | 1` is accepted.
+    /// Whether `++`/`--` may write its result back to a slot of `target`. A
+    /// `never` slot takes it, as in tsc: it holds no value unless an alias
+    /// filled a `never[]`, and then the result is the number it would be.
     fn postfix_write_fits(&self, result: &Type, target: &Type) -> bool {
-        matches!(target.peel(), Type::Never)
-            || assignable(
-                result,
-                &super::stmt::widen_literal_members(target.clone()),
-                self.resolver(),
-            )
+        matches!(target.peel(), Type::Never) || assignable(result, target, self.resolver())
     }
 
     fn infer_postfix_ident(
