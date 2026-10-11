@@ -5605,18 +5605,8 @@ impl Inferer<'_> {
             (crate::ObjectField, crate::TypedObjectFieldSource),
         > = std::collections::BTreeMap::new();
 
-        // For each member, the names the fields written after it give: a
-        // spread's source doesn't decide those.
-        let mut written_after: Vec<std::collections::BTreeSet<String>> = Vec::new();
-        let mut later = std::collections::BTreeSet::new();
-        for member in members.iter().rev() {
-            written_after.push(later.clone());
-            if let crate::ObjectLiteralMember::Field(field) = member {
-                later.insert(field.name.name.clone());
-            }
-        }
-        written_after.reverse();
-        for (member, overwritten) in members.into_iter().zip(written_after) {
+        let overwritten_after = fields_written_after(&members);
+        for (member, overwritten) in members.into_iter().zip(overwritten_after) {
             match member {
                 crate::ObjectLiteralMember::Computed { .. } => {
                     self.error(
@@ -6509,22 +6499,22 @@ impl Inferer<'_> {
 
         if elements.is_empty() {
             // `[]` holds no element, so it is `never[]`, as in tsc, and fits
-            // any array type it is used as. It is built with the expected
-            // element type, the slot it lands in. An element type still
-            // holding a type parameter is the call inferring it, which reads
-            // the hint back.
-            let elem_ty = expected_elem.cloned().unwrap_or(Type::Never);
-            let own_elem_ty = if type_contains_type_var(&elem_ty) {
-                elem_ty.clone()
+            // any array type it is used as. The typed node keeps the element
+            // type of the slot it lands in, which the array is built with. A
+            // slot element type still holding a type parameter stays the
+            // expression's own too: generic inference reads it back.
+            let slot_elem_ty = expected_elem.cloned().unwrap_or(Type::Never);
+            let literal_elem_ty = if type_contains_type_var(&slot_elem_ty) {
+                slot_elem_ty.clone()
             } else {
                 Type::Never
             };
             return Ok((
                 TypedExprKind::ArrayLiteral {
                     elements: Vec::new(),
-                    element_ty: elem_ty,
+                    element_ty: slot_elem_ty,
                 },
-                Type::Array(Box::new(own_elem_ty)),
+                Type::Array(Box::new(literal_elem_ty)),
             ));
         }
 
@@ -9169,10 +9159,10 @@ impl Inferer<'_> {
             self.inferred_returns.take()
         };
 
-        // The fresh literal types a block body returns, which a generic call
+        // The fresh literal types the body returns, once it is a block, which a generic call
         // taking this function literal may infer from (see
         // `function_literal_returned_literals`).
-        let mut block_returned_fresh: Option<std::collections::BTreeSet<Type>> = None;
+        let mut returned_fresh: Option<std::collections::BTreeSet<Type>> = None;
         let (typed_body, body_ret) = match body {
             ArrowBody::Expr(e) => {
                 let (id, t) = self.infer_returned_value(e, ret_hint.as_ref())?;
@@ -9189,7 +9179,7 @@ impl Inferer<'_> {
                 })?;
                 let id = self.wrap_narrow_regions(id, &narrow_seed, span)?;
                 let returned = self.inferred_returns.take().unwrap_or_default();
-                block_returned_fresh = Some(
+                returned_fresh = Some(
                     returned
                         .iter()
                         .flat_map(|value| value.fresh.iter().cloned())
@@ -9216,7 +9206,7 @@ impl Inferer<'_> {
             let body = match typed_body {
                 ClosureBody::Block(body) => body,
                 ClosureBody::Expr(value) => {
-                    block_returned_fresh = Some(self.fresh_literals(value)?);
+                    returned_fresh = Some(self.fresh_literals(value)?);
                     self.typed_ast
                         .try_push_stmt(crate::TypedStmt {
                             kind: crate::TypedStmtKind::Return(Some(value)),
@@ -9227,7 +9217,7 @@ impl Inferer<'_> {
             };
             ClosureBody::Block(self.prepend_parameter_defaults(default_prologue, body)?)
         };
-        if let (ClosureBody::Block(body), Some(fresh)) = (&typed_body, block_returned_fresh) {
+        if let (ClosureBody::Block(body), Some(fresh)) = (&typed_body, returned_fresh) {
             self.record_closure_returned_fresh(*body, fresh);
         }
         // Restore frames.
@@ -9699,12 +9689,11 @@ impl Inferer<'_> {
         Ok(declared_holds_more.then_some(path))
     }
 
-    /// Whether `++`/`--` may write its result back to a slot of `target`. A
-    /// `never` slot takes it, as in tsc: it holds no value unless an alias
-    /// filled a `never[]`, and then the result is the number it would be.
-    /// Whether `++` or `--` may write `result` to a target of type `target`.
-    /// It is checked against the base type of the target's literal types, as
-    /// in tsc: `p.c++` with `c: 0 | 1` is accepted.
+    /// Whether `++` or `--` may write `result` back to a slot of `target`, as
+    /// in tsc. A `never` slot takes it: it holds no value unless an alias
+    /// filled a `never[]`, and then the result is the number it would be. A
+    /// literal-typed slot is checked against its base type, so `p.c++` with
+    /// `c: 0 | 1` is accepted.
     fn postfix_write_fits(&self, result: &Type, target: &Type) -> bool {
         matches!(target.peel(), Type::Never)
             || assignable(
@@ -10246,10 +10235,13 @@ impl Inferer<'_> {
     fn shaped_by_context(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         let id = peel_parens(self.ast, expr)?;
         Ok(is_context_typed_literal(self.ast, id)?
-            || matches!(
-                self.ast.try_expr(id).map_err(super::arena_failure)?.kind,
-                ExprKind::Ternary { .. }
-            ))
+            || matches!(self.peeled_kind(id)?, ExprKind::Ternary { .. }))
+    }
+
+    /// The kind of `expr` inside any parentheses.
+    fn peeled_kind(&self, expr: ExprId) -> Result<&ExprKind, CompilerFailure> {
+        let id = peel_parens(self.ast, expr)?;
+        Ok(&self.ast.try_expr(id).map_err(super::arena_failure)?.kind)
     }
 
     /// Infers `expr`, keeping its literal types, under a `context` that guides
@@ -10297,13 +10289,10 @@ impl Inferer<'_> {
         }
         // A literal with spreads of its own would take the context as its own
         // type, so only those spreads take it.
-        let id = peel_parens(self.ast, value)?;
-        if matches!(
-            self.ast.try_expr(id).map_err(super::arena_failure)?.kind,
-            ExprKind::ObjectLiteral { .. }
-        ) {
-            self.spread_context_for_next_literal = Some(spread_source_context(want, overwritten));
+        if !matches!(self.peeled_kind(value)?, ExprKind::ObjectLiteral { .. }) {
+            return self.infer_expr(value, None);
         }
+        self.spread_context_for_next_literal = Some(spread_source_context(want, overwritten));
         let inferred = self.infer_expr(value, None);
         self.spread_context_for_next_literal = None;
         inferred
@@ -10314,8 +10303,7 @@ impl Inferer<'_> {
     /// as its own (see `own_object_literal_type`), so under a spread's
     /// all-optional context it would claim every field may be absent.
     fn holds_spread(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
-        let id = peel_parens(self.ast, expr)?;
-        Ok(match &self.ast.try_expr(id).map_err(super::arena_failure)?.kind {
+        Ok(match self.peeled_kind(expr)? {
             ExprKind::ObjectLiteral { members } => members
                 .iter()
                 .any(|member| matches!(member, crate::ObjectLiteralMember::Spread { .. })),
@@ -12576,6 +12564,27 @@ struct ElementMismatch {
 }
 
 /// The expression inside any parentheses around `expr`.
+/// For each member of an object literal, the names of the fields a later
+/// member overwrites, which a spread at that member doesn't decide.
+fn fields_written_after(
+    members: &[crate::ObjectLiteralMember],
+) -> Vec<std::collections::BTreeSet<String>> {
+    let mut overwritten = std::collections::BTreeSet::new();
+    let mut per_member: Vec<_> = members
+        .iter()
+        .rev()
+        .map(|member| {
+            let after = overwritten.clone();
+            if let crate::ObjectLiteralMember::Field(field) = member {
+                overwritten.insert(field.name.name.clone());
+            }
+            after
+        })
+        .collect();
+    per_member.reverse();
+    per_member
+}
+
 pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
     loop {
         match &ast.try_expr(expr).map_err(super::arena_failure)?.kind {
@@ -12657,32 +12666,37 @@ pub(super) fn cannot_be_typed_alone(ast: &crate::Ast, id: ExprId) -> Result<bool
 /// The types a block body's returns contribute to its return type, as tsc
 /// infers it from their union. Literals of one primitive form their union
 /// (`if (b) return 1; return 2;` returns `1 | 2`), beside the `null` or
-/// `undefined` a path returns. A union that is one literal type widens where
-/// it is fresh, as do the returns of any other mix: `if (b) return 1; return
-/// 1;` returns `number`.
+/// `undefined` a path returns. Every other mix widens each fresh literal, as
+/// does a union that is a single literal type: `if (b) return 1; return 1;`
+/// returns `number`.
 fn returned_value_types(returned: Vec<super::ReturnedValue>) -> Vec<(Type, Span)> {
-    let own = Type::union(returned.iter().map(|value| value.ty.clone()).collect());
+    let returned_union = Type::union(returned.iter().map(|value| value.ty.clone()).collect());
     let is_nullish = |ty: &Type| matches!(ty.peel(), Type::Undefined | Type::Null | Type::Void);
-    let one_primitive = returned
-        .iter()
-        .find(|value| !is_nullish(&value.ty))
-        .and_then(|first| first.ty.literal_base());
-    let literals_of_one_primitive = one_primitive.is_some()
+    let Some(first_value) = returned.iter().find(|value| !is_nullish(&value.ty)) else {
+        return widened_returns(returned);
+    };
+    let span = first_value.span;
+    let shared_literal_base = first_value.ty.literal_base();
+    let literals_of_one_primitive = shared_literal_base.is_some()
         && returned
             .iter()
-            .all(|value| is_nullish(&value.ty) || value.ty.literal_base() == one_primitive);
-    if own.peel().is_literal_type() || !literals_of_one_primitive {
-        return returned
-            .into_iter()
-            .map(|value| (value.widened, value.span))
-            .collect();
+            .all(|value| is_nullish(&value.ty) || value.ty.literal_base() == shared_literal_base);
+    if returned_union.peel().is_literal_type() || !literals_of_one_primitive {
+        return widened_returns(returned);
     }
-    let (nullish, values): (Vec<_>, Vec<_>) =
-        returned.into_iter().partition(|value| is_nullish(&value.ty));
-    let span = values[0].span;
+    let (nullish, values): (Vec<_>, Vec<_>) = returned
+        .into_iter()
+        .partition(|value| is_nullish(&value.ty));
     let union = Type::union(values.into_iter().map(|value| value.ty).collect());
     std::iter::once((union, span))
         .chain(nullish.into_iter().map(|value| (value.ty, value.span)))
+        .collect()
+}
+
+fn widened_returns(returned: Vec<super::ReturnedValue>) -> Vec<(Type, Span)> {
+    returned
+        .into_iter()
+        .map(|value| (value.widened, value.span))
         .collect()
 }
 

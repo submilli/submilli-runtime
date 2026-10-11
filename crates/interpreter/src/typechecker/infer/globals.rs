@@ -138,7 +138,7 @@ impl<'a> Inferer<'a> {
                     if ty.is_none() {
                         self.record_global_aliased_condition(mangled.clone(), typed_value);
                     }
-                    if name.name.starts_with("#pattern_dst_") {
+                    if crate::lower_patterns::is_pattern_value(&name.name) {
                         self.pattern_sources.insert(name.name.clone(), typed_value);
                     }
                     self.add_typed_global(crate::TypedGlobal {
