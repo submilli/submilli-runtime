@@ -1406,6 +1406,123 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         }
 
         #[test]
+        fn the_stand_ins_chat_lands_in_the_session_its_calls_ran_in() {
+            let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
+            let page = playground.start();
+            let bound = playground
+                .command(&["bind", "customerId=cus_northwind", "--secret", "API_KEY"])
+                .env("API_KEY", SECRET)
+                .output()
+                .unwrap();
+            assert!(bound.status.success(), "{}", stderr(&bound));
+
+            // The stand-in's call goes through the bridge, named as Claude Code names it.
+            let mut bridge = Bridge::start(&playground);
+            bridge.initialize();
+            bridge.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            bridge.send(json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {
+                    "name": "submilli__typescript__execute",
+                    "arguments": { "code": "function main(): number { return 42; }" },
+                    "_meta": { "claudecode/toolUseId": "toolu_chat_test" }
+                }
+            }));
+            assert_eq!(bridge.reply()["id"], 2);
+
+            // Its transcript, where Claude Code writes it, and the call's hook.
+            let claude = playground.dir.path().join("claude");
+            let live = claude.join("cc-session/subagents/agent-agent-x.jsonl");
+            std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+            let lines = [
+                json!({ "type": "user", "uuid": "u1",
+                        "message": { "role": "user", "content": "Total the charges." } }),
+                json!({ "type": "assistant", "uuid": "a1", "message": { "role": "assistant",
+                        "content": [{ "type": "tool_use", "id": "toolu_chat_test",
+                                      "name": "mcp__playground__submilli__typescript__execute",
+                                      "input": {} }] } }),
+                json!({ "type": "assistant", "uuid": "a2", "message": { "role": "assistant",
+                        "content": [{ "type": "text", "text": "The total is 42." }] } }),
+            ];
+            let transcript: String = lines.iter().map(|line| format!("{line}\n")).collect();
+            std::fs::write(&live, transcript).unwrap();
+            let hook = |agent_type: Option<&str>| {
+                let mut hook = json!({
+                    "hook_event_name": "PostToolUse",
+                    "session_id": "cc-session",
+                    "transcript_path": claude.join("cc-session.jsonl"),
+                    "agent_id": "agent-x",
+                    "tool_name": "mcp__playground__submilli__typescript__execute",
+                    "tool_use_id": "toolu_chat_test",
+                });
+                if let Some(agent_type) = agent_type {
+                    hook["agent_type"] = json!(agent_type);
+                }
+                hook
+            };
+            let chat_hook = |hook: &Value| {
+                let mut child = playground
+                    .command(&["chat-hook"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                write!(child.stdin.take().unwrap(), "{hook}").unwrap();
+                let output = child.wait_with_output().unwrap();
+                assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+                assert!(output.stdout.is_empty(), "chat-hook prints nothing");
+                output
+            };
+            chat_hook(&hook(Some("general-purpose")));
+            chat_hook(&hook(None));
+            chat_hook(&hook(Some("submilli-standin")));
+
+            let sessions = playground.expect(0, &["sessions"]);
+            let session = sessions["sessions"][0]["session"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let log = std::fs::read_to_string(
+                playground
+                    .state()
+                    .join(format!("store/events/{session}.jsonl")),
+            )
+            .unwrap();
+            let chat: Vec<String> = log
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter_map(|event| event["body"]["chat"]["text"].as_str().map(str::to_owned))
+                .collect();
+            assert_eq!(chat, ["Total the charges.", "The total is 42."]);
+
+            // Only the stand-in token may post chat.
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .build()
+                .into();
+            for token in ["app", "chat", "admin"] {
+                let status = agent
+                    .post(&format!("{page}/api/chat"))
+                    .header(
+                        "authorization",
+                        &format!("Bearer {}", playground.token(token)),
+                    )
+                    .send_json(json!({ "agent": "agent-y", "messages": [] }))
+                    .unwrap()
+                    .status()
+                    .as_u16();
+                assert_eq!(status, 403, "{token}");
+            }
+
+            // With the playground stopped, the hook still exits 0, silently.
+            drop(bridge);
+            playground.stop();
+            let output = chat_hook(&hook(Some("submilli-standin")));
+            assert!(output.stderr.is_empty(), "{}", stderr(&output));
+        }
+
+        #[test]
         fn the_bridge_answers_every_request_with_why_it_cannot_connect() {
             let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
 

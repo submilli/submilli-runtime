@@ -23,6 +23,8 @@ mod api;
 #[cfg(unix)]
 mod bridge;
 #[cfg(unix)]
+mod chat;
+#[cfg(unix)]
 mod client;
 #[cfg(unix)]
 mod control_auth;
@@ -140,6 +142,10 @@ pub enum PlaygroundCmd {
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
     /// runs are labeled `stand-in`.
     Mcp,
+    /// Copy a coding assistant's stand-in conversation to the running playground: a
+    /// Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks
+    /// post anything. Always exits 0 and prints nothing.
+    ChatHook,
 }
 
 #[derive(ClapArgs)]
@@ -470,6 +476,7 @@ impl Args {
             Some(PlaygroundCmd::Cancel(_)) => "playground.cancel",
             Some(PlaygroundCmd::Watch(_)) => "playground.watch",
             Some(PlaygroundCmd::Mcp) => "playground.mcp",
+            Some(PlaygroundCmd::ChatHook) => "playground.chat-hook",
         }
     }
 }
@@ -554,6 +561,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
             execute_watch(args.session, args.follow, Output::from_json(args.json))
         }
         PlaygroundCmd::Mcp => bridge::execute(),
+        PlaygroundCmd::ChatHook => Ok(chat::execute_hook()),
     }
 }
 

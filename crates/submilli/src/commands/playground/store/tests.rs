@@ -268,6 +268,8 @@ fn kinds(events: &[&StoredEvent]) -> Vec<String> {
         .iter()
         .map(|event| match &event.body {
             EventBody::Gap(_) => "gap".to_owned(),
+            EventBody::Chat(turn) => format!("chat {}", turn.text),
+            EventBody::ChatReplaced(_) => "chat replaced".to_owned(),
             EventBody::Event(event) => match &event.kind {
                 EventKind::RunStarted { .. } => "started".to_owned(),
                 EventKind::CallStarted { call_index, .. } => format!("call {call_index}"),
@@ -748,7 +750,7 @@ fn a_drop_while_runs_overlap_leaves_every_open_runs_later_decisions_unnumbered()
             EventBody::Event(e) => {
                 matches!(e.kind, EventKind::Decision { .. }).then_some(event.decision)
             }
-            EventBody::Gap(_) => None,
+            _ => None,
         })
         .collect();
     assert_eq!(second_run, [Some(1), None]);
@@ -1229,7 +1231,7 @@ fn decisions_are_numbered_as_the_run_keeps_them_and_left_unnumbered_after_a_drop
                 }
                 _ => None,
             },
-            EventBody::Gap(_) => None,
+            _ => None,
         })
         .collect();
     assert_eq!(

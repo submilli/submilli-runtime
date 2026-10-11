@@ -413,6 +413,8 @@ pub(crate) struct Actions {
     pub(crate) page: Page,
     /// Runs a cancel was sent for, while they drain.
     pub(crate) cancelling: Mutex<BTreeSet<u64>>,
+    /// Where the stand-in's chat goes.
+    pub(crate) chat: super::super::chat::ChatIntake,
 }
 
 impl Actions {

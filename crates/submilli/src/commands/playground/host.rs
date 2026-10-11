@@ -352,6 +352,7 @@ async fn run(
             base: Some(description.url.clone()),
         },
         cancelling: std::sync::Mutex::default(),
+        chat: super::chat::ChatIntake::default(),
     });
     // Flipped once the server has drained, so the event feeds end and the control
     // listener can close.

@@ -366,7 +366,7 @@ function main(): string {{
                 EventKind::Console { line, .. } => Some(line.as_str()),
                 _ => None,
             },
-            EventBody::Gap(_) => None,
+            _ => None,
         })
         .collect();
     assert_eq!(

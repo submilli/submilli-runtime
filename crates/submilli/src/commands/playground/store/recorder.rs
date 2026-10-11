@@ -68,6 +68,34 @@ struct Shared {
     /// The server-wide sequence number of the last event delivered; a jump past the next
     /// one means the server dropped events in between.
     last_seq: AtomicU64,
+    /// The session of each recent MCP tool call its client named, by that name: how chat
+    /// from a coding assistant finds the session its tool calls ran in.
+    calls: Mutex<RecentCalls>,
+}
+
+/// The most recent tool calls' sessions, by the call's id, oldest forgotten first.
+#[derive(Default)]
+struct RecentCalls {
+    sessions: HashMap<String, String>,
+    order: std::collections::VecDeque<String>,
+}
+
+/// How many tool calls' sessions are kept in memory; older ones are found on disk.
+const RECENT_CALLS: usize = 4096;
+
+impl RecentCalls {
+    fn insert(&mut self, call: &str, session: &str) {
+        if self.sessions.contains_key(call) {
+            return;
+        }
+        if self.order.len() >= RECENT_CALLS
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.sessions.remove(&oldest);
+        }
+        self.sessions.insert(call.to_owned(), session.to_owned());
+        self.order.push_back(call.to_owned());
+    }
 }
 
 /// What the recorder knows of one run while its events arrive.
@@ -144,12 +172,69 @@ impl Recorder {
                 tracks: Mutex::new(HashMap::new()),
                 untracked: Mutex::new(HashMap::new()),
                 last_seq: AtomicU64::new(0),
+                calls: Mutex::new(RecentCalls::default()),
             }),
         }
     }
 
     pub(crate) fn store(&self) -> &Arc<Store> {
         &self.shared.store
+    }
+
+    /// The session one of the tool calls `ids` ran in: a recent call's from memory,
+    /// else one in the event logs on disk.
+    pub(crate) fn session_of_call<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a str> + Clone,
+    ) -> Option<String> {
+        let recent = {
+            let calls = self
+                .shared
+                .calls
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            ids.clone()
+                .into_iter()
+                .find_map(|id| calls.sessions.get(id).cloned())
+        };
+        recent.or_else(|| {
+            let ids: HashSet<&str> = ids.into_iter().collect();
+            if ids.is_empty() {
+                return None;
+            }
+            self.shared
+                .store
+                .session_with_call(&ids)
+                .unwrap_or_else(|error| {
+                    warn(&format!(
+                        "looking for a tool call's session failed: {error}"
+                    ));
+                    None
+                })
+        })
+    }
+
+    /// Appends a chat entry to `session`'s log at `position`, with known secrets masked.
+    pub(crate) fn append_chat(
+        &self,
+        session: &str,
+        event_id: String,
+        position: Position,
+        body: EventBody,
+    ) {
+        self.shared.append_stored(
+            Some(session.to_owned()),
+            StoredEvent {
+                format: FORMAT,
+                session_seq: 0,
+                event_id,
+                position,
+                run: None,
+                backfilled: false,
+                decision: None,
+                body,
+            },
+        );
     }
 
     /// The server's execution id of run `id` while it is in flight: started, and not yet
@@ -286,6 +371,12 @@ impl Shared {
     }
 
     fn event(&self, event: SessionEvent) {
+        if let (Some(call), Some(session)) = (&event.tool_call_id, &event.session_id) {
+            self.calls
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(call, session);
+        }
         let mut tracks = self.tracks();
         let previous = self.last_seq.swap(event.seq, Ordering::Relaxed);
         if event.seq > previous.saturating_add(1) {
