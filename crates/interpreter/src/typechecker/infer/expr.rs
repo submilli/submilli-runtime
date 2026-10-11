@@ -1449,7 +1449,16 @@ impl Inferer<'_> {
                 // type is TS-style: the branch that keeps the LHS
                 // contributes only the values that can short-circuit
                 // there (`falsy_part` for `&&`, `truthy_part` for `||`).
-                let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
+                let lhs_context = if op == BinOp::Or {
+                    self.left_operand_context(
+                        lhs,
+                        expected,
+                        &[Type::Null, Type::Undefined, Type::BooleanLiteral(false)],
+                    )?
+                } else {
+                    None
+                };
+                let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
                 let mut condition_error = false;
                 if matches!(lhs_ty.peel(), Type::Unknown) {
                     // `&&`/`||` on un-narrowed `unknown`
@@ -10159,6 +10168,62 @@ impl Inferer<'_> {
         assignable(rhs_ty, &lhs_ty.widen_literal(), self.resolver()).then(|| lhs_ty.clone())
     }
 
+    /// The context `a || b` or `a ?? b` gives `a`, as TypeScript has it: the
+    /// expression's own, joined with the values that fall through to `b`, so a
+    /// branch that yields one (`(c ? [n, 1] : undefined) ?? [n, 2]`) still fits.
+    fn left_operand_context(
+        &self,
+        lhs: ExprId,
+        expected: Option<&Type>,
+        falls_through: &[Type],
+    ) -> Result<Option<Type>, CompilerFailure> {
+        let Some(want) = expected else {
+            return Ok(None);
+        };
+        if !self.shaped_by_context(lhs)? {
+            return Ok(None);
+        }
+        let mut members = vec![want.clone()];
+        members.extend_from_slice(falls_through);
+        Ok(Some(Type::union(members)))
+    }
+
+    /// Whether a context TypeScript gives `expr` without requiring it (the left
+    /// side of `||`, a spread's source) shapes its type here: a literal, or a
+    /// conditional choosing between values. Any other expression types alone,
+    /// since the context is no requirement on it: `maybe || "d"` with `maybe:
+    /// number | null` is wrong as a whole, not in `maybe`.
+    fn shaped_by_context(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        let id = peel_parens(self.ast, expr)?;
+        Ok(is_context_typed_literal(self.ast, id)?
+            || matches!(
+                self.ast.try_expr(id).map_err(super::arena_failure)?.kind,
+                ExprKind::Ternary { .. }
+            ))
+    }
+
+    /// Infers `expr`, keeping its literal types, under a `context` that guides
+    /// it without being a requirement: an expression that doesn't fit it is
+    /// inferred again alone, so a mismatch is reported once, where the value
+    /// is used.
+    fn infer_with_soft_context(
+        &mut self,
+        expr: ExprId,
+        context: Option<Type>,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let Some(context) = context else {
+            return self.infer_expr_keeping_literals(expr, None, true);
+        };
+        let diagnostics_before = self.diagnostics.len();
+        let errors_before = self.error_count();
+        let hinted = self.infer_expr_keeping_literals(expr, Some(&context), true)?;
+        if self.error_count() == errors_before {
+            return Ok(hinted);
+        }
+        self.diagnostics.truncate(diagnostics_before);
+        self.infer_expr_keeping_literals(expr, None, true)
+    }
+
     /// `a ?? b`. Result type is `union(strip_nullish(lhs), rhs)`.
     /// Emits a `Severity::Warning` when `lhs` is statically
     /// non-nullable (the `??` clause is unreachable). The right side takes
@@ -10170,7 +10235,9 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
+        let lhs_context =
+            self.left_operand_context(lhs, expected, &[Type::Null, Type::Undefined])?;
+        let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
         // The right side runs only where the left is `null` or `undefined`.
         let rhs_env = self.nullish_operand_env(typed_lhs)?;
         // An unreachable right side is never the result, so it is not held
