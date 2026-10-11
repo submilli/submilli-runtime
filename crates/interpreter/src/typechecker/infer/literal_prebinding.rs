@@ -696,6 +696,7 @@ impl Inferer<'_> {
                 }
                 | ExprKind::Unary { operand: inner, .. }
                 | ExprKind::Typeof { operand: inner }
+                | ExprKind::Void { operand: inner }
                 | ExprKind::As { expr: inner, .. }
                 | ExprKind::InstanceOf { value: inner, .. }
                 | ExprKind::PostfixUnary { operand: inner, .. } => self.writes_nothing(*inner)?,
@@ -740,8 +741,19 @@ impl Inferer<'_> {
                     all(self, &values)?
                 }
                 // A function literal's body runs later, and the rest are
-                // leaves.
-                _ => true,
+                // leaves. Listed so that a new kind is decided here.
+                ExprKind::Arrow { .. }
+                | ExprKind::FunctionExpression { .. }
+                | ExprKind::Number(_)
+                | ExprKind::BigInt(_)
+                | ExprKind::String(_)
+                | ExprKind::Boolean(_)
+                | ExprKind::Null
+                | ExprKind::Identifier(_)
+                | ExprKind::This
+                | ExprKind::ThisOutsideReceiver
+                | ExprKind::Super
+                | ExprKind::Regex { .. } => true,
             },
         )
     }

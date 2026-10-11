@@ -12583,7 +12583,6 @@ struct ElementMismatch {
     already_errored: bool,
 }
 
-/// The expression inside any parentheses around `expr`.
 /// For each member of an object literal, the names of the fields a later
 /// member overwrites, which a spread at that member doesn't decide.
 fn fields_written_after(
@@ -12605,6 +12604,7 @@ fn fields_written_after(
     per_member
 }
 
+/// The expression inside any parentheses around `expr`.
 pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
     loop {
         match &ast.try_expr(expr).map_err(super::arena_failure)?.kind {
