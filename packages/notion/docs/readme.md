@@ -14,7 +14,13 @@ For page content, prefer the enhanced Markdown functions:
 `appendPageMarkdown`. `createPage` accepts one content strategy: Markdown, block
 children, a data-source template, or no content. Page properties have typed
 inputs for common property kinds and a `custom: Map<string, unknown>` escape
-hatch for newer or uncommon Notion property shapes.
+hatch for newer or uncommon Notion property shapes. Every `custom` entry needs a
+JSON value; an `undefined` value throws `invalid_body`. `updatePage` changes only
+the fields you set; `icon: null` or `cover: null` removes the icon or cover, as
+`clearIcon` and `clearCover` do.
+
+Options bags on list and query functions are optional; omit them for the first
+page of default results.
 
 Use `queryDataSource` for structured filters and sorts, and
 `listDataSourceTemplates` before creating a page from a template. Database views

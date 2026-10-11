@@ -24,12 +24,15 @@ mod import_graph;
 mod imports;
 mod inference_sources;
 mod literal_freshness;
+mod literal_prebinding;
 mod lookup;
 pub(in crate::typechecker) mod module_symbols;
 mod namespace_symbol;
 mod narrow_scopes;
 pub mod narrowing;
 mod nested_functions;
+mod object_normalization;
+mod param_defaults;
 mod predicate_envs;
 mod records;
 mod reserved;
@@ -44,9 +47,9 @@ mod type_diff;
 mod type_namespace;
 mod type_predicate;
 mod type_registry;
+mod union_call;
+mod value_operand;
 pub(crate) mod variance;
-mod void_type_arguments;
-mod void_value;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -130,10 +133,15 @@ pub fn infer_with_transitive_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        prebinding: false,
+        returns_into_void_context: false,
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
+        invoked_return_hint: None,
+        cast_operand: None,
         invoked_body_exit: None,
+        prebinding_parameter_types: false,
         captured_mutators: bindings.mutators,
         function_written_globals: bindings.function_written_globals,
         arithmetic_targets: bindings.arithmetic_targets,
@@ -159,6 +167,7 @@ pub fn infer_with_transitive_checked<'a>(
         in_nested_function: false,
         later_globals: BTreeMap::new(),
         switch_frames: Vec::new(),
+        uninitialized_members: None,
         super_call_is_statement: false,
         in_super_arguments: false,
         in_super_handler: false,
@@ -172,6 +181,8 @@ pub fn infer_with_transitive_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
+        literal_hint_interfaces: BTreeMap::new(),
+        held_arguments: BTreeMap::new(),
         values_widening_candidates: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
@@ -407,10 +418,15 @@ pub fn infer_package_checked<'a>(
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        prebinding: false,
+        returns_into_void_context: false,
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
+        invoked_return_hint: None,
+        cast_operand: None,
         invoked_body_exit: None,
+        prebinding_parameter_types: false,
         captured_mutators: Default::default(),
         function_written_globals: Default::default(),
         arithmetic_targets: Default::default(),
@@ -436,6 +452,7 @@ pub fn infer_package_checked<'a>(
         in_nested_function: false,
         later_globals: BTreeMap::new(),
         switch_frames: Vec::new(),
+        uninitialized_members: None,
         super_call_is_statement: false,
         in_super_arguments: false,
         in_super_handler: false,
@@ -449,6 +466,8 @@ pub fn infer_package_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
+        literal_hint_interfaces: BTreeMap::new(),
+        held_arguments: BTreeMap::new(),
         values_widening_candidates: BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
@@ -738,6 +757,13 @@ pub(super) struct Inferer<'a> {
     /// `keeps_literal_types`, so it doesn't reach a conditional's branches,
     /// whose function types couldn't form one callable union.
     next_function_keeps_returned_literals: bool,
+    /// A generic call's literal argument is being prebound
+    /// ([`Inferer::prebind_from_literal_argument`]), so the calls inferred
+    /// within it don't prebind their own.
+    prebinding: bool,
+    /// The unannotated function literal being inferred is in a `void`
+    /// context, so a bare `return` in it yields `null` (see `infer_return`).
+    returns_into_void_context: bool,
     /// An object literal argument of a generic call, and the type parameters
     /// the call infers that type only one of its fields: a function literal
     /// in that field keeps its returned literals (see
@@ -747,9 +773,19 @@ pub(super) struct Inferer<'a> {
     /// The span of the arrow an immediately-invoked call is about to infer;
     /// see [`iife::immediately_invoked_arrow`].
     immediately_invoked: Option<Span>,
+    /// The type the immediately-invoked call's result is expected to have,
+    /// which the arrow it runs takes as its return type's context, as in tsc.
+    invoked_return_hint: Option<Type>,
+    /// The span of the function literal an `as` cast is about to infer, and
+    /// the cast's target. The target only types the literal's unannotated
+    /// parameters and lets an `unknown` return take any value; the cast
+    /// itself relates the rest.
+    cast_operand: Option<(Span, Type)>,
     /// What the immediately-invoked body just inferred leaves for the code
     /// after its call.
     invoked_body_exit: Option<iife::InvokedBodyExit>,
+    /// A preliminary initializer pass does not recursively start more trials.
+    prebinding_parameter_types: bool,
     pub(super) source: &'a str,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,
@@ -845,6 +881,10 @@ pub(super) struct Inferer<'a> {
     /// The `let`/`const` declared directly in the clauses of each enclosing
     /// `switch`, innermost last.
     pub(super) switch_frames: Vec<switch_stmt::SwitchFrame>,
+    /// While a field initializer is inferred: the instance members it would
+    /// read before they are set — parameter properties, which the constructor
+    /// assigns afterwards, and fields declared at or after it (TS2729).
+    pub(super) uninitialized_members: Option<std::collections::BTreeSet<String>>,
     /// Set by an expression statement that is a bare `super(...)` call, for
     /// `infer_super_call` to take. A call inside an expression can be skipped
     /// (`c ? super(1) : f()`), which the super-call rule can't see.
@@ -893,6 +933,15 @@ pub(super) struct Inferer<'a> {
     /// their inference without being a requirement:
     /// an argument that doesn't fit it decides the type parameter instead.
     pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
+    /// Object literal arguments hinted by a generic interface expanded to its
+    /// fields, with that interface's name, so a missing field can still name
+    /// it.
+    pub(super) literal_hint_interfaces: BTreeMap<crate::ExprId, String>,
+    /// Arguments a call already evaluated into temporaries, by source
+    /// expression: inferring one reads its temporary again. A method on a
+    /// union of strings with arrays checks each argument against both
+    /// signatures this way.
+    pub(super) held_arguments: BTreeMap<crate::ExprId, crate::ExprId>,
     /// Values of literal argument slots typed as a type parameter an earlier
     /// value bound to a candidate: one the candidate fits widens it rather
     /// than mismatching it (`{ v: new Dog(), w: new Animal() }`).

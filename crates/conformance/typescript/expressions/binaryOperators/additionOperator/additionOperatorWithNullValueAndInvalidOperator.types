@@ -1,0 +1,113 @@
+=== additionOperatorWithNullValueAndInvalidOperator.ts ===
+// If one operand is the null or undefined value, it is treated as having the type of the other operand.
+
+function foo(): void { return undefined }
+>foo : () => void
+>    : ^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+let a: boolean = null as unknown as (boolean);
+>a : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let c: void = null as unknown as (void);
+>c : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+
+// null + boolean/Object
+let r1 = null + a;
+>r1 : any
+>   : ^^^
+>null + a : any
+>         : ^^^
+>a : boolean
+>  : ^^^^^^^
+
+/*pruned*/;
+let r3 = null + c;
+>r3 : any
+>   : ^^^
+>null + c : any
+>         : ^^^
+>c : void
+>  : ^^^^
+
+let r4 = a + null;
+>r4 : any
+>   : ^^^
+>a + null : any
+>         : ^^^
+>a : boolean
+>  : ^^^^^^^
+
+/*pruned*/;
+let r6 = null + c;
+>r6 : any
+>   : ^^^
+>null + c : any
+>         : ^^^
+>c : void
+>  : ^^^^
+
+
+// other cases
+/*pruned*/;
+let r8 = null + true;
+>r8 : any
+>   : ^^^
+>null + true : any
+>            : ^^^
+>true : true
+>     : ^^^^
+
+let r9 = null + { a: '' };
+>r9 : any
+>   : ^^^
+>null + { a: '' } : any
+>                 : ^^^
+>{ a: '' } : { a: string; }
+>          : ^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+let r10 = null + foo();
+>r10 : any
+>    : ^^^
+>null + foo() : any
+>             : ^^^
+>foo() : void
+>      : ^^^^
+>foo : () => void
+>    : ^^^^^^^^^^
+
+let r11 = null + (() => { });
+>r11 : any
+>    : ^^^
+>null + (() => { }) : any
+>                   : ^^^
+>(() => { }) : () => void
+>            : ^^^^^^^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

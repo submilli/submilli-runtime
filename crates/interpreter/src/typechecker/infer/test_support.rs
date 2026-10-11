@@ -14,6 +14,18 @@ pub(super) fn run_with_packages(
     source: &str,
     packages: &[&PackageDeclaration],
 ) -> (TypedAst, Vec<Diagnostic>) {
+    run_pipeline(source, packages, false)
+}
+
+pub(super) fn run_with_lowered_patterns(source: &str) -> (TypedAst, Vec<Diagnostic>) {
+    run_pipeline(source, &[], true)
+}
+
+fn run_pipeline(
+    source: &str,
+    packages: &[&PackageDeclaration],
+    lower_patterns: bool,
+) -> (TypedAst, Vec<Diagnostic>) {
     let mut asi = Asi::new(source, crate::FileId(0));
     let mut tokens: Vec<Token> = Vec::new();
     loop {
@@ -34,6 +46,11 @@ pub(super) fn run_with_packages(
         parse_diags.is_empty(),
         "unexpected parser diags: {parse_diags:?}"
     );
+    let ast = if lower_patterns {
+        crate::lower_patterns::lower(ast).unwrap()
+    } else {
+        ast
+    };
     let packages = runtime_packages(packages);
     infer(source, "main", &ast, &packages)
 }
@@ -123,10 +140,15 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         keeps_literal_types: false,
         returns_keep_literals: false,
         next_function_keeps_returned_literals: false,
+        prebinding: false,
+        returns_into_void_context: false,
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
+        invoked_return_hint: None,
+        cast_operand: None,
         invoked_body_exit: None,
+        prebinding_parameter_types: false,
         captured_mutators: bindings.mutators,
         function_written_globals: bindings.function_written_globals,
         arithmetic_targets: bindings.arithmetic_targets,
@@ -152,6 +174,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         in_nested_function: false,
         later_globals: Default::default(),
         switch_frames: Vec::new(),
+        uninitialized_members: None,
         super_call_is_statement: false,
         in_super_arguments: false,
         in_super_handler: false,
@@ -165,6 +188,8 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         inferred_returns: None,
         inference_source_literals: std::collections::BTreeSet::new(),
         arguments_with_replaceable_hints: std::collections::BTreeSet::new(),
+        literal_hint_interfaces: std::collections::BTreeMap::new(),
+        held_arguments: std::collections::BTreeMap::new(),
         values_widening_candidates: std::collections::BTreeSet::new(),
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),

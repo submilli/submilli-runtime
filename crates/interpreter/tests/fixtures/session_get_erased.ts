@@ -4,7 +4,7 @@
 // expect-error: generic type parameters are erased at runtime
 import session from "submilli:session";
 
-function load<T>(key: string): T {
+function load<T>(key: string): T | undefined {
   return session.get<T>(key);
 }
 

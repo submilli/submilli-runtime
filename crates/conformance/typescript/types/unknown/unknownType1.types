@@ -16,11 +16,11 @@ type T10 = unknown | null;  // unknown
 >T10 : unknown
 >    : ^^^^^^^
 
-type T11 = unknown | null;  // unknown
+type T11 = unknown | undefined;  // unknown
 >T11 : unknown
 >    : ^^^^^^^
 
-type T12 = unknown | null | null;  // unknown
+type T12 = unknown | null | undefined;  // unknown
 >T12 : unknown
 >    : ^^^^^^^
 
@@ -62,7 +62,7 @@ type T23<T> = T | unknown;  // unknown
 /*pruned*/;                                    // true
 /*pruned*/;                                    // Deferred
 
-/*pruned*/;                                        
+/*pruned*/;
 /*pruned*/;                       // { x: string } | { x: number }
 /*pruned*/;           // { x: any }
 /*pruned*/;               // { x: unknown }
@@ -199,7 +199,7 @@ function f11(x: unknown): void {
 
 // typeof, instanceof, and user defined type predicates
 
-/*pruned*/;                                                                            
+/*pruned*/;
 
 function f20(x: unknown): void {
 >f20 : (x: unknown) => void
@@ -245,30 +245,30 @@ function f20(x: unknown): void {
 >  : ^^^^^
 
     }
-    /*pruned*/;         
-                       
-     
+    /*pruned*/;
+
+
 }
 
 // Homomorphic mapped type over unknown
 
-/*pruned*/;                              
+/*pruned*/;
 /*pruned*/;           // { [x: string]: number }
 /*pruned*/;               // {}
 
 // Anything is assignable to unknown
 
-/*pruned*/;                                             
-                                                  
-            
-                
-                  
-                    
-          
-             
-               
-           
- 
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
 
 // unknown assignable only to itself and any
 
@@ -278,7 +278,7 @@ function f22(x: unknown): void {
 >x : unknown
 >  : ^^^^^^^
 
-    /*pruned*/;     
+    /*pruned*/;
     let v2: unknown = x;
 >v2 : unknown
 >   : ^^^^^^^
@@ -304,9 +304,9 @@ function f22(x: unknown): void {
 >x : unknown
 >  : ^^^^^^^
 
-    let v7: {} | null | null = x;  // Error
->v7 : {} | null
->   : ^^^^^^^^^
+    let v7: {} | null | undefined = x;  // Error
+>v7 : {} | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^
 >x : unknown
 >  : ^^^^^^^
 
@@ -314,18 +314,18 @@ function f22(x: unknown): void {
 
 // Type parameter 'T extends unknown' not related to object
 
-/*pruned*/;                                  
-                                
- 
+/*pruned*/;
+
+
 
 // Anything fresh but primitive assignable to { [x: string]: unknown }
 
-/*pruned*/;                                      
-           
-                 
-                           
-                      
- 
+/*pruned*/;
+
+
+
+
+
 
 // Locals of type unknown always considered initialized
 
@@ -351,12 +351,12 @@ function f25(): void {
 
 // Spread of unknown causes result to be unknown
 
-/*pruned*/;                                    
-                                               
-                                               
-                                                 
-                                    
- 
+/*pruned*/;
+
+
+
+
+
 
 // Functions with unknown return type don't need return expressions
 
@@ -384,28 +384,28 @@ function f28(x: unknown): void {
 
 // Class properties of type unknown don't need definite assignment
 
-/**/;     
-                        
-               
-           
- 
+/**/;
+
+
+
+
 
 // Type parameter with explicit 'unknown' constraint not assignable to '{}'
 
-/*pruned*/;                                           
-                  
-                  
- 
+/*pruned*/;
+
+
+
 
 // Repro from #26796
 
 /*pruned*/;                                          // false
-/*pruned*/;                                                                   
+/*pruned*/;
 /*pruned*/;                                 // false
 
-/*pruned*/;                                   
-                         
- 
+/*pruned*/;
+
+
 
 
 function main(): void {}

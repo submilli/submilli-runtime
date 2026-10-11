@@ -215,7 +215,7 @@ enum Animal { DOG, CAT }
 // Repro from #34840
 
 function foo(): void {
-    const foo: number | null = 0;
+    const foo: number | undefined = 0;
     while (true) {
         const stats = foo;
         switch (stats) {

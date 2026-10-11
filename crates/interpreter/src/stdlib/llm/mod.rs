@@ -43,8 +43,7 @@ use crate::runtime::llm::{
     PromptBoundKind,
 };
 use crate::stdlib::abi::{
-    self, backing_struct, i32_field, install_field_getters, nullable_boxed_number_field,
-    nullable_string_field, string_field,
+    self, backing_struct, i32_field, install_field_getters, nullable_object_field, string_field,
 };
 use crate::stdlib::shared::{
     audit_quota_denial, check_security_call, filters_candidate, mark_filtered, optional_number,
@@ -85,7 +84,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         false,
         HeapType::ConcreteStruct(intr.string.clone()),
     ));
-    // `Completion`, `Model`, `Completion[]`, and the nullable `schema` argument
+    // `Completion`, `Model`, `Completion[]`, and the optional `schema` argument
     // all cross the boundary as the universal `(ref null $Object)` lowering.
     let nullable_object = ValType::Ref(RefType::new(
         true,
@@ -247,7 +246,7 @@ fn install_getters(
 /// 3. **Reserve before dispatching.** The reservation covers output tokens as
 ///    well as input, so the ceiling is preventive rather than retroactive.
 /// 4. **Reconcile after.** Reported usage commits, unreported usage is held —
-///    `null` means indeterminate, not free — and a dispatch that never ran
+///    `undefined` means indeterminate, not free — and a dispatch that never ran
 ///    releases its whole reservation.
 async fn dispatch(
     caller: &mut wasmtime::Caller<'_, StoreData>,
@@ -560,7 +559,7 @@ fn estimated_input_tokens(prompts: &[String]) -> u64 {
 /// left indeterminate.
 ///
 /// An element the provider reported no usage for keeps its *share* of the
-/// reservation rather than releasing it: `null` means indeterminate, not free,
+/// reservation rather than releasing it: `undefined` means indeterminate, not free,
 /// and a throttled element may still have been billed.
 fn usage(outcomes: &[LlmOutcome], reservation: u64, prompt_count: usize) -> (u64, u64) {
     let per_prompt = if prompt_count == 0 {
@@ -655,14 +654,13 @@ fn throw(op: &str, error: LlmCallError) -> wasmtime::Error {
     }
 }
 
-/// Read the nullable `schema` argument. Absent and `null` are the same thing
-/// here: no schema was emitted for this call.
+/// Read the optional `schema` argument. Undefined means no schema was emitted.
 fn read_optional_string(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     val: &Val,
     name: &str,
 ) -> wasmtime::Result<Option<String>> {
-    if matches!(val, Val::AnyRef(None)) {
+    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
         return Ok(None);
     }
     read_string_arg(caller, val, name).map(Some)
@@ -686,15 +684,15 @@ fn completion_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<Stru
         engine,
         &intr,
         vec![
-            i32_field(),                        // ok
-            nullable_string_field(&intr),       // text
-            nullable_string_field(&intr),       // reason
-            nullable_string_field(&intr),       // message
-            i32_field(),                        // retryable
-            nullable_boxed_number_field(&intr), // status
-            nullable_string_field(&intr),       // finishReason
-            nullable_boxed_number_field(&intr), // inputTokens
-            nullable_boxed_number_field(&intr), // outputTokens
+            i32_field(),                  // ok
+            nullable_object_field(&intr), // text
+            nullable_object_field(&intr), // reason
+            nullable_object_field(&intr), // message
+            i32_field(),                  // retryable
+            nullable_object_field(&intr), // status
+            nullable_object_field(&intr), // finishReason
+            nullable_object_field(&intr), // inputTokens
+            nullable_object_field(&intr), // outputTokens
         ],
     )
 }
@@ -705,9 +703,9 @@ fn model_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructTyp
         engine,
         &intr,
         vec![
-            string_field(&intr),                // name
-            nullable_string_field(&intr),       // description
-            nullable_boxed_number_field(&intr), // contextWindow
+            string_field(&intr),          // name
+            nullable_object_field(&intr), // description
+            nullable_object_field(&intr), // contextWindow
         ],
     )
 }
@@ -823,7 +821,7 @@ fn optional_string(
         Some(text) => Ok(Val::AnyRef(Some(
             write_submilli_string_struct(caller, text)?.to_anyref(),
         ))),
-        None => Ok(Val::AnyRef(None)),
+        None => crate::runtime::prelude::undefined::value(caller),
     }
 }
 
@@ -1537,7 +1535,7 @@ mod tests {
         assert!(sanitized.contains("SYSTEM"), "{sanitized:?}");
 
         // A description of only whitespace and control characters carries
-        // nothing, and `null` says that honestly rather than handing the guest
+        // nothing, and `undefined` says that honestly rather than handing the guest
         // an empty string it would weigh as advice.
         assert_eq!(sanitize_description(" \n\t\u{0} "), None);
 
@@ -1571,7 +1569,7 @@ mod tests {
                    function main(): string {
                      const ms = llm.models();
                      const d = ms[0].description;
-                     return d === null ? "<null>" : d;
+                     return d === undefined ? "<none>" : d;
                    }"#,
             )
             .await

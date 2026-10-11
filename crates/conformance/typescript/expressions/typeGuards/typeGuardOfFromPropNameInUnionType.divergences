@@ -5,5 +5,5 @@ line 36: a
   ours: AWithOptionalProp
 
 errors:
-line 39: ours: expected `string`, got `string | null` (tsc accepts)
-line 40: ours: expected `string`, got `string | null` (tsc accepts)
+line 39: ours: expected `string`, got `string | undefined` (tsc accepts)
+line 40: ours: expected `string`, got `string | undefined` (tsc accepts)

@@ -25,7 +25,7 @@ function findConversation(name: string): SlackConversation {
 
 function main(): void {
     const channelName = secrets.get("SLACK_TEST_CHANNEL");
-    if (secrets.get("SLACK_BOT_TOKEN") === null || channelName === null) return;
+    if (secrets.get("SLACK_BOT_TOKEN") === undefined || channelName === undefined) return;
 
     label("bot channel reads");
     const channel = findConversation(channelName);

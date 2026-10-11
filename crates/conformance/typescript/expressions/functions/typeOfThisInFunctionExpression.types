@@ -11,7 +11,7 @@ function fn(): void {
 >this : any
 >     : ^^^
 
-    /*pruned*/;                             
+    /*pruned*/;
 }
 
 let t = function () {
@@ -26,7 +26,7 @@ let t = function () {
 >this : any
 >     : ^^^
 
-    /*pruned*/;                             
+    /*pruned*/;
 }
 
 let t2 = function f() {
@@ -43,7 +43,7 @@ let t2 = function f() {
 >this : any
 >     : ^^^
 
-    /*pruned*/;                             
+    /*pruned*/;
 }
 
 class C {
@@ -56,7 +56,7 @@ class C {
 >function () {         /*pruned*/;                                    let q_2 = this;     } : () => void
 >                                                                                           : ^^^^^^^^^^
 
-        /*pruned*/;                           
+        /*pruned*/;
         let q_2 = this;
 >q_2 : any
 >    : ^^^
@@ -72,7 +72,7 @@ class C {
 >ff : () => void
 >   : ^^^^^^^^^^
 
-        /*pruned*/;                           
+        /*pruned*/;
         let q_2 = this;
 >q_2 : any
 >    : ^^^
@@ -82,23 +82,23 @@ class C {
     }
 }
 
-/*pruned*/;  
-                         
-                     
-                                                
-     
+/*pruned*/;
 
-                         
-                     
-                                                
-     
 
-                           
-                     
-                                                
-     
 
- 
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 function main(): void {}
 >main : () => void

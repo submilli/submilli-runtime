@@ -33,17 +33,29 @@ pub struct TypeInfo {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypeInfoKind {
     Null,
+    Undefined,
     Boolean,
     Number,
     String,
     NumberLiteral(LiteralF64),
     StringLiteral(String),
     BooleanLiteral(bool),
-    Array { element: TypeInfoId },
-    Tuple { elements: Vec<TypeInfoId> },
-    Object { fields: Vec<FieldInfo> },
-    Union { members: Vec<TypeInfoId> },
-    Unsupported { label: String },
+    Array {
+        element: TypeInfoId,
+    },
+    Tuple {
+        elements: Vec<TypeInfoId>,
+        optional: usize,
+    },
+    Object {
+        fields: Vec<FieldInfo>,
+    },
+    Union {
+        members: Vec<TypeInfoId>,
+    },
+    Unsupported {
+        label: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -131,6 +143,7 @@ impl TypeInfoTable {
     pub fn supports_host_json_type(&self, ty: &Type) -> bool {
         match ty.peel() {
             Type::Null
+            | Type::Undefined
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Number
@@ -142,15 +155,19 @@ impl TypeInfoTable {
             Type::Tuple(elements) => elements
                 .iter()
                 .all(|element| self.supports_host_json_type(element)),
-            Type::Union(members) if members.iter().any(|m| matches!(m.peel(), Type::Null)) => {
+            Type::Union(members)
+                if members
+                    .iter()
+                    .any(|m| matches!(m.peel(), Type::Null | Type::Undefined)) =>
+            {
                 members
                     .iter()
-                    .filter(|m| !matches!(m.peel(), Type::Null))
+                    .filter(|m| !matches!(m.peel(), Type::Null | Type::Undefined))
                     .count()
                     == 1
                     && members
                         .iter()
-                        .find(|m| !matches!(m.peel(), Type::Null))
+                        .find(|m| !matches!(m.peel(), Type::Null | Type::Undefined))
                         .is_some_and(|m| self.supports_host_json_type(m))
             }
             _ => false,
@@ -171,6 +188,7 @@ impl TypeInfoTable {
         };
         match (&info.kind, ty.peel()) {
             (TypeInfoKind::Null, Type::Null)
+            | (TypeInfoKind::Undefined, Type::Undefined)
             | (TypeInfoKind::Boolean, Type::Boolean)
             | (TypeInfoKind::Number, Type::Number)
             | (TypeInfoKind::String, Type::String) => true,
@@ -180,8 +198,9 @@ impl TypeInfoTable {
             (TypeInfoKind::Array { element }, Type::Array(expected)) => {
                 self.type_info_matches_type(*element, expected, seen)
             }
-            (TypeInfoKind::Tuple { elements }, Type::Tuple(expected)) => {
-                elements.len() == expected.len()
+            (TypeInfoKind::Tuple { elements, optional }, Type::Tuple(expected)) => {
+                *optional == expected.optional
+                    && elements.len() == expected.len()
                     && elements
                         .iter()
                         .zip(expected)
@@ -282,6 +301,7 @@ impl TypeInfoBuilder {
     fn kind_for_type(&mut self, ty: &Type) -> TypeInfoKind {
         match ty.peel() {
             Type::Null => TypeInfoKind::Null,
+            Type::Undefined => TypeInfoKind::Undefined,
             Type::Boolean => TypeInfoKind::Boolean,
             Type::Number => TypeInfoKind::Number,
             Type::String => TypeInfoKind::String,
@@ -292,6 +312,7 @@ impl TypeInfoBuilder {
                 element: self.intern_type(element),
             },
             Type::Tuple(elements) => TypeInfoKind::Tuple {
+                optional: elements.optional,
                 elements: elements
                     .iter()
                     .map(|element| self.intern_type(element))

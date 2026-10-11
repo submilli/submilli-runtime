@@ -9,10 +9,8 @@
 // expect-error: narrowing on `d` does not cross a closure boundary
 // expect-error: `>` not defined for `number | null` and `number`
 // expect-error: narrowing on `n` does not cross a closure boundary
-// expect-error: cannot index into non-array type `null | number[]`
+// expect-error: cannot index into non-array type `number[] | null`
 // expect-error: narrowing on `a` does not cross a closure boundary
-// expect-error: template-literal interpolation
-// expect-error: narrowing on `t` does not cross a closure boundary
 function main(): void {
   let s: string | null = "x";
   if (s !== null) {
@@ -41,12 +39,5 @@ function main(): void {
     const h = (): number => a[0];
     a = null;
     console.log(`${h()}`);
-  }
-
-  let t: string | null = "y";
-  if (t !== null) {
-    const i = (): string => `${t}`;
-    t = null;
-    console.log(i());
   }
 }

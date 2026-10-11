@@ -1,0 +1,246 @@
+=== assignParameterPropertyToPropertyDeclarationES2022.ts ===
+class C {
+>C : C
+>  : ^
+
+    qux: string = this.bar // should error
+>qux : string
+>    : ^^^^^^
+>this.bar : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>bar : string
+>    : ^^^^^^
+
+    bar: string = this.foo // should error
+>bar : string
+>    : ^^^^^^
+>this.foo : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>foo : string
+>    : ^^^^^^
+
+    quiz: string = this.bar // ok
+>quiz : string
+>     : ^^^^^^
+>this.bar : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>bar : string
+>    : ^^^^^^
+
+    quench: void = this.m1() // ok
+>quench : void
+>       : ^^^^
+>this.m1() : void
+>          : ^^^^
+>this.m1 : () => void
+>        : ^^^^^^^^^^
+>this : this
+>     : ^^^^
+>m1 : () => void
+>   : ^^^^^^^^^^
+
+    quanch: void = this.m3() // should error
+>quanch : void
+>       : ^^^^
+>this.m3() : void
+>          : ^^^^
+>this.m3 : () => void
+>        : ^^^^^^^^^^
+>this : this
+>     : ^^^^
+>m3 : () => void
+>   : ^^^^^^^^^^
+
+    m1(): void {
+>m1 : () => void
+>   : ^^^^^^^^^^
+
+        this.foo // ok
+>this.foo : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>foo : string
+>    : ^^^^^^
+
+    }
+    m3: () => void = function() { }
+>m3 : () => void
+>   : ^^^^^^^^^^
+>function() { } : () => void
+>               : ^^^^^^^^^^
+
+    constructor(public foo: string) {}
+>foo : string
+>    : ^^^^^^
+
+    quim: string = this.baz // should error
+>quim : string
+>     : ^^^^^^
+>this.baz : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>baz : string
+>    : ^^^^^^
+
+    baz: string = this.foo; // should error
+>baz : string
+>    : ^^^^^^
+>this.foo : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>foo : string
+>    : ^^^^^^
+
+    quid: string = this.baz // ok
+>quid : string
+>     : ^^^^^^
+>this.baz : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>baz : string
+>    : ^^^^^^
+
+    m2(): void {
+>m2 : () => void
+>   : ^^^^^^^^^^
+
+        this.foo // ok
+>this.foo : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>foo : string
+>    : ^^^^^^
+
+    }
+}
+
+class D extends C {
+>D : D
+>  : ^
+>C : C
+>  : ^
+
+    quill: string = this.foo // ok
+>quill : string
+>      : ^^^^^^
+>this.foo : string
+>         : ^^^^^^
+>this : this
+>     : ^^^^
+>foo : string
+>    : ^^^^^^
+
+}
+
+class E {
+>E : E
+>  : ^
+
+    bar: () => string = () => this.foo1 + this.foo2; // both ok
+>bar : () => string
+>    : ^^^^^^^^^^^^
+>() => this.foo1 + this.foo2 : () => string
+>                            : ^^^^^^^^^^^^
+>this.foo1 + this.foo2 : string
+>                      : ^^^^^^
+>this.foo1 : string
+>          : ^^^^^^
+>this : this
+>     : ^^^^
+>foo1 : string
+>     : ^^^^^^
+>this.foo2 : string
+>          : ^^^^^^
+>this : this
+>     : ^^^^
+>foo2 : string
+>     : ^^^^^^
+
+    foo1: string = '';
+>foo1 : string
+>     : ^^^^^^
+>'' : ""
+>   : ^^
+
+    constructor(public foo2: string) {}
+>foo2 : string
+>     : ^^^^^^
+
+}
+
+/**/;
+
+
+
+
+
+/**/;
+
+
+
+
+
+class H {
+>H : H
+>  : ^
+
+    constructor(public p1: C) {}
+>p1 : C
+>   : ^
+
+
+    public p2: () => string = () => {
+>p2 : () => string
+>   : ^^^^^^^^^^^^
+>() => {         return this.p1.foo;     } : () => string
+>                                          : ^^^^^^^^^^^^
+
+        return this.p1.foo;
+>this.p1.foo : string
+>            : ^^^^^^
+>this.p1 : C
+>        : ^
+>this : this
+>     : ^^^^
+>p1 : C
+>   : ^
+>foo : string
+>    : ^^^^^^
+
+    }
+
+    public p3: () => string = () => this.p1.foo;
+>p3 : () => string
+>   : ^^^^^^^^^^^^
+>() => this.p1.foo : () => string
+>                  : ^^^^^^^^^^^^
+>this.p1.foo : string
+>            : ^^^^^^
+>this.p1 : C
+>        : ^
+>this : this
+>     : ^^^^
+>p1 : C
+>   : ^
+>foo : string
+>    : ^^^^^^
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

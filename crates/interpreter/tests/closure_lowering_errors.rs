@@ -1,14 +1,15 @@
 //! Compiler failures below exercise source limits and injected invalid codegen state.
-use interpreter::codegen::{
+use submilli_engine::codegen::{
     closures::{self, ClosureSig},
     symbol_table::SymbolTable,
 };
-use interpreter::compile::{compile_package_checked, compile_script_checked};
-use interpreter::compiler_error::{CompilerFailure, CompilerStage};
-use interpreter::{FileId, ModulePath, PackageSourceModule, Type};
+use submilli_engine::compile::{compile_package_checked, compile_script_checked};
+use submilli_engine::compiler_error::{CompilerFailure, CompilerStage};
+use submilli_engine::{FileId, ModulePath, PackageSourceModule, Type};
 
 fn signature(arity: usize, ret: Type) -> Type {
     Type::Function {
+        optional: 0,
         params: vec![Type::Number; arity],
         ret: Box::new(ret),
         has_rest: false,

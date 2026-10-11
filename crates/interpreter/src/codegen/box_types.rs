@@ -389,6 +389,7 @@ impl Collector<'_> {
             | TypedExprKind::String(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
+            | TypedExprKind::Undefined
             | TypedExprKind::This
             | TypedExprKind::Regex { .. }
             | TypedExprKind::LocalRef { .. }
@@ -411,7 +412,13 @@ pub fn emit(
 ) {
     for val in value_types_to_emit {
         let field = FieldType {
-            element_type: StorageType::Val(*val),
+            element_type: StorageType::Val(match *val {
+                ValType::Ref(mut reference) => {
+                    reference.nullable = true;
+                    ValType::Ref(reference)
+                }
+                value => value,
+            }),
             mutable: true,
         };
         types.ty().subtype(&SubType {
@@ -419,7 +426,14 @@ pub fn emit(
             supertype_idx: None,
             composite_type: CompositeType {
                 inner: CompositeInnerType::Struct(StructType {
-                    fields: vec![field].into_boxed_slice(),
+                    fields: vec![
+                        field,
+                        FieldType {
+                            element_type: StorageType::Val(ValType::I32),
+                            mutable: true,
+                        },
+                    ]
+                    .into_boxed_slice(),
                 }),
                 shared: false,
                 descriptor: None,

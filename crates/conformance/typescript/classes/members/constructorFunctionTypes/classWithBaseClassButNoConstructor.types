@@ -21,7 +21,7 @@ class C extends Base {
 
 }
 
-/**/;     
+/**/;
 let c = new C(); // error
 >c : C
 >  : ^
@@ -108,7 +108,7 @@ class D2<T, U> extends Base2<string, number> {
 
 }
 
-/*pruned*/; 
+/*pruned*/;
 let d3 = new D(); // error
 >d3 : D<unknown, unknown>
 >   : ^^^^^^^^^^^^^^^^^^^
@@ -140,7 +140,7 @@ class D3 extends Base2<string, number> {
 
 }
 
-/*pruned*/; 
+/*pruned*/;
 let d5 = new D(); // error
 >d5 : D<unknown, unknown>
 >   : ^^^^^^^^^^^^^^^^^^^

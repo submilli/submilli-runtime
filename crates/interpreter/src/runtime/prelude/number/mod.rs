@@ -18,7 +18,7 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::number::{
-    format_number_js, parse_float_js, parse_int_js, to_exponential_js, to_fixed_js,
+    format_number_js, parse_float_js, parse_int_with_radix, to_exponential_js, to_fixed_js,
     to_precision_js, to_string_radix_js,
 };
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
@@ -46,22 +46,13 @@ const NUMBER_CONSTANTS: [(&str, f64); 8] = [
 /// prelude name (not the `NumberConstructor#` prefix the statics use).
 const GLOBAL_CONSTANTS: [(&str, f64); 2] = [("NaN", f64::NAN), ("Infinity", f64::INFINITY)];
 
-/// The value of a `globalThis` numeric constant, or `None` for any other name.
-/// The typechecker folds these into a literal parameter default, which stays
-/// correct only while it reads the same table [`install_constants`] installs from.
-pub(crate) fn global_constant_value(name: &str) -> Option<f64> {
-    GLOBAL_CONSTANTS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|&(_, v)| v)
-}
-
-/// The mangled name of a `NumberConstructor` static constant, matching the
-/// member-access key codegen resolves (`Number.EPSILON` → this).
 /// `Number(value)`: a `$string` parses with JS `Number(...)` semantics; a
-/// `$bigint` converts to f64 (∞ on overflow). Anything else mirrors the Wasm
-/// wrapper's failed cast as a catchable error.
+/// `$bigint` converts to f64 (∞ on overflow); `undefined` is `NaN`. Anything
+/// else mirrors the Wasm wrapper's failed cast as a catchable error.
 fn number_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<f64> {
+    if super::undefined::is_undefined(caller, value)? {
+        return Ok(f64::NAN);
+    }
     let Val::AnyRef(Some(any)) = value else {
         return Err(crate::runtime::host::type_error(
             "Number(value): value is null",
@@ -91,7 +82,7 @@ fn number_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
         );
     }
     Err(crate::runtime::host::type_error(
-        "Number(value): expected a string or bigint",
+        "Number(value): expected a string, bigint, or undefined",
     ))
 }
 
@@ -176,7 +167,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    // `NumberConstructor#parseInt(s, radix)` — radix defaults to 10.
+    // `NumberConstructor#parseInt(s, radix)` — an omitted radix arrives as 0.
     let s = string_ref.clone();
     register_host_fn(
         linker,
@@ -187,8 +178,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, results| {
             let input = read_string_arg(caller, abi_arg(params, 0)?, "Number.parseInt")?;
             let radix = read_f64(abi_arg(params, 1)?, "Number.parseInt")?;
-            *abi_result(results, 0)? =
-                Val::F64(parse_int_js(&input, to_radix_u32(radix)).to_bits());
+            *abi_result(results, 0)? = Val::F64(parse_int_with_radix(&input, radix).to_bits());
             Ok(())
         },
     )?;
@@ -208,13 +198,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    // `Number(value: string | bigint)` — the conversion call-signature
+    // `Number(value: string | bigint | undefined)` — the conversion call-signature
     // (`Dispatch::Static`, only the boxed value arrives). Strings parse with JS
-    // `Number(...)` semantics; bigints convert to f64 (∞ on overflow).
-    // Non-null: the declared `string | bigint` union has no null member, so
-    // codegen's import lowers to `(ref $Object)`.
+    // `Number(...)` semantics; bigints convert to f64 (∞ on overflow);
+    // `undefined` is `NaN`.
+    // Undefined-containing unions use the nullable erased object ABI.
     let obj_param = ValType::Ref(RefType::new(
-        false,
+        true,
         HeapType::ConcreteStruct(
             crate::runtime::intrinsic_types::build_intrinsic_types(&engine)?.object,
         ),
@@ -255,7 +245,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         ctor_key("@call"),
         vec![Param::new(
             "value",
-            Type::Union(vec![Type::String, Type::BigInt]),
+            Type::Union(vec![Type::String, Type::BigInt, Type::Undefined]),
         )],
         Type::Number,
     );
@@ -302,7 +292,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "parseInt",
         ctor_key("parseInt"),
-        vec![s(), Param::new("radix", Type::Number)],
+        vec![s(), crate::runtime::host::parse_int_radix_param()],
         Type::Number,
     );
     declare_method(
@@ -465,20 +455,6 @@ fn is_safe_integer(n: f64) -> bool {
     is_integer(n) && n.abs() <= MAX_SAFE_INTEGER
 }
 
-/// ToInteger on a radix argument: NaN → 0, finite → trunc, out of `[0, 36]` → 0
-/// (so `parse_int_js`'s own range check returns `NaN`).
-fn to_radix_u32(radix: f64) -> u32 {
-    if radix.is_nan() {
-        return 0;
-    }
-    let truncated = radix.trunc();
-    if (0.0..=36.0).contains(&truncated) {
-        truncated as u32
-    } else {
-        0
-    }
-}
-
 fn read_f64(val: &Val, name: &str) -> wasmtime::Result<f64> {
     match val {
         Val::F64(bits) => Ok(f64::from_bits(*bits)),
@@ -515,6 +491,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toString".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::with_default(
                                 "radix",
@@ -531,6 +508,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toFixed".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::with_default(
                                 "digits",
@@ -547,6 +525,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toPrecision".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::with_default(
                                 "precision",
@@ -563,6 +542,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toExponential".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::with_default(
                                 "fractionDigits",
@@ -579,6 +559,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toJson".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::String,
@@ -607,21 +588,23 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "@call".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "value",
-                                Type::Union(vec![Type::String, Type::BigInt]),
+                                Type::Union(vec![Type::String, Type::BigInt, Type::Undefined]),
                             )],
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Convert a `string` or `bigint` to a `number`.\n * - String input is parsed (empty / whitespace → 0, malformed → NaN).\n * - BigInt input is converted lossily to the nearest representable f64.\n */",
+                                "/**\n * Convert a `string`, `bigint`, or `undefined` to a `number`.\n * - String input is parsed (empty / whitespace → 0, malformed → NaN); undefined becomes NaN.\n * - BigInt input is converted lossily to the nearest representable f64.\n */",
                             ),
                         },
                     ),
                     (
                         "isNaN".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
@@ -634,6 +617,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "isFinite".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
@@ -646,6 +630,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "isInteger".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
@@ -658,6 +643,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "isSafeInteger".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
@@ -670,25 +656,23 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "parseInt".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("s", Type::String),
-                                Param::with_default(
-                                    "radix",
-                                    Type::Number,
-                                    crate::DefaultValue::Number(10.0),
-                                ),
+                                crate::runtime::host::parse_int_radix_param(),
                             ],
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Same as the global `parseInt` — parses the longest leading integer, ignoring trailing junk. Returns `NaN` when no prefix parses.\n * @param s The string to parse.\n * @param radix Base 2–36; `0` auto-detects a `0x` hex prefix. Defaults to `10`.\n */",
+                                "/**\n * Same as the global `parseInt` — parses the longest leading integer, ignoring trailing junk. Returns `NaN` when no prefix parses.\n * @param s The string to parse.\n * @param radix Base 2–36. `0`, omitted or `undefined` reads a `0x` prefix as base 16 and anything else as base 10.\n */",
                             ),
                         },
                     ),
                     (
                         "parseFloat".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("s", Type::String)],
                             ret: Type::Number,

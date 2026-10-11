@@ -2,7 +2,7 @@
 // another way, as a field or with another key. A constant key naming a
 // declared field reads as that field, so the field's write narrows it.
 // expect-error: expected `string`, got `number`
-// expect-error: expected `string`, got `number | string | null`
+// expect-error: expected `string`, got `number | string | undefined`
 // expect-error-count: 2
 type Pair = { a: string | number; b: string | number };
 

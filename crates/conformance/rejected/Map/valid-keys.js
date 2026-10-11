@@ -1,4 +1,4 @@
-// rejected: Symbol, undefined, TypedArray, and WeakRef keys plus reference-identity object keying — keys here are statically typed and compare structurally (equals/hash vtable)
+// rejected: Symbol, TypedArray, and WeakRef keys plus reference-identity object keying — keys here are statically typed and compare structurally (equals/hash vtable)
 // Copyright (C) 2021 Rick Waldron. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 /*---

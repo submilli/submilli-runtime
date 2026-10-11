@@ -1,11 +1,11 @@
 //! Console infrastructure failures must terminate execution even inside guest catch blocks.
 use std::io::{self, Write};
 
-use interpreter::runtime::host::FatalHostError;
-use interpreter::runtime::{
+use submilli_engine::runtime::host::FatalHostError;
+use submilli_engine::runtime::{
     RuntimeConfig, StoreData, Vfs, install_runtime_async, install_tenant_limits,
 };
-use interpreter::{FileId, compile_script, dispatch_main_async, instantiate_program_async};
+use submilli_engine::{FileId, compile_script, dispatch_main_async, instantiate_program_async};
 use wasmtime::{Linker, Module};
 
 struct FailedWriter;
@@ -23,7 +23,7 @@ impl Write for FailedWriter {
 #[test]
 fn console_writer_failure_bypasses_guest_catch_and_next_run_succeeds() {
     std::thread::Builder::new()
-        .stack_size(interpreter::compiler_limits::COMPILER_STACK_BYTES)
+        .stack_size(submilli_engine::compiler_limits::COMPILER_STACK_BYTES)
         .spawn(|| pollster::block_on(check_console_failure()))
         .unwrap()
         .join()

@@ -406,6 +406,7 @@ pub(crate) fn walk_type(
         | Type::Void
         | Type::Never
         | Type::Null
+        | Type::Undefined
         | Type::Error
         | Type::TypeVar(_)
         | Type::GenericParam { .. }
@@ -655,11 +656,7 @@ fn closure_func_type(sig: ClosureSig, intrinsics: IntrinsicTypeIndices) -> FuncT
     for _ in 0..sig.arity {
         wasm_params.push(object_ref);
     }
-    let results: Vec<ValType> = if sig.is_void {
-        vec![]
-    } else {
-        vec![object_ref]
-    };
+    let results = vec![object_ref];
     FuncType::new(wasm_params, results)
 }
 
@@ -849,6 +846,7 @@ mod tests {
             params: vec![Type::Number; 256],
             ret: Box::new(Type::Void),
             predicate: None,
+            optional: 0,
             has_rest: false,
         };
         let shapes = [Shape::Array(Box::new(Type::Array(Box::new(signature))))];

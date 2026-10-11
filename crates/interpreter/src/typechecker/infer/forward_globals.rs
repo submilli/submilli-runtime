@@ -13,7 +13,6 @@ use crate::compiler_error::CompilerFailure;
 use crate::{ExprId, ExprKind, Ident, Span, StmtId, StmtKind, Type, TypeAnnotation, ValueKind};
 
 use super::Inferer;
-use super::void_value::ValuePosition;
 
 /// A module-level `let`/`const` that step 2 has not reached yet.
 pub(in crate::typechecker) enum LaterGlobal {
@@ -290,13 +289,19 @@ impl Inferer<'_> {
         };
         let mut param_types = Vec::with_capacity(params.len());
         for param in params {
-            let (Some(annotation), None) = (&param.ty, param.default) else {
+            // An optional or defaulted parameter makes the signature depend on
+            // its omission, and a default's type isn't known yet.
+            if param.is_omittable() {
+                return Ok(None);
+            }
+            let Some(annotation) = &param.ty else {
                 return Ok(None);
             };
-            param_types.push(self.resolve_value_type(annotation, ValuePosition::Parameter)?);
+            param_types.push(self.resolve_type(annotation)?);
         }
         Ok(Some(Type::Function {
             params: param_types,
+            optional: 0,
             ret: Box::new(self.resolve_type(return_type)?),
             predicate: None,
             has_rest: params.last().is_some_and(|p| p.rest),

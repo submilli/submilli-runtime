@@ -67,25 +67,25 @@ let unused3 = { b: 1, ...abq }
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-function g(obj: { x: number | null }): { x: number | null; } {
->g : (obj: { x: number | null; }) => { x: number | null; }
->  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->obj : { x: number | null; }
->    : ^^^^^^^^^^^^^^^^^^^^^
->x : number | null
->  : ^^^^^^^^^^^^^
->x : number | null
->  : ^^^^^^^^^^^^^
+function g(obj: { x: number | undefined }): { x: number | undefined; } {
+>g : (obj: { x: number | undefined; }) => { x: number | undefined; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number | undefined; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>x : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 
     return { x: 1, ...obj };
->{ x: 1, ...obj } : { x: number | null; }
->                 : ^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1, ...obj } : { x: number | undefined; }
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >x : number
 >  : ^^^^^^
 >1 : 1
 >  : ^
->obj : { x: number | null; }
->    : ^^^^^^^^^^^^^^^^^^^^^
+>obj : { x: number | undefined; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 }
 function h(obj: { x: number }): { x: number; } {

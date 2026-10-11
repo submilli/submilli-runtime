@@ -17,14 +17,29 @@ use wasm_encoder::{HeapType, Instruction};
 use crate::codegen::CodegenCtx;
 use crate::codegen::function_emitter::{FunctionEmitter, emit_const_string_by_text};
 
-/// Thrown by `x!` when the value turns out to be `null`.
-pub const NON_NULL_ASSERT_MESSAGE: &str = "non-null assertion failed: value is null";
+/// Thrown by `x!` when the value turns out to be `null` or `undefined`.
+pub const NON_NULL_ASSERT_MESSAGE: &str = "non-null assertion failed: value is null or undefined";
 
 /// Thrown when a property write resolves, at runtime, to a getter with no
 /// setter — reachable only through a receiver whose static type does not say
 /// which implementation backs the property.
 pub const READ_ONLY_PROPERTY_MESSAGE: &str =
     "cannot assign to a property backed by a getter with no setter";
+
+/// Thrown when a function that must return a value reaches its end. The
+/// missing-return rule leaves that possible only through an exhaustive
+/// `switch` whose value a call or closure moved outside the type a narrowing
+/// gave it. JavaScript returns `undefined` there, which the declared return
+/// type cannot hold.
+pub const MISSING_RETURN_VALUE_MESSAGE: &str =
+    "function ended without returning a value: no `case` of an exhaustive `switch` matched";
+
+/// Whether a value-returning body in `ta` can reach its end, and so throws
+/// [`MISSING_RETURN_VALUE_MESSAGE`] there. Emission and the analysis pass that
+/// interns the message both ask this, so they agree.
+pub(crate) fn body_end_may_be_reached(ta: &crate::TypedAst) -> bool {
+    !ta.exhaustive_switches.is_empty()
+}
 
 /// Raise a `TypeError` carrying `message`. Every message thrown this way must
 /// also be interned by the analysis pass, or the string pool has no entry to

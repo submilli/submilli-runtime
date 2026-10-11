@@ -1,4 +1,4 @@
-types: 66 of 92 tsc entries compared, 8 differ
+types: 70 of 96 tsc entries compared, 6 differ
 
 line 27: key
   tsc:  keyof Thing
@@ -8,10 +8,6 @@ line 28: key
   tsc:  keyof Thing
   ours: "a" | "b" | "c"
 
-line 29: obj[key]
-  tsc:  string | number | undefined
-  ours: number | string
-
 line 29: key
   tsc:  keyof Thing
   ours: "a" | "b" | "c"
@@ -19,10 +15,6 @@ line 29: key
 line 30: key
   tsc:  keyof Thing
   ours: "a" | "b" | "c"
-
-line 32: obj[key]
-  tsc:  string | number | undefined
-  ours: number | string
 
 line 32: key
   tsc:  keyof Thing

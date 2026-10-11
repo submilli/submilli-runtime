@@ -2,30 +2,30 @@ types: 17 of 48 tsc entries compared, 6 differ
 
 line 9: config['works']
   tsc:  boolean | { prop: string; }
-  ours: boolean | null | { prop: string }
+  ours: boolean | { prop: string } | undefined
 
 line 10: config.works
   tsc:  { prop: string; }
-  ours: null | { prop: string }
+  ours: { prop: string } | undefined
 
 line 11: config['works']
   tsc:  { prop: string; }
-  ours: null | { prop: string }
+  ours: { prop: string } | undefined
 
 line 13: config.works
   tsc:  boolean | { prop: string; }
-  ours: boolean | null | { prop: string }
+  ours: boolean | { prop: string } | undefined
 
 line 14: config['works']
   tsc:  { prop: string; }
-  ours: null | { prop: string }
+  ours: { prop: string } | undefined
 
 line 15: config.works
   tsc:  { prop: string; }
-  ours: null | { prop: string }
+  ours: { prop: string } | undefined
 
 errors:
-line 10: ours: cannot assign to field `prop` of `null | { prop: string }`: the receiver can be `null` (tsc accepts)
-line 11: ours: cannot assign to field `prop` of `null | { prop: string }`: the receiver can be `null` (tsc accepts)
-line 14: ours: cannot assign to field `prop` of `null | { prop: string }`: the receiver can be `null` (tsc accepts)
-line 15: ours: cannot assign to field `prop` of `null | { prop: string }`: the receiver can be `null` (tsc accepts)
+line 10: ours: cannot assign to field `prop` of `{ prop: string } | undefined`: the receiver can be `undefined` (tsc accepts)
+line 11: ours: cannot assign to field `prop` of `{ prop: string } | undefined`: the receiver can be `undefined` (tsc accepts)
+line 14: ours: cannot assign to field `prop` of `{ prop: string } | undefined`: the receiver can be `undefined` (tsc accepts)
+line 15: ours: cannot assign to field `prop` of `{ prop: string } | undefined`: the receiver can be `undefined` (tsc accepts)

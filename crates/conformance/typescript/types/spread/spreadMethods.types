@@ -118,23 +118,23 @@ ssk.g; // error
 >  : ^^^
 
 
-/*pruned*/;                                          
-/*pruned*/;       
-/*pruned*/;              
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 /**/;
 /**/;   // ok
 /**/; // ok
-/**/; 
+/**/;
 /**/;    // ok
 /**/;  // ok
 
-/*pruned*/;                                       
-/*pruned*/;       
-/*pruned*/;              
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 /**/;
 /**/;   // ok
 /**/; // ok
-/**/; 
+/**/;
 /**/;    // ok
 /**/;  // ok
 

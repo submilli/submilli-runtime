@@ -1,5 +1,4 @@
 // test262: test/built-ins/Array/prototype/find/predicate-not-called-on-empty-array.js
-// Adapted: undefined -> null (find returns T | null here).
 
 function main(): void {
   let called = false;
@@ -13,5 +12,5 @@ function main(): void {
   const result = empty.find(predicate);
 
   assertSameValue(called, false, "[].find(predicate) does not call predicate");
-  assertSameValue(result, null, "[].find(predicate) returned null");
+  assertSameValue(result, undefined, "[].find(predicate) returned undefined");
 }

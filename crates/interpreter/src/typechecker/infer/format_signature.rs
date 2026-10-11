@@ -29,6 +29,8 @@ pub(super) enum SignatureKind<'a> {
         ret: &'a Type,
         /// The last `params` entry is the rest array.
         has_rest: bool,
+        /// How many fixed parameters before the rest slot a caller may omit.
+        optional: usize,
     },
     Intrinsic {
         kind: Intrinsic,
@@ -90,6 +92,9 @@ pub(super) fn format_signature(
                 write_type(out, receiver_ty)?;
             }
             out.format(format_args!(".{name}"))?;
+            if sig.optional {
+                out.push("?")?;
+            }
             write_generic_list(out, &sig.generics)?;
             out.push("(")?;
             write_params(out, &sig.params, substitution, &limits)?;
@@ -107,8 +112,9 @@ pub(super) fn format_signature(
             params,
             ret,
             has_rest,
+            optional,
         } => {
-            write_synthetic_params(out, params, has_rest)?;
+            write_synthetic_params(out, params, has_rest, optional)?;
             out.push(" => ")?;
             write_type(out, ret)
         }
@@ -157,9 +163,28 @@ pub(super) fn write_params(
             out.push(", ")?;
         }
         let ty = substituted(&param.ty, sub, limits)?;
-        write_named_param(out, &param.name, &ty, param.default.as_ref(), param.rest)?;
+        write_named_param(
+            out,
+            &param.name,
+            &ty,
+            param.default.as_ref(),
+            param.rest,
+            shows_optional(params, i),
+        )?;
     }
     Ok(())
+}
+
+/// Whether the `index`th parameter prints as `name?: T`. A parameter a
+/// required one follows can't be written that way (TypeScript rejects
+/// `f(a?: number, b: number)`), so a defaulted one there prints its type with
+/// `undefined`, as `tsc` shows it.
+pub(super) fn shows_optional(params: &[crate::Param], index: usize) -> bool {
+    params.get(index).is_some_and(crate::Param::is_omittable)
+        && params
+            .iter()
+            .skip(index.saturating_add(1))
+            .all(|later| later.is_omittable() || later.rest)
 }
 
 pub(super) fn write_named_param(
@@ -168,14 +193,25 @@ pub(super) fn write_named_param(
     ty: &Type,
     default: Option<&DefaultValue>,
     rest: bool,
+    optional: bool,
 ) -> Result<(), RenderError> {
     if rest {
         out.push("...")?;
     }
-    if !name.is_empty() {
-        out.format(format_args!("{name}: "))?;
+    // An omitted argument arrives as `undefined`; the callee applies any
+    // source default, so the caller sees an optional parameter.
+    let default = default.filter(|d| !matches!(d, DefaultValue::Undefined));
+    let marked = !name.is_empty() && optional && default.is_none() && !rest;
+    if marked {
+        // `x?: T` already admits `undefined`; printing it again is noise.
+        out.format(format_args!("{name}?: "))?;
+        write_type(out, &crate::types::shown_beside_optional_marker(ty))?;
+    } else {
+        if !name.is_empty() {
+            out.format(format_args!("{name}: "))?;
+        }
+        write_type(out, ty)?;
     }
-    write_type(out, ty)?;
     if let Some(default) = default {
         out.push(" = ")?;
         write_default_value(out, default)?;
@@ -188,9 +224,12 @@ pub(super) fn write_default_value(
     default: &DefaultValue,
 ) -> Result<(), RenderError> {
     match default {
-        DefaultValue::Number(n) => out.push(&crate::runtime::number::format_number_js(*n)),
+        DefaultValue::Number(n) | DefaultValue::OmittedNumber { omitted: n, .. } => {
+            out.push(&crate::runtime::number::format_number_js(*n))
+        }
         DefaultValue::String(s) => out.format(format_args!("{s:?}")),
         DefaultValue::Boolean(b) => out.format(format_args!("{b}")),
+        DefaultValue::Undefined => out.push("undefined"),
         DefaultValue::Null => out.push("null"),
         DefaultValue::EmptyArray => out.push("[]"),
         DefaultValue::EmptyObject => out.push("{}"),
@@ -231,26 +270,37 @@ fn write_return(
     write_type(out, &substituted(ret, sub, limits)?)
 }
 
+/// `optional` counts the fixed parameters before the rest slot that print as
+/// `arg{i}?: T`.
 pub(super) fn write_synthetic_params(
     out: &mut Writer,
     params: &[Type],
     rest: bool,
+    optional: usize,
 ) -> Result<(), RenderError> {
     if rest && params.is_empty() {
         return Err(RenderError::InvalidMetadata(
             "rest signature has no parameter",
         ));
     }
+    let fixed = params.len().saturating_sub(usize::from(rest));
+    let required = fixed.saturating_sub(optional);
     out.push("(")?;
     for (i, param) in params.iter().enumerate() {
         if i != 0 {
             out.push(", ")?;
         }
-        if rest && i == params.len().saturating_sub(1) {
+        if i >= fixed {
             out.push("...")?;
         }
-        out.format(format_args!("arg{i}: "))?;
-        write_type(out, param)?;
+        if i >= required && i < fixed {
+            // `arg?: T` already admits `undefined`; printing it again is noise.
+            out.format(format_args!("arg{i}?: "))?;
+            write_type(out, &crate::types::shown_beside_optional_marker(param))?;
+        } else {
+            out.format(format_args!("arg{i}: "))?;
+            write_type(out, param)?;
+        }
     }
     out.push(")")
 }
@@ -258,7 +308,7 @@ pub(super) fn write_synthetic_params(
 fn write_intrinsic(out: &mut Writer, kind: Intrinsic) -> Result<(), RenderError> {
     if matches!(kind, Intrinsic::JsonStringify) {
         return out.push(
-            "JSON.stringify<T>(value: T, replacer?: null, space?: number | string | null): string",
+            "JSON.stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined",
         );
     }
     if matches!(kind, Intrinsic::JsonParse) {
@@ -392,6 +442,7 @@ mod tests {
                 params: &[Type::Number, Type::String],
                 ret: &Type::Boolean,
                 has_rest: false,
+                optional: 0,
             },
             &TypeParamSubstitution::new(),
         );
@@ -407,6 +458,7 @@ mod tests {
                 params: &[Type::Number, Type::Array(Box::new(Type::Number))],
                 ret: &Type::Number,
                 has_rest: true,
+                optional: 0,
             },
             &TypeParamSubstitution::new(),
         );
@@ -416,6 +468,7 @@ mod tests {
     #[test]
     fn method_no_generics() {
         let sig = MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![],
             ret: Type::String,
@@ -437,6 +490,7 @@ mod tests {
     #[test]
     fn method_on_union_receiver_parenthesizes_it() {
         let sig = MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![],
             ret: Type::String,
@@ -462,6 +516,7 @@ mod tests {
     #[test]
     fn method_substitutes_interface_generic_with_named_param() {
         let sig = MethodSig {
+            optional: false,
             generics: vec!["U".to_string()],
             params: vec![Param::new(
                 "fn",
@@ -470,6 +525,7 @@ mod tests {
                     ret: Box::new(Type::TypeVar("U".to_string())),
                     predicate: None,
                     has_rest: false,
+                    optional: 0,
                 },
             )],
             ret: Type::Array(Box::new(Type::TypeVar("U".to_string()))),
@@ -491,6 +547,7 @@ mod tests {
     #[test]
     fn method_on_interface_ref_multi_arg_with_named_param() {
         let sig = MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
             ret: Type::TypeVar("V".to_string()),
@@ -521,6 +578,7 @@ mod tests {
     #[test]
     fn method_falls_back_to_positional_when_names_empty() {
         let sig = MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![Param::anon(Type::TypeVar("K".to_string()))],
             ret: Type::TypeVar("V".to_string()),

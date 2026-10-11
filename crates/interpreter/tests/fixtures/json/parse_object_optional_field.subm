@@ -1,18 +1,18 @@
 function main(): void {
   const a = JSON.parse("{\"id\":1}") as { id: number; deletedAt?: string };
   assert(a.id === 1, "id parsed");
-  assert(a.deletedAt === null, "omitted optional reads as null");
+  assert(a.deletedAt === undefined, "omitted optional reads as undefined");
 
   const b = JSON.parse(
     "{\"id\":2,\"deletedAt\":\"2025-01-01\"}"
   ) as { id: number; deletedAt?: string };
   assert(b.id === 2, "id parsed");
-  assert(b.deletedAt !== null, "present optional is non-null");
+  assert(b.deletedAt !== undefined, "present optional is defined");
 
   const c = JSON.parse(
     "{\"c\":5,\"b\":7}"
   ) as { a?: number; b?: number; c: number };
   assert(c.c === 5, "required c parsed");
-  assert(c.a === null, "omitted a stays null");
-  assert(c.b !== null, "present b is non-null");
+  assert(c.a === undefined, "omitted a stays undefined");
+  assert(c.b !== undefined, "present b is defined");
 }

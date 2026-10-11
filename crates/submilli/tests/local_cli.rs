@@ -2106,7 +2106,7 @@ const SECRET_PACKAGE_SOURCE: &str = r#"
     /** Returns "matched" when MY_TOKEN resolves to `expected`; throws otherwise. */
     export function tokenProbe(expected: string): string {
         const value = get("MY_TOKEN");
-        if (value === null) { throw new Error("MY_TOKEN resolved to nothing"); }
+        if (value === undefined) { throw new Error("MY_TOKEN resolved to nothing"); }
         if (value !== expected) { throw new Error("MY_TOKEN did not match"); }
         return "matched";
     }
@@ -2207,7 +2207,7 @@ fn run_blueprint_refuses_a_direct_secret_read_from_main() {
     let script = write_temp(
         "submilli-run-main-secret.subm",
         r#"import { get } from "submilli:secrets";
-function main(): string | null { return get("MY_TOKEN"); }"#,
+function main(): string | undefined { return get("MY_TOKEN"); }"#,
     );
     let bp = write_temp(
         "submilli-run-main-secret.yaml",

@@ -1,6 +1,6 @@
 // expect-error: is a method on `CA`, and a union receiver reads only fields
 // expect-error: cannot assign to `x` through `CA | CB`
-// expect-error: cannot read field `x` on `null | IA`: the receiver can be `null`
+// expect-error: cannot read field `x` on `IA | null`: the receiver can be `null`
 // The three things a nominal-union receiver still can't do. Each diagnostic
 // names which of them it is — "does not exist" for a member that visibly
 // declares the name would send the reader looking for the wrong fix — and the

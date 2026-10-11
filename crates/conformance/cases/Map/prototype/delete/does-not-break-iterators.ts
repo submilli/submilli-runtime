@@ -1,6 +1,8 @@
 // test262: test/built-ins/Map/prototype/delete/does-not-break-iterators.js
-// Adapted: an exhausted result carries no `value` field here (no undefined);
-// presence is checked via `"value" in result`.
+// Adapted: `n.value[i]` is read through an `as
+// IteratorYieldResult<[string, number]>` cast — indexing needs the yield
+// variant, and `done` is typed boolean (not a literal), so the IteratorResult
+// union is not narrowed by the type alone.
 
 function main(): void {
   const m = new Map<string, number>([
@@ -13,17 +15,12 @@ function main(): void {
   e.next();
   m.delete("b");
 
-  const n = e.next();
+  let n = e.next();
 
-  if ("value" in n) {
-    const entry = n.value;
-    assertSameValue(entry[0], "c");
-    assertSameValue(entry[1], 3);
-  } else {
-    assert(false, "second next() should yield the entry after the deleted one");
-  }
+  assertSameValue((n as IteratorYieldResult<[string, number]>).value[0], "c");
+  assertSameValue((n as IteratorYieldResult<[string, number]>).value[1], 3);
 
-  const last = e.next();
-  assert(!("value" in last), "exhausted result carries no value");
-  assertSameValue(last.done, true);
+  n = e.next();
+  assertSameValue(n.value, undefined);
+  assertSameValue(n.done, true);
 }

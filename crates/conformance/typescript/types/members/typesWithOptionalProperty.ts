@@ -1,11 +1,11 @@
 // @target: es2015
 // basic uses of optional properties without errors
 
-/*pruned*/;  
-                
-                 
-                    
- 
+interface I {
+    foo: string;
+    bar?: number;
+    baz? (): string;
+}
 
 let a: {
     foo: string;
@@ -21,17 +21,17 @@ let b = { foo: '' };
 let c = { foo: '', bar: 3 };
 let d = { foo: '', bar: 3, baz: () => '' };
 
-/*pruned*/;                       
+let i: I = null as unknown as (I);
 
-/**/; 
-/**/; 
-/**/; 
+i = b;
+i = c;
+i = d;
 
 a = b;
 a = c;
 a = d;
 
-/**/; 
-/**/; 
+i = a;
+a = i;
 
 function main(): void {}

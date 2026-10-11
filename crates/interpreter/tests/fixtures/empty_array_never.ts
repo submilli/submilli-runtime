@@ -1,5 +1,7 @@
 // An unannotated `[]` holds no element, so it is `never[]`, as in tsc: it can be
-// read, iterated, spread and nested, and fits any array type it meets later.
+// read, iterated, spread and nested, and fits any array type it meets later. An
+// element another type filled it with is a real value: every operation tsc
+// accepts on `never` runs on it as it would in JavaScript.
 function fill(list: number[]): void {
   list.push(41);
 }
@@ -48,4 +50,32 @@ function main(): void {
   const flags = { list: [] };
   flag(flags.list);
   assert(`is ${flags.list[0]}${1}` === "is true1", "interpolating a boolean beside text and a number");
+
+  let counted = 0;
+  for (let v of []) {
+    v++;
+    counted = v;
+  }
+  assert(counted === 0, "`++` on an element of [] type-checks; the loop never runs");
+
+  let total = 1;
+  total += filled.list[0];
+  assert(total === 42, "compound assignment with an element it was given");
+  assert((filled.list[0] ? "y" : "n") === "y", "an element tests truthy");
+  assert(!filled.list[0] === false && (filled.list[0] && 5) === 5, "`!` and `&&` test it");
+  const element = filled.list[0];
+  let printed = "";
+  if (element !== null) printed = `${element}`;
+  assert(printed === "41", "a guarded read yields the element");
+  let bumped = filled.list[0];
+  bumped++;
+  assert(bumped === 42, "`++` on a binding holding an element");
+  let replaced = 3;
+  replaced = filled.list[0];
+  assert(replaced === 41, "a variable assigned an element reads it");
+  switch (element) {
+    default:
+      printed = "default";
+  }
+  assert(printed === "default", "a switch over an element runs its default");
 }

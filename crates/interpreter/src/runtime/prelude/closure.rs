@@ -100,14 +100,17 @@ impl Closure {
         self.func.call_async(&mut *caller, &call_args, out).await
     }
 
-    /// Invoke a void closure on already-boxed args. The funcref has no result
-    /// slot, so there is nothing to return.
+    /// Invoke a callback on already-boxed args and discard its completion value.
     pub(crate) async fn call_void_args(
         &self,
         caller: &mut Caller<'_, StoreData>,
         args: &[Val],
     ) -> wasmtime::Result<()> {
-        self.invoke(caller, args, &mut []).await
+        if self.result_count(caller) == 0 {
+            self.invoke(caller, args, &mut []).await
+        } else {
+            self.call(caller, args).await.map(|_| ())
+        }
     }
 
     /// Invoke a value-returning closure and return its boxed result verbatim.
@@ -183,12 +186,14 @@ impl Closure {
                     .try_reserve_exact(declared)
                     .map_err(crate::runtime::host::fatal_host_error)?;
                 inputs.extend(args.iter().take(declared).copied());
-                inputs.resize(declared, Val::null_any_ref());
+                if inputs.len() < declared {
+                    inputs.resize(declared, super::undefined::value(caller)?);
+                }
                 (inputs, reservation)
             };
         if signature.results().len() == 0 {
             self.invoke(caller, &inputs, &mut []).await?;
-            return Ok(Val::null_any_ref());
+            return super::undefined::value(caller);
         }
         self.call(caller, &inputs).await
     }
@@ -372,6 +377,10 @@ mod tests {
         let mut store = config
             .store_async(&engine, StoreData::with_vfs(Vfs::none()))
             .unwrap();
+        let mut linker = wasmtime::Linker::new(&engine);
+        crate::runtime::install_runtime_async(&mut linker, &mut store)
+            .await
+            .unwrap();
         let invalid = Func::new(&mut store, FuncType::new(&engine, [], []), |_, _, _| Ok(()));
         let healthy = Func::new(
             &mut store,
@@ -401,10 +410,8 @@ mod tests {
                         env: Val::null_any_ref(),
                     };
                     assert!(healthy.accepts_arguments(&mut caller, 0)?);
-                    assert!(matches!(
-                        healthy.call_dynamic(&mut caller, &[]).await?,
-                        Val::AnyRef(None)
-                    ));
+                    let result = healthy.call_dynamic(&mut caller, &[]).await?;
+                    assert!(super::super::undefined::is_undefined(&mut caller, &result)?);
                     Ok(())
                 })
             },

@@ -20,10 +20,10 @@ class BaseA {
 
 }
 
-/*pruned*/;  
-                                               
-                                            
- 
+/*pruned*/;
+
+
+
 
 class BaseC {
 >BaseC : BaseC
@@ -103,12 +103,12 @@ class DerivedA extends BaseA {
 
 }
 
-/*pruned*/;                   
-                                               
-                                               
-                                                      
-                                                             
- 
+/*pruned*/;
+
+
+
+
+
 
 class DerivedC extends BaseC { // error
 >DerivedC : DerivedC
@@ -190,7 +190,7 @@ let da = new DerivedA(1);
 >1 : 1
 >  : ^
 
-/*pruned*/;              
+/*pruned*/;
 let dc = new DerivedC(1);
 >dc : DerivedC
 >   : ^^^^^^^^

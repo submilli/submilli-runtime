@@ -1,5 +1,4 @@
 // test262: test/built-ins/Set/prototype/forEach/iterates-values-deleted-then-readded.js
-// expect-fail: elements re-added during a forEach are not visited — forEach walks a snapshot of the order ledger taken at call time, while the standard revisits a deleted-then-readded element at its new position
 // Adapted: the callback's (entry, set) arguments don't exist here; the outer
 // `s` is used instead; expects.shift() rewritten as index access.
 

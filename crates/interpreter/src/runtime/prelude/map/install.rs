@@ -194,7 +194,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
     let k = || Type::TypeVar("K".to_string());
     let v = || Type::TypeVar("V".to_string());
     let map_ty = || Type::prelude_interface("Map".to_string(), vec![k(), v()]);
-    let entry = || Type::Tuple(vec![k(), v()]);
+    let entry = || Type::Tuple(vec![k(), v()].into());
     let iter = |t: Type| Type::prelude_interface("Iterator".to_string(), vec![t]);
     let map = || Param::new("map", map_ty());
     let key = || Param::new("key", k());
@@ -207,7 +207,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "get",
         vec![map(), key()],
-        Type::Union(vec![v(), Type::Null]),
+        Type::Union(vec![v(), Type::Undefined]),
     );
     m(
         defs,
@@ -246,6 +246,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
                 Type::prelude_interface("Iterable".to_string(), vec![entry()]),
                 Type::prelude_interface("Iterator".to_string(), vec![entry()]),
                 Type::Null,
+                Type::Undefined,
             ]),
         )],
         map_ty(),
@@ -274,21 +275,23 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "get".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
                             ret: Type::Union(vec![
                                 Type::TypeVar("V".to_string()),
-                                Type::Null,
+                                Type::Undefined,
                             ]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the value associated with `key`, or `null` if the key is not present.\n * @param key The key to look up.\n */",
+                                "/**\n * Returns the value associated with `key`, or `undefined` if the key is not present.\n * @param key The key to look up.\n */",
                             ),
                         },
                     ),
                     (
                         "set".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("key", Type::TypeVar("K".to_string())),
@@ -307,6 +310,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "has".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
                             ret: Type::Boolean,
@@ -319,6 +323,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "delete".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
                             ret: Type::Boolean,
@@ -331,36 +336,39 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "keys".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("K".to_string())]),
                             predicate: None,
                             doc: doc(
-                                "/** Returns a lazy `Iterator<K>` over the keys in insertion order (snapshots the buckets at creation). */",
+                                "/** Returns a lazy `Iterator<K>` over the keys in insertion order. It walks the map live: keys added later are visited, keys deleted first are skipped. */",
                             ),
                         },
                     ),
                     (
                         "values".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("V".to_string())]),
                             predicate: None,
                             doc: doc(
-                                "/** Returns a lazy `Iterator<V>` over the values in insertion order (snapshots the buckets at creation). */",
+                                "/** Returns a lazy `Iterator<V>` over the values in insertion order. It walks the map live: entries added later are visited, entries deleted first are skipped. */",
                             ),
                         },
                     ),
                     (
                         "entries".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Tuple(vec![
                                 Type::TypeVar("K".to_string()),
                                 Type::TypeVar("V".to_string()),
-                            ])]),
+                            ].into())]),
                             predicate: None,
                             doc: doc(
                                 "/** Returns a lazy `Iterator<[K, V]>` over the entries — the same cursor `for-of` uses. */",
@@ -370,10 +378,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "forEach".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "callback",
                                 Type::Function {
+                                    optional: 0,
                                     params: vec![
                                         Type::TypeVar("V".to_string()),
                                         Type::TypeVar("K".to_string()),
@@ -393,37 +403,33 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Void,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Calls `callback(value, key, map)` once for each entry in insertion order.\n * @param callback Function called once per entry — value first, key second, matching JS.\n */",
+                                "/**\n * Calls `callback(value, key, map)` once for each entry in insertion order, including entries the callback adds.\n * @param callback Function called once per entry — value first, key second, matching JS.\n */",
                             ),
                         },
                     ),
                     (
-                        // lazy cursor over `[K, V]` pairs.
-                        // Each call returns a fresh `Iterator<[K, V]>`
-                        // that snapshots the backing's bucket-array
-                        // references at construction time and walks
-                        // them lazily; subsequent `m.set(...)` doesn't
-                        // affect the cursor (snapshot semantics).
-                        // This is what makes `Map<K, V>` structurally
-                        // satisfy `Iterable<[K, V]>` (follows
-                        // up to remove the phase-6 stopgap).
+                        // A live cursor over `[K, V]` pairs; this is what
+                        // makes `Map<K, V>` structurally satisfy
+                        // `Iterable<[K, V]>`.
                         "iterator".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Tuple(vec![
                                     Type::TypeVar("K".to_string()),
                                     Type::TypeVar("V".to_string()),
-                                ])]),
+                                ].into())]),
                             predicate: None,
                             doc: doc(
-                                "/** Returns a fresh `Iterator<[K, V]>` over the entries. Each call snapshots the bucket-array references at iterator-creation time and walks them lazily; intervening `m.set(...)` doesn't affect the cursor. */",
+                                "/** Returns a fresh `Iterator<[K, V]>` over the entries in insertion order. It walks the map live: entries added later are visited, entries deleted first are skipped. */",
                             ),
                         },
                     ),
                     (
                         "clear".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::Void,
@@ -444,7 +450,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 )]),
                 dispatch: Dispatch::Direct,
                 doc: doc(
-                    "/** A hash-backed key-value collection. Keys are compared by structural equality through each key's `equals` method; lookup buckets via `hash`. Insertion-order iteration is not guaranteed in v1. */",
+                    "/** A hash-backed key-value collection. Keys are compared by structural equality through each key's `equals` method; lookup buckets via `hash`. Iteration follows insertion order. */",
                 ),
             },
         },
@@ -461,6 +467,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "new".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: vec!["K".to_string(), "V".to_string()],
                         params: vec![Param::with_default(
                             "entries",
@@ -468,24 +475,25 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 Type::Readonly(Box::new(Type::Array(Box::new(Type::Tuple(vec![
                                     Type::TypeVar("K".to_string()),
                                     Type::TypeVar("V".to_string()),
-                                ]))))),
+                                ].into()))))),
                                 Type::prelude_interface(
                                     "Iterable".to_string(),
                                     vec![Type::Tuple(vec![
                                         Type::TypeVar("K".to_string()),
                                         Type::TypeVar("V".to_string()),
-                                    ])],
+                                    ].into())],
                                 ),
                                 Type::prelude_interface(
                                     "Iterator".to_string(),
                                     vec![Type::Tuple(vec![
                                         Type::TypeVar("K".to_string()),
                                         Type::TypeVar("V".to_string()),
-                                    ])],
+                                    ].into())],
                                 ),
                                 Type::Null,
+                                Type::Undefined,
                             ]),
-                            crate::DefaultValue::Null,
+                            crate::DefaultValue::Undefined,
                         )],
                         ret: Type::prelude_interface("Map".to_string(), vec![
                                 Type::TypeVar("K".to_string()),

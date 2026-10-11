@@ -26,18 +26,18 @@ function foo(): number { return 1; }
 >  : ^
 
 
-/**/;    
-                      
-                                      
- 
-/*pruned*/;  
-                                                
- 
+/**/;
 
-/*pruned*/;        
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
 
 //number type var
-/*pruned*/;                     
+/*pruned*/;
 let ResultIsNumber2 = NUMBER1++;
 >ResultIsNumber2 : number
 >                : ^^^^^^
@@ -48,9 +48,9 @@ let ResultIsNumber2 = NUMBER1++;
 
 
 // number type literal
-/*pruned*/;               
-/*pruned*/;                           
-/*pruned*/;                                                       
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 let ResultIsNumber6 = 1++;
 >ResultIsNumber6 : number
@@ -98,9 +98,9 @@ let ResultIsNumber8 = { x: 1, y: (n: number) => { return n; } }++;
 
 
 // number type expressions
-/*pruned*/;                   
-/*pruned*/;                      
-/*pruned*/;                                
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 let ResultIsNumber12 = foo()++;
 >ResultIsNumber12 : number
@@ -112,7 +112,7 @@ let ResultIsNumber12 = foo()++;
 >foo : () => number
 >    : ^^^^^^^^^^^^
 
-/*pruned*/;                      
+/*pruned*/;
 let ResultIsNumber14 = (NUMBER + NUMBER)++;
 >ResultIsNumber14 : number
 >                 : ^^^^^^
@@ -129,9 +129,9 @@ let ResultIsNumber14 = (NUMBER + NUMBER)++;
 
 
 // miss assignment operator
-;   
-/**/;     
-/**/;   
+;
+/**/;
+/**/;
 
 1++;
 >1++ : number

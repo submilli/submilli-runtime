@@ -44,10 +44,62 @@ let x2 = 1;
 >  : ^
 
 
-/*pruned*/;                      
-/*pruned*/;                               
-/*pruned*/;                               
-/*pruned*/;                                        
+let { a = "foo" } = { a: "foo" };
+>a : string
+>  : ^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>{ a: "foo" } : { a?: string; }
+>             : ^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+let { b = "foo" as "foo" } = { b: "bar" };
+>b : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+>"foo" as "foo" : "foo"
+>               : ^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>{ b: "bar" } : { b?: "bar"; }
+>             : ^^^^^^^^^^^^^^
+>b : "bar"
+>  : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+let { c = "foo" } = { c: "bar" as "bar" };
+>c : string
+>  : ^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>{ c: "bar" as "bar" } : { c?: "bar"; }
+>                      : ^^^^^^^^^^^^^^
+>c : "bar"
+>  : ^^^^^
+>"bar" as "bar" : "bar"
+>               : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+let { d = "foo" as "foo" } = { d: "bar" as "bar" };
+>d : "foo" | "bar"
+>  : ^^^^^^^^^^^^^
+>"foo" as "foo" : "foo"
+>               : ^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>{ d: "bar" as "bar" } : { d?: "bar"; }
+>                      : ^^^^^^^^^^^^^^
+>d : "bar"
+>  : ^^^^^
+>"bar" as "bar" : "bar"
+>               : ^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
 
 
 function main(): void {}

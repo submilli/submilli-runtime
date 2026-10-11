@@ -1,6 +1,6 @@
 // expect-error: unreachable code
 // expect-error: no fallthrough
-// expect-error: arrow function does not return a value on all paths
+// expect-error: cannot assign to field `x` of `Holder | undefined`: the receiver can be `undefined`
 // expect-error-count: 3
 // A compound assignment's receiver is also part of its lowered value; each
 // defect inside it is still one diagnostic.

@@ -8,7 +8,7 @@ import secrets from "submilli:secrets";
 import { getViewer, listTeams, getTeam, getIssue, listIssues } from "@submilli/linear";
 
 function main(): void {
-    if (secrets.get("LINEAR_API_KEY") === null) {
+    if (secrets.get("LINEAR_API_KEY") === undefined) {
         return;
     }
 

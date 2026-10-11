@@ -60,12 +60,12 @@ export interface Calendar {
 
 interface ApiCalendar {
     id: string;
-    summary?: string;
-    description?: string;
-    timeZone?: string;
-    accessRole?: string;
-    primary?: boolean;
-    selected?: boolean;
+    summary?: string | null;
+    description?: string | null;
+    timeZone?: string | null;
+    accessRole?: string | null;
+    primary?: boolean | null;
+    selected?: boolean | null;
 }
 
 interface CalendarListResponse {
@@ -83,16 +83,12 @@ export interface EventTime {
     timeZone?: string;
 }
 
-// The package's own copy of a caller's `EventTime`, each property read once.
-interface EventTimeFields {
-    date: string | null;
-    dateTime: string | null;
-    timeZone: string | null;
-}
-
 /** An event attendee. */
 export interface Attendee {
-    /** Attendee email address, one bare address such as "dana@example.com". It is checked and sent in lowercase. */
+    /**
+     * Attendee email address, one bare address such as "dana@example.com". It is checked and sent in
+     * lowercase. Empty in a returned event when Calendar lists the attendee without an address.
+     */
     email: string;
     /** Attendee display name. */
     displayName?: string;
@@ -136,9 +132,9 @@ export interface Event {
     description: string;
     /** Free-form location; empty string when unset. */
     location: string;
-    /** Event start (all-day date or timed dateTime). */
+    /** Event start (all-day date or timed dateTime); empty for a cancelled instance listed with `showDeleted`. */
     start: EventTime;
-    /** Event end, exclusive (all-day date or timed dateTime). */
+    /** Event end, exclusive (all-day date or timed dateTime); empty for a cancelled instance listed with `showDeleted`. */
     end: EventTime;
     /** Attendees; empty array when none. */
     attendees: Attendee[];
@@ -158,21 +154,32 @@ export interface Event {
 
 interface ApiEvent {
     id: string;
-    status?: string;
-    htmlLink?: string;
-    summary?: string;
-    description?: string;
-    location?: string;
-    start: EventTime;
-    end: EventTime;
-    attendees?: Attendee[];
-    recurrence?: string[];
-    recurringEventId?: string;
-    visibility?: string;
-    hangoutLink?: string;
-    created?: string;
-    updated?: string;
-    attendeesOmitted?: boolean;
+    status?: string | null;
+    htmlLink?: string | null;
+    summary?: string | null;
+    description?: string | null;
+    location?: string | null;
+    // A cancelled instance of a recurring event, listed with `showDeleted`, carries neither.
+    start?: EventTime | null;
+    end?: EventTime | null;
+    attendees?: ApiAttendee[] | null;
+    recurrence?: string[] | null;
+    recurringEventId?: string | null;
+    visibility?: string | null;
+    hangoutLink?: string | null;
+    created?: string | null;
+    updated?: string | null;
+    attendeesOmitted?: boolean | null;
+}
+
+// Calendar can list an attendee without an address, such as a removed account.
+interface ApiAttendee {
+    email?: string | null;
+    displayName?: string | null;
+    optional?: boolean | null;
+    responseStatus?: string | null;
+    comment?: string | null;
+    self?: boolean | null;
 }
 
 interface EventListResponse {
@@ -181,8 +188,8 @@ interface EventListResponse {
 }
 
 interface EventAttendeeMetadata {
-    attendees?: { email?: string }[];
-    attendeesOmitted?: boolean;
+    attendees?: ApiAttendee[] | null;
+    attendeesOmitted?: boolean | null;
 }
 
 /** Filters and pagination for listing events. */
@@ -341,7 +348,7 @@ interface FreeBusyItem {
 }
 
 interface ApiFreeBusyCalendar {
-    busy?: BusyPeriod[];
+    busy?: BusyPeriod[] | null;
 }
 
 interface FreeBusyResponse {
@@ -438,40 +445,41 @@ interface GoogleErrorDetail {
 
 /**
  * List calendars visible to the authenticated account.
-  * @param page Optional page size (1-250, default 20) and continuation token; `null` uses the defaults.
+  * @param page Optional page size (1-250, default 20) and continuation token; omit it to use the defaults.
   * @returns One page of calendars; `nextPageToken` is empty on the last page.
  * @capability submilli/google-calendar.listCalendars {}
  */
-export function listCalendars(page: PageOptions | null = null): Page<Calendar> {
-    const limit = page === null ? null : page.limit;
-    const pageToken = page === null ? null : page.pageToken;
+export function listCalendars(page: PageOptions = {}): Page<Calendar> {
+    const { limit, pageToken } = page;
     check("submilli/google-calendar.listCalendars", {});
     const query = new Map<string, string>();
     applyPage(query, limit, pageToken, 20, 250);
     const data = calendarGet("/users/me/calendarList", query).json() as CalendarListResponse;
     const items: Calendar[] = [];
-    if (data.items !== null) for (const item of data.items) items.push(calendarFrom(item));
-    return { items: items, nextPageToken: str(data.nextPageToken) };
+    const calendars = data.items;
+    if (calendars !== undefined) for (const item of calendars) items.push(calendarFrom(item));
+    return { items: items, nextPageToken: data.nextPageToken ?? "" };
 }
 
 /**
  * List one page of events. The default calendar is `primary`.
-  * @param options Optional calendar ID (default `primary`), page size, time bounds, text query, ordering, and other filters; `null` lists the primary calendar with the API defaults.
+  * @param options Optional calendar ID (default `primary`), page size, time bounds, text query, ordering, and other filters; omit it to list the primary calendar with the API defaults.
   * @returns One page of events; `items` is empty when nothing matches and `nextPageToken` is empty on the last page.
  * @capability submilli/google-calendar.listEvents { calendarId: string }
  */
-export function listEvents(options: EventListOptions | null = null): Page<Event> {
-    const requestedCalendar = options === null ? null : options.calendarId;
-    const limit = options === null ? null : options.limit;
-    const pageToken = options === null ? null : options.pageToken;
-    const timeMin = options === null ? null : options.timeMin;
-    const timeMax = options === null ? null : options.timeMax;
-    const search = options === null ? null : options.query;
-    const singleEvents = options === null ? null : options.singleEvents;
-    const orderBy = options === null ? null : options.orderBy;
-    const showDeleted = options === null ? null : options.showDeleted;
-    const timeZone = options === null ? null : options.timeZone;
-    const calendarId = requestedCalendar === null ? "primary" : requestedCalendar;
+export function listEvents(options: EventListOptions = {}): Page<Event> {
+    const {
+        calendarId = "primary",
+        limit,
+        pageToken,
+        timeMin,
+        timeMax,
+        query: search,
+        singleEvents,
+        orderBy,
+        showDeleted,
+        timeZone,
+    } = options;
     check("submilli/google-calendar.listEvents", { calendarId: calendarId });
     const query = new Map<string, string>();
     query.set("maxResults", bounded(limit, 20, 1, 2500).toString());
@@ -500,10 +508,15 @@ export function getEvent(eventId: string, calendarId: string = "primary"): Event
 }
 
 function fetchEvent(eventId: string, calendarId: string): Event | null {
+    const item = fetchApiEvent(eventId, calendarId);
+    return item === null ? null : eventFrom(item);
+}
+
+function fetchApiEvent(eventId: string, calendarId: string): ApiEvent | null {
     const response = calendarRawGet("/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId), new Map<string, string>());
     if (response.status === 404) return null;
     requireOk(response);
-    return eventFrom(response.json() as ApiEvent);
+    return response.json() as ApiEvent;
 }
 
 /**
@@ -517,41 +530,38 @@ function fetchEvent(eventId: string, calendarId: string): Event | null {
 export function createEvent(input: EventCreateInput, calendarId: string = "primary"): Event {
     const { summary, description, location, visibility, createGoogleMeet, sendUpdates: requestedSendUpdates } = input;
     const sendUpdates = sendUpdatesMode(requestedSendUpdates);
-    const requestedStart = input.start;
-    const start: EventTimeFields = { date: requestedStart.date, dateTime: requestedStart.dateTime, timeZone: requestedStart.timeZone };
-    const requestedEnd = input.end;
-    const end: EventTimeFields = { date: requestedEnd.date, dateTime: requestedEnd.dateTime, timeZone: requestedEnd.timeZone };
+    const start = copyEventTime(input.start);
+    const end = copyEventTime(input.end);
     const requestedAttendees = input.attendees;
     const attendees: Attendee[] = [];
-    if (requestedAttendees !== null) {
+    if (requestedAttendees !== undefined) {
         // Each attendee is copied with its address in the one spelling policy reads, so the
         // list the check approves is the list the request sends.
         for (const item of requestedAttendees) {
             const { email, displayName, optional, responseStatus, comment } = item;
-            const attendee: Attendee = { email: validAttendeeAddress(email) };
-            if (displayName !== null) attendee.displayName = displayName;
-            if (optional !== null) attendee.optional = optional;
-            if (responseStatus !== null) attendee.responseStatus = responseStatus;
-            if (comment !== null) attendee.comment = comment;
-            attendees.push(attendee);
+            attendees.push({
+                email: validAttendeeAddress(email),
+                displayName: displayName,
+                optional: optional,
+                responseStatus: responseStatus,
+                comment: comment,
+            });
         }
     }
-    const requestedRecurrence = input.recurrence;
-    let recurrence: string[] | null = null;
-    if (requestedRecurrence !== null) {
-        const copied: string[] = [];
-        for (const rule of requestedRecurrence) copied.push(rule);
-        recurrence = copied;
-    }
+    const recurrence = copyStrings(input.recurrence);
     const reminders = input.reminders;
     check("submilli/google-calendar.createEvent", { calendarId: calendarId, attendees: distinctAddresses(attendees), sendUpdates: sendUpdates });
-    const body: EventCreateBody = { summary: summary, start: normalizeEventTime(start), end: normalizeEventTime(end) };
-    if (description !== null) body.description = description;
-    if (location !== null) body.location = location;
+    const body: EventCreateBody = {
+        summary: summary,
+        start: normalizeEventTime(start),
+        end: normalizeEventTime(end),
+        description: description,
+        location: location,
+        recurrence: recurrence,
+        reminders: reminders,
+        visibility: visibility,
+    };
     if (attendees.length > 0) body.attendees = attendees;
-    if (recurrence !== null) body.recurrence = recurrence;
-    if (reminders !== null) body.reminders = reminders;
-    if (visibility !== null) body.visibility = visibility;
     const query = new Map<string, string>();
     query.set("sendUpdates", sendUpdates);
     if (createGoogleMeet === true) {
@@ -583,43 +593,33 @@ export function updateEvent(eventId: string, input: EventUpdateInput, calendarId
     const { summary, description, location, clearDescription, clearLocation, visibility, sendUpdates: requestedSendUpdates } = input;
     const sendUpdates = sendUpdatesMode(requestedSendUpdates);
     const requestedStart = input.start;
-    let start: EventTimeFields | null = null;
-    if (requestedStart !== null) {
-        start = { date: requestedStart.date, dateTime: requestedStart.dateTime, timeZone: requestedStart.timeZone };
-    }
+    const start = requestedStart === undefined ? undefined : copyEventTime(requestedStart);
     const requestedEnd = input.end;
-    let end: EventTimeFields | null = null;
-    if (requestedEnd !== null) {
-        end = { date: requestedEnd.date, dateTime: requestedEnd.dateTime, timeZone: requestedEnd.timeZone };
-    }
+    const end = requestedEnd === undefined ? undefined : copyEventTime(requestedEnd);
     const requestedAttendees = input.attendees;
-    let attendees: Attendee[] | null = null;
-    if (requestedAttendees !== null) {
-        const copied: Attendee[] = [];
+    let attendees: Attendee[] | undefined;
+    if (requestedAttendees !== undefined) {
+        attendees = [];
+        // Each attendee is copied with its address in the one spelling policy reads, so the
+        // list the check approves is the list the request sends.
         for (const item of requestedAttendees) {
             const { email, displayName, optional, responseStatus, comment } = item;
-            const attendee: Attendee = { email: validAttendeeAddress(email) };
-            if (displayName !== null) attendee.displayName = displayName;
-            if (optional !== null) attendee.optional = optional;
-            if (responseStatus !== null) attendee.responseStatus = responseStatus;
-            if (comment !== null) attendee.comment = comment;
-            copied.push(attendee);
+            attendees.push({
+                email: validAttendeeAddress(email),
+                displayName: displayName,
+                optional: optional,
+                responseStatus: responseStatus,
+                comment: comment,
+            });
         }
-        attendees = copied;
     }
-    const requestedRecurrence = input.recurrence;
-    let recurrence: string[] | null = null;
-    if (requestedRecurrence !== null) {
-        const copied: string[] = [];
-        for (const rule of requestedRecurrence) copied.push(rule);
-        recurrence = copied;
-    }
+    const recurrence = copyStrings(input.recurrence);
     const reminders = input.reminders;
-    const attendeesAfterUpdate = attendees !== null ? distinctAddresses(attendees) : currentAttendeeAddresses(eventId, calendarId);
+    const attendeesAfterUpdate = attendees !== undefined ? distinctAddresses(attendees) : currentAttendeeAddresses(eventId, calendarId);
     const removedAttendees: string[] = [];
     let notificationRecipients: string[] = [];
     if (sendUpdates !== "none") {
-        const previous = attendees === null ? attendeesAfterUpdate : currentAttendeeAddresses(eventId, calendarId);
+        const previous = attendees === undefined ? attendeesAfterUpdate : currentAttendeeAddresses(eventId, calendarId);
         for (const address of previous) {
             if (!attendeesAfterUpdate.includes(address)) removedAttendees.push(address);
         }
@@ -629,24 +629,26 @@ export function updateEvent(eventId: string, input: EventUpdateInput, calendarId
         calendarId: calendarId, attendees: attendeesAfterUpdate,
         removedAttendees: removedAttendees, notificationRecipients: notificationRecipients, sendUpdates: sendUpdates,
     });
-    const body: EventUpdateBody = {};
-    if (summary !== null) body.summary = summary;
-    if (start !== null) body.start = normalizeEventTime(start);
-    if (end !== null) body.end = normalizeEventTime(end);
+    const body: EventUpdateBody = {
+        summary: summary,
+        start: start === undefined ? undefined : normalizeEventTime(start),
+        end: end === undefined ? undefined : normalizeEventTime(end),
+        attendees: attendees,
+        recurrence: recurrence,
+        reminders: reminders,
+        visibility: visibility,
+    };
+    // Calendar removes a field the patch sets to null.
     if (clearDescription === true) {
         body.description = null;
-    } else if (description !== null) {
+    } else if (description !== undefined) {
         body.description = description;
     }
     if (clearLocation === true) {
         body.location = null;
-    } else if (location !== null) {
+    } else if (location !== undefined) {
         body.location = location;
     }
-    if (attendees !== null) body.attendees = attendees;
-    if (recurrence !== null) body.recurrence = recurrence;
-    if (reminders !== null) body.reminders = reminders;
-    if (visibility !== null) body.visibility = visibility;
     const query = new Map<string, string>();
     query.set("sendUpdates", sendUpdates);
     const path = "/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId);
@@ -668,17 +670,17 @@ export function respondToEvent(eventId: string, response: string, calendarId: st
     if (response !== "accepted" && response !== "declined" && response !== "tentative" && response !== "needsAction") {
         throw new CalendarError("invalid_response", "response must be accepted, declined, tentative, or needsAction", 0);
     }
-    const current = fetchEvent(eventId, calendarId);
+    const current = fetchApiEvent(eventId, calendarId);
     if (current === null) throw new CalendarError("not_found", "Calendar event was not found", 404);
-    const attendees: Attendee[] = [];
+    // The patch replaces the attendee list, so it resends every attendee as Calendar listed it,
+    // including any without an address.
+    let attendees: ApiAttendee[] = [];
+    if (current.attendees) attendees = current.attendees;
     let foundSelf = false;
-    for (const attendee of current.attendees) {
+    for (const attendee of attendees) {
         if (attendee.self === true) {
             attendee.responseStatus = response;
-            attendees.push(attendee);
             foundSelf = true;
-        } else {
-            attendees.push(attendee);
         }
     }
     if (!foundSelf) throw new CalendarError("self_attendee_not_found", "the authenticated account is not an attendee on this event", 0);
@@ -694,13 +696,12 @@ export function respondToEvent(eventId: string, response: string, calendarId: st
  * Delete an event. This is idempotent when the event is already absent. `sendUpdates` in the
  * check is "none" when unset.
   * @param eventId ID of the event to delete.
-  * @param options Optional calendar ID (default `primary`) and notification mode (default `none`); `null` uses the defaults.
+  * @param options Optional calendar ID (default `primary`) and notification mode (default `none`); omit it to use the defaults.
  * @capability submilli/google-calendar.deleteEvent { calendarId: string, sendUpdates: string }
  */
-export function deleteEvent(eventId: string, options: EventDeleteOptions | null = null): void {
-    const requestedCalendar = options === null ? null : options.calendarId;
-    const sendUpdates = sendUpdatesMode(options === null ? null : options.sendUpdates);
-    const calendarId = requestedCalendar === null ? "primary" : requestedCalendar;
+export function deleteEvent(eventId: string, options: EventDeleteOptions = {}): void {
+    const { calendarId = "primary", sendUpdates: requestedSendUpdates } = options;
+    const sendUpdates = sendUpdatesMode(requestedSendUpdates);
     check("submilli/google-calendar.deleteEvent", { calendarId: calendarId, sendUpdates: sendUpdates });
     const query = new Map<string, string>();
     query.set("sendUpdates", sendUpdates);
@@ -723,13 +724,27 @@ function currentAttendeeAddresses(eventId: string, calendarId: string): string[]
     }
     const addresses: string[] = [];
     const attendees = current.attendees;
-    if (attendees == null) return addresses;
-    for (const attendee of attendees) {
-        const email = attendee.email;
-        // Calendar can list an attendee without an address; there is nobody to notify.
-        if (email != null) addresses.push(oneSpelling(email));
+    if (attendees) {
+        for (const attendee of attendees) {
+            const email = attendee.email;
+            // Calendar can list an attendee without an address; there is nobody to notify.
+            if (email) addresses.push(oneSpelling(email));
+        }
     }
     return distinct(addresses);
+}
+
+// The package's own copy of a caller's `EventTime`, each property read once.
+function copyEventTime(time: EventTime): EventTime {
+    const { date, dateTime, timeZone } = time;
+    return { date: date, dateTime: dateTime, timeZone: timeZone };
+}
+
+function copyStrings(values: string[] | undefined): string[] | undefined {
+    if (values === undefined) return undefined;
+    const copied: string[] = [];
+    for (const value of values) copied.push(value);
+    return copied;
 }
 
 function distinctAddresses(attendees: Attendee[]): string[] {
@@ -767,8 +782,8 @@ function distinct(values: string[]): string[] {
 }
 
 // Calendar sends no email when `sendUpdates` is absent, which is "none".
-function sendUpdatesMode(requested: string | null): string {
-    if (requested === null) return "none";
+function sendUpdatesMode(requested: string | undefined): string {
+    if (requested === undefined) return "none";
     if (requested !== "all" && requested !== "externalOnly" && requested !== "none") {
         throw new CalendarError("invalid_send_updates", "sendUpdates must be all, externalOnly, or none", 0);
     }
@@ -797,7 +812,7 @@ export function queryFreeBusy(input: FreeBusyInput): FreeBusyResult {
             timeMax: timeMax,
             items: [{ id: id }],
         };
-        if (timeZone !== null) body.timeZone = timeZone;
+        if (timeZone !== undefined) body.timeZone = timeZone;
         const response = post(API + "/freeBusy", body, authHeaders());
         requireOk(response);
         const data = response.json() as FreeBusyResponse;
@@ -806,7 +821,7 @@ export function queryFreeBusy(input: FreeBusyInput): FreeBusyResult {
         if (values.length > 0) {
             const value = values[0] as ApiFreeBusyCalendar;
             const periods = value.busy;
-            if (periods !== null) busy = periods;
+            if (periods) busy = periods;
         }
         calendars.push({ calendarId: id, busy: busy });
     }
@@ -832,7 +847,7 @@ export function findFreeTime(input: FindFreeTimeInput): TimeSlot[] {
         timeMin: timeMin,
         timeMax: timeMax,
     };
-    if (timeZone !== null) query.timeZone = timeZone;
+    if (timeZone !== undefined) query.timeZone = timeZone;
     const result = queryFreeBusy(query);
     const busy: BusyPeriod[] = [];
     for (const calendar of result.calendars) for (const period of calendar.busy) busy.push(period);
@@ -881,19 +896,14 @@ export function agenda(options: AgendaOptions): AgendaResult {
         maxEventsPerCalendar,
         timeZone,
     } = options;
-    let calendarIds: string[] | null = null;
-    if (requestedCalendarIds !== null) {
-        const copied: string[] = [];
-        for (const id of requestedCalendarIds) copied.push(id);
-        calendarIds = copied;
-    }
+    const calendarIds = copyStrings(requestedCalendarIds);
     check("submilli/google-calendar.agenda", {});
     const calendarLimit = bounded(maxCalendars, 10, 1, 10);
     const eventLimit = bounded(maxEventsPerCalendar, 20, 1, 100);
     const timeMin = toRfc3339(requestedMin, "timeMin");
     const timeMax = toRfc3339(requestedMax, "timeMax");
     const ids: string[] = [];
-    if (calendarIds !== null) {
+    if (calendarIds !== undefined) {
         for (const id of calendarIds) if (ids.length < calendarLimit) ids.push(id);
     } else {
         const page = listCalendars({ limit: calendarLimit });
@@ -901,18 +911,17 @@ export function agenda(options: AgendaOptions): AgendaResult {
     }
     const events: AgendaEvent[] = [];
     let truncated = false;
-    if (calendarIds !== null) truncated = calendarIds.length > ids.length;
+    if (calendarIds !== undefined) truncated = calendarIds.length > ids.length;
     for (const id of ids) {
-        const eventOptions: EventListOptions = {
+        const page = listEvents({
             calendarId: id,
             limit: eventLimit,
             timeMin: timeMin,
             timeMax: timeMax,
             singleEvents: true,
             orderBy: "startTime",
-        };
-        if (timeZone !== null) eventOptions.timeZone = timeZone;
-        const page = listEvents(eventOptions);
+            timeZone: timeZone,
+        });
         for (const event of page.items) events.push({ calendarId: id, event: event });
         if (page.nextPageToken.length > 0) truncated = true;
     }
@@ -922,37 +931,54 @@ export function agenda(options: AgendaOptions): AgendaResult {
 
 function eventPage(data: EventListResponse): Page<Event> {
     const items: Event[] = [];
-    if (data.items !== null) for (const item of data.items) items.push(eventFrom(item));
-    return { items: items, nextPageToken: str(data.nextPageToken) };
+    const events = data.items;
+    if (events !== undefined) for (const item of events) items.push(eventFrom(item));
+    return { items: items, nextPageToken: data.nextPageToken ?? "" };
 }
 
 function eventFrom(item: ApiEvent): Event {
+    const attendees: Attendee[] = [];
+    const listed = item.attendees;
+    if (listed) for (const attendee of listed) attendees.push(attendeeFrom(attendee));
+    let recurrence: string[] = [];
+    if (item.recurrence) recurrence = item.recurrence;
     return {
         id: item.id,
-        status: str(item.status),
-        htmlLink: str(item.htmlLink),
-        summary: str(item.summary),
-        description: str(item.description),
-        location: str(item.location),
-        start: item.start,
-        end: item.end,
-        attendees: item.attendees !== null ? item.attendees : [],
-        recurrence: item.recurrence !== null ? item.recurrence : [],
-        recurringEventId: str(item.recurringEventId),
-        visibility: str(item.visibility),
-        hangoutLink: str(item.hangoutLink),
-        created: str(item.created),
-        updated: str(item.updated),
+        status: item.status ?? "",
+        htmlLink: item.htmlLink ?? "",
+        summary: item.summary ?? "",
+        description: item.description ?? "",
+        location: item.location ?? "",
+        start: item.start ?? {},
+        end: item.end ?? {},
+        attendees: attendees,
+        recurrence: recurrence,
+        recurringEventId: item.recurringEventId ?? "",
+        visibility: item.visibility ?? "",
+        hangoutLink: item.hangoutLink ?? "",
+        created: item.created ?? "",
+        updated: item.updated ?? "",
+    };
+}
+
+function attendeeFrom(item: ApiAttendee): Attendee {
+    return {
+        email: item.email ?? "",
+        displayName: item.displayName ?? undefined,
+        optional: item.optional ?? undefined,
+        responseStatus: item.responseStatus ?? undefined,
+        comment: item.comment ?? undefined,
+        self: item.self ?? undefined,
     };
 }
 
 function calendarFrom(item: ApiCalendar): Calendar {
     return {
         id: item.id,
-        summary: str(item.summary),
-        description: str(item.description),
-        timeZone: str(item.timeZone),
-        accessRole: str(item.accessRole),
+        summary: item.summary ?? "",
+        description: item.description ?? "",
+        timeZone: item.timeZone ?? "",
+        accessRole: item.accessRole ?? "",
         primary: item.primary === true,
         selected: item.selected === true,
     };
@@ -973,7 +999,7 @@ function calendarPath(path: string, query: Map<string, string>): string {
 
 function authHeaders(): Map<string, string> {
     const token = secrets.get("GOOGLE_ACCESS_TOKEN");
-    if (token === null) throw new CalendarError("missing_token", "GOOGLE_ACCESS_TOKEN is not bound", 0);
+    if (token === undefined) throw new CalendarError("missing_token", "GOOGLE_ACCESS_TOKEN is not bound", 0);
     const headers = new Map<string, string>();
     headers.set("Authorization", "Bearer " + token);
     return headers;
@@ -986,33 +1012,33 @@ function requireOk(response: Response): Response {
     if (response.body.startsWith("{")) {
         const envelope = response.json() as GoogleErrorEnvelope;
         const body = envelope.error;
-        if (body !== null) {
+        if (body !== undefined) {
             const errors = body.errors;
             const bodyStatus = body.status;
             const bodyMessage = body.message;
-            if (errors !== null && errors.length > 0) {
+            if (errors !== undefined && errors.length > 0) {
                 const reason = errors[0].reason;
-                if (reason !== null) code = reason;
-            } else if (bodyStatus !== null) {
+                if (reason !== undefined) code = reason;
+            } else if (bodyStatus !== undefined) {
                 code = bodyStatus;
             }
-            if (bodyMessage !== null) message = bodyMessage;
+            if (bodyMessage !== undefined) message = bodyMessage;
         }
     }
     throw new CalendarError(code, message, response.status);
 }
 
-function applyPage(query: Map<string, string>, limit: number | null, pageToken: string | null, defaultLimit: number, maxLimit: number): void {
+function applyPage(query: Map<string, string>, limit: number | undefined, pageToken: string | undefined, defaultLimit: number, maxLimit: number): void {
     query.set("maxResults", bounded(limit, defaultLimit, 1, maxLimit).toString());
     putQuery(query, "pageToken", pageToken);
 }
 
-function putQuery(query: Map<string, string>, name: string, value: string | null): void {
-    if (value !== null) query.set(name, value);
+function putQuery(query: Map<string, string>, name: string, value: string | undefined): void {
+    if (value !== undefined) query.set(name, value);
 }
 
-function putTimeQuery(query: Map<string, string>, name: string, value: string | null): void {
-    if (value !== null) query.set(name, toRfc3339(value, name));
+function putTimeQuery(query: Map<string, string>, name: string, value: string | undefined): void {
+    if (value !== undefined) query.set(name, toRfc3339(value, name));
 }
 
 function toRfc3339(value: string, param: string): string {
@@ -1023,42 +1049,29 @@ function toRfc3339(value: string, param: string): string {
     }
 }
 
-function normalizeEventTime(time: EventTimeFields): EventTime {
-    const dateTime = time.dateTime;
-    if (dateTime === null) {
-        const unchanged: EventTime = {};
-        if (time.date !== null) unchanged.date = time.date;
-        if (time.timeZone !== null) unchanged.timeZone = time.timeZone;
-        return unchanged;
-    }
-    const normalized: EventTime = { dateTime: toRfc3339(dateTime, "dateTime") };
-    if (time.date !== null) normalized.date = time.date;
-    let zone = time.timeZone;
-    if (zone === null && dateTime.indexOf("[") >= 0) {
+function normalizeEventTime(time: EventTime): EventTime {
+    const { date, dateTime, timeZone } = time;
+    if (dateTime === undefined) return { date: date, timeZone: timeZone };
+    let zone = timeZone;
+    if (zone === undefined && dateTime.indexOf("[") >= 0) {
         zone = Temporal.ZonedDateTime.from(dateTime).timeZoneId;
     }
-    if (zone !== null) normalized.timeZone = zone;
-    return normalized;
+    return { date: date, dateTime: toRfc3339(dateTime, "dateTime"), timeZone: zone };
 }
 
-function putBool(query: Map<string, string>, name: string, value: boolean | null): void {
-    if (value !== null) query.set(name, value ? "true" : "false");
+function putBool(query: Map<string, string>, name: string, value: boolean | undefined): void {
+    if (value !== undefined) query.set(name, value ? "true" : "false");
 }
 
-function bounded(value: number | null, fallback: number, min: number, max: number): number {
-    const actual = value === null ? fallback : value;
+function bounded(value: number | undefined, fallback: number, min: number, max: number): number {
+    const actual = value ?? fallback;
     if (actual < min) return min;
     if (actual > max) return max;
     return actual;
 }
 
-function str(value: string | null): string {
-    return value === null ? "" : value;
-}
-
 function eventStart(event: Event): string {
-    if (event.start.dateTime !== null) return event.start.dateTime;
-    return str(event.start.date);
+    return event.start.dateTime ?? event.start.date ?? "";
 }
 
 function meetRequestId(): string {

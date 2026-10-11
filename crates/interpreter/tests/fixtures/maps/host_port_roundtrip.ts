@@ -11,7 +11,7 @@ function main(): void {
   m.set(b, "b");
   assert(m.size === 2, "two object keys");
   assert(m.has({ id: 1 }), "structural key lookup");
-  const got: string | null = m.get({ id: 2 });
+  const got: string | undefined = m.get({ id: 2 });
   assert(got === "b", "structural get");
   assert(m.delete({ id: 1 }), "delete by structural key");
   assert(!m.has(a), "deleted key is gone");
@@ -24,7 +24,7 @@ function main(): void {
   src.set("z", 3);
   const copy = new Map(src.entries());
   assert(copy.size === 3, "constructed from an iterator");
-  const y: number | null = copy.get("y");
+  const y: number | undefined = copy.get("y");
   assert(y === 2, "copied value survives the round-trip");
 
   // Drive the host-built keys() cursor by hand.

@@ -1,1 +1,5 @@
-types: 46 of 75 tsc entries compared, 0 differ
+types: 47 of 76 tsc entries compared, 1 differ
+
+line 31: undefined
+  tsc:  undefined
+  ours: { title: undefined }

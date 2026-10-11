@@ -1,0 +1,1097 @@
+=== arithmeticOperatorWithUndefinedValueAndInvalidOperands.ts ===
+// If one operand is the undefined or undefined value, it is treated as having the type of the
+// other operand.
+
+let a: boolean = null as unknown as (boolean);
+>a : boolean
+>  : ^^^^^^^
+>null as unknown as (boolean) : boolean
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b: string = null as unknown as (string);
+>b : string
+>  : ^^^^^^
+>null as unknown as (string) : string
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+
+// operator *
+let r1a1 = undefined * a;
+>r1a1 : number
+>     : ^^^^^^
+>undefined * a : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r1a2 = undefined * b;
+>r1a2 : number
+>     : ^^^^^^
+>undefined * b : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+let r1b1 = a * undefined;
+>r1b1 : number
+>     : ^^^^^^
+>a * undefined : number
+>              : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r1b2 = b * undefined;
+>r1b2 : number
+>     : ^^^^^^
+>b * undefined : number
+>              : ^^^^^^
+>b : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+let r1c1 = undefined * true;
+>r1c1 : number
+>     : ^^^^^^
+>undefined * true : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r1c2 = undefined * '';
+>r1c2 : number
+>     : ^^^^^^
+>undefined * '' : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r1c3 = undefined * {};
+>r1c3 : number
+>     : ^^^^^^
+>undefined * {} : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r1d1 = true * undefined;
+>r1d1 : number
+>     : ^^^^^^
+>true * undefined : number
+>                 : ^^^^^^
+>true : true
+>     : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r1d2 = '' * undefined;
+>r1d2 : number
+>     : ^^^^^^
+>'' * undefined : number
+>               : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r1d3 = {} * undefined;
+>r1d3 : number
+>     : ^^^^^^
+>{} * undefined : number
+>               : ^^^^^^
+>{} : {}
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// operator /
+let r2a1 = undefined / a;
+>r2a1 : number
+>     : ^^^^^^
+>undefined / a : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r2a2 = undefined / b;
+>r2a2 : number
+>     : ^^^^^^
+>undefined / b : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+let r2b1 = a / undefined;
+>r2b1 : number
+>     : ^^^^^^
+>a / undefined : number
+>              : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r2b2 = b / undefined;
+>r2b2 : number
+>     : ^^^^^^
+>b / undefined : number
+>              : ^^^^^^
+>b : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+let r2c1 = undefined / true;
+>r2c1 : number
+>     : ^^^^^^
+>undefined / true : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r2c2 = undefined / '';
+>r2c2 : number
+>     : ^^^^^^
+>undefined / '' : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r2c3 = undefined / {};
+>r2c3 : number
+>     : ^^^^^^
+>undefined / {} : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r2d1 = true / undefined;
+>r2d1 : number
+>     : ^^^^^^
+>true / undefined : number
+>                 : ^^^^^^
+>true : true
+>     : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r2d2 = '' / undefined;
+>r2d2 : number
+>     : ^^^^^^
+>'' / undefined : number
+>               : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r2d3 = {} / undefined;
+>r2d3 : number
+>     : ^^^^^^
+>{} / undefined : number
+>               : ^^^^^^
+>{} : {}
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// operator %
+let r3a1 = undefined % a;
+>r3a1 : number
+>     : ^^^^^^
+>undefined % a : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r3a2 = undefined % b;
+>r3a2 : number
+>     : ^^^^^^
+>undefined % b : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+let r3b1 = a % undefined;
+>r3b1 : number
+>     : ^^^^^^
+>a % undefined : number
+>              : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r3b2 = b % undefined;
+>r3b2 : number
+>     : ^^^^^^
+>b % undefined : number
+>              : ^^^^^^
+>b : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+let r3c1 = undefined % true;
+>r3c1 : number
+>     : ^^^^^^
+>undefined % true : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r3c2 = undefined % '';
+>r3c2 : number
+>     : ^^^^^^
+>undefined % '' : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r3c3 = undefined % {};
+>r3c3 : number
+>     : ^^^^^^
+>undefined % {} : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r3d1 = true % undefined;
+>r3d1 : number
+>     : ^^^^^^
+>true % undefined : number
+>                 : ^^^^^^
+>true : true
+>     : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r3d2 = '' % undefined;
+>r3d2 : number
+>     : ^^^^^^
+>'' % undefined : number
+>               : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r3d3 = {} % undefined;
+>r3d3 : number
+>     : ^^^^^^
+>{} % undefined : number
+>               : ^^^^^^
+>{} : {}
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// operator -
+let r4a1 = undefined - a;
+>r4a1 : number
+>     : ^^^^^^
+>undefined - a : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r4a2 = undefined - b;
+>r4a2 : number
+>     : ^^^^^^
+>undefined - b : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+let r4b1 = a - undefined;
+>r4b1 : number
+>     : ^^^^^^
+>a - undefined : number
+>              : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r4b2 = b - undefined;
+>r4b2 : number
+>     : ^^^^^^
+>b - undefined : number
+>              : ^^^^^^
+>b : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+let r4c1 = undefined - true;
+>r4c1 : number
+>     : ^^^^^^
+>undefined - true : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r4c2 = undefined - '';
+>r4c2 : number
+>     : ^^^^^^
+>undefined - '' : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r4c3 = undefined - {};
+>r4c3 : number
+>     : ^^^^^^
+>undefined - {} : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r4d1 = true - undefined;
+>r4d1 : number
+>     : ^^^^^^
+>true - undefined : number
+>                 : ^^^^^^
+>true : true
+>     : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r4d2 = '' - undefined;
+>r4d2 : number
+>     : ^^^^^^
+>'' - undefined : number
+>               : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r4d3 = {} - undefined;
+>r4d3 : number
+>     : ^^^^^^
+>{} - undefined : number
+>               : ^^^^^^
+>{} : {}
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// operator <<
+let r5a1 = undefined << a;
+>r5a1 : number
+>     : ^^^^^^
+>undefined << a : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r5a2 = undefined << b;
+>r5a2 : number
+>     : ^^^^^^
+>undefined << b : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+let r5b1 = a << undefined;
+>r5b1 : number
+>     : ^^^^^^
+>a << undefined : number
+>               : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r5b2 = b << undefined;
+>r5b2 : number
+>     : ^^^^^^
+>b << undefined : number
+>               : ^^^^^^
+>b : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+let r5c1 = undefined << true;
+>r5c1 : number
+>     : ^^^^^^
+>undefined << true : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r5c2 = undefined << '';
+>r5c2 : number
+>     : ^^^^^^
+>undefined << '' : number
+>                : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r5c3 = undefined << {};
+>r5c3 : number
+>     : ^^^^^^
+>undefined << {} : number
+>                : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r5d1 = true << undefined;
+>r5d1 : number
+>     : ^^^^^^
+>true << undefined : number
+>                  : ^^^^^^
+>true : true
+>     : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r5d2 = '' << undefined;
+>r5d2 : number
+>     : ^^^^^^
+>'' << undefined : number
+>                : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r5d3 = {} << undefined;
+>r5d3 : number
+>     : ^^^^^^
+>{} << undefined : number
+>                : ^^^^^^
+>{} : {}
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// operator >>
+let r6a1 = undefined >> a;
+>r6a1 : number
+>     : ^^^^^^
+>undefined >> a : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r6a2 = undefined >> b;
+>r6a2 : number
+>     : ^^^^^^
+>undefined >> b : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+let r6b1 = a >> undefined;
+>r6b1 : number
+>     : ^^^^^^
+>a >> undefined : number
+>               : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r6b2 = b >> undefined;
+>r6b2 : number
+>     : ^^^^^^
+>b >> undefined : number
+>               : ^^^^^^
+>b : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+let r6c1 = undefined >> true;
+>r6c1 : number
+>     : ^^^^^^
+>undefined >> true : number
+>                  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r6c2 = undefined >> '';
+>r6c2 : number
+>     : ^^^^^^
+>undefined >> '' : number
+>                : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r6c3 = undefined >> {};
+>r6c3 : number
+>     : ^^^^^^
+>undefined >> {} : number
+>                : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r6d1 = true >> undefined;
+>r6d1 : number
+>     : ^^^^^^
+>true >> undefined : number
+>                  : ^^^^^^
+>true : true
+>     : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r6d2 = '' >> undefined;
+>r6d2 : number
+>     : ^^^^^^
+>'' >> undefined : number
+>                : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r6d3 = {} >> undefined;
+>r6d3 : number
+>     : ^^^^^^
+>{} >> undefined : number
+>                : ^^^^^^
+>{} : {}
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// operator >>>
+let r7a1 = undefined >>> a;
+>r7a1 : number
+>     : ^^^^^^
+>undefined >>> a : number
+>                : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r7a2 = undefined >>> b;
+>r7a2 : number
+>     : ^^^^^^
+>undefined >>> b : number
+>                : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+let r7b1 = a >>> undefined;
+>r7b1 : number
+>     : ^^^^^^
+>a >>> undefined : number
+>                : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r7b2 = b >>> undefined;
+>r7b2 : number
+>     : ^^^^^^
+>b >>> undefined : number
+>                : ^^^^^^
+>b : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+let r7c1 = undefined >>> true;
+>r7c1 : number
+>     : ^^^^^^
+>undefined >>> true : number
+>                   : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r7c2 = undefined >>> '';
+>r7c2 : number
+>     : ^^^^^^
+>undefined >>> '' : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r7c3 = undefined >>> {};
+>r7c3 : number
+>     : ^^^^^^
+>undefined >>> {} : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r7d1 = true >>> undefined;
+>r7d1 : number
+>     : ^^^^^^
+>true >>> undefined : number
+>                   : ^^^^^^
+>true : true
+>     : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r7d2 = '' >>> undefined;
+>r7d2 : number
+>     : ^^^^^^
+>'' >>> undefined : number
+>                 : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r7d3 = {} >>> undefined;
+>r7d3 : number
+>     : ^^^^^^
+>{} >>> undefined : number
+>                 : ^^^^^^
+>{} : {}
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// operator &
+let r8a1 = undefined & a;
+>r8a1 : number
+>     : ^^^^^^
+>undefined & a : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r8a2 = undefined & b;
+>r8a2 : number
+>     : ^^^^^^
+>undefined & b : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+let r8b1 = a & undefined;
+>r8b1 : number
+>     : ^^^^^^
+>a & undefined : number
+>              : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r8b2 = b & undefined;
+>r8b2 : number
+>     : ^^^^^^
+>b & undefined : number
+>              : ^^^^^^
+>b : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+let r8c1 = undefined & true;
+>r8c1 : number
+>     : ^^^^^^
+>undefined & true : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r8c2 = undefined & '';
+>r8c2 : number
+>     : ^^^^^^
+>undefined & '' : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r8c3 = undefined & {};
+>r8c3 : number
+>     : ^^^^^^
+>undefined & {} : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r8d1 = true & undefined;
+>r8d1 : number
+>     : ^^^^^^
+>true & undefined : number
+>                 : ^^^^^^
+>true : true
+>     : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r8d2 = '' & undefined;
+>r8d2 : number
+>     : ^^^^^^
+>'' & undefined : number
+>               : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r8d3 = {} & undefined;
+>r8d3 : number
+>     : ^^^^^^
+>{} & undefined : number
+>               : ^^^^^^
+>{} : {}
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// operator ^
+let r9a1 = undefined ^ a;
+>r9a1 : number
+>     : ^^^^^^
+>undefined ^ a : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r9a2 = undefined ^ b;
+>r9a2 : number
+>     : ^^^^^^
+>undefined ^ b : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+let r9b1 = a ^ undefined;
+>r9b1 : number
+>     : ^^^^^^
+>a ^ undefined : number
+>              : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r9b2 = b ^ undefined;
+>r9b2 : number
+>     : ^^^^^^
+>b ^ undefined : number
+>              : ^^^^^^
+>b : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+let r9c1 = undefined ^ true;
+>r9c1 : number
+>     : ^^^^^^
+>undefined ^ true : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r9c2 = undefined ^ '';
+>r9c2 : number
+>     : ^^^^^^
+>undefined ^ '' : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r9c3 = undefined ^ {};
+>r9c3 : number
+>     : ^^^^^^
+>undefined ^ {} : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r9d1 = true ^ undefined;
+>r9d1 : number
+>     : ^^^^^^
+>true ^ undefined : number
+>                 : ^^^^^^
+>true : true
+>     : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r9d2 = '' ^ undefined;
+>r9d2 : number
+>     : ^^^^^^
+>'' ^ undefined : number
+>               : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r9d3 = {} ^ undefined;
+>r9d3 : number
+>     : ^^^^^^
+>{} ^ undefined : number
+>               : ^^^^^^
+>{} : {}
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// operator |
+let r10a1 = undefined | a;
+>r10a1 : number
+>      : ^^^^^^
+>undefined | a : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>a : boolean
+>  : ^^^^^^^
+
+let r10a2 = undefined | b;
+>r10a2 : number
+>      : ^^^^^^
+>undefined | b : number
+>              : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>b : string
+>  : ^^^^^^
+
+/*pruned*/;
+
+let r10b1 = a | undefined;
+>r10b1 : number
+>      : ^^^^^^
+>a | undefined : number
+>              : ^^^^^^
+>a : boolean
+>  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r10b2 = b | undefined;
+>r10b2 : number
+>      : ^^^^^^
+>b | undefined : number
+>              : ^^^^^^
+>b : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+/*pruned*/;
+
+let r10c1 = undefined | true;
+>r10c1 : number
+>      : ^^^^^^
+>undefined | true : number
+>                 : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>true : true
+>     : ^^^^
+
+let r10c2 = undefined | '';
+>r10c2 : number
+>      : ^^^^^^
+>undefined | '' : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>'' : ""
+>   : ^^
+
+let r10c3 = undefined | {};
+>r10c3 : number
+>      : ^^^^^^
+>undefined | {} : number
+>               : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+
+let r10d1 = true | undefined;
+>r10d1 : number
+>      : ^^^^^^
+>true | undefined : number
+>                 : ^^^^^^
+>true : true
+>     : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r10d2 = '' | undefined;
+>r10d2 : number
+>      : ^^^^^^
+>'' | undefined : number
+>               : ^^^^^^
+>'' : ""
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r10d3 = {} | undefined;
+>r10d3 : number
+>      : ^^^^^^
+>{} | undefined : number
+>               : ^^^^^^
+>{} : {}
+>   : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

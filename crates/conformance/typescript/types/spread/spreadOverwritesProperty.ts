@@ -6,7 +6,7 @@ let unused1 = { b: 1, ...ab }
 let unused2 = { ...ab, ...ab }
 let unused3 = { b: 1, ...abq }
 
-function g(obj: { x: number | null }): { x: number | null; } {
+function g(obj: { x: number | undefined }): { x: number | undefined; } {
     return { x: 1, ...obj };
 }
 function h(obj: { x: number }): { x: number; } {

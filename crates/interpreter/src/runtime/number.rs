@@ -14,6 +14,16 @@ pub(crate) fn to_int32(value: f64) -> i32 {
     to_uint32(value) as i32
 }
 
+/// ECMAScript ToUint16, as `String.fromCharCode` applies it.
+pub(crate) fn to_uint16(value: f64) -> u16 {
+    to_uint32(value) as u16
+}
+
+/// ECMAScript ToUint8, as a `Uint8Array` byte write applies it.
+pub(crate) fn to_uint8(value: f64) -> u8 {
+    to_uint32(value) as u8
+}
+
 /// ECMAScript ToString for f64 — spells NaN/Infinity/-Infinity and
 /// normalizes -0 to "0" (Rust's default prints "inf" and keeps the sign).
 pub fn format_number_js(n: f64) -> String {
@@ -170,14 +180,25 @@ pub fn to_string_radix_js(x: f64, radix: f64) -> Result<String, String> {
     Ok(out)
 }
 
-/// JS-spec `parseInt(s, radix)`.
+/// `parseInt(s, radix)` with the radix argument as JavaScript reads it:
+/// `ToInt32`, where 0 (including `NaN` and an omitted radix) means "detect a
+/// `0x` prefix, else base 10". Any other value outside 2–36 makes the result
+/// `NaN`.
+pub fn parse_int_with_radix(input: &str, radix: f64) -> f64 {
+    match u32::try_from(to_int32(radix)) {
+        Ok(radix @ (0 | 2..=36)) => parse_int_js(input, radix),
+        _ => f64::NAN,
+    }
+}
+
+/// JS-spec `parseInt(s, radix)` for an already-converted radix.
 ///
 /// `radix == 0` means auto-detect: `0x` / `0X` prefix → base 16,
 /// otherwise base 10. `radix == 16` also accepts the `0x` prefix.
 /// Other radices in `[2, 36]` are taken literally; out-of-range
 /// radices return `NaN`.
 pub fn parse_int_js(input: &str, radix: u32) -> f64 {
-    let s = input.trim_start_matches(is_ascii_whitespace);
+    let s = input.trim_start_matches(is_js_whitespace);
     if s.is_empty() {
         return f64::NAN;
     }
@@ -216,7 +237,7 @@ pub fn parse_int_js(input: &str, radix: u32) -> f64 {
 }
 
 pub fn parse_float_js(input: &str) -> f64 {
-    let s = input.trim_start_matches(is_ascii_whitespace);
+    let s = input.trim_start_matches(is_js_whitespace);
     if s.is_empty() {
         return f64::NAN;
     }
@@ -307,10 +328,6 @@ fn is_decimal_literal_byte(b: u8) -> bool {
     b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-')
 }
 
-fn is_ascii_whitespace(c: char) -> bool {
-    c.is_ascii_whitespace()
-}
-
 fn strip_sign(s: &str) -> (f64, &str) {
     if let Some(rest) = s.strip_prefix('+') {
         (1.0, rest)
@@ -321,9 +338,10 @@ fn strip_sign(s: &str) -> (f64, &str) {
     }
 }
 
+/// The digits after a `0x`/`0X` prefix. A bare prefix leaves none, which
+/// `parse_int_js` reports as `NaN`, as JavaScript does.
 fn strip_hex_prefix(s: &str) -> Option<&str> {
-    let rest = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
-    if rest.is_empty() { None } else { Some(rest) }
+    s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
 }
 
 fn float_prefix(s: &str) -> &str {
@@ -391,7 +409,22 @@ pub(crate) fn pow_js(base: f64, exponent: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_float_js, parse_int_js, string_to_number_js};
+    use super::{parse_float_js, parse_int_js, string_to_number_js, to_uint8};
+
+    #[test]
+    fn to_uint8_wraps_modulo_256() {
+        assert_eq!(to_uint8(7.0), 7);
+        assert_eq!(to_uint8(256.0), 0);
+        assert_eq!(to_uint8(257.9), 1);
+        assert_eq!(to_uint8(-1.0), 255);
+        assert_eq!(to_uint8(-1.5), 255);
+        assert_eq!(to_uint8(-256.0), 0);
+        assert_eq!(to_uint8(-0.5), 0);
+        assert_eq!(to_uint8(f64::NAN), 0);
+        assert_eq!(to_uint8(f64::INFINITY), 0);
+        assert_eq!(to_uint8(f64::NEG_INFINITY), 0);
+        assert_eq!(to_uint8(2f64.powi(60) + 512.0), 0);
+    }
 
     #[test]
     fn formatter_invariants_hold_at_float_boundaries() {

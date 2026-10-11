@@ -4,7 +4,7 @@ import secrets from "submilli:secrets";
 import { getPullRequestReactions, getPullRequest, searchIssuesAcrossRepositories, searchPullRequestsAcrossRepositories, searchPullRequestSummaries } from "@submilli/github";
 
 function main(): void {
-    if (secrets.get("GITHUB_TOKEN") === null) {
+    if (secrets.get("GITHUB_TOKEN") === undefined) {
         label("skip: GITHUB_TOKEN is not bound");
         return;
     }

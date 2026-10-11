@@ -16,11 +16,11 @@ use super::{Inferer, narrowing};
 /// but `null` remains, which means the path can't carry a narrowing at all.
 pub(super) fn non_null_form(ty: Type) -> Option<Type> {
     match ty.peel() {
-        Type::Null => None,
+        Type::Null | Type::Undefined => None,
         Type::Union(members) => {
             let kept: Vec<Type> = members
                 .iter()
-                .filter(|m| !matches!(m.peel(), Type::Null))
+                .filter(|m| !matches!(m.peel(), Type::Null | Type::Undefined))
                 .cloned()
                 .collect();
             (!kept.is_empty()).then(|| Type::union(kept))
@@ -797,7 +797,7 @@ impl<'a> Inferer<'a> {
                 cs.len() == os.len()
                     && cs
                         .iter()
-                        .zip(os)
+                        .zip(os.iter())
                         .all(|(c, o)| self.fields_within_compared(c, o, comparison))
             }
             _ => match (self.member_shape(candidate), self.member_shape(other)) {
@@ -870,7 +870,7 @@ impl<'a> Inferer<'a> {
                 ps.len() != ms.len()
                     || ps
                         .iter()
-                        .zip(ms)
+                        .zip(ms.iter())
                         .any(|(p, m)| self.may_lose_readonly_within(p, m, compared))
             }
             (Type::Function { ret: p, .. }, Type::Function { ret: m, .. }) => {
@@ -914,9 +914,11 @@ impl<'a> Inferer<'a> {
         match ty.peel_preserving_readonly() {
             Type::Readonly(_) => true,
             Type::Array(element) => self.declares_readonly_within(element, opened),
-            Type::Tuple(elements) | Type::Union(elements) => elements
-                .iter()
-                .any(|element| self.declares_readonly_within(element, opened)),
+            Type::Tuple(crate::types::TupleType { elements, .. }) | Type::Union(elements) => {
+                elements
+                    .iter()
+                    .any(|element| self.declares_readonly_within(element, opened))
+            }
             Type::Object { fields, index } => {
                 index
                     .as_ref()
@@ -1011,13 +1013,15 @@ impl<'a> Inferer<'a> {
         // Assignment narrowings don't use `wrap_narrow_regions` (no shadow),
         // but `NarrowedView` requires a `source` field. Use a fresh `LocalRef`
         // as a placeholder.
+        let storage_ty = self
+            .scopes
+            .get(&ident.name)
+            .map_or_else(|| narrowed_ty.clone(), |entry| entry.storage_type().clone());
+        let source_kind = self.local_storage_read(ident.clone(), &storage_ty, &narrowed_ty)?;
         let source = self
             .typed_ast
             .try_push_expr(TypedExpr {
-                kind: crate::TypedExprKind::LocalRef {
-                    ident: ident.clone(),
-                    boxed: false,
-                },
+                kind: source_kind,
                 span,
                 ty: narrowed_ty.clone(),
             })
@@ -1292,7 +1296,7 @@ impl<'a> Inferer<'a> {
             Type::Union(members) => {
                 let mut tys = Vec::new();
                 for m in members {
-                    if matches!(m.peel(), Type::Null) {
+                    if matches!(m.peel(), Type::Null | Type::Undefined) {
                         continue;
                     }
                     tys.push(self.narrow_source_field_ty(m, field_name)?);
@@ -1384,15 +1388,18 @@ impl<'a> Inferer<'a> {
                     let Some(entry) = self.scopes.get(name) else {
                         return Ok(None);
                     };
+                    let ty = entry.ty.clone();
+                    let storage_ty = entry.storage_type().clone();
                     (
-                        crate::TypedExprKind::LocalRef {
-                            ident: crate::Ident {
+                        self.local_storage_read(
+                            crate::Ident {
                                 name: name.clone(),
                                 span,
                             },
-                            boxed: false,
-                        },
-                        entry.ty.clone(),
+                            &storage_ty,
+                            &ty,
+                        )?,
+                        ty,
                     )
                 }
                 narrowing::BindingId::This => (
@@ -1504,7 +1511,10 @@ impl<'a> Inferer<'a> {
                 Type::StringLiteral(key.clone()),
             ),
             narrowing::PathElem::Index(
-                narrowing::LiteralValue::Boolean(_) | narrowing::LiteralValue::BigInt(_),
+                narrowing::LiteralValue::Boolean(_)
+                | narrowing::LiteralValue::BigInt(_)
+                | narrowing::LiteralValue::Null
+                | narrowing::LiteralValue::Undefined,
             ) => return Ok(None),
             narrowing::PathElem::Key(binding, _) => {
                 let key_path = narrowing::ReferencePath::root(binding.clone());
@@ -1765,7 +1775,8 @@ impl<'a> Inferer<'a> {
 fn has_function_part(ty: &Type) -> bool {
     match ty.peel() {
         Type::Function { .. } => true,
-        Type::Union(members) | Type::Tuple(members) => members.iter().any(has_function_part),
+        Type::Union(members) => members.iter().any(has_function_part),
+        Type::Tuple(members) => members.iter().any(has_function_part),
         Type::Array(elem) => has_function_part(elem),
         Type::Object { fields, index } => {
             fields.values().any(|field| has_function_part(&field.ty))
@@ -1801,6 +1812,7 @@ fn narrows_to_itself(ty: &Type) -> bool {
             | Type::Boolean
             | Type::BooleanLiteral(_)
             | Type::Null
+            | Type::Undefined
             | Type::NumberEnum { .. }
             | Type::StringEnum { .. }
             | Type::Error

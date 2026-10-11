@@ -49,7 +49,7 @@ function main(): void {
   assert(o?.mid.fn().y === 2, "plain call step after ?.");
 
   const none: Outer | null = null as Outer | null;
-  assert(none?.mid.i.y === null, "the whole chain short-circuits");
-  assert(none?.mid.arr[0].y === null, "including through an index step");
-  assert(none?.mid.fn().y === null, "and through a call step");
+  assert(none?.mid.i.y === undefined, "the whole chain short-circuits");
+  assert(none?.mid.arr[0].y === undefined, "including through an index step");
+  assert(none?.mid.fn().y === undefined, "and through a call step");
 }

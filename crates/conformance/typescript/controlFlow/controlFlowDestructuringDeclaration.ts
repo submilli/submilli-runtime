@@ -4,54 +4,54 @@
 function f1(): void {
     let x: string | number = 1;
     x;
-    let y: string | null = "";
+    let y: string | undefined = "";
     y;
 }
 
 function f2(): void {
     let [x]: [string | number] = [1];
     x;
-    let [y]: [string | null] = [""];
+    let [y]: [string | undefined] = [""];
     y;
-    /*pruned*/;                            
-    ; 
+    let [z = ""]: [string | undefined] = [undefined];
+    z;
 }
 
 function f3(): void {
     let [x]: (string | number)[] = [1];
     x;
-    let [y]: (string | null)[] = [""];
+    let [y]: (string | undefined)[] = [""];
     y;
-    /*pruned*/;                              
-    ; 
+    let [z = ""]: (string | undefined)[] = [undefined];
+    z;
 }
 
-/*pruned*/;          
-                                                 
-      
-                                                
-      
-                                                       
-      
- 
+function f4(): void {
+    let { x }: { x: string | number } = { x: 1 };
+    x;
+    let { y }: { y: string | undefined } = { y: "" };
+    y;
+    let { z = "" }: { z: string | undefined } = { z: undefined };
+    z;
+}
 
-/*pruned*/;          
-                                                  
-      
-                                                 
-      
-                                                        
-      
- 
+function f5(): void {
+    let { x }: { x?: string | number } = { x: 1 };
+    x;
+    let { y }: { y?: string | undefined } = { y: "" };
+    y;
+    let { z = "" }: { z?: string | undefined } = { z: undefined };
+    z;
+}
 
-/*pruned*/;          
-                                            
-      
-                                          
-      
-                                               
-      
- 
+function f6(): void {
+    let { x }: { x?: string | number } = {};
+    x;
+    let { y }: { y?: string | undefined } = {};
+    y;
+    let { z = "" }: { z?: string | undefined } = {};
+    z;
+}
 
 /*pruned*/;          
                                               

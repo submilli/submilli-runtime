@@ -30,12 +30,12 @@ function main(): number {
     identities.set(map, 9);
     map.clear();
     assert(identities.get(map) === 9);
-    assert(identities.get(new Map<string, number>()) === null);
+    assert(identities.get(new Map<string, number>()) === undefined);
     const f = (): number => 1;
     const functions = new Map<() => number, number>();
     functions.set(f, 1);
     assert(functions.get(f) === 1);
-    assert(functions.get((): number => 1) === null);
+    assert(functions.get((): number => 1) === undefined);
     const expressions = new Set<RegExp>();
     const r = /a/g;
     expressions.add(r);
@@ -46,7 +46,7 @@ function main(): number {
     const firstError = new Error("one");
     errors.set(firstError, 1);
     assert(errors.get(firstError) === 1);
-    assert(errors.get(new Error("one")) === null);
+    assert(errors.get(new Error("one")) === undefined);
     const changingError = new Error("before");
     errors.set(changingError, 2);
     changingError.message = "after";
@@ -66,7 +66,7 @@ function main(): number {
     assert(!Object.is(date, month));
     assert(!Object.is(month, date));
     structural.set(date, 4);
-    assert(structural.get(month) === null);
+    assert(structural.get(month) === undefined);
     const zones = new Map<Temporal.ZonedDateTime, number>();
     zones.set(Temporal.ZonedDateTime.from("2020-01-01T00:00-05:00[US/Eastern]"), 1);
     assert(zones.get(Temporal.ZonedDateTime.from("2020-01-01T00:00-05:00[America/New_York]")) === 1);

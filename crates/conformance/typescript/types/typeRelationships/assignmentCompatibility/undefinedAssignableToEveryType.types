@@ -8,7 +8,7 @@ class C {
 >    : ^^^^^^
 
 }
-/*pruned*/;                        
+/*pruned*/;
 interface I {
 >I : I
 >  : ^
@@ -33,78 +33,104 @@ enum E { A }
 >A : E.A
 >  : ^^^
 
-/*pruned*/;                        
+/*pruned*/;
 
-let b: number = null;
+let b: number = undefined;
 >b : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let c: string = null;
+let c: string = undefined;
 >c : string
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let d: boolean = null;
+let d: boolean = undefined;
 >d : boolean
 >  : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-/*pruned*/;        
-/*pruned*/;       
-let g: void = null;
+/*pruned*/;
+/*pruned*/;
+let g: void = undefined;
 >g : void
 >  : ^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let h: Object = null;
+let h: Object = undefined;
 >h : Object
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let i: {} = null;
+let i: {} = undefined;
 >i : {}
 >  : ^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let j: () => {} = null;
+let j: () => {} = undefined;
 >j : () => {}
 >  : ^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-/*pruned*/;            
-let l: (x: number) => string = null;
+/*pruned*/;
+let l: (x: number) => string = undefined;
 >l : (x: number) => string
 >  : ^^^^^^^^^^^^^^^^^^^^^
 >x : number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-/**/;     
-ai = null;
->ai = null : null
->          : ^^^^
+/*pruned*/;
+ai = undefined;
+>ai = undefined : undefined
+>               : ^^^^^^^^^
 >ai : I
 >   : ^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-/**/;     
-let m: number[] = null;
+/*pruned*/;
+let m: number[] = undefined;
 >m : number[]
 >  : ^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let n: { foo: string } = null;
+let n: { foo: string } = undefined;
 >n : { foo: string; }
 >  : ^^^^^^^^^^^^^^^^
 >foo : string
 >    : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-/*pruned*/;                  
-let p: Number = null;
+/*pruned*/;
+let p: Number = undefined;
 >p : Number
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
-let q: String = null;
+let q: String = undefined;
 >q : String
 >  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
-/*pruned*/;                                                 
-             
-             
-             
- 
+/*pruned*/;
+
+
+
+
 //function foo<T, U extends T, V extends Date>(x: T, y: U, z: V) {
 //    x = undefined;
 //    y = undefined;

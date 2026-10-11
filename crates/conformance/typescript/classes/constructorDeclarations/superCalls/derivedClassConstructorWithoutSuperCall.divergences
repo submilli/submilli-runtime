@@ -1,1 +1,4 @@
-types: 5 of 20 tsc entries compared, 0 differ
+types: 7 of 26 tsc entries compared, 0 differ
+
+errors:
+line 31: ours: `super(...)` must be a statement of its own (tsc accepts)

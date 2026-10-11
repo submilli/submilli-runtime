@@ -105,8 +105,9 @@ and, if credentials are needed, an `auth_proxy` rule rather than a secret.
 ## Filters
 
 A filter is a boolean expression over the JSON context passed to `check` (or
-the fields a stdlib gate supplies). A missing field or a wrong-kind value is a
-non-match, which under `default: deny` means denied.
+the fields a stdlib gate supplies). A missing field, including one passed as
+`undefined`, or a wrong-kind value is a non-match, which under `default: deny`
+means denied.
 
 | Form | Example |
 | --- | --- |

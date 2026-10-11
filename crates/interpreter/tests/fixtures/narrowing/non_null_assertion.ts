@@ -44,7 +44,7 @@ function main(): void {
     caught = true;
     assert(e.name === "TypeError", "null assertion throws TypeError");
     assert(
-      e.message === "non-null assertion failed: value is null",
+      e.message === "non-null assertion failed: value is null or undefined",
       "null assertion preserves message",
     );
   }
@@ -58,4 +58,13 @@ function main(): void {
     assert(e.name === "TypeError", "literal null assertion throws TypeError");
   }
   assert(caughtLiteral, "literal null assertion is catchable as TypeError");
+
+  let caughtUndefined = false;
+  try {
+    undefined!;
+  } catch (e: TypeError) {
+    caughtUndefined = true;
+  }
+  assert(caughtUndefined, "undefined assertion is catchable as TypeError");
+
 }

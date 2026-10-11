@@ -1,0 +1,1 @@
+destructuringControlFlow.ts(43,1): error TS18048: 'value' is possibly 'undefined'.

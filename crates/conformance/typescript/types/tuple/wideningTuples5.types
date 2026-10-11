@@ -1,11 +1,13 @@
 === wideningTuples5.ts ===
-let [a, b] = [null, null];
->a : null
->  : ^^^^
+let [a, b] = [undefined, null];
+>a : undefined
+>  : ^^^^^^^^^
 >b : null
 >  : ^^^^
->[null, null] : [null, null]
->             : ^^^^^^^^^^^^
+>[undefined, null] : [undefined, null]
+>                  : ^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 function main(): void {}

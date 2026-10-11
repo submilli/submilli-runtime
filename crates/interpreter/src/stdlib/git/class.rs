@@ -260,7 +260,7 @@ fn install_factories(
     ));
     let options = ValType::Ref(RefType::new(
         true,
-        HeapType::ConcreteStruct(intr.object_shape.clone()),
+        HeapType::ConcreteStruct(intr.object.clone()),
     ));
     let repository_result = ValType::Ref(RefType::new(
         false,

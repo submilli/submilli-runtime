@@ -1,7 +1,7 @@
 === argumentExpressionContextualTyping.ts ===
 // In a typed function call, argument expressions are contextually typed by their corresponding parameter types.
-/*pruned*/;                                      
-/*pruned*/;                                                     
+/*pruned*/;
+/*pruned*/;
 function baz(x: [string, number, boolean]): void { }
 >baz : (x: [string, number, boolean]) => void
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

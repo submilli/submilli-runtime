@@ -11,21 +11,21 @@ function main(): void {
   // `list` gates on `session.list` for the operation and then on `session.read`
   // per candidate key. With every read denied, no key survives the filter — and
   // neither the count nor the cursor may disclose the ones that were dropped.
-  const page = session.list("", 100, null);
+  const page = session.list("", 100);
   assert(page.entries.length === 0, "denied keys are omitted from the page");
-  assert(page.nextCursor === null, "the cursor does not disclose denied keys");
+  assert(page.nextCursor === undefined, "the cursor does not disclose denied keys");
 
   // The filter is silent, not an error: listing a denied keyspace succeeds and
   // reports nothing, so a program cannot probe for existence through a throw.
-  const prefixed = session.list("triage/", 10, null);
+  const prefixed = session.list("triage/", 10);
   assert(prefixed.entries.length === 0, "a denied prefix lists as empty");
-  assert(prefixed.nextCursor === null, "no cursor for a fully denied prefix");
+  assert(prefixed.nextCursor === undefined, "no cursor for a fully denied prefix");
 
   // The op-level gate is separate: `session.list` itself was not denied, so the
   // call runs rather than throwing.
   let threw = false;
   try {
-    session.list("triage/", 1, null);
+    session.list("triage/", 1);
   } catch (e: Error) {
     threw = true;
   }

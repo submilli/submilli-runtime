@@ -9,6 +9,8 @@
 //! update the matching entry here — see AGENTS.md. The `capabilities` test in
 //! the `submilli` CLI asserts every `example_filter` below parses.
 
+use super::{OptionalPackage, Stdlib};
+
 /// One context field a capability's `filter:` expression can match on.
 pub struct FilterField {
     pub name: &'static str,
@@ -356,7 +358,7 @@ const HTTP: &[Capability] = &[
 
 /// Every other method `http.request` takes, gated as `http.<method>` with the
 /// method lowercased: `http.request("TRACE", …)` checks `http.trace`. Kept
-/// out of [`CATALOG`], whose consumers read a templated name as
+/// out of [`CORE_CATALOG`], whose consumers read a templated name as
 /// `mcp.<server>` and concretize it per declared server; see
 /// [`uncataloged_http_method`].
 pub const HTTP_OTHER_METHOD: Capability = Capability {
@@ -485,7 +487,8 @@ const SESSION: &[Capability] = &[
     },
 ];
 
-const CATALOG: &[CapabilityGroup] = &[
+/// The capabilities of the core packages, which every embedder has.
+const CORE_CATALOG: &[CapabilityGroup] = &[
     CapabilityGroup {
         module: "submilli:embedding",
         capabilities: EMBEDDING,
@@ -520,16 +523,98 @@ const CATALOG: &[CapabilityGroup] = &[
     },
 ];
 
-/// Every stdlib capability the runtime can gate, grouped by source module.
-pub fn catalog() -> &'static [CapabilityGroup] {
-    CATALOG
+const AGENT: FilterField = field(
+    "agent",
+    "string",
+    "The sub-agent's name, as `submilli:agents` list() names it",
+);
+
+const AGENTS: CapabilityGroup = CapabilityGroup {
+    module: "submilli:agents",
+    capabilities: &[Capability {
+        name: "agent.run",
+        main_denial: None,
+        summary: "Hand work to a harness sub-agent, or list the agents",
+        filter_fields: &[AGENT],
+        example_filter: "agent == \"researcher\"",
+    }],
+};
+
+const SKILL: FilterField = field(
+    "name",
+    "string",
+    "The skill's name, as `submilli:skills` list() names it",
+);
+
+const SKILLS: CapabilityGroup = CapabilityGroup {
+    module: "submilli:skills",
+    capabilities: &[Capability {
+        name: "skill.load",
+        main_denial: None,
+        summary: "Load a harness skill, read its files, or list the skills",
+        filter_fields: &[SKILL],
+        example_filter: "name == \"code-review\"",
+    }],
+};
+
+/// The capabilities of one optional package.
+fn optional_group(package: OptionalPackage) -> &'static CapabilityGroup {
+    match package {
+        OptionalPackage::Agents => &AGENTS,
+        OptionalPackage::Skills => &SKILLS,
+    }
 }
 
-/// Look up a capability by its exact name (templates included, by their
+/// Every capability the core packages gate, grouped by source module. An
+/// optional package's capabilities are listed only by [`catalog_for`].
+pub fn catalog() -> &'static [CapabilityGroup] {
+    CORE_CATALOG
+}
+
+/// Every capability the packages of `stdlib` gate, grouped by source module,
+/// in [`catalog`]'s order: by module name without its `submilli:` or `@` prefix.
+pub fn catalog_for(stdlib: Stdlib) -> Vec<&'static CapabilityGroup> {
+    let mut groups: Vec<&'static CapabilityGroup> = CORE_CATALOG.iter().collect();
+    groups.extend(stdlib.optional_packages().map(optional_group));
+    groups.sort_by_key(|group| catalog_order(group.module));
+    groups
+}
+
+fn catalog_order(module: &str) -> &str {
+    module
+        .strip_prefix("submilli:")
+        .or_else(|| module.strip_prefix('@'))
+        .unwrap_or(module)
+}
+
+/// Every group the runtime can gate, whichever packages an embedder enables.
+/// Runtime checks use this: a capability reaches them only from a host
+/// function, which is installed only when its package is enabled.
+pub(crate) fn all_groups() -> impl Iterator<Item = &'static CapabilityGroup> {
+    CORE_CATALOG.iter().chain(
+        OptionalPackage::ALL
+            .iter()
+            .map(|package| optional_group(*package)),
+    )
+}
+
+/// Look up a core capability by its exact name (templates included, by their
 /// literal `mcp.<server>` spelling).
 pub fn find(name: &str) -> Option<&'static Capability> {
-    CATALOG
-        .iter()
+    find_for(Stdlib::core(), name)
+}
+
+/// [`find`] among the capabilities of `stdlib`.
+pub fn find_for(stdlib: Stdlib, name: &str) -> Option<&'static Capability> {
+    catalog_for(stdlib)
+        .into_iter()
+        .flat_map(|group| group.capabilities)
+        .find(|cap| cap.name == name)
+}
+
+/// [`find`] among every group the runtime can gate.
+pub(crate) fn find_any(name: &str) -> Option<&'static Capability> {
+    all_groups()
         .flat_map(|group| group.capabilities)
         .find(|cap| cap.name == name)
 }
@@ -545,7 +630,12 @@ pub fn uncataloged_http_method(name: &str) -> Option<&str> {
 /// The entry describing `name`: its catalog entry, or [`HTTP_OTHER_METHOD`]
 /// for a name that fills it.
 pub fn find_gating(name: &str) -> Option<&'static Capability> {
-    find(name).or_else(|| uncataloged_http_method(name).map(|_| &HTTP_OTHER_METHOD))
+    find_gating_for(Stdlib::core(), name)
+}
+
+/// [`find_gating`] among the capabilities of `stdlib`.
+pub fn find_gating_for(stdlib: Stdlib, name: &str) -> Option<&'static Capability> {
+    find_for(stdlib, name).or_else(|| uncataloged_http_method(name).map(|_| &HTTP_OTHER_METHOD))
 }
 
 /// An RFC 9110 method token, the set `http.request` accepts, in lowercase.
@@ -565,8 +655,7 @@ mod tests {
     /// answer for every caller, so growing the set is a deliberate act.
     #[test]
     fn only_secrets_get_is_refused_to_main() {
-        let refused: Vec<&str> = catalog()
-            .iter()
+        let refused: Vec<&str> = all_groups()
             .flat_map(|group| group.capabilities)
             .filter(|cap| !cap.grantable_to_main())
             .map(|cap| cap.name)
@@ -574,10 +663,22 @@ mod tests {
         assert_eq!(refused, ["secrets.get"]);
     }
 
+    /// The core set lists exactly the core catalog, in the same order, so every
+    /// surface that reads `catalog()` agrees with one that reads `catalog_for`.
+    #[test]
+    fn core_set_lists_the_core_catalog() {
+        let core: Vec<&str> = catalog().iter().map(|group| group.module).collect();
+        let for_core: Vec<&str> = catalog_for(Stdlib::core())
+            .iter()
+            .map(|group| group.module)
+            .collect();
+        assert_eq!(for_core, core);
+    }
+
     #[test]
     fn catalog_entries_are_well_formed() {
         let mut seen = HashSet::new();
-        for group in catalog() {
+        for group in all_groups() {
             for cap in group.capabilities {
                 assert!(
                     cap.name.contains('.') && !cap.name.is_empty(),

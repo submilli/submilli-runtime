@@ -10,6 +10,7 @@ import {
     draftRecipients,
     sendEmail,
     createDraft,
+    getProfile,
 } from "@submilli/gmail";
 
 function main(): void {
@@ -29,10 +30,19 @@ function main(): void {
     const reply: ReplyInput = { messageId: "m1", text: "Thanks", replyAll: true };
     const labels: LabelChanges = { addLabelIds: ["STARRED"], removeLabelIds: ["UNREAD"] };
     const search: SearchOptions = { limit: 20, includeSpamTrash: false };
-    assert(email.attachments !== null && email.attachments.length === 1, "VFS attachments are represented");
+    assert(email.attachments !== undefined && email.attachments.length === 1, "VFS attachments are represented");
     assert(reply.replyAll === true, "reply-all is explicit");
-    assert(labels.addLabelIds !== null && labels.addLabelIds.length === 1, "label changes are explicit");
+    assert(labels.addLabelIds !== undefined && labels.addLabelIds.length === 1, "label changes are explicit");
     assert(search.limit === 20, "searches are bounded");
+
+    label("an unbound access token is reported before any request");
+    let tokenFailure = "none";
+    try {
+        getProfile();
+    } catch (e) {
+        if (e instanceof GmailError) tokenFailure = e.code;
+    }
+    assert(tokenFailure === "missing_token", "got " + tokenFailure);
 
     label("a reply goes to the sender's bare address");
     const original: Header[] = [

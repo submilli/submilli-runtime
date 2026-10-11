@@ -4,7 +4,7 @@ enum E { a, b, c }
 let a: boolean = null as unknown as (boolean);
 let b: number = null as unknown as (number);
 let c: string = null as unknown as (string);
-/*pruned*/;                             
+let d: void = null as unknown as (void);
 /*pruned*/;                       
 let f: { a: string } = null as unknown as ({ a: string });
 /*pruned*/;                               
@@ -23,7 +23,7 @@ function foo<T, U>(t: T, u: U): void {
     let r1a1 = t < a;
     let r1a2 = t < b;
     let r1a3 = t < c;
-    /*pruned*/;      
+    let r1a4 = t < d;
     /*pruned*/;      
     let r1a6 = t < f;
     /*pruned*/;      
@@ -40,7 +40,7 @@ function foo<T, U>(t: T, u: U): void {
     let r2a1 = t < a;
     let r2a2 = t < b;
     let r2a3 = t < c;
-    /*pruned*/;      
+    let r2a4 = t < d;
     /*pruned*/;      
     let r2a6 = t < f;
     /*pruned*/;      
@@ -57,7 +57,7 @@ function foo<T, U>(t: T, u: U): void {
     let r3a1 = t < a;
     let r3a2 = t < b;
     let r3a3 = t < c;
-    /*pruned*/;      
+    let r3a4 = t < d;
     /*pruned*/;      
     let r3a6 = t < f;
     /*pruned*/;      
@@ -74,7 +74,7 @@ function foo<T, U>(t: T, u: U): void {
     let r4a1 = t < a;
     let r4a2 = t < b;
     let r4a3 = t < c;
-    /*pruned*/;      
+    let r4a4 = t < d;
     /*pruned*/;      
     let r4a6 = t < f;
     /*pruned*/;      
@@ -91,7 +91,7 @@ function foo<T, U>(t: T, u: U): void {
     let r5a1 = t < a;
     let r5a2 = t < b;
     let r5a3 = t < c;
-    /*pruned*/;      
+    let r5a4 = t < d;
     /*pruned*/;      
     let r5a6 = t < f;
     /*pruned*/;      
@@ -108,7 +108,7 @@ function foo<T, U>(t: T, u: U): void {
     let r6a1 = t < a;
     let r6a2 = t < b;
     let r6a3 = t < c;
-    /*pruned*/;      
+    let r6a4 = t < d;
     /*pruned*/;      
     let r6a6 = t < f;
     /*pruned*/;      
@@ -125,7 +125,7 @@ function foo<T, U>(t: T, u: U): void {
     let r7a1 = t < a;
     let r7a2 = t < b;
     let r7a3 = t < c;
-    /*pruned*/;      
+    let r7a4 = t < d;
     /*pruned*/;      
     let r7a6 = t < f;
     /*pruned*/;      
@@ -142,7 +142,7 @@ function foo<T, U>(t: T, u: U): void {
     let r8a1 = t < a;
     let r8a2 = t < b;
     let r8a3 = t < c;
-    /*pruned*/;      
+    let r8a4 = t < d;
     /*pruned*/;      
     let r8a6 = t < f;
     /*pruned*/;      

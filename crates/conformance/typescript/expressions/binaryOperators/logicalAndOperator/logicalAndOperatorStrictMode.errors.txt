@@ -1,0 +1,8 @@
+logicalAndOperatorStrictMode.ts(49,12): error TS1345: An expression of type 'void' cannot be tested for truthiness.
+logicalAndOperatorStrictMode.ts(50,12): error TS1345: An expression of type 'void' cannot be tested for truthiness.
+logicalAndOperatorStrictMode.ts(51,12): error TS1345: An expression of type 'void' cannot be tested for truthiness.
+logicalAndOperatorStrictMode.ts(52,12): error TS1345: An expression of type 'void' cannot be tested for truthiness.
+logicalAndOperatorStrictMode.ts(53,12): error TS1345: An expression of type 'void' cannot be tested for truthiness.
+logicalAndOperatorStrictMode.ts(54,12): error TS1345: An expression of type 'void' cannot be tested for truthiness.
+logicalAndOperatorStrictMode.ts(55,12): error TS1345: An expression of type 'void' cannot be tested for truthiness.
+logicalAndOperatorStrictMode.ts(56,12): error TS1345: An expression of type 'void' cannot be tested for truthiness.

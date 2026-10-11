@@ -29,7 +29,7 @@ use crate::CapabilitySchema;
 // v8: replaceable object-shape arrays and explicitly marked accessor payload names.
 // v9: structural objects and interface declarations carry string index signatures.
 // v10: `submilli:fs` `Info` drops `pathLimit`, so its intrinsic layout loses a field.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 10;
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 11;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";
@@ -747,6 +747,7 @@ mod tests {
         methods.insert(
             "rename".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: vec![Param::new("name", Type::String)],
                 ret: Type::Void,

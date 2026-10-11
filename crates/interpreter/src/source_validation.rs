@@ -15,7 +15,11 @@ pub(crate) fn validate(ast: &Ast, source: &str, file: FileId) -> Result<(), Sour
     for origin in ast.pattern_origins.values() {
         validator.span(origin.pattern_span)?;
     }
-    for bindings in ast.for_of_pattern_bindings.values() {
+    for bindings in ast
+        .for_of_pattern_bindings
+        .values()
+        .chain(ast.for_pattern_init_bindings.values())
+    {
         validator.idents(bindings)?;
     }
     for expr in ast.source_expressions() {
@@ -61,7 +65,7 @@ pub(crate) fn validate(ast: &Ast, source: &str, file: FileId) -> Result<(), Sour
             | StmtKind::Const { ty, .. }
             | StmtKind::LetPattern { ty, .. }
             | StmtKind::ConstPattern { ty, .. }
-            | StmtKind::ConstRest { ty, .. }
+            | StmtKind::ObjectRest { ty, .. }
             | StmtKind::ForOf { ty, .. }
             | StmtKind::ForOfPattern { ty, .. } => validator.optional(ty)?,
             StmtKind::Function {
@@ -165,7 +169,7 @@ impl<'a> Validator<'a> {
                 self.span(name.span)?;
                 self.doc(doc)?;
             }
-            StmtKind::ConstRest {
+            StmtKind::ObjectRest {
                 name, doc, exclude, ..
             } => {
                 self.span(name.span)?;
@@ -544,6 +548,7 @@ impl<'a> Validator<'a> {
                 }
                 TypeAnnotationKind::TypeOf { path } => self.path(path, 1, annotation.span)?,
                 TypeAnnotationKind::Array(inner)
+                | TypeAnnotationKind::Optional(inner)
                 | TypeAnnotationKind::Readonly(inner)
                 | TypeAnnotationKind::KeyOf(inner) => self.annotation(inner)?,
                 TypeAnnotationKind::Tuple(members) | TypeAnnotationKind::Union(members) => {

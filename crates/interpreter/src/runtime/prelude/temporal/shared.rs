@@ -17,7 +17,7 @@ use crate::runtime::StoreData;
 use crate::runtime::fuel::host_func_async;
 use crate::runtime::host::{read_string_arg, register_host_fn, write_submilli_string_struct};
 use crate::runtime::intrinsic_types::IntrinsicTypes;
-use crate::runtime::prelude::collection::object_field;
+use crate::runtime::prelude::undefined::is_undefined;
 use crate::{
     MangledName, NamespaceSymbol, ObjectField, Package, PackageDeclaration, Param,
     Span as DiagSpan, Type, ValueKind, ValueSymbol,
@@ -1442,6 +1442,20 @@ pub(super) const DURATION_FIELD_NAMES: [&str; 10] = [
     "nanoseconds",
 ];
 
+fn object_field(
+    caller: &mut Caller<'_, StoreData>,
+    obj: &Val,
+    name: &str,
+) -> wasmtime::Result<Option<Val>> {
+    let Some(value) = crate::runtime::prelude::collection::object_field(caller, obj, name)? else {
+        return Ok(None);
+    };
+    if is_undefined(caller, &value)? {
+        return Ok(None);
+    }
+    Ok(Some(value))
+}
+
 pub(super) fn object_time_bag(
     caller: &mut Caller<'_, StoreData>,
     obj: &Val,
@@ -1520,10 +1534,7 @@ pub(super) fn object_string_field(
     let Some(v) = object_field(caller, obj, name)? else {
         return Ok(None);
     };
-    match v {
-        Val::AnyRef(None) => Ok(None),
-        _ => read_string_arg(caller, &v, label).map(Some),
-    }
+    read_string_arg(caller, &v, label).map(Some)
 }
 
 pub(super) fn object_diff_options(
@@ -1565,7 +1576,7 @@ fn object_f64_field(
         .map(|abi| abi.boxed_number_type.clone())
         .ok_or_else(|| wasmtime::Error::msg("host_abi unset (prelude not instantiated)"))?;
     let Val::AnyRef(Some(any)) = v else {
-        return Ok(None);
+        wasmtime::bail!("Temporal.{label}{{{name}}}: expected boxed number");
     };
     let Some(st) = any.as_struct(&mut *caller)? else {
         wasmtime::bail!("Temporal.{label}{{{name}}}: expected boxed number");
@@ -2044,7 +2055,7 @@ pub(super) fn object_relative_to(
         return Ok(None);
     };
     let Val::AnyRef(Some(any)) = value else {
-        return Ok(None);
+        wasmtime::bail!("Temporal.{label}: relativeTo must be a PlainDate or ZonedDateTime");
     };
     let Some(st) = any.as_struct(&mut *caller)? else {
         wasmtime::bail!("Temporal.{label}: relativeTo must be a PlainDate or ZonedDateTime");
@@ -2417,6 +2428,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         ])
     };
     let temporal_to_json_sig = || MethodSig {
+        optional: false,
         generics: Vec::new(),
         params: Vec::new(),
         ret: Type::String,
@@ -2458,6 +2470,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "add".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_instant_ref(),
@@ -2468,6 +2481,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "subtract".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_instant_ref(),
@@ -2478,13 +2492,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "until".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("other", temporal_instant_ref()),
                                 Param::with_default(
                                     "options",
                                     temporal_since_until_options_ref(),
-                                    crate::DefaultValue::Null,
+                                    crate::DefaultValue::Undefined,
                                 ),
                             ],
                             ret: temporal_duration_ref(),
@@ -2495,13 +2510,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "since".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("other", temporal_instant_ref()),
                                 Param::with_default(
                                     "options",
                                     temporal_since_until_options_ref(),
-                                    crate::DefaultValue::Null,
+                                    crate::DefaultValue::Undefined,
                                 ),
                             ],
                             ret: temporal_duration_ref(),
@@ -2512,6 +2528,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "round".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "roundTo",
@@ -2530,6 +2547,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toZonedDateTimeISO".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("tz", Type::String)],
                             ret: temporal_zdt_ref(),
@@ -2540,6 +2558,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toString".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::String,
@@ -2553,6 +2572,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "equals".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("other", temporal_instant_ref())],
                             ret: Type::Boolean,
@@ -2602,6 +2622,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "from".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("iso", Type::String)],
                             ret: temporal_instant_ref(),
@@ -2614,6 +2635,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "fromEpochMilliseconds".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("ms", Type::Number)],
                             ret: temporal_instant_ref(),
@@ -2624,6 +2646,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "fromEpochNanoseconds".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("ns", Type::BigInt)],
                             ret: temporal_instant_ref(),
@@ -2636,6 +2659,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "compare".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("a", temporal_instant_ref()),
@@ -3047,6 +3071,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "add".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_duration_ref(),
@@ -3057,6 +3082,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "subtract".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_duration_ref(),
@@ -3067,6 +3093,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "negated".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: temporal_duration_ref(),
@@ -3077,6 +3104,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "total".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "totalOf",
@@ -3092,6 +3120,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "round".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "roundTo",
@@ -3110,11 +3139,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toString".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::with_default(
                                 "options",
                                 temporal_ref("DurationToStringOptions"),
-                                crate::DefaultValue::Null,
+                                crate::DefaultValue::Undefined,
                             )],
                             ret: Type::String,
                             predicate: None,
@@ -3125,6 +3155,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "with".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("fields", temporal_duration_like_ref())],
                             ret: temporal_duration_ref(),
@@ -3137,6 +3168,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "abs".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: temporal_duration_ref(),
@@ -3196,6 +3228,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "new".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("fields", temporal_duration_fields_ref())],
                             ret: temporal_duration_ref(),
@@ -3208,6 +3241,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "from".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "item",
@@ -3227,6 +3261,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "compare".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("a", temporal_duration_like_ref()),
@@ -3234,7 +3269,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 Param::with_default(
                                     "options",
                                     temporal_compare_options_ref(),
-                                    crate::DefaultValue::Null,
+                                    crate::DefaultValue::Undefined,
                                 ),
                             ],
                             ret: Type::Number,
@@ -3285,6 +3320,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "add".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_zdt_ref(),
@@ -3297,6 +3333,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "subtract".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_zdt_ref(),
@@ -3307,13 +3344,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "until".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("other", temporal_zdt_ref()),
                                 Param::with_default(
                                     "options",
                                     temporal_since_until_options_ref(),
-                                    crate::DefaultValue::Null,
+                                    crate::DefaultValue::Undefined,
                                 ),
                             ],
                             ret: temporal_duration_ref(),
@@ -3324,13 +3362,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "since".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("other", temporal_zdt_ref()),
                                 Param::with_default(
                                     "options",
                                     temporal_since_until_options_ref(),
-                                    crate::DefaultValue::Null,
+                                    crate::DefaultValue::Undefined,
                                 ),
                             ],
                             ret: temporal_duration_ref(),
@@ -3341,6 +3380,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "withTimeZone".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("tz", Type::String)],
                             ret: temporal_zdt_ref(),
@@ -3353,6 +3393,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "with".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "fields",
@@ -3368,6 +3409,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "round".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "roundTo",
@@ -3386,6 +3428,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "startOfDay".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: temporal_zdt_ref(),
@@ -3398,6 +3441,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toInstant".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: temporal_instant_ref(),
@@ -3408,6 +3452,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toPlainDate".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: temporal_plain_date_ref(),
@@ -3420,6 +3465,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toPlainTime".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: temporal_ref("PlainTime"),
@@ -3432,6 +3478,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toPlainDateTime".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: temporal_ref("PlainDateTime"),
@@ -3444,6 +3491,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "toString".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: Vec::new(),
                             ret: Type::String,
@@ -3457,6 +3505,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "equals".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("other", temporal_zdt_ref())],
                             ret: Type::Boolean,
@@ -3578,6 +3627,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "from".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![Param::new("iso", Type::String)],
                             ret: temporal_zdt_ref(),
@@ -3590,6 +3640,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     (
                         "compare".to_string(),
                         MethodSig {
+                            optional: false,
                             generics: Vec::new(),
                             params: vec![
                                 Param::new("a", temporal_zdt_ref()),
@@ -3633,6 +3684,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             (
                 "add".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: vec![Param::new("duration", temporal_duration_like_ref())],
                     ret: self_ty.clone(),
@@ -3643,6 +3695,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             (
                 "subtract".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: vec![Param::new("duration", temporal_duration_like_ref())],
                     ret: self_ty.clone(),
@@ -3653,13 +3706,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             (
                 "until".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: vec![
                         Param::new("other", self_ty.clone()),
                         Param::with_default(
                             "options",
                             temporal_since_until_options_ref(),
-                            crate::DefaultValue::Null,
+                            crate::DefaultValue::Undefined,
                         ),
                     ],
                     ret: temporal_duration_ref(),
@@ -3672,13 +3726,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             (
                 "since".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: vec![
                         Param::new("other", self_ty.clone()),
                         Param::with_default(
                             "options",
                             temporal_since_until_options_ref(),
-                            crate::DefaultValue::Null,
+                            crate::DefaultValue::Undefined,
                         ),
                     ],
                     ret: temporal_duration_ref(),
@@ -3697,6 +3752,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         (
             "with".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: vec![Param::new("fields", temporal_ref(fields_name))],
                 ret: self_ty,
@@ -3713,6 +3769,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         (
             "toPlainYearMonth".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: Vec::new(),
                 ret: temporal_plain_year_month_ref(),
@@ -3725,6 +3782,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         (
             "toPlainMonthDay".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: Vec::new(),
                 ret: temporal_plain_month_day_ref(),
@@ -3767,11 +3825,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             m.push((
                 "toPlainDateTime".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: vec![Param::with_default(
                         "time",
                         temporal_plain_time_ref(),
-                        crate::DefaultValue::Null,
+                        crate::DefaultValue::Undefined,
                     )],
                     ret: temporal_plain_date_time_ref(),
                     predicate: None,
@@ -3783,6 +3842,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             m.push((
                 "toZonedDateTime".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: vec![Param::new(
                         "timeZoneOrOptions",
@@ -3877,6 +3937,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             m.push((
                 "toPlainDate".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: Vec::new(),
                     ret: temporal_plain_date_ref(),
@@ -3887,6 +3948,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             m.push((
                 "toPlainTime".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: Vec::new(),
                     ret: temporal_plain_time_ref(),
@@ -3899,6 +3961,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             m.push((
                 "toZonedDateTime".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: vec![Param::new("timeZone", Type::String)],
                     ret: temporal_zdt_ref(),
@@ -3942,6 +4005,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             m.push((
                 "toPlainDate".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: vec![Param::new(
                         "fields",
@@ -3973,6 +4037,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             (
                 "toPlainDate".to_string(),
                 MethodSig {
+                    optional: false,
                     generics: Vec::new(),
                     params: vec![Param::new(
                         "fields",
@@ -4045,13 +4110,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 generics: Vec::new(),
                 params: vec![Param::with_default(
                     "tz",
-                    Type::Union(vec![Type::String, Type::Null]),
-                    crate::DefaultValue::Null,
+                    Type::Union(vec![Type::String, Type::Undefined]),
+                    crate::DefaultValue::Undefined,
                 )],
                 ret: temporal_zdt_ref(),
                 type_predicate: None,
                 doc: doc(
-                    "/** The current ZonedDateTime in `tz`, or the system zone if `tz` is omitted / null. Non-deterministic. */",
+                    "/** The current ZonedDateTime in `tz`, or the system zone if `tz` is omitted / undefined. Non-deterministic. */",
                 ),
             },
         },
@@ -4067,8 +4132,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     generics: Vec::new(),
                     params: vec![Param::with_default(
                         "tz",
-                        Type::Union(vec![Type::String, Type::Null]),
-                        crate::DefaultValue::Null,
+                        Type::Union(vec![Type::String, Type::Undefined]),
+                        crate::DefaultValue::Undefined,
                     )],
                     ret,
                     type_predicate: None,
@@ -4080,17 +4145,17 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     insert_now_plain(
         "plainDateISO",
         temporal_plain_date_ref(),
-        "/** Today's date in `tz`, or the system (local) zone if `tz` is omitted / null. Non-deterministic. */",
+        "/** Today's date in `tz`, or the system (local) zone if `tz` is omitted / undefined. Non-deterministic. */",
     );
     insert_now_plain(
         "plainTimeISO",
         temporal_plain_time_ref(),
-        "/** The current wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / null. Non-deterministic. */",
+        "/** The current wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / undefined. Non-deterministic. */",
     );
     insert_now_plain(
         "plainDateTimeISO",
         temporal_ref("PlainDateTime"),
-        "/** The current date and wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / null. Non-deterministic. */",
+        "/** The current date and wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / undefined. Non-deterministic. */",
     );
     now.values.insert(
         "zonedDateTime".to_string(),
@@ -4102,13 +4167,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 generics: Vec::new(),
                 params: vec![Param::with_default(
                     "tz",
-                    Type::Union(vec![Type::String, Type::Null]),
-                    crate::DefaultValue::Null,
+                    Type::Union(vec![Type::String, Type::Undefined]),
+                    crate::DefaultValue::Undefined,
                 )],
                 ret: temporal_zdt_ref(),
                 type_predicate: None,
                 doc: doc(
-                    "/** The current ZonedDateTime in `tz`, or the system zone if `tz` is null. Non-deterministic. Alias of `zonedDateTimeISO` (our subset has no calendar argument). */",
+                    "/** The current ZonedDateTime in `tz`, or the system zone if `tz` is undefined. Non-deterministic. Alias of `zonedDateTimeISO` (our subset has no calendar argument). */",
                 ),
             },
         },

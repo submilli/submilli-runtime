@@ -16,7 +16,7 @@ function main(): void {
   assert(o?.a === 1, "the literal's own field still wins");
 
   const none: { a: number } | null = null as { a: number } | null;
-  assert(none?.toJson() === null, "a null receiver short-circuits before dispatch");
+  assert(none?.toJson() === undefined, "a null receiver short-circuits before dispatch");
 
   // A class receiver resolves prelude members the same way, including one it
   // overrides.

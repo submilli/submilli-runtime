@@ -80,7 +80,7 @@ pub(super) fn lower(
 /// Host interfaces retain their native operation ABI. Core language values and
 /// user-defined objects resolve members on the actual receiver.
 pub(crate) fn dynamic_member_interface(iface: &MangledName) -> bool {
-    !iface.as_str().starts_with("submilli:")
+    !crate::codegen::is_host_package(iface.as_str())
         || [
             "String",
             "Number",

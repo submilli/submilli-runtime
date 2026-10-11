@@ -1,4 +1,8 @@
-types: 172 of 256 tsc entries compared, 13 differ
+types: 172 of 256 tsc entries compared, 14 differ
+
+line 12: x
+  tsc:  number
+  ours: number | string
 
 line 49: typeof x === "string" ? x === "hello" : ((b = x) && // number | boolean (typeof x === "boolean" ? x // boolean : x == 10))
   tsc:  boolean | 0

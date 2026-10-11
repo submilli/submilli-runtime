@@ -1,14 +1,13 @@
 undefinedAssignableToEveryType.ts(3,5): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
-undefinedAssignableToEveryType.ts(14,5): error TS2322: Type 'null' is not assignable to type 'number'.
-undefinedAssignableToEveryType.ts(15,5): error TS2322: Type 'null' is not assignable to type 'string'.
-undefinedAssignableToEveryType.ts(16,5): error TS2322: Type 'null' is not assignable to type 'boolean'.
-undefinedAssignableToEveryType.ts(19,5): error TS2322: Type 'null' is not assignable to type 'void'.
-undefinedAssignableToEveryType.ts(20,5): error TS2322: Type 'null' is not assignable to type 'Object'.
-undefinedAssignableToEveryType.ts(21,5): error TS2322: Type 'null' is not assignable to type '{}'.
-undefinedAssignableToEveryType.ts(22,5): error TS2322: Type 'null' is not assignable to type '() => {}'.
-undefinedAssignableToEveryType.ts(24,5): error TS2322: Type 'null' is not assignable to type '(x: number) => string'.
-undefinedAssignableToEveryType.ts(26,1): error TS2322: Type 'null' is not assignable to type 'I'.
-undefinedAssignableToEveryType.ts(28,5): error TS2322: Type 'null' is not assignable to type 'number[]'.
-undefinedAssignableToEveryType.ts(29,5): error TS2322: Type 'null' is not assignable to type '{ foo: string; }'.
-undefinedAssignableToEveryType.ts(31,5): error TS2322: Type 'null' is not assignable to type 'Number'.
-undefinedAssignableToEveryType.ts(32,5): error TS2322: Type 'null' is not assignable to type 'String'.
+undefinedAssignableToEveryType.ts(14,5): error TS2322: Type 'undefined' is not assignable to type 'number'.
+undefinedAssignableToEveryType.ts(15,5): error TS2322: Type 'undefined' is not assignable to type 'string'.
+undefinedAssignableToEveryType.ts(16,5): error TS2322: Type 'undefined' is not assignable to type 'boolean'.
+undefinedAssignableToEveryType.ts(20,5): error TS2322: Type 'undefined' is not assignable to type 'Object'.
+undefinedAssignableToEveryType.ts(21,5): error TS2322: Type 'undefined' is not assignable to type '{}'.
+undefinedAssignableToEveryType.ts(22,5): error TS2322: Type 'undefined' is not assignable to type '() => {}'.
+undefinedAssignableToEveryType.ts(24,5): error TS2322: Type 'undefined' is not assignable to type '(x: number) => string'.
+undefinedAssignableToEveryType.ts(26,1): error TS2322: Type 'undefined' is not assignable to type 'I'.
+undefinedAssignableToEveryType.ts(28,5): error TS2322: Type 'undefined' is not assignable to type 'number[]'.
+undefinedAssignableToEveryType.ts(29,5): error TS2322: Type 'undefined' is not assignable to type '{ foo: string; }'.
+undefinedAssignableToEveryType.ts(31,5): error TS2322: Type 'undefined' is not assignable to type 'Number'.
+undefinedAssignableToEveryType.ts(32,5): error TS2322: Type 'undefined' is not assignable to type 'String'.

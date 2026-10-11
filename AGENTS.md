@@ -23,8 +23,9 @@ Changes must build and test from this repository without private documentation.
 - Use `.ts` for new source and fixtures; `.subm` remains supported.
 - Accept equivalent TypeScript syntax under the forgiveness principle. Do not
   introduce different semantics merely to accept another spelling.
-- `any` and `undefined` are unsupported. Use concrete types, `unknown`, or `null`.
-  Casts with `as` and non-null assertions are runtime-checked.
+- `any` is unsupported. Use concrete types or `unknown`. Missing values use
+  `undefined`; explicit `null` remains distinct. Optional fields read as
+  `T | undefined`. Casts with `as` and non-null assertions are runtime-checked.
 - Language feature changes need a fixture demonstrating their behavior.
 - Runtime strings are UTF-16 code units. Operate on those units rather than
   round-tripping through Rust UTF-8 strings, which loses lone surrogates.
@@ -299,7 +300,7 @@ Whenever modifying the Git standard library (`crates/interpreter/src/stdlib/git/
 run the Git memory-limit tests in addition to other affected checks:
 
 ```sh
-SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=0 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test --locked -p interpreter --test git_memory -- --nocapture
+SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_FULL_TEST=0 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test --locked -p submilli-engine --test git_memory -- --nocapture
 ```
 
 These tests use an in-process HTTP transport backed by local `git upload-pack`,
@@ -370,7 +371,7 @@ modes with synthetic package tests and a focused localhost test; contact real
 APIs only when their integration behavior is affected.
 
 Select the affected crate/test or package rather than all network integrations,
-for example `SUBMILLI_SKIP_HTTP_TESTS=0 cargo test -p interpreter --test http_live`
+for example `SUBMILLI_SKIP_HTTP_TESTS=0 cargo test -p submilli-engine --test http_live`
 or `cargo run -p submilli -- build test -p @submilli/jina --env-var JINA_API_KEY`.
 These tests may require execution outside the sandbox, even for local listeners.
 Request network access only for selected checks that require it. Record why HTTP

@@ -1,0 +1,3 @@
+# Custom conversion forwarders in a consumer must find inherited method payloads.
+@test/conversions base -
+main app @test/conversions root

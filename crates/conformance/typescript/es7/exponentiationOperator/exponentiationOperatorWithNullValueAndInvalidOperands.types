@@ -18,7 +18,7 @@ let b: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                 
+/*pruned*/;
 
 // operator **
 let r1a1 = null ** a;
@@ -37,7 +37,7 @@ let r1a2 = null ** b;
 >b : string
 >  : ^^^^^^
 
-/*pruned*/;          
+/*pruned*/;
 
 let r1b1 = a ** null;
 >r1b1 : number
@@ -55,7 +55,7 @@ let r1b2 = b ** null;
 >b : string
 >  : ^^^^^^
 
-/*pruned*/;          
+/*pruned*/;
 
 let r1c1 = null ** true;
 >r1c1 : number

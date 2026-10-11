@@ -75,6 +75,8 @@ enum ResidualSite {
     DiscriminatedReceiver {
         path: narrowing::ReferencePath,
         disc_key: String,
+        /// The discriminant values no case covers.
+        missing: Type,
     },
     Scrutinee {
         path: narrowing::ReferencePath,
@@ -236,7 +238,7 @@ impl Inferer<'_> {
         for &stmt in stmts {
             if let StmtKind::Let { name, .. }
             | StmtKind::Const { name, .. }
-            | StmtKind::ConstRest { name, .. } =
+            | StmtKind::ObjectRest { name, .. } =
                 &self.ast.try_stmt(stmt).map_err(super::arena_failure)?.kind
             {
                 locals.entry(name.name.clone()).or_insert(name.span);
@@ -300,15 +302,6 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         let (typed, ty) = self.infer_expr(discriminant, None)?;
-        // A `void` discriminant has nothing to compare against, and an empty
-        // switch reaches codegen with no case to report a type error first.
-        if ty.carries_void() {
-            self.error_non_comparable_type(
-                source_span,
-                &ty,
-                super::diagnostics::ComparisonPosition::SwitchDiscriminant,
-            );
-        }
         Ok(Discriminant {
             source: discriminant,
             entry_env,
@@ -340,11 +333,13 @@ impl Inferer<'_> {
             ty: &disc_ty,
             operand: &disc_operand,
         };
+        let disc_exclusions = self.discriminant_exclusions(typed_disc)?;
+        let narrowed_before =
+            !disc_exclusions.is_empty() || self.discriminant_narrowed(typed_disc)?;
         let entry_reachable = self.reachable;
         self.push_pending_join_frame(narrowing::PendingJoinKind::Switch);
         let mut typed_cases: Vec<TypedSwitchCase> = Vec::new();
         let mut seen: BTreeMap<CaseKey, Span> = BTreeMap::new();
-        let mut saw_null: Option<Span> = None;
         let mut all_assigned: BTreeSet<narrowing::ReferencePath> = BTreeSet::new();
         let mut any_arm_reachable_exit = false;
         // Whether the `case`s, with no `default`, match every value.
@@ -369,16 +364,7 @@ impl Inferer<'_> {
                     continue;
                 };
                 let value_span = case_value_span(&label);
-                if matches!(label, TypedSwitchValue::Null { .. }) {
-                    saw_null.get_or_insert(value_span);
-                }
-                // tsc reports no duplicate for an expression label; one of a
-                // single literal type still covers that value.
-                let duplicate_of = if matches!(label, TypedSwitchValue::Expr { .. }) {
-                    None
-                } else {
-                    seen.insert(case_key(&label), value_span)
-                };
+                let duplicate_of = case_key(&label).and_then(|key| seen.insert(key, value_span));
                 if let Some(prev) = duplicate_of {
                     self.diagnostics.push(Diagnostic {
                         severity: Severity::Error,
@@ -420,7 +406,7 @@ impl Inferer<'_> {
             });
         }
 
-        let covered = CaseCoverage::of(&typed_cases, saw_null.is_some());
+        let covered = CaseCoverage::of(&typed_cases, disc_exclusions);
         let (residual, site) = self.compute_switch_residual(typed_disc, &disc_ty, &covered)?;
 
         let typed_default = if let Some(d) = default {
@@ -429,8 +415,13 @@ impl Inferer<'_> {
                 .try_stmt(d.body)
                 .map_err(super::arena_failure)?
                 .span;
-            let default_residual = self.unmatched_residual(&residual, &site, saw_null.is_some());
-            let env = self.build_default_narrow_env(&default_residual, &site, body_span)?;
+            let env = self.build_default_narrow_env(
+                &residual,
+                &site,
+                covered.ruled_out(&site),
+                narrowed_before,
+                body_span,
+            )?;
             self.push_narrow_frame(env.clone());
             self.switch_depth += 1;
             self.reachable = entry_reachable;
@@ -446,12 +437,11 @@ impl Inferer<'_> {
             any_arm_reachable_exit |= body_reachable;
             Some(typed_body)
         } else {
-            let unmatched = self.unmatched_residual(&residual, &site, saw_null.is_some());
             let leaves_values_unmatched =
-                !matches!(unmatched, Type::Never) && !narrowing::is_ruled_out(&unmatched);
+                !matches!(residual, Type::Never) && !narrowing::is_ruled_out(&residual);
             if leaves_values_unmatched {
                 if requires_every_case(&disc_ty) {
-                    self.emit_non_exhaustive(&unmatched, &site, switch_span);
+                    self.emit_non_exhaustive(&residual, &site, switch_span);
                 }
                 any_arm_reachable_exit |= entry_reachable;
             } else {
@@ -472,8 +462,10 @@ impl Inferer<'_> {
             // narrowing to the rest, as a `default` arm would.
             let mut natural = entry_env;
             natural.extend_env(self.build_default_narrow_env(
-                &self.unmatched_residual(&residual, &site, saw_null.is_some()),
+                &residual,
                 &site,
+                covered.ruled_out(&site),
+                narrowed_before,
                 switch_span,
             )?);
             Some(natural)
@@ -691,6 +683,9 @@ impl Inferer<'_> {
                 (TypedExprKind::Boolean(*value), Type::Boolean, *span)
             }
             TypedSwitchValue::Null { span } => (TypedExprKind::Null, Type::Null, *span),
+            TypedSwitchValue::Undefined { span } => {
+                (TypedExprKind::Undefined, Type::Undefined, *span)
+            }
             TypedSwitchValue::Expr { label, .. } => return Ok(*label),
             TypedSwitchValue::Enum {
                 enum_name,
@@ -764,20 +759,13 @@ impl Inferer<'_> {
             if let Type::Union(members) = receiver_expr.ty.peel()
                 && let Some(field_tys) = self.discriminant_field_types(members, &name.name)
             {
-                let disc_key = name.name.clone();
-                let kept = self.members_left_unmatched(members, &field_tys, covered);
-                let residual =
-                    narrowing::with_source_refinement(&receiver_expr.ty, Type::union(kept));
-                if let Some(receiver_path) = self.expr_to_reference_path(receiver_expr)? {
-                    return Ok((
-                        residual,
-                        ResidualSite::DiscriminatedReceiver {
-                            path: receiver_path,
-                            disc_key,
-                        },
-                    ));
-                }
-                return Ok((residual, ResidualSite::Anonymous));
+                let (kept, missing) = self.members_left_unmatched(members, &field_tys, covered);
+                return self.discriminated_residual(
+                    receiver_expr,
+                    kept,
+                    missing,
+                    name.name.clone(),
+                );
             }
         }
         if let TypedExprKind::IndexAccess { receiver, index } = &disc_expr.kind {
@@ -794,38 +782,23 @@ impl Inferer<'_> {
                 && let Some((disc_pos, table)) = narrowing::tuple_union_discriminant(members)
                 && disc_pos == position
             {
-                let kept: Vec<Type> = members
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, _)| {
-                        !table.iter().any(|(lit, variant)| {
-                            variant.0 as usize == *idx && covered.literals.contains(lit)
-                        })
-                    })
-                    .map(|(_, m)| m.clone())
-                    .collect();
-                let residual =
-                    narrowing::with_source_refinement(&receiver_expr.ty, Type::union(kept));
-                if let Some(receiver_path) = self.expr_to_reference_path(receiver_expr)? {
-                    return Ok((
-                        residual,
-                        ResidualSite::DiscriminatedReceiver {
-                            path: receiver_path,
-                            disc_key: format!("[{position}]"),
-                        },
-                    ));
-                }
-                return Ok((residual, ResidualSite::Anonymous));
+                let kept = table.uncovered_members(members, &covered.literals);
+                let missing = Type::union(
+                    table
+                        .uncovered(&covered.literals)
+                        .iter()
+                        .map(narrowing::literal_type)
+                        .collect(),
+                );
+                return self.discriminated_residual(
+                    receiver_expr,
+                    kept,
+                    missing,
+                    format!("[{position}]"),
+                );
             }
         }
         let residual = self.unmatched_values(disc_ty, covered);
-        // A `case null` leaves `null` out only of the default's view, so the
-        // residual keeps it; a residual of only `null` it matched is empty.
-        let residual = if covered.null && matches!(residual.peel(), Type::Null) {
-            Type::Never
-        } else {
-            residual
-        };
         Ok(
             if let Some(path) = self.expr_to_reference_path(disc_expr)? {
                 (residual, ResidualSite::Scrutinee { path })
@@ -835,23 +808,52 @@ impl Inferer<'_> {
         )
     }
 
-    /// The values of `ty` no case matches, less `null`, which the caller
-    /// handles.
+    /// What a `switch` on a union's discriminant leaves for its `default`: the
+    /// members `kept`, and the discriminant values no case matched, which a
+    /// missing-case error names.
+    fn discriminated_residual(
+        &self,
+        receiver_expr: &TypedExpr,
+        kept: Vec<Type>,
+        missing: Type,
+        disc_key: String,
+    ) -> Result<(Type, ResidualSite), crate::compiler_error::CompilerFailure> {
+        let residual = narrowing::with_source_refinement(&receiver_expr.ty, Type::union(kept));
+        let Some(path) = self.expr_to_reference_path(receiver_expr)? else {
+            return Ok((residual, ResidualSite::Anonymous));
+        };
+        Ok((
+            residual,
+            ResidualSite::DiscriminatedReceiver {
+                path,
+                disc_key,
+                missing,
+            },
+        ))
+    }
+
+    /// The values of `ty` no case matches. `case null` and `case undefined`
+    /// match those values as any literal case does.
     fn unmatched_values(&self, ty: &Type, covered: &CaseCoverage) -> Type {
-        narrowing::subtract_literals(&self.without_named_members(ty, covered), &covered.literals)
+        narrowing::subtract_literals(
+            &self.without_named_members(ty, covered),
+            &covered.literals_ruled_out(),
+        )
     }
 
     /// The members of a union switched on its discriminant field that the
-    /// cases leave, as in TypeScript: the field's values no case matches are
-    /// gathered over every member, and a member stays when its field can hold
-    /// one of them. `{ tag: S }` stays beside `{ tag: "p" }` though cases name
-    /// every member of `S`, since `S.P` holds `"p"`.
+    /// cases leave, as in TypeScript, and the field's values no case matches:
+    /// those values are gathered over every member, and a member stays when
+    /// its field can hold one of them. `{ tag: S }` stays beside `{ tag: "p" }`
+    /// though cases name every member of `S`, since `S.P` holds `"p"`. An
+    /// optional discriminant reads `undefined` when absent, so every member
+    /// that may omit it stays until a `case undefined`.
     fn members_left_unmatched(
         &self,
         members: &[Type],
         field_tys: &[Option<Type>],
         covered: &CaseCoverage,
-    ) -> Vec<Type> {
+    ) -> (Vec<Type>, Type) {
         let unmatched: Vec<Option<Type>> = field_tys
             .iter()
             .map(|field_ty| {
@@ -860,29 +862,19 @@ impl Inferer<'_> {
                     .map(|ty| self.unmatched_values(ty, covered))
             })
             .collect();
-        let all_unmatched = Type::union(unmatched.iter().flatten().cloned().collect());
-        let unmatched_null = !covered.null
-            && narrowing::union_members(&all_unmatched)
-                .iter()
-                .any(|m| matches!(m.peel(), Type::Null));
-        let values_left = without_null(&all_unmatched);
-        members
+        let values_left = Type::union(unmatched.iter().flatten().cloned().collect());
+        let kept = members
             .iter()
             .zip(field_tys.iter().zip(&unmatched))
             .filter(|(_, (field_ty, unmatched))| {
                 let (Some(field_ty), Some(unmatched)) = (field_ty, unmatched) else {
                     return true;
                 };
-                let own = without_null(unmatched);
-                own != Type::Never
-                    || (unmatched_null
-                        && narrowing::union_members(field_ty)
-                            .iter()
-                            .any(|m| matches!(m.peel(), Type::Null)))
-                    || self.shares_a_value(field_ty, &values_left, covered)
+                *unmatched != Type::Never || self.shares_a_value(field_ty, &values_left, covered)
             })
             .map(|(member, _)| member.clone())
-            .collect()
+            .collect();
+        (kept, values_left)
     }
 
     /// Whether a value of `field_ty` can be one of the unmatched `values`, as
@@ -894,7 +886,10 @@ impl Inferer<'_> {
         narrowing::union_members(field_ty).into_iter().any(|field| {
             narrowing::union_members(values).into_iter().any(|value| {
                 match (field.peel(), value.peel()) {
-                    (Type::Null, _) | (_, Type::Null | Type::Never) => false,
+                    // A member's own unmatched values already keep it for
+                    // `null` and `undefined`.
+                    (Type::Null | Type::Undefined, _)
+                    | (_, Type::Null | Type::Undefined | Type::Never) => false,
                     (
                         Type::NumberEnum { mangled: a, .. } | Type::StringEnum { mangled: a, .. },
                         Type::NumberEnum { mangled: b, .. } | Type::StringEnum { mangled: b, .. },
@@ -917,13 +912,15 @@ impl Inferer<'_> {
         })
     }
 
-    /// `ty` without the enum members the cases name: an enum leaves the
-    /// members no case names, as their member types.
+    /// `ty` without the enum members the cases name or an earlier check ruled
+    /// out: an enum leaves the other members, as their member types.
     fn without_named_members(&self, ty: &Type, covered: &CaseCoverage) -> Type {
         let is_named = |member: &Type| match member.peel() {
             Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. } => {
-                narrowing::LiteralValue::of_enum_member(member)
-                    .is_some_and(|value| covered.named_members.contains(&(mangled.clone(), value)))
+                narrowing::LiteralValue::of_enum_member(member).is_some_and(|value| {
+                    covered.ruled_out_before.contains(&value)
+                        || covered.named_members.contains(&(mangled.clone(), value))
+                })
             }
             _ => false,
         };
@@ -946,26 +943,53 @@ impl Inferer<'_> {
         Type::union(left)
     }
 
+    /// Whether the cases, with the values ruled out before the switch, leave
+    /// no member of the enum `ty`.
     fn names_every_member(&self, ty: &Type, covered: &CaseCoverage) -> bool {
         let (Type::NumberEnum { mangled, .. } | Type::StringEnum { mangled, .. }) = ty.peel()
         else {
             return false;
         };
         super::comparable::enum_literal_values(ty.peel(), self.resolver()).is_some_and(|values| {
-            values
-                .into_iter()
-                .all(|value| covered.named_members.contains(&(mangled.clone(), value)))
+            values.into_iter().all(|value| {
+                covered.ruled_out_before.contains(&value)
+                    || covered.named_members.contains(&(mangled.clone(), value))
+            })
         })
     }
 
-    /// What the discriminant can be when no case matched: the residual, less
-    /// `null` when a `case null` matched it.
-    fn unmatched_residual(&self, residual: &Type, site: &ResidualSite, saw_null: bool) -> Type {
-        if saw_null && matches!(site, ResidualSite::Scrutinee { .. }) {
-            narrowing::strip_null(residual)
-        } else {
-            residual.clone()
-        }
+    /// Whether a check before the switch narrowed the discriminant or the
+    /// object it is read from.
+    fn discriminant_narrowed(&self, typed_disc: ExprId) -> Result<bool, CompilerFailure> {
+        let disc_expr = self
+            .typed_ast
+            .try_expr(typed_disc)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(path) = self.expr_to_reference_path(disc_expr)? else {
+            return Ok(false);
+        };
+        Ok((0..=path.chain.len()).any(|len| {
+            let prefix = narrowing::ReferencePath {
+                root: path.root.clone(),
+                chain: path.chain[..len].to_vec(),
+            };
+            self.innermost_narrowing(&prefix).is_some()
+        }))
+    }
+
+    /// The values the discriminant was already known not to hold.
+    fn discriminant_exclusions(
+        &self,
+        typed_disc: ExprId,
+    ) -> Result<BTreeSet<narrowing::LiteralValue>, CompilerFailure> {
+        let disc_expr = self
+            .typed_ast
+            .try_expr(typed_disc)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(path) = self.expr_to_reference_path(disc_expr)? else {
+            return Ok(BTreeSet::new());
+        };
+        Ok(self.known_exclusions(&path))
     }
 
     /// After a `switch` whose cases match every value and all leave, the tested
@@ -984,7 +1008,13 @@ impl Inferer<'_> {
         if !self.rules_out_to_never(path) {
             return Ok(());
         }
-        let env = self.build_default_narrow_env(&narrowing::RULED_OUT, site, switch_span)?;
+        let env = self.build_default_narrow_env(
+            &narrowing::RULED_OUT,
+            site,
+            BTreeSet::new(),
+            true,
+            switch_span,
+        )?;
         if let Some(frame) = self.narrow_scopes.last_mut() {
             frame.extend_env(env);
         }
@@ -995,6 +1025,8 @@ impl Inferer<'_> {
         &mut self,
         residual: &Type,
         site: &ResidualSite,
+        excluded_literals: BTreeSet<narrowing::LiteralValue>,
+        narrowed_before: bool,
         body_span: Span,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         let mut env = narrowing::NarrowEnv::new();
@@ -1014,13 +1046,24 @@ impl Inferer<'_> {
                 .map_err(crate::typechecker::arena_failure)?,
             None => return Ok(env),
         };
+        // No value is left. When the cases alone cover the declared type, the
+        // path reads `never`, as in TypeScript. When an earlier check helped,
+        // a call or alias may have changed the value since, so the view rules
+        // the path out instead: it reads `never` only where
+        // `rules_out_to_never` allows and elsewhere keeps its declared type,
+        // rather than handing that value to code that trusts `never`.
+        let narrowed_ty = if narrowed_before && matches!(residual, Type::Never) {
+            narrowing::RULED_OUT
+        } else {
+            residual.clone()
+        };
         let binding = self.mint_narrow_binding(body_span)?;
         env.insert(
             path,
             narrowing::NarrowedView {
-                narrowed_ty: residual.clone(),
+                narrowed_ty,
                 facts: narrowing::TypeFacts::EMPTY,
-                excluded_literals: BTreeSet::new(),
+                excluded_literals,
                 binding,
                 source,
             },
@@ -1029,12 +1072,16 @@ impl Inferer<'_> {
     }
 
     fn emit_non_exhaustive(&mut self, residual: &Type, site: &ResidualSite, switch_span: Span) {
-        let missing = format_residual_missing(residual);
-        let suffix = match site {
-            ResidualSite::DiscriminatedReceiver { disc_key, .. } => {
-                format!(" for discriminant `.{disc_key}`")
+        let (missing, suffix) = match site {
+            ResidualSite::DiscriminatedReceiver {
+                disc_key, missing, ..
+            } => (
+                format_residual_missing(missing),
+                format!(" for discriminant `.{disc_key}`"),
+            ),
+            ResidualSite::Scrutinee { .. } | ResidualSite::Anonymous => {
+                (format_residual_missing(residual), String::new())
             }
-            ResidualSite::Scrutinee { .. } | ResidualSite::Anonymous => String::new(),
         };
         let help = if missing.is_empty() {
             "add a `default:` clause".to_string()
@@ -1058,9 +1105,9 @@ impl Inferer<'_> {
 
 /// Whether a `switch` without `default` must list every value of its
 /// discriminant: when its type is made of literals alone, which cases can
-/// cover. One with a member such as `string` or `null`, even in a single
-/// member of a discriminated union, can't be listed out, so the switch may
-/// simply fall through.
+/// cover. One with a member such as `string`, `null` or `undefined`, even in
+/// a single member of a discriminated union, can't be listed out, so the
+/// switch may simply fall through.
 fn requires_every_case(disc_ty: &Type) -> bool {
     narrowing::union_members(disc_ty).into_iter().all(|member| {
         narrowing::unit_literal_value(member).is_some() || matches!(member.peel(), Type::Boolean)
@@ -1077,18 +1124,19 @@ fn format_residual_missing(residual: &Type) -> String {
 
 fn format_one_literal(ty: &Type) -> Option<String> {
     match ty.peel() {
-        Type::StringLiteral(s) => Some(format!("\"{s}\"")),
+        Type::StringLiteral(s) => Some(format!("\"{}\"", crate::types::escape_string_literal(s))),
         Type::NumberLiteral(n) => Some(format!("{}", n.0)),
         Type::BooleanLiteral(b) => Some(b.to_string()),
+        Type::Null => Some("null".to_string()),
+        Type::Undefined => Some("undefined".to_string()),
         Type::Object { fields, .. } => {
-            // Discriminated-union residuals are object variants; find the discriminant field's literal.
+            // Discriminated-union residuals are object variants; find the discriminant field's
+            // literal. Only a direct literal field can be the discriminant, so nested objects
+            // are skipped.
             for field in fields.values() {
-                if let Some(lit) = match field.ty.peel() {
-                    Type::StringLiteral(s) => Some(format!("\"{s}\"")),
-                    Type::NumberLiteral(n) => Some(format!("{}", n.0)),
-                    Type::BooleanLiteral(b) => Some(b.to_string()),
-                    _ => None,
-                } {
+                if !matches!(field.ty.peel(), Type::Object { .. })
+                    && let Some(lit) = format_one_literal(&field.ty)
+                {
                     return Some(lit);
                 }
             }
@@ -1107,6 +1155,7 @@ fn classify_switch_case_value(typed: &TypedExpr, span: Span) -> Option<TypedSwit
         TypedExprKind::Number(n) => Some(TypedSwitchValue::Number { value: *n, span }),
         TypedExprKind::Boolean(b) => Some(TypedSwitchValue::Boolean { value: *b, span }),
         TypedExprKind::Null => Some(TypedSwitchValue::Null { span }),
+        TypedExprKind::Undefined => Some(TypedSwitchValue::Undefined { span }),
         TypedExprKind::NumberEnumMember {
             enum_mangled,
             variant,
@@ -1170,6 +1219,8 @@ fn literal_switch_value(literal: narrowing::LiteralValue, span: Span) -> Option<
             span,
         },
         narrowing::LiteralValue::Boolean(value) => TypedSwitchValue::Boolean { value, span },
+        narrowing::LiteralValue::Null => TypedSwitchValue::Null { span },
+        narrowing::LiteralValue::Undefined => TypedSwitchValue::Undefined { span },
         narrowing::LiteralValue::BigInt(_) => return None,
     })
 }
@@ -1188,41 +1239,35 @@ fn case_value_span(value: &TypedSwitchValue) -> Span {
         | TypedSwitchValue::Number { span, .. }
         | TypedSwitchValue::Boolean { span, .. }
         | TypedSwitchValue::Null { span }
+        | TypedSwitchValue::Undefined { span }
         | TypedSwitchValue::Enum { span, .. }
         | TypedSwitchValue::Expr { span, .. } => *span,
     }
 }
 
-fn without_null(ty: &Type) -> Type {
-    Type::union(
-        narrowing::union_members(ty)
-            .into_iter()
-            .filter(|member| !matches!(member.peel(), Type::Null))
-            .cloned()
-            .collect(),
-    )
-}
-
-/// The values a `switch`'s cases match. A case naming an enum member matches
-/// only that enum's member, and a bare literal case no member, as in
-/// TypeScript: `case 0` leaves `E.A` unmatched, and `case E.A` leaves `0`.
+/// The values a `switch`'s cases match, with those an earlier check ruled out.
+/// A case naming an enum member matches only that enum's member, and a bare
+/// literal case no member, as in TypeScript: `case 0` leaves `E.A` unmatched,
+/// and `case E.A` leaves `0`.
 struct CaseCoverage {
-    /// The values of the bare literal cases.
+    /// The values of the bare literal cases, `null` and `undefined` included.
     literals: BTreeSet<narrowing::LiteralValue>,
     /// The enum members the cases name, by enum and value.
     named_members: BTreeSet<(crate::MangledName, narrowing::LiteralValue)>,
-    null: bool,
+    /// The values the discriminant was known not to hold before the switch,
+    /// such as the enum members an earlier `if` returned on.
+    ruled_out_before: BTreeSet<narrowing::LiteralValue>,
 }
 
 impl CaseCoverage {
-    fn of(cases: &[TypedSwitchCase], null: bool) -> Self {
+    fn of(cases: &[TypedSwitchCase], ruled_out_before: BTreeSet<narrowing::LiteralValue>) -> Self {
         let mut coverage = Self {
             literals: BTreeSet::new(),
             named_members: BTreeSet::new(),
-            null,
+            ruled_out_before,
         };
         for value in cases.iter().flat_map(|case| &case.values) {
-            let Some(literal) = switch_value_to_literal_value(value) else {
+            let Some(literal) = narrowing::switch_value_literal(value) else {
                 continue;
             };
             match value {
@@ -1236,6 +1281,28 @@ impl CaseCoverage {
         }
         coverage
     }
+
+    /// The literal values no case leaves: the bare literal cases and the
+    /// values ruled out before. The members a case names are left to
+    /// `without_named_enums`, since `case E.A` matches no bare literal.
+    fn literals_ruled_out(&self) -> BTreeSet<narrowing::LiteralValue> {
+        self.literals
+            .union(&self.ruled_out_before)
+            .cloned()
+            .collect()
+    }
+
+    /// The values the discriminant can't hold where no case matched, which a
+    /// further check of it keeps ruled out. They belong to the discriminant,
+    /// so a view of the receiver it was read from gets none.
+    fn ruled_out(&self, site: &ResidualSite) -> BTreeSet<narrowing::LiteralValue> {
+        if !matches!(site, ResidualSite::Scrutinee { .. }) {
+            return BTreeSet::new();
+        }
+        let mut ruled_out = self.literals_ruled_out();
+        ruled_out.extend(self.named_members.iter().map(|(_, value)| value.clone()));
+        ruled_out
+    }
 }
 
 /// What makes two `case` labels the same: a member of an enum, or a literal
@@ -1245,35 +1312,17 @@ impl CaseCoverage {
 enum CaseKey {
     Member(crate::MangledName, String),
     Literal(narrowing::LiteralValue),
-    Null,
 }
 
-fn case_key(value: &TypedSwitchValue) -> CaseKey {
+/// `None` for an expression label: tsc reports no duplicate for one, though
+/// one of a single literal type still covers that value.
+fn case_key(value: &TypedSwitchValue) -> Option<CaseKey> {
     match value {
+        TypedSwitchValue::Expr { .. } => None,
         TypedSwitchValue::Enum {
             enum_name, member, ..
-        } => CaseKey::Member(enum_name.clone(), member.name.clone()),
-        _ => switch_value_to_literal_value(value).map_or(CaseKey::Null, CaseKey::Literal),
-    }
-}
-
-fn switch_value_to_literal_value(value: &TypedSwitchValue) -> Option<narrowing::LiteralValue> {
-    match value {
-        TypedSwitchValue::String { value, .. } => {
-            Some(narrowing::LiteralValue::String(value.clone()))
-        }
-        TypedSwitchValue::Number { value, .. } => Some(narrowing::LiteralValue::Number(
-            crate::types::LiteralF64(*value),
-        )),
-        TypedSwitchValue::Boolean { value, .. } => Some(narrowing::LiteralValue::Boolean(*value)),
-        TypedSwitchValue::Null { .. } => None,
-        TypedSwitchValue::Expr { literal, .. } => literal.clone(),
-        TypedSwitchValue::Enum { value, .. } => match value {
-            EnumVariantPayload::Number(n) => Some(narrowing::LiteralValue::Number(
-                crate::types::LiteralF64(*n),
-            )),
-            EnumVariantPayload::String(s) => Some(narrowing::LiteralValue::String(s.clone())),
-        },
+        } => Some(CaseKey::Member(enum_name.clone(), member.name.clone())),
+        _ => narrowing::switch_value_literal(value).map(CaseKey::Literal),
     }
 }
 

@@ -1,0 +1,8 @@
+exponentiationOperatorWithOnlyNullValueOrUndefinedValue.ts(3,10): error TS18050: The value 'null' cannot be used here.
+exponentiationOperatorWithOnlyNullValueOrUndefinedValue.ts(3,18): error TS18050: The value 'null' cannot be used here.
+exponentiationOperatorWithOnlyNullValueOrUndefinedValue.ts(4,10): error TS18050: The value 'null' cannot be used here.
+exponentiationOperatorWithOnlyNullValueOrUndefinedValue.ts(4,18): error TS18050: The value 'undefined' cannot be used here.
+exponentiationOperatorWithOnlyNullValueOrUndefinedValue.ts(5,10): error TS18050: The value 'undefined' cannot be used here.
+exponentiationOperatorWithOnlyNullValueOrUndefinedValue.ts(5,23): error TS18050: The value 'null' cannot be used here.
+exponentiationOperatorWithOnlyNullValueOrUndefinedValue.ts(6,10): error TS18050: The value 'undefined' cannot be used here.
+exponentiationOperatorWithOnlyNullValueOrUndefinedValue.ts(6,23): error TS18050: The value 'undefined' cannot be used here.

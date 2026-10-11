@@ -137,7 +137,7 @@ impl Inferer<'_> {
         let Some(field_ty) = self.field_read_type(&receiver_view.narrowed_ty, &name.name) else {
             return Ok(None);
         };
-        let Some((declared_ty, declared_at)) = self.const_declaration(&sibling.root) else {
+        let Some((declared_ty, declared_at)) = self.constant_declaration(&sibling.root) else {
             return Ok(None);
         };
         let Some(source_kind) = self.synthesize_unnarrowed_source(sibling, declared_at)? else {
@@ -161,12 +161,14 @@ impl Inferer<'_> {
         }))
     }
 
-    /// The declared type and name span of the `const` at `root`.
-    fn const_declaration(&self, root: &narrowing::BindingId) -> Option<(Type, crate::Span)> {
+    /// The declared type and name span of the constant binding at `root`: a
+    /// `const`, or a binding no write reaches.
+    fn constant_declaration(&self, root: &narrowing::BindingId) -> Option<(Type, crate::Span)> {
         match root {
             narrowing::BindingId::Local { name, decl_scope } => {
+                let ty = self.constant_root_type(root)?;
                 let entry = self.scopes.get_binding(name, *decl_scope)?;
-                entry.is_const.then(|| (entry.ty.clone(), entry.decl_span))
+                Some((ty, entry.decl_span))
             }
             narrowing::BindingId::Global(mangled) => self
                 .global_const(mangled)
@@ -236,7 +238,7 @@ impl Inferer<'_> {
         }
         Ok(self
             .expr_to_reference_path(expr)?
-            .filter(|path| path.chain.is_empty())
+            .filter(|path| path.chain.is_empty() && self.constant_root_type(&path.root).is_some())
             .and_then(|path| self.aliased_conditions.initializers.get(&path).copied()))
     }
 

@@ -50,8 +50,8 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
-    self, backing_struct, f64_field, install_field_getters, nullable_boxed_number_field,
-    nullable_string_field, raw_bytes_field, string_field,
+    self, backing_struct, f64_field, install_field_getters, nullable_object_field, raw_bytes_field,
+    string_field,
 };
 use crate::stdlib::shared::{
     audit_quota_denial, check_security_call, filters_candidate, mark_filtered, optional_number,
@@ -568,12 +568,12 @@ fn embeddings_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<Stru
         engine,
         &intr,
         vec![
-            raw_bytes_field(&intr),             // vectors (hidden: no getter)
-            f64_field(),                        // count
-            f64_field(),                        // dimensions
-            string_field(&intr),                // identity
-            string_field(&intr),                // model
-            nullable_boxed_number_field(&intr), // inputTokens
+            raw_bytes_field(&intr),       // vectors (hidden: no getter)
+            f64_field(),                  // count
+            f64_field(),                  // dimensions
+            string_field(&intr),          // identity
+            string_field(&intr),          // model
+            nullable_object_field(&intr), // inputTokens
         ],
     )
 }
@@ -584,12 +584,12 @@ fn model_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructTyp
         engine,
         &intr,
         vec![
-            string_field(&intr),                // name
-            nullable_string_field(&intr),       // description
-            f64_field(),                        // dimensions
-            nullable_boxed_number_field(&intr), // maxInputTokens
-            f64_field(),                        // maxInputBytes
-            string_field(&intr),                // identity
+            string_field(&intr),          // name
+            nullable_object_field(&intr), // description
+            f64_field(),                  // dimensions
+            nullable_object_field(&intr), // maxInputTokens
+            f64_field(),                  // maxInputBytes
+            string_field(&intr),          // identity
         ],
     )
 }
@@ -657,7 +657,7 @@ fn build_model(
     let name = string_val(caller, &model.name)?;
     let description = match model.description.as_deref().and_then(sanitize_description) {
         Some(text) => string_val(caller, &text)?,
-        None => Val::AnyRef(None),
+        None => crate::runtime::prelude::undefined::value(caller)?,
     };
     let max_input_tokens = optional_number(caller, model.max_input_tokens.map(|n| n as f64))?;
     let identity = string_val(caller, &model.identity)?;

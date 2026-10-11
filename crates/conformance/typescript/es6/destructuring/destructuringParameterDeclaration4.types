@@ -9,7 +9,7 @@ type arrayString = Array<String>
 >arrayString : arrayString
 >            : ^^^^^^^^^^^
 
-/*pruned*/;                               
+/*pruned*/;
 type stringOrNumArray = Array<String|Number>;
 >stringOrNumArray : stringOrNumArray
 >                 : ^^^^^^^^^^^^^^^^
@@ -43,7 +43,7 @@ function a4(...b: number[] = [1,2,3]): void { }   // Error, can't have initializ
 >3 : 3
 >  : ^
 
-/*pruned*/;                         
+/*pruned*/;
 function a6([a, b, c, ...x]: number[]): void { }
 >a6 : ([a, b, c, ...x]: number[]) => void
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -103,12 +103,12 @@ let temp = [1, 2, 3];
 >3 : 3
 >  : ^
 
-/**/;    
-                                                                                   
- 
+/**/;
+
+
 
 // Rest parameter with generic
-/*pruned*/;                                         
+/*pruned*/;
 /*pruned*/;                       // Error
 
 

@@ -24,7 +24,7 @@
 //! `llm_no_provider` deliberately gets none, which is the unconfigured runtime.
 //!
 //! The default run is a smoke subset. Set `SUBMILLI_FULL_TEST=1` for
-//! nightly/CI coverage, or `SUBMILLI_FIXTURE_FILTER=<substring>` for targeted
+//! nightly/CI coverage, or `SUBMILLI_FIXTURE_FILTER=<substring[,substring...]>` for targeted
 //! local runs.
 
 use std::fs;
@@ -32,7 +32,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use interpreter::runtime::{
+use submilli_engine::runtime::{
     EmbeddingBatch, EmbeddingError, EmbeddingFailureReason, EmbeddingLimits,
     EmbeddingMalformedReason, EmbeddingModel, EmbeddingProvider, EmbeddingTokenBudget,
     ExecutionTokenBudget, FailureReason, InMemorySessionKv, LinkedPackageModule, LlmCallError,
@@ -40,7 +40,7 @@ use interpreter::runtime::{
     StoreData, SubBatchSettlement, Vfs, estimate_embedding_tokens, install_package_modules_async,
     install_runtime_host_functions, install_runtime_store_bound, install_tenant_limits,
 };
-use interpreter::{
+use submilli_engine::{
     Asi, BacktraceMode, CompiledPackage, Diagnostic, ModulePath, PackageDeclaration,
     PackageSourceModule, RunResult, RuntimeConfig, Sources, Token, TokenKind,
     compile_package_with_transitive, compile_script, diagnostics, infer_package, lower_patterns,
@@ -115,7 +115,7 @@ impl PreparedRuntime {
 
     async fn run(
         &self,
-        compiled: &interpreter::compile::CompiledScript,
+        compiled: &submilli_engine::compile::CompiledScript,
         deny_capabilities: &[String],
         deny_llm_models: &[String],
         deny_embedding_models: &[String],
@@ -156,7 +156,7 @@ impl PreparedRuntime {
         install_runtime_store_bound(&mut linker, &mut store)?;
         let inst = linker.instantiate_async(&mut store, &module).await?;
         let _watchdog = self.config.arm_timeout(&self.engine)?;
-        let value = interpreter::dispatch_main_async(&mut store, &inst).await?;
+        let value = submilli_engine::dispatch_main_async(&mut store, &inst).await?;
         let captured = buf.lock().unwrap().clone();
         let console = String::from_utf8(captured)
             .map_err(|e| wasmtime::Error::msg(format!("console output not utf-8: {e}")))?;
@@ -171,7 +171,7 @@ impl PreparedRuntime {
     async fn run_packages(
         &self,
         deps: &[&CompiledPackage],
-        root: &interpreter::compile::CompiledScript,
+        root: &submilli_engine::compile::CompiledScript,
         deny_capabilities: &[String],
         fixture: &str,
     ) -> wasmtime::Result<RunResult> {
@@ -206,7 +206,7 @@ impl PreparedRuntime {
         let root_module = Module::new(&self.engine, &root.wasm)?;
         let inst = linker.instantiate_async(&mut store, &root_module).await?;
         let _watchdog = self.config.arm_timeout(&self.engine)?;
-        let value = interpreter::dispatch_main_async(&mut store, &inst).await?;
+        let value = submilli_engine::dispatch_main_async(&mut store, &inst).await?;
         Ok(RunResult {
             value,
             console: String::new(),
@@ -226,7 +226,7 @@ fn run_fixtures_parallel(paths: Vec<PathBuf>, runtime: Arc<PreparedRuntime>) -> 
         let runtime = Arc::clone(&runtime);
         handles.push(
             std::thread::Builder::new()
-                .stack_size(interpreter::compiler_limits::COMPILER_STACK_BYTES)
+                .stack_size(submilli_engine::compiler_limits::COMPILER_STACK_BYTES)
                 .spawn(move || {
                     let tokio = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
@@ -281,7 +281,7 @@ fn is_false(value: &str) -> bool {
 
 fn select_fixture_suite(paths: &mut Vec<PathBuf>) {
     if let Ok(filter) = std::env::var("SUBMILLI_FIXTURE_FILTER") {
-        paths.retain(|path| fixture_rel(path).contains(&filter));
+        paths.retain(|path| matches_fixture_filter(&fixture_rel(path), &filter));
         return;
     }
 
@@ -300,6 +300,31 @@ fn select_fixture_suite(paths: &mut Vec<PathBuf>) {
         };
         seen_dirs.insert(dir.to_string())
     });
+}
+
+fn matches_fixture_filter(path: &str, filter: &str) -> bool {
+    filter
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .any(|part| path.contains(part))
+}
+
+#[test]
+fn fixture_filter_selects_only_requested_groups() {
+    assert!(matches_fixture_filter(
+        "undefined/primitives.ts",
+        "undefined,tuples/optional"
+    ));
+    assert!(matches_fixture_filter(
+        "tuples/optional_elements.ts",
+        "undefined, tuples/optional"
+    ));
+    assert!(!matches_fixture_filter(
+        "objects/ordinary.ts",
+        "undefined,tuples/optional,"
+    ));
+    assert!(!matches_fixture_filter("objects/ordinary.ts", " , "));
 }
 
 fn run_full_fixture_suite() -> bool {
@@ -383,7 +408,7 @@ fn run_one(
     let filename = rel(path);
     let expectations = parse_expectations(&src)?;
 
-    let compiled = compile_script(&src, &filename, interpreter::FileId(0), &[], &[]);
+    let compiled = compile_script(&src, &filename, submilli_engine::FileId(0), &[], &[]);
     let diags = match &compiled {
         Ok(compiled) => &compiled.warnings,
         Err(diags) => diags,
@@ -470,13 +495,13 @@ fn run_multi(path: &Path) -> Result<(), String> {
         owned_asts.push((module, file_id, ast));
     }
 
-    let stdlib_defs = interpreter::runtime::stdlib_package_declarations();
+    let stdlib_defs = submilli_engine::runtime::stdlib_package_declarations();
     let mut external_packages: std::collections::BTreeMap<String, PackageDeclaration> = stdlib_defs
         .into_iter()
         .map(|defs| (defs.package_name.clone(), defs))
         .collect();
     let (prelude_defs, host_defs, _) =
-        interpreter::runtime::prelude::cached_runtime_package_declarations();
+        submilli_engine::runtime::prelude::cached_runtime_package_declarations();
     for defs in prelude_defs {
         external_packages.insert(defs.package_name.clone(), defs.clone());
     }
@@ -501,7 +526,7 @@ fn run_multi(path: &Path) -> Result<(), String> {
     match (
         all_diags
             .iter()
-            .any(|d| d.severity == interpreter::Severity::Error),
+            .any(|d| d.severity == submilli_engine::Severity::Error),
         error_needles.as_slice(),
     ) {
         (false, n) if !n.is_empty() => Err(format!(
@@ -718,7 +743,7 @@ fn run_packages_fixture(
     let root_script = match compile_script(
         root_src,
         root_path.as_str(),
-        interpreter::FileId(0),
+        submilli_engine::FileId(0),
         &all_decls,
         &[],
     ) {
@@ -805,7 +830,10 @@ fn assert_diagnostic_count(expected: Option<usize>, diags: &[Diagnostic]) -> Res
     Ok(())
 }
 
-fn parse_source(src: &str, file: interpreter::FileId) -> (interpreter::Ast, Vec<Diagnostic>) {
+fn parse_source(
+    src: &str,
+    file: submilli_engine::FileId,
+) -> (submilli_engine::Ast, Vec<Diagnostic>) {
     let mut asi = Asi::new(src, file);
     let mut tokens: Vec<Token> = Vec::new();
     loop {
@@ -1364,21 +1392,21 @@ fn install_embedding_fixture_support(data: &mut StoreData, fixture: &str) {
 /// where filter-conditional denial gets its integration coverage.
 struct FixtureDenyLlmModel(Vec<String>);
 
-impl interpreter::runtime::SecurityCheck for FixtureDenyLlmModel {
+impl submilli_engine::runtime::SecurityCheck for FixtureDenyLlmModel {
     fn check(
         &self,
         _caller: &str,
         capability: &str,
         context: &serde_json::Value,
-    ) -> interpreter::runtime::CheckOutcome {
+    ) -> submilli_engine::runtime::CheckOutcome {
         let model = context.get("model").and_then(serde_json::Value::as_str);
         if capability == "llm.call" && model.is_some_and(|m| self.0.iter().any(|d| d == m)) {
-            return interpreter::runtime::CheckOutcome::Deny {
+            return submilli_engine::runtime::CheckOutcome::Deny {
                 rule: None,
                 reason: "denied by fixture model filter".to_string(),
             };
         }
-        interpreter::runtime::CheckOutcome::Allow { rule: None }
+        submilli_engine::runtime::CheckOutcome::Allow { rule: None }
     }
 }
 
@@ -1386,21 +1414,21 @@ impl interpreter::runtime::SecurityCheck for FixtureDenyLlmModel {
 /// `embedding.embed` for the named aliases, keyed off the check context.
 struct FixtureDenyEmbeddingModel(Vec<String>);
 
-impl interpreter::runtime::SecurityCheck for FixtureDenyEmbeddingModel {
+impl submilli_engine::runtime::SecurityCheck for FixtureDenyEmbeddingModel {
     fn check(
         &self,
         _caller: &str,
         capability: &str,
         context: &serde_json::Value,
-    ) -> interpreter::runtime::CheckOutcome {
+    ) -> submilli_engine::runtime::CheckOutcome {
         let model = context.get("model").and_then(serde_json::Value::as_str);
         if capability == "embedding.embed" && model.is_some_and(|m| self.0.iter().any(|d| d == m)) {
-            return interpreter::runtime::CheckOutcome::Deny {
+            return submilli_engine::runtime::CheckOutcome::Deny {
                 rule: None,
                 reason: "denied by fixture model filter".to_string(),
             };
         }
-        interpreter::runtime::CheckOutcome::Allow { rule: None }
+        submilli_engine::runtime::CheckOutcome::Allow { rule: None }
     }
 }
 
@@ -1408,20 +1436,20 @@ impl interpreter::runtime::SecurityCheck for FixtureDenyEmbeddingModel {
 /// with a fixed reason the fixture can assert against.
 struct FixtureDeny(Vec<String>);
 
-impl interpreter::runtime::SecurityCheck for FixtureDeny {
+impl submilli_engine::runtime::SecurityCheck for FixtureDeny {
     fn check(
         &self,
         _caller: &str,
         capability: &str,
         _context: &serde_json::Value,
-    ) -> interpreter::runtime::CheckOutcome {
+    ) -> submilli_engine::runtime::CheckOutcome {
         if self.0.iter().any(|needle| capability.contains(needle)) {
-            interpreter::runtime::CheckOutcome::Deny {
+            submilli_engine::runtime::CheckOutcome::Deny {
                 rule: None,
                 reason: "denied by fixture policy".to_string(),
             }
         } else {
-            interpreter::runtime::CheckOutcome::Allow { rule: None }
+            submilli_engine::runtime::CheckOutcome::Allow { rule: None }
         }
     }
 }
@@ -1555,8 +1583,8 @@ fn diagnostic_count_directive_rejects_missing_and_duplicate_reports() {
     )
     .unwrap();
     let diagnostic = Diagnostic {
-        severity: interpreter::Severity::Error,
-        span: interpreter::Span::at(interpreter::FileId(0)),
+        severity: submilli_engine::Severity::Error,
+        span: submilli_engine::Span::at(submilli_engine::FileId(0)),
         message: "mismatch".into(),
         help: vec![],
         notes: vec![],

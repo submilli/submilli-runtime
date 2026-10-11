@@ -23,8 +23,8 @@ function f2(s: string): void {
     }
 }
 
-function f3(s: string): "foo" | "bar" | null {
-    return s === "foo" || s === "bar" ? s : null;  // "foo" | "bar" | undefined
+function f3(s: string): "foo" | "bar" | undefined {
+    return s === "foo" || s === "bar" ? s : undefined;  // "foo" | "bar" | undefined
 }
 
 function f4(x: number): 1 | 2 {

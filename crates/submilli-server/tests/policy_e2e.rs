@@ -225,7 +225,7 @@ permissions:
 ";
     let script = r#"
 import { get } from "submilli:secrets";
-function main(): string | null { return get("TOKEN"); }
+function main(): string | undefined { return get("TOKEN"); }
 "#;
 
     let (status, body) =
@@ -254,7 +254,7 @@ permissions:
 ";
     let script = r#"
 import { get } from "submilli:secrets";
-function main(): string | null { return get("MISSING"); }
+function main(): string | undefined { return get("MISSING"); }
 "#;
 
     let (status, body) = execute(policy, script).await;
@@ -264,7 +264,7 @@ function main(): string | null { return get("MISSING"); }
 }
 
 /// The package side of the two tests above: a declared secret still resolves,
-/// and an undeclared one is still `null`, when the caller is a package.
+/// and an undeclared one is still `undefined`, when the caller is a package.
 ///
 /// The package reports what it saw rather than returning the value. Handing the
 /// plaintext back to `main` is the shape the carve-out exists to prevent, and a
@@ -275,12 +275,12 @@ import { get } from "submilli:secrets";
 /** True when the named secret resolves to exactly `expected`. */
 export function secretMatches(name: string, expected: string): boolean {
     const value = get(name);
-    return value !== null && value === expected;
+    return value !== undefined && value === expected;
 }
 
 /** True when the named secret resolves to nothing. */
 export function secretIsAbsent(name: string): boolean {
-    return get(name) === null;
+    return get(name) === undefined;
 }
 "#;
 
@@ -493,7 +493,7 @@ permissions:
 ";
     let script = r#"
 import { get } from "submilli:secrets";
-function main(): string | null { return get("TOKEN"); }
+function main(): string | undefined { return get("TOKEN"); }
 "#;
     let (status, body) = execute(policy, script).await;
     assert_eq!(status, StatusCode::OK);
@@ -626,7 +626,7 @@ function main(): number { return 1; }
 fn write_denied_on_install_package(store_root: &Path) {
     let source = r#"
 import { readText } from "submilli:fs";
-export const first: string | null = readText("/never.txt");
+export const first: string | undefined = readText("/never.txt");
 "#;
     let package = compile_package(
         "@acme/eager",
@@ -665,7 +665,7 @@ packages:
 ";
     let script = r#"
 import { first } from "@acme/eager";
-function main(): string | null { return first; }
+function main(): string | undefined { return first; }
 "#;
     let (status, body) = execute_with_packages(policy, store.path(), script).await;
     assert_eq!(status, StatusCode::OK);

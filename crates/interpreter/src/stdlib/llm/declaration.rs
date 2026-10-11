@@ -21,7 +21,7 @@
 //! return type here and is never inferable from an argument.
 //!
 //! The trailing `schema` parameter is likewise not surface a program writes. It
-//! defaults to `null`, and the typed lowering fills it with the JSON Schema
+//! defaults to `undefined`, and the typed lowering fills it with the JSON Schema
 //! emitted from `T` at compile time — the way `McpCall` passes its `server` and
 //! `tool` as constants. Passing it by hand changes only what the provider is
 //! asked for; the structural check lives in the synthetic `Cast`, not in the
@@ -168,7 +168,7 @@ pub fn package_declaration() -> PackageDeclaration {
          *\n * Choosing a model is the delegation decision — a cheap model for a \
          thousand classifications, a strong one for the synthesis — so branch on \
          `contextWindow`, which is a fact you can compute against. Both \
-         `contextWindow` and `description` are `null` when the operator declared \
+         `contextWindow` and `description` are `undefined` when the operator declared \
          none; a program filtering on `contextWindow` drops those, which is correct \
          for a chunk-size decision, because you should not size against a number \
          nobody asserted.\n *\n * Treat `description` as advice, not fact: it is \
@@ -178,14 +178,14 @@ pub fn package_declaration() -> PackageDeclaration {
     defs
 }
 
-/// The compile-time schema slot. `null` on the untyped path; the typed lowering
+/// The compile-time schema slot. `undefined` on the untyped path; the typed lowering
 /// substitutes the JSON Schema emitted from `T`. Declared with a default so the
 /// arity a program writes stays two.
 fn schema_param() -> Param {
     Param::with_default(
         "schema",
-        Type::union(vec![Type::String, Type::Null]),
-        crate::DefaultValue::Null,
+        Type::union(vec![Type::String, Type::Undefined]),
+        crate::DefaultValue::Undefined,
     )
 }
 
@@ -207,12 +207,12 @@ fn model_type() -> Type {
     }
 }
 
-fn nullable_string() -> Type {
-    Type::union(vec![Type::String, Type::Null])
+fn optional_string() -> Type {
+    Type::union(vec![Type::String, Type::Undefined])
 }
 
-fn nullable_number() -> Type {
-    Type::union(vec![Type::Number, Type::Null])
+fn optional_number() -> Type {
+    Type::union(vec![Type::Number, Type::Undefined])
 }
 
 fn insert_completion_interface(defs: &mut PackageDeclaration) {
@@ -226,20 +226,20 @@ fn insert_completion_interface(defs: &mut PackageDeclaration) {
     insert_property(
         &mut properties,
         "text",
-        nullable_string(),
-        "/** The completion text. Always a string when `ok`; on the failure arm `null` only when the model produced none at all, so `\"\"` and `null` mean different things. */",
+        optional_string(),
+        "/** The completion text. Always a string when `ok`; on the failure arm `undefined` only when the model produced none at all, so `\"\"` and `undefined` mean different things. */",
     );
     insert_property(
         &mut properties,
         "reason",
-        nullable_string(),
-        "/** Why this element is not a clean completion, `null` when `ok`. One of `\"truncated\"`, `\"content-filtered\"`, `\"invalid-output\"`, `\"rate-limited\"`, `\"request-rejected\"`, `\"provider-unavailable\"`, `\"transport\"`, `\"cancelled\"`, `\"incomplete\"` — branch on this, not on `message`. */",
+        optional_string(),
+        "/** Why this element is not a clean completion, `undefined` when `ok`. One of `\"truncated\"`, `\"content-filtered\"`, `\"invalid-output\"`, `\"rate-limited\"`, `\"request-rejected\"`, `\"provider-unavailable\"`, `\"transport\"`, `\"cancelled\"`, `\"incomplete\"` — branch on this, not on `message`. */",
     );
     insert_property(
         &mut properties,
         "message",
-        nullable_string(),
-        "/** A fixed classification of the failure, `null` when `ok`. Never the prompt, the completion, or a provider response body. */",
+        optional_string(),
+        "/** A fixed classification of the failure, `undefined` when `ok`. Never the prompt, the completion, or a provider response body. */",
     );
     insert_property(
         &mut properties,
@@ -250,26 +250,26 @@ fn insert_completion_interface(defs: &mut PackageDeclaration) {
     insert_property(
         &mut properties,
         "status",
-        nullable_number(),
-        "/** The HTTP status the provider answered with, `null` when none was observed — which is what distinguishes a dead connection from a provider that answered with an error. */",
+        optional_number(),
+        "/** The HTTP status the provider answered with, `undefined` when none was observed — which is what distinguishes a dead connection from a provider that answered with an error. */",
     );
     insert_property(
         &mut properties,
         "finishReason",
-        nullable_string(),
+        optional_string(),
         "/** The provider's own raw stop reason, for diagnosis only. Varies per provider and per SDK version — branch on `reason` instead. */",
     );
     insert_property(
         &mut properties,
         "inputTokens",
-        nullable_number(),
-        "/** Prompt tokens the provider reported. `null` means indeterminate, not free: a throttled call may still have been billed, so it is never `0` as a stand-in for unknown. */",
+        optional_number(),
+        "/** Prompt tokens the provider reported. `undefined` means indeterminate, not free: a throttled call may still have been billed, so it is never `0` as a stand-in for unknown. */",
     );
     insert_property(
         &mut properties,
         "outputTokens",
-        nullable_number(),
-        "/** Completion tokens the provider reported, with the same `null`-means-indeterminate rule as `inputTokens`. */",
+        optional_number(),
+        "/** Completion tokens the provider reported, with the same `undefined`-means-indeterminate rule as `inputTokens`. */",
     );
     insert_interface(
         defs,
@@ -290,14 +290,14 @@ fn insert_model_interface(defs: &mut PackageDeclaration) {
     insert_property(
         &mut properties,
         "description",
-        nullable_string(),
-        "/** Operator-authored deployment intent, or `null` when none was declared. Advice, not fact — it is free text that steers model selection, so weigh it after `contextWindow`. Always a single line, within a fixed length bound. */",
+        optional_string(),
+        "/** Operator-authored deployment intent, or `undefined` when none was declared. Advice, not fact — it is free text that steers model selection, so weigh it after `contextWindow`. Always a single line, within a fixed length bound. */",
     );
     insert_property(
         &mut properties,
         "contextWindow",
-        nullable_number(),
-        "/** The model's context window in tokens, or `null` when the operator declared none. Absent means unknown, not zero, and there is no fallback table — a program sizing chunks should drop a model rather than guess. */",
+        optional_number(),
+        "/** The model's context window in tokens, or `undefined` when the operator declared none. Absent means unknown, not zero, and there is no fallback table — a program sizing chunks should drop a model rather than guess. */",
     );
     insert_interface(
         defs,

@@ -1,10 +1,10 @@
 === nullishCoalescingOperator4.ts ===
 
-const a1: 'literal' | null | null = null as unknown as ('literal' | null | null);
->a1 : "literal" | null
->   : ^^^^^^^^^^^^^^^^
->null as unknown as ('literal' | null | null) : "literal" | null
->                                             : ^^^^^^^^^^^^^^^^
+const a1: 'literal' | undefined | null = null as unknown as ('literal' | undefined | null);
+>a1 : "literal" | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ('literal' | undefined | null) : "literal" | null | undefined
+>                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
@@ -13,14 +13,14 @@ const aa1 = a1 ?? a1.toLowerCase()
 >    : ^^^
 >a1 ?? a1.toLowerCase() : any
 >                       : ^^^
->a1 : "literal" | null
->   : ^^^^^^^^^^^^^^^^
+>a1 : "literal" | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >a1.toLowerCase() : any
 >                 : ^^^
 >a1.toLowerCase : any
 >               : ^^^
->a1 : null
->   : ^^^^
+>a1 : null | undefined
+>   : ^^^^^^^^^^^^^^^^
 >toLowerCase : any
 >            : ^^^
 
@@ -29,14 +29,14 @@ const aa2 = a1 || a1.toLocaleUpperCase()
 >    : ^^^
 >a1 || a1.toLocaleUpperCase() : any
 >                             : ^^^
->a1 : "literal" | null
->   : ^^^^^^^^^^^^^^^^
+>a1 : "literal" | null | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >a1.toLocaleUpperCase() : any
 >                       : ^^^
 >a1.toLocaleUpperCase : any
 >                     : ^^^
->a1 : null
->   : ^^^^
+>a1 : null | undefined
+>   : ^^^^^^^^^^^^^^^^
 >toLocaleUpperCase : any
 >                  : ^^^
 

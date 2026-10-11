@@ -62,6 +62,9 @@ async fn get(
 ) -> wasmtime::Result<Val> {
     let key = read_string_units(caller, name, FIELD_NAME)?;
     if let Some(property) = find(caller, object, &key, false)? {
+        if !field_is_present(caller, &property.name, &property.value)? {
+            return super::super::undefined::value(caller);
+        }
         return checked_data_value(caller, object, property.slot, property.value).await;
     }
     if let Some(property) = find(caller, object, &accessor_key("get ", &key)?, true)? {
@@ -69,7 +72,7 @@ async fn get(
             .call_with_receiver(caller, *object, &[])
             .await;
     }
-    Ok(Val::AnyRef(None))
+    super::super::undefined::value(caller)
 }
 
 /// Hidden payload rows retain concrete class validators across structural views.

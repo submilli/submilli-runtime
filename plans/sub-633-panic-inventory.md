@@ -32,9 +32,10 @@ by [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 Entries marked **fixed on main** were merged in PR #151, PR #152, PR #163 or PR #169. Entries marked **fixed
 on branch** have completed focused verification and review; other N entries
-remain open unless explicitly accepted as an operational limitation. Three N
-entries remain open, twelve are fixed on main, N17 is fixed on this branch, and
-N09 is an accepted operational limitation. Evidence means:
+remain open unless explicitly accepted as an operational limitation. N16 remains
+open in this pinned inventory; twelve entries are fixed on main, N13/N17 are
+fixed on this branch, and
+N09/N10 are accepted operational limitations. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
   The entry says whether this was a public API, source input, or only a dependency
@@ -55,10 +56,10 @@ N09 is an accepted operational limitation. Evidence means:
 | N07 | **Fixed on main:** make resolver error formatting safe for arbitrary UTF-8 | Public formatting regression passes |
 | N08 | **Fixed on main:** make watchdog thread creation fallible | Injected setup failure, recovery and timer lifecycle regressions |
 | N09 | **Accepted operational limitation:** Tokio blocking-pool admission panic | Pinned dependency inspection; explicit maintainer decision, 2026-10-08 |
-| N10 | Propagate UUID entropy acquisition failures | Inspection; dependency OS failure |
+| N10 | **Accepted operational limitation:** UUID entropy failure panic | Pinned dependency inspection; explicit maintainer decision, 2026-10-08 |
 | N11 | **Fixed on main:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
 | N12 | **Fixed on main:** traverse validation children lazily with fallible ancestor frames | Wide-input and allocation-failure regressions |
-| N13 | **Engine fixed; adoption pending:** bound expanded Wasm locals across a module | `submilli-wasm` commit `faacf98`; release/adoption remains |
+| N13 | **Adopted locally:** bound expanded Wasm locals across a module | Engine PR #8 merged; released 0.1.11 selected in manifest and lockfile |
 | N14 | **Fixed on main:** bound aggregate MCP discovery pages/tools/schemas | Paginated localhost and aggregate-limit regressions pass |
 | N15 | **Fixed on main:** bound artifact reads and retained package data before loading | File and wide-closure regressions pass |
 | N16 | Admit native string-builder output before allocation | Inspection; host allocation before store limit |
@@ -74,7 +75,7 @@ N09 is an accepted operational limitation. Evidence means:
 Keep N/Q identifiers stable from this reset onward. Close an N entry only after
 its mechanism and directly affected siblings are fixed or a genuine scoped
 invariant is established, with focused evidence. An explicit maintainer decision
-may instead accept a scoped operational limitation, as in N09; record it separately
+may instead accept a scoped operational limitation, as in N09/N10; record it separately
 from fixed mechanisms and proven guarantees. Resolve a Q into an N finding
 or an accepted guarantee; lack of a reproducer is not a proof. Record revision,
 short disposition and verification in the entry, not repeated progress essays.
@@ -366,7 +367,12 @@ Tokio filesystem/DNS worker admission remains a dependency coverage limitation;
 this is not a complete transitive-dependency audit. Revisit this exception if a
 fallible admission API or a different blocking-pool design becomes available.
 
-### N10 — UUID generation panics if OS entropy fails
+### N10 — UUID entropy failure panic: accepted operational limitation
+
+**Disposition (2026-10-08):** explicitly accepted by the maintainer for now.
+Keep the existing `Uuid::new_v4` calls. No panic-catching wrapper or fallible UUID
+replacement is required for this item. This accepts a real operational failure;
+it is not a proven invariant, removed panic, or guarantee of process termination.
 
 **Sites:** `crates/interpreter/src/stdlib/uuid.rs:76`; Git `storage.rs:510`,
 `stage.rs:148`, `transport.rs:425`; server `audit.rs:125`, `:383`, `:769`,
@@ -375,18 +381,19 @@ fallible admission API or a different blocking-pool design becomes available.
 
 UUID 1.23.1 `src/rng.rs:54–60` calls `getrandom::fill` and panics on failure in
 the locked default RNG configuration. Randomness acquisition is an operational
-failure, not a fixed-width UUID invariant. Audit/recording and cleanup-adjacent
-Git paths need the same disposition as the guest UUID function.
+failure, not a fixed-width UUID invariant. This exception covers the listed guest,
+Git, request/session and audit/recording UUID-generation paths.
 
 **Evidence:** pinned dependency source and call-site review; no entropy failure
 was injected. The session cursor and shared secret encryption already use fallible
 randomness and should retain those real error paths.
 
-**Direction/done:** generate the random bytes fallibly and construct the UUID
-with the correct version/variant bits. Preserve fatal setup/host classification,
-no partial publication, and existing ID format. For observation-only IDs, define
-an explicit safe failure policy without inventing an apparently valid random ID.
-Cover entropy failure at representative setup, guest and Git/recording boundaries.
+**Scope:** this decision leaves existing UUID generation behavior unchanged.
+It does not authorize replacing existing fallible randomness APIs with panicking
+ones, weakening entropy quality, or fabricating IDs after a failure. Existing
+session-cursor and secret-encryption error paths remain required. No recovery,
+cleanup, or process-abort guarantee is established. Revisit if the maintainer
+chooses to make UUID entropy acquisition fallible.
 
 ### N11 — Lexer diagnostics grow before later error/render limits
 
@@ -469,11 +476,18 @@ before growth, with fallible reservation. Track the engine fix and adoption of i
 released version here. Test repeated compressed local groups under a deliberately
 small compile budget and successful ordinary module loading.
 
-**Progress:** `submilli-wasm` commit `faacf98` adds a configurable aggregate
-expanded-locals ceiling, checked arithmetic and fallible reservation before arena
-growth. Focused limit tests, formatting, all-target Clippy and three independent
-review passes are clean. N13 remains open until that engine change is released and
-this workspace adopts the release.
+**Progress:** engine [PR #8](https://github.com/submilli/submilli-wasm/pull/8)
+merged as `ccd2b116` and shipped in `submilli-wasm` 0.1.11. This workspace now
+selects 0.1.11 in both its manifest and lockfile. The released implementation
+checks the aggregate count before expansion, uses checked arithmetic and fallible
+reservation, and limits indexes to `u32`. The runtime accepts the engine default
+of 8,388,608 expanded locals per module; no runtime override is introduced.
+The engine PR reports aggregate rejection, exact-limit acceptance, per-module
+override, ordinary loading and default-limit regressions. Runtime adoption
+verification passed 35 focused cross-module GC and memory-cap integration tests,
+workspace Clippy with warnings denied, and workspace formatting. HTTP and
+nightly-only coverage were excluded. The adoption is implemented on this branch;
+these results are separate from the upstream engine test results.
 
 ### N14 — MCP discovery limits each response but retains unbounded pages
 

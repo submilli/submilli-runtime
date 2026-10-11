@@ -406,6 +406,7 @@ fn stringify_typed_object_value(
     }
     output.append(caller, &[123])?;
     let mut written = 0usize;
+    let mut listed = 0usize;
     // TypeInfo object fields inherit the compiler's BTreeMap name order.
     for field in fields {
         let Some(raw) = crate::runtime::prelude::collection::object_field_present(
@@ -419,6 +420,11 @@ fn stringify_typed_object_value(
             }
             return Ok(Fit::Mismatch);
         };
+        listed = listed.saturating_add(1);
+        // JSON omits an undefined property; it still counts as listed.
+        if super::prelude::undefined::is_undefined(caller, &raw)? {
+            continue;
+        }
         if written != 0 {
             output.append(caller, &[44])?;
         }
@@ -444,7 +450,7 @@ fn stringify_typed_object_value(
     }
     // An object stored through a narrower field type can carry fields this
     // TypeInfo doesn't list; fall back so they are still serialized.
-    if crate::runtime::prelude::object::data_field_count(caller, &receiver)? > written {
+    if crate::runtime::prelude::object::data_field_count(caller, &receiver)? > listed {
         return Ok(Fit::Mismatch);
     }
     output.append(caller, &[125])?;
@@ -466,12 +472,18 @@ fn stringify_type_info_val(
         ));
     }
     charge_json_visit(caller, remaining)?;
+    // Object properties are filtered by their owner. Array elements containing
+    // undefined have JSON's null representation, independently of static type.
+    if super::prelude::undefined::is_undefined(caller, &val)? {
+        output.append(caller, &[110, 117, 108, 108])?;
+        return Ok(Fit::Matched);
+    }
     let (kind, _metadata) = read_type_kind(caller, package, type_id)?;
     if !value_fits_kind(caller, &kind, &val)? {
         return Ok(Fit::Mismatch);
     }
     match kind {
-        crate::TypeInfoKind::Null => {
+        crate::TypeInfoKind::Null | crate::TypeInfoKind::Undefined => {
             output.append(caller, &[110, 117, 108, 108])?;
             Ok(Fit::Matched)
         }
@@ -516,9 +528,18 @@ fn stringify_type_info_val(
         crate::TypeInfoKind::Array { element } => {
             stringify_array(caller, package, element, val, remaining, depth, output)
         }
-        crate::TypeInfoKind::Tuple { elements } => {
-            stringify_tuple(caller, package, &elements, val, remaining, depth, output)
-        }
+        crate::TypeInfoKind::Tuple { elements, optional } => stringify_tuple(
+            caller,
+            package,
+            TupleSchema {
+                elements: &elements,
+                optional,
+            },
+            val,
+            remaining,
+            depth,
+            output,
+        ),
         crate::TypeInfoKind::Object { fields } => {
             let object = boxed_struct(caller, val, "object")?;
             stringify_typed_object_value(caller, package, fields, object, remaining, depth, output)
@@ -532,7 +553,7 @@ fn stringify_type_info_val(
                         .get(package)
                         .and_then(|table| table.get(*id))
                         .map(|info| &info.kind),
-                    Some(crate::TypeInfoKind::Null)
+                    Some(crate::TypeInfoKind::Null | crate::TypeInfoKind::Undefined)
                 )
             }) =>
         {
@@ -550,7 +571,7 @@ fn stringify_type_info_val(
                             .get(package)
                             .and_then(|table| table.get(**id))
                             .map(|info| &info.kind),
-                        Some(crate::TypeInfoKind::Null)
+                        Some(crate::TypeInfoKind::Null | crate::TypeInfoKind::Undefined)
                     )
                 })
                 .ok_or_else(|| wasmtime::Error::msg("JSON.stringify: empty nullable union"))?;
@@ -580,6 +601,9 @@ fn value_fits_kind(
     let intr = intrinsic_types(&mut *caller)?;
     let expected = match kind {
         crate::TypeInfoKind::Null => return Ok(matches!(val, Val::AnyRef(None))),
+        crate::TypeInfoKind::Undefined => {
+            return super::prelude::undefined::is_undefined(caller, val);
+        }
         crate::TypeInfoKind::Boolean | crate::TypeInfoKind::BooleanLiteral(_) => {
             &intr.boxed_boolean
         }
@@ -634,25 +658,36 @@ fn stringify_array(
     Ok(Fit::Matched)
 }
 
+struct TupleSchema<'a> {
+    elements: &'a [crate::TypeInfoId],
+    optional: usize,
+}
+
 fn stringify_tuple(
     caller: &mut Caller<'_, StoreData>,
     package: &str,
-    elements: &[crate::TypeInfoId],
+    schema: TupleSchema<'_>,
     val: Val,
     remaining: &mut u32,
     depth: u32,
     output: &mut Output,
 ) -> wasmtime::Result<Fit> {
+    let TupleSchema { elements, optional } = schema;
     let storage = super::array_storage::ArrayStorage::read(caller, &val)?;
     let raw = storage.backing;
     let len = storage.len;
-    if len as usize != elements.len() {
+    let minimum = elements.len().checked_sub(optional).ok_or_else(|| {
+        super::host::fatal_host_error("JSON.stringify: invalid tuple optional count")
+    })?;
+    if !(minimum..=elements.len()).contains(&(len as usize)) {
         return Ok(Fit::Mismatch);
     }
     output.append(caller, &[91])?;
-    for (index, element) in elements.iter().enumerate() {
-        let elem = raw.get(&mut *caller, index as u32)?;
-        let element = *element;
+    for index in 0..len {
+        let elem = raw.get(&mut *caller, index)?;
+        let element = elements.get(index as usize).copied().ok_or_else(|| {
+            super::host::fatal_host_error("JSON.stringify: tuple element metadata missing")
+        })?;
         if index != 0 {
             output.append(caller, &[44])?;
         }
@@ -686,7 +721,7 @@ fn read_type_kind(
         })?;
     let entries = match &info.kind {
         crate::TypeInfoKind::Object { fields } => fields.len(),
-        crate::TypeInfoKind::Tuple { elements } => elements.len(),
+        crate::TypeInfoKind::Tuple { elements, .. } => elements.len(),
         crate::TypeInfoKind::Union { members } => members.len(),
         _ => 0,
     };
@@ -709,7 +744,7 @@ fn read_type_kind(
                 .ok_or_else(|| super::host::fatal_host_error("JSON schema size overflow"))?;
             (fields.len(), bytes)
         }
-        crate::TypeInfoKind::Tuple { elements } => (
+        crate::TypeInfoKind::Tuple { elements, .. } => (
             elements.len(),
             (elements.len() as u64) * std::mem::size_of::<crate::TypeInfoId>() as u64,
         ),
@@ -741,6 +776,7 @@ fn read_type_kind(
         .ok_or_else(|| super::host::fatal_host_error("JSON schema disappeared"))?;
     let kind = match &info.kind {
         crate::TypeInfoKind::Null => crate::TypeInfoKind::Null,
+        crate::TypeInfoKind::Undefined => crate::TypeInfoKind::Undefined,
         crate::TypeInfoKind::Boolean | crate::TypeInfoKind::BooleanLiteral(_) => {
             crate::TypeInfoKind::Boolean
         }
@@ -769,8 +805,9 @@ fn read_type_kind(
             }
             crate::TypeInfoKind::Object { fields: copied }
         }
-        crate::TypeInfoKind::Tuple { elements } => crate::TypeInfoKind::Tuple {
+        crate::TypeInfoKind::Tuple { elements, optional } => crate::TypeInfoKind::Tuple {
             elements: copy_type_ids(elements)?,
+            optional: *optional,
         },
         crate::TypeInfoKind::Union { members } => crate::TypeInfoKind::Union {
             members: copy_type_ids(members)?,

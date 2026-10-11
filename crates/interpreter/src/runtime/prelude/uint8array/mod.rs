@@ -27,7 +27,7 @@ use crate::runtime::host::{
     read_uint8_array_range, uint8_array_backing, write_submilli_uint8array_struct,
 };
 use crate::runtime::intrinsic_types::intrinsic_types;
-use crate::runtime::number::format_number_js;
+use crate::runtime::number::{format_number_js, to_uint8};
 use crate::runtime::prelude::array::{ElementCallback, merge_sort};
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::as_struct;
@@ -83,12 +83,6 @@ fn backing(
     }
 }
 
-/// `ToUint8` as the Wasm bodies do it: `i32.trunc_sat_f64_u` then keep the low
-/// byte (saturates NaN/negatives to 0, not JS `% 256`, matching the prelude).
-fn to_byte(n: f64) -> u8 {
-    (n as u32 & 0xff) as u8
-}
-
 /// Box a byte into a `$boxed_number` for a callback argument or boxed return.
 fn box_byte(caller: &mut Caller<'_, StoreData>, b: u8) -> wasmtime::Result<Val> {
     let boxed = intrinsic_types(&mut *caller)?.boxed_number.clone();
@@ -113,7 +107,7 @@ fn unbox_byte(caller: &mut Caller<'_, StoreData>, v: &Val, name: &str) -> wasmti
         .as_struct(&mut *caller)?
         .ok_or_else(|| wasmtime::Error::msg(format!("{name} callback result is not a number")))?;
     match st.field(&mut *caller, 1)? {
-        Val::F64(bits) => Ok(to_byte(f64::from_bits(bits))),
+        Val::F64(bits) => Ok(to_uint8(f64::from_bits(bits))),
         other => Err(wasmtime::Error::msg(format!(
             "{name} callback result field was {other:?}, not f64"
         ))),
@@ -177,7 +171,7 @@ fn length(caller: &mut Caller<'_, StoreData>, receiver: &Val, name: &str) -> was
     Ok(f64::from(arr.len(&mut *caller)?))
 }
 
-/// `at(index)` → the byte boxed as a `$boxed_number`, or `null` when out of range.
+/// `at(index)` → the byte boxed as a `$boxed_number`, or `undefined` when out of range.
 fn at(
     caller: &mut Caller<'_, StoreData>,
     receiver: &Val,
@@ -191,7 +185,7 @@ fn at(
             let byte = read_uint8(caller, arr, i)?;
             box_byte(caller, byte)
         }
-        None => Ok(Val::null_any_ref()),
+        None => super::undefined::value(caller),
     }
 }
 
@@ -215,13 +209,21 @@ fn slice(
 fn with(bytes: &[u8], index: f64, value: f64) -> Option<Vec<u8>> {
     let i = at_index(index, bytes.len() as i32)?;
     let mut out = bytes.to_vec();
-    out[i] = to_byte(value);
+    out[i] = to_uint8(value);
     Some(out)
+}
+
+/// The byte equal to `target`, which a search compares as a number: a value
+/// that isn't an integer from 0 to 255 equals no byte.
+fn searched_byte(target: f64) -> Option<u8> {
+    (target.fract() == 0.0 && (0.0..=255.0).contains(&target)).then_some(target as u8)
 }
 
 fn index_of(bytes: &[u8], target: f64, from: f64) -> f64 {
     let len = bytes.len() as i32;
-    let target = to_byte(target);
+    let Some(target) = searched_byte(target) else {
+        return -1.0;
+    };
     let mut i = fwd_from(from, len);
     while i < len {
         if bytes[i as usize] == target {
@@ -234,7 +236,9 @@ fn index_of(bytes: &[u8], target: f64, from: f64) -> f64 {
 
 fn last_index_of(bytes: &[u8], target: f64, from: f64) -> f64 {
     let len = bytes.len() as i32;
-    let target = to_byte(target);
+    let Some(target) = searched_byte(target) else {
+        return -1.0;
+    };
     let Some(mut i) = last_from(from, len) else {
         return -1.0;
     };
@@ -295,7 +299,7 @@ fn fill(
     let end = norm_clamp(end, len) as u32;
     let count = end.saturating_sub(start);
     fuel::charge(&mut *caller, fuel::COPY, u64::from(count))?;
-    let chunk = [to_byte(value); 4096];
+    let chunk = [to_uint8(value); 4096];
     let mut offset = start;
     while offset < end {
         let count = (end - offset).min(chunk.len() as u32);
@@ -642,20 +646,20 @@ fn hex_nibble(c: u16) -> wasmtime::Result<u8> {
     }
 }
 
-/// Read `Base64Options` — `(url_safe, omit_padding)`. A null/absent options object
+/// Read `Base64Options` — `(url_safe, omit_padding)`. An undefined/absent options object
 /// means standard alphabet, padded.
 fn read_base64_options(
     caller: &mut Caller<'_, StoreData>,
     opt: &Val,
 ) -> wasmtime::Result<(bool, bool)> {
-    if matches!(opt, Val::AnyRef(None)) {
+    if super::undefined::is_undefined(caller, opt)? {
         return Ok((false, false));
     }
     let (mut url_safe, mut omit_padding) = (false, false);
     for (name, value) in read_object_entries(caller, opt, "Base64Options")? {
-        // An optional field the caller omitted is materialized as `null`; leave
+        // An optional field the caller omitted is materialized as `undefined`; leave
         // the default for it.
-        if matches!(value, Val::AnyRef(None)) {
+        if super::undefined::is_undefined(caller, &value)? {
             continue;
         }
         match String::from_utf16_lossy(&name).as_str() {
@@ -733,17 +737,6 @@ mod tests {
 
     fn units(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()
-    }
-
-    #[test]
-    fn to_byte_saturates_like_trunc_sat_u() {
-        // Saturates NaN/negatives to 0 (not JS `% 256`), then keeps the low byte —
-        // matching the Wasm `i32.trunc_sat_f64_u` + `& 0xff` path.
-        assert_eq!(to_byte(7.0), 7);
-        assert_eq!(to_byte(256.0), 0);
-        assert_eq!(to_byte(257.0), 1);
-        assert_eq!(to_byte(-1.0), 0);
-        assert_eq!(to_byte(f64::NAN), 0);
     }
 
     #[test]

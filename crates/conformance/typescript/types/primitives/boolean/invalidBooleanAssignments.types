@@ -1,0 +1,118 @@
+=== invalidBooleanAssignments.ts ===
+let x = true;
+>x : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+
+
+let a: number = x;
+>a : number
+>  : ^^^^^^
+>x : true
+>  : ^^^^
+
+let b: string = x;
+>b : string
+>  : ^^^^^^
+>x : true
+>  : ^^^^
+
+let c: void = x;
+>c : void
+>  : ^^^^
+>x : true
+>  : ^^^^
+
+let d: typeof undefined = x;
+>d : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>x : true
+>  : ^^^^
+
+
+enum E { A }
+>E : E
+>  : ^
+>A : E.A
+>  : ^^^
+
+let e: E = x;
+>e : E
+>  : ^
+>x : true
+>  : ^^^^
+
+
+class C { foo: string }
+>C : C
+>  : ^
+>foo : string
+>    : ^^^^^^
+
+let f: C = x;
+>f : C
+>  : ^
+>x : true
+>  : ^^^^
+
+
+interface I { bar: string }
+>I : I
+>  : ^
+>bar : string
+>    : ^^^^^^
+
+let g: I = x;
+>g : I
+>  : ^
+>x : true
+>  : ^^^^
+
+
+/*pruned*/;
+let h2: { toString(): string } = x; // no error
+>h2 : { toString(): string; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
+>toString : () => string
+>         : ^^^^^^^^^^^^
+>x : true
+>  : ^^^^
+
+
+/*pruned*/;
+/**/;
+
+function i<T>(a: T): void {
+>i : <T>(a: T) => void
+>  : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : T
+>  : ^
+
+    a = x;
+>a = x : boolean
+>      : ^^^^^^^
+>a : T
+>  : ^
+>x : boolean
+>  : ^^^^^^^
+
+}
+i = x;
+>i = x : true
+>      : ^^^^
+>i : any
+>  : ^^^
+>x : true
+>  : ^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

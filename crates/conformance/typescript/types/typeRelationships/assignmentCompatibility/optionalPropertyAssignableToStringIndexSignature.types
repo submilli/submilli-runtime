@@ -12,17 +12,17 @@ let optionalProperties: { k1?: string } = null as unknown as ({ k1?: string });
 >k1 : string | undefined
 >   : ^^^^^^^^^^^^^^^^^^
 
-let undefinedProperties: { k1: string | null } = null as unknown as ({ k1: string | null });
->undefinedProperties : { k1: string | null; }
->                    : ^^^^^^^^^^^^^^^^^^^^^^
->k1 : string | null
->   : ^^^^^^^^^^^^^
->null as unknown as ({ k1: string | null }) : { k1: string | null; }
->                                           : ^^^^^^^^^^^^^^^^^^^^^^
+let undefinedProperties: { k1: string | undefined } = null as unknown as ({ k1: string | undefined });
+>undefinedProperties : { k1: string | undefined; }
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>k1 : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ k1: string | undefined }) : { k1: string | undefined; }
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
->k1 : string | null
->   : ^^^^^^^^^^^^^
+>k1 : string | undefined
+>   : ^^^^^^^^^^^^^^^^^^
 
 
 let stringDictionary: { [key: string]: string } = null as unknown as ({ [key: string]: string });
@@ -46,25 +46,64 @@ stringDictionary = optionalProperties;  // ok
 >                   : ^^^^^^^^^^^^^^^^
 
 stringDictionary = undefinedProperties; // error
->stringDictionary = undefinedProperties : { k1: string | null; }
->                                       : ^^^^^^^^^^^^^^^^^^^^^^
+>stringDictionary = undefinedProperties : { k1: string | undefined; }
+>                                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >stringDictionary : { [key: string]: string; }
 >                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^
->undefinedProperties : { k1: string | null; }
->                    : ^^^^^^^^^^^^^^^^^^^^^^
+>undefinedProperties : { k1: string | undefined; }
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-/*pruned*/
-/*pruned*/
-/*pruned*/
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;                         // error
 
-/*pruned*/
-/*pruned*/
+let optionalUndefined: { k1?: undefined } = null as unknown as ({ k1?: undefined });
+>optionalUndefined : { k1?: undefined; }
+>                  : ^^^^^^^^^^^^^^^^^^^
+>k1 : undefined
+>   : ^^^^^^^^^
+>null as unknown as ({ k1?: undefined }) : { k1?: undefined; }
+>                                        : ^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>k1 : undefined
+>   : ^^^^^^^^^
 
-/*pruned*/
-/*pruned*/
-/*pruned*/
-/*pruned*/
+let dict: { [key: string]: string } = optionalUndefined; // error
+>dict : { [key: string]: string; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>key : string
+>    : ^^^^^^
+>optionalUndefined : { k1?: undefined; }
+>                  : ^^^^^^^^^^^^^^^^^^^
+
+
+function f<T>(): void {
+>f : <T>() => void
+>  : ^^^^^^^^^^^^^
+>T : T
+>  : ^
+
+	let optional: { k1?: T } = undefined!;
+>optional : { k1?: T; }
+>         : ^^^^^^^^^^^
+>k1 : T | undefined
+>   : ^^^^^^^^^^^^^
+>undefined! : never
+>           : ^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+	let dict: { [key: string]: T | number } = optional; // ok
+>dict : { [key: string]: number | T; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>key : string
+>    : ^^^^^^
+>optional : { k1?: T; }
+>         : ^^^^^^^^^^^
+
+}
 
 
 function main(): void {}

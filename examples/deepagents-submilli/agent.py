@@ -64,11 +64,12 @@ your head, write and run a program.
 ## Language deltas (it is NOT Node.js / browser JS)
 
 - No NPM, no Node APIs, no browser globals.
-- No `undefined`, no non-null `!`. Model absence with `T | null` and narrow
-  against `null` (no `in`, no `.hasOwnProperty()`).
+- Missing values are `undefined`, distinct from `null`. Narrow with
+  `=== undefined` or `=== null` (no `.hasOwnProperty()`).
 - No `async`/`await`/`Promise` — calls are synchronous.
 - No `Date` — use the `Temporal` global (ISO 8601 + IANA timezones).
-- `unknown` requires narrowing; there is no unsafe `any`. `==` aliases `===`.
+- `unknown` requires narrowing; there is no unsafe `any`. `==` aliases `===`,
+  and `== null` is a compile error.
 
 ## Standard library
 

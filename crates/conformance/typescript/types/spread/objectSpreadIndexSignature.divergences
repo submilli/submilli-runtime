@@ -1,4 +1,4 @@
-types: 26 of 45 tsc entries compared, 4 differ
+types: 32 of 52 tsc entries compared, 4 differ
 
 line 6: i
   tsc:  { b: number; a: number; }

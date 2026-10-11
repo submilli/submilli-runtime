@@ -1,0 +1,10 @@
+invalidBooleanAssignments.ts(4,5): error TS2322: Type 'boolean' is not assignable to type 'number'.
+invalidBooleanAssignments.ts(5,5): error TS2322: Type 'boolean' is not assignable to type 'string'.
+invalidBooleanAssignments.ts(6,5): error TS2322: Type 'boolean' is not assignable to type 'void'.
+invalidBooleanAssignments.ts(7,5): error TS2322: Type 'true' is not assignable to type 'undefined'.
+invalidBooleanAssignments.ts(10,5): error TS2322: Type 'true' is not assignable to type 'E'.
+invalidBooleanAssignments.ts(12,11): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+invalidBooleanAssignments.ts(13,5): error TS2322: Type 'boolean' is not assignable to type 'C'.
+invalidBooleanAssignments.ts(16,5): error TS2322: Type 'boolean' is not assignable to type 'I'.
+invalidBooleanAssignments.ts(25,5): error TS2322: Type 'boolean' is not assignable to type 'T'.   'T' could be instantiated with an arbitrary type which could be unrelated to 'boolean'.
+invalidBooleanAssignments.ts(27,1): error TS2630: Cannot assign to 'i' because it is a function.

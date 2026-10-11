@@ -56,10 +56,10 @@ export function createView(databaseId: string, dataSourceId: string, input: Crea
         fieldJson("name", input.name),
         fieldJson("type", input.type),
     ];
-    if (input.filter !== null) fields.push(fieldJson("filter", input.filter));
-    if (input.sorts !== null) fields.push(fieldJson("sorts", input.sorts));
-    if (input.configuration !== null) fields.push(fieldJson("configuration", input.configuration));
-    if (input.position !== null) fields.push(fieldJson("position", input.position));
+    if (input.filter !== null && input.filter !== undefined) fields.push(fieldJson("filter", input.filter));
+    if (input.sorts !== undefined) fields.push(fieldJson("sorts", input.sorts));
+    if (input.configuration !== null && input.configuration !== undefined) fields.push(fieldJson("configuration", input.configuration));
+    if (input.position !== null && input.position !== undefined) fields.push(fieldJson("position", input.position));
     return viewFrom(notionPost("/views", objectJson(fields)).json());
 }
 
@@ -72,14 +72,14 @@ export function createView(databaseId: string, dataSourceId: string, input: Crea
  */
 export function updateView(viewId: string, input: UpdateViewInput): NotionView {
     const fields: string[] = [];
-    if (input.name !== null) fields.push(fieldJson("name", input.name));
+    if (input.name !== undefined) fields.push(fieldJson("name", input.name));
     if (input.clearFilter === true) fields.push("\"filter\":null");
-    else if (input.filter !== null) fields.push(fieldJson("filter", input.filter));
+    else if (input.filter !== null && input.filter !== undefined) fields.push(fieldJson("filter", input.filter));
     if (input.clearSorts === true) fields.push("\"sorts\":null");
-    else if (input.sorts !== null) fields.push(fieldJson("sorts", input.sorts));
+    else if (input.sorts !== undefined) fields.push(fieldJson("sorts", input.sorts));
     if (input.clearQuickFilters === true) fields.push("\"quick_filters\":null");
-    else if (input.quickFilters !== null) fields.push(fieldJson("quick_filters", input.quickFilters));
-    if (input.configuration !== null) fields.push(fieldJson("configuration", input.configuration));
+    else if (input.quickFilters !== null && input.quickFilters !== undefined) fields.push(fieldJson("quick_filters", input.quickFilters));
+    if (input.configuration !== null && input.configuration !== undefined) fields.push(fieldJson("configuration", input.configuration));
     if (fields.length === 0) throw validationError("empty_update", "updateView requires at least one changed field");
     return viewFrom(notionPatch("/views/" + pathId(viewId), objectJson(fields)).json());
 }
@@ -88,14 +88,14 @@ export function updateView(viewId: string, input: UpdateViewInput): NotionView {
  * List views belonging to a database.
  *
  * @param databaseId Resolved ID of the database.
- * @param requestedSize Views per page, 1 to 100; `null` uses 100.
- * @param startCursor Cursor from a previous page's `nextCursor`; `null` starts at the first view.
+ * @param requestedSize Views per page, 1 to 100; undefined uses 100.
+ * @param startCursor Cursor from a previous page's `nextCursor`; undefined starts at the first view.
  * @returns One page of views; an empty `results` means the database has none.
  */
 export function listViews(
     databaseId: string,
-    requestedSize: number | null,
-    startCursor: string | null,
+    requestedSize: number | undefined,
+    startCursor: string | undefined,
 ): PageResult<NotionView> {
     const query = new Map<string, string>();
     query.set("database_id", databaseId);

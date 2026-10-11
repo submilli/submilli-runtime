@@ -1,0 +1,466 @@
+=== nullIsSubtypeOfEverythingButUndefined.ts ===
+// null is a subtype of any other types except undefined
+
+let r0 = true ? null : null;
+>r0 : null
+>   : ^^^^
+>true ? null : null : null
+>                   : ^^^^
+>true : true
+>     : ^^^^
+
+let r0_2 = true ? null : null;
+>r0_2 : null
+>     : ^^^^
+>true ? null : null : null
+>                   : ^^^^
+>true : true
+>     : ^^^^
+
+
+let u: typeof undefined = null as unknown as (typeof undefined);
+>u : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>null as unknown as (typeof undefined) : undefined
+>                                      : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let r0b = true ? u : null;
+>r0b : null | undefined
+>    : ^^^^^^^^^^^^^^^^
+>true ? u : null : null | undefined
+>                : ^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>u : undefined
+>  : ^^^^^^^^^
+
+let r0b_2 = true ? null : u;
+>r0b_2 : null | undefined
+>      : ^^^^^^^^^^^^^^^^
+>true ? null : u : null | undefined
+>                : ^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>u : undefined
+>  : ^^^^^^^^^
+
+
+let r1 = true ? 1 : null;
+>r1 : number | null
+>   : ^^^^^^^^^^^^^
+>true ? 1 : null : 1 | null
+>                : ^^^^^^^^
+>true : true
+>     : ^^^^
+>1 : 1
+>  : ^
+
+let r1_2 = true ? null : 1;
+>r1_2 : number | null
+>     : ^^^^^^^^^^^^^
+>true ? null : 1 : 1 | null
+>                : ^^^^^^^^
+>true : true
+>     : ^^^^
+>1 : 1
+>  : ^
+
+
+let r2 = true ? '' : null;
+>r2 : string | null
+>   : ^^^^^^^^^^^^^
+>true ? '' : null : "" | null
+>                 : ^^^^^^^^^
+>true : true
+>     : ^^^^
+>'' : ""
+>   : ^^
+
+let r2_2 = true ? null : '';
+>r2_2 : string | null
+>     : ^^^^^^^^^^^^^
+>true ? null : '' : "" | null
+>                 : ^^^^^^^^^
+>true : true
+>     : ^^^^
+>'' : ""
+>   : ^^
+
+
+let r3 = true ? true : null;
+>r3 : boolean | null
+>   : ^^^^^^^^^^^^^^
+>true ? true : null : true | null
+>                   : ^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>true : true
+>     : ^^^^
+
+let r3_2 = true ? null : true;
+>r3_2 : boolean | null
+>     : ^^^^^^^^^^^^^^
+>true ? null : true : true | null
+>                   : ^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>true : true
+>     : ^^^^
+
+
+/*pruned*/;
+/*pruned*/;
+
+let r5 = true ? /1/ : null;
+>r5 : RegExp | null
+>   : ^^^^^^^^^^^^^
+>true ? /1/ : null : RegExp | null
+>                  : ^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>/1/ : RegExp
+>    : ^^^^^^
+
+let r5_2 = true ? null : /1/;
+>r5_2 : RegExp | null
+>     : ^^^^^^^^^^^^^
+>true ? null : /1/ : RegExp | null
+>                  : ^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>/1/ : RegExp
+>    : ^^^^^^
+
+
+let r6 = true ? { foo: 1 } : null;
+>r6 : { foo: number; } | null
+>   : ^^^^^^^^^^^^^^^^^^^^^^^
+>true ? { foo: 1 } : null : { foo: number; } | null
+>                         : ^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>{ foo: 1 } : { foo: number; }
+>           : ^^^^^^^^^^^^^^^^
+>foo : number
+>    : ^^^^^^
+>1 : 1
+>  : ^
+
+let r6_2 = true ? null : { foo: 1 };
+>r6_2 : { foo: number; } | null
+>     : ^^^^^^^^^^^^^^^^^^^^^^^
+>true ? null : { foo: 1 } : { foo: number; } | null
+>                         : ^^^^^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>{ foo: 1 } : { foo: number; }
+>           : ^^^^^^^^^^^^^^^^
+>foo : number
+>    : ^^^^^^
+>1 : 1
+>  : ^
+
+
+let r7 = true ? () => { } : null;
+>r7 : (() => void) | null
+>   : ^^^^^^^^^^^^^^^^^^^
+>true ? () => { } : null : (() => void) | null
+>                        : ^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+let r7_2 = true ? null : () => { };
+>r7_2 : (() => void) | null
+>     : ^^^^^^^^^^^^^^^^^^^
+>true ? null : () => { } : (() => void) | null
+>                        : ^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+
+/*pruned*/;
+/*pruned*/;                                        // type parameters not identical across declarations
+
+interface I1 { foo: number; }
+>I1 : I1
+>   : ^^
+>foo : number
+>    : ^^^^^^
+
+let i1: I1 = null as unknown as (I1);
+>i1 : I1
+>   : ^^
+>null as unknown as (I1) : I1
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let r9 = true ? i1 : null;
+>r9 : I1 | null
+>   : ^^^^^^^^^
+>true ? i1 : null : I1 | null
+>                 : ^^^^^^^^^
+>true : true
+>     : ^^^^
+>i1 : I1
+>   : ^^
+
+let r9_2 = true ? null : i1;
+>r9_2 : I1 | null
+>     : ^^^^^^^^^
+>true ? null : i1 : I1 | null
+>                 : ^^^^^^^^^
+>true : true
+>     : ^^^^
+>i1 : I1
+>   : ^^
+
+
+class C1 { foo: number; }
+>C1 : C1
+>   : ^^
+>foo : number
+>    : ^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+class C2<T> { foo: T; }
+>C2 : C2<T>
+>   : ^^^^^
+>T : T
+>  : ^
+>foo : T
+>    : ^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+enum E { A }
+>E : E
+>  : ^
+>A : E.A
+>  : ^^^
+
+/*pruned*/;
+/*pruned*/;
+
+let r14 = true ? E.A : null;
+>r14 : E | null
+>    : ^^^^^^^^
+>true ? E.A : null : E | null
+>                  : ^^^^^^^^
+>true : true
+>     : ^^^^
+>E.A : E
+>    : ^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E
+>  : ^
+
+let r14_2 = true ? null : E.A;
+>r14_2 : E | null
+>      : ^^^^^^^^
+>true ? null : E.A : E | null
+>                  : ^^^^^^^^
+>true : true
+>     : ^^^^
+>E.A : E
+>    : ^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E
+>  : ^
+
+
+function f(): void { }
+>f : () => void
+>  : ^^^^^^^^^^
+
+/*pruned*/;
+
+
+let af: typeof f = null as unknown as (typeof f);
+>af : () => void
+>   : ^^^^^^^^^^
+>f : () => void
+>  : ^^^^^^^^^^
+>null as unknown as (typeof f) : () => void
+>                              : ^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>f : () => void
+>  : ^^^^^^^^^^
+
+let r15 = true ? af : null;
+>r15 : (() => void) | null
+>    : ^^^^^^^^^^^^^^^^^^^
+>true ? af : null : (() => void) | null
+>                 : ^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>af : () => void
+>   : ^^^^^^^^^^
+
+let r15_2 = true ? null : af;
+>r15_2 : (() => void) | null
+>      : ^^^^^^^^^^^^^^^^^^^
+>true ? null : af : (() => void) | null
+>                 : ^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>af : () => void
+>   : ^^^^^^^^^^
+
+
+class c { baz: string }
+>c : c
+>  : ^
+>baz : string
+>    : ^^^^^^
+
+/*pruned*/;
+
+
+let ac: typeof c = null as unknown as (typeof c);
+>ac : typeof c
+>   : ^^^^^^^^
+>c : typeof c
+>  : ^^^^^^^^
+>null as unknown as (typeof c) : typeof c
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>c : typeof c
+>  : ^^^^^^^^
+
+let r16 = true ? ac : null;
+>r16 : typeof c | null
+>    : ^^^^^^^^^^^^^^^
+>true ? ac : null : typeof c | null
+>                 : ^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>ac : typeof c
+>   : ^^^^^^^^
+
+let r16_2 = true ? null : ac;
+>r16_2 : typeof c | null
+>      : ^^^^^^^^^^^^^^^
+>true ? null : ac : typeof c | null
+>                 : ^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>ac : typeof c
+>   : ^^^^^^^^
+
+
+function f17<T>(x: T): void {
+>f17 : <T>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    let r17 = true ? x : null;
+>r17 : T | null
+>    : ^^^^^^^^
+>true ? x : null : T | null
+>                : ^^^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+
+    let r17_2 = true ? null : x;
+>r17_2 : T | null
+>      : ^^^^^^^^
+>true ? null : x : T | null
+>                : ^^^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+
+}
+
+function f18<T, U>(x: U): void {
+>f18 : <T, U>(x: U) => void
+>    : ^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : U
+>  : ^
+
+    let r18 = true ? x : null;
+>r18 : U | null
+>    : ^^^^^^^^
+>true ? x : null : U | null
+>                : ^^^^^^^^
+>true : true
+>     : ^^^^
+>x : U
+>  : ^
+
+    let r18_2 = true ? null : x;
+>r18_2 : U | null
+>      : ^^^^^^^^
+>true ? null : x : U | null
+>                : ^^^^^^^^
+>true : true
+>     : ^^^^
+>x : U
+>  : ^
+
+}
+//function f18<T, U extends T>(x: U) {
+//    var r18 = true ? x : null;
+//    var r18 = true ? null : x;
+//}
+
+/*pruned*/;
+/*pruned*/;
+
+let r20 = true ? {} : null;
+>r20 : {} | null
+>    : ^^^^^^^^^
+>true ? {} : null : {} | null
+>                 : ^^^^^^^^^
+>true : true
+>     : ^^^^
+>{} : {}
+>   : ^^
+
+let r20_2 = true ? null : {};
+>r20_2 : {} | null
+>      : ^^^^^^^^^
+>true ? null : {} : {} | null
+>                 : ^^^^^^^^^
+>true : true
+>     : ^^^^
+>{} : {}
+>   : ^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

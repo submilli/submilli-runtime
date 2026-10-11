@@ -15,19 +15,19 @@ function main(): void {
   session.set("notes/x", "x");
   session.set("triage/ab", 3);
 
-  const all = session.list("", 100, null);
+  const all = session.list("", 100);
   assert(keysOf(all) === "notes/x,triage/a,triage/ab,triage/b,", "code-unit order");
-  assert(all.nextCursor === null, "an exhausted keyspace has no cursor");
+  assert(all.nextCursor === undefined, "an exhausted keyspace has no cursor");
 
   // Prefix matches exact code units, with no path semantics: "triage/a" is a
   // prefix of "triage/ab", not a directory.
-  const prefixed = session.list("triage/a", 100, null);
+  const prefixed = session.list("triage/a", 100);
   assert(keysOf(prefixed) === "triage/a,triage/ab,", "prefix is exact code units");
 
   // A prefix that matches nothing yields an empty page and no cursor.
-  const none = session.list("zzz", 100, null);
+  const none = session.list("zzz", 100);
   assert(none.entries.length === 0, "no matches yields no entries");
-  assert(none.nextCursor === null, "no matches yields no cursor");
+  assert(none.nextCursor === undefined, "no matches yields no cursor");
 
   // `sizeBytes` is the stored value's serialized size, not key + value. `1`
   // serializes to one code unit; a two-code-unit key would double the count if
@@ -35,36 +35,36 @@ function main(): void {
   assert(all.entries[1].key === "triage/a", "entry order is stable");
   assert(all.entries[1].sizeBytes === 2, "sizeBytes is the value payload only");
   session.set("triage/a", "abcd");
-  const resized = session.list("triage/a", 100, null);
+  const resized = session.list("triage/a", 100);
   assert(resized.entries[0].sizeBytes === 12, "\"abcd\" serializes to 6 code units");
 
   // Pagination: a limit smaller than the match count returns a cursor that
   // resumes strictly after the last emitted key.
-  const first = session.list("triage/", 2, null);
+  const first = session.list("triage/", 2);
   assert(keysOf(first) === "triage/a,triage/ab,", "first page respects the limit");
-  assert(first.nextCursor !== null, "a truncated page carries a cursor");
+  assert(first.nextCursor !== undefined, "a truncated page carries a cursor");
 
   const second = session.list("triage/", 2, first.nextCursor);
   assert(keysOf(second) === "triage/b,", "the cursor resumes after the last key");
-  assert(second.nextCursor === null, "the final page has no cursor");
+  assert(second.nextCursor === undefined, "the final page has no cursor");
 
   // A page filled exactly to the limit cannot know whether more matches follow,
   // so it hands back a cursor; that cursor's page is empty and final. Paging
-  // until the cursor is null therefore terminates without re-reporting a key.
-  const exact = session.list("triage/", 3, null);
+  // until the cursor is undefined therefore terminates without re-reporting a key.
+  const exact = session.list("triage/", 3);
   assert(keysOf(exact) === "triage/a,triage/ab,triage/b,", "a full page holds every match");
-  assert(exact.nextCursor !== null, "a page filled to the limit still offers a cursor");
+  assert(exact.nextCursor !== undefined, "a page filled to the limit still offers a cursor");
   const past = session.list("triage/", 3, exact.nextCursor);
   assert(past.entries.length === 0, "the page past the last match is empty");
-  assert(past.nextCursor === null, "and ends the walk");
+  assert(past.nextCursor === undefined, "and ends the walk");
 
   // Limit bounds: 1 and 1000 are accepted, 0 and 1001 are not.
-  assert(session.list("", 1, null).entries.length === 1, "limit 1 is accepted");
-  assert(session.list("", 1000, null).entries.length === 4, "limit 1000 is accepted");
+  assert(session.list("", 1).entries.length === 1, "limit 1 is accepted");
+  assert(session.list("", 1000).entries.length === 4, "limit 1000 is accepted");
 
   let rejectedZero = false;
   try {
-    session.list("", 0, null);
+    session.list("", 0);
   } catch (e: Error) {
     rejectedZero = true;
   }
@@ -72,7 +72,7 @@ function main(): void {
 
   let rejectedOver = false;
   try {
-    session.list("", 1001, null);
+    session.list("", 1001);
   } catch (e: Error) {
     rejectedOver = true;
   }
@@ -80,7 +80,7 @@ function main(): void {
 
   // A cursor is opaque: it must not be the key it resumes after.
   const cursor = first.nextCursor;
-  assert(cursor !== null, "cursor present");
+  assert(cursor !== undefined, "cursor present");
   const opaque = cursor as string;
   assert(opaque !== "triage/ab", "the cursor is not the bare key");
 
@@ -109,13 +109,13 @@ function main(): void {
   for (let i = 0; i < 600; i = i + 1) {
     session.set("pad/" + i.toString(), 0);
   }
-  const bounded = session.list("zz/", 10, null);
+  const bounded = session.list("zz/", 10);
   assert(bounded.entries.length === 0, "the scan bound cut the page short");
-  assert(bounded.nextCursor !== null, "a bound-limited short page still pages on");
+  assert(bounded.nextCursor !== undefined, "a bound-limited short page still pages on");
 
   session.set("zz/found", 7);
   let walked = 0;
-  let next: string | null = null;
+  let next: string | undefined;
   let found = false;
   while (walked < 20) {
     const page = session.list("zz/", 10, next);
@@ -125,11 +125,11 @@ function main(): void {
       }
     }
     next = page.nextCursor;
-    if (next === null) {
+    if (next === undefined) {
       break;
     }
     walked = walked + 1;
   }
   assert(found, "paging to exhaustion reaches keys past the scan bound");
-  assert(next === null, "the walk ended because the keyspace was exhausted");
+  assert(next === undefined, "the walk ended because the keyspace was exhausted");
 }

@@ -5,7 +5,7 @@ import { batch, choiceQuestion, noulQuestion, scoreQuestion, Question, choice, n
 
 function main(): void {
     const key = secrets.get("TYPESAFE_AI_KEY");
-    if (key === null || key.trim().length === 0) {
+    if (key === undefined || key.trim().length === 0) {
         label("skip: TYPESAFE_AI_KEY is not bound");
         return;
     }

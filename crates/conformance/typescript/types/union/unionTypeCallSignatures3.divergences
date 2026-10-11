@@ -1,0 +1,4 @@
+types: 15 of 39 tsc entries compared, 0 differ
+
+errors:
+line 12: ours: cannot call value of type `((arg0: string) => void) | ((arg0: string, ...arg1: string[]) => void) | ((arg0: string, arg1?: string) => void) | ((...arg0: string[]) => void) | ((arg0?: string) => void) | ((arg0?: string, ...arg1: number[]) => void) | ((arg0?: string, arg1?: number) => void)` (tsc accepts)

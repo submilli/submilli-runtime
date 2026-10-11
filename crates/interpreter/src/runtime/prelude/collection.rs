@@ -9,6 +9,7 @@ use wasmtime::{Caller, StructType, Val};
 
 use crate::runtime::StoreData;
 use crate::runtime::host::write_submilli_string_struct_units;
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::iterator::as_struct;
 use crate::runtime::prelude::vtable::read_string_units;
 
@@ -189,12 +190,48 @@ pub(crate) fn unbox_bool(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmt
     }
 }
 
-/// Empty buckets use null, so a stored null key needs a private sentinel.
+/// Empty buckets use null, so a stored null key needs a private sentinel. A
+/// `-0` key is stored as `+0`, as JavaScript's `Map#set` and `Set#add` do.
 pub(crate) fn encode_key(caller: &mut Caller<'_, StoreData>, key: &Val) -> wasmtime::Result<Val> {
     if matches!(key, Val::AnyRef(None)) {
-        crate::runtime::host::host_collection_null(caller)
-    } else {
-        Ok(*key)
+        return crate::runtime::host::host_collection_null(caller);
+    }
+    if boxed_number_value(caller, key)?.is_some_and(|n| n == 0.0 && n.is_sign_negative()) {
+        let zero = crate::runtime::host::write_boxed_number_struct(caller, 0.0)?;
+        return Ok(Val::AnyRef(Some(zero.to_anyref())));
+    }
+    Ok(*key)
+}
+
+/// Whether both values are boxed `NaN`s. Number `equals` is `===`, and this is
+/// where SameValueZero (`Map`/`Set` keys, `Array#includes`) differs from it.
+pub(crate) fn both_nan(
+    caller: &mut Caller<'_, StoreData>,
+    a: &Val,
+    b: &Val,
+) -> wasmtime::Result<bool> {
+    Ok(boxed_number_value(caller, a)?.is_some_and(f64::is_nan)
+        && boxed_number_value(caller, b)?.is_some_and(f64::is_nan))
+}
+
+/// The number a boxed `number` holds, or `None` for any other value.
+fn boxed_number_value(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+) -> wasmtime::Result<Option<f64>> {
+    let Val::AnyRef(Some(any)) = val else {
+        return Ok(None);
+    };
+    let Some(st) = any.as_struct(&mut *caller)? else {
+        return Ok(None);
+    };
+    let boxed = intrinsic_types(&mut *caller)?.boxed_number.clone();
+    if !StructType::eq(&st.ty(&*caller)?, &boxed) {
+        return Ok(None);
+    }
+    match st.field(&mut *caller, 1)? {
+        Val::F64(bits) => Ok(Some(f64::from_bits(bits))),
+        _ => Ok(None),
     }
 }
 

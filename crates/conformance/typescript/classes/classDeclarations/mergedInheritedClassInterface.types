@@ -153,12 +153,12 @@ child.method();
 >       : ^^^^^^^^^^
 
 
-/*pruned*/;                                                  
-/*pruned*/;         
-/*pruned*/;         
-/*pruned*/;            
-/*pruned*/;            
-/*pruned*/;          
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 
 
 function main(): void {}

@@ -28,7 +28,7 @@ function main(): void {
   // Negative indices on at / slice / with resolve from the end.
   const b: number[] = [10, 20, 30, 40];
   assert(b.at(-1) === 40, "at(-1) is the last element");
-  assert(b.at(-5) === null, "at past the start is null");
+  assert(b.at(-5) === undefined, "at past the start is undefined");
   const s = b.slice(-2);
   assert(s.length === 2 && s[0] === 30 && s[1] === 40, "slice(-2) is the last two");
   const w = b.with(-1, 99);

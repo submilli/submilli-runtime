@@ -54,7 +54,7 @@ function main(): void {
     asserted = e.name + ":" + e.message;
   }
   assert(
-    asserted === "TypeError:non-null assertion failed: value is null",
+    asserted === "TypeError:non-null assertion failed: value is null or undefined",
     "x! on null is TypeError",
   );
 

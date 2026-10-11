@@ -1,4 +1,4 @@
-// The shapes that *are* legal: returning a `void` call from a `void` function,
+// Returning a `void` call from a `void` function,
 // and an alias for `void` in return position.
 type V = void;
 
@@ -12,9 +12,7 @@ function aliased(): V {
   return sideEffect();
 }
 
-// A type parameter the declaration only ever puts in return position may be
-// instantiated at `void` — a `void` return has no result slot at all. This is
-// the one place `void` is legitimate outside a function's own return type.
+// Generic void return values preserve the callback effects and undefined result.
 interface Sink<T> {
   emit(x: string): T;
 }

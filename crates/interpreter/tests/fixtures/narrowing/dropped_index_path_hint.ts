@@ -4,8 +4,8 @@
 class Leaf { z: number | null = 3; }
 const key: string | null = "k";
 function main(): number {
-  const leaves: Record<string, Leaf | null> = { k: new Leaf() };
-  if (key !== null && leaves[key] !== null && leaves[key].z !== null) {
+  const leaves: Record<string, Leaf> = { k: new Leaf() };
+  if (key !== null && leaves[key] !== undefined && leaves[key].z !== null) {
     const n: number = leaves[key].z;
     return n;
   }

@@ -1,0 +1,126 @@
+=== contextuallyTypedBindingInitializer.ts ===
+interface Show {
+>Show : Show
+>     : ^^^^
+
+    show: (x: number) => string;
+>show : (x: number) => string
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+}
+function f({ show = v => v.toString() }: Show): void {}
+>f : ({ show }: Show) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>show : (x: number) => string
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>v => v.toString() : (v: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^
+>v : number
+>  : ^^^^^^
+>v.toString() : string
+>             : ^^^^^^
+>v.toString : (radix?: number) => string
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>v : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+
+interface Nested {
+>Nested : Nested
+>       : ^^^^^^
+
+    nested: Show
+>nested : Show
+>       : ^^^^
+
+}
+function ff({ nested = { show: v => v.toString() } }: Nested): void {}
+>ff : ({ nested }: Nested) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>nested : Show
+>       : ^^^^
+>{ show: v => v.toString() } : { show: (v: number) => string; }
+>                            : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>show : (v: number) => string
+>     : ^^^^^^^^^^^^^^^^^^^^^
+>v => v.toString() : (v: number) => string
+>                  : ^^^^^^^^^^^^^^^^^^^^^
+>v : number
+>  : ^^^^^^
+>v.toString() : string
+>             : ^^^^^^
+>v.toString : (radix?: number) => string
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>v : number
+>  : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+interface Tuples {
+>Tuples : Tuples
+>       : ^^^^^^
+
+    prop: [string, number];
+>prop : [string, number]
+>     : ^^^^^^^^^^^^^^^^
+
+}
+function g({ prop = ["hello", 1234] }: Tuples): void {}
+>g : ({ prop }: Tuples) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>prop : [string, number]
+>     : ^^^^^^^^^^^^^^^^
+>["hello", 1234] : [string, number]
+>                : ^^^^^^^^^^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+>1234 : 1234
+>     : ^^^^
+
+
+interface StringUnion {
+>StringUnion : StringUnion
+>            : ^^^^^^^^^^^
+
+    prop: "foo" | "bar";
+>prop : "foo" | "bar"
+>     : ^^^^^^^^^^^^^
+
+}
+function h({ prop = "foo" }: StringUnion): void {}
+>h : ({ prop }: StringUnion) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>prop : "foo" | "bar"
+>     : ^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+
+interface StringIdentity {
+>StringIdentity : StringIdentity
+>               : ^^^^^^^^^^^^^^
+
+    stringIdentity(s: string): string;
+>stringIdentity : (s: string) => string
+>               : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+
+}
+/*pruned*/;
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

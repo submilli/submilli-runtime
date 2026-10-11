@@ -16,7 +16,7 @@ function makeRange(lo: number, hi: number): Range {
       const it: Iterator<number> = {
         next: (): IteratorResult<number> => {
           if (i >= hi) {
-            const done: IteratorResult<number> = { done: true };
+            const done: IteratorResult<number> = { done: true, value: undefined };
             return done;
           }
           const out: IteratorResult<number> = { done: false, value: i };

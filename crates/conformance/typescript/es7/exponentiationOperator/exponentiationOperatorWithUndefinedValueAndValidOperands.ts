@@ -12,12 +12,12 @@ let b: number = null as unknown as (number);
 
 // operator *
 /*pruned*/;         
-let rk2 = null ** b;
-let rk3 = null ** 1;
-let rk4 = null ** E.a;
+let rk2 = undefined ** b;
+let rk3 = undefined ** 1;
+let rk4 = undefined ** E.a;
 /*pruned*/;         
-let rk6 = b ** null;
-let rk7 = 0 ** null;
-let rk8 = E.b ** null;
+let rk6 = b ** undefined;
+let rk7 = 0 ** undefined;
+let rk8 = E.b ** undefined;
 
 function main(): void {}

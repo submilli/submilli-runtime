@@ -9,9 +9,9 @@ interface Runnable {
 
 }
 
-/*pruned*/;                              
-                             
- 
+/*pruned*/;
+
+
 
 let x: string = null as unknown as (string);
 >x : string
@@ -21,7 +21,7 @@ let x: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                                                             
+/*pruned*/;
 
 let b: boolean = null as unknown as (boolean);
 >b : boolean
@@ -32,8 +32,8 @@ let b: boolean = null as unknown as (boolean);
 >                : ^^^^^^^
 
 /*pruned*/;
-/*pruned*/;   
-/*pruned*/;    
+/*pruned*/;
+/*pruned*/;
 b = "foo" == "bar";
 >b = "foo" == "bar" : boolean
 >                   : ^^^^^^^
@@ -70,12 +70,12 @@ b = x == "bar";
 >"bar" : "bar"
 >      : ^^^^^
 
-/*pruned*/;    
-/*pruned*/;    
+/*pruned*/;
+/*pruned*/;
 
 /*pruned*/;
-/*pruned*/;   
-/*pruned*/;    
+/*pruned*/;
+/*pruned*/;
 b = "foo" != "bar";
 >b = "foo" != "bar" : boolean
 >                   : ^^^^^^^
@@ -112,8 +112,8 @@ b = x != "bar";
 >"bar" : "bar"
 >      : ^^^^^
 
-/*pruned*/;    
-/*pruned*/;    
+/*pruned*/;
+/*pruned*/;
 
 
 function main(): void {}

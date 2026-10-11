@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
 import { test } from 'node:test';
-import { nullableFields } from '../../../scripts/package-contract-host.mjs';
 
 let token = 'oauth-test-token';
 let response;
+// When set, the whole response envelope instead of `{ data: response }`.
+let envelope;
 let request;
 let denied = false;
 const capabilities = [];
@@ -35,17 +36,13 @@ globalThis.__linearHost = {
                 agentSession: { issue: resolvedTeam, comment: null },
             });
         }
-        return { ok: true, json: () => ({ errors: null, data }) };
+        return { ok: true, json: () => envelope ?? { data } };
     },
 };
 const source = (await readFile(new URL('../src/lib.ts', import.meta.url), 'utf8'))
     .replace(/^import .*from "submilli:.*";\n/gm, '')
     .replace('const ENDPOINT', 'const { post, secrets, check } = globalThis.__linearHost;\nconst ENDPOINT');
-const module = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source)).toString('base64')}`);
-// Make explicit the Submilli optional-field convention for equivalent Node calls.
-const linear = Object.fromEntries(Object.entries(module).map(([name, value]) => [name,
-    typeof value === 'function' ? (...args) => value(...args.map(nullableFields)) : value,
-]));
+const linear = await import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(source)).toString('base64')}`);
 const session = { id: 'session', status: 'active', issue: { id: 'issue' }, comment: null,
     url: null, summary: null, externalUrls: [], plan: null };
 const page = { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } };
@@ -136,12 +133,10 @@ test('comments support threaded replies; comment and activity lists preserve pag
 
 test('an update and a comment are checked against the team of their issue', () => {
     const issue = { id: 'issue', title: 'Renamed' };
-    // Submilli reads an absent optional field as null; plain JavaScript needs it spelled out.
-    const unset = { title: null, description: null, assigneeId: null, stateId: null, priority: null, labelIds: null, projectId: null };
     for (const [capability, call, mutation, context] of [
-        ['updateIssue', () => linear.updateIssue('issue', { ...unset, title: 'Renamed' }), 'issueUpdate', { teamId: 'team', projectId: null }],
-        ['updateIssue', () => linear.updateIssue('issue', { ...unset, projectId: 'project' }), 'issueUpdate', { teamId: 'team', projectId: 'project' }],
-        ['createComment', () => linear.createComment({ issueId: 'issue', body: 'Note', parentId: null }), 'commentCreate', { teamId: 'team' }],
+        ['updateIssue', () => linear.updateIssue('issue', { title: 'Renamed' }), 'issueUpdate', { teamId: 'team', projectId: null }],
+        ['updateIssue', () => linear.updateIssue('issue', { projectId: 'project' }), 'issueUpdate', { teamId: 'team', projectId: 'project' }],
+        ['createComment', () => linear.createComment({ issueId: 'issue', body: 'Note' }), 'commentCreate', { teamId: 'team' }],
     ]) {
         response = {
             issue: { team: { id: 'team' } },
@@ -243,6 +238,24 @@ test('denied session reads make only the team lookup', () => {
 test('GraphQL errors remain actionable', () => {
     response = null;
     assert.throws(() => linear.getAgentSession('session'), /no data/);
+    envelope = { errors: [{ message: 'Entity not found', path: null, extensions: null }] };
+    assert.throws(() => linear.getAgentSession('session'), /^Error: Linear GraphQL error: Entity not found$/);
+    envelope = { data: null, errors: null };
+    assert.throws(() => linear.getAgentSession('session'), /no data/);
+    envelope = undefined;
+});
+
+test('an unfiltered issue list is checked with a null team and sends only the default page', () => {
+    response = { issues: page };
+    assert.deepEqual(linear.listIssues(), page);
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: null });
+    assert.deepEqual(JSON.parse(JSON.stringify(request.body.variables)), { first: 50 });
+    linear.listIssues({ teamId: 'team', stateType: 'started' }, { after: 'cursor' });
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team' });
+    assert.deepEqual(JSON.parse(JSON.stringify(request.body.variables)), {
+        first: 50, after: 'cursor', filter: { team: { id: { eq: 'team' } }, state: { type: { eq: 'started' } } },
+    });
+    queries.add(request.body.query);
 });
 
 // Supply a local SDL and an installed graphql module for an additional schema check.

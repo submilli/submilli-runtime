@@ -4,7 +4,7 @@
 // line where it was, so `tsc`'s baselines and our diagnostics stay comparable line
 // by line with the upstream test:
 //
-// - `var` becomes `let`, and `undefined` becomes `null`. A `var` declared again in
+// - `var` becomes `let`. A `var` declared again in
 //   the same scope, which upstream uses to check a type (`var x: T; var x = e;`),
 //   would be a `let` redeclaration, so the repeat binds `x_2` instead; later reads
 //   still name the first. (`port-suite.cjs` leaves out a case whose repeats are
@@ -15,7 +15,7 @@
 //   `tsc` infers for it, and so do a class field and a parameter with a default value
 //   that have no type, since Submilli requires them to be written. Where `tsc`
 //   infers `any`, nothing is written.
-// - `// @strict: false` becomes `// @strict: true`, and `function main(): void {}`
+// - `// @strict: false` and `// @strictNullChecks: false` become `true`, and `function main(): void {}`
 //   is appended.
 //
 // Usage: node port-case.cjs <upstream case.ts> <ported case.ts>
@@ -36,11 +36,13 @@ function main() {
 function port(source, fileName) {
   let text = source.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
   text = text.replace(/^(\s*\/\/\s*@strict\s*:\s*)false\b/im, "$1true");
+  // Without strict null checks tsc erases `null` and `undefined` from types,
+  // conflating what Submilli keeps apart.
+  text = text.replace(/^(\s*\/\/\s*@strictNullChecks\s*:\s*)false\b/im, "$1true");
   text = renameRedeclarations(text, fileName);
   text = rewriteTokens(text);
   text = fillDeclarations(text, fileName);
-  // Types are inferred from the program as rewritten so far, so they are spelled
-  // with `null` and see the values the placeholders supply.
+  // Infer from the rewritten program, including its declaration placeholders.
   text = annotateInferredTypes(text, fileName);
   if (!/^\s*function\s+main\s*\(/m.test(text)) text += "\n\nfunction main(): void {}\n";
   return text;
@@ -79,25 +81,19 @@ function renameRedeclarations(text, fileName) {
   return applyEdits(text, edits);
 }
 
-/**
- * `var` → `let` and `undefined` → `null`, as tokens, so strings and comments are left
- * alone. The scanner has no parser to tell a template's `}` from a block's, so words in
- * a template's text after its first substitution are rewritten too.
- */
+/** Rewrite declaration keywords, leaving template text and property names alone. */
 function rewriteTokens(text) {
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+  const sourceFile = parse(text, "case.ts");
   const edits = [];
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    if (token === ts.SyntaxKind.VarKeyword) edits.push(replace(scanner, "let"));
-    else if (token === ts.SyntaxKind.Identifier && scanner.getTokenText() === "undefined") {
-      edits.push(replace(scanner, "null"));
-    } else if (token === ts.SyntaxKind.UndefinedKeyword) edits.push(replace(scanner, "null"));
-  }
+  const visit = (node) => {
+    if (ts.isVariableDeclarationList(node) && !(node.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const))) {
+      const start = node.getStart(sourceFile);
+      if (text.slice(start, start + 3) === "var") edits.push({ start, end: start + 3, text: "let" });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
   return applyEdits(text, edits);
-}
-
-function replace(scanner, replacement) {
-  return { start: scanner.getTokenStart(), end: scanner.getTokenEnd(), text: replacement };
 }
 
 /** Give each typed binding with no value, and each `declare function`, a placeholder. */
@@ -163,7 +159,7 @@ function annotateInferredTypes(text, fileName) {
   const checker = program.getTypeChecker();
   const sourceFile = program.getSourceFile(fileName);
   const edits = [];
-  const spell = (type, node) => checker.typeToString(type, node, ts.TypeFormatFlags.NoTruncation).replace(/\bundefined\b/g, "null");
+  const spell = (type, node) => checker.typeToString(type, node, ts.TypeFormatFlags.NoTruncation);
   // A type that can't be written where it goes: `any`, a class expression's, or `this`.
   const unwritable = /\bany\b|\(Anonymous|\bthis\b/;
   const visit = (node) => {
@@ -226,4 +222,5 @@ function applyEdits(text, edits) {
   return out;
 }
 
-main();
+module.exports = { port };
+if (require.main === module) main();

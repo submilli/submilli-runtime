@@ -50,21 +50,20 @@ function rejectedAs(code: string, action: () => void): void {
     assert(outcome === code, "expected " + code + ", got " + outcome);
 }
 
-function meeting(attendees: Attendee[], sendUpdates: string | null): EventCreateInput {
-    const input: EventCreateInput = {
+function meeting(attendees: Attendee[], sendUpdates: string | undefined): EventCreateInput {
+    return {
         summary: "Review",
         start: { dateTime: "2026-10-05T10:00:00Z" },
         end: { dateTime: "2026-10-05T10:30:00Z" },
         attendees: attendees,
+        sendUpdates: sendUpdates,
     };
-    if (sendUpdates !== null) input.sendUpdates = sendUpdates;
-    return input;
 }
 
-function attendeeRuleHolds(capability: string, call: (attendees: Attendee[], sendUpdates: string | null) => void, readsCurrentAttendees: boolean = false): void {
+function attendeeRuleHolds(capability: string, call: (attendees: Attendee[], sendUpdates: string | undefined) => void, readsCurrentAttendees: boolean = false): void {
     reachesCredentialBoundary(() => { call([{ email: "allowed@example.com" }, { email: "second@example.com" }], "none"); });
     // An unset `sendUpdates` is checked as "none", which is what Calendar does with it.
-    reachesCredentialBoundary(() => { call([{ email: "allowed@example.com" }], null); });
+    reachesCredentialBoundary(() => { call([{ email: "allowed@example.com" }], undefined); });
     deniedAt(capability, "main", () => { call([{ email: "allowed@example.com" }, { email: "blocked@example.com" }], "none"); });
     // Policy reads the address in one spelling, however the caller wrote it.
     for (const spelling of ["Blocked@Example.com", "BLOCKED@EXAMPLE.COM", "blocked@example.com."]) {
@@ -92,12 +91,11 @@ function attendeeRuleHolds(capability: string, call: (attendees: Attendee[], sen
 }
 
 function main(): string {
-    attendeeRuleHolds("submilli/google-calendar.createEvent", (attendees: Attendee[], sendUpdates: string | null): void => {
+    attendeeRuleHolds("submilli/google-calendar.createEvent", (attendees: Attendee[], sendUpdates: string | undefined): void => {
         createEvent(meeting(attendees, sendUpdates));
     });
-    attendeeRuleHolds("submilli/google-calendar.updateEvent", (attendees: Attendee[], sendUpdates: string | null): void => {
-        if (sendUpdates === null) updateEvent("event1", { attendees: attendees });
-        else updateEvent("event1", { attendees: attendees, sendUpdates: sendUpdates });
+    attendeeRuleHolds("submilli/google-calendar.updateEvent", (attendees: Attendee[], sendUpdates: string | undefined): void => {
+        updateEvent("event1", { attendees: attendees, sendUpdates: sendUpdates });
     }, true);
     // An event created without attendees has an empty list, which a deny-list allows.
     reachesCredentialBoundary(() => {

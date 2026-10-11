@@ -175,10 +175,10 @@ function e(): void {
 >e : () => void
 >  : ^^^^^^^^^^
 
-    /*pruned*/;                                                                                         
-    /*pruned*/;                                               
-                              
-     
+    /*pruned*/;
+    /*pruned*/;
+
+
 }
 function f(): void {
 >f : () => void
@@ -216,11 +216,13 @@ function f(): void {
 >"number" : "number"
 >         : ^^^^^^^^
 
-        x = null;
->x = null : null
->         : ^^^^
+        x = undefined;
+>x = undefined : undefined
+>              : ^^^^^^^^^
 >x : string | number | boolean
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
     }
     x; // string | number

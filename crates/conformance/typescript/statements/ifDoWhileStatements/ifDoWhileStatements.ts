@@ -48,9 +48,9 @@ if (null) { }
 while (null) { }
 do { }while(null)
 
-if (null) { }
-while (null) { }
-do { }while(null)
+if (undefined) { }
+while (undefined) { }
+do { }while(undefined)
 
 if (0.0) { }
 while (0.0) { }
@@ -107,7 +107,7 @@ if (b) { }
 while (b) { }
 do { }while(b)
 
-let c = null;
+let c = undefined;
 if (c) { }
 while (c) { }
 do { }while(c)
@@ -152,14 +152,14 @@ if (k) { }
 while (k) { }
 do { }while(k)
 
-/*pruned*/;                                
-/*pruned*/;  
-/*pruned*/;     
-/*pruned*/;      
+function fn(x?: string): I { return null; }
+if (fn()) { }
+while (fn()) { }
+do { }while(fn())
 
-/*pruned*/;
-/*pruned*/;   
-/*pruned*/;    
+if (fn) { }
+while (fn) { }
+do { }while(fn)
 
 
 

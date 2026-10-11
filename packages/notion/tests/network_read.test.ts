@@ -4,7 +4,7 @@ import { getSelf, search } from "@submilli/notion";
 
 function main(): void {
     label("live Notion identity and bounded search when a token is available");
-    if (secrets.get("NOTION_ACCESS_TOKEN") === null) return;
+    if (secrets.get("NOTION_ACCESS_TOKEN") === undefined) return;
     const bot = getSelf();
     assert(bot.id.length > 0, "integration bot has an ID");
     const page = search({ pageSize: 1 });

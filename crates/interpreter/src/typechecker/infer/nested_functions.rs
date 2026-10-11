@@ -21,6 +21,7 @@ use crate::{
 
 use super::Inferer;
 
+#[derive(Clone)]
 pub(in crate::typechecker) struct NestedFunction {
     name: Ident,
     stmt: StmtId,
@@ -115,7 +116,7 @@ impl Inferer<'_> {
         let declared = match &self.ast.try_stmt(stmt).map_err(super::arena_failure)?.kind {
             StmtKind::Let { name, .. }
             | StmtKind::Const { name, .. }
-            | StmtKind::ConstRest { name, .. } => name.span,
+            | StmtKind::ObjectRest { name, .. } => name.span,
             _ => return Ok(Vec::new()),
         };
         let ready: Vec<usize> = self
@@ -368,6 +369,7 @@ impl Inferer<'_> {
                 ty: ty.clone(),
                 boxed: false,
                 rest: param.rest,
+                optional: param.is_omittable(),
                 default: None,
             })
             .collect();
@@ -475,9 +477,5 @@ fn nested_function_rejection(declaration: &Declaration) -> Option<(Span, &'stati
     if let Some(generic) = declaration.generics.first() {
         return Some((generic.span, "a nested function cannot be generic"));
     }
-    let defaulted = declaration.params.iter().find(|p| p.default.is_some())?;
-    Some((
-        defaulted.name.span,
-        "a nested function's parameters cannot have default values",
-    ))
+    None
 }

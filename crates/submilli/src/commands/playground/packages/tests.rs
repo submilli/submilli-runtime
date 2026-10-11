@@ -174,6 +174,7 @@ fn the_closure_marks_a_dependency_only_package_not_importable() {
                 origin: Origin::Blueprint,
                 importable: true,
                 project: true,
+                required_by: Vec::new(),
             },
             ClosureEntry {
                 name: "@acme/money".into(),
@@ -181,6 +182,7 @@ fn the_closure_marks_a_dependency_only_package_not_importable() {
                 origin: Origin::Dependency,
                 importable: false,
                 project: true,
+                required_by: vec!["@acme/billing".into()],
             },
         ]
     );

@@ -13,12 +13,12 @@ import {
 } from "@submilli/github";
 
 function main(): void {
-    if (secrets.get("GITHUB_TOKEN") === null) {
+    if (secrets.get("GITHUB_TOKEN") === undefined) {
         label("skip: GITHUB_TOKEN is not bound");
         return;
     }
     const configured = secrets.get("GITHUB_TEST_REPOSITORY");
-    if (configured === null) {
+    if (configured === undefined) {
         label("skip: GITHUB_TEST_REPOSITORY is not bound");
         return;
     }

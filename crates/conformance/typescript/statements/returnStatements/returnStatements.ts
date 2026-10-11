@@ -2,7 +2,7 @@
 // all the following should be valid
 function fn1(): number { return 1; }
 function fn2(): string { return ''; }
-function fn3(): void { return null; }
+function fn3(): void { return undefined; }
 function fn4(): void { return; }
 function fn5(): boolean { return true; }
 /*pruned*/;                                  

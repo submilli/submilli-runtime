@@ -10,6 +10,9 @@
 //!   events/<session>.jsonl  each session's events, appended as they arrive
 //!   changes.jsonl       the change log: blueprint versions and clear markers
 //!   retries.jsonl       idempotent retries answered without running
+//!   sessions.jsonl      sessions the playground started, and when each ended
+//!   links.jsonl         runs the playground ran again live, linked to their source
+//!   running/<id>.json   runs in flight, removed as each finishes
 //! ```
 //!
 //! The directory is 0700 and every file 0600. Each file carries the format version it
@@ -50,9 +53,12 @@ use super::log::warn;
 
 pub(crate) mod changes;
 pub(crate) mod events;
+pub(crate) mod links;
 pub(crate) mod recorder;
 pub(crate) mod redact;
 pub(crate) mod run;
+pub(crate) mod running;
+pub(crate) mod sessions;
 
 #[cfg(test)]
 mod tests;
@@ -203,6 +209,7 @@ impl Store {
         }
         let store = Self::unopened(root, true);
         store.remove_staged()?;
+        store.clear_running()?;
         store.repair_tails()?;
         let last_run = store.recover_last_run()?;
         store.lock().last_run = last_run;
@@ -329,6 +336,31 @@ impl Store {
         append_line(&self.index_path(), &summary)
     }
 
+    /// Replaces a stored run's file in one rename and leaves its index line as it is: for
+    /// what is kept with a run after it was recorded (a test run's report), which changes
+    /// nothing its summary holds. The run must already be redacted. A run removed since
+    /// it was loaded (by [`Store::clear`]) stays removed.
+    pub(crate) fn rewrite_run(&self, run: &StoredRun) -> Result<()> {
+        self.writer()?;
+        let path = self.run_path(run.id);
+        let staged = stage(&path, &json_bytes(run))?;
+        // Checked under the lock `clear` removes runs under, so it cannot remove the
+        // file between this check and the rename.
+        let _inner = self.lock();
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(io_error(&path)(error)),
+        }
+        staged
+            .persist(&path)
+            .map(drop)
+            .map_err(|error| StoreError::Io {
+                path: path.clone(),
+                source: error.error,
+            })
+    }
+
     /// A stored run, or `None` when there is none with that id.
     pub(crate) fn load_run(&self, id: u64) -> Result<Option<StoredRun>> {
         let path = self.run_path(id);
@@ -413,10 +445,11 @@ impl Store {
         Ok(ids)
     }
 
-    /// Removes every run file and the index, and appends a clear marker naming the last
-    /// id handed out, which also starts a new audit window. Ids keep counting from there,
-    /// and a run already in progress is stored when it finishes. Returns how many runs
-    /// were removed.
+    /// Removes every run file, the index, and every session's event log, and appends a
+    /// clear marker naming the last id handed out, which also starts a new audit window.
+    /// Ids and each session's event numbers keep counting from there, a run already in
+    /// progress is stored when it finishes, and the started-session log stays, so open
+    /// sessions are still listed. Returns how many runs were removed.
     pub(crate) fn clear(&self) -> Result<usize> {
         self.writer()?;
         let inner = self.lock();
@@ -433,6 +466,7 @@ impl Store {
         self.append_change(ChangeEntry::Clear {
             high_water: inner.last_run,
         })?;
+        self.events.remove_logs()?;
         Ok(ids.len())
     }
 
@@ -469,7 +503,13 @@ impl Store {
 
     /// Cuts the unfinished last line, which a crash left, off every append-only file.
     fn repair_tails(&self) -> Result<()> {
-        let mut files = vec![self.index_path(), self.changes_path(), self.retries_path()];
+        let mut files = vec![
+            self.index_path(),
+            self.changes_path(),
+            self.retries_path(),
+            self.sessions_path(),
+            self.links_path(),
+        ];
         let events = self.root.join("events");
         for entry in fs::read_dir(&events).map_err(io_error(&events))? {
             let path = entry.map_err(io_error(&events))?.path();

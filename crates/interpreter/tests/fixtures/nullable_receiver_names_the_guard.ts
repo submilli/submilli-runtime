@@ -8,12 +8,12 @@
 // makes *this* access legal. Advice that lands on a second rejection is worse
 // than the generic message it replaces, and costs the reader that message's
 // type dump as well.
-// expect-error: cannot read field `f` on `null | A`: the receiver can be `null`
+// expect-error: cannot read field `f` on `A | null`: the receiver can be `null`
 // expect-error: guard first — `if (x !== null) { … x.f … }` — or read it as `x?.f`, or assert non-null with `x!.f`
-// expect-error: cannot assign to field `f` of `null | A`: the receiver can be `null`
+// expect-error: cannot assign to field `f` of `A | null`: the receiver can be `null`
 // expect-error: guard first — `if (y !== null) { y.f = … }` — or assert non-null with `y!.f = …`
 // A nullable *interface* receiver reaches the same pair.
-// expect-error: cannot read field `g` on `null | I`: the receiver can be `null`
+// expect-error: cannot read field `g` on `I | null`: the receiver can be `null`
 // A read-modify-write names its own operator: `p!.f = …` is a different edit
 // from `p.f++`, and a rewrite that compiles but is not the edit still costs a
 // round trip.
@@ -34,17 +34,17 @@
 // The non-null half carries no members at all.
 // expect-error: cannot read field `f` on non-object type `number | null`
 // The field is absent on what remains, so every rewrite lands on a second error.
-// expect-error: cannot read field `nothere` on non-object type `null | A`
+// expect-error: cannot read field `nothere` on non-object type `A | null`
 // A union write has no single field layout to reach, so neither a guard nor `!`
 // makes it legal — unlike the union *read* just below it, which both fix.
-// expect-error: cannot assign to field of `null | A | B`
+// expect-error: cannot assign to field of `A | B | null`
 // One member of the surviving union cannot back the field, and a union read
 // rejects wholesale.
-// expect-error: cannot read field `f` on non-object type `null | I | A`
+// expect-error: cannot read field `f` on non-object type `I | A | null`
 // A `readonly` field and a getter with no setter are both readable and neither
 // is assignable, so the write side asks the *write* authority, not the read one.
-// expect-error: cannot assign to field of `null | RO`
-// expect-error: cannot assign to field of `null | Getter`
+// expect-error: cannot assign to field of `RO | null`
+// expect-error: cannot assign to field of `Getter | null`
 
 // --- a guard needs a place to live on ---
 

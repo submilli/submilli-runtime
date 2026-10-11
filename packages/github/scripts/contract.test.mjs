@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { contractHost, loadPackage, nullableFields } from '../../../scripts/package-contract-host.mjs';
+import { contractHost, loadPackage } from '../../../scripts/package-contract-host.mjs';
 const host = contractHost();
 const github = await loadPackage(new URL('../src/lib.ts', import.meta.url), host);
-const options = (value = {}) => nullableFields(value);
+const options = (value = {}) => value;
 const repo = { owner: 'Victim-Org', name: 'Mixed-Repo' };
 const reaction = { total_count: 3, '+1': 2, '-1': 0, laugh: 0, hooray: 0, confused: 0, heart: 1, rocket: 0, eyes: 0 };
 const hit = { number: 7, title: 'Compiler work', repository_url: 'https://api.github.com/repos/Rust-Lang/Rust', html_url: 'https://github.com/rust-lang/rust/issues/7', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-02T00:00:00Z', reactions: reaction };
@@ -11,7 +11,7 @@ const hit = { number: 7, title: 'Compiler work', repository_url: 'https://api.gi
 test('repository identity is canonical in checks and paths; commit refs retain case', () => {
     host.reset(); host.response(() => ({ data: [] }));
     github.listCommits(repo, options({ sha: 'Main', path: 'src/Lib.ts' }));
-    assert.deepEqual(host.checks[0], { capability: 'github.com/commits.list', context: { owner: 'victim-org', repo: 'mixed-repo', ref: 'Main', path: 'src/Lib.ts' } });
+    assert.deepEqual(host.checks[0], { capability: 'github.com/commits.list', context: { owner: 'victim-org', repo: 'mixed-repo', branch: null, path: 'src/Lib.ts', ref: 'Main', treeSha: null, head: null, base: null } });
     const url = new URL(host.requests[0].url);
     assert.equal(url.pathname, '/repos/victim-org/mixed-repo/commits');
     assert.equal(url.searchParams.get('sha'), 'Main'); assert.equal(url.searchParams.get('path'), 'src/Lib.ts');

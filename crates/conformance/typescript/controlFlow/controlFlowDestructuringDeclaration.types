@@ -14,9 +14,9 @@ function f1(): void {
 >x : number
 >  : ^^^^^^
 
-    let y: string | null = "";
->y : string | null
->  : ^^^^^^^^^^^^^
+    let y: string | undefined = "";
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >"" : ""
 >   : ^^
 
@@ -42,9 +42,9 @@ function f2(): void {
 >x : number
 >  : ^^^^^^
 
-    let [y]: [string | null] = [""];
->y : string | null
->  : ^^^^^^^^^^^^^
+    let [y]: [string | undefined] = [""];
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >[""] : [string]
 >     : ^^^^^^^^
 >"" : ""
@@ -54,8 +54,20 @@ function f2(): void {
 >y : string
 >  : ^^^^^^
 
-    /*pruned*/;                            
-    ; 
+    let [z = ""]: [string | undefined] = [undefined];
+>z : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>[undefined] : [undefined]
+>            : ^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+    z;
+>z : string
+>  : ^^^^^^
+
 }
 
 function f3(): void {
@@ -74,9 +86,9 @@ function f3(): void {
 >x : number
 >  : ^^^^^^
 
-    let [y]: (string | null)[] = [""];
->y : string | null
->  : ^^^^^^^^^^^^^
+    let [y]: (string | undefined)[] = [""];
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >[""] : string[]
 >     : ^^^^^^^^
 >"" : ""
@@ -86,42 +98,183 @@ function f3(): void {
 >y : string
 >  : ^^^^^^
 
-    /*pruned*/;                              
-    ; 
+    let [z = ""]: (string | undefined)[] = [undefined];
+>z : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>[undefined] : undefined[]
+>            : ^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+    z;
+>z : string
+>  : ^^^^^^
+
 }
 
-/*pruned*/;          
-                                                 
-      
-                                                
-      
-                                                       
-      
- 
+function f4(): void {
+>f4 : () => void
+>   : ^^^^^^^^^^
 
-/*pruned*/;          
-                                                  
-      
-                                                 
-      
-                                                        
-      
- 
+    let { x }: { x: string | number } = { x: 1 };
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>{ x: 1 } : { x: number; }
+>         : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
 
-/*pruned*/;          
-                                            
-      
-                                          
-      
-                                               
-      
- 
+    x;
+>x : number
+>  : ^^^^^^
 
-/*pruned*/;          
-                                              
-                                                    
-      
- 
+    let { y }: { y: string | undefined } = { y: "" };
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>{ y: "" } : { y: string; }
+>          : ^^^^^^^^^^^^^^
+>y : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+
+    y;
+>y : string
+>  : ^^^^^^
+
+    let { z = "" }: { z: string | undefined } = { z: undefined };
+>z : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>z : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>{ z: undefined } : { z: undefined; }
+>                 : ^^^^^^^^^^^^^^^^^
+>z : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+    z;
+>z : string
+>  : ^^^^^^
+
+}
+
+function f5(): void {
+>f5 : () => void
+>   : ^^^^^^^^^^
+
+    let { x }: { x?: string | number } = { x: 1 };
+>x : string | number | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ x: 1 } : { x: number; }
+>         : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+    x;
+>x : number
+>  : ^^^^^^
+
+    let { y }: { y?: string | undefined } = { y: "" };
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>{ y: "" } : { y: string; }
+>          : ^^^^^^^^^^^^^^
+>y : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+
+    y;
+>y : string
+>  : ^^^^^^
+
+    let { z = "" }: { z?: string | undefined } = { z: undefined };
+>z : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>z : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>{ z: undefined } : { z: undefined; }
+>                 : ^^^^^^^^^^^^^^^^^
+>z : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+    z;
+>z : string
+>  : ^^^^^^
+
+}
+
+function f6(): void {
+>f6 : () => void
+>   : ^^^^^^^^^^
+
+    let { x }: { x?: string | number } = {};
+>x : string | number | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string | number | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+    x;
+>x : string | number | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    let { y }: { y?: string | undefined } = {};
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+    y;
+>y : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    let { z = "" }: { z?: string | undefined } = {};
+>z : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>z : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+    z;
+>z : string
+>  : ^^^^^^
+
+}
+
+/*pruned*/;
+
+
+
+
 
 
 function main(): void {}

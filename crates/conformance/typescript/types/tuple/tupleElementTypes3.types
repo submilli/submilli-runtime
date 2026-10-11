@@ -1,13 +1,15 @@
 === tupleElementTypes3.ts ===
-let [a, b] = [0, null];
+let [a, b] = [0, undefined];
 >a : number
 >  : ^^^^^^
->b : null
->  : ^^^^
->[0, null] : [number, null]
->          : ^^^^^^^^^^^^^^
+>b : undefined
+>  : ^^^^^^^^^
+>[0, undefined] : [number, undefined]
+>               : ^^^^^^^^^^^^^^^^^^^
 >0 : 0
 >  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 function main(): void {}

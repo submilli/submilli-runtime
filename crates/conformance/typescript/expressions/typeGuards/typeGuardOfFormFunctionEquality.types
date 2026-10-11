@@ -23,10 +23,10 @@ function isString2(a: Object): a is string { return null as unknown as (boolean)
 >                : ^^^^^^^
 
 
-/*pruned*/;                
-                       
-            
- 
+/*pruned*/;
+
+
+
 
 let x = isString1(0, "") === isString2("");
 >x : boolean

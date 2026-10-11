@@ -11,13 +11,13 @@ function main(): void {
   assert(s.at(0) === "h", "at(0)");
   assert(s.at(-1) === "o", "at(-1) is last");
   assert(s.at(-5) === "h", "at(-len)");
-  assert(s.at(-6) === null, "at(out-of-range neg) is null");
-  assert(s.at(5) === null, "at(len) is null");
-  assert(s.at(100) === null, "at(big) is null");
+  assert(s.at(-6) === undefined, "at(out-of-range neg) is undefined");
+  assert(s.at(5) === undefined, "at(len) is undefined");
+  assert(s.at(100) === undefined, "at(big) is undefined");
 
   const hit = s.at(1);
-  assert(hit !== null, "an in-range at() is non-null");
-  if (hit !== null) {
+  assert(hit !== undefined, "an in-range at() is non-undefined");
+  if (hit !== undefined) {
     assert(hit === "e", "the narrowed hit is the character");
   }
 

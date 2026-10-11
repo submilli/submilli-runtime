@@ -55,7 +55,7 @@ provides:
     teamId:
       type: string
 - name: linear.app/listIssues
-  description: List issues, optionally filtered and paginated.
+  description: List issues, optionally filtered and paginated. `teamId` in the check is the filter's team, or null when the filter names no team.
   fields:
     teamId:
       type: string
@@ -74,7 +74,7 @@ provides:
     teamId:
       type: string
 - name: linear.app/updateIssue
-  description: Update an issue by UUID; returns the updated issue. The issue is read first, so the check carries `teamId`, the team the issue belongs to. `projectId` is the project the update moves the issue to, or null when it moves it nowhere.
+  description: Update an issue by UUID; returns the updated issue. The issue is read first, so the check carries `teamId`, the team the issue belongs to. `projectId` is the project the update moves the issue to, or null when the update leaves the project unchanged.
   fields:
     projectId:
       type: string

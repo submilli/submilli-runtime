@@ -46,7 +46,7 @@ fn rewrite_declarations(ast: &mut TypedAst, flow: &Flow) {
                 param.ty = Type::Unknown;
             }
         }
-        if !function.return_type.is_void() && flow.widened.contains(&Place::Return(function.body)) {
+        if flow.widened.contains(&Place::Return(function.body)) {
             function.return_type = Type::Unknown;
         }
     }
@@ -68,7 +68,7 @@ fn rewrite_declarations(ast: &mut TypedAst, flow: &Flow) {
                     param.ty = Type::Unknown;
                 }
             }
-            if !method.return_type.is_void() && flow.widened.contains(&Place::Return(method.body)) {
+            if flow.widened.contains(&Place::Return(method.body)) {
                 method.return_type = Type::Unknown;
             }
         }
@@ -171,13 +171,7 @@ fn rewrite_expressions(
     live_bindings: &HashSet<Ident>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     for id in ast.expr_ids().map_err(crate::codegen::arena_failure)? {
-        if flow.expr_is_wide(id)
-            && !ast
-                .try_expr(id)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .is_void()
-        {
+        if flow.expr_is_wide(id) {
             ast.runtime_source_types.insert(
                 id,
                 ast.try_expr(id)
@@ -253,7 +247,7 @@ fn rewrite_closure(
                 capture.ty = Type::Unknown;
             }
         }
-        if !return_type.is_void() && flow.widened.contains(&Place::ClosureReturn(id)) {
+        if flow.widened.contains(&Place::ClosureReturn(id)) {
             *return_type = Type::Unknown;
         }
     };
@@ -279,7 +273,7 @@ fn rewrite_operation(
             ..
         } if super::dynamic_member_interface(&iface)
             && (flow.expr_is_wide(receiver)
-                || (!iface.as_str().starts_with("submilli:")
+                || (!crate::codegen::is_host_package(iface.as_str())
                     && ast
                         .authored_call_arguments(
                             ast.try_expr(id)
@@ -298,7 +292,7 @@ fn rewrite_operation(
             ..
         } if super::dynamic_member_interface(&iface)
             && (flow.expr_is_wide(receiver)
-                || (!iface.as_str().starts_with("submilli:")
+                || (!crate::codegen::is_host_package(iface.as_str())
                     && ast
                         .authored_call_arguments(
                             ast.try_expr(id)

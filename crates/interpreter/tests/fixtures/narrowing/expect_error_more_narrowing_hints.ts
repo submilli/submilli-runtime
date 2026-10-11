@@ -10,7 +10,7 @@
 // expect-error: narrowing on `u` does not cross a closure boundary
 // expect-error: `for-of` requires an array, tuple, string
 // expect-error: narrowing on `a` does not cross a closure boundary
-// expect-error: cannot call value of type `null | (() => number)`
+// expect-error: cannot call value of type `(() => number) | null`
 // expect-error: narrowing on `c` does not cross a closure boundary
 function main(): void {
   let v: number | null = 1;

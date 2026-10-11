@@ -2,12 +2,12 @@ import { parse, URL } from "submilli:url";
 
 function main(): void {
   const a: URL = parse("https://example.com/path?status=ok");
-  assert(a.fragment === null, "fragment is null when no `#`");
+  assert(a.fragment === undefined, "fragment is null when no `#`");
   assert(a.query.size === 1, "query still parsed");
 
   const b: URL = parse("https://example.com/path#section");
-  assert(b.fragment !== null, "fragment present");
-  if (b.fragment !== null) {
+  assert(b.fragment !== undefined, "fragment present");
+  if (b.fragment !== undefined) {
     assert(b.fragment === "section", "fragment value");
   }
 }

@@ -32,7 +32,7 @@ class K2 {
   v: number = 12;
 }
 
-// One member declares the field optional, so the step widens to `| null`.
+// One member declares the field optional, so the step widens to `| undefined`.
 type Opt = { v?: number };
 type Req = { v: number };
 
@@ -46,7 +46,7 @@ type Callable2 = { v: () => number; tag: number };
 
 type Nested = { inner: A | B };
 
-function readChain(u: A | B | null): number | null {
+function readChain(u: A | B | null): number | undefined {
   return u?.v;
 }
 function readPlain(u: A | B): number {
@@ -85,7 +85,7 @@ function main(): void {
   assert(readPlain(mkA()) === 1, "the plain union read is the control");
   assert(readChain(mkA()) === 1, "a `?.` read off a union of object shapes");
   assert(readChain(mkB()) === 2, "the other member of the same union");
-  assert(readChain(null) === null, "a null receiver short-circuits the union step");
+  assert(readChain(null) === undefined, "a null receiver short-circuits the union step");
 
   // A union with a nominal member lowers to the universal `$Object` slot, so the
   // step has to downcast to `$ObjectShape` before the field-name scan — the same
@@ -105,9 +105,9 @@ function main(): void {
   const classes: K1 | K2 | null = new K2();
   assert(classes?.v === 12, "a union of two classes");
 
-  // Optional on one side, required on the other: the step type carries the null.
+  // Optional on one side, required on the other: the step type carries undefined.
   const opt: Opt | Req | null = mkOpt();
-  assert(opt?.v === null, "an optional field on one member widens the step");
+  assert(opt?.v === undefined, "an optional field on one member widens the step");
 
   // Different payload slots per member.
   const front: Front | Back | null = mkFront();

@@ -283,7 +283,7 @@ foo.in = 1;
 >1 : 1
 >  : ^
 
-/*pruned*/;        
+/*pruned*/;
 foo.new = 1;
 >foo.new = 1 : 1
 >            : ^
@@ -404,14 +404,14 @@ foo.typeof = 1;
 >1 : 1
 >  : ^
 
-foo.let = 1;
->foo.let = 1 : 1
+foo.var = 1;
+>foo.var = 1 : 1
 >            : ^
->foo.let : number
+>foo.var : number
 >        : ^^^^^^
 >foo : typeof foo
 >    : ^^^^^^^^^^
->let : number
+>var : number
 >    : ^^^^^^
 >1 : 1
 >  : ^
@@ -848,15 +848,15 @@ foo.type = 1;
 >1 : 1
 >  : ^
 
-foo.null = 1;
->foo.null = 1 : 1
->             : ^
->foo.null : number
->         : ^^^^^^
+foo.undefined = 1;
+>foo.undefined = 1 : 1
+>                  : ^
+>foo.undefined : number
+>              : ^^^^^^
 >foo : typeof foo
 >    : ^^^^^^^^^^
->null : number
->     : ^^^^^^
+>undefined : number
+>          : ^^^^^^
 >1 : 1
 >  : ^
 

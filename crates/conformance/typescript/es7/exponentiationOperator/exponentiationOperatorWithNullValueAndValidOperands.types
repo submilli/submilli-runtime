@@ -16,7 +16,7 @@ enum E {
 
 }
 
-/*pruned*/;                           
+/*pruned*/;
 let b: number = null as unknown as (number);
 >b : number
 >  : ^^^^^^
@@ -27,7 +27,7 @@ let b: number = null as unknown as (number);
 
 
 // operator **
-/*pruned*/;        
+/*pruned*/;
 let r2 = null ** b;
 >r2 : number
 >   : ^^^^^^
@@ -56,7 +56,7 @@ let r4 = null ** E.a;
 >a : E.a
 >  : ^^^
 
-/*pruned*/;        
+/*pruned*/;
 let r6 = b ** null;
 >r6 : number
 >   : ^^^^^^

@@ -63,7 +63,7 @@ function main(): void {
   // inspect the raw text and decide.
   const raw = llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
   assert(raw.ok, "the untyped form does not apply a structural check");
-  assert(raw.text !== null, "and hands back the raw text for the caller to judge");
+  assert(raw.text !== undefined, "and hands back the raw text for the caller to judge");
 
   // Execution continues past a caught mismatch — the check refuses a value, it
   // does not end the program.

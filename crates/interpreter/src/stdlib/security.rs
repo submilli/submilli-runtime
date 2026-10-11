@@ -452,9 +452,9 @@ mod tests {
                 /**
                  * Pass-through JSON encoder.
                  * @param value Value to encode.
-                 * @returns `value` as JSON.
+                 * @returns `value` as JSON, or `undefined` when it has none.
                  */
-                export function passthrough(value: unknown): string {
+                export function passthrough(value: unknown): string | undefined {
                     return JSON.stringify(value);
                 }
                 "#,

@@ -1,5 +1,5 @@
 === callGenericFunctionWithZeroTypeArguments.ts ===
-// valid invocations of generic functions with no explicit type arguments provided 
+// valid invocations of generic functions with no explicit type arguments provided
 
 function f<T>(x: T): T { return null; }
 >f : <T>(x: T) => T
@@ -20,18 +20,18 @@ let r = f(1);
 >  : ^
 
 
-/*pruned*/;                              
-/*pruned*/;    
+/*pruned*/;
+/*pruned*/;
 
-/*pruned*/;                                                        
-/*pruned*/;    
+/*pruned*/;
+/*pruned*/;
 
-/**/;    
-                   
-                    
-     
- 
-/*pruned*/;             
+/**/;
+
+
+
+
+/*pruned*/;
 
 interface I {
 >I : I
@@ -46,8 +46,8 @@ interface I {
 >  : ^
 
 }
-/*pruned*/;                       
-/*pruned*/;     
+/*pruned*/;
+/*pruned*/;
 
 class C2<T> {
 >C2 : C2<T>
@@ -96,8 +96,8 @@ interface I2<T> {
 >  : ^
 
 }
-/*pruned*/;                                          
-/*pruned*/;      
+/*pruned*/;
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

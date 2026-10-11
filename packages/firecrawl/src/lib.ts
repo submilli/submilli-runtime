@@ -135,19 +135,19 @@ export interface CrawlOptions {
 /** Typed common metadata plus the complete provider object in Page.metadata. */
 export interface PageMetadata {
     /** Provider source URL when available; retain for attribution. */
-    sourceURL?: string;
+    sourceURL?: string | null;
     /** Provider URL; for page metadata this can be the resolved URL. */
-    url?: string;
+    url?: string | null;
     /** Page title when provided. */
-    title?: string;
+    title?: string | null;
     /** Page description when provided. */
-    description?: string;
+    description?: string | null;
     /** Provider-reported page language. */
-    language?: string;
+    language?: string | null;
     /** Source HTTP status, including per-page failures. */
-    statusCode?: number;
+    statusCode?: number | null;
     /** Provider-reported error detail when available. */
-    error?: string;
+    error?: string | null;
 }
 
 /** Page content with source attribution and complete metadata. */
@@ -228,10 +228,10 @@ export interface JobPage {
 }
 /** One provider-reported failed source. */
 export interface PageFailure {
-    /** Provider-issued identifier. */
-    id?: string;
+    /** Provider-issued identifier, or null when absent. */
+    id: string | null;
     /** Provider failure timestamp, or null when absent. */
-    timestamp?: string;
+    timestamp: string | null;
     /** Provider URL; for page metadata this can be the resolved URL. */
     url: string;
     /** Provider-reported error detail when available. */
@@ -273,29 +273,68 @@ export class FirecrawlError extends Error {
 
 /** Search web sources. Native result scraping authorizes unknown hosts via an explicit separate grant.
  * @param query Web search query, at most 500 characters.
- * @param options Optional search controls (result limit, domain filters, geo/time filters); `null` uses the provider defaults, with up to 10 web results.
+ * @param options Optional search controls (result limit, domain filters, geo/time filters); omit it to use the provider defaults, with up to 10 web results.
  * @returns Web results in provider order, each with title, description and URL; `content` is set only when `scrapeOptions` was requested. `results` is empty when nothing matched.
  * @capability firecrawl.dev/search { limit: number }
  * @capability firecrawl.dev/search.scrape {}
  * @capability firecrawl.dev/delegatedFetch {}
  */
-export function search(query: string, options: SearchOptions | null = null): SearchResponse {
-    const requested: SearchOptions = options === null ? {} : options;
-    const { limit, includeDomains, excludeDomains, tbs, location, country, safe, timeout, scrapeOptions } = requested;
-    // The body builder reads its options again, so it gets these reads, not the caller's object.
+export function search(query: string, options: SearchOptions = {}): SearchResponse {
+    const { limit, includeDomains, excludeDomains, tbs, location, country, safe, timeout, scrapeOptions } = options;
+    // Snapshot nested inputs before schema serialization can invoke caller code.
     const opts: SearchOptions = {};
-    if (limit !== null) opts.limit = limit;
-    if (includeDomains !== null) opts.includeDomains = includeDomains;
-    if (excludeDomains !== null) opts.excludeDomains = excludeDomains;
-    if (tbs !== null) opts.tbs = tbs;
-    if (location !== null) opts.location = location;
-    if (country !== null) opts.country = country;
-    if (safe !== null) opts.safe = safe;
-    if (timeout !== null) opts.timeout = timeout;
-    if (scrapeOptions !== null) opts.scrapeOptions = scrapeOptions;
+    if (limit !== undefined) opts.limit = limit;
+    if (includeDomains !== undefined) {
+        const copied: string[] = [];
+        for (const domain of includeDomains) copied.push(domain);
+        opts.includeDomains = copied;
+    }
+    if (excludeDomains !== undefined) {
+        const copied: string[] = [];
+        for (const domain of excludeDomains) copied.push(domain);
+        opts.excludeDomains = copied;
+    }
+    if (tbs !== undefined) opts.tbs = tbs;
+    if (location !== undefined) opts.location = location;
+    if (country !== undefined) opts.country = country;
+    if (safe !== undefined) opts.safe = safe;
+    if (timeout !== undefined) opts.timeout = timeout;
+    if (scrapeOptions !== undefined) {
+        const { formats, json, onlyMainContent, includeTags, excludeTags, maxAge, storeInCache, timeout: scrapeTimeout } = scrapeOptions;
+        const snapshot: ScrapeOptions = {};
+        if (formats !== undefined) {
+            const copied: Format[] = [];
+            for (const format of formats) copied.push(format);
+            snapshot.formats = copied;
+        }
+        if (includeTags !== undefined) {
+            const copied: string[] = [];
+            for (const tag of includeTags) copied.push(tag);
+            snapshot.includeTags = copied;
+        }
+        if (excludeTags !== undefined) {
+            const copied: string[] = [];
+            for (const tag of excludeTags) copied.push(tag);
+            snapshot.excludeTags = copied;
+        }
+        if (onlyMainContent !== undefined) snapshot.onlyMainContent = onlyMainContent;
+        if (maxAge !== undefined) snapshot.maxAge = maxAge;
+        if (storeInCache !== undefined) snapshot.storeInCache = storeInCache;
+        if (scrapeTimeout !== undefined) snapshot.timeout = scrapeTimeout;
+        if (json !== undefined) {
+            const { schema, prompt } = json;
+            const copied: JsonOptions = {};
+            if (prompt !== undefined) copied.prompt = prompt;
+            if (schema !== null && schema !== undefined) {
+                copied.schema = snapshotSchema(schema);
+            }
+            snapshot.json = copied;
+        }
+        opts.scrapeOptions = snapshot;
+    }
     const body = buildSearchBody(query, opts);
     check("firecrawl.dev/search", { limit: limit ?? 10 });
-    if (scrapeOptions !== null) {
+    if (scrapeOptions !== undefined) {
         // Search results are unknown before submission. This grant deliberately
         // authorizes native extraction across result hosts; it is not a host-scoped scrape grant.
         check("firecrawl.dev/search.scrape", {});
@@ -304,46 +343,52 @@ export function search(query: string, options: SearchOptions | null = null): Sea
     return normalizeSearchJson(requireOk(post(BASE + "/search", body, authHeaders())));
 }
 
+function snapshotSchema(schema: unknown): unknown {
+    const encoded = JSON.stringify(schema);
+    if (encoded === undefined || !encoded.startsWith("{")) throw invalidArgument("json.schema must be an object");
+    return JSON.parse(encoded);
+}
+
 /**
  * Build a web-only search request. No extraction or generated highlights by default.
  * @param query Web search query, at most 500 characters.
- * @param options Optional search controls; `null` uses the defaults, with a limit of 10.
+ * @param options Optional search controls; omit it to use the defaults, with a limit of 10.
  * @returns The JSON request body for the search endpoint.
  */
-export function buildSearchBody(query: string, options: SearchOptions | null = null): string {
+export function buildSearchBody(query: string, options: SearchOptions = {}): string {
     requireText(query, "query");
     if (query.length > 500) throw invalidArgument("query must be at most 500 characters");
-    const opts: SearchOptions = options === null ? {} : options;
-    const limit = opts.limit ?? 10;
+    const { includeDomains, excludeDomains, tbs, location, country, safe, timeout, scrapeOptions } = options;
+    const limit = options.limit ?? 10;
     integerRange(limit, 1, 100, "limit");
     const fields = [field("query", JSON.stringify(query)), field("limit", JSON.stringify(limit)),
         '"sources":["web"]', '"highlights":false', '"domainTools":false'];
-    if (opts.includeDomains !== null && opts.excludeDomains !== null) throw invalidArgument("includeDomains and excludeDomains are mutually exclusive");
-    addSearchDomains(fields, "includeDomains", opts.includeDomains);
-    addSearchDomains(fields, "excludeDomains", opts.excludeDomains);
-    if (opts.tbs !== null) { requireText(opts.tbs, "tbs"); fields.push(field("tbs", JSON.stringify(opts.tbs))); }
-    if (opts.location !== null) { requireText(opts.location, "location"); fields.push(field("location", JSON.stringify(opts.location))); }
-    if (opts.country !== null) {
-        if (!/^[a-zA-Z]{2}$/.test(opts.country)) throw invalidArgument("country must be a two-letter code");
-        fields.push(field("country", JSON.stringify(opts.country.toUpperCase())));
+    if (includeDomains !== undefined && excludeDomains !== undefined) throw invalidArgument("includeDomains and excludeDomains are mutually exclusive");
+    addSearchDomains(fields, "includeDomains", includeDomains);
+    addSearchDomains(fields, "excludeDomains", excludeDomains);
+    if (tbs !== undefined) { requireText(tbs, "tbs"); fields.push(field("tbs", JSON.stringify(tbs))); }
+    if (location !== undefined) { requireText(location, "location"); fields.push(field("location", JSON.stringify(location))); }
+    if (country !== undefined) {
+        if (!/^[a-zA-Z]{2}$/.test(country)) throw invalidArgument("country must be a two-letter code");
+        fields.push(field("country", JSON.stringify(country.toUpperCase())));
     }
-    addBoolean(fields, "safe", opts.safe);
-    if (opts.timeout !== null) {
-        integerRange(opts.timeout, 1, 300000, "timeout");
-        fields.push(field("timeout", JSON.stringify(opts.timeout)));
+    addBoolean(fields, "safe", safe);
+    if (timeout !== undefined) {
+        integerRange(timeout, 1, 300000, "timeout");
+        fields.push(field("timeout", JSON.stringify(timeout)));
     }
-    if (opts.scrapeOptions !== null) fields.push(field("scrapeOptions", objectJson(scrapeFields(opts.scrapeOptions))));
+    if (scrapeOptions !== undefined) fields.push(field("scrapeOptions", objectJson(scrapeFields(scrapeOptions))));
     return objectJson(fields);
 }
 
 /** Retrieve one page. Host constrains the submitted URL, not provider redirects/subresources.
  * @param url Absolute HTTP(S) URL of the page, without credentials or whitespace.
- * @param options Optional content controls (formats, selectors, caching); `null` returns markdown only.
+ * @param options Optional content controls (formats, selectors, caching); omit it for markdown only.
  * @returns The page's markdown and/or HTML, title, source URL, status code and full provider metadata; fields the provider did not return are `null`.
  * @capability firecrawl.dev/scrape { host: string }
  * @capability firecrawl.dev/delegatedFetch {}
  */
-export function scrape(url: string, options: ScrapeOptions | null = null): Page {
+export function scrape(url: string, options: ScrapeOptions = {}): Page {
     const body = buildScrapeBody(url, options);
     check("firecrawl.dev/scrape", { host: urlHost(url) });
     check("firecrawl.dev/delegatedFetch", {});
@@ -352,26 +397,15 @@ export function scrape(url: string, options: ScrapeOptions | null = null): Page 
 
 /** Discover URLs; the seed host is not a downstream network allowlist.
  * @param url Absolute HTTP(S) URL of the site or page to discover links from.
- * @param options Optional discovery controls (limit, search text, sitemap mode); `null` uses the defaults, with a limit of 100 and no subdomains.
+ * @param options Optional discovery controls (limit, search text, sitemap mode); omit it to use the defaults, with a limit of 100 and no subdomains.
  * @returns The discovered links in provider order and the limit that was applied; a result as long as `limit` may mean more URLs exist.
  * @capability firecrawl.dev/map { host: string, limit: number, includeSubdomains: boolean }
  * @capability firecrawl.dev/delegatedFetch {}
  */
-export function map(url: string, options: MapOptions | null = null): MapResponse {
-    const requestedLimit = options === null ? null : options.limit;
-    const search = options === null ? null : options.search;
-    const sitemap = options === null ? null : options.sitemap;
-    const includeSubdomains = options === null ? null : options.includeSubdomains;
-    const ignoreQueryParameters = options === null ? null : options.ignoreQueryParameters;
-    const ignoreCache = options === null ? null : options.ignoreCache;
-    const opts: MapOptions = {};
-    if (requestedLimit !== null) opts.limit = requestedLimit;
-    if (search !== null) opts.search = search;
-    if (sitemap !== null) opts.sitemap = sitemap;
-    if (includeSubdomains !== null) opts.includeSubdomains = includeSubdomains;
-    if (ignoreQueryParameters !== null) opts.ignoreQueryParameters = ignoreQueryParameters;
-    if (ignoreCache !== null) opts.ignoreCache = ignoreCache;
-    const body = buildMapBody(url, opts);
+export function map(url: string, options: MapOptions = {}): MapResponse {
+    const { limit: requestedLimit, search, sitemap, includeSubdomains, ignoreQueryParameters, ignoreCache } = options;
+    // The body builder reads its options again, so it gets these reads, not the caller's object.
+    const body = buildMapBody(url, { limit: requestedLimit, search, sitemap, includeSubdomains, ignoreQueryParameters, ignoreCache });
     const limit = requestedLimit ?? 100;
     check("firecrawl.dev/map", { host: urlHost(url), limit: limit, includeSubdomains: includeSubdomains ?? false });
     check("firecrawl.dev/delegatedFetch", {});
@@ -380,12 +414,12 @@ export function map(url: string, options: MapOptions | null = null): MapResponse
 
 /** Submit once and return promptly. Every requested host is checked before any HTTP request.
  * @param urls Absolute HTTP(S) URLs to scrape, 1-1000; each host is checked before any request.
- * @param options Optional content controls applied to every URL; `null` returns markdown only.
+ * @param options Optional content controls applied to every URL; omit it for markdown only.
  * @returns The job with its ID, to pass to `getJob` with kind `"batch"`, and any URLs the provider rejected.
  * @capability firecrawl.dev/batch.start { host: string, count: number }
  * @capability firecrawl.dev/delegatedFetch {}
  */
-export function startBatch(urls: string[], options: ScrapeOptions | null = null): Job {
+export function startBatch(urls: string[], options: ScrapeOptions = {}): Job {
     const ownedUrls: string[] = [];
     for (const url of urls) ownedUrls.push(url);
     // Validated before the checks, as `buildBatchBody` does; the body is built after them.
@@ -408,17 +442,8 @@ export function startCrawl(url: string, options: CrawlOptions): Job {
     const { limit, maxDiscoveryDepth, includePaths, excludePaths, sitemap, ignoreQueryParameters,
         crawlEntireDomain, allowSubdomains, allowExternalLinks, scrapeOptions } = options;
     // The body builder reads its options again, so it gets these reads, not the caller's object.
-    const opts: CrawlOptions = { limit: limit };
-    if (maxDiscoveryDepth !== null) opts.maxDiscoveryDepth = maxDiscoveryDepth;
-    if (includePaths !== null) opts.includePaths = includePaths;
-    if (excludePaths !== null) opts.excludePaths = excludePaths;
-    if (sitemap !== null) opts.sitemap = sitemap;
-    if (ignoreQueryParameters !== null) opts.ignoreQueryParameters = ignoreQueryParameters;
-    if (crawlEntireDomain !== null) opts.crawlEntireDomain = crawlEntireDomain;
-    if (allowSubdomains !== null) opts.allowSubdomains = allowSubdomains;
-    if (allowExternalLinks !== null) opts.allowExternalLinks = allowExternalLinks;
-    if (scrapeOptions !== null) opts.scrapeOptions = scrapeOptions;
-    const body = buildCrawlBody(url, opts);
+    const body = buildCrawlBody(url, { limit, maxDiscoveryDepth, includePaths, excludePaths, sitemap,
+        ignoreQueryParameters, crawlEntireDomain, allowSubdomains, allowExternalLinks, scrapeOptions });
     check("firecrawl.dev/crawl.start", { host: urlHost(url), limit: limit,
         allowSubdomains: allowSubdomains ?? false, allowExternalLinks: allowExternalLinks ?? false,
         crawlEntireDomain: crawlEntireDomain ?? false });
@@ -468,29 +493,29 @@ export function cancelJob(kind: JobKind, jobId: string): Cancellation {
  * @param jobId UUID returned by `startBatch` or `startCrawl`.
  * @param path VFS path the raw JSON response is written to.
  * @param next The `next` URL from a previous page of the same job to fetch the following page; `null` fetches the first page.
- * @param options Optional `overwrite` (default false) and `maxBytes` (default 20000000); `null` uses the defaults.
+ * @param options Optional `overwrite` (default false) and `maxBytes` (default 20000000); omit it to use the defaults.
  * @returns The download result for the file written to `path`.
  * @capability firecrawl.dev/jobs.read { kind: string, jobId: string }
  * @capability fs.write { path: string, max_bytes: number }
  */
 export function downloadJobPage(kind: JobKind, jobId: string, path: string, next: string | null = null,
-    options: SaveOptions | null = null): DownloadResult {
+    options: SaveOptions = {}): DownloadResult {
     const endpoint = jobPagePath(kind, jobId, next);
-    const opts: SaveOptions = options === null ? {} : options;
-    const maxBytes = opts.maxBytes ?? 20000000;
+    const { maxBytes: requestedMaxBytes, overwrite } = options;
+    const maxBytes = requestedMaxBytes ?? 20000000;
     integerRange(maxBytes, 1, 9007199254740991, "maxBytes");
     check("firecrawl.dev/jobs.read", { kind: kind, jobId: jobId });
     check("fs.write", { path: path, max_bytes: maxBytes });
-    return download(BASE + endpoint, path, { headers: authHeaders(), maxBytes: maxBytes, overwrite: opts.overwrite ?? false });
+    return download(BASE + endpoint, path, { headers: authHeaders(), maxBytes: maxBytes, overwrite: overwrite ?? false });
 }
 
 /**
  * Pure builder used by offline tests.
  * @param url Absolute HTTP(S) URL of the page.
- * @param options Optional content controls (formats, selectors, caching); `null` returns markdown only.
+ * @param options Optional content controls (formats, selectors, caching); omit it for markdown only.
  * @returns The JSON request body for the scrape endpoint.
  */
-export function buildScrapeBody(url: string, options: ScrapeOptions | null = null): string {
+export function buildScrapeBody(url: string, options: ScrapeOptions = {}): string {
     urlHost(url);
     const fields = scrapeFields(options);
     fields.push(field("url", JSON.stringify(url)));
@@ -500,10 +525,10 @@ export function buildScrapeBody(url: string, options: ScrapeOptions | null = nul
 /**
  * Build a strict batch request without network access.
  * @param urls Absolute HTTP(S) URLs to scrape, 1-1000.
- * @param options Optional content controls (formats, selectors, caching); `null` returns markdown only.
+ * @param options Optional content controls (formats, selectors, caching); omit it for markdown only.
  * @returns The JSON request body for the batch-scrape endpoint.
  */
-export function buildBatchBody(urls: string[], options: ScrapeOptions | null = null): string {
+export function buildBatchBody(urls: string[], options: ScrapeOptions = {}): string {
     validateBatchUrls(urls);
     return batchBody(urls, scrapeFields(options));
 }
@@ -522,20 +547,20 @@ function batchBody(urls: string[], fields: string[]): string {
 /**
  * Build a bounded map request without network access.
  * @param url Absolute HTTP(S) URL of the site or page to map.
- * @param options Optional discovery controls; `null` uses the defaults, with a limit of 100.
+ * @param options Optional discovery controls; omit it to use the defaults, with a limit of 100.
  * @returns The JSON request body for the map endpoint.
  */
-export function buildMapBody(url: string, options: MapOptions | null = null): string {
+export function buildMapBody(url: string, options: MapOptions = {}): string {
     urlHost(url);
-    const opts: MapOptions = options === null ? {} : options;
-    const limit = opts.limit ?? 100;
+    const { search, sitemap, ignoreQueryParameters, ignoreCache } = options;
+    const limit = options.limit ?? 100;
     integerRange(limit, 1, 100000, "limit");
     const fields = [field("url", JSON.stringify(url)), field("limit", JSON.stringify(limit)),
-        field("includeSubdomains", JSON.stringify(opts.includeSubdomains ?? false))];
-    if (opts.search !== null) { requireText(opts.search, "search"); fields.push(field("search", JSON.stringify(opts.search))); }
-    addSitemap(fields, opts.sitemap);
-    addBoolean(fields, "ignoreQueryParameters", opts.ignoreQueryParameters);
-    addBoolean(fields, "ignoreCache", opts.ignoreCache);
+        field("includeSubdomains", JSON.stringify(options.includeSubdomains ?? false))];
+    if (search !== undefined) { requireText(search, "search"); fields.push(field("search", JSON.stringify(search))); }
+    addSitemap(fields, sitemap);
+    addBoolean(fields, "ignoreQueryParameters", ignoreQueryParameters);
+    addBoolean(fields, "ignoreCache", ignoreCache);
     return objectJson(fields);
 }
 
@@ -553,7 +578,7 @@ export function buildCrawlBody(url: string, options: CrawlOptions): string {
         field("allowExternalLinks", JSON.stringify(options.allowExternalLinks ?? false)),
         field("crawlEntireDomain", JSON.stringify(options.crawlEntireDomain ?? false)),
         field("scrapeOptions", objectJson(scrapeFields(options.scrapeOptions)))];
-    if (options.maxDiscoveryDepth !== null) {
+    if (options.maxDiscoveryDepth !== undefined) {
         integerRange(options.maxDiscoveryDepth, 0, 1000, "maxDiscoveryDepth");
         fields.push(field("maxDiscoveryDepth", JSON.stringify(options.maxDiscoveryDepth)));
     }
@@ -600,11 +625,11 @@ export function urlHost(url: string): string {
 }
 
 interface ApiSearchResult {
-    url: string; title?: string; description?: string; position?: number;
-    markdown?: string; html?: string; json?: unknown; metadata?: unknown; warning?: string; error?: string;
+    url: string; title?: string | null; description?: string | null; position?: number | null;
+    markdown?: string | null; html?: string | null; json?: unknown; metadata?: unknown; warning?: string | null; error?: string | null;
 }
 interface ApiSearchData { web: ApiSearchResult[]; }
-interface ApiSearch { success: boolean; data: ApiSearchData; id?: string; creditsUsed?: number; warning?: string; warnings?: unknown; }
+interface ApiSearch { success: boolean; data: ApiSearchData; id?: string | null; creditsUsed?: number | null; warning?: string | null; warnings?: unknown; }
 
 /**
  * Validate v2 data.web and retain available extraction, metadata, warnings and partial failures.
@@ -619,20 +644,24 @@ export function normalizeSearchJson(body: string): SearchResponse {
         for (const item of data.data.web) {
             requireText(item.url, "result URL");
             results.push({ url: item.url, title: item.title ?? "", description: item.description ?? "",
-                position: item.position, content: searchContent(item), error: item.error });
+                position: item.position ?? null, content: searchContent(item), error: item.error ?? null });
         }
-        return { id: data.id, results: results, creditsUsed: data.creditsUsed, warning: data.warning, warnings: data.warnings };
+        return { id: data.id ?? null, results: results, creditsUsed: data.creditsUsed ?? null, warning: data.warning ?? null, warnings: data.warnings ?? null };
     } catch (cause) { throw invalidResponse(); }
 }
 
 function searchContent(item: ApiSearchResult): Page | null {
-    if (item.markdown === null && item.html === null && item.json === null && item.metadata === null && item.warning === null) return null;
+    if ((item.markdown === null || item.markdown === undefined)
+        && (item.html === null || item.html === undefined)
+        && (item.json === null || item.json === undefined)
+        && (item.metadata === null || item.metadata === undefined)
+        && (item.warning === null || item.warning === undefined)) return null;
     return pageFrom({ markdown: item.markdown, html: item.html, json: item.json,
-        metadata: item.metadata === null ? {} : item.metadata, warning: item.warning });
+        metadata: item.metadata ?? {}, warning: item.warning });
 }
 
-function addSearchDomains(fields: string[], name: string, domains: string[] | null): void {
-    if (domains === null) return;
+function addSearchDomains(fields: string[], name: string, domains: string[] | undefined): void {
+    if (domains === undefined) return;
     const normalized: string[] = [];
     for (const domain of domains) {
         if (domain.length > 253 || !/^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/.test(domain)) {
@@ -648,13 +677,16 @@ function addSearchDomains(fields: string[], name: string, domains: string[] | nu
 
 interface ApiPage { markdown?: string | null; html?: string | null; json?: unknown; metadata: unknown; warning?: string | null; }
 interface ApiScrape { success: boolean; data: ApiPage; }
-interface ApiMap { success: boolean; links: MapLink[]; }
-interface ApiJob { success: boolean; id: string; invalidURLs?: string[]; }
+interface ApiMapLink { url: string; title?: string | null; description?: string | null; }
+interface ApiMap { success: boolean; links: ApiMapLink[]; }
+interface ApiJob { success: boolean; id: string; invalidURLs?: string[] | null; }
 interface ApiJobPage {
-    status: string; total: number; completed: number; creditsUsed?: number;
-    expiresAt?: string; createdAt?: string; completedAt?: string; duration?: number;
-    error?: string; next?: string; data: ApiPage[];
+    status: string; total: number; completed: number; creditsUsed?: number | null;
+    expiresAt?: string | null; createdAt?: string | null; completedAt?: string | null; duration?: number | null;
+    error?: string | null; next?: string | null; data: ApiPage[];
 }
+interface ApiPageFailure { id?: string | null; timestamp?: string | null; url: string; error: string; }
+interface ApiJobErrors { errors: ApiPageFailure[]; robotsBlocked: string[]; }
 
 /**
  * Validate and normalize a scrape envelope.
@@ -678,8 +710,15 @@ export function normalizeMapJson(body: string, limit: number): MapResponse {
     try {
         const data = JSON.parse(body) as ApiMap;
         if (!data.success) throw invalidResponse();
-        for (const link of data.links) requireText(link.url, "url");
-        return { links: data.links, limit: limit };
+        const links: MapLink[] = [];
+        for (const item of data.links) {
+            requireText(item.url, "url");
+            const link: MapLink = { url: item.url };
+            if (item.title !== null && item.title !== undefined) link.title = item.title;
+            if (item.description !== null && item.description !== undefined) link.description = item.description;
+            links.push(link);
+        }
+        return { links: links, limit: limit };
     } catch (cause) { throw invalidResponse(); }
 }
 /**
@@ -692,7 +731,7 @@ export function normalizeJobJson(body: string): Job {
         const data = JSON.parse(body) as ApiJob;
         if (!data.success) throw invalidResponse();
         jobPagePath("batch", data.id);
-        const invalidURLs: string[] = data.invalidURLs === null ? [] : data.invalidURLs;
+        const invalidURLs: string[] = (data.invalidURLs === null || data.invalidURLs === undefined) ? [] : data.invalidURLs;
         return { id: data.id, invalidURLs: invalidURLs };
     } catch (cause) { throw invalidResponse(); }
 }
@@ -709,12 +748,13 @@ export function normalizeJobPageJson(body: string, kind: JobKind, jobId: string)
         requireText(data.status, "status");
         integerRange(data.total, 0, 9007199254740991, "total");
         integerRange(data.completed, 0, 9007199254740991, "completed");
-        if (data.next !== null) jobPagePath(kind, jobId, data.next);
+        const next = data.next ?? null;
+        if (next !== null) jobPagePath(kind, jobId, next);
         const pages: Page[] = [];
         for (const page of data.data) pages.push(pageFrom(page));
         return { status: data.status, total: data.total, completed: data.completed,
-            creditsUsed: data.creditsUsed, expiresAt: data.expiresAt, createdAt: data.createdAt,
-            completedAt: data.completedAt, duration: data.duration, error: data.error, next: data.next, data: pages };
+            creditsUsed: data.creditsUsed ?? null, expiresAt: data.expiresAt ?? null, createdAt: data.createdAt ?? null,
+            completedAt: data.completedAt ?? null, duration: data.duration ?? null, error: data.error ?? null, next: next, data: pages };
     } catch (cause) { throw invalidResponse(); }
 }
 /**
@@ -724,9 +764,14 @@ export function normalizeJobPageJson(body: string, kind: JobKind, jobId: string)
  */
 export function normalizeJobErrorsJson(body: string): JobErrors {
     try {
-        const data = JSON.parse(body) as JobErrors;
-        for (const error of data.errors) { requireText(error.url, "url"); requireText(error.error, "error"); }
-        return data;
+        const data = JSON.parse(body) as ApiJobErrors;
+        const errors: PageFailure[] = [];
+        for (const failure of data.errors) {
+            requireText(failure.url, "url");
+            requireText(failure.error, "error");
+            errors.push({ id: failure.id ?? null, timestamp: failure.timestamp ?? null, url: failure.url, error: failure.error });
+        }
+        return { errors: errors, robotsBlocked: data.robotsBlocked };
     } catch (cause) { throw invalidResponse(); }
 }
 /**
@@ -759,45 +804,44 @@ export function firecrawlHttpError(status: number, retryAfter: string | null = n
     return new FirecrawlError(code, "Firecrawl request failed: HTTP " + status.toString() + " (" + code + ")", status, retryAfter);
 }
 
-function scrapeFields(options: ScrapeOptions | null): string[] {
-    const opts: ScrapeOptions = options === null ? {} : options;
-    const formats = opts.formats ?? ["markdown"];
+function scrapeFields(options: ScrapeOptions = {}): string[] {
+    const { json, onlyMainContent, storeInCache, includeTags, excludeTags, maxAge, timeout } = options;
+    const formats = options.formats ?? ["markdown"];
     const encoded: string[] = [];
     for (const format of formats) {
         if (format !== "markdown" && format !== "html") throw invalidArgument("formats supports markdown and html");
         encoded.push(JSON.stringify(format));
     }
-    const json = opts.json;
-    if (json !== null) {
+    if (json !== undefined) {
         const fields = ['"type":"json"'];
-        if (json.schema !== null) {
+        if (json.schema !== null && json.schema !== undefined) {
             const schema = JSON.stringify(json.schema);
-            if (!schema.startsWith("{")) throw invalidArgument("json.schema must be an object");
+            if (schema === undefined || !schema.startsWith("{")) throw invalidArgument("json.schema must be an object");
             fields.push(field("schema", schema));
         }
-        if (json.prompt !== null) { requireText(json.prompt, "json.prompt"); fields.push(field("prompt", JSON.stringify(json.prompt))); }
+        if (json.prompt !== undefined) { requireText(json.prompt, "json.prompt"); fields.push(field("prompt", JSON.stringify(json.prompt))); }
         encoded.push(objectJson(fields));
     }
     if (encoded.length === 0) throw invalidArgument("Request at least one output format");
     const fields = [field("formats", "[" + encoded.join(",") + "]")];
-    addBoolean(fields, "onlyMainContent", opts.onlyMainContent);
-    addBoolean(fields, "storeInCache", opts.storeInCache);
-    addStrings(fields, "includeTags", opts.includeTags);
-    addStrings(fields, "excludeTags", opts.excludeTags);
-    if (opts.maxAge !== null) { integerRange(opts.maxAge, 0, 9007199254740991, "maxAge"); fields.push(field("maxAge", JSON.stringify(opts.maxAge))); }
-    if (opts.timeout !== null) { integerRange(opts.timeout, 1, 300000, "timeout"); fields.push(field("timeout", JSON.stringify(opts.timeout))); }
+    addBoolean(fields, "onlyMainContent", onlyMainContent);
+    addBoolean(fields, "storeInCache", storeInCache);
+    addStrings(fields, "includeTags", includeTags);
+    addStrings(fields, "excludeTags", excludeTags);
+    if (maxAge !== undefined) { integerRange(maxAge, 0, 9007199254740991, "maxAge"); fields.push(field("maxAge", JSON.stringify(maxAge))); }
+    if (timeout !== undefined) { integerRange(timeout, 1, 300000, "timeout"); fields.push(field("timeout", JSON.stringify(timeout))); }
     return fields;
 }
 function pageFrom(data: ApiPage): Page {
     const metadata = data.metadata as PageMetadata;
-    return { sourceURL: metadata.sourceURL, url: metadata.url, title: metadata.title,
-        description: metadata.description, language: metadata.language, statusCode: metadata.statusCode,
-        error: metadata.error, warning: data.warning, markdown: data.markdown, html: data.html,
-        json: data.json, metadata: data.metadata };
+    return { sourceURL: metadata.sourceURL ?? null, url: metadata.url ?? null, title: metadata.title ?? null,
+        description: metadata.description ?? null, language: metadata.language ?? null, statusCode: metadata.statusCode ?? null,
+        error: metadata.error ?? null, warning: data.warning ?? null, markdown: data.markdown ?? null, html: data.html ?? null,
+        json: data.json ?? null, metadata: data.metadata };
 }
 function authHeaders(): Map<string, string> {
     const key = secrets.get("FIRECRAWL_API_KEY");
-    if (key === null || key.trim().length === 0) throw new FirecrawlError("missing_credentials", "Bind FIRECRAWL_API_KEY before using Firecrawl");
+    if (key === undefined || key.trim().length === 0) throw new FirecrawlError("missing_credentials", "Bind FIRECRAWL_API_KEY before using Firecrawl");
     const headers = new Map<string, string>();
     headers.set("Authorization", "Bearer " + key);
     headers.set("Content-Type", "application/json");
@@ -805,22 +849,22 @@ function authHeaders(): Map<string, string> {
     return headers;
 }
 function requireOk(response: Response): string {
-    if (!response.ok) throw firecrawlHttpError(response.status, response.headers.get("retry-after"));
+    if (!response.ok) throw firecrawlHttpError(response.status, response.headers.get("retry-after") ?? null);
     return response.body;
 }
-function addSitemap(fields: string[], mode: SitemapMode | null): void {
-    if (mode === null) return;
+function addSitemap(fields: string[], mode: SitemapMode | undefined): void {
+    if (mode === undefined) return;
     if (mode !== "include" && mode !== "skip" && mode !== "only") throw invalidArgument("Invalid sitemap mode");
     fields.push(field("sitemap", JSON.stringify(mode)));
 }
-function addStrings(fields: string[], name: string, values: string[] | null): void {
-    if (values === null) return;
+function addStrings(fields: string[], name: string, values: string[] | undefined): void {
+    if (values === undefined) return;
     integerRange(values.length, 0, 1000, name + " count");
     for (const value of values) requireText(value, name);
     fields.push(field(name, JSON.stringify(values)));
 }
-function addBoolean(fields: string[], name: string, value: boolean | null): void {
-    if (value !== null) fields.push(field(name, JSON.stringify(value)));
+function addBoolean(fields: string[], name: string, value: boolean | undefined): void {
+    if (value !== undefined) fields.push(field(name, JSON.stringify(value)));
 }
 function integerRange(value: number, min: number, max: number, name: string): void {
     if (!Number.isFinite(value) || value !== Math.floor(value) || value < min || value > max) throw invalidArgument(name + " is outside its integer range");

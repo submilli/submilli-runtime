@@ -4,7 +4,7 @@ import { scrape, map } from "@submilli/firecrawl";
 
 function main(): void {
     const key = secrets.get("FIRECRAWL_API_KEY");
-    if (key === null || key.trim().length === 0) {
+    if (key === undefined || key.trim().length === 0) {
         label("skip: FIRECRAWL_API_KEY is not bound");
         return;
     }

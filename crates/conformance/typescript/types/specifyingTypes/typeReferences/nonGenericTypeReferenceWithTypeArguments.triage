@@ -1,0 +1,1 @@
+line 14 extra: by-design spec §2.2 a class is declared at the top level of a module, not inside a function

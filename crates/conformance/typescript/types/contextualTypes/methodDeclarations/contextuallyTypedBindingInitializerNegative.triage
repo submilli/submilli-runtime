@@ -1,0 +1,4 @@
+line 6 type: artifact both compilers reject the default arrow's number return where Show requires string; the recovery binding includes the invalid default's function type alongside the declared function type
+line 13, 18 type: artifact both compilers reject the default arrow's number return; the probe reports the contextual named interface for the rejected object literal where tsc retains its structural shape
+line 23 type: artifact both compilers reject the numeric first element of the default tuple; the probe retains the contextual [string, number] type for the rejected literal where tsc reports [number, number]
+line 28 type: artifact both compilers reject the default "baz" outside the declared "foo" | "bar" union; the recovery binding includes the rejected default literal

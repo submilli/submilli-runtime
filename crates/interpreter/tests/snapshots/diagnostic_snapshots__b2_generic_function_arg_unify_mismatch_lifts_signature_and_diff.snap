@@ -22,14 +22,3 @@ error: object literal is missing required field `y`
   |                       ^^^^^^^^^^^^^^
 5 | }
 ---
-error: expected `{ x: number; y: number }`, got `{ x: number; z: number }`
- --> test.subm:4:23
-  |
-3 |   const first: { x: number; y: number } = { x: 1, y: 2 };
-4 |   let p = pick(first, { x: 1, z: 3 });
-  |                       ^^^^^^^^^^^^^^
-5 | }
-  |
-help: missing field(s): `y`
-extra field(s): `z`
----

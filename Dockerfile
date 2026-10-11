@@ -8,7 +8,11 @@
 # QEMU-emulated arm64 Rust compilation.
 #
 # To build locally you must populate `dist/<arch>/` yourself — `.dockerignore`
-# denies everything else, so it is the entire build context.
+# denies everything outside `dist/`, so it is the entire build context.
+#
+# The default target is that release image. The `render` target, built by
+# .github/workflows/deploy-render.yml, adds this repository's packages and also
+# needs them compiled into `dist/packages/`.
 
 # Distroless has no shell, so `RUN mkdir -p /var/lib/submilli && chown` is not
 # available, and the server cannot create the directory itself: uid 65532 has no
@@ -28,7 +32,7 @@ RUN mkdir -p /state
 # reads /etc/ssl/certs at runtime, and jiff reads /usr/share/zoneinfo for named
 # time zones. This base ships both, plus a mode-1777 /tmp the ephemeral VFS root
 # defaults to, and an /etc/passwd entry for uid 65532.
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS runtime
 
 ARG TARGETARCH
 ARG VERSION=0.0.0-dev
@@ -100,3 +104,16 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # operator opts out with SUBMILLI_ALLOW_UNAUTHENTICATED=1. Baking either choice
 # into the image would make it the default for everyone who pulls it.
 ENTRYPOINT ["/usr/local/bin/submilli-server"]
+
+# The image Render runs (see .github/workflows/deploy-render.yml): the runtime
+# plus this repository's packages, which the workflow compiles into
+# `dist/packages/` with `submilli build publish-local`. They land in the CLI's
+# store under $SUBMILLI_HOME. COPY leaves them owned by root, which is fine: the
+# server (uid 65532) only reads that store, as its fallback. The fallback is
+# always $SUBMILLI_HOME/packages, so a deployment that sets SUBMILLI_HOME
+# elsewhere hides these; move state with the per-path settings instead.
+FROM runtime AS render
+COPY dist/packages/ /var/lib/submilli/packages/
+
+# Last, so a build that names no target still produces the release image.
+FROM runtime

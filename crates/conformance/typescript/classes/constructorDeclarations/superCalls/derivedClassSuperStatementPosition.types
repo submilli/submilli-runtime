@@ -130,33 +130,33 @@ class DerivedAfterRestParameter extends Object {
     }
 }
 
-/*pruned*/;                           
-           
-                   
-             
-                            
-             
-                      
-             
-                            
-             
-     
- 
+/*pruned*/;
 
-/*pruned*/;                                      
-           
-                   
-             
-             
-             
-                            
-             
-                      
-             
-                            
-             
-     
- 
+
+
+
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class DerivedInConditional extends Object {
 >DerivedInConditional : DerivedInConditional

@@ -3,8 +3,8 @@ import { parse, URL } from "submilli:url";
 function main(): void {
   const u: URL = parse("https://example.com/v1/widgets");
   assert(u.query.size === 0, "absent query → empty Map");
-  const v: string | null = u.query.get("foo");
-  assert(v === null, "absent key returns null on empty Map");
+  const v: string | undefined = u.query.get("foo");
+  assert(v === undefined, "absent key returns undefined on empty Map");
 
   // verifies isolation — parse returns a fresh Map, not shared internal state
   u.query.set("added", "later");

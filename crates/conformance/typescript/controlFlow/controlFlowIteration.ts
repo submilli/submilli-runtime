@@ -4,7 +4,7 @@
 let cond: boolean = null as unknown as (boolean);
 
 function ff(): void {
-    let x: string | null = null as unknown as (string | null);
+    let x: string | undefined = null as unknown as (string | undefined);
     while (true) {
         if (cond) {
             x = "";

@@ -1,12 +1,12 @@
 === propertyAccessChain.2.ts ===
 
-const o1: null | { b: string } = null as unknown as (null | { b: string });
->o1 : { b: string; } | null
->   : ^^^^^^^^^^^^^^^^^^^^^
+const o1: undefined | { b: string } = null as unknown as (undefined | { b: string });
+>o1 : { b: string; } | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >b : string
 >  : ^^^^^^
->null as unknown as (null | { b: string }) : { b: string; } | null
->                                          : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (undefined | { b: string }) : { b: string; } | undefined
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 >b : string
@@ -15,21 +15,21 @@ const o1: null | { b: string } = null as unknown as (null | { b: string });
 o1?.b;
 >o1?.b : string | undefined
 >      : ^^^^^^^^^^^^^^^^^^
->o1 : { b: string; } | null
->   : ^^^^^^^^^^^^^^^^^^^^^
+>o1 : { b: string; } | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >b : string | undefined
 >  : ^^^^^^^^^^^^^^^^^^
 
 
-const o2: null | { b: { c: string } } = null as unknown as (null | { b: { c: string } });
->o2 : { b: { c: string; }; } | null
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+const o2: undefined | { b: { c: string } } = null as unknown as (undefined | { b: { c: string } });
+>o2 : { b: { c: string; }; } | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >b : { c: string; }
 >  : ^^^^^^^^^^^^^^
 >c : string
 >  : ^^^^^^
->null as unknown as (null | { b: { c: string } }) : { b: { c: string; }; } | null
->                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (undefined | { b: { c: string } }) : { b: { c: string; }; } | undefined
+>                                                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 >b : { c: string; }
@@ -42,39 +42,39 @@ o2?.b.c;
 >        : ^^^^^^^^^^^^^^^^^^
 >o2?.b : { c: string; } | undefined
 >      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
->o2 : { b: { c: string; }; } | null
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>o2 : { b: { c: string; }; } | undefined
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >b : { c: string; } | undefined
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >c : string | undefined
 >  : ^^^^^^^^^^^^^^^^^^
 
 
-const o3: { b: null | { c: string } } = null as unknown as ({ b: null | { c: string } });
->o3 : { b: null | { c: string; }; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->b : { c: string; } | null
->  : ^^^^^^^^^^^^^^^^^^^^^
+const o3: { b: undefined | { c: string } } = null as unknown as ({ b: undefined | { c: string } });
+>o3 : { b: undefined | { c: string; }; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { c: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >c : string
 >  : ^^^^^^
->null as unknown as ({ b: null | { c: string } }) : { b: null | { c: string; }; }
->                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ b: undefined | { c: string } }) : { b: undefined | { c: string; }; }
+>                                                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
->b : { c: string; } | null
->  : ^^^^^^^^^^^^^^^^^^^^^
+>b : { c: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >c : string
 >  : ^^^^^^
 
 o3.b?.c;
 >o3.b?.c : string | undefined
 >        : ^^^^^^^^^^^^^^^^^^
->o3.b : { c: string; } | null
->     : ^^^^^^^^^^^^^^^^^^^^^
->o3 : { b: null | { c: string; }; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->b : { c: string; } | null
->  : ^^^^^^^^^^^^^^^^^^^^^
+>o3.b : { c: string; } | undefined
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>o3 : { b: undefined | { c: string; }; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { c: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >c : string | undefined
 >  : ^^^^^^^^^^^^^^^^^^
 

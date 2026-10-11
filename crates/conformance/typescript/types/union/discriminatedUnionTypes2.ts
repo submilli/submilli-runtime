@@ -36,7 +36,7 @@ function f14<T>(x: { a: 0; b: string } | { a: T, c: number }): void {
     }
 }
 
-type Result<T> = { error?: null, value: T } | { error: Error };
+type Result<T> = { error?: undefined, value: T } | { error: Error };
 
 function f15(x: Result<number>): void {
     if (!x.error) {

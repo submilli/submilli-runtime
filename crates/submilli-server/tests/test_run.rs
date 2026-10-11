@@ -590,7 +590,7 @@ function main(): string {
 import session from "submilli:session";
 function main(): string {
   const only = session.get("only-here");
-  return String(readText("/notes.txt")) + "/" + String(session.get("k")) + "/" + (only === null ? "none" : "leaked");
+  return String(readText("/notes.txt")) + "/" + String(session.get("k")) + "/" + (only === undefined ? "none" : "leaked");
 }"#,
         )
         .await;

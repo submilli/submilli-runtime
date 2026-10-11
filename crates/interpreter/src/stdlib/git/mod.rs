@@ -291,16 +291,23 @@ fn install_repository_writes(
         false,
         HeapType::ConcreteStruct(intr.object_shape.clone()),
     ));
+    // Class method slots carry a value even when their source return type is void.
+    let completion = argument.clone();
     let repository = crate::mangle::package_symbol(MODULE_NAME, "Repository");
     register_host_fn_async(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "add"),
-        FuncType::new(engine, [receiver.clone(), argument.clone()], []),
+        FuncType::new(
+            engine,
+            [receiver.clone(), argument.clone()],
+            [completion.clone()],
+        ),
         false,
-        |caller, params, _results| {
+        |caller, params, results| {
             Box::pin(async move {
                 invoke(caller, "add", true, params).await?;
+                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
                 Ok(())
             })
         },
@@ -332,12 +339,13 @@ fn install_repository_writes(
         FuncType::new(
             engine,
             [receiver.clone(), argument.clone(), argument.clone()],
-            [],
+            [completion.clone()],
         ),
         false,
-        |caller, params, _results| {
+        |caller, params, results| {
             Box::pin(async move {
                 invoke(caller, "createBranch", true, params).await?;
+                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
                 Ok(())
             })
         },
@@ -346,11 +354,16 @@ fn install_repository_writes(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&repository, "switchBranch"),
-        FuncType::new(engine, [receiver.clone(), argument.clone()], []),
+        FuncType::new(
+            engine,
+            [receiver.clone(), argument.clone()],
+            [completion.clone()],
+        ),
         false,
-        |caller, params, _results| {
+        |caller, params, results| {
             Box::pin(async move {
                 invoke(caller, "switchBranch", true, params).await?;
+                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
                 Ok(())
             })
         },
@@ -362,12 +375,13 @@ fn install_repository_writes(
         FuncType::new(
             engine,
             [receiver.clone(), argument.clone(), argument.clone()],
-            [],
+            [completion.clone()],
         ),
         false,
-        |caller, params, _results| {
+        |caller, params, results| {
             Box::pin(async move {
                 invoke(caller, "addRemote", true, params).await?;
+                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
                 Ok(())
             })
         },
@@ -379,12 +393,13 @@ fn install_repository_writes(
         FuncType::new(
             engine,
             [receiver.clone(), argument.clone(), argument.clone()],
-            [],
+            [completion.clone()],
         ),
         false,
-        |caller, params, _results| {
+        |caller, params, results| {
             Box::pin(async move {
                 invoke(caller, "setRemoteUrl", true, params).await?;
+                *abi_result(results, 0)? = crate::runtime::prelude::undefined::value(caller)?;
                 Ok(())
             })
         },
@@ -603,10 +618,16 @@ async fn decode_arguments(
 ) -> Result<(Vec<Value>, String)> {
     let mut args = Vec::new();
     let offset = usize::from(method);
-    for param in params
+    for (index, param) in params
         .get(offset..)
         .ok_or_else(|| crate::runtime::host::invariant_trap("git ABI: missing arguments"))?
+        .iter()
+        .enumerate()
     {
+        if crate::runtime::prelude::undefined::is_undefined(caller, param)? {
+            args.push(undefined_argument(op, index)?);
+            continue;
+        }
         let units = value::serialize(caller, param).await?;
         if units.len() as u64 * 2 > max_bytes {
             bail!("git: argument size limit exceeded");
@@ -630,6 +651,19 @@ async fn decode_arguments(
         bail!("git: repository path targets protected metadata");
     }
     Ok((args, path))
+}
+
+// Virtual calls apply defaults in the selected method, just as guest classes do.
+fn undefined_argument(op: &str, index: usize) -> Result<Value> {
+    match (op, index) {
+        ("init", 1) | ("clone", 2) | ("log" | "diff", 0) => {
+            Ok(Value::Object(serde_json::Map::new()))
+        }
+        ("createBranch", 1) => Ok(Value::String("HEAD".into())),
+        ("fetch" | "pull", 0) => Ok(Value::String("origin".into())),
+        ("fetch" | "pull", 1) => Ok(Value::String(String::new())),
+        _ => bail!("git: undefined is not accepted for this argument to {op}"),
+    }
 }
 
 fn encode_result(

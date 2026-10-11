@@ -65,7 +65,7 @@ function source(count: number): Source<Box> {
           churn();
           n++;
           if (n > count) {
-            const done: IteratorResult<Box> = { done: true };
+            const done: IteratorResult<Box> = { done: true, value: undefined };
             return done;
           }
           const step: IteratorResult<Box> = { done: false, value: new Box(n) };
@@ -86,12 +86,13 @@ function pairSource(count: number): Source<[Box, Box]> {
           churn();
           n++;
           if (n > count) {
-            const done: IteratorResult<[Box, Box]> = { done: true };
+            const done: IteratorResult<[Box, Box]> = { done: true, value: undefined };
             return done;
           }
+          const pair: [Box, Box] = [new Box(n), new Box(n * 10)];
           const step: IteratorResult<[Box, Box]> = {
             done: false,
-            value: [new Box(n), new Box(n * 10)],
+            value: pair,
           };
           return step;
         },
@@ -195,7 +196,7 @@ function droppedElements(): void {
     return box.v === 8;
   });
   churn();
-  assert(found !== null && found.v === 8, "find keeps elements its callback removed");
+  assert(found !== undefined && found.v === 8, "find keeps elements its callback removed");
 
   const tested = boxes(8);
   const every = tested.every((box: Box) => {
@@ -251,11 +252,17 @@ function collections(): void {
   }
   let clearedSum = 0;
   cleared.forEach((value: Box) => {
-    cleared.clear();
-    churn();
     clearedSum += value.v;
+    if (value.v === 1) {
+      cleared.clear();
+      churn();
+      for (let i = 0; i < 8; i++) {
+        cleared.set(i, new Box(10 + i));
+      }
+    }
+    churn();
   });
-  assert(clearedSum === 36, "Map forEach keeps the entries its callback cleared");
+  assert(clearedSum === 109, "Map forEach follows a clear its callback makes");
 
   const emptied = new Set<Box>();
   for (let i = 0; i < 8; i++) {
@@ -263,11 +270,17 @@ function collections(): void {
   }
   let emptiedSum = 0;
   emptied.forEach((value: Box) => {
-    emptied.clear();
-    churn();
     emptiedSum += value.v;
+    if (value.v === 1) {
+      emptied.clear();
+      churn();
+      for (let i = 0; i < 8; i++) {
+        emptied.add(new Box(10 + i));
+      }
+    }
+    churn();
   });
-  assert(emptiedSum === 36, "Set forEach keeps the elements its callback cleared");
+  assert(emptiedSum === 109, "Set forEach follows a clear its callback makes");
 }
 
 function getters(): void {

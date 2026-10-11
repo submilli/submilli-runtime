@@ -1,0 +1,1 @@
+validVoidValues.ts(4,1): error TS2322: Type 'null' is not assignable to type 'void'.

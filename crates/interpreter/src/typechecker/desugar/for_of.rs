@@ -669,8 +669,9 @@ fn synthesize_close_finally(
         ret: Box::new(Type::Void),
         predicate: None,
         has_rest: false,
+        optional: 0,
     };
-    let close_opt_ty = Type::union(vec![close_fn_ty.clone(), Type::Null]);
+    let close_opt_ty = Type::union(vec![close_fn_ty.clone(), Type::Undefined]);
 
     // Iterator uses VTable dispatch: emit as FieldAccess, not MethodCall.
     let it_ref_for_close = ctx.local_ref(it_ident.clone(), iter_ty.clone())?;
@@ -699,21 +700,21 @@ fn synthesize_close_finally(
     )?;
 
     let close_ref_for_check = ctx.local_ref(close_ident.clone(), close_opt_ty.clone())?;
-    let null_lit = ctx
+    let undefined_lit = ctx
         .ta
         .try_push_expr(TypedExpr {
-            kind: TypedExprKind::Null,
+            kind: TypedExprKind::Undefined,
             span,
-            ty: Type::Null,
+            ty: Type::Undefined,
         })
         .map_err(crate::typechecker::arena_failure)?;
-    let null_check = ctx
+    let presence_check = ctx
         .ta
         .try_push_expr(TypedExpr {
             kind: TypedExprKind::Binary {
                 op: BinOp::NotEq,
                 lhs: close_ref_for_check,
-                rhs: null_lit,
+                rhs: undefined_lit,
             },
             span,
             ty: Type::Boolean,
@@ -768,7 +769,7 @@ fn synthesize_close_finally(
     let then_block = ctx.push_stmt(TypedStmtKind::Block(vec![narrow_region]), span)?;
     let if_stmt = ctx.push_stmt(
         TypedStmtKind::If {
-            condition: null_check,
+            condition: presence_check,
             then_block,
             else_block: None,
         },

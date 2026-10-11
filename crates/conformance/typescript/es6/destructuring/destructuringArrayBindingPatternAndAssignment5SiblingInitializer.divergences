@@ -1,0 +1,40 @@
+types: 36 of 52 tsc entries compared, 9 differ
+
+line 6: [1]
+  tsc:  [number]
+  ours: [number, undefined]
+
+line 7: [1]
+  tsc:  [number]
+  ours: [number, undefined]
+
+line 12: ['hi']
+  tsc:  [string]
+  ours: [string, undefined]
+
+line 13: ['hi']
+  tsc:  [string]
+  ours: [string, undefined]
+
+line 26: a
+  tsc:  number | undefined
+  ours: number
+
+line 26: a
+  tsc:  number | undefined
+  ours: number
+
+line 26: b
+  tsc:  number | undefined
+  ours: number
+
+line 26: yadda ?? []
+  tsc:  [number, number] | []
+  ours: [number, number]
+
+line 26: []
+  tsc:  []
+  ours: [number, number]
+
+errors:
+line 26: ours: tuple literal has 0 elements, but type expects 2 (tsc accepts)

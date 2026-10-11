@@ -51,6 +51,7 @@ fn insert_static(
     statics.insert(
         name.into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params,
             ret,
@@ -83,15 +84,16 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "status".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![],
-            ret: object(
-                &[
-                    ("branch", Type::union(vec![Type::String, Type::Null])),
-                    ("entries", array(entry)),
-                    ("clean", Type::Boolean),
-                ],
-                false,
+            ret: with_optional(
+                object(
+                    &[("entries", array(entry)), ("clean", Type::Boolean)],
+                    false,
+                ),
+                "branch",
+                Type::String,
             ),
             predicate: None,
             doc: crate::doc(
@@ -103,17 +105,16 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "log".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![options(&[
                 ("limit", Type::Number),
                 ("offset", Type::Number),
             ])],
-            ret: object(
-                &[
-                    ("commits", array(commit)),
-                    ("nextOffset", Type::union(vec![Type::Number, Type::Null])),
-                ],
-                false,
+            ret: with_optional(
+                object(&[("commits", array(commit))], false),
+                "nextOffset",
+                Type::Number,
             ),
             predicate: None,
             doc: crate::doc(FileId::GIT, "/** Read history, default 50 commits; limit 1..1000, nonnegative integer offset. Traversal is resource-bounded. */"),
@@ -122,6 +123,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "diff".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![options(&[
                 ("mode", Type::String),
@@ -142,6 +144,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "show".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![string("ref"), string("path")],
             ret: Type::Uint8Array,
@@ -152,6 +155,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "branches".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![],
             ret: array(object(
@@ -169,6 +173,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "remotes".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![],
             ret: array(object(
@@ -185,6 +190,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "add".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![Param::new("paths", array(Type::String))],
             ret: Type::Void,
@@ -195,6 +201,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "commit".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![string("message")],
             ret: Type::String,
@@ -205,6 +212,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "createBranch".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![string("name"), default_string("start", "HEAD")],
             ret: Type::Void,
@@ -218,6 +226,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "switchBranch".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![string("name")],
             ret: Type::Void,
@@ -231,6 +240,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "addRemote".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![string("name"), string("url")],
             ret: Type::Void,
@@ -244,6 +254,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "setRemoteUrl".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![string("name"), string("url")],
             ret: Type::Void,
@@ -254,6 +265,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "fetch".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![
                 default_string("remote", "origin"),
@@ -267,6 +279,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "pull".into(),
         MethodSig {
+            optional: false,
             generics: vec![],
             params: vec![
                 default_string("remote", "origin"),
@@ -331,6 +344,14 @@ fn object(fields: &[(&str, Type)], optional: bool) -> Type {
     }
 }
 
+/// `ty` with an optional member the host leaves out when it has no value.
+fn with_optional(mut ty: Type, name: &str, field: Type) -> Type {
+    if let Type::Object { fields, .. } = &mut ty {
+        fields.insert(name.to_owned(), ObjectField::optional(field));
+    }
+    ty
+}
+
 fn array(ty: Type) -> Type {
     Type::Array(Box::new(ty))
 }
@@ -346,8 +367,8 @@ fn default_string(name: &str, value: &str) -> Param {
 fn options(fields: &[(&str, Type)]) -> Param {
     Param::with_default(
         "options",
-        Type::union(vec![object(fields, true), Type::Null]),
-        DefaultValue::Null,
+        Type::union(vec![object(fields, true), Type::Undefined]),
+        DefaultValue::Undefined,
     )
 }
 

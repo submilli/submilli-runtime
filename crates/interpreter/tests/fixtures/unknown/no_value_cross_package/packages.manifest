@@ -1,5 +1,5 @@
 # A method of an imported class returning `unknown` that ends without a
-# `return`, or with a bare `return;`, yields `null` across the package boundary.
+# `return`, or with a bare `return;`, yields `undefined` across the package boundary.
 # name         dir   deps         root
 @test/maybe    lib   -
 main           app   @test/maybe  root

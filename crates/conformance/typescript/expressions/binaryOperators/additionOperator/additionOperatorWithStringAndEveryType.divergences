@@ -1,8 +1,9 @@
-types: 38 of 65 tsc entries compared, 0 differ
+types: 43 of 72 tsc entries compared, 0 differ
 
 errors:
 line 17: ours: `+` not defined for `string` and `boolean` (tsc accepts)
 line 18: ours: `+` not defined for `string` and `number` (tsc accepts)
+line 21: ours: `+` not defined for `string` and `void` (tsc accepts)
 line 26: ours: `+` not defined for `boolean` and `string` (tsc accepts)
 line 27: ours: `+` not defined for `number` and `string` (tsc accepts)
 line 35: ours: `+` not defined for `string` and `E.a` (tsc accepts)

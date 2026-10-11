@@ -167,6 +167,8 @@ impl Inferer<'_> {
                 ty: from_ty,
             })
             .map_err(crate::typechecker::arena_failure)?;
+        // Either way the value keeps the literals it was already known not to be.
+        let exclusions = self.known_exclusions(&path);
         let mut true_env = narrowing::NarrowEnv::new();
         let mut false_env = narrowing::NarrowEnv::new();
         true_env.insert(
@@ -174,7 +176,7 @@ impl Inferer<'_> {
             narrowing::NarrowedView {
                 narrowed_ty: true_ty,
                 facts: narrowing::TypeFacts::EMPTY,
-                excluded_literals: std::collections::BTreeSet::new(),
+                excluded_literals: exclusions.clone(),
                 binding: self.mint_narrow_binding(arg_span)?,
                 source: source_true,
             },
@@ -184,7 +186,7 @@ impl Inferer<'_> {
             narrowing::NarrowedView {
                 narrowed_ty: false_ty,
                 facts: narrowing::TypeFacts::EMPTY,
-                excluded_literals: std::collections::BTreeSet::new(),
+                excluded_literals: exclusions,
                 binding: self.mint_narrow_binding(arg_span)?,
                 source: source_false,
             },

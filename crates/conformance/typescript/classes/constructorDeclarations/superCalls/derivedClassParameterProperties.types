@@ -280,7 +280,7 @@ class Derived8 extends Base {
 >3 : 3
 >  : ^
 
-        this.b = 3;        
+        this.b = 3;
 >this.b = 3 : 3
 >           : ^
 >this.b : number

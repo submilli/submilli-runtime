@@ -39,7 +39,7 @@ export function main(): string {
   }
 
   const o: Opt = { f: 1 };
-  if (o.f !== null) {
+  if (o.f !== undefined) {
     o.f = o.f + 1;
   }
 
@@ -54,6 +54,6 @@ export function main(): string {
   assert(cb !== null && cb === 2n, "class `*=` write-out runs on a bigint");
   assert(iv !== null && iv === 2, "interface write-out runs");
   assert(sv !== null && sv === 2, "structural write-out runs");
-  assert(ov !== null && ov === 2, "optional write-out runs");
+  assert(ov !== undefined && ov === 2, "optional write-out runs");
   return "ok";
 }

@@ -1,7 +1,0 @@
-// expect-error: default values inside destructuring patterns
-
-function main(): void {
-  const obj: { a: number } = { a: 1 };
-  const { a = 0 } = obj;
-  assert(a === 1, "unreachable");
-}

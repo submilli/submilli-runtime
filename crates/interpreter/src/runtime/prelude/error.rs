@@ -884,8 +884,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 statics: BTreeMap::from([(
                     "isError".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: Vec::new(),
-                        params: vec![Param::new("value", Type::Unknown)],
+                        params: vec![Param::with_default(
+                            "value", Type::Unknown, crate::DefaultValue::Undefined,
+                        )],
                         ret: Type::Boolean,
                         predicate: Some(crate::TypePredicate {
                             parameter_index: 0,
@@ -985,7 +988,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 extends: Some(crate::ClassExtends::plain(crate::mangle::prelude("Error"))),
                 implements: Vec::new(),
                 doc: doc(
-                    "/** The built-in type-error class (`extends Error`, `name` = `\"TypeError\"`). Thrown by the runtime when a value fails a type-shaped runtime check: a non-null assertion (`x!`) applied to `null`, a runtime-checked `as` cast that doesn't match (including `JSON.parse` result shapes), `TextDecoder.decode` of invalid UTF-8, or an invalid URL. Catch selectively with `catch (e: TypeError)`. */",
+                    "/** The built-in type-error class (`extends Error`, `name` = `\"TypeError\"`). Thrown by the runtime when a value fails a type-shaped runtime check: a non-null assertion (`x!`) applied to `null` or `undefined`, a runtime-checked `as` cast that doesn't match (including `JSON.parse` result shapes), `TextDecoder.decode` of invalid UTF-8, or an invalid URL. Catch selectively with `catch (e: TypeError)`. */",
                 ),
             },
         },
@@ -1139,7 +1142,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 extends: Some(crate::ClassExtends::plain(crate::mangle::prelude("Error"))),
                 implements: Vec::new(),
                 doc: doc(
-                    "/** The built-in reference-error class (`extends Error`, `name` = `\"ReferenceError\"`). Thrown when code reads or writes a module variable before its declaration has run. Catch selectively with `catch (e: ReferenceError)`. */",
+                    "/** The built-in reference-error class (`extends Error`, `name` = `\"ReferenceError\"`). Thrown when code reads or writes a module variable before its declaration has run, or when a parameter default reads a parameter before its initialization. Catch selectively with `catch (e: ReferenceError)`. */",
                 ),
             },
         },

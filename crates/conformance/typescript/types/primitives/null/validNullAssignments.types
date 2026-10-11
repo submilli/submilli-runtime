@@ -1,0 +1,127 @@
+=== validNullAssignments.ts ===
+let a: number = null;
+>a : number
+>  : ^^^^^^
+
+let b: boolean = null;
+>b : boolean
+>  : ^^^^^^^
+
+let c: string = null;
+>c : string
+>  : ^^^^^^
+
+let d: void = null;
+>d : void
+>  : ^^^^
+
+
+let e: typeof undefined = null;
+>e : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+e = null; // ok
+>e = null : null
+>         : ^^^^
+>e : undefined
+>  : ^^^^^^^^^
+
+
+enum E { A }
+>E : E
+>  : ^
+>A : E.A
+>  : ^^^
+
+E.A = null; // error
+>E.A = null : null
+>           : ^^^^
+>E.A : any
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>A : any
+>  : ^^^
+
+
+class C { foo: string }
+>C : C
+>  : ^
+>foo : string
+>    : ^^^^^^
+
+/*pruned*/;
+/**/;     // ok
+C = null; // error
+>C = null : null
+>         : ^^^^
+>C : any
+>  : ^^^
+
+
+interface I { foo: string }
+>I : I
+>  : ^
+>foo : string
+>    : ^^^^^^
+
+let g: I = null as unknown as (I);
+>g : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+g = null; // ok
+>g = null : null
+>         : ^^^^
+>g : I
+>  : ^
+
+I = null; // error
+>I = null : null
+>         : ^^^^
+>I : any
+>  : ^^^
+
+
+/*pruned*/;
+/**/;     // error
+
+let h: { f(): void } = null;
+>h : { f(): void; }
+>  : ^^^^^^^^^^^^^^
+>f : () => void
+>  : ^^^^^^^^^^
+
+
+function i<T>(a: T): void {
+>i : <T>(a: T) => void
+>  : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : T
+>  : ^
+
+    a = null;
+>a = null : null
+>         : ^^^^
+>a : T
+>  : ^
+
+}
+i = null; // error
+>i = null : null
+>         : ^^^^
+>i : any
+>  : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

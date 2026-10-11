@@ -1,9 +1,9 @@
-// `description` and `contextWindow` are each `null` when the operator declared
+// `description` and `contextWindow` are each `undefined` when the operator declared
 // none, and absent means *unknown* rather than zero. Models are blueprint
 // declared, so an operator may legitimately name a model without asserting
 // anything else about it — and there is no fallback table to fill the gap.
 //
-// This is the trap the field's nullability exists to force: a program sizing
+// This is the trap the field's optionality exists to force: a program sizing
 // chunks against `contextWindow` must drop a model that declared none rather
 // than treat it as `0` (which would reject every prompt) or guess a default
 // (which would overflow a small model's window). Filtering on either field
@@ -23,16 +23,16 @@ function main(): void {
     if (m.name === "claude-haiku-4-5") {
       sawDescribed = true;
       // The fully declared model carries both optional fields.
-      assert(m.description !== null, "a declared description reaches the guest");
+      assert(m.description !== undefined, "a declared description reaches the guest");
       assert((m.description as string).length > 0, "and is non-empty");
-      assert(m.contextWindow !== null, "a declared context window reaches the guest");
+      assert(m.contextWindow !== undefined, "a declared context window reaches the guest");
       assert((m.contextWindow as number) === 200000, "with the operator's own number");
     }
     if (m.name === "bare-model") {
       sawBare = true;
-      // The name-only model reports null for both — not "", and not 0.
-      assert(m.description === null, "an undeclared description is null, not an empty string");
-      assert(m.contextWindow === null, "an undeclared context window is null, not zero");
+      // The name-only model reports undefined for both — not "", and not 0.
+      assert(m.description === undefined, "an undeclared description is undefined, not an empty string");
+      assert(m.contextWindow === undefined, "an undeclared context window is undefined, not zero");
     }
   }
   assert(sawDescribed, "the fully declared model is listed");
@@ -46,7 +46,7 @@ function main(): void {
   let widestWindow = 0;
   for (const m of models) {
     const window = m.contextWindow;
-    if (window === null) continue;
+    if (window === undefined) continue;
     if (widestName === "" || window > widestWindow) {
       widestName = m.name;
       widestWindow = window;
@@ -55,7 +55,7 @@ function main(): void {
   assert(widestName === "claude-haiku-4-5", "the undeclared model dropped out of sizing");
   assert(widestWindow === 200000, "the surviving window is the declared one");
 
-  // Dropping it from a sizing decision does not make it uncallable: a null
+  // Dropping it from a sizing decision does not make it uncallable: an undefined
   // window means unknown, not unusable.
   const c = llm.call("bare-model", "Summarize this.");
   assert(c.ok, "a model that declared no context window is still callable");

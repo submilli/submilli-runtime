@@ -1,11 +1,11 @@
 // @target: es2015
 // @strict: true
 
-let x: { a: 0 | 1 | null } = null as unknown as ({ a: 0 | 1 | null });
+let x: { a: 0 | 1 | undefined } = null as unknown as ({ a: 0 | 1 | undefined });
 
 let { a: a1 } = x;
-/*pruned*/;           
-/*pruned*/;           
+let { a: a2 = 0 } = x;
+let { a: a3 = 2 } = x;
 /*pruned*/;                    
 
 let b1 = x.a;
@@ -16,12 +16,12 @@ let b3 = x.a ?? 2;
 // Repro from #35693
 
 interface Foo {
-  bar: 'yo' | 'ha' | null;
+  bar: 'yo' | 'ha' | undefined;
 }
 
-/*pruned*/;                    
+let { bar = 'yo' } = {} as Foo;
 
-;     // "yo" | "ha"
+bar;  // "yo" | "ha"
 
 
 function main(): void {}

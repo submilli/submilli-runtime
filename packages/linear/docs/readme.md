@@ -24,12 +24,14 @@ check.
 
 Lists return a `Page<T>` with `nodes` and `pageInfo`. When
 `pageInfo.hasNextPage` is true, pass `{ after: pageInfo.endCursor }` to request
-the next page. Always keep pagination explicitly bounded.
+the next page; a `null` cursor is treated as absent. The `page` argument is
+optional; omit it to request the first 50 items. Always keep pagination
+explicitly bounded.
 
-`listIssues` accepts curated filters for team, assignee, workflow state type,
-and lifecycle timestamp ranges. To find issues completed during a period, use
-`stateType: "completed"` together with `completedAtAfter` and
-`completedAtBefore`. ISO timestamps from `Temporal` are accepted; a trailing
+`listIssues` accepts optional curated filters for team, assignee, workflow
+state type, and lifecycle timestamp ranges; omit the filter to list all issues.
+To find issues completed during a period, use `stateType: "completed"` together
+with `completedAtAfter` and `completedAtBefore`. ISO timestamps from `Temporal` are accepted; a trailing
 bracketed zone annotation is removed before calling Linear.
 
 `Issue` includes lifecycle timestamps (`createdAt`, `updatedAt`, `completedAt`, `canceledAt`, `startedAt`, `triagedAt`, `archivedAt`, `autoClosedAt`), planning fields (`dueDate`, `estimate`, `priorityLabel`, `labelIds`), and embedded one-level relations (`assignee`, `creator`, `team`, `state`, `project`, `cycle`).

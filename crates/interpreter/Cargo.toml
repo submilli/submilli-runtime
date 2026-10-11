@@ -1,10 +1,16 @@
 [package]
-name = "interpreter"
+name = "submilli-engine"
+description = "Compiles Submilli programs, a TypeScript subset, to WebAssembly and runs them under capability policy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+readme = "README.md"
+keywords = ["submilli", "typescript", "webassembly", "sandbox", "agents"]
+categories = ["compilers", "wasm"]
+publish = true
+# Tests and their snapshots stay in the repository; the package is the library.
+exclude = ["tests/**", "**/snapshots/**"]
 
 [lints]
 workspace = true

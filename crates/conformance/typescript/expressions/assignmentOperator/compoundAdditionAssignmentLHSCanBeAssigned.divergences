@@ -1,4 +1,4 @@
-types: 27 of 52 tsc entries compared, 0 differ
+types: 35 of 60 tsc entries compared, 0 differ
 
 errors:
 line 21: ours: expected `string`, got `boolean` (tsc accepts)
@@ -6,5 +6,5 @@ line 22: ours: expected `string`, got `number` (tsc accepts)
 line 24: ours: expected `string`, got `E.a` (tsc accepts)
 line 25: ours: expected `string`, got `{}` (tsc accepts)
 line 26: ours: expected `string`, got `null` (tsc accepts)
-line 27: ours: expected `string`, got `null` (tsc accepts)
+line 27: ours: expected `string`, got `undefined` (tsc accepts)
 line 48: ours: expected `{}`, got `string` (tsc accepts)

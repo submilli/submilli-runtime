@@ -64,11 +64,13 @@ BigInt(null);
 >BigInt : BigIntConstructor
 >       : ^^^^^^^^^^^^^^^^^
 
-BigInt(null)
->BigInt(null) : bigint
->             : ^^^^^^
+BigInt(undefined)
+>BigInt(undefined) : bigint
+>                  : ^^^^^^
 >BigInt : BigIntConstructor
 >       : ^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
 
 
 

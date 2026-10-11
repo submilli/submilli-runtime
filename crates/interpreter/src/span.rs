@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 pub struct FileId(pub u32);
 
 impl FileId {
-    pub const FIRST_RESERVED: u32 = u32::MAX - 22;
+    pub const FIRST_RESERVED: u32 = u32::MAX - 24;
     pub const COMPILER: FileId = FileId(Self::FIRST_RESERVED);
 
     pub const PRELUDE: FileId = FileId(u32::MAX);
@@ -39,6 +39,8 @@ impl FileId {
     pub const EMBEDDING: FileId = FileId(u32::MAX - 21);
     pub const CODE: FileId = FileId(u32::MAX - 20);
     pub const GIT: FileId = FileId(u32::MAX - 19);
+    pub const AGENTS: FileId = FileId(u32::MAX - 22);
+    pub const SKILLS: FileId = FileId(u32::MAX - 23);
 
     /// Virtual display path for a reserved (prelude/stdlib) id, e.g.
     /// `submilli:fs`. Returns `None` for ordinary user/script files, which
@@ -67,6 +69,8 @@ impl FileId {
             FileId::SECRETS => "submilli:secrets",
             FileId::SESSION => "submilli:session",
             FileId::LLM => "submilli:llm",
+            FileId::AGENTS => "submilli:agents",
+            FileId::SKILLS => "submilli:skills",
             FileId::TEST => "submilli:test",
             _ => return None,
         })

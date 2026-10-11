@@ -73,8 +73,8 @@ pub fn package_declaration() -> PackageDeclaration {
             string("pattern"),
             Param::with_default(
                 "options",
-                Type::union(vec![options, Type::Null]),
-                DefaultValue::Null,
+                Type::union(vec![options, Type::Undefined]),
+                DefaultValue::Undefined,
             ),
         ],
         object(

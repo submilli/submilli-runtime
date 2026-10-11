@@ -8,8 +8,8 @@ let {a1, a2}: { a1: number, a2: string } = { a1: 10, a2: "world" }
 //      Otherwise, if the declaration includes an initializer expression, T is the type of that initializer expression.
 /*pruned*/;                                                         
 let temp = { t1: true, t2: "false" };
-/*pruned*/;                                                                 
-/*pruned*/;                                             
+let [b2 = 3, b3 = true, b4 = temp] = [3, false, { t1: false, t2: "hello" }];
+let [b5 = 3, b6 = true, b7 = temp] = [undefined, undefined, undefined];
 
 // The type T associated with a binding element is determined as follows:
 //      If the binding element is a rest element, T is an array type with

@@ -35,10 +35,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
         false,
         HeapType::ConcreteStruct(intr.object_shape.clone()),
     ));
-    let options = ValType::Ref(RefType::new(
-        true,
-        HeapType::ConcreteStruct(intr.object_shape),
-    ));
+    let options = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
     for (name, params, result) in [
         (
             "read",

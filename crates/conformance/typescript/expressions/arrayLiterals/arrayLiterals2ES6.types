@@ -8,7 +8,7 @@
 // SpreadElement:
 //      ...   AssignmentExpression
 
-/*pruned*/;           
+/*pruned*/;
 let a1 = ["hello", "world"]
 >a1 : string[]
 >   : ^^^^^^^^
@@ -19,8 +19,8 @@ let a1 = ["hello", "world"]
 >"world" : "world"
 >        : ^^^^^^^
 
-/*pruned*/;                     
-/*pruned*/;         
+/*pruned*/;
+/*pruned*/;
 let a4 = [() => 1, ];
 >a4 : (() => number)[]
 >   : ^^^^^^^^^^^^^^^^
@@ -31,7 +31,7 @@ let a4 = [() => 1, ];
 >1 : 1
 >  : ^
 
-/*pruned*/;         
+/*pruned*/;
 
 // Each element expression in a non-empty array literal is processed as follows:
 //    - If the array literal contains no spread elements, and if the array literal is contextually typed (section 4.19)
@@ -42,7 +42,7 @@ let a4 = [() => 1, ];
 //     - If the array literal contains no spread elements and is contextually typed by a tuple-like type,
 //       the resulting type is a tuple type constructed from the types of the element expressions.
 
-/*pruned*/;                                  
+/*pruned*/;
 let b1: [number[], string[]] = [[1, 2, 3], ["hello", "string"]];
 >b1 : [number[], string[]]
 >   : ^^^^^^^^^^^^^^^^^^^^
@@ -143,8 +143,8 @@ let temp2: [number[], string[]] = [[1, 2, 3], ["hello", "string"]];
 >         : ^^^^^^^^
 
 
-/*pruned*/;                                
-/*pruned*/;                                        
+/*pruned*/;
+/*pruned*/;
 let d0 = [1, true, ...temp, ];  // has type (string|number|boolean)[]
 >d0 : (string | number | boolean)[]
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -179,10 +179,10 @@ let d2: number[] = [...temp1];
 >temp1 : number[]
 >      : ^^^^^^^^
 
-/*pruned*/;                  
-/*pruned*/;                            
-/*pruned*/;      
-/*pruned*/;      
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
 let d7 = [...a4];
 >d7 : (() => number)[]
 >   : ^^^^^^^^^^^^^^^^

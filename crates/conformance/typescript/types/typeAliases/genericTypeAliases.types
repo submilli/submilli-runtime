@@ -271,31 +271,31 @@ type Pair<T> = AB<T, T>;
 >  : ^
 
 
-/*pruned*/;                              
-                
- 
+/*pruned*/;
 
-/*pruned*/;                                                         
-/**/;   
-/**/;   
-/*pruned*/;    
 
-/*pruned*/;                               
-                                    
-                                                    
-             
- 
 
-/*pruned*/;                               
-                                    
-                                                    
-             
- 
+/*pruned*/;
+/**/;
+/**/;
+/*pruned*/;
+
+/*pruned*/;
+
+
+
+
+
+/*pruned*/;
+
+
+
+
 
 // Deeply instantiated generics
-/*pruned*/;         
-/*pruned*/;         
-/**/; 
+/*pruned*/;
+/*pruned*/;
+/**/;
 
 
 function main(): void {}

@@ -1,11 +1,23 @@
 === typesWithOptionalProperty.ts ===
 // basic uses of optional properties without errors
 
-/*pruned*/;  
-                
-                 
-                    
- 
+interface I {
+>I : I
+>  : ^
+
+    foo: string;
+>foo : string
+>    : ^^^^^^
+
+    bar?: number;
+>bar : number | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+
+    baz? (): string;
+>baz : (() => string) | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
 
 let a: {
 >a : { foo: string; bar?: number; baz?(): string; }
@@ -88,11 +100,39 @@ let d = { foo: '', bar: 3, baz: () => '' };
 >   : ^^
 
 
-/*pruned*/;                       
+let i: I = null as unknown as (I);
+>i : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
 
-/**/; 
-/**/; 
-/**/; 
+
+i = b;
+>i = b : { foo: string; }
+>      : ^^^^^^^^^^^^^^^^
+>i : I
+>  : ^
+>b : { foo: string; }
+>  : ^^^^^^^^^^^^^^^^
+
+i = c;
+>i = c : { foo: string; bar: number; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>i : I
+>  : ^
+>c : { foo: string; bar: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+i = d;
+>i = d : { foo: string; bar: number; baz: () => string; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>i : I
+>  : ^
+>d : { foo: string; bar: number; baz: () => string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 a = b;
 >a = b : { foo: string; }
@@ -119,8 +159,22 @@ a = d;
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-/**/; 
-/**/; 
+i = a;
+>i = a : { foo: string; bar?: number; baz?(): string; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>i : I
+>  : ^
+>a : { foo: string; bar?: number; baz?(): string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+a = i;
+>a = i : I
+>      : ^
+>a : { foo: string; bar?: number; baz?(): string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>i : I
+>  : ^
+
 
 function main(): void {}
 >main : () => void

@@ -18,14 +18,12 @@ use crate::{Dispatch, ExprId, MangledName, Type};
 pub enum FieldSetup {
     /// `this.field = <initializer expr>`.
     Init { field: String, value: ExprId },
-    /// `this.field = <constructor param>` for a parameter property. `param_local`
-    /// is the init fn's local index of the param (self is local 0).
+    /// Read the current parameter storage after defaults, including captured cells.
     ParamCopy {
         field: String,
-        param_local: u32,
-        ty: Type,
+        param: Box<crate::TypedParam>,
     },
-    /// `this.field = null` for an optional field that redeclares an inherited
+    /// `this.field = undefined` for an optional field that redeclares an inherited
     /// one with no initializer of its own. The slot is the parent's, so without
     /// this it would keep the parent's initialized value.
     Reset { field: String },
@@ -41,6 +39,9 @@ pub struct ClassGuardLayout {
 #[derive(Default, Clone, Debug)]
 pub struct SymbolTable {
     pub(crate) field_lookup_function: Option<u32>,
+    pub(crate) resultless_functions: BTreeSet<u32>,
+    /// Declared defaults of a host function's Wasm parameters, by position.
+    host_parameter_defaults: BTreeMap<u32, Vec<Option<crate::DefaultValue>>>,
     pub class_type_parameters: BTreeMap<MangledName, Vec<String>>,
     pub runtime_generic_functions: BTreeSet<MangledName>,
     pub field_guard_targets: BTreeMap<u32, Type>,
@@ -51,6 +52,9 @@ pub struct SymbolTable {
     globals: BTreeMap<MangledName, u32>,
     global_types: BTreeMap<MangledName, Type>,
     init_guards: BTreeMap<MangledName, crate::codegen::init_guard::InitFlag>,
+    /// The flags of guarded classes, by the index of the top-level statement
+    /// their declaration precedes.
+    class_declaration_flags: BTreeMap<usize, Vec<u32>>,
     intrinsic_type_indices: Option<IntrinsicTypeIndices>,
     pub(crate) this_environment_type: Option<u32>,
     pub(crate) call_metadata_type: Option<u32>,
@@ -73,6 +77,10 @@ pub struct SymbolTable {
     /// Vtable slot index (4 + declaration position) of a class method, for static
     /// `call_ref` dispatch; keyed for every class in the method's inheritance chain.
     class_method_slot: BTreeMap<(MangledName, String), u32>,
+    /// Methods whose current callable value lives in the mutable instance payload.
+    class_payload_methods: BTreeSet<(MangledName, String)>,
+    /// Member names this module may write through a structural alias.
+    rewritable_members: crate::codegen::classes::RewritableMembers,
     /// Wasm fn-type index of a class method's signature, for the `call_ref`.
     class_method_sig: BTreeMap<(MangledName, String), u32>,
     /// Physical Wasm signature of a class method's vtable slot, keyed for every
@@ -120,6 +128,9 @@ pub struct SymbolTable {
     // Closures, adapters, and direct-dispatch wrappers are NOT in this map.
     top_level_fns: BTreeMap<MangledName, TopLevelFn>,
     iface_dispatch: BTreeMap<MangledName, Dispatch>,
+    /// The JavaScript string form of each static-dispatch interface's binding,
+    /// which names the object the binding reads as when used as a value.
+    static_value_tags: BTreeMap<MangledName, String>,
     /// Physical signature of each Direct/Static-dispatch interface wrapper,
     /// keyed by its `iface#method` dispatch key.
     iface_method_abi: BTreeMap<MangledName, MethodSlotAbi>,
@@ -191,6 +202,7 @@ pub(crate) fn may_hold_null(ty: &Type) -> bool {
         // A recursion back-edge is a name codegen has no body for, and the alias
         // it names often does list `null` (`type J = number | null | Wrap[]`).
         Type::Null
+        | Type::Void
         | Type::Unknown
         | Type::TypeVar(_)
         | Type::GenericParam { .. }
@@ -226,6 +238,12 @@ impl SymbolTable {
         global: &MangledName,
     ) -> Option<&crate::codegen::init_guard::InitFlag> {
         self.init_guards.get(global)
+    }
+
+    pub fn class_declaration_flags(&self, index: usize) -> &[u32] {
+        self.class_declaration_flags
+            .get(&index)
+            .map_or(&[], Vec::as_slice)
     }
 
     pub fn prelude_func_idx(&self, symbol: &str) -> Option<u32> {
@@ -355,6 +373,11 @@ impl SymbolTable {
         self.class_method_slot
             .get(&(class.clone(), method.to_string()))
             .copied()
+    }
+
+    pub fn is_class_payload_method(&self, class: &MangledName, method: &str) -> bool {
+        self.class_payload_methods
+            .contains(&(class.clone(), method.to_string()))
     }
 
     pub fn class_method_sig(&self, class: &MangledName, method: &str) -> Option<u32> {
@@ -595,6 +618,51 @@ impl SymbolTable {
         self.class_method_slot.insert((class, method), slot);
     }
 
+    pub(crate) fn record_host_parameter_defaults(
+        &mut self,
+        func_idx: u32,
+        defaults: Vec<Option<crate::DefaultValue>>,
+    ) {
+        self.host_parameter_defaults.insert(func_idx, defaults);
+    }
+
+    /// The declared defaults for a call to host function `func_idx`, aligned
+    /// to its `arg_count` arguments: entry `i` belongs to argument `i`.
+    ///
+    /// The arguments fill the trailing parameters, so any leading parameter
+    /// without an argument (a method's receiver, already on the stack) is
+    /// skipped. A function without recorded defaults has none.
+    pub(crate) fn host_call_defaults(
+        &self,
+        func_idx: u32,
+        arg_count: usize,
+    ) -> &[Option<crate::DefaultValue>] {
+        let defaults = self
+            .host_parameter_defaults
+            .get(&func_idx)
+            .map_or(&[][..], Vec::as_slice);
+        let receivers = defaults.len().saturating_sub(arg_count);
+        defaults.get(receivers..).unwrap_or_default()
+    }
+
+    pub fn record_class_payload_method(&mut self, class: MangledName, method: String) {
+        self.class_payload_methods.insert((class, method));
+    }
+
+    pub(crate) fn record_rewritable_members(
+        &mut self,
+        members: crate::codegen::classes::RewritableMembers,
+    ) {
+        self.rewritable_members = members;
+    }
+
+    /// A payload method, local or imported, that this module may overwrite
+    /// through a structural alias, so a direct call must read the payload rather
+    /// than the class vtable. Every other call keeps the cheaper vtable dispatch.
+    pub fn is_rewritable_class_method(&self, class: &MangledName, method: &str) -> bool {
+        self.rewritable_members.includes(method) && self.is_class_payload_method(class, method)
+    }
+
     pub fn record_class_method_sig(&mut self, class: MangledName, method: String, sig: u32) {
         self.class_method_sig.insert((class, method), sig);
     }
@@ -821,6 +889,13 @@ impl SymbolTable {
         self.init_guards.insert(global, flag);
     }
 
+    pub fn record_class_declaration_flag(&mut self, index: usize, flag_idx: u32) {
+        self.class_declaration_flags
+            .entry(index)
+            .or_default()
+            .push(flag_idx);
+    }
+
     /// Language globals retain their declared type for checked narrowed reads.
     /// Runtime metadata globals only need an index.
     pub fn record_typed_global(&mut self, mangled: MangledName, idx: u32, ty: Type) {
@@ -883,6 +958,14 @@ impl SymbolTable {
 
     pub fn record_iface_dispatch(&mut self, iface: MangledName, dispatch: Dispatch) {
         self.iface_dispatch.insert(iface, dispatch);
+    }
+
+    pub fn record_static_value_tag(&mut self, iface: MangledName, tag: String) {
+        self.static_value_tags.insert(iface, tag);
+    }
+
+    pub fn static_value_tag(&self, iface: &MangledName) -> Option<&str> {
+        self.static_value_tags.get(iface).map(String::as_str)
     }
 
     pub fn iface_dispatch(&self, iface: &MangledName) -> Option<Dispatch> {
@@ -963,7 +1046,7 @@ impl SymbolTable {
                     heap_type: HeapType::Concrete(idx),
                 })
             }
-            Type::TypeVar(_) | Type::GenericParam { .. } | Type::Unknown => {
+            Type::TypeVar(_) | Type::GenericParam { .. } | Type::Unknown | Type::Void => {
                 // Erased-generic and dynamic slots lower to nullable `(ref null $Object)`;
                 // nullable so `null` literals can flow in via WasmGC subtyping.
                 let object_idx = self
@@ -1001,11 +1084,19 @@ impl SymbolTable {
                     heap_type: HeapType::Concrete(object_idx),
                 })
             }
-            Type::Void | Type::Error => {
-                // `void` is a return type only; `Error` only follows a reported typecheck
-                // failure. Either arm here is a compiler bug.
+            Type::Undefined => {
+                let intrinsic = self.intrinsic_type_indices().ok_or_else(|| {
+                    crate::codegen::internal_failure("undefined intrinsic is not declared")
+                })?;
+                ValType::Ref(RefType {
+                    nullable: false,
+                    heap_type: HeapType::Concrete(intrinsic.undefined),
+                })
+            }
+            Type::Error => {
+                // `Error` only follows a reported typecheck failure.
                 return Err(crate::codegen::internal_failure(
-                    "void/error cannot occupy a value slot",
+                    "error cannot occupy a value slot",
                 ));
             }
             Type::Never => {
@@ -1056,7 +1147,10 @@ impl SymbolTable {
                 // spelled `null`: a `TypeVar`, `GenericParam`, `unknown`, or an
                 // unrecorded `ClassRef` can hold null after instantiation
                 // without naming it, and a non-null slot would trap the write.
-                let nullable = lowered.iter().copied().any(is_nullable_ref);
+                let nullable = lowered.iter().copied().any(is_nullable_ref)
+                    || members
+                        .iter()
+                        .any(|member| matches!(member.peel(), Type::Undefined));
                 ValType::Ref(RefType {
                     nullable,
                     heap_type: HeapType::Concrete(heap_idx),
@@ -1150,9 +1244,6 @@ impl SymbolTable {
         &self,
         ty: &Type,
     ) -> Result<Vec<ValType>, crate::compiler_error::CompilerFailure> {
-        if ty.is_void() {
-            return Ok(vec![]);
-        }
         Ok(vec![self.value_type(ty)?])
     }
 
@@ -1194,9 +1285,6 @@ impl SymbolTable {
         &self,
         ty: &Type,
     ) -> Result<Vec<ValType>, crate::compiler_error::CompilerFailure> {
-        if ty.is_void() {
-            return Ok(vec![]);
-        }
         Ok(vec![self.slot_value_type(ty)?])
     }
 

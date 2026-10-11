@@ -5,7 +5,7 @@ import { uploadFile } from "@submilli/notion";
 
 function main(): void {
     label("live single-part upload when explicitly enabled");
-    if (secrets.get("NOTION_ACCESS_TOKEN") === null) return;
+    if (secrets.get("NOTION_ACCESS_TOKEN") === undefined) return;
     if (secrets.get("NOTION_LIVE_UPLOADS") !== "true") return;
     const path = "/notion-upload-test.txt";
     writeText(path, "Temporary @submilli/notion upload test.\n");

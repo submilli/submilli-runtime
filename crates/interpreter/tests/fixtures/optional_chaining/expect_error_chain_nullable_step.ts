@@ -1,4 +1,4 @@
-// expect-error: cannot read `y` on a value of type `null | Inner`
+// expect-error: cannot read `y` on a value of type `Inner | null`
 // expect-error: cannot read `y` on a value of type `Nil | Inner`
 // expect-error: cannot read `y` on a value of type `null` — the receiver is always null
 // `?.` short-circuits its own step only. A plain `.` after a step that yields a

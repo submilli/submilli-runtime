@@ -339,8 +339,8 @@ function f5(): void {
 
 }
 
-/*pruned*/;                                                     
-/*pruned*/;                                                                                         
+/*pruned*/;
+/*pruned*/;
 
 function f6(cond: boolean): void {
 >f6 : (cond: boolean) => void
@@ -348,12 +348,12 @@ function f6(cond: boolean): void {
 >cond : boolean
 >     : ^^^^^^^
 
-    /*pruned*/;            
-    /*pruned*/;           
-    /*pruned*/;                        
-    /*pruned*/;               
-    /*pruned*/;              
-    /*pruned*/;                           
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
 }
 
 // Repro from #10898
@@ -494,34 +494,34 @@ let x = onMouseOver();
 
 // Repro from #23649
 
-/*pruned*/;                                                                  
-                                             
-                                         
-               
- 
+/*pruned*/;
 
-/*pruned*/;                                                        
-                                
- 
 
-/*pruned*/;                  
 
-/*pruned*/;                                          
-                                               
-/*pruned*/;                               
 
-                                                    
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+
+
 
 // Repro from #29081
 
-/*pruned*/;                                                   
-                             
-                                        
- 
+/*pruned*/;
+
+
+
 
 // Repro from #32169
 
-/*pruned*/;                                                                        
+/*pruned*/;
 enum E { A, B }
 >E : E
 >  : ^
@@ -530,8 +530,8 @@ enum E { A, B }
 >B : E.B
 >  : ^^^
 
-/*pruned*/;      
-/*pruned*/;      
+/*pruned*/;
+/*pruned*/;
 
 
 function main(): void {}

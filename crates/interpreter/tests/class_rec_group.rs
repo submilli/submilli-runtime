@@ -5,7 +5,7 @@
 //! must still validate, and the per-class struct + vtable types must appear in
 //! the emitted rec group with the expected `$ObjectShape`/`$VTable` nesting.
 
-use interpreter::{FileId, compile_script};
+use submilli_engine::{FileId, compile_script};
 use wasmparser::{CompositeInnerType, Parser, Payload, Validator};
 
 fn compile(source: &str) -> Vec<u8> {

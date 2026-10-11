@@ -7,7 +7,7 @@
 //! host returns guest objects directly. The typechecker wraps known-return
 //! MCP calls in a normal `Cast`, so this module never emits cast validation.
 
-use wasm_encoder::Instruction;
+use wasm_encoder::{BlockType, Instruction};
 
 use crate::ExprId;
 use crate::codegen::CodegenCtx;
@@ -34,7 +34,22 @@ pub(super) fn emit_mcp_call(
     emit_inline_const_string(emitter, ctx, tool)?;
     if let Some(&arg) = args.first() {
         emit_expr(emitter, ctx, arg)?;
+        let ty = &ctx
+            .ta
+            .try_expr(arg)
+            .map_err(crate::codegen::arena_failure)?
+            .ty;
+        let local = emitter.add_anonymous_local(ctx.symbols.value_type(ty)?)?;
+        emitter.instruction(Instruction::LocalTee(local));
+        super::expr::emit_is_undefined(emitter, ctx)?;
+        emitter.emit_if(BlockType::Result(
+            ctx.symbols.value_type(&crate::Type::String)?,
+        ));
+        emit_inline_const_string(emitter, ctx, "{}")?;
+        emitter.emit_else();
+        emitter.instruction(Instruction::LocalGet(local));
         emit_vtable_dispatch_on_object_stack(emitter, ctx, 1);
+        emitter.emit_end();
     } else {
         emit_inline_const_string(emitter, ctx, "{}")?;
     }

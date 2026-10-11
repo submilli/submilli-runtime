@@ -167,15 +167,15 @@ function f(e: E): number {
     }
 }
 
-/*pruned*/;               
-              
-                 
-        
-                    
-                              
-                              
-         
- 
+/*pruned*/;
+
+
+
+
+
+
+
+
 
 // Repro from #12668
 
@@ -222,29 +222,29 @@ type Shape = Square | Rectangle | Circle | Triangle;
 >      : ^^^^^
 
 
-/*pruned*/;                      
-             
-                     
-                                                     
-                                                           
-                                                                   
-                                                                          
-     
-                
- 
+/*pruned*/;
 
-/*pruned*/;                             
-             
-                   
-                         
-                                                  
-                                                        
-                                                                
-                                                                       
-         
-         
-                
- 
+
+
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
 
 // Repro from #13241
 
@@ -425,18 +425,18 @@ enum Level {
 
 }
 
-/*pruned*/;                                     
-                                               
-                  
-                   
-                       
-            
-                   
-                       
-            
-   
-              
-  
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
 
 // Repro from #20409
 
@@ -648,14 +648,14 @@ enum Animal { DOG, CAT }
 >    : ^^^^^^^^^^
 
 
-/*pruned*/;                                                                           
+/*pruned*/;
 
-/*pruned*/;                    
-                                        
-                                          
-                                          
-     
- 
+/*pruned*/;
+
+
+
+
+
 
 // Repro from #34840
 
@@ -663,9 +663,9 @@ function foo(): void {
 >foo : () => void
 >    : ^^^^^^^^^^
 
-    const foo: number | null = 0;
->foo : number | null
->    : ^^^^^^^^^^^^^
+    const foo: number | undefined = 0;
+>foo : number | undefined
+>    : ^^^^^^^^^^^^^^^^^^
 >0 : 0
 >  : ^
 

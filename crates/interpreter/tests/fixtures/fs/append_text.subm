@@ -4,8 +4,8 @@ function main(): void {
   writeText("/log.txt", "line1\n");
   appendText("/log.txt", "line2\n");
   appendText("/log.txt", "line3\n");
-  const back: string | null = readText("/log.txt");
-  if (back === null) {
+  const back: string | undefined = readText("/log.txt");
+  if (back === undefined) {
     assert(false, "readText returned null");
     return;
   }

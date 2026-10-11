@@ -49,8 +49,8 @@ None — all 26 ported/divergence cases pass.
 
 - `parse/text-negative-zero.ts` — dropped the original's final
   `JSON.parse(-0)` (ToString coercion of a number argument).
-- `stringify/value-primitive-top-level.ts` — dropped
-  `JSON.stringify(undefined)` (no `undefined`).
+- `stringify/value-primitive-top-level.ts` preserves top-level undefined, which
+  produces undefined rather than a JSON document.
 - `stringify/value-number-negative-zero.ts` — heterogeneous `['-0', 0, -0]`
   split by element type.
 - `stringify/value-string-escape-ascii.ts` — the original's computed

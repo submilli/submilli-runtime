@@ -1,6 +1,6 @@
 // A `toJson` inserted into a `Record` is not type-checked, so it can return a
 // value that is not a string. Reading that result as the JSON text throws a
-// catchable error rather than ending the run.
+// catchable TypeError rather than ending the run or emitting invalid JSON.
 function main(): void {
     const record: Record<string, () => number[]> = {};
     record["toJson"] = () => [1, 2];
@@ -22,5 +22,13 @@ function main(): void {
     } catch (e) {
         bytesMessage = e.message;
     }
-    assert(bytesMessage !== "", "a Uint8Array toJson result throws");
+    assert(bytesMessage === "toJson must return a string", "a Uint8Array toJson result throws");
+
+    let nestedMessage = "";
+    try {
+        JSON.stringify({ k: bytes });
+    } catch (e) {
+        nestedMessage = e.message;
+    }
+    assert(nestedMessage === "toJson must return a string", "a nested Uint8Array toJson result throws");
 }

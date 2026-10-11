@@ -9,7 +9,7 @@ interface Dict {
 
 function split(x: Dict | { a: string; b: string }): string {
   const { b, ...others } = x;
-  return JSON.stringify(b) + " " + JSON.stringify(others);
+  return `${JSON.stringify(b)} ${JSON.stringify(others)}`;
 }
 
 function readB(x: Dict | { a: string; b: string }): string {

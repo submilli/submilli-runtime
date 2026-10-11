@@ -1,13 +1,13 @@
 function isNamed(u: { id: number, name?: string }): boolean {
-  return u.name !== null;
+  return u.name !== undefined;
 }
 
 function main(): void {
   const a: { id: number, name?: string } = { id: 1, name: "alice" };
-  assert(a.name !== null, "present optional is non-null");
+  assert(a.name !== undefined, "present optional is defined");
   assert(isNamed(a), "named");
 
   const b: { id: number, name?: string } = { id: 2 };
-  assert(b.name === null, "absent optional reads as null");
+  assert(b.name === undefined, "absent optional reads as undefined");
   assert(!isNamed(b), "anonymous");
 }

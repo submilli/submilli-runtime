@@ -20,18 +20,23 @@ use axum::http::header::{CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use submilli_server::audit::AuditConfig;
 use submilli_server::{AppState, AuthConfig, RunTelemetry, ServerConfig};
 use tokio::sync::Notify;
 
+use super::api::{self, Group};
 use super::control_auth::{self, Caller, ControlAuth, LoginRefusal, Now};
+use super::controls::act::{Actions, Binding};
+use super::controls::render::Page;
 use super::log::warn;
 use super::packages::{self, ClosureEntry, Freshness, ProjectPackages};
 use super::project::Project;
 use super::state::{APP_TOKEN, InstanceLock, InstanceRecord, StateDir};
+
+/// The token the bridge presents for its binding.
+const STAND_IN_TOKEN: &str = "stand-in";
 use super::store::redact::WatchedSecretStore;
 use super::store::{KnownSecrets, Recorder, Store};
 use super::watch::{self, Applier, BlueprintStatus};
@@ -103,6 +108,19 @@ pub(crate) struct Status {
     /// Whether the server listener answers, which `status` adds after asking.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) health: Option<String>,
+    /// The binding new runs get: variable values, and secret names only.
+    pub(crate) binding: BindingView,
+}
+
+/// The binding as `status` shows it: the variables, and only the names of the secrets.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct BindingView {
+    pub(crate) variables: std::collections::BTreeMap<String, String>,
+    pub(crate) secrets: Vec<String>,
+    /// Secrets bound before the playground started, whose values were not kept.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) to_bind_again: Vec<String>,
 }
 
 /// Test-only, hidden: how long a serving process waits after taking the instance
@@ -162,12 +180,13 @@ pub(crate) fn serve(options: HostOptions) -> Result<Served> {
         crate::commands::local::open_secret_store()?,
         secrets.clone(),
     ));
+    let recorder = Recorder::new(Arc::clone(&store), secrets.clone());
     let mut config = server_config(
         &state_dir,
         &options.egress,
         tokens.clone(),
         Some(secret_store),
-        Some(Arc::new(Recorder::new(Arc::clone(&store), secrets))),
+        Some(Arc::new(recorder.clone())),
     );
     config.volumes = super::project::volumes(&options.project);
     config.session_cipher = Some(Arc::new(state_dir.session_cipher()?));
@@ -183,6 +202,8 @@ pub(crate) fn serve(options: HostOptions) -> Result<Served> {
         Serving {
             name: blueprint.name.clone(),
             store,
+            recorder,
+            secrets,
             packages,
             freshness,
             closure,
@@ -198,6 +219,10 @@ pub(crate) fn serve(options: HostOptions) -> Result<Served> {
 struct Serving {
     name: String,
     store: Arc<Store>,
+    /// The server's run recorder, which knows the runs in flight.
+    recorder: Recorder,
+    /// Secret values the recorder cuts out; `bind` adds the development values it holds.
+    secrets: KnownSecrets,
     packages: Arc<ProjectPackages>,
     /// The package check runs get, which the blueprint watcher shares.
     freshness: Arc<Freshness>,
@@ -274,7 +299,7 @@ async fn run(
     let applier = Arc::new(
         Applier::new(
             state.clone(),
-            serving.store,
+            Arc::clone(&serving.store),
             options.project.blueprint.clone(),
             serving.name.clone(),
         )
@@ -302,6 +327,35 @@ async fn run(
         serving.closure,
     );
     let auth = Arc::new(ControlAuth::new(tokens));
+    // The variables the last `bind` saved; secret values were never saved.
+    let binding = match state_dir.read_binding() {
+        Ok(saved) => Binding::remembered(saved.unwrap_or_default()),
+        Err(error) => {
+            warn(&format!(
+                "the saved binding was not read, so the playground starts with none: {error:#}"
+            ));
+            Binding::default()
+        }
+    };
+    let actions = Arc::new(Actions {
+        app: state.clone(),
+        store: Arc::clone(&serving.store),
+        recorder: serving.recorder,
+        secrets: serving.secrets,
+        binding: std::sync::Mutex::new(binding),
+        binding_file: state_dir.binding_path(),
+        blueprints: Arc::clone(&blueprints),
+        blueprint_name: serving.name.clone(),
+        blueprint_path: options.project.blueprint.clone(),
+        project_root: options.project.root.clone(),
+        page: Page {
+            base: Some(description.url.clone()),
+        },
+        cancelling: std::sync::Mutex::default(),
+    });
+    // Flipped once the server has drained, so the event feeds end and the control
+    // listener can close.
+    let (stopped, stopping) = tokio::sync::watch::channel(false);
     let shared = ControlState(Arc::new(ControlInner {
         auth: Arc::clone(&auth),
         port: control_port,
@@ -313,6 +367,8 @@ async fn run(
         blueprint_name: serving.name.clone(),
         packages: Arc::clone(&serving.packages),
         held: Arc::clone(&held),
+        actions,
+        stopping,
     }));
     let control_stop = Arc::new(Notify::new());
     let control_task = tokio::spawn({
@@ -358,6 +414,7 @@ async fn run(
     // Also after a drain no signal or stop route began (`POST /v1/shutdown`).
     held.begin_stopping();
     auth.drop_sessions();
+    stopped.send_replace(true);
     control_stop.notify_one();
     if tokio::time::timeout(CONTROL_CLOSE_BUDGET, control_task)
         .await
@@ -498,9 +555,24 @@ fn restrict_new_files() {
 }
 
 #[derive(Clone)]
-struct ControlState(Arc<ControlInner>);
+pub(crate) struct ControlState(Arc<ControlInner>);
 
-struct ControlInner {
+impl ControlState {
+    pub(crate) fn actions(&self) -> &Actions {
+        &self.0.actions
+    }
+
+    pub(crate) fn actions_arc(&self) -> &Arc<Actions> {
+        &self.0.actions
+    }
+
+    /// Becomes `true` once the playground has drained and is closing its listener.
+    pub(crate) fn stopping(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.0.stopping.clone()
+    }
+}
+
+pub(crate) struct ControlInner {
     auth: Arc<ControlAuth>,
     port: u16,
     nonce: String,
@@ -513,10 +585,11 @@ struct ControlInner {
     blueprint_name: String,
     packages: Arc<ProjectPackages>,
     held: Arc<HeldInstance>,
+    actions: Arc<Actions>,
+    stopping: tokio::sync::watch::Receiver<bool>,
 }
 
-/// The control listener's routes, by who may call them. Later steps add their
-/// routes to the group whose callers they accept.
+/// The control listener's routes, by who may call them, built from [`api::ROUTES`].
 pub(crate) struct ControlRoutes {
     /// No credential: the page, the login-code exchange, and the nonce challenge.
     public: Router<ControlState>,
@@ -524,19 +597,22 @@ pub(crate) struct ControlRoutes {
     admin: Router<ControlState>,
     /// The admin token or a browser session: the CLI and the page.
     viewer: Router<ControlState>,
+    /// The `stand-in` token only: the bridge.
+    stand_in: Router<ControlState>,
 }
 
 impl ControlRoutes {
     fn new() -> Self {
+        let group = |group: Group| {
+            api::by_group(group).fold(Router::new(), |router, route| {
+                router.route(route.path, (route.handler)())
+            })
+        };
         Self {
-            public: Router::new()
-                .route("/", get(page))
-                .route("/api/challenge", post(challenge))
-                .route("/api/login", post(login)),
-            admin: Router::new()
-                .route("/api/login-codes", post(mint_login_code))
-                .route("/api/stop", post(stop)),
-            viewer: Router::new().route("/api/status", get(status)),
+            public: group(Group::Public),
+            admin: group(Group::Admin),
+            viewer: group(Group::Viewer),
+            stand_in: group(Group::StandIn),
         }
     }
 
@@ -548,18 +624,24 @@ impl ControlRoutes {
             state.clone(),
             require_viewer,
         ));
+        let stand_in = self.stand_in.route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_stand_in,
+        ));
         Router::new()
             .merge(self.public)
             .merge(admin)
             .merge(viewer)
+            .merge(stand_in)
             .fallback(not_found)
+            .layer(axum::extract::DefaultBodyLimit::max(api::MAX_BODY_BYTES))
             .layer(middleware::from_fn_with_state(state.clone(), same_origin))
             .layer(middleware::from_fn(no_sniff))
             .with_state(state)
     }
 }
 
-fn error(status: StatusCode, code: &'static str, message: &str) -> Response {
+pub(crate) fn error(status: StatusCode, code: &'static str, message: &str) -> Response {
     (status, Json(json!({ "error": code, "message": message }))).into_response()
 }
 
@@ -623,6 +705,20 @@ async fn require_viewer(
     }
 }
 
+/// The bridge's routes: only the `stand-in` token, never the admin token, another
+/// token, or a browser session.
+async fn require_stand_in(
+    State(state): State<ControlState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    match state.0.auth.caller(request.headers(), Now::current()) {
+        Some(Caller::Token(name)) if name == STAND_IN_TOKEN => next.run(request).await,
+        Some(_) => forbidden(),
+        None => unauthorized(),
+    }
+}
+
 /// An unknown control route answers 401 to a caller with no credential, so the
 /// route table is not readable without one.
 async fn not_found(State(state): State<ControlState>, request: Request) -> Response {
@@ -639,11 +735,11 @@ async fn not_found(State(state): State<ControlState>, request: Request) -> Respo
 }
 
 #[derive(Deserialize)]
-struct ChallengeRequest {
+pub(crate) struct ChallengeRequest {
     challenge: String,
 }
 
-async fn challenge(
+pub(crate) async fn challenge(
     State(state): State<ControlState>,
     Json(request): Json<ChallengeRequest>,
 ) -> Response {
@@ -658,11 +754,14 @@ async fn challenge(
 }
 
 #[derive(Deserialize)]
-struct LoginRequest {
+pub(crate) struct LoginRequest {
     code: String,
 }
 
-async fn login(State(state): State<ControlState>, Json(request): Json<LoginRequest>) -> Response {
+pub(crate) async fn login(
+    State(state): State<ControlState>,
+    Json(request): Json<LoginRequest>,
+) -> Response {
     match state.0.auth.exchange(&request.code, Now::current()) {
         Ok(token) => Json(json!({
             "session_token": token,
@@ -683,7 +782,7 @@ async fn login(State(state): State<ControlState>, Json(request): Json<LoginReque
     }
 }
 
-async fn mint_login_code(State(state): State<ControlState>) -> Response {
+pub(crate) async fn mint_login_code(State(state): State<ControlState>) -> Response {
     match state.0.auth.mint_login_code(Now::current()) {
         Ok(code) => Json(json!({
             "code": code,
@@ -698,7 +797,7 @@ async fn mint_login_code(State(state): State<ControlState>) -> Response {
     }
 }
 
-async fn status(State(state): State<ControlState>) -> Response {
+pub(crate) async fn status(State(state): State<ControlState>) -> Response {
     let mut description = state.0.description.clone();
     // The closure of the blueprint in force now, which a save may have changed.
     let packages_error = match current_closure(&state).await {
@@ -724,6 +823,7 @@ async fn status(State(state): State<ControlState>) -> Response {
         blueprint_status,
         packages_error,
         health: None,
+        binding: state.actions().binding_view(),
     })
     .into_response()
 }
@@ -742,7 +842,7 @@ async fn current_closure(state: &ControlState) -> Result<Option<Vec<ClosureEntry
         .map_err(|failure| failure.to_string())
 }
 
-async fn stop(State(state): State<ControlState>) -> Response {
+pub(crate) async fn stop(State(state): State<ControlState>) -> Response {
     state.0.held.begin_stopping();
     state.0.server_shutdown.notify_one();
     (StatusCode::ACCEPTED, Json(json!({ "stopping": true }))).into_response()
@@ -750,7 +850,7 @@ async fn stop(State(state): State<ControlState>) -> Response {
 
 /// A stand-in until the page arrives: it trades the link's login code for a
 /// browser session, keeps the token out of the address bar, and shows the status.
-async fn page() -> Response {
+pub(crate) async fn page() -> Response {
     (
         [(
             CONTENT_TYPE,

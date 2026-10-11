@@ -126,8 +126,10 @@ impl Inferer<'_> {
         };
         let arrow_span = self.ast.try_expr(arrow).map_err(super::arena_failure)?.span;
         self.immediately_invoked = Some(arrow_span);
+        self.invoked_return_hint = expected.cloned();
         let inferred = self.infer_call(callee, type_args, args, expected, span);
         self.immediately_invoked = None;
+        self.invoked_return_hint = None;
         let exit = self.invoked_body_exit.take();
         let inferred = inferred?;
         if let Some(exit) = exit {

@@ -7,8 +7,8 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "55e3b91757ad4c0b8b51d0a1da57a017584d0e48ca857b87ae9ae6a747147747"
-  confirmedAt: "2026-10-05T13:01:53.009Z"
+  contentHash: "b48aa29693521bbf1662f69e7466d6c0966a5ec6d3021e6fa148f56702a6fb4a"
+  confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
 This page describes the language of the `filter` in a permission rule.
@@ -34,7 +34,7 @@ value is a literal or a variable. It is never another field.
 
 | Operator | Value | True when |
 | --- | --- | --- |
-| `==` | String, number, `true`, `false`, `null`, or variable | The field has the value's type and equals it. `field == null` is true only when the field is present and null. |
+| `==` | String, number, `true`, `false`, `null`, or variable | The field has the value's type and equals it. `field == null` is true only when the field is present and null; a field passed as `undefined` is missing. |
 | `!=` | String, number, `true`, `false`, `null`, or variable | The field has the value's type and differs from it. |
 | `<`, `<=`, `>`, `>=` | Number or variable | The field is a number and compares so. |
 | `glob` | Quoted pattern, with or without variables | The field is a string and the whole of it fits the pattern. |

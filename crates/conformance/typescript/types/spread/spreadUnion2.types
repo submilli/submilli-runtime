@@ -1,12 +1,12 @@
 === spreadUnion2.ts ===
 
-const undefinedUnion: { a: number } | null = null as unknown as ({ a: number } | null);
->undefinedUnion : { a: number; } | null
->               : ^^^^^^^^^^^^^^^^^^^^^
+const undefinedUnion: { a: number } | undefined = null as unknown as ({ a: number } | undefined);
+>undefinedUnion : { a: number; } | undefined
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >a : number
 >  : ^^^^^^
->null as unknown as ({ a: number } | null) : { a: number; } | null
->                                          : ^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ a: number } | undefined) : { a: number; } | undefined
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 >a : number
@@ -37,13 +37,13 @@ let o1: {} | { a: number } = null as unknown as ({} | { a: number });
 >a : number
 >  : ^^^^^^
 
-let o1 = { ...undefinedUnion };
->o1 : { a?: number | undefined; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+let o1_2 = { ...undefinedUnion };
+>o1_2 : { a?: number | undefined; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >{ ...undefinedUnion } : { a?: number | undefined; }
 >                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
->undefinedUnion : { a: number; } | null
->               : ^^^^^^^^^^^^^^^^^^^^^
+>undefinedUnion : { a: number; } | undefined
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 let o2: {} | { b: number } = null as unknown as ({} | { b: number });
@@ -58,9 +58,9 @@ let o2: {} | { b: number } = null as unknown as ({} | { b: number });
 >b : number
 >  : ^^^^^^
 
-let o2 = { ...nullUnion };
->o2 : { b?: number | undefined; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+let o2_2 = { ...nullUnion };
+>o2_2 : { b?: number | undefined; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >{ ...nullUnion } : { b?: number | undefined; }
 >                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >nullUnion : { b: number; } | null
@@ -91,25 +91,25 @@ let o3: {} | { a: number } | { b: number } | { a: number, b: number } = null as 
 >b : number
 >  : ^^^^^^
 
-let o3 = { ...undefinedUnion, ...nullUnion };
->o3 : { b?: number | undefined; a?: number | undefined; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+let o3_2 = { ...undefinedUnion, ...nullUnion };
+>o3_2 : { b?: number | undefined; a?: number | undefined; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >{ ...undefinedUnion, ...nullUnion } : { b?: number | undefined; a?: number | undefined; }
 >                                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->undefinedUnion : { a: number; } | null
->               : ^^^^^^^^^^^^^^^^^^^^^
+>undefinedUnion : { a: number; } | undefined
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 >nullUnion : { b: number; } | null
 >          : ^^^^^^^^^^^^^^^^^^^^^
 
-let o3 = { ...nullUnion, ...undefinedUnion };
->o3 : { a?: number | undefined; b?: number | undefined; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+let o3_3 = { ...nullUnion, ...undefinedUnion };
+>o3_3 : { a?: number | undefined; b?: number | undefined; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >{ ...nullUnion, ...undefinedUnion } : { a?: number | undefined; b?: number | undefined; }
 >                                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >nullUnion : { b: number; } | null
 >          : ^^^^^^^^^^^^^^^^^^^^^
->undefinedUnion : { a: number; } | null
->               : ^^^^^^^^^^^^^^^^^^^^^
+>undefinedUnion : { a: number; } | undefined
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 let o4: {} | { a: number } = null as unknown as ({} | { a: number });
@@ -124,15 +124,15 @@ let o4: {} | { a: number } = null as unknown as ({} | { a: number });
 >a : number
 >  : ^^^^^^
 
-let o4 = { ...undefinedUnion, ...undefinedUnion };
->o4 : { a?: number | undefined; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+let o4_2 = { ...undefinedUnion, ...undefinedUnion };
+>o4_2 : { a?: number | undefined; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >{ ...undefinedUnion, ...undefinedUnion } : { a?: number | undefined; }
 >                                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
->undefinedUnion : { a: number; } | null
->               : ^^^^^^^^^^^^^^^^^^^^^
->undefinedUnion : { a: number; } | null
->               : ^^^^^^^^^^^^^^^^^^^^^
+>undefinedUnion : { a: number; } | undefined
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>undefinedUnion : { a: number; } | undefined
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
 let o5: {} | { b: number } = null as unknown as ({} | { b: number });
@@ -147,9 +147,9 @@ let o5: {} | { b: number } = null as unknown as ({} | { b: number });
 >b : number
 >  : ^^^^^^
 
-let o5 = { ...nullUnion, ...nullUnion };
->o5 : { b?: number | undefined; }
->   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+let o5_2 = { ...nullUnion, ...nullUnion };
+>o5_2 : { b?: number | undefined; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >{ ...nullUnion, ...nullUnion } : { b?: number | undefined; }
 >                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >nullUnion : { b: number; } | null

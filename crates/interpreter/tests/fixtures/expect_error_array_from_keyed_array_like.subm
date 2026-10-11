@@ -1,0 +1,22 @@
+// expect-error: `Array.from` doesn't read the keyed entries of `Keyed`
+// expect-error-count: 3
+// TypeScript reads `d["0"]` and `d["1"]` as the elements of an array-like with
+// a string index signature or fields named by array indices. Submilli's
+// `Array.from` gives an array-like no elements, so it rejects the call rather
+// than build the wrong array.
+interface Keyed {
+  length: number;
+  [key: string]: number;
+}
+
+type KeyedObject = { length: number; [key: string]: number };
+type Indexed = { length: number; "0": number };
+
+function main(): void {
+  const d: Keyed = { length: 2, "0": 7, "1": 8 };
+  const o: KeyedObject = { length: 2, "0": 7, "1": 8 };
+  console.log(Array.from(d, (_v: unknown, i: number) => i).join(","));
+  console.log(Array.from(o, (_v: unknown, i: number) => i).join(","));
+  const n: Indexed = { length: 1, "0": 7 };
+  console.log(Array.from(n, (_v: unknown, i: number) => i).join(","));
+}

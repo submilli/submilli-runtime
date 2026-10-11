@@ -10,7 +10,7 @@ function range(hi: number): Range {
       let i = 0;
       const it: Iterator<number> = {
         next: (): IteratorResult<number> => {
-          if (i >= hi) { const d: IteratorResult<number> = { done: true }; return d; }
+          if (i >= hi) { const d: IteratorResult<number> = { done: true, value: undefined }; return d; }
           const y: IteratorResult<number> = { done: false, value: i };
           i = i + 1;
           return y;

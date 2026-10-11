@@ -8,7 +8,7 @@ use wasm_encoder::{
 };
 use wasmtime::{Linker, Module as WtModule};
 
-use interpreter::RuntimeConfig;
+use submilli_engine::RuntimeConfig;
 
 // Outside the rec group:
 const STRING_IDX: u32 = 0;

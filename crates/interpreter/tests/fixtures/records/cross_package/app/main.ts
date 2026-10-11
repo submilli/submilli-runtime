@@ -4,7 +4,7 @@ function main(): void {
   put(values, "new", 3);
   assert(values.new === 3);
   assert(read(values, "count") === 1);
-  assert(read(values, "absent") === null);
+  assert(read(values, "absent") === undefined);
   assert(JSON.stringify(values) === '{"count":1,"new":3}');
   assert(readOptional(values) === 1);
   const wide: Record<string, unknown> = values;

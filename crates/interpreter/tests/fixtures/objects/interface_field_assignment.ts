@@ -21,7 +21,7 @@ function main(): void {
     assert(c.n === 9, "postfix increment of interface field");
 
     // Assigning a previously-absent optional field.
-    assert(c.note === null, "optional field starts null");
+    assert(c.note === undefined, "optional field starts undefined");
     c.note = "done";
     assert(c.note === "done", "assigned optional field reads back");
 }

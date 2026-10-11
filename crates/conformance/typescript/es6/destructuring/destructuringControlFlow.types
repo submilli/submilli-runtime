@@ -81,7 +81,7 @@ function f2(obj: [number, string] | null[]): void {
 >obj : [number, string] | null[]
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    /*pruned*/;      
+    /*pruned*/;
     if (obj[0] && obj[1]) {
 >obj[0] && obj[1] : string | 0 | null
 >                 : ^^^^^^^^^^^^^^^^^
@@ -126,7 +126,7 @@ function f2(obj: [number, string] | null[]): void {
 >obj : [number, string] | null[]
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        /*pruned*/;      
+        /*pruned*/;
     }
 }
 
@@ -164,7 +164,7 @@ function f3(obj: { a?: number, b?: string }): void {
 >obj : { a?: number; b?: string; }
 >    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-        /*pruned*/;      
+        /*pruned*/;
     }
 }
 
@@ -187,9 +187,30 @@ function f4(): void {
 
 // Repro from #31770
 
-/*pruned*/;                       
-/*pruned*/;                          
-/*pruned*/;           // Error
+type KeyValue = [string, string?];
+>KeyValue : KeyValue
+>         : ^^^^^^^^
+
+let [key, value]: KeyValue = ["foo"];
+>key : string
+>    : ^^^^^^
+>value : string | undefined
+>      : ^^^^^^^^^^^^^^^^^^
+>["foo"] : [string]
+>        : ^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
+value.toUpperCase();  // Error
+>value.toUpperCase() : any
+>                    : ^^^
+>value.toUpperCase : any
+>                  : ^^^
+>value : undefined
+>      : ^^^^^^^^^
+>toUpperCase : any
+>            : ^^^
+
 
 
 function main(): void {}

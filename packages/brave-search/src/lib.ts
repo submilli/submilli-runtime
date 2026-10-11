@@ -105,75 +105,39 @@ export class BraveSearchError extends Error {
 
 /** Search one page of web results. Credentials are supplied internally.
  * @param query Search text, 1–600 characters and at most 75 words.
- * @param options Optional search settings; `null` uses the provider defaults.
+ * @param options Optional search settings; omitted fields use the provider defaults.
  * @returns One page of web results with query metadata and the next offset, if any.
  * @capability brave.com/search {}
  */
-export function search(query: string, options: SearchOptions | null = null): SearchPage {
-    const country = options === null ? null : options.country;
-    const searchLanguage = options === null ? null : options.searchLanguage;
-    const freshness = options === null ? null : options.freshness;
-    const safeSearch = options === null ? null : options.safeSearch;
-    const count = options === null ? null : options.count;
-    const offset = options === null ? null : options.offset;
-    const extraSnippets = options === null ? null : options.extraSnippets;
-    const spellcheck = options === null ? null : options.spellcheck;
-    const searchOptions: SearchOptions = {};
-    if (country !== null) searchOptions.country = country;
-    if (searchLanguage !== null) searchOptions.searchLanguage = searchLanguage;
-    if (freshness !== null) searchOptions.freshness = freshness;
-    if (safeSearch !== null) searchOptions.safeSearch = safeSearch;
-    if (count !== null) searchOptions.count = count;
-    if (offset !== null) searchOptions.offset = offset;
-    if (extraSnippets !== null) searchOptions.extraSnippets = extraSnippets;
-    if (spellcheck !== null) searchOptions.spellcheck = spellcheck;
+export function search(query: string, options: SearchOptions = {}): SearchPage {
     check("brave.com/search", {});
-    const params = buildSearchQuery(query, searchOptions);
-    const body = request("web/search", params);
-    return normalizeSearchJson(body, query, offset ?? 0);
+    const params = buildSearchQuery(query, options);
+    return normalizeSearchJson(request("web/search", params), query, options.offset ?? 0);
 }
 
 /** Retrieve extracted web passages with their source URLs.
  * @param query Search text, 1–600 characters and at most 75 words.
- * @param options Optional context settings; `null` uses the provider defaults.
+ * @param options Optional context settings; omitted fields use the provider defaults.
  * @returns Extracted passages grouped by source page, in provider order.
  * @capability brave.com/context {}
  */
-export function context(query: string, options: ContextOptions | null = null): ContextResult {
-    const country = options === null ? null : options.country;
-    const searchLanguage = options === null ? null : options.searchLanguage;
-    const freshness = options === null ? null : options.freshness;
-    const safeSearch = options === null ? null : options.safeSearch;
-    const count = options === null ? null : options.count;
-    const maxUrls = options === null ? null : options.maxUrls;
-    const maxTokens = options === null ? null : options.maxTokens;
-    const maxTokensPerUrl = options === null ? null : options.maxTokensPerUrl;
-    const contextOptions: ContextOptions = {};
-    if (country !== null) contextOptions.country = country;
-    if (searchLanguage !== null) contextOptions.searchLanguage = searchLanguage;
-    if (freshness !== null) contextOptions.freshness = freshness;
-    if (safeSearch !== null) contextOptions.safeSearch = safeSearch;
-    if (count !== null) contextOptions.count = count;
-    if (maxUrls !== null) contextOptions.maxUrls = maxUrls;
-    if (maxTokens !== null) contextOptions.maxTokens = maxTokens;
-    if (maxTokensPerUrl !== null) contextOptions.maxTokensPerUrl = maxTokensPerUrl;
+export function context(query: string, options: ContextOptions = {}): ContextResult {
     check("brave.com/context", {});
-    return normalizeContextJson(request("llm/context", buildContextQuery(query, contextOptions)));
+    return normalizeContextJson(request("llm/context", buildContextQuery(query, options)));
 }
 
 /**
  * Build encoded web parameters without credentials or network access.
  * @param query Search text, 1–600 characters and at most 75 words.
- * @param options Optional search settings; `null` uses the defaults.
+ * @param options Optional search settings; omitted fields use the defaults.
  * @returns Query string beginning with `?`, with every value percent-encoded.
  */
-export function buildSearchQuery(query: string, options: SearchOptions | null = null): string {
-    const opts: SearchOptions = options === null ? {} : options;
-    const parts = commonQuery(query, opts.country, opts.searchLanguage, opts.freshness, opts.safeSearch);
-    add(parts, "count", bounded(opts.count, 10, 1, 20, "count").toString());
-    add(parts, "offset", bounded(opts.offset, 0, 0, 9, "offset").toString());
-    add(parts, "extra_snippets", (opts.extraSnippets ?? true).toString());
-    add(parts, "spellcheck", (opts.spellcheck ?? true).toString());
+export function buildSearchQuery(query: string, options: SearchOptions = {}): string {
+    const parts = commonQuery(query, options.country, options.searchLanguage, options.freshness, options.safeSearch);
+    add(parts, "count", bounded(options.count, 10, 1, 20, "count").toString());
+    add(parts, "offset", bounded(options.offset, 0, 0, 9, "offset").toString());
+    add(parts, "extra_snippets", (options.extraSnippets ?? true).toString());
+    add(parts, "spellcheck", (options.spellcheck ?? true).toString());
     add(parts, "result_filter", "web");
     add(parts, "text_decorations", "false");
     return "?" + parts.join("&");
@@ -182,16 +146,15 @@ export function buildSearchQuery(query: string, options: SearchOptions | null = 
 /**
  * Build encoded context parameters without credentials or network access.
  * @param query Search text, 1–600 characters and at most 75 words.
- * @param options Optional context settings; `null` uses the defaults.
+ * @param options Optional context settings; omitted fields use the defaults.
  * @returns Query string beginning with `?`, with every value percent-encoded.
  */
-export function buildContextQuery(query: string, options: ContextOptions | null = null): string {
-    const opts: ContextOptions = options === null ? {} : options;
-    const parts = commonQuery(query, opts.country, opts.searchLanguage, opts.freshness, opts.safeSearch);
-    add(parts, "count", bounded(opts.count, 20, 1, 50, "count").toString());
-    add(parts, "maximum_number_of_urls", bounded(opts.maxUrls, 10, 1, 50, "maxUrls").toString());
-    add(parts, "maximum_number_of_tokens", bounded(opts.maxTokens, 4096, 1024, 32768, "maxTokens").toString());
-    add(parts, "maximum_number_of_tokens_per_url", bounded(opts.maxTokensPerUrl, 2048, 512, 8192, "maxTokensPerUrl").toString());
+export function buildContextQuery(query: string, options: ContextOptions = {}): string {
+    const parts = commonQuery(query, options.country, options.searchLanguage, options.freshness, options.safeSearch);
+    add(parts, "count", bounded(options.count, 20, 1, 50, "count").toString());
+    add(parts, "maximum_number_of_urls", bounded(options.maxUrls, 10, 1, 50, "maxUrls").toString());
+    add(parts, "maximum_number_of_tokens", bounded(options.maxTokens, 4096, 1024, 32768, "maxTokens").toString());
+    add(parts, "maximum_number_of_tokens_per_url", bounded(options.maxTokensPerUrl, 2048, 512, 8192, "maxTokensPerUrl").toString());
     add(parts, "enable_local", "false");
     return "?" + parts.join("&");
 }
@@ -199,15 +162,15 @@ export function buildContextQuery(query: string, options: ContextOptions | null 
 interface ApiSearchItem {
     title: string;
     url: string;
-    description?: string;
-    extra_snippets?: string[];
-    age?: string;
+    description?: string | null;
+    extra_snippets?: string[] | null;
+    age?: string | null;
 }
 
 interface ApiQuery {
-    original?: string;
-    altered?: string;
-    more_results_available?: boolean;
+    original?: string | null;
+    altered?: string | null;
+    more_results_available?: boolean | null;
 }
 
 interface ApiWeb {
@@ -216,18 +179,18 @@ interface ApiWeb {
 
 interface ApiSearch {
     type: string;
-    query?: ApiQuery;
-    web?: ApiWeb;
+    query?: ApiQuery | null;
+    web?: ApiWeb | null;
 }
 
 interface ApiContextItem {
     title: string;
     url: string;
-    snippets?: string[];
+    snippets?: string[] | null;
 }
 
 interface ApiGrounding {
-    generic?: ApiContextItem[];
+    generic?: ApiContextItem[] | null;
 }
 
 interface ApiContext {
@@ -246,19 +209,20 @@ export function normalizeSearchJson(body: string, query: string, offset: number)
         const data = JSON.parse(body) as ApiSearch;
         if (data.type !== "search") throw invalidResponse();
         const items: SearchItem[] = [];
-        if (data.web !== null) {
-            for (const item of data.web.results) {
+        const results = data.web?.results;
+        if (results !== undefined) {
+            for (const item of results) {
                 requireSource(item.title, item.url);
                 items.push({ title: item.title, url: item.url, description: item.description ?? "",
-                    extraSnippets: strings(item.extra_snippets), age: item.age });
+                    extraSnippets: strings(item.extra_snippets), age: item.age ?? null });
             }
         }
         const meta = data.query;
         return {
             items: items,
-            originalQuery: meta === null ? query : meta.original ?? query,
-            alteredQuery: meta === null ? null : meta.altered,
-            nextOffset: meta !== null && meta.more_results_available === true && offset < 9 ? offset + 1 : null,
+            originalQuery: meta?.original ?? query,
+            alteredQuery: meta?.altered ?? null,
+            nextOffset: meta?.more_results_available === true && offset < 9 ? offset + 1 : null,
         };
     } catch (cause) {
         throw invalidResponse();
@@ -275,7 +239,7 @@ export function normalizeContextJson(body: string): ContextResult {
         const data = JSON.parse(body) as ApiContext;
         const items: ContextItem[] = [];
         const generic = data.grounding.generic;
-        if (generic !== null) {
+        if (generic !== null && generic !== undefined) {
             for (const item of generic) {
                 requireSource(item.title, item.url);
                 items.push({ title: item.title, url: item.url, snippets: strings(item.snippets) });
@@ -288,8 +252,8 @@ export function normalizeContextJson(body: string): ContextResult {
 }
 
 interface ApiError {
-    type?: string;
-    error?: { detail?: string };
+    type?: string | null;
+    error?: { detail?: string | null } | null;
 }
 
 /**
@@ -321,10 +285,10 @@ function braveErrorDetail(body: string): string {
     try {
         const data = JSON.parse(body) as ApiError;
         const parts: string[] = [];
-        if (data.type !== null && data.type.length > 0) parts.push(data.type);
-        if (data.error !== null && data.error.detail !== null && data.error.detail.length > 0) {
-            parts.push(data.error.detail);
-        }
+        const type = data.type ?? "";
+        const detail = data.error?.detail ?? "";
+        if (type.length > 0) parts.push(type);
+        if (detail.length > 0) parts.push(detail);
         return parts.join(": ");
     } catch (cause) {
         return "";
@@ -333,7 +297,7 @@ function braveErrorDetail(body: string): string {
 
 function request(path: string, params: string): string {
     const token = secrets.get("BRAVE_SEARCH_API_KEY");
-    if (token === null || token.trim().length === 0) {
+    if (token === undefined || token.trim().length === 0) {
         throw new BraveSearchError("missing_credentials", "Bind BRAVE_SEARCH_API_KEY in the blueprint before using Brave Search");
     }
     const headers = new Map<string, string>();
@@ -341,12 +305,12 @@ function request(path: string, params: string): string {
     headers.set("Accept", "application/json");
     // Keep the authority and its trailing slash static for capability derivation.
     const response = get("https://api.search.brave.com/res/v1/" + path + params, headers);
-    if (!response.ok) throw braveHttpError(response.status, response.headers.get("retry-after"), response.body);
+    if (!response.ok) throw braveHttpError(response.status, response.headers.get("retry-after") ?? null, response.body);
     return response.body;
 }
 
-function commonQuery(query: string, country: string | null, language: string | null,
-    freshness: string | null, safeSearch: SafeSearch | null): string[] {
+function commonQuery(query: string, country: string | undefined, language: string | undefined,
+    freshness: string | undefined, safeSearch: SafeSearch | undefined): string[] {
     const trimmed = query.trim();
     if (trimmed.length === 0 || query.length > 600 || trimmed.split(/\s+/).length > 75) {
         throw new BraveSearchError("invalid_argument", "query must contain 1–600 characters and at most 75 words");
@@ -357,14 +321,14 @@ function commonQuery(query: string, country: string | null, language: string | n
     }
     const parts: string[] = [];
     add(parts, "q", query);
-    if (country !== null) add(parts, "country", country);
-    if (language !== null) add(parts, "search_lang", language);
-    if (freshness !== null) add(parts, "freshness", freshness);
+    if (country !== undefined) add(parts, "country", country);
+    if (language !== undefined) add(parts, "search_lang", language);
+    if (freshness !== undefined) add(parts, "freshness", freshness);
     add(parts, "safesearch", safe);
     return parts;
 }
 
-function bounded(value: number | null, fallback: number, min: number, max: number, name: string): number {
+function bounded(value: number | undefined, fallback: number, min: number, max: number, name: string): number {
     const actual = value ?? fallback;
     if (!Number.isFinite(actual) || actual !== Math.floor(actual) || actual < min || actual > max) {
         throw new BraveSearchError("invalid_argument", name + " must be an integer between " + min.toString() + " and " + max.toString());
@@ -384,6 +348,6 @@ function invalidResponse(): BraveSearchError {
     return new BraveSearchError("invalid_response", "Brave Search returned an invalid response");
 }
 
-function strings(value: string[] | null): string[] {
-    return value === null ? [] : value;
+function strings(value: string[] | null | undefined): string[] {
+    return value === null || value === undefined ? [] : value;
 }

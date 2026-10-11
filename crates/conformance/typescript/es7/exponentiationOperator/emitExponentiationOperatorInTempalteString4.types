@@ -12,7 +12,7 @@ let t2 = 10;
 >10 : 10
 >   : ^^
 
-/**/; 
+/**/;
 
 // With TemplateTail
 `${t1 ** -t2} world`;
@@ -45,7 +45,7 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                   
+/*pruned*/;
 `${(-t1++) ** t2 - t1} world`;
 >`${(-t1++) ** t2 - t1} world` : string
 >                              : ^^^^^^
@@ -66,8 +66,8 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                     
-/*pruned*/;                         
+/*pruned*/;
+/*pruned*/;
 
 // TempateHead & TemplateTail are empt
 `${t1 ** -t2} hello world ${t1 ** -t2}`;
@@ -122,7 +122,7 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                                                 
+/*pruned*/;
 `${(-t1++) ** t2 - t1} hello world ${t2 ** (-t1++) **  - t1}`;
 >`${(-t1++) ** t2 - t1} hello world ${t2 ** (-t1++) **  - t1}` : string
 >                                                              : ^^^^^^
@@ -161,8 +161,8 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                                                   
-/*pruned*/;                                                         
+/*pruned*/;
+/*pruned*/;
 
 // With templateHead
 `hello ${(-t1) ** t2 - t1}`;
@@ -183,7 +183,7 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                   
+/*pruned*/;
 `hello ${(-t1++) ** t2 - t1}`;
 >`hello ${(-t1++) ** t2 - t1}` : string
 >                              : ^^^^^^
@@ -204,8 +204,8 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;                     
-/*pruned*/;                        
+/*pruned*/;
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

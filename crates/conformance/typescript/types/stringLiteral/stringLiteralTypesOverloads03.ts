@@ -27,7 +27,7 @@ let helloOrWorld: "hello" | "world" = null as unknown as ("hello" | "world");
 /*pruned*/;                       
 /*pruned*/;                 
 /*pruned*/;                      
-                
+                     
  
 
 /*pruned*/;             
@@ -39,7 +39,7 @@ let helloOrWorld: "hello" | "world" = null as unknown as ("hello" | "world");
 /*pruned*/;                                    
 /*pruned*/;                       
 /*pruned*/;                      
-                
+                     
  
 
 /*pruned*/;             

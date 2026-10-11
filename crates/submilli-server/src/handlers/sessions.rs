@@ -24,6 +24,7 @@ use crate::app::{AppState, BlueprintForRun};
 use crate::handlers::execute::{self, ExecuteInputs, SESSION_HEADER, blueprint_miss_message};
 use crate::idempotency::{Refusal, Reservation};
 use crate::idempotency_store::RecordedOutcome;
+use crate::record::{SessionRunError, SessionStartError};
 
 /// Opt-in replay guard on the session execute endpoint. Named to match the
 /// harness, which already sends it.
@@ -66,80 +67,95 @@ pub async fn create(
     State(state): State<AppState>,
     Json(req): Json<CreateRequest>,
 ) -> impl IntoResponse {
-    let found = match state.blueprints().get(&req.blueprint).await {
-        Ok(found) => found,
-        Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
-    };
-    let Some(blueprint) = found else {
-        // One code for "this name is not runnable", whether it was never registered
-        // or is registered in a form this binary can no longer parse: a client that
-        // has to branch on the difference reads `message`, and one that only needs to
-        // know the name is unusable keeps its existing predicate.
-        let message = match blueprint_miss_message(&state, &req.blueprint).await {
-            Ok(message) => message,
-            Err(error) => return crate::blueprint::store_failure_response(error).into_response(),
-        };
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "unknown blueprint",
-                "message": message,
-                "name": req.blueprint,
-            })),
-        )
-            .into_response();
-    };
-
-    // Bind variables up front: defaults fill, a missing-required or undeclared
-    // name is a 400 and the session is never created.
-    let supplied = req.variables.clone().unwrap_or_default();
-    let variables = match resolve_variables(&blueprint.variables, &supplied) {
-        Ok(resolved) => Arc::new(resolved),
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid variables: {err}") })),
-            )
-                .into_response();
-        }
-    };
-
-    if let Err(error) = blueprint
-        .vfs
-        .resolve(&variables)
-        .map(|_| ())
-        .and_then(|()| submilli_shared::resolve_git(&blueprint, &variables).map(|_| ()))
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": error.to_string()})),
-        )
-            .into_response();
-    }
-    let supplied_secrets = req.secrets.clone().unwrap_or_default();
-    let secrets = match resolve_harness_secrets(&blueprint.secrets, &supplied_secrets) {
-        Ok(resolved) => Arc::new(resolved),
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid secrets: {err}") })),
-            )
-                .into_response();
-        }
-    };
-
-    match state
-        .session_manager()
-        .create(&blueprint, variables, secrets)
-        .await
-    {
+    let started = start(
+        &state,
+        &req.blueprint,
+        &req.variables.unwrap_or_default(),
+        &req.secrets.unwrap_or_default(),
+    )
+    .await;
+    match started {
         Ok(session_id) => {
             let body = CreateResponse {
                 session_id: session_id.clone(),
             };
             (session_header(&session_id), Json(body)).into_response()
         }
-        Err(error) => session_state_response(error),
+        Err(error) => start_refusal_response(error),
+    }
+}
+
+/// Creates a session bound to `blueprint_name`, its resolved variables, and its harness
+/// secrets, and returns its id. Everything is validated before the session exists:
+/// defaults fill, and a missing-required or undeclared name refuses the request.
+pub(crate) async fn start(
+    state: &AppState,
+    blueprint_name: &str,
+    supplied: &BTreeMap<String, String>,
+    supplied_secrets: &HarnessSecretBindings,
+) -> Result<String, SessionStartError> {
+    let Some(blueprint) = state
+        .blueprints()
+        .get(blueprint_name)
+        .await
+        .map_err(SessionStartError::Store)?
+    else {
+        // One code for "this name is not runnable", whether it was never registered
+        // or is registered in a form this binary can no longer parse: a client that
+        // has to branch on the difference reads `message`, and one that only needs to
+        // know the name is unusable keeps its existing predicate.
+        let message = blueprint_miss_message(state, blueprint_name)
+            .await
+            .map_err(SessionStartError::Store)?;
+        return Err(SessionStartError::UnknownBlueprint {
+            name: blueprint_name.to_owned(),
+            message,
+        });
+    };
+
+    let variables = resolve_variables(&blueprint.variables, supplied)
+        .map(Arc::new)
+        .map_err(|error| SessionStartError::InvalidVariables(error.to_string()))?;
+    blueprint
+        .vfs
+        .resolve(&variables)
+        .map(|_| ())
+        .and_then(|()| submilli_shared::resolve_git(&blueprint, &variables).map(|_| ()))
+        .map_err(|error| SessionStartError::InvalidFilesystem(error.to_string()))?;
+    let secrets = resolve_harness_secrets(&blueprint.secrets, supplied_secrets)
+        .map(Arc::new)
+        .map_err(|error| SessionStartError::InvalidSecrets(error.to_string()))?;
+
+    state
+        .session_manager()
+        .create(&blueprint, variables, secrets)
+        .await
+        .map_err(SessionStartError::Session)
+}
+
+/// The `POST /v1/sessions` response for a session that was not started.
+fn start_refusal_response(error: SessionStartError) -> axum::response::Response {
+    match error {
+        SessionStartError::UnknownBlueprint { name, message } => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "unknown blueprint",
+                "message": message,
+                "name": name,
+            })),
+        )
+            .into_response(),
+        SessionStartError::InvalidVariables(_)
+        | SessionStartError::InvalidFilesystem(_)
+        | SessionStartError::InvalidSecrets(_) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": error.to_string() })),
+        )
+            .into_response(),
+        SessionStartError::Store(error) => {
+            crate::blueprint::store_failure_response(error).into_response()
+        }
+        SessionStartError::Session(error) => session_state_response(error),
     }
 }
 
@@ -163,71 +179,16 @@ pub async fn execute(
             "execution_id": crate::audit::execution_id(), "error": "invalid_request", "message": error.body_text()
         }))).into_response(),
     };
-    let blueprint_name = match state.session_manager().blueprint_name(&session_id).await {
-        Ok(name) => name,
-        Err(error) => return session_state_response(error),
-    };
-    let Some(blueprint_name) = blueprint_name else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "execution_id": crate::audit::execution_id(), "error": "unknown session", "session_id": session_id })),
-        )
-            .into_response();
-    };
-    let found = match state.blueprint_for_run(&blueprint_name).await {
-        Ok(found) => found,
-        Err(error) => return execution_store_failure(error),
-    };
-    let Some(found) = found else {
-        // A session outlives a restart, so its blueprint may have become unrunnable
-        // (rather than removed) while the session slept: `message` says which.
-        let message = match blueprint_miss_message(&state, &blueprint_name).await {
-            Ok(message) => message,
-            Err(error) => return execution_store_failure(error),
-        };
-        return (
-            StatusCode::NOT_FOUND,
-            Json(
-                serde_json::json!({ "execution_id": crate::audit::execution_id(),
-                    "error": "blueprint no longer exists",
-                    "message": message,
-                    "name": blueprint_name,
-                }),
-            ),
-        )
-            .into_response();
-    };
-
-    let blueprint = &found.blueprint;
-    let (binding, secrets) = match state
-        .session_manager()
-        .execution_bindings(&session_id)
-        .await
+    let bound = match bound_for_run(
+        &state,
+        &session_id,
+        &req.code,
+        crate::audit::execution().as_deref(),
+    )
+    .await
     {
-        Ok(record) => record,
-        Err(error) => return session_state_response(error),
-    };
-    let variables = Arc::new(binding.variables().clone());
-    if let Some(audit) = crate::audit::execution() {
-        audit.annotate(&req.code, &blueprint_name, Some(blueprint), &variables);
-    }
-    let harness_secrets = secrets.or_else(|| {
-        required_harness_secrets(&blueprint.secrets)
-            .is_empty()
-            .then(Arc::default)
-    });
-    let Some(harness_secrets) = harness_secrets else {
-        return (
-            StatusCode::CONFLICT,
-            Json(
-                serde_json::json!({ "execution_id": crate::audit::execution_id(),
-                    "error": "session_requires_secrets",
-                    "session_id": session_id,
-                    "required": required_harness_secrets(&blueprint.secrets),
-                }),
-            ),
-        )
-            .into_response();
+        Ok(bound) => bound,
+        Err(error) => return run_refusal_response(&session_id, error),
     };
     // Every session-level refusal above happens before any reservation exists,
     // so a bad key against an unknown session reports the unknown session and
@@ -238,12 +199,10 @@ pub async fn execute(
             let outcome = run(
                 &state,
                 &session_id,
-                &blueprint_name,
-                found,
-                variables,
-                harness_secrets,
+                bound,
                 &req.code,
                 None,
+                crate::audit::execution(),
             )
             .await;
             return execute::with_session_header(&session_id, outcome.response).into_response();
@@ -285,12 +244,10 @@ pub async fn execute(
     let outcome = run(
         &state,
         &session_id,
-        &blueprint_name,
-        found,
-        variables,
-        harness_secrets,
+        bound,
         &req.code,
         Some(&key),
+        crate::audit::execution(),
     )
     .await;
     if !outcome.dispatched {
@@ -315,28 +272,140 @@ pub async fn execute(
     stored_body_response(&session_id, StatusCode::OK, body)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run(
-    state: &AppState,
-    session_id: &str,
-    blueprint_name: &str,
+/// What a session runs under: the blueprint it was bound to, as registered now, and the
+/// variables and harness secrets fixed when it was created.
+pub(crate) struct BoundSession {
+    blueprint_name: String,
     found: BlueprintForRun,
     variables: Arc<submilli_blueprint::VarBindings>,
     harness_secrets: Arc<HarnessSecretBindings>,
+}
+
+/// Reads what `session_id` runs under, refusing a session that cannot run: unknown or
+/// closed, bound to a blueprint that is no longer runnable, or missing the harness
+/// secrets its blueprint requires. `audit` is annotated with the program as it will run.
+pub(crate) async fn bound_for_run(
+    state: &AppState,
+    session_id: &str,
+    code: &str,
+    audit: Option<&crate::audit::ExecutionAudit>,
+) -> Result<BoundSession, SessionRunError> {
+    let Some(blueprint_name) = state
+        .session_manager()
+        .blueprint_name(session_id)
+        .await
+        .map_err(SessionRunError::Session)?
+    else {
+        return Err(SessionRunError::UnknownSession {
+            session_id: session_id.to_owned(),
+        });
+    };
+    let Some(found) = state
+        .blueprint_for_run(&blueprint_name)
+        .await
+        .map_err(SessionRunError::Store)?
+    else {
+        // A session outlives a restart, so its blueprint may have become unrunnable
+        // (rather than removed) while the session slept: `message` says which.
+        let message = blueprint_miss_message(state, &blueprint_name)
+            .await
+            .map_err(SessionRunError::Store)?;
+        return Err(SessionRunError::BlueprintMissing {
+            name: blueprint_name,
+            message,
+        });
+    };
+
+    let blueprint = &found.blueprint;
+    let (binding, secrets) = state
+        .session_manager()
+        .execution_bindings(session_id)
+        .await
+        .map_err(SessionRunError::Session)?;
+    let variables = Arc::new(binding.variables().clone());
+    if let Some(audit) = audit {
+        audit.annotate(code, &blueprint_name, Some(blueprint), &variables);
+    }
+    let harness_secrets = secrets.or_else(|| {
+        required_harness_secrets(&blueprint.secrets)
+            .is_empty()
+            .then(Arc::default)
+    });
+    let Some(harness_secrets) = harness_secrets else {
+        return Err(SessionRunError::SecretsRequired {
+            session_id: session_id.to_owned(),
+            required: required_harness_secrets(&blueprint.secrets),
+        });
+    };
+    Ok(BoundSession {
+        blueprint_name,
+        found,
+        variables,
+        harness_secrets,
+    })
+}
+
+/// The `POST /v1/sessions/{id}/execute` response for a session that cannot run.
+fn run_refusal_response(session_id: &str, error: SessionRunError) -> axum::response::Response {
+    match error {
+        SessionRunError::UnknownSession { .. } => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "execution_id": crate::audit::execution_id(), "error": "unknown session", "session_id": session_id })),
+        )
+            .into_response(),
+        SessionRunError::BlueprintMissing { name, message } => (
+            StatusCode::NOT_FOUND,
+            Json(
+                serde_json::json!({ "execution_id": crate::audit::execution_id(),
+                    "error": "blueprint no longer exists",
+                    "message": message,
+                    "name": name,
+                }),
+            ),
+        )
+            .into_response(),
+        SessionRunError::SecretsRequired { required, .. } => (
+            StatusCode::CONFLICT,
+            Json(
+                serde_json::json!({ "execution_id": crate::audit::execution_id(),
+                    "error": "session_requires_secrets",
+                    "session_id": session_id,
+                    "required": required,
+                }),
+            ),
+        )
+            .into_response(),
+        SessionRunError::Store(error) => execution_store_failure(error),
+        SessionRunError::Session(error) => session_state_response(error),
+    }
+}
+
+/// Runs `code` in `session_id` under what it is bound to, recorded as a session run.
+pub(crate) async fn run(
+    state: &AppState,
+    session_id: &str,
+    bound: BoundSession,
     code: &str,
     idempotency_key: Option<&str>,
+    audit: Option<Arc<crate::audit::ExecutionAudit>>,
 ) -> execute::ExecuteOutcome {
+    let BoundSession {
+        blueprint_name,
+        found,
+        variables,
+        harness_secrets,
+    } = bound;
     execute::execute_core(
         state,
         ExecuteInputs {
             session_id,
             code,
-            blueprint_name,
+            blueprint_name: &blueprint_name,
             blueprint: Arc::new(found.blueprint),
             version_tag: found.version_tag,
             variables,
             harness_secrets,
-            audit: crate::audit::execution(),
+            audit,
             vfs_source: execute::VfsSource::Rest,
             run_entry: crate::record::RunEntry::Session,
             client: None,

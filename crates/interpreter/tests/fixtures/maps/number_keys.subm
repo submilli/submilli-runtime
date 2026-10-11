@@ -8,14 +8,14 @@ function main(): void {
 
   assert(m.size === 5, "five distinct number keys");
 
-  const z: string | null = m.get(0);
-  assert(z !== null && z === "zero", "0 → zero");
-  const o: string | null = m.get(1);
-  assert(o !== null && o === "one", "1 → one");
-  const f: string | null = m.get(42);
-  assert(f !== null && f === "forty-two", "42 → forty-two");
-  const n: string | null = m.get(-7);
-  assert(n !== null && n === "neg-seven", "-7 → neg-seven");
-  const p: string | null = m.get(3.14);
-  assert(p !== null && p === "pi", "3.14 → pi");
+  const z: string | undefined = m.get(0);
+  assert(z !== undefined && z === "zero", "0 → zero");
+  const o: string | undefined = m.get(1);
+  assert(o !== undefined && o === "one", "1 → one");
+  const f: string | undefined = m.get(42);
+  assert(f !== undefined && f === "forty-two", "42 → forty-two");
+  const n: string | undefined = m.get(-7);
+  assert(n !== undefined && n === "neg-seven", "-7 → neg-seven");
+  const p: string | undefined = m.get(3.14);
+  assert(p !== undefined && p === "pi", "3.14 → pi");
 }

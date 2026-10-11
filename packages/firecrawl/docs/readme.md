@@ -222,7 +222,7 @@ in running or failed jobs. Counters are provider accounting, not evidence that
 every discovered URL succeeded. Results expire; persist them before `expiresAt`.
 
 `getJobErrors(kind, jobId)` returns `{ errors, robotsBlocked }`. Failures retain
-URL, error, and optional ID/timestamp. Always inspect this endpoint as well as
+URL, error, and ID/timestamp (`null` when not reported). Always inspect this endpoint as well as
 page errors: failed pages can be absent from results and counters. Firecrawl
 does not guarantee its error list covers every failure class.
 

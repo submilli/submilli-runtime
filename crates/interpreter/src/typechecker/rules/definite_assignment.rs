@@ -1,6 +1,7 @@
 //! Definite-assignment rule: a non-optional class field with no initializer must
 //! be assigned on every path through the constructor (TS `strictPropertyInitialization`).
-//! Otherwise it silently defaults to `null`/`0` at the WasmGC level.
+//! A field whose type admits `undefined` is exempt, as in TypeScript: it starts
+//! as `undefined`.
 //!
 //! The analysis returns, per statement, the set of own fields assigned via
 //! `this.x = …` on all paths that complete normally, plus whether the statement
@@ -22,7 +23,12 @@ pub(super) fn run(
         let required: Vec<&crate::TypedClassField> = class
             .fields
             .iter()
-            .filter(|f| !f.optional && f.initializer.is_none() && !f.auto_assigned)
+            .filter(|f| {
+                !f.optional
+                    && f.initializer.is_none()
+                    && !f.auto_assigned
+                    && !may_start_undefined(&f.ty)
+            })
             .collect();
         if required.is_empty() {
             continue;
@@ -50,6 +56,17 @@ pub(super) fn run(
         }
     }
     Ok(())
+}
+
+/// Whether a field of type `ty` may start out `undefined`, so it needs no
+/// initializer. `unknown` holds `undefined` too, unlike the runtime-cast rule.
+fn may_start_undefined(ty: &crate::Type) -> bool {
+    ty.any_member(&|member| {
+        matches!(
+            member,
+            crate::Type::Undefined | crate::Type::Void | crate::Type::Unknown
+        )
+    })
 }
 
 struct Flow {

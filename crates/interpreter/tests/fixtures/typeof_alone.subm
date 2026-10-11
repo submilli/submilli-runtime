@@ -1,0 +1,6 @@
+// `typeof` outside a comparison is a value: the runtime tag as a string.
+function main(): void {
+  const x: number = 1;
+  const t: string = typeof x;
+  assert(t === "number", "typeof a typed local");
+}

@@ -453,6 +453,7 @@ impl<'a> Walker<'a, '_, '_> {
             | TypedExprKind::String(_)
             | TypedExprKind::Boolean(_)
             | TypedExprKind::Null
+            | TypedExprKind::Undefined
             | TypedExprKind::Regex { .. }
             | TypedExprKind::FunctionRef { .. }
             | TypedExprKind::NumberEnumMember { .. }
@@ -772,7 +773,15 @@ impl<'a> Walker<'a, '_, '_> {
             receiver,
             Use::Escape(Usage::MethodCalled(name.name.clone())),
         )?;
-        self.consume_all(args, || Usage::PassedTo(name.name.clone()))
+        // A call signature (`String(x)`, which interpolation of a generic or
+        // `unknown` lowers to) is named by the value called, not by `@call`.
+        let callee = match &self.expr_at(receiver)?.kind {
+            TypedExprKind::GlobalRef { name: global, .. } if name.name == "@call" => {
+                global.name.clone()
+            }
+            _ => name.name.clone(),
+        };
+        self.consume_all(args, || Usage::PassedTo(callee.clone()))
     }
 
     fn binary(&mut self, op: BinOp, lhs: ExprId, rhs: ExprId) -> Result<Yield, CompilerFailure> {

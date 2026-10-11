@@ -3,14 +3,14 @@ import secrets from "submilli:secrets";
 import { IssuePriority, getIssue, updateIssue } from "@submilli/sentry";
 
 function main(): void {
-    if (secrets.get("SENTRY_AUTH_TOKEN") === null || secrets.get("SENTRY_LIVE_MUTATIONS") !== "true") {
+    if (secrets.get("SENTRY_AUTH_TOKEN") === undefined || secrets.get("SENTRY_LIVE_MUTATIONS") !== "true") {
         label("skip: Sentry live mutations are disabled");
         return;
     }
     const organization = secrets.get("SENTRY_TEST_ORGANIZATION");
     const project = secrets.get("SENTRY_TEST_PROJECT");
     const issueId = secrets.get("SENTRY_TEST_ISSUE_ID");
-    if (organization === null || project === null || issueId === null) {
+    if (organization === undefined || project === undefined || issueId === undefined) {
         label("skip: SENTRY_TEST_ORGANIZATION, SENTRY_TEST_PROJECT, or SENTRY_TEST_ISSUE_ID is not bound");
         return;
     }

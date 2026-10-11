@@ -1,26 +1,26 @@
 === nullishCoalescingOperator7.ts ===
 
-const a: string | null = null as unknown as (string | null);
->a : string | null
->  : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+const a: string | undefined = null as unknown as (string | undefined);
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-const b: string | null = null as unknown as (string | null);
->b : string | null
->  : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+const b: string | undefined = null as unknown as (string | undefined);
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
-const c: string | null = null as unknown as (string | null);
->c : string | null
->  : ^^^^^^^^^^^^^
->null as unknown as (string | null) : string | null
->                                   : ^^^^^^^^^^^^^
+const c: string | undefined = null as unknown as (string | undefined);
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (string | undefined) : string | undefined
+>                                        : ^^^^^^^^^^^^^^^^^^
 >null as unknown : unknown
 >                : ^^^^^^^
 
@@ -30,8 +30,8 @@ const foo1 = a ? 1 : 2;
 >     : ^^^^^
 >a ? 1 : 2 : 1 | 2
 >          : ^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >1 : 1
 >  : ^
 >2 : 2
@@ -44,8 +44,8 @@ const foo2 = a ?? 'foo' ? 1 : 2;
 >                   : ^^^^^
 >a ?? 'foo' : string
 >           : ^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >'foo' : "foo"
 >      : ^^^^^
 >1 : 1
@@ -60,24 +60,24 @@ const foo3 = a ?? 'foo' ? (b ?? 'bar') : (c ?? 'baz');
 >                                         : ^^^^^^
 >a ?? 'foo' : string
 >           : ^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >'foo' : "foo"
 >      : ^^^^^
 >(b ?? 'bar') : string
 >             : ^^^^^^
 >b ?? 'bar' : string
 >           : ^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >'bar' : "bar"
 >      : ^^^^^
 >(c ?? 'baz') : string
 >             : ^^^^^^
 >c ?? 'baz' : string
 >           : ^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >'baz' : "baz"
 >      : ^^^^^
 
@@ -93,20 +93,20 @@ function f (): void {
 >                                     : ^^^^^^
 >a ?? 'foo' : string
 >           : ^^^^^^
->a : string | null
->  : ^^^^^^^^^^^^^
+>a : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >'foo' : "foo"
 >      : ^^^^^
 >b ?? 'bar' : string
 >           : ^^^^^^
->b : string | null
->  : ^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >'bar' : "bar"
 >      : ^^^^^
 >c ?? 'baz' : string
 >           : ^^^^^^
->c : string | null
->  : ^^^^^^^^^^^^^
+>c : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
 >'baz' : "baz"
 >      : ^^^^^
 

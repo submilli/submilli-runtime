@@ -47,6 +47,7 @@ pub(crate) fn insert_temporal_plain_type(
         (
             "toString".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: Vec::new(),
                 ret: Type::String,
@@ -57,6 +58,7 @@ pub(crate) fn insert_temporal_plain_type(
         (
             "toJSON".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: Vec::new(),
                 ret: Type::String,
@@ -67,6 +69,7 @@ pub(crate) fn insert_temporal_plain_type(
         (
             "equals".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: vec![Param::new("other", self_ref())],
                 ret: Type::Boolean,
@@ -119,6 +122,7 @@ pub(crate) fn insert_temporal_plain_type(
     let mut ctor_methods = BTreeMap::from([(
         "from".to_string(),
         MethodSig {
+            optional: false,
             generics: Vec::new(),
             params: vec![Param::new("iso", Type::String)],
             ret: self_ref(),
@@ -132,6 +136,7 @@ pub(crate) fn insert_temporal_plain_type(
         ctor_methods.insert(
             "compare".to_string(),
             MethodSig {
+                optional: false,
                 generics: Vec::new(),
                 params: vec![Param::new("a", self_ref()), Param::new("b", self_ref())],
                 ret: Type::Number,
@@ -413,10 +418,10 @@ mod tests {
                 "Error"
                     | "QuotaExceededError"
                     | "RangeError"
+                    | "ReferenceError"
                     | "TypeError"
                     | "SyntaxError"
                     | "URIError"
-                    | "ReferenceError"
                     | "PermissionDeniedError"
             ) {
                 assert!(matches!(&defs.types[*name].kind, TypeKind::Class { .. }));

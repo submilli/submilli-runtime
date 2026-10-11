@@ -1,2 +1,1 @@
-line 6 extra: bug SUB-1453 `++` on a `never` value is rejected
 line 4, 5 type: artifact the inner `v` is read in its own initializer, which tsc types as `any` for the circular reference

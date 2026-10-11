@@ -1,5 +1,4 @@
 // test262: test/built-ins/String/prototype/replace/S15.5.4.11_A3_T1.js
-// expect-fail: $11 with only two capture groups should resolve as capture 1 + literal "1"; the whole match is replaced by the empty string instead
 // The original's `"$11" + 15` concatenation is spelled "$1115" directly.
 
 function main(): void {

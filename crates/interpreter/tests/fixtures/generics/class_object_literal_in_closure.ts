@@ -19,7 +19,7 @@ class Range<T> {
           i = i + 1;
           return { done: false, value: v };
         }
-        return { done: true };
+        return { done: true, value: undefined };
       },
     };
   }

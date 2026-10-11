@@ -1,4 +1,5 @@
 classExtendingNonConstructor.ts(5,5): error TS2683: 'this' implicitly has type 'any' because it does not have a type annotation.
+classExtendingNonConstructor.ts(8,18): error TS2507: Type 'undefined' is not a constructor function type.
 classExtendingNonConstructor.ts(9,18): error TS2507: Type 'true' is not a constructor function type.
 classExtendingNonConstructor.ts(10,18): error TS2507: Type 'false' is not a constructor function type.
 classExtendingNonConstructor.ts(11,18): error TS2507: Type '42' is not a constructor function type.

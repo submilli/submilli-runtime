@@ -32,7 +32,7 @@ function f1(x: Color | string): void {
 >x : Color
 >  : ^^^^^
 
-        /*pruned*/;                                 
+        /*pruned*/;
     }
     else {
         let z = x;
@@ -99,7 +99,7 @@ function f2(x: Color | string | string[]): void {
 >x : Color
 >  : ^^^^^
 
-        /*pruned*/;                                 
+        /*pruned*/;
     }
     else {
         let w = x;
@@ -149,7 +149,7 @@ function f2(x: Color | string | string[]): void {
 >x : Color | string[]
 >  : ^^^^^^^^^^^^^^^^
 
-        /*pruned*/;                                                       
+        /*pruned*/;
     }
 }
 

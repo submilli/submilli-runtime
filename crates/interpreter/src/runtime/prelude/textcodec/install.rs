@@ -169,6 +169,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "encode".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: Vec::new(),
                         params: vec![Param::new("s", Type::String)],
                         ret: Type::Uint8Array,
@@ -198,6 +199,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "decode".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: Vec::new(),
                         params: vec![Param::new("bytes", Type::Uint8Array)],
                         ret: Type::String,
@@ -227,6 +229,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "new".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: Vec::new(),
                         params: Vec::new(),
                         ret: Type::prelude_interface("TextEncoder".to_string(), Vec::new()),
@@ -256,6 +259,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 methods: BTreeMap::from([(
                     "new".to_string(),
                     MethodSig {
+                        optional: false,
                         generics: Vec::new(),
                         params: Vec::new(),
                         ret: Type::prelude_interface("TextDecoder".to_string(), Vec::new()),

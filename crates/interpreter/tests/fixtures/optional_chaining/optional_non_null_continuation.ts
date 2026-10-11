@@ -3,11 +3,11 @@
 // null, not TypeScript's unchecked assertion.
 //
 // Position decides what it asserts. Mid-chain it asserts one step, and the chain
-// keeps its own `| null`, so a base that short-circuits skips the assertion
-// entirely. At the tail there is no later step to feed, and the only null left
+// keeps its own `| undefined`, so a base that short-circuits skips the assertion
+// entirely. At the tail there is no later step to feed, and the nullish value left
 // to remove is the one the short-circuit adds — so a trailing `!` asserts the
 // whole chain, exactly as TypeScript's `(a?.b)!` does, and a short-circuit
-// throws rather than yielding null.
+// throws rather than yielding undefined.
 type MaybeInner = Inner | null;
 type Produce = () => number;
 
@@ -49,10 +49,10 @@ function main(): void {
   assert(present?.b!?.y === 2, "optional step after an assertion");
 
   const short: Outer | null = null as Outer | null;
-  assert(short?.b!.y === null, "base short-circuits before the assertion");
+  assert(short?.b!.y === undefined, "base short-circuits before the assertion");
 
-  // A trailing `!` removes the chain's own `| null`, so this is `Inner`, not
-  // `Inner | null` — no narrowing needed to read `.y`.
+  // A trailing `!` removes the chain's own `| undefined`, so this is `Inner`, not
+  // `Inner | undefined` — no narrowing needed to read `.y`.
   const tail: Inner = present?.b!;
   assert(tail.y === 2, "trailing assertion narrows the whole chain");
 
@@ -81,7 +81,7 @@ function main(): void {
 
   // The `NonNull` step inside a closure body, which walks a different path
   // through the capture pass than the same chain in a statement.
-  const read = (): number | null => f2()?.b!.y;
+  const read = (): number | undefined => f2()?.b!.y;
   assert(read() === 2, "assertion inside a closure");
 
   const emptied = new Outer();

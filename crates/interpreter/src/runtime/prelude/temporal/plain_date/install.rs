@@ -60,7 +60,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     reg_plain_date_with(linker, engine, with_ty)?;
     let options = ValType::Ref(RefType::new(
         true,
-        HeapType::ConcreteStruct(types.intr.object_shape.clone()),
+        HeapType::ConcreteStruct(types.intr.object.clone()),
     ));
     let pair_ty = FuncType::new(engine, [obj.clone(), obj.clone(), options], [obj.clone()]);
     for method in ["until", "since"] {
@@ -198,17 +198,18 @@ fn reg_plain_date_to_plain_date_time(
         |caller, params, results| {
             let d = as_struct_val(caller, abi_arg(params, 0)?, "PlainDate.toPlainDateTime")?;
             let maybe_t = *abi_arg(params, 1)?;
-            let (h, mi, s, ns) = if let Val::AnyRef(Some(_)) = maybe_t {
-                let t = as_struct_val(caller, &maybe_t, "PlainDate.toPlainDateTime")?;
-                (
-                    st_i32(caller, t, 1, "PlainDate.toPlainDateTime")?,
-                    st_i32(caller, t, 2, "PlainDate.toPlainDateTime")?,
-                    st_i32(caller, t, 3, "PlainDate.toPlainDateTime")?,
-                    st_i32(caller, t, 4, "PlainDate.toPlainDateTime")?,
-                )
-            } else {
-                (0, 0, 0, 0)
-            };
+            let (h, mi, s, ns) =
+                if crate::runtime::prelude::undefined::is_undefined(caller, &maybe_t)? {
+                    (0, 0, 0, 0)
+                } else {
+                    let t = as_struct_val(caller, &maybe_t, "PlainDate.toPlainDateTime")?;
+                    (
+                        st_i32(caller, t, 1, "PlainDate.toPlainDateTime")?,
+                        st_i32(caller, t, 2, "PlainDate.toPlainDateTime")?,
+                        st_i32(caller, t, 3, "PlainDate.toPlainDateTime")?,
+                        st_i32(caller, t, 4, "PlainDate.toPlainDateTime")?,
+                    )
+                };
             let y = st_i32(caller, d, 1, "PlainDate.toPlainDateTime")?;
             let m = st_i32(caller, d, 2, "PlainDate.toPlainDateTime")?;
             let day = st_i32(caller, d, 3, "PlainDate.toPlainDateTime")?;
@@ -256,7 +257,7 @@ fn plain_date_to_zoned_arg(
             wasmtime::Error::msg("Temporal.PlainDate.toZonedDateTime: `timeZone` is required")
         })?;
     let time = match object_field(caller, arg, "plainTime")? {
-        Some(t @ Val::AnyRef(Some(_))) => {
+        Some(t) if !crate::runtime::prelude::undefined::is_undefined(caller, &t)? => {
             let st = as_struct_val(caller, &t, "PlainDate.toZonedDateTime")?;
             plain_time_from_struct(caller, st, 0, "PlainDate.toZonedDateTime")?
         }
@@ -329,8 +330,8 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
             receiver(),
             Param::with_default(
                 "time",
-                Type::Union(vec![shared::temporal_type("PlainTime"), Type::Null]),
-                DefaultValue::Null,
+                Type::Union(vec![shared::temporal_type("PlainTime"), Type::Undefined]),
+                DefaultValue::Undefined,
             ),
         ],
         shared::temporal_type("PlainDateTime"),
@@ -395,8 +396,8 @@ fn declare_arithmetic(
                 Param::new("other", ty()),
                 Param::with_default(
                     "options",
-                    Type::Union(vec![shared::object_shape_type(&[]), Type::Null]),
-                    DefaultValue::Null,
+                    Type::Union(vec![shared::object_shape_type(&[]), Type::Undefined]),
+                    DefaultValue::Undefined,
                 ),
             ],
             shared::temporal_type("Duration"),

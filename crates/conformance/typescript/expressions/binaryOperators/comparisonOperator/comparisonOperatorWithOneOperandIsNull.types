@@ -173,8 +173,15 @@ let c: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;                             
-/*pruned*/;                       
+let d: void = null as unknown as (void);
+>d : void
+>  : ^^^^
+>null as unknown as (void) : void
+>                          : ^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
 let f: {} = null as unknown as ({});
 >f : {}
 >  : ^^
@@ -217,8 +224,15 @@ let r1a3 = null < c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;         
-/*pruned*/;         
+let r1a4 = null < d;
+>r1a4 : boolean
+>     : ^^^^^^^
+>null < d : boolean
+>         : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r1a6 = null < f;
 >r1a6 : boolean
 >     : ^^^^^^^
@@ -260,8 +274,15 @@ let r1b3 = c < null;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;         
-/*pruned*/;         
+let r1b4 = d < null;
+>r1b4 : boolean
+>     : ^^^^^^^
+>d < null : boolean
+>         : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r1b6 = f < null;
 >r1b6 : boolean
 >     : ^^^^^^^
@@ -304,8 +325,15 @@ let r2a3 = null > c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;         
-/*pruned*/;         
+let r2a4 = null > d;
+>r2a4 : boolean
+>     : ^^^^^^^
+>null > d : boolean
+>         : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r2a6 = null > f;
 >r2a6 : boolean
 >     : ^^^^^^^
@@ -347,8 +375,15 @@ let r2b3 = c > null;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;         
-/*pruned*/;         
+let r2b4 = d > null;
+>r2b4 : boolean
+>     : ^^^^^^^
+>d > null : boolean
+>         : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r2b6 = f > null;
 >r2b6 : boolean
 >     : ^^^^^^^
@@ -391,8 +426,15 @@ let r3a3 = null <= c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;          
-/*pruned*/;          
+let r3a4 = null <= d;
+>r3a4 : boolean
+>     : ^^^^^^^
+>null <= d : boolean
+>          : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r3a6 = null <= f;
 >r3a6 : boolean
 >     : ^^^^^^^
@@ -434,8 +476,15 @@ let r3b3 = c <= null;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;          
-/*pruned*/;          
+let r3b4 = d <= null;
+>r3b4 : boolean
+>     : ^^^^^^^
+>d <= null : boolean
+>          : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r3b6 = f <= null;
 >r3b6 : boolean
 >     : ^^^^^^^
@@ -478,8 +527,15 @@ let r4a3 = null >= c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;          
-/*pruned*/;          
+let r4a4 = null >= d;
+>r4a4 : boolean
+>     : ^^^^^^^
+>null >= d : boolean
+>          : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r4a6 = null >= f;
 >r4a6 : boolean
 >     : ^^^^^^^
@@ -521,8 +577,15 @@ let r4b3 = c >= null;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;          
-/*pruned*/;          
+let r4b4 = d >= null;
+>r4b4 : boolean
+>     : ^^^^^^^
+>d >= null : boolean
+>          : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r4b6 = f >= null;
 >r4b6 : boolean
 >     : ^^^^^^^
@@ -565,8 +628,15 @@ let r5a3 = null == c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;          
-/*pruned*/;          
+let r5a4 = null == d;
+>r5a4 : boolean
+>     : ^^^^^^^
+>null == d : boolean
+>          : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r5a6 = null == f;
 >r5a6 : boolean
 >     : ^^^^^^^
@@ -608,8 +678,15 @@ let r5b3 = c == null;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;          
-/*pruned*/;          
+let r5b4 = d == null;
+>r5b4 : boolean
+>     : ^^^^^^^
+>d == null : boolean
+>          : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r5b6 = f == null;
 >r5b6 : boolean
 >     : ^^^^^^^
@@ -652,8 +729,15 @@ let r6a3 = null != c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;          
-/*pruned*/;          
+let r6a4 = null != d;
+>r6a4 : boolean
+>     : ^^^^^^^
+>null != d : boolean
+>          : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r6a6 = null != f;
 >r6a6 : boolean
 >     : ^^^^^^^
@@ -695,8 +779,15 @@ let r6b3 = c != null;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;          
-/*pruned*/;          
+let r6b4 = d != null;
+>r6b4 : boolean
+>     : ^^^^^^^
+>d != null : boolean
+>          : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r6b6 = f != null;
 >r6b6 : boolean
 >     : ^^^^^^^
@@ -739,8 +830,15 @@ let r7a3 = null === c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;           
-/*pruned*/;           
+let r7a4 = null === d;
+>r7a4 : boolean
+>     : ^^^^^^^
+>null === d : boolean
+>           : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r7a6 = null === f;
 >r7a6 : boolean
 >     : ^^^^^^^
@@ -782,8 +880,15 @@ let r7b3 = c === null;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;           
-/*pruned*/;           
+let r7b4 = d === null;
+>r7b4 : boolean
+>     : ^^^^^^^
+>d === null : boolean
+>           : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r7b6 = f === null;
 >r7b6 : boolean
 >     : ^^^^^^^
@@ -826,8 +931,15 @@ let r8a3 = null !== c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;           
-/*pruned*/;           
+let r8a4 = null !== d;
+>r8a4 : boolean
+>     : ^^^^^^^
+>null !== d : boolean
+>           : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r8a6 = null !== f;
 >r8a6 : boolean
 >     : ^^^^^^^
@@ -869,8 +981,15 @@ let r8b3 = c !== null;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;           
-/*pruned*/;           
+let r8b4 = d !== null;
+>r8b4 : boolean
+>     : ^^^^^^^
+>d !== null : boolean
+>           : ^^^^^^^
+>d : void
+>  : ^^^^
+
+/*pruned*/;
 let r8b6 = f !== null;
 >r8b6 : boolean
 >     : ^^^^^^^

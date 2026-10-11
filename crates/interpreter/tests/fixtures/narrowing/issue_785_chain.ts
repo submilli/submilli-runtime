@@ -1,11 +1,11 @@
 interface Inner { name: string; }
 interface Outer { inner: Inner | null; }
 function read(o: Outer | null): string {
-  if (o?.inner != null) { return o.inner.name; }
+  if (o?.inner !== undefined && o.inner !== null) { return o.inner.name; }
   return "-";
 }
 function reversed(o: Outer | null): string {
-  if (null == o?.inner) { return "-"; }
+  if (undefined === o?.inner || null === o.inner) { return "-"; }
   return o.inner.name;
 }
 function truthy(o: Outer | null): string {
@@ -14,7 +14,7 @@ function truthy(o: Outer | null): string {
 }
 interface Root { outer: Outer | null; }
 function deep(r: Root | null): string {
-  if (r?.outer?.inner != null) { return r.outer.inner.name; }
+  if (r?.outer?.inner !== undefined && r.outer.inner !== null) { return r.outer.inner.name; }
   return "-";
 }
 export function main(): void {

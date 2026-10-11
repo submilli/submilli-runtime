@@ -1,6 +1,6 @@
 // A block-bodied closure typed `unknown` only by where it is used takes
 // `unknown` as its return type: its returns need not agree, a bare `return;`
-// yields `null`, and it may fall off the end.
+// yields `undefined`, and it may fall off the end.
 interface Handler {
   handle: (flag: boolean) => unknown;
 }
@@ -27,7 +27,7 @@ function main(): void {
       return;
     }
     return "x";
-  }, true) === null);
+  }, true) === undefined);
   assert(call((flag) => {
     if (flag) {
       return;
@@ -47,7 +47,7 @@ function main(): void {
   assert(handler.handle(false) === 3);
 
   const holder = new Holder();
-  assert(holder.run(false) === null);
+  assert(holder.run(false) === undefined);
   assert(holder.run(true) === 1);
 
   const seed: unknown = null;
