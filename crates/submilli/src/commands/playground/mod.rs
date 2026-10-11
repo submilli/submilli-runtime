@@ -21,6 +21,8 @@ use ipnet::IpNet;
 #[cfg(unix)]
 mod api;
 #[cfg(unix)]
+mod bridge;
+#[cfg(unix)]
 mod client;
 #[cfg(unix)]
 mod control_auth;
@@ -34,6 +36,8 @@ mod host;
 mod labels;
 #[cfg(unix)]
 mod log;
+#[cfg(unix)]
+mod mcp_http;
 #[cfg(unix)]
 mod packages;
 #[cfg(unix)]
@@ -132,6 +136,10 @@ pub enum PlaygroundCmd {
     /// session already idle it prints the events so far and exits at once, so start it
     /// after the run it is to follow has started, or pass `--follow`.
     Watch(WatchArgs),
+    /// Serve the running playground's tools over stdio, for a coding assistant's
+    /// stand-in subagent to launch. Uses the binding and the development secrets; its
+    /// runs are labeled `stand-in`.
+    Mcp,
 }
 
 #[derive(ClapArgs)]
@@ -461,6 +469,7 @@ impl Args {
             Some(PlaygroundCmd::Clear(_)) => "playground.clear",
             Some(PlaygroundCmd::Cancel(_)) => "playground.cancel",
             Some(PlaygroundCmd::Watch(_)) => "playground.watch",
+            Some(PlaygroundCmd::Mcp) => "playground.mcp",
         }
     }
 }
@@ -544,6 +553,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Watch(args) => {
             execute_watch(args.session, args.follow, Output::from_json(args.json))
         }
+        PlaygroundCmd::Mcp => bridge::execute(),
     }
 }
 

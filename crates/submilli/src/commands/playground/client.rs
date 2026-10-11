@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::control_auth::{CHALLENGE_BYTES, challenge_response};
 use super::host::Status;
-use super::state::{Holder, InstanceRecord, StateDir, random_hex};
+use super::state::{ADMIN_TOKEN, Holder, InstanceRecord, StateDir, random_hex};
 
 const NOT_A_STATUS: &str = "the playground's answer to GET /api/status is not a playground status";
 
@@ -97,7 +97,9 @@ pub(crate) struct Page {
 pub(crate) struct Running {
     pub(crate) record: InstanceRecord,
     agent: ureq::Agent,
-    admin: String,
+    /// The token requests are sent with: the admin token, unless the command connected
+    /// as another.
+    token: String,
 }
 
 /// The playground answered a control request with an error status.
@@ -154,6 +156,11 @@ pub(crate) struct FeedEvent {
 /// instance lock serves the project, so a record without one is stale however its
 /// pid and port look, and one with it is never stale, however slowly it answers.
 pub(crate) fn probe(state: &StateDir) -> Result<Probe> {
+    probe_as(state, ADMIN_TOKEN)
+}
+
+/// [`probe`], sending requests with token `name`.
+pub(crate) fn probe_as(state: &StateDir, name: &str) -> Result<Probe> {
     // The record before the instance lock: an instance takes the instance lock
     // before it writes its record, so a record read here and no holder after means
     // it is gone.
@@ -172,11 +179,11 @@ pub(crate) fn probe(state: &StateDir) -> Result<Probe> {
         return Ok(Probe::Busy(Busy::NotAnswering { pid: record.pid }));
     }
     // Read only now: a listener that failed the challenge never gets near it.
-    let admin = state.admin_token()?;
+    let token = state.token(name)?;
     Ok(Probe::Running(Running {
         record,
         agent: self::agent(REQUEST_TIMEOUT),
-        admin,
+        token,
     }))
 }
 
@@ -262,7 +269,7 @@ impl Running {
         let builder = ureq::http::Request::builder()
             .method(method)
             .uri(&url)
-            .header("authorization", format!("Bearer {}", self.admin))
+            .header("authorization", format!("Bearer {}", self.token))
             .header("content-type", "application/json");
         let request = builder
             .body(body.map_or_else(String::new, Value::to_string))
@@ -281,14 +288,13 @@ impl Running {
         &self,
         path: &str,
         last_event_id: Option<&str>,
-        mut each: impl FnMut(FeedEvent) -> bool,
+        each: impl FnMut(FeedEvent) -> bool,
     ) -> Result<()> {
-        use std::io::BufRead as _;
         let url = format!("{}{path}", base(&self.record));
         let mut builder = ureq::http::Request::builder()
             .method("GET")
             .uri(&url)
-            .header("authorization", format!("Bearer {}", self.admin))
+            .header("authorization", format!("Bearer {}", self.token))
             .header("accept", "text/event-stream");
         if let Some(id) = last_event_id {
             builder = builder.header("last-event-id", id);
@@ -303,45 +309,14 @@ impl Running {
         }
         let reader =
             std::io::BufReader::new(response.body_mut().with_config().limit(u64::MAX).reader());
-        let mut event = FeedEvent::default();
-        for line in reader.lines() {
-            // An error here is the playground closing the stream as it stopped.
-            let Ok(line) = line else {
-                return Ok(());
-            };
-            if line.is_empty() {
-                let done = std::mem::take(&mut event);
-                if done.data.is_empty() && done.name.is_empty() {
-                    continue;
-                }
-                let name = if done.name.is_empty() {
-                    "message".to_owned()
-                } else {
-                    done.name.clone()
-                };
-                if !each(FeedEvent { name, ..done }) {
-                    return Ok(());
-                }
-                continue;
-            }
-            if line.starts_with(':') {
-                continue;
-            }
-            let (field, value) = line.split_once(':').unwrap_or((line.as_str(), ""));
-            let value = value.strip_prefix(' ').unwrap_or(value);
-            match field {
-                "event" => event.name = value.to_owned(),
-                "id" => event.id = Some(value.to_owned()),
-                "data" => {
-                    if !event.data.is_empty() {
-                        event.data.push('\n');
-                    }
-                    event.data.push_str(value);
-                }
-                _ => {}
-            }
-        }
+        // An error reading is the playground closing the stream as it stopped.
+        let _ = read_feed(reader, each);
         Ok(())
+    }
+
+    /// The token requests are sent with.
+    pub(crate) fn token(&self) -> &str {
+        &self.token
     }
 
     /// A control call's answer. A success whose body is not what the route returns
@@ -351,7 +326,7 @@ impl Running {
         let request = ureq::http::Request::builder()
             .method(method)
             .uri(&url)
-            .header("authorization", format!("Bearer {}", self.admin))
+            .header("authorization", format!("Bearer {}", self.token))
             .body(())
             .context("building a control request")?;
         let mut response = self
@@ -360,6 +335,50 @@ impl Running {
             .with_context(|| format!("calling the playground at {url}"))?;
         decode(method, path, url, &mut response)
     }
+}
+
+/// Hands each server-sent event in `reader` to `each` until it returns `false` or the
+/// stream ends. An error is the stream breaking off.
+pub(crate) fn read_feed(
+    reader: impl std::io::BufRead,
+    mut each: impl FnMut(FeedEvent) -> bool,
+) -> std::io::Result<()> {
+    let mut event = FeedEvent::default();
+    for line in reader.lines() {
+        let line = line?;
+        if line.is_empty() {
+            let done = std::mem::take(&mut event);
+            if done.data.is_empty() && done.name.is_empty() {
+                continue;
+            }
+            let name = if done.name.is_empty() {
+                "message".to_owned()
+            } else {
+                done.name.clone()
+            };
+            if !each(FeedEvent { name, ..done }) {
+                return Ok(());
+            }
+            continue;
+        }
+        if line.starts_with(':') {
+            continue;
+        }
+        let (field, value) = line.split_once(':').unwrap_or((line.as_str(), ""));
+        let value = value.strip_prefix(' ').unwrap_or(value);
+        match field {
+            "event" => event.name = value.to_owned(),
+            "id" => event.id = Some(value.to_owned()),
+            "data" => {
+                if !event.data.is_empty() {
+                    event.data.push('\n');
+                }
+                event.data.push_str(value);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// A control response's JSON. A refusal is a [`Refused`] error with the playground's
@@ -454,7 +473,7 @@ mod tests {
                 nonce: String::new(),
             },
             agent: long_agent(),
-            admin: "token".into(),
+            token: "token".into(),
         }
     }
 

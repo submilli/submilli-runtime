@@ -1249,6 +1249,191 @@ variables:\n  customerId:\n    required: true\n\
 secrets:\n  API_KEY:\n    harness:\n      required: true\n\
 permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
 
+        /// The stand-in's bridge as a coding assistant runs it: JSON-RPC lines in and out.
+        struct Bridge {
+            child: Child,
+            stdin: Option<std::process::ChildStdin>,
+            lines: std::sync::mpsc::Receiver<String>,
+        }
+
+        impl Bridge {
+            fn start(playground: &Playground) -> Self {
+                let mut child = playground
+                    .command(&["mcp"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let stdout = child.stdout.take().unwrap();
+                let (sent, lines) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    for line in BufReader::new(stdout).lines() {
+                        let Ok(line) = line else { break };
+                        if sent.send(line).is_err() {
+                            break;
+                        }
+                    }
+                });
+                let stdin = child.stdin.take();
+                Self {
+                    child,
+                    stdin,
+                    lines,
+                }
+            }
+
+            fn send(&mut self, message: Value) {
+                let stdin = self.stdin.as_mut().unwrap();
+                writeln!(stdin, "{message}").unwrap();
+                stdin.flush().unwrap();
+            }
+
+            /// The next line the bridge writes, which must be JSON.
+            fn reply(&self) -> Value {
+                let line = self
+                    .lines
+                    .recv_timeout(Duration::from_secs(60))
+                    .expect("the bridge answers");
+                serde_json::from_str(&line).unwrap_or_else(|_| panic!("not JSON: {line}"))
+            }
+
+            fn initialize(&mut self) -> Value {
+                self.send(json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18", "capabilities": {},
+                        "clientInfo": { "name": "test", "version": "0" }
+                    }
+                }));
+                self.reply()
+            }
+
+            /// Closes stdin and waits for the bridge to exit; its status and stderr.
+            fn finish(mut self) -> (i32, String) {
+                drop(self.stdin.take());
+                self.exit()
+            }
+
+            fn exit(mut self) -> (i32, String) {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                let status = loop {
+                    if let Some(status) = self.child.try_wait().unwrap() {
+                        break status;
+                    }
+                    assert!(Instant::now() < deadline, "the bridge did not exit");
+                    std::thread::sleep(Duration::from_millis(50));
+                };
+                let mut stderr = String::new();
+                self.child
+                    .stderr
+                    .take()
+                    .unwrap()
+                    .read_to_string(&mut stderr)
+                    .unwrap();
+                (status.code().unwrap_or(-1), stderr)
+            }
+        }
+
+        #[test]
+        fn the_bridge_runs_programs_as_the_stand_in_under_the_binding() {
+            let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
+            playground.start();
+            let bound = playground
+                .command(&["bind", "customerId=cus_northwind", "--secret", "API_KEY"])
+                .env("API_KEY", SECRET)
+                .output()
+                .unwrap();
+            assert!(bound.status.success(), "{}", stderr(&bound));
+            let before = playground.runs();
+
+            // A client that closes stdin right after its last request still gets every
+            // answer before the bridge exits.
+            let mut piped = Bridge::start(&playground);
+            piped.initialize();
+            piped.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            piped.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+            drop(piped.stdin.take());
+            let listed = piped.reply();
+            assert_eq!(listed["id"], 2, "{listed}");
+            assert!(listed["result"]["tools"].is_array(), "{listed}");
+            assert_eq!(piped.exit().0, 0);
+
+            let mut bridge = Bridge::start(&playground);
+            // The required variable and secret both reach the session: without either the
+            // server refuses to start it.
+            let initialized = bridge.initialize();
+            assert!(
+                initialized["result"]["serverInfo"].is_object(),
+                "{initialized}"
+            );
+            bridge.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            bridge.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+            let tools = bridge.reply();
+            assert_eq!(tools["id"], 2);
+            assert!(
+                tools["result"]["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tool| tool["name"] == "submilli__typescript__execute"),
+                "{tools}"
+            );
+            bridge.send(json!({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {
+                    "name": "submilli__typescript__execute",
+                    "arguments": { "code": "function main(): string { return \"from the stand-in\"; }" },
+                    "_meta": { "claudecode/toolUseId": "toolu_bridge_test" }
+                }
+            }));
+            let called = bridge.reply();
+            assert_eq!(called["id"], 3, "{called}");
+            assert!(called.to_string().contains("from the stand-in"), "{called}");
+
+            // An assistant stops its MCP servers with a signal.
+            let killed = Command::new("kill")
+                .args(["-TERM", &bridge.child.id().to_string()])
+                .status()
+                .unwrap();
+            assert!(killed.success());
+            let (code, _) = bridge.exit();
+            assert_eq!(code, 0);
+
+            assert_eq!(playground.runs(), before + 1);
+            let runs = playground.expect(0, &["runs", "--limit", "1"]);
+            assert_eq!(runs["runs"][0]["source"], "stand-in", "{runs}");
+        }
+
+        #[test]
+        fn the_bridge_answers_every_request_with_why_it_cannot_connect() {
+            let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
+
+            // Not running.
+            let mut bridge = Bridge::start(&playground);
+            let refused = bridge.initialize();
+            assert_eq!(refused["id"], 1);
+            let message = refused["error"]["message"].as_str().unwrap().to_owned();
+            assert!(message.contains("not running"), "{refused}");
+            bridge.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            bridge.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+            assert_eq!(bridge.reply()["error"]["message"], message.as_str());
+            let (code, stderr) = bridge.finish();
+            assert_eq!(code, 6);
+            assert!(stderr.contains("not running"), "{stderr}");
+
+            // A required secret with no development value.
+            playground.start();
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let mut bridge = Bridge::start(&playground);
+            let refused = bridge.initialize();
+            let message = refused["error"]["message"].as_str().unwrap();
+            assert!(message.contains("bind --secret API_KEY"), "{refused}");
+            let (code, stderr) = bridge.finish();
+            assert_eq!(code, 2);
+            assert!(stderr.contains("bind --secret API_KEY"), "{stderr}");
+        }
+
         #[test]
         fn development_secrets_reach_only_the_bridge_and_never_a_file() {
             let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
@@ -1297,16 +1482,33 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let (status, body) = bridge(&playground.token("stand-in"));
             assert_eq!(status, 200, "{body}");
             let body: Value = serde_json::from_str(&body).unwrap();
-            assert_eq!(body["secrets"]["API_KEY"], SECRET);
-            assert_eq!(body["variables"]["customerId"], "cus_northwind");
+            assert_eq!(body["exit"], 0, "{body}");
+            assert_eq!(body["result"]["blueprint"], "demo");
+            assert_eq!(body["result"]["secrets"], json!({ "API_KEY": SECRET }));
+            assert_eq!(
+                body["result"]["variables"],
+                json!({ "customerId": "cus_northwind" })
+            );
             for refused in ["app", "admin"] {
                 let (status, body) = bridge(&playground.token(refused));
                 assert_eq!(status, 403, "{refused}: {body}");
                 assert!(!body.contains(SECRET));
             }
 
-            // Without the development value, a test is refused, naming `bind`.
+            // Without the development value, a test is refused, naming `bind`, and so is
+            // the bridge, without connecting.
             playground.expect(0, &["bind", "--unset", "API_KEY"]);
+            let (status, body) = bridge(&playground.token("stand-in"));
+            assert_eq!(status, 200, "{body}");
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["exit"], 2, "{body}");
+            assert_eq!(body["result"]["error"]["kind"], "missing-secrets");
+            assert!(
+                body["result"]["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("bind --secret API_KEY")),
+                "{body}"
+            );
             let tested = playground.run(&["test", &ran["run"].to_string()]);
             assert_eq!(tested.status.code(), Some(2), "{}", stderr(&tested));
             assert!(

@@ -427,7 +427,7 @@ async fn cancel(
 }
 
 async fn bridge_binding(State(state): State<ControlState>) -> Response {
-    Json(state.actions().bridge_binding()).into_response()
+    answered(state.actions().bridge_binding().await)
 }
 
 // ---- reads, for the page -------------------------------------------------------------------

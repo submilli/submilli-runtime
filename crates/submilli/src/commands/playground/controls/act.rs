@@ -42,7 +42,7 @@ use super::super::api::{MAX_BODY_BYTES, feed};
 use super::super::client::{self, Probe, Running};
 use super::super::labels;
 use super::super::project;
-use super::super::state::{self, InstanceRecord, RememberedBinding, StateDir};
+use super::super::state::{self, ADMIN_TOKEN, InstanceRecord, RememberedBinding, StateDir};
 use super::super::store::redact::REDACTED;
 use super::super::store::run::{DecisionRef, StoredRun, StoredTestReport};
 use super::super::store::sessions::SessionEntry;
@@ -778,10 +778,21 @@ impl Actions {
         }
     }
 
-    /// The binding with secret values, for the bridge.
-    pub(crate) fn bridge_binding(&self) -> Value {
-        let binding = self.binding();
-        json!({ "variables": binding.variables, "secrets": binding.secrets })
+    /// What the bridge connects with: the blueprint, and the values a new run of it gets,
+    /// secret values included. Refused as a run would be when a required value is missing.
+    pub(crate) async fn bridge_binding(&self) -> Answer {
+        answer(self.try_bridge_binding().await)
+    }
+
+    async fn try_bridge_binding(&self) -> Result<Answer, ActError> {
+        let blueprint = self.blueprint(&self.blueprint_name).await?;
+        let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
+        let result = json!({
+            "blueprint": self.blueprint_name,
+            "variables": variables,
+            "secrets": secrets,
+        });
+        Ok(Answer::of(EXIT_SUCCESS, &result, |_| String::new()))
     }
 
     // ---- sessions ----
@@ -2010,6 +2021,11 @@ impl ActionRequest {
 /// The running playground for the project around the current directory, or the answer
 /// that says it is not running.
 pub(crate) fn connect() -> Result<Result<Running, Answer>> {
+    connect_as(ADMIN_TOKEN)
+}
+
+/// [`connect`], sending requests with token `name`.
+pub(crate) fn connect_as(name: &str) -> Result<Result<Running, Answer>> {
     let not_running = || Ok(Err(Answer::from(ActError::not_running())));
     let Ok(cwd) = std::env::current_dir() else {
         return not_running();
@@ -2017,7 +2033,7 @@ pub(crate) fn connect() -> Result<Result<Running, Answer>> {
     let Some(root) = project::find_project_root(&cwd) else {
         return not_running();
     };
-    match client::probe(&StateDir::for_project(&root))? {
+    match client::probe_as(&StateDir::for_project(&root), name)? {
         Probe::Running(running) => Ok(Ok(running)),
         Probe::Busy(busy) => Ok(Err(Answer::from(ActError::new(
             EXIT_NOT_RUNNING,
