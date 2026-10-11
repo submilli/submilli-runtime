@@ -10227,13 +10227,19 @@ impl Inferer<'_> {
     /// A spread's source in an object literal checked against `expected`. A
     /// literal or conditional there takes the literal's context, as in tsc, so
     /// `{ ...(c ? { kind: "circle" } : { kind: "square" }) }` keeps its kinds.
+    /// A context still holding a type parameter is left to the call inferring
+    /// it: a literal against one takes that context as its own type.
     fn infer_spread_source(
         &mut self,
         value: ExprId,
         expected: Option<&Type>,
     ) -> Result<(ExprId, Type), CompilerFailure> {
         match expected {
-            Some(want) if self.shaped_by_context(value)? && !self.holds_spread(value)? => {
+            Some(want)
+                if !type_contains_type_var(want)
+                    && self.shaped_by_context(value)?
+                    && !self.holds_spread(value)? =>
+            {
                 self.infer_with_soft_context(value, Some(spread_source_context(want)))
             }
             _ => self.infer_expr(value, None),
