@@ -844,6 +844,9 @@ const MAX_CONSOLE_BYTES: usize = 1024 * 1024;
 
 /// The longest console line a session event carries; the run's console keeps the rest.
 const MAX_CONSOLE_LINE_BYTES: usize = 4 * 1024;
+/// The most console lines one run reports as session events; the run's console keeps the
+/// rest.
+const MAX_CONSOLE_LINES: usize = 1000;
 
 impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -883,13 +886,14 @@ impl Sink {
 }
 
 /// Splits what the console accepted into lines and reports each complete one to the run's
-/// log. `console.log` ends every line, so only output cut at the console's cap leaves a
-/// line unreported.
+/// log, up to [`MAX_CONSOLE_LINES`]. `console.log` ends every line, so otherwise only
+/// output cut at the console's cap leaves a line unreported.
 struct ConsoleLines {
     log: Arc<DecisionLog>,
     /// The line so far, at most [`MAX_CONSOLE_LINE_BYTES`] of it.
     pending: Vec<u8>,
     truncated: bool,
+    reported: usize,
 }
 
 impl ConsoleLines {
@@ -898,11 +902,12 @@ impl ConsoleLines {
             log,
             pending: Vec::new(),
             truncated: false,
+            reported: 0,
         }
     }
 
     fn feed(&mut self, mut bytes: &[u8]) {
-        while !bytes.is_empty() {
+        while !bytes.is_empty() && self.reported < MAX_CONSOLE_LINES {
             let (part, rest, ended) = match bytes.iter().position(|byte| *byte == b'\n') {
                 Some(end) => (&bytes[..end], &bytes[end + 1..], true),
                 None => (bytes, &[][..], false),
@@ -919,15 +924,19 @@ impl ConsoleLines {
     }
 
     fn report(&mut self) {
-        let line = String::from_utf8_lossy(&self.pending);
-        let mut line = line.strip_suffix('\r').unwrap_or(&line);
-        if self.truncated {
-            // The cut may split a character; drop its replacement rather than show it.
-            line = line.trim_end_matches(char::REPLACEMENT_CHARACTER);
+        // The cut may split a character: leave its start off rather than show it replaced.
+        if self.truncated
+            && let Err(error) = std::str::from_utf8(&self.pending)
+            && error.error_len().is_none()
+        {
+            self.pending.truncate(error.valid_up_to());
         }
+        let line = String::from_utf8_lossy(&self.pending);
+        let line = line.strip_suffix('\r').unwrap_or(&line);
         self.log.console_line(line, self.truncated);
         self.pending.clear();
         self.truncated = false;
+        self.reported += 1;
     }
 }
 

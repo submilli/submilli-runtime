@@ -26,6 +26,7 @@ use std::fmt::Write as _;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::commands::playground::agent::{MAX_TURNS, Stopped};
 use crate::commands::playground::store::run::DecisionRef;
 
 use super::act::{
@@ -948,8 +949,10 @@ pub(crate) struct ChatResult {
     pub(crate) provider: &'static str,
     pub(crate) model: String,
     pub(crate) tool_calls: usize,
-    /// `answered`, or `turn-limit`.
-    pub(crate) stopped: &'static str,
+    pub(crate) stopped: Stopped,
+    /// The provider's reason, when it stopped the answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stop_reason: Option<String>,
     pub(crate) next: Vec<String>,
     pub(crate) untrusted: ChatUntrusted,
 }
@@ -973,12 +976,29 @@ pub(crate) fn chat_text(result: &ChatResult) -> String {
         let _ = write!(out, " · session {}", clean(session));
     }
     let _ = writeln!(out);
-    if result.stopped == "turn-limit" {
-        let _ = writeln!(
-            out,
-            "stopped after {} model turns without a final answer",
-            crate::commands::playground::agent::MAX_TURNS
-        );
+    match result.stopped {
+        Stopped::Answered => {}
+        Stopped::TurnLimit => {
+            let _ = writeln!(
+                out,
+                "stopped after {MAX_TURNS} model turns without a final answer"
+            );
+        }
+        Stopped::OutputLimit => {
+            let _ = writeln!(
+                out,
+                "stopped at the model's output limit; its answer may be cut short"
+            );
+        }
+        Stopped::Provider => {
+            let reason = result.stop_reason.as_deref().unwrap_or("no reason given");
+            let _ = writeln!(
+                out,
+                "{} stopped the model's answer: {}",
+                result.provider,
+                clean(reason)
+            );
+        }
     }
     if let Some(reply) = &result.untrusted.reply {
         let mut fence = Fence::default();

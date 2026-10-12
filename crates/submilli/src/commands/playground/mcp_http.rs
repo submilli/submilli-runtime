@@ -4,6 +4,7 @@
 //! [`McpHttp`] is one MCP session.
 
 use std::collections::BTreeMap;
+use std::io::Read as _;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -22,14 +23,21 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REFUSAL_BYTES: u64 = 64 * 1024;
 /// The largest JSON reply read whole.
 const MAX_REPLY_BYTES: u64 = 64 << 20;
+/// How long ending the session may take: it is best effort, on the way out.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Why a message got no reply.
 #[derive(Debug)]
 pub(crate) enum Failure {
     /// The endpoint answered with an error status, and this text.
     Refused { status: u16, text: String },
-    /// No answer, or one cut off: the playground stopped or was never reached.
+    /// The server no longer knows the session: the playground restarted, or the session
+    /// expired.
+    SessionGone,
+    /// No answer: the playground stopped or was never reached.
     Unanswered(String),
+    /// The reply was cut off after the message arrived, so a call may have run.
+    Lost(String),
 }
 
 impl std::fmt::Display for Failure {
@@ -44,7 +52,16 @@ impl std::fmt::Display for Failure {
                     "the playground refused the request (HTTP {status}): {text}"
                 )
             }
+            Self::SessionGone => write!(
+                f,
+                "the playground no longer has this MCP session (it restarted, or the \
+                 session expired); restart this MCP server to connect again"
+            ),
             Self::Unanswered(error) => write!(f, "the playground did not answer: {error}"),
+            Self::Lost(error) => write!(
+                f,
+                "the playground's reply was cut off, so the call may have run: {error}"
+            ),
         }
     }
 }
@@ -118,20 +135,34 @@ impl McpHttp {
             .agent
             .run(request)
             .map_err(|error| Failure::Unanswered(error.to_string()))?;
+        let status = response.status();
         if let Some(session) = header(&response, SESSION_HEADER) {
             *lock(&self.session) = Some(session);
         }
-        let status = response.status();
         if status.as_u16() == 202 {
             return Ok(());
         }
         if !status.is_success() {
-            let text = response
+            // The start of a long refusal is kept; one that cannot be read at all is not
+            // taken for an empty one.
+            let mut bytes = Vec::new();
+            let read = response
                 .body_mut()
                 .with_config()
-                .limit(MAX_REFUSAL_BYTES)
-                .read_to_string()
-                .unwrap_or_default();
+                .limit(u64::MAX)
+                .reader()
+                .take(MAX_REFUSAL_BYTES)
+                .read_to_end(&mut bytes);
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            // MCP's answer to a session id the server does not know; a missing blueprint
+            // is a 404 too, and says so.
+            if status.as_u16() == 404
+                && !initialize
+                && self.session().is_some()
+                && ((read.is_ok() && text.trim().is_empty()) || text.contains("Session not found"))
+            {
+                return Err(Failure::SessionGone);
+            }
             return Err(Failure::Refused {
                 status: status.as_u16(),
                 text: refusal_text(&text),
@@ -154,14 +185,14 @@ impl McpHttp {
                 }
                 true
             })
-            .map_err(|error| Failure::Unanswered(error.to_string()));
+            .map_err(|error| Failure::Lost(error.to_string()));
         }
         let body = response
             .body_mut()
             .with_config()
             .limit(MAX_REPLY_BYTES)
             .read_to_string()
-            .map_err(|error| Failure::Unanswered(error.to_string()))?;
+            .map_err(|error| Failure::Lost(error.to_string()))?;
         if body.trim().is_empty() {
             return Ok(());
         }
@@ -169,9 +200,7 @@ impl McpHttp {
             Ok(Value::Array(replies)) => replies.into_iter().for_each(&mut each),
             Ok(reply) => each(reply),
             Err(error) => {
-                return Err(Failure::Unanswered(format!(
-                    "the reply is not JSON: {error}"
-                )));
+                return Err(Failure::Lost(format!("the reply is not JSON: {error}")));
             }
         }
         Ok(())
@@ -190,6 +219,11 @@ impl McpHttp {
             .header(SESSION_HEADER, session)
             .body(());
         if let Ok(request) = request {
+            let request = self
+                .agent
+                .configure_request(request)
+                .timeout_global(Some(CLOSE_TIMEOUT))
+                .build();
             let _ = self.agent.run(request);
         }
     }
@@ -222,7 +256,7 @@ fn refusal_text(body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read as _, Write as _};
+    use std::io::Write as _;
 
     use serde_json::json;
 
@@ -353,6 +387,64 @@ mod tests {
         );
         sent.unwrap();
         assert_eq!(replies, [answer]);
+    }
+
+    #[test]
+    fn a_session_the_server_forgot_says_to_restart_and_a_cut_reply_may_have_run() {
+        let initialized = json!({ "jsonrpc": "2.0", "id": 1, "result": {} });
+        let (connection, _requests) = answering(vec![
+            reply(
+                "200 OK",
+                "content-type: application/json\r\nmcp-session-id: s-1\r\n",
+                &initialized.to_string(),
+            ),
+            reply("404 Not Found", "", "Not Found: Session not found"),
+            reply("404 Not Found", "", "unknown blueprint: demo"),
+            reply("404 Not Found", "", ""),
+            reply(
+                "404 Not Found",
+                "",
+                &format!("unknown blueprint: {}", "x".repeat(70_000)),
+            ),
+            // Promises more than it sends, then closes.
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\
+             connection: close\r\n\r\n{\"jsonrpc\""
+                .to_owned(),
+        ]);
+        let ping = json!({ "jsonrpc": "2.0", "id": 2, "method": "ping" });
+        collect(
+            &connection,
+            &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" }),
+        )
+        .1
+        .unwrap();
+        let gone = collect(&connection, &ping).1.unwrap_err();
+        assert!(matches!(gone, Failure::SessionGone), "{gone}");
+        assert!(
+            gone.to_string().contains("restart this MCP server"),
+            "{gone}"
+        );
+        let missing = collect(&connection, &ping).1.unwrap_err();
+        assert!(
+            matches!(missing, Failure::Refused { status: 404, .. }),
+            "{missing}"
+        );
+        assert!(
+            missing.to_string().contains("unknown blueprint"),
+            "{missing}"
+        );
+        let empty = collect(&connection, &ping).1.unwrap_err();
+        assert!(matches!(empty, Failure::SessionGone), "{empty}");
+        // Too long to read whole: its start is kept, and it is no session's loss.
+        let long = collect(&connection, &ping).1.unwrap_err();
+        assert!(
+            matches!(&long, Failure::Refused { status: 404, text }
+                if text.starts_with("unknown blueprint")),
+            "{long}"
+        );
+        let lost = collect(&connection, &ping).1.unwrap_err();
+        assert!(matches!(lost, Failure::Lost(_)), "{lost}");
+        assert!(lost.to_string().contains("may have run"), "{lost}");
     }
 
     #[test]

@@ -485,6 +485,46 @@ function main(): void {
     assert_eq!(console_bytes(&events), 100_001);
 }
 
+#[tokio::test]
+async fn a_cut_through_a_character_leaves_it_off_and_keeps_real_replacement_characters() {
+    let server = server();
+    // 1365 replacement characters are 4095 bytes: the cut at 4096 splits the euro sign.
+    server
+        .execute(
+            r#"
+function main(): void {
+  console.log("\uFFFD".repeat(1365) + "\u20AC tail");
+}
+"#,
+        )
+        .await;
+    let events = server.collected.first_run().await;
+    let lines = console_lines(&events);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].3);
+    assert_eq!(lines[0].0, "\u{FFFD}".repeat(1365));
+}
+
+#[tokio::test]
+async fn a_run_reports_at_most_its_cap_of_console_lines() {
+    let server = server();
+    server
+        .execute(
+            r#"
+function main(): void {
+  for (let i = 0; i < 1500; i++) {
+    console.log("");
+  }
+}
+"#,
+        )
+        .await;
+    let events = server.collected.first_run().await;
+    // The cap is 1000 lines; the run's console keeps them all.
+    assert_eq!(console_lines(&events).len(), 1000);
+    assert_eq!(console_bytes(&events), 1500);
+}
+
 fn console_bytes(events: &[SessionEvent]) -> u64 {
     events
         .iter()

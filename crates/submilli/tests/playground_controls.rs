@@ -1572,8 +1572,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             ], "stop_reason": "tool_use" })
         }
 
-        /// Starts the playground with the model API on `port` and the key set.
-        fn start_with_model(playground: &Playground, port: u16) {
+        /// Starts the playground with the model API on `port` and the key set; its page.
+        fn start_with_model(playground: &Playground, port: u16) -> String {
             let output = playground
                 .command(&["start", "--json"])
                 .env("ANTHROPIC_API_KEY", MODEL_KEY)
@@ -1581,6 +1581,12 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 .output()
                 .unwrap();
             assert!(output.status.success(), "start: {}", stderr(&output));
+            let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+            ready["url"]
+                .as_str()
+                .unwrap()
+                .trim_end_matches('/')
+                .to_owned()
         }
 
         #[test]
@@ -1689,6 +1695,211 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let result = playground.expect(0, &["chat", "Keep going."]);
             assert_eq!(result["stopped"], "turn-limit");
             assert_eq!(bodies.lock().unwrap().len(), 20);
+            // What the last answer asked for is not run: no model would see it.
+            assert_eq!(result["tool_calls"], 19);
+        }
+
+        #[test]
+        fn chat_runs_at_most_its_limit_of_calls_an_answer_and_none_without_object_arguments() {
+            let (port, bodies) = model_api(|n| match n {
+                // The first request of each chat.
+                n if n % 2 == 0 => {
+                    let mut content = vec![json!({ "type": "tool_use", "id": "bad",
+                        "name": "submilli__typescript__execute", "input": "not an object" })];
+                    content.extend((0..16).map(|i| {
+                        json!({ "type": "tool_use", "id": format!("call_{i}"),
+                                "name": "submilli__typescript__execute",
+                                "input": { "code": PROGRAM } })
+                    }));
+                    json!({ "content": content, "stop_reason": "tool_use" })
+                }
+                _ => json!({ "content": [{ "type": "text", "text": "Done." }],
+                             "stop_reason": "end_turn" }),
+            });
+            let playground = Playground::starter();
+            let page = start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let result = playground.expect(0, &["chat", "Run them all."]);
+            assert_eq!(result["stopped"], "answered");
+            // The first sixteen, less the one with no object: fifteen ran.
+            assert_eq!(result["tool_calls"], 15);
+            let bodies = bodies.lock().unwrap().clone();
+            let results = bodies[1]["messages"][2]["content"]
+                .as_array()
+                .unwrap()
+                .clone();
+            assert_eq!(results.len(), 17, "every call gets a result");
+            let errors: Vec<&str> = results
+                .iter()
+                .filter(|result| result["is_error"] == true)
+                .map(|result| result["tool_use_id"].as_str().unwrap())
+                .collect();
+            assert_eq!(errors, ["bad", "call_15"]);
+
+            // The limit is the chat's to set.
+            let result =
+                playground.expect(0, &["chat", "Run them all.", "--max-calls-per-answer", "3"]);
+            assert_eq!(result["tool_calls"], 2, "{result}");
+            let refused = playground.run(&["chat", "x", "--max-calls-per-answer", "0"]);
+            assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+
+            // The playground checks it too, for a client other than the CLI, and one that
+            // leaves it out gets the default.
+            let post = |body: Value| {
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .build()
+                    .into();
+                let mut response = agent
+                    .post(&format!("{page}/api/agent"))
+                    .header(
+                        "authorization",
+                        &format!("Bearer {}", playground.token("admin")),
+                    )
+                    .send_json(body)
+                    .unwrap();
+                response.body_mut().read_to_string().unwrap()
+            };
+            for limit in [0, 1001] {
+                let answer = post(json!({ "task": "x", "max_calls_per_answer": limit }));
+                assert!(answer.contains("invalid-max-calls"), "{limit}: {answer}");
+            }
+            let answer = post(json!({ "task": "Run them all." }));
+            assert!(answer.contains("\"tool_calls\":15"), "{answer}");
+            playground.stop();
+        }
+
+        #[test]
+        fn chat_says_when_the_model_was_cut_off_or_stopped() {
+            let (port, bodies) = model_api(|n| match n {
+                // Cut mid-call: the last call may be incomplete.
+                0 => json!({ "content": [
+                    { "type": "tool_use", "id": "cut", "name": "submilli__typescript__execute",
+                      "input": { "code": "function main(): number {" } },
+                ], "stop_reason": "max_tokens" }),
+                1 => json!({ "content": [{ "type": "text", "text": "Partial ans" }],
+                             "stop_reason": "max_tokens" }),
+                _ => json!({ "content": [], "stop_reason": "refusal" }),
+            });
+            let playground = Playground::starter();
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+
+            let result = playground.expect(0, &["chat", "Compute six times seven."]);
+            assert_eq!(result["stopped"], "output-limit", "{result}");
+            assert_eq!(result["tool_calls"], 0);
+            assert_eq!(result["untrusted"]["reply"], "Partial ans");
+            let refused = bodies.lock().unwrap()[1]["messages"][2]["content"][0].clone();
+            assert_eq!(refused["is_error"], true, "{refused}");
+            assert!(
+                refused["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("output limit"),
+                "{refused}"
+            );
+            let session = result["session"].as_str().unwrap();
+            let log = std::fs::read_to_string(
+                playground
+                    .state()
+                    .join(format!("store/events/{session}.jsonl")),
+            )
+            .unwrap();
+            let cut = log
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .find(|event| event["body"]["chat"]["text"] == "Partial ans")
+                .unwrap();
+            assert_eq!(cut["body"]["chat"]["truncated"], true, "{cut}");
+
+            let stopped = playground.expect(0, &["chat", "Anything."]);
+            assert_eq!(stopped["stopped"], "provider", "{stopped}");
+            assert_eq!(stopped["stop_reason"], "refusal");
+            let text = playground.run(&["chat", "Anything."]);
+            let printed = String::from_utf8_lossy(&text.stdout);
+            assert!(
+                printed.contains("anthropic stopped the model's answer: refusal"),
+                "{printed}"
+            );
+            playground.stop();
+        }
+
+        #[test]
+        fn a_chat_whose_command_is_stopped_stops_too() {
+            // A model that never finishes, slowly.
+            let (port, bodies) = model_api(|n| {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                call_execute(n)
+            });
+            let playground = Playground::starter();
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let mut chat = playground
+                .command(&["chat", "Keep going."])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let asked = || bodies.lock().unwrap().len();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while asked() < 2 && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            assert!(asked() >= 2, "the chat never started");
+            chat.kill().unwrap();
+            chat.wait().unwrap();
+            // At most the request under way when it stopped, and the one after it.
+            let at_stop = asked();
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            assert!(
+                asked() <= at_stop + 1,
+                "{} requests after the stop",
+                asked() - at_stop
+            );
+            // The playground is still well.
+            playground.expect(0, &["exec", "--example"]);
+            playground.stop();
+        }
+
+        #[test]
+        fn chat_follows_no_redirect_so_the_key_goes_nowhere_else() {
+            let (elsewhere, reached) = model_api(call_execute);
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { break };
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    let _ = reader.read_exact(&mut body);
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 302 Found\r\nlocation: http://127.0.0.1:{elsewhere}/v1/messages\r\n\
+                         content-length: 0\r\nconnection: close\r\n\r\n"
+                    );
+                }
+            });
+            let playground = Playground::starter();
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let output = playground.run(&["chat", "Compute six times seven."]);
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert!(stderr(&output).contains("HTTP 302"), "{}", stderr(&output));
+            assert!(
+                reached.lock().unwrap().is_empty(),
+                "the redirect was followed"
+            );
+            playground.stop();
         }
 
         #[test]

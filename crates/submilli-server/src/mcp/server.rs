@@ -594,11 +594,8 @@ impl SubmilliMcp {
         Parameters(args): Parameters<ReadFileArgs>,
         Extension(parts): Extension<axum::http::request::Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let BlueprintForRun {
-            blueprint,
-            version_tag,
-        } = self.require_blueprint_for_run().await?;
-        let blueprint = Arc::new(blueprint);
+        let tagged = TaggedBlueprint::from(self.require_blueprint_for_run().await?);
+        let blueprint = &tagged.blueprint;
 
         let session_id = session_header(&parts);
         let variables = self
@@ -609,8 +606,7 @@ impl SubmilliMcp {
             .map_err(vfs_session_error)?;
         if let Err(refused) = self.authorize_file_call(
             &parts,
-            Arc::clone(&blueprint),
-            version_tag,
+            &tagged,
             Arc::clone(&variables),
             FileTool {
                 name: "submilli__files__read",
@@ -623,7 +619,7 @@ impl SubmilliMcp {
         }
         let (vfs, _info) = self
             .acquire_vfs(
-                &blueprint,
+                blueprint,
                 session_id.as_deref(),
                 VfsUse::ReadFiles,
                 &variables,
@@ -661,11 +657,8 @@ impl SubmilliMcp {
         Parameters(args): Parameters<ListFilesArgs>,
         Extension(parts): Extension<axum::http::request::Parts>,
     ) -> Result<CallToolResult, ErrorData> {
-        let BlueprintForRun {
-            blueprint,
-            version_tag,
-        } = self.require_blueprint_for_run().await?;
-        let blueprint = Arc::new(blueprint);
+        let tagged = TaggedBlueprint::from(self.require_blueprint_for_run().await?);
+        let blueprint = &tagged.blueprint;
 
         let session_id = session_header(&parts);
         let variables = self
@@ -678,8 +671,7 @@ impl SubmilliMcp {
         let recursive = args.recursive.unwrap_or(false);
         if let Err(refused) = self.authorize_file_call(
             &parts,
-            Arc::clone(&blueprint),
-            version_tag,
+            &tagged,
             Arc::clone(&variables),
             FileTool {
                 name: "submilli__files__list",
@@ -692,7 +684,7 @@ impl SubmilliMcp {
         }
         let (vfs, _info) = self
             .acquire_vfs(
-                &blueprint,
+                blueprint,
                 session_id.as_deref(),
                 VfsUse::ReadFiles,
                 &variables,
@@ -728,18 +720,17 @@ impl SubmilliMcp {
     /// a path that cannot name anything in the VFS (`..` past the root, a NUL byte)
     /// too, but as a denial, which tells the model a rule stopped it rather than
     /// that the path is wrong.
-    #[allow(clippy::too_many_arguments)]
     fn authorize_file_call(
         &self,
         parts: &axum::http::request::Parts,
-        blueprint: Arc<Blueprint>,
-        version_tag: Option<String>,
+        tagged: &TaggedBlueprint,
         variables: Arc<submilli_blueprint::VarBindings>,
         tool: FileTool<'_>,
         path: &str,
         recursive: Option<bool>,
     ) -> Result<(), FileToolError> {
         let capability = tool.capability;
+        let blueprint = &tagged.blueprint;
         let mut context = serde_json::Map::new();
         context.insert("path".into(), path.into());
         if let Some(recursive) = recursive {
@@ -752,8 +743,7 @@ impl SubmilliMcp {
             .map_err(|error| FileToolError::denied(capability, &error.to_string()))?;
         guest_normalize(config.cwd(), path)
             .map_err(|error| FileToolError::file(path, error.into()))?;
-        let recording =
-            self.file_tool_recording(parts, &blueprint, version_tag, &variables, tool.name);
+        let recording = self.file_tool_recording(parts, tagged, &variables, tool.name);
         let log = recording.as_ref().map(crate::record::Recording::log);
         let policy: Arc<dyn SecurityCheck> =
             Arc::new(PolicyCheck::with_variables(blueprint.clone(), variables));
@@ -766,7 +756,7 @@ impl SubmilliMcp {
         let audit_context = policy.audit_context(capability, &context, config.cwd());
         self.state.audit().file_decision(
             parts,
-            &blueprint,
+            blueprint,
             capability,
             audit_context.as_ref(),
             &outcome,
@@ -805,11 +795,11 @@ impl SubmilliMcp {
     fn file_tool_recording(
         &self,
         parts: &axum::http::request::Parts,
-        blueprint: &Arc<Blueprint>,
-        version_tag: Option<String>,
+        tagged: &TaggedBlueprint,
         variables: &Arc<submilli_blueprint::VarBindings>,
         tool: &str,
     ) -> Option<crate::record::Recording> {
+        let blueprint = &tagged.blueprint;
         crate::record::Recording::start(&self.state, || crate::record::RunStart {
             execution_id: uuid::Uuid::new_v4().to_string(),
             label: parts
@@ -825,12 +815,36 @@ impl SubmilliMcp {
             blueprint_name: self.blueprint_name.clone(),
             blueprint: Arc::clone(blueprint),
             blueprint_hash: crate::audit::blueprint_hash(blueprint),
-            blueprint_version: version_tag.or_else(|| crate::audit::blueprint_hash(blueprint)),
+            blueprint_version: tagged
+                .version_tag
+                .clone()
+                .or_else(|| crate::audit::blueprint_hash(blueprint)),
             variables: Arc::clone(variables),
             // A file tool runs no program and reads no secret.
             harness_secrets: Arc::default(),
             code: None,
         })
+    }
+}
+
+/// [`BlueprintForRun`], shared: a file tool's blueprint, and the version tag its run is
+/// recorded under.
+struct TaggedBlueprint {
+    blueprint: Arc<Blueprint>,
+    version_tag: Option<String>,
+}
+
+impl From<BlueprintForRun> for TaggedBlueprint {
+    fn from(
+        BlueprintForRun {
+            blueprint,
+            version_tag,
+        }: BlueprintForRun,
+    ) -> Self {
+        Self {
+            blueprint: Arc::new(blueprint),
+            version_tag,
+        }
     }
 }
 

@@ -265,6 +265,21 @@ impl Running {
         path: &str,
         body: Option<&Value>,
     ) -> Result<T> {
+        self.send_with(&long_agent(), method, path, body)
+    }
+
+    /// A post that runs nothing, so it is bounded like a status read.
+    pub(crate) fn post_bounded<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
+        self.send_with(&self.agent, "POST", path, Some(body))
+    }
+
+    fn send_with<T: DeserializeOwned>(
+        &self,
+        agent: &ureq::Agent,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<T> {
         let url = format!("{}{path}", base(&self.record));
         let builder = ureq::http::Request::builder()
             .method(method)
@@ -274,7 +289,7 @@ impl Running {
         let request = builder
             .body(body.map_or_else(String::new, Value::to_string))
             .context("building a control request")?;
-        let mut response = long_agent().run(request).map_err(|source| Unanswered {
+        let mut response = agent.run(request).map_err(|source| Unanswered {
             url: url.clone(),
             source,
         })?;

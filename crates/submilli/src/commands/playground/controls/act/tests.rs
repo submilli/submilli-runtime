@@ -439,12 +439,29 @@ fn a_watched_event_keeps_its_kind_and_ids_trusted_and_the_runs_values_apart() {
     assert_eq!(line["kind"], "run-started");
     assert_eq!(line["label"], "assistant");
     assert_eq!(line["untrusted"]["client"], HOSTILE);
+
+    // What a run writes to its console is the run's to say.
+    let console = json!({
+        "session_seq": 2, "event_id": "e-2", "run": 7,
+        "position": { "at_micros": 1, "rank": 3 },
+        "body": { "event": {
+            "kind": "console", "line": HOSTILE, "written_micros": 4, "truncated": true,
+            "at_micros": 1,
+        } },
+    });
+    let line = watch_line(Some(2), &console, "s-1");
+    assert_eq!(line["kind"], "console", "{line}");
+    assert_eq!(line["truncated"], true);
+    assert_eq!(line["untrusted"]["line"], HOSTILE);
+    let mut outside = line.clone();
+    outside.as_object_mut().unwrap().remove("untrusted");
+    assert!(!outside.to_string().contains(HOSTILE), "{line}");
 }
 
 #[test]
 fn a_watched_chat_message_keeps_what_the_assistant_said_apart() {
     let chat = json!({
-        "session_seq": 2, "event_id": "chat-1",
+        "session_seq": 2, "event_id": HOSTILE,
         "position": { "at_micros": 1_791_468_192_000_000_u64, "rank": 0 },
         "body": { "chat": {
             "turn": HOSTILE, "role": "assistant", "text": HOSTILE,
@@ -460,6 +477,7 @@ fn a_watched_chat_message_keeps_what_the_assistant_said_apart() {
     assert_eq!(line["untrusted"]["text"], HOSTILE);
     assert_eq!(line["untrusted"]["turn"], HOSTILE);
     assert_eq!(line["untrusted"]["agent"], HOSTILE);
+    assert_eq!(line["untrusted"]["event_id"], HOSTILE);
     let mut outside = line.clone();
     outside.as_object_mut().unwrap().remove("untrusted");
     assert!(!outside.to_string().contains(HOSTILE), "{line}");

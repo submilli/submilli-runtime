@@ -291,6 +291,36 @@ fn an_older_claude_codes_last_message_is_the_report_when_the_transcript_lacks_it
 // ---- into the session ------------------------------------------------------------------------
 
 #[test]
+fn a_long_last_message_already_in_the_transcript_is_not_added_twice_and_a_half_written_line_is_skipped()
+ {
+    let world = World::new();
+    let long = "é".repeat(MAX_MESSAGE_BYTES);
+    let lines = [
+        json!({ "type": "user", "uuid": "u-1", "message": { "content": "Total the charges." } }),
+        json!({ "type": "assistant", "uuid": "a-1",
+                "message": { "content": [{ "type": "text", "text": long }] } }),
+    ];
+    let mut bytes: Vec<u8> = lines
+        .iter()
+        .flat_map(|line| format!("{line}\n").into_bytes())
+        .collect();
+    // The line being written ends inside a character.
+    bytes.extend_from_slice(b"{\"type\":\"assistant\",\"text\":\"\xc3");
+    let path = world.dir.path().join("long.jsonl");
+    std::fs::write(&path, bytes).unwrap();
+    let mut stop = world
+        .hooks()
+        .into_iter()
+        .find(|hook| hook["hook_event_name"] == "SubagentStop")
+        .unwrap();
+    stop["agent_transcript_path"] = json!(path);
+    stop["last_assistant_message"] = json!(long);
+    let messages = hook_post(&stop).unwrap().messages;
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert!(messages[1].truncated);
+}
+
+#[test]
 fn a_recorded_stand_in_run_puts_its_task_and_report_around_its_calls_once() {
     let mut world = World::new();
     world.replay("sess-1");
@@ -390,6 +420,70 @@ fn chat_that_never_finds_its_session_is_dropped() {
 }
 
 #[test]
+fn a_stand_in_back_after_a_long_silence_still_finds_its_session() {
+    let mut world = World::new();
+    let start = Instant::now();
+    world.call("sess-1", "toolu_1");
+    assert_eq!(
+        world.post_at(live("agent-1", "toolu_1", vec![says("t1", "first")]), start),
+        1
+    );
+    let later = start + HELD_FOR + Duration::from_secs(1);
+    let stop = ChatPost {
+        agent: "agent-1".into(),
+        calls: vec!["toolu_1".into()],
+        messages: vec![says("t1", "first"), says("t2", "report")],
+        complete: true,
+    };
+    assert_eq!(world.post_at(stop, later), 2);
+    assert_eq!(texts(&world.log("sess-1")), ["first", "report"]);
+}
+
+#[test]
+fn a_complete_copy_cut_to_fit_keeps_the_live_messages_it_lacks() {
+    let mut world = World::new();
+    world.call("sess-1", "toolu_1");
+    let messages = vec![says("t1", "task"), says("t2", "middle"), says("t3", "end")];
+    assert_eq!(world.post(live("agent-1", "toolu_1", messages)), 3);
+    // The copy kept the task and the newest message only.
+    let stop = ChatPost {
+        agent: "agent-1".into(),
+        calls: vec!["toolu_1".into()],
+        messages: vec![says("t1", "task"), says("t3", "end")],
+        complete: true,
+    };
+    assert_eq!(world.post(stop), 2);
+    let mut kept = texts(&world.log("sess-1"));
+    kept.sort();
+    assert_eq!(kept, ["end", "middle", "task"]);
+}
+
+#[test]
+fn a_full_intake_makes_room_by_forgetting_a_finished_stand_in() {
+    let mut world = World::new();
+    world.call("sess-1", "toolu_done");
+    let done = ChatPost {
+        agent: "done".into(),
+        calls: vec!["toolu_done".into()],
+        messages: vec![says("d1", "finished")],
+        complete: true,
+    };
+    assert_eq!(world.post(done), 1);
+    for n in 1..MAX_AGENTS {
+        world.post(live(
+            &format!("waiting-{n}"),
+            &format!("toolu_w{n}"),
+            vec![],
+        ));
+    }
+    world.call("sess-2", "toolu_new");
+    assert_eq!(
+        world.post(live("new", "toolu_new", vec![says("n1", "hello")])),
+        1
+    );
+}
+
+#[test]
 fn held_chat_is_capped() {
     let world = World::new();
     let big = "x".repeat(MAX_MESSAGE_BYTES);
@@ -397,8 +491,8 @@ fn held_chat_is_capped() {
         .map(|n| says(&format!("t{n}"), &big))
         .collect();
     world.post(live("agent-1", "toolu_1", messages));
-    let agents = world.intake.agents.lock().unwrap();
-    assert!(agents["agent-1"].held_bytes <= MAX_HELD_BYTES);
+    let stand_ins = world.intake.stand_ins.lock().unwrap();
+    assert!(stand_ins["agent-1"].held_bytes <= MAX_HELD_BYTES);
 }
 
 #[test]

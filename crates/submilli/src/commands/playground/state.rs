@@ -28,12 +28,14 @@ use submilli_server::{ApiToken, Role};
 /// runs are labeled with (KTD5); none of them ever appears in output or a link.
 pub(crate) const TOKENS: [(&str, Role); 5] = [
     (ADMIN_TOKEN, Role::Admin),
-    ("stand-in", Role::User),
+    (STAND_IN_TOKEN, Role::User),
     (APP_TOKEN, Role::User),
     ("chat", Role::User),
     ("browser-chat", Role::User),
 ];
 pub(crate) const ADMIN_TOKEN: &str = "admin";
+/// The coding assistant's stand-in: its bridge and its chat hook.
+pub(crate) const STAND_IN_TOKEN: &str = "stand-in";
 pub(crate) const APP_TOKEN: &str = "app";
 
 /// What the running playground leaves on disk for other commands: its pid, both

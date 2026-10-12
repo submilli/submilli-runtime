@@ -235,6 +235,17 @@ pub struct ChatArgs {
     /// What the agent should do.
     #[arg(value_name = "TASK")]
     task: String,
+    /// The most tool calls run for one answer of the model; the rest are refused to it.
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = agent::DEFAULT_MAX_CALLS_PER_ANSWER,
+        value_parser = clap::value_parser!(u16).range(
+            i64::from(*agent::MAX_CALLS_PER_ANSWER_RANGE.start())
+                ..=i64::from(*agent::MAX_CALLS_PER_ANSWER_RANGE.end())
+        ),
+    )]
+    max_calls_per_answer: u16,
     /// Print JSON.
     #[arg(long)]
     json: bool,
@@ -580,7 +591,10 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         }
         PlaygroundCmd::Mcp => bridge::execute(),
         PlaygroundCmd::Chat(args) => act(
-            ActionRequest::Chat(controls::act::ChatRequest { task: args.task }),
+            ActionRequest::Chat(controls::act::ChatRequest {
+                task: args.task,
+                max_calls_per_answer: Some(args.max_calls_per_answer),
+            }),
             args.json,
         ),
         PlaygroundCmd::ChatHook => Ok(chat::execute_hook()),
@@ -745,6 +759,18 @@ fn secret_value(name: &str) -> Result<String, String> {
             "no value for `{name}`: export ${name}, or store one with `submilli secret put {name}`"
         )
     })
+}
+
+/// `text` cut to at most `max` bytes at a character boundary, and whether it was cut.
+pub(crate) fn within_bytes(text: &str, max: usize) -> (&str, bool) {
+    if text.len() <= max {
+        return (text, false);
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
 }
 
 #[cfg(unix)]

@@ -113,6 +113,18 @@ pub(crate) struct Position {
     pub(crate) rank: u8,
 }
 
+impl Position {
+    /// A place by time alone, outside any run: where chat goes.
+    pub(crate) fn at(at_micros: u64) -> Self {
+        Self {
+            at_micros,
+            run: None,
+            call_index: None,
+            rank: 0,
+        }
+    }
+}
+
 /// A session's events as read.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct EventLog {

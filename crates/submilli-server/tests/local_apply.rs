@@ -276,7 +276,7 @@ impl Server {
     }
 
     /// Lists the root through the MCP file tool, which records a run of its own.
-    async fn mcp_list_files(&self) {
+    async fn mcp_file_tool(&self, tool: &str, arguments: Value) {
         let (status, session) = self
             .mcp(
                 json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
@@ -293,7 +293,7 @@ impl Server {
             StatusCode::ACCEPTED
         );
         let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": { "name": "submilli__files__list", "arguments": {} } });
+            "params": { "name": tool, "arguments": arguments } });
         assert_eq!(self.mcp(call, Some(&session)).await.0, StatusCode::OK);
     }
 
@@ -344,10 +344,15 @@ async fn every_run_records_the_version_tag_its_blueprint_was_applied_with() {
 async fn a_file_tool_run_records_the_version_tag_too() {
     let server = Server::new();
     server.apply(V1, "v1").await;
-    server.mcp_list_files().await;
-    let (start, _) = server.last_run();
-    assert!(start.code.is_none(), "the last run is the file tool's");
-    assert_eq!(start.blueprint_version.as_deref(), Some("v1"));
+    for (tool, arguments) in [
+        ("submilli__files__list", json!({})),
+        ("submilli__files__read", json!({ "path": "notes.txt" })),
+    ] {
+        server.mcp_file_tool(tool, arguments).await;
+        let (start, _) = server.last_run();
+        assert!(start.code.is_none(), "the last run is {tool}'s");
+        assert_eq!(start.blueprint_version.as_deref(), Some("v1"), "{tool}");
+    }
 }
 
 #[tokio::test]

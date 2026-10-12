@@ -33,10 +33,8 @@ use super::controls::render::Page;
 use super::log::warn;
 use super::packages::{self, ClosureEntry, Freshness, ProjectPackages};
 use super::project::Project;
-use super::state::{APP_TOKEN, InstanceLock, InstanceRecord, StateDir};
+use super::state::{APP_TOKEN, InstanceLock, InstanceRecord, STAND_IN_TOKEN, StateDir};
 
-/// The token the bridge presents for its binding.
-const STAND_IN_TOKEN: &str = "stand-in";
 use super::store::redact::WatchedSecretStore;
 use super::store::{KnownSecrets, Recorder, Store};
 use super::watch::{self, Applier, BlueprintStatus};

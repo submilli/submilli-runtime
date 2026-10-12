@@ -26,7 +26,8 @@ fn turns() -> Vec<Turn> {
             calls: vec![ToolCall {
                 id: "call_1".into(),
                 name: "submilli__typescript__execute".into(),
-                arguments: json!({ "code": "function main() {}" }),
+                arguments: Ok(object(json!({ "code": "function main() {}" }))),
+                signature: None,
             }],
         },
         Turn::Results(vec![ToolResult {
@@ -38,17 +39,25 @@ fn turns() -> Vec<Turn> {
     ]
 }
 
-fn request(kind: ProviderKind, base: &str, model: &str) -> WireRequest {
-    build_tool_request(
+fn object(value: Value) -> Map<String, Value> {
+    value.as_object().cloned().unwrap()
+}
+
+fn request_for(kind: ProviderKind, base: &str, model: &str, turns: &[Turn]) -> WireRequest {
+    build_tool_request(&ToolRequest {
         kind,
-        base,
+        base_url: base,
         model,
-        "Be brief.",
-        &turns(),
-        &tools(),
-        1024,
-        KEY,
-    )
+        system: "Be brief.",
+        turns,
+        tools: &tools(),
+        max_tokens: 1024,
+        api_key: KEY,
+    })
+}
+
+fn request(kind: ProviderKind, base: &str, model: &str) -> WireRequest {
+    request_for(kind, base, model, &turns())
 }
 
 /// The key is in a header, and nowhere in the URL or body.
@@ -129,7 +138,7 @@ fn an_openai_compatible_request_keeps_chat_completions() {
     assert_eq!(
         request.body,
         json!({
-            "model": "m", "max_completion_tokens": 1024,
+            "model": "m", "max_tokens": 1024,
             "messages": [
                 { "role": "system", "content": "Be brief." },
                 { "role": "user", "content": "Total the charges." },
@@ -189,7 +198,8 @@ fn each_provider_answer_parses_into_text_and_calls() {
     let call = ToolCall {
         id: "call_1".into(),
         name: "submilli__typescript__execute".into(),
-        arguments: json!({ "code": "x" }),
+        arguments: Ok(object(json!({ "code": "x" }))),
+        signature: None,
     };
     let anthropic = json!({ "content": [
         { "type": "thinking", "thinking": "" },
@@ -261,7 +271,75 @@ fn google_calls_without_ids_get_distinct_ones() {
     let reply = parse_tool_response(ProviderKind::Google, &body.to_string()).unwrap();
     let ids: Vec<&str> = reply.calls.iter().map(|call| call.id.as_str()).collect();
     assert_eq!(ids, ["call-0", "call-1"]);
-    assert_eq!(reply.calls[1].arguments, json!({}));
+    assert_eq!(reply.calls[1].arguments, Ok(Map::new()));
+}
+
+#[test]
+fn a_google_calls_thought_signature_goes_back_with_it() {
+    let body = json!({ "candidates": [{ "content": { "parts": [
+        { "functionCall": { "name": "submilli__typescript__execute", "args": { "code": "x" } },
+          "thoughtSignature": "c2lnbmVk" },
+    ]}}]});
+    let reply = parse_tool_response(ProviderKind::Google, &body.to_string()).unwrap();
+    assert_eq!(reply.calls[0].signature.as_deref(), Some("c2lnbmVk"));
+    let turns = [
+        Turn::User("Run it.".into()),
+        Turn::Assistant {
+            text: None,
+            calls: reply.calls,
+        },
+    ];
+    let request = request_for(
+        ProviderKind::Google,
+        "https://generativelanguage.googleapis.com",
+        "m",
+        &turns,
+    );
+    assert_eq!(
+        request.body["contents"][1]["parts"][0],
+        json!({ "functionCall": { "name": "submilli__typescript__execute",
+                                  "args": { "code": "x" } },
+                "thoughtSignature": "c2lnbmVk" })
+    );
+}
+
+#[test]
+fn arguments_that_are_not_an_object_are_kept_as_sent() {
+    let cut = "{\"path\":\"src/sec";
+    let body = json!({ "output": [
+        { "type": "function_call", "call_id": "a", "name": "t", "arguments": cut },
+        { "type": "function_call", "call_id": "b", "name": "t", "arguments": "[1]" },
+    ]});
+    let reply = parse_tool_response(ProviderKind::OpenAi, &body.to_string()).unwrap();
+    assert_eq!(reply.calls[0].arguments, Err(cut.to_owned()));
+    assert_eq!(reply.calls[1].arguments, Err("[1]".to_owned()));
+    let anthropic = json!({ "content": [
+        { "type": "tool_use", "id": "a", "name": "t", "input": "x" } ] });
+    let reply = parse_tool_response(ProviderKind::Anthropic, &anthropic.to_string()).unwrap();
+    assert_eq!(reply.calls[0].arguments, Err("\"x\"".to_owned()));
+    // Sent back as they came to a provider that takes text, as none to one that takes
+    // an object.
+    let turns = [Turn::Assistant {
+        text: None,
+        calls: vec![ToolCall {
+            id: "a".into(),
+            name: "t".into(),
+            arguments: Err(cut.to_owned()),
+            signature: None,
+        }],
+    }];
+    let openai = request_for(ProviderKind::OpenAi, "https://api.openai.com", "m", &turns);
+    assert_eq!(openai.body["input"][0]["arguments"], json!(cut));
+    let anthropic = request_for(
+        ProviderKind::Anthropic,
+        "https://api.anthropic.com",
+        "m",
+        &turns,
+    );
+    assert_eq!(
+        anthropic.body["messages"][0]["content"][0]["input"],
+        json!({})
+    );
 }
 
 #[test]
@@ -271,8 +349,146 @@ fn a_malformed_answer_says_so_and_errors_give_the_providers_message() {
     assert!(parse_tool_response(ProviderKind::OpenAiCompatible, "{}").is_err());
     assert!(parse_tool_response(ProviderKind::Google, "{}").is_err());
     assert_eq!(
-        error_message(r#"{"error":{"message":"invalid x-api-key"}}"#),
+        error_message(r#"{"error":{"message":"invalid x-api-key"}}"#, ""),
         "invalid x-api-key"
     );
-    assert_eq!(error_message("Bad gateway\n"), "Bad gateway");
+    assert_eq!(error_message("Bad gateway\n", ""), "Bad gateway");
+    // An odd prefix puts a two-byte character across the cap.
+    let page = format!("<html>!{}</html>", "é".repeat(4000));
+    let quoted = error_message(&page, "");
+    assert!(
+        quoted.len() <= MAX_ERROR_BYTES + " [cut]".len(),
+        "{}",
+        quoted.len()
+    );
+    assert!(quoted.ends_with("é [cut]"), "{quoted}");
+    let exact = "x".repeat(MAX_ERROR_BYTES);
+    assert_eq!(error_message(&exact, ""), exact);
+}
+
+#[test]
+fn an_echoed_key_is_replaced_before_the_error_is_cut() {
+    // The key straddles the cap: cut first, its start would be left.
+    let body = format!("{}{KEY} echoed", "x".repeat(MAX_ERROR_BYTES - 5));
+    let quoted = error_message(&body, KEY);
+    assert!(!quoted.contains(&KEY[..5]), "{quoted}");
+    let json = json!({ "error": { "message": format!("bad key {KEY}") } }).to_string();
+    assert_eq!(error_message(&json, KEY), "bad key [redacted]");
+    // Quoted as JSON text by a proxy that escapes `/`.
+    let key = "sk-a/b+c";
+    let body = r#"{"detail":"bad key sk-a\/b+c"}"#;
+    let quoted = error_message(body, key);
+    assert!(!quoted.contains("sk-a"), "{quoted}");
+}
+
+#[test]
+fn an_answer_cut_at_the_output_cap_says_so() {
+    for (kind, body) in [
+        (
+            ProviderKind::Anthropic,
+            json!({ "content": [{ "type": "text", "text": "Partial" }], "stop_reason": "max_tokens" }),
+        ),
+        (
+            ProviderKind::OpenAi,
+            json!({ "status": "incomplete",
+                    "incomplete_details": { "reason": "max_output_tokens" },
+                    "output": [{ "type": "reasoning", "id": "rs_1", "summary": [] }] }),
+        ),
+        (
+            ProviderKind::OpenAiCompatible,
+            json!({ "choices": [{ "message": { "content": "Partial" }, "finish_reason": "length" }] }),
+        ),
+        (
+            ProviderKind::Google,
+            json!({ "candidates": [{ "content": { "parts": [{ "text": "Partial" }] },
+                                     "finishReason": "MAX_TOKENS" }] }),
+        ),
+    ] {
+        let reply = parse_tool_response(kind, &body.to_string()).unwrap();
+        assert_eq!(reply.finish, Finish::OutputLimit, "{kind:?}");
+    }
+    // A thinking model cut before it said anything sends no parts.
+    let thought_only =
+        json!({ "candidates": [{ "content": { "role": "model" }, "finishReason": "MAX_TOKENS" }] });
+    let reply = parse_tool_response(ProviderKind::Google, &thought_only.to_string()).unwrap();
+    assert_eq!(reply.finish, Finish::OutputLimit);
+    assert_eq!((reply.text, reply.calls.len()), (None, 0));
+    let done =
+        json!({ "content": [{ "type": "text", "text": "Done." }], "stop_reason": "end_turn" });
+    let reply = parse_tool_response(ProviderKind::Anthropic, &done.to_string()).unwrap();
+    assert_eq!(reply.finish, Finish::Complete);
+}
+
+#[test]
+fn an_answer_the_provider_stopped_says_why() {
+    for (kind, body, why) in [
+        (
+            ProviderKind::Anthropic,
+            json!({ "content": [], "stop_reason": "refusal" }),
+            "refusal",
+        ),
+        (
+            ProviderKind::OpenAi,
+            json!({ "status": "incomplete",
+                    "incomplete_details": { "reason": "content_filter" }, "output": [] }),
+            "content_filter",
+        ),
+        (
+            ProviderKind::OpenAiCompatible,
+            json!({ "choices": [{ "message": { "content": null },
+                                  "finish_reason": "content_filter" }] }),
+            "content_filter",
+        ),
+        (
+            ProviderKind::Google,
+            json!({ "candidates": [{ "finishReason": "SAFETY" }] }),
+            "SAFETY",
+        ),
+        (
+            ProviderKind::Google,
+            json!({ "promptFeedback": { "blockReason": "PROHIBITED_CONTENT" } }),
+            "PROHIBITED_CONTENT",
+        ),
+    ] {
+        let reply = parse_tool_response(kind, &body.to_string()).unwrap();
+        assert_eq!(reply.finish, Finish::Other(why.to_owned()), "{kind:?}");
+    }
+}
+
+#[test]
+fn parallel_google_calls_keep_the_signature_on_the_first_only() {
+    let body = json!({ "candidates": [{ "content": { "parts": [
+        { "text": "Two at once." },
+        { "functionCall": { "name": "a", "args": {} }, "thoughtSignature": "c2ln" },
+        { "functionCall": { "name": "b", "args": { "x": 1 } } },
+    ]}}]});
+    let reply = parse_tool_response(ProviderKind::Google, &body.to_string()).unwrap();
+    let signatures: Vec<Option<&str>> = reply
+        .calls
+        .iter()
+        .map(|call| call.signature.as_deref())
+        .collect();
+    assert_eq!(signatures, [Some("c2ln"), None]);
+    let turns = [Turn::Assistant {
+        text: reply.text,
+        calls: reply.calls,
+    }];
+    let request = request_for(
+        ProviderKind::Google,
+        "https://generativelanguage.googleapis.com",
+        "m",
+        &turns,
+    );
+    let parts = &request.body["contents"][0]["parts"];
+    assert_eq!(parts[0], json!({ "text": "Two at once." }));
+    assert_eq!(parts[1]["thoughtSignature"], "c2ln");
+    assert!(parts[2].get("thoughtSignature").is_none(), "{parts}");
+}
+
+#[test]
+fn blank_argument_text_is_no_arguments() {
+    let body = json!({ "output": [
+        { "type": "function_call", "call_id": "a", "name": "t", "arguments": "" } ] });
+    let reply = parse_tool_response(ProviderKind::OpenAi, &body.to_string()).unwrap();
+    assert_eq!(reply.calls[0].arguments, Ok(Map::new()));
 }

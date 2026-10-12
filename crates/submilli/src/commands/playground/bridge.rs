@@ -7,9 +7,10 @@
 //! Stdout is the protocol channel: everything else goes to stderr. When the bridge cannot
 //! connect (no playground, or a required value unbound), it says why on stderr and
 //! answers every request with that reason, so the assistant sees it instead of hanging.
+//! It connects once: after the playground restarts, the assistant restarts it.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead as _, Write as _};
+use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -18,13 +19,13 @@ use serde_json::{Value, json};
 
 use super::controls::act::{Answer, connect_as};
 use super::controls::render::{EXIT_FAILURE, EXIT_SUCCESS};
-use super::mcp_http::McpHttp;
-
-const STAND_IN_TOKEN: &str = "stand-in";
+use super::mcp_http::{Failure, McpHttp};
+use super::state::STAND_IN_TOKEN;
 
 /// JSON-RPC's code for an error the server defines; the message says what it was.
 const SERVER_ERROR: i64 = -32000;
 const PARSE_ERROR: i64 = -32700;
+const INVALID_REQUEST: i64 = -32600;
 
 pub(crate) fn execute() -> Result<ExitCode> {
     let (connection, binding) = match open() {
@@ -36,22 +37,7 @@ pub(crate) fn execute() -> Result<ExitCode> {
     let out = Output::default();
     let variables = binding.variables;
     let mut in_flight = Vec::new();
-    let stdin = std::io::stdin().lock();
-    for line in stdin.lines() {
-        let Ok(line) = line else {
-            break;
-        };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(mut message) = serde_json::from_str::<Value>(&line) else {
-            out.write(&error_reply(
-                &Value::Null,
-                PARSE_ERROR,
-                "the line is not JSON",
-            ));
-            continue;
-        };
+    for mut message in messages(std::io::stdin().lock(), &out) {
         if message["method"] == "initialize" {
             with_variables(&mut message, &variables);
         }
@@ -126,21 +112,69 @@ fn refusal(answer: &Answer) -> (u8, String) {
 /// Says why on stderr, then answers every request with it until stdin closes.
 fn refuse(reason: &str, exit: u8) -> ExitCode {
     eprintln!("submilli playground mcp: {reason}");
+    // The client cannot reconnect a stdio server itself.
+    let reason = format!("{reason} (then restart this MCP server)");
     let out = Output::default();
-    for line in std::io::stdin().lock().lines() {
-        let Ok(line) = line else {
-            break;
-        };
-        let Ok(message) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
+    for message in messages(std::io::stdin().lock(), &out) {
         if let Some(id) = message.get("id")
             && message.get("method").is_some()
         {
-            out.write(&error_reply(id, SERVER_ERROR, reason));
+            out.write(&error_reply(id, SERVER_ERROR, &reason));
         }
     }
     ExitCode::from(exit)
+}
+
+/// The JSON-RPC messages on stdin, one a line, until it closes or fails. A line that is
+/// not one is answered with why, and reading goes on.
+fn messages<'a>(input: impl BufRead + 'a, out: &'a Output) -> impl Iterator<Item = Value> + 'a {
+    lines(input).filter_map(move |line| match parsed(&line) {
+        Line::Message(message) => Some(message),
+        Line::Answered(error) => {
+            out.write(&error);
+            None
+        }
+        Line::Blank => None,
+    })
+}
+
+/// Stdin's lines as bytes, until it closes or fails.
+fn lines(input: impl BufRead) -> impl Iterator<Item = Vec<u8>> {
+    input.split(b'\n').map_while(|line| {
+        line.map_err(|error| eprintln!("submilli playground mcp: reading stdin failed: {error}"))
+            .ok()
+    })
+}
+
+/// What one line of stdin holds.
+#[derive(Debug, PartialEq)]
+enum Line {
+    Blank,
+    Message(Value),
+    /// Not one message: the error reply that answers it.
+    Answered(Value),
+}
+
+fn parsed(line: &[u8]) -> Line {
+    if line.trim_ascii().is_empty() {
+        return Line::Blank;
+    }
+    let Ok(message) = serde_json::from_slice::<Value>(line) else {
+        return Line::Answered(error_reply(
+            &Value::Null,
+            PARSE_ERROR,
+            "the line is not JSON",
+        ));
+    };
+    if !message.is_object() {
+        // MCP has no batches since 2025-06-18.
+        return Line::Answered(error_reply(
+            &Value::Null,
+            INVALID_REQUEST,
+            "a line must hold one JSON-RPC message",
+        ));
+    }
+    Line::Message(message)
 }
 
 /// Sends `message` and writes each reply. A request whose reply never came is answered
@@ -162,6 +196,14 @@ fn relay(connection: &McpHttp, out: &Output, message: &Value) {
         return;
     };
     match sent {
+        // The answer came before the reply broke off; the client has it.
+        Err(failure) if answered => eprintln!("submilli playground mcp: {failure}"),
+        // A restarted playground listens on a new port, which only a new bridge finds.
+        Err(failure @ Failure::Unanswered(_)) => out.write(&error_reply(
+            id,
+            SERVER_ERROR,
+            &format!("{failure}; if the playground restarted, restart this MCP server"),
+        )),
         Err(failure) => out.write(&error_reply(id, SERVER_ERROR, &failure.to_string())),
         Ok(()) if !answered => out.write(&error_reply(
             id,
@@ -277,5 +319,22 @@ mod tests {
         let mut bare = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" });
         with_variables(&mut bare, &variables);
         assert_eq!(bare["params"]["_meta"]["variables"]["a"], "bound");
+    }
+
+    #[test]
+    fn each_line_is_one_message_or_answered_with_why_and_reading_goes_on() {
+        let input: &[u8] =
+            b"{\"id\":1,\"method\":\"ping\"}\n\xff\xfe\n[{\"id\":2}]\n  \r\n{\"id\":3}";
+        let read: Vec<Line> = lines(input).map(|line| parsed(&line)).collect();
+        assert_eq!(read.len(), 5);
+        assert_eq!(read[0], Line::Message(json!({ "id": 1, "method": "ping" })));
+        let code = |line: &Line| match line {
+            Line::Answered(error) => error["error"]["code"].as_i64(),
+            _ => None,
+        };
+        assert_eq!(code(&read[1]), Some(PARSE_ERROR));
+        assert_eq!(code(&read[2]), Some(INVALID_REQUEST));
+        assert_eq!(read[3], Line::Blank);
+        assert_eq!(read[4], Line::Message(json!({ "id": 3 })));
     }
 }

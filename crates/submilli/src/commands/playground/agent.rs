@@ -5,25 +5,34 @@
 //! it (`chat` from the CLI, `browser-chat` from the page), and its turns go to its
 //! session's log as chat.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
 use submilli_shared::llm::ProviderKind;
 use submilli_shared::llm::tools::{
-    Reply, ToolCall, ToolResult, ToolSpec, Turn, build_tool_request, error_message,
-    parse_tool_response,
+    Finish, Reply, ToolCall, ToolRequest, ToolResult, ToolSpec, Turn, build_tool_request,
+    error_message, parse_tool_response,
 };
 
+use super::chat::{chat_body, message};
 use super::mcp_http::McpHttp;
 use super::store::Recorder;
-use super::store::events::{ChatRole, ChatTurn, EventBody, Position};
+use super::store::events::{ChatRole, Position};
 
 /// The variable that picks the provider and model: `<provider>:<model>`.
 pub(crate) const MODEL_VARIABLE: &str = "SUBMILLI_PLAYGROUND_MODEL";
 
 /// How many times the model may be asked before the loop stops.
 pub(crate) const MAX_TURNS: usize = 20;
+/// The most tool calls run for one answer unless the chat says otherwise; the rest are
+/// refused to the model.
+pub(crate) const DEFAULT_MAX_CALLS_PER_ANSWER: u16 = 16;
+/// What that limit may be set to.
+pub(crate) const MAX_CALLS_PER_ANSWER_RANGE: std::ops::RangeInclusive<u16> = 1..=1000;
 /// How long one model request may take.
 pub(crate) const PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_OUTPUT_TOKENS: u64 = 4096;
@@ -88,28 +97,12 @@ pub(crate) struct Choice {
 pub(crate) fn choose(env: impl Fn(&str) -> Option<String>) -> Result<Choice, String> {
     let set = |name: &str| env(name).filter(|value| !value.trim().is_empty());
     let key_of = |row: &ProviderRow| row.keys.iter().copied().find(|key| set(key).is_some());
-    let choice = |row: &ProviderRow, model: String, key_variable| {
-        let base_url = set(row.base_url_variable).map_or_else(
-            || row.default_base_url.to_owned(),
-            |url| {
-                let url = url.trim_end_matches('/');
-                url.strip_suffix("/v1").unwrap_or(url).to_owned()
-            },
-        );
-        Choice {
-            provider: row.name,
-            kind: row.kind,
-            model,
-            key_variable,
-            base_url,
-        }
-    };
-    let names = || {
-        PROVIDERS
-            .iter()
-            .map(|row| row.name)
-            .collect::<Vec<_>>()
-            .join(", ")
+    let choice = |row: &'static ProviderRow, model: String, key_variable| Choice {
+        provider: row.name,
+        kind: row.kind,
+        model,
+        key_variable,
+        base_url: base_url(row, set(row.base_url_variable)),
     };
     if let Some(named) = set(MODEL_VARIABLE) {
         let (provider, model) = named
@@ -120,7 +113,7 @@ pub(crate) fn choose(env: impl Fn(&str) -> Option<String>) -> Result<Choice, Str
                 format!(
                     "{MODEL_VARIABLE} is `{named}`; set it to `<provider>:<model>`, the \
                      provider one of {}",
-                    names()
+                    provider_names()
                 )
             })?;
         let row = PROVIDERS
@@ -129,7 +122,7 @@ pub(crate) fn choose(env: impl Fn(&str) -> Option<String>) -> Result<Choice, Str
             .ok_or_else(|| {
                 format!(
                     "{MODEL_VARIABLE} names provider `{provider}`; use one of {}",
-                    names()
+                    provider_names()
                 )
             })?;
         let key = key_of(row).ok_or_else(|| {
@@ -152,6 +145,40 @@ pub(crate) fn choose(env: impl Fn(&str) -> Option<String>) -> Result<Choice, Str
         })
 }
 
+/// The provider's address: its override with any version path left off, else its own.
+fn base_url(row: &ProviderRow, configured: Option<String>) -> String {
+    let Some(url) = configured else {
+        return row.default_base_url.to_owned();
+    };
+    let url = url.trim_end_matches('/');
+    ["/v1beta", "/v1"]
+        .iter()
+        .find_map(|version| url.strip_suffix(version))
+        .unwrap_or(url)
+        .to_owned()
+}
+
+fn provider_names() -> String {
+    PROVIDERS
+        .iter()
+        .map(|row| row.name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The chat's limit of tool calls per answer: `requested`, else the default.
+pub(crate) fn max_calls_per_answer(requested: Option<u16>) -> Result<usize, String> {
+    let limit = requested.unwrap_or(DEFAULT_MAX_CALLS_PER_ANSWER);
+    if !MAX_CALLS_PER_ANSWER_RANGE.contains(&limit) {
+        return Err(format!(
+            "the most tool calls per answer is between {} and {}",
+            MAX_CALLS_PER_ANSWER_RANGE.start(),
+            MAX_CALLS_PER_ANSWER_RANGE.end()
+        ));
+    }
+    Ok(usize::from(limit))
+}
+
 /// [`choose`] from this process's environment.
 pub(crate) fn configured() -> Result<Choice, String> {
     choose(|name| std::env::var(name).ok())
@@ -168,6 +195,22 @@ pub(crate) struct Setup<'a> {
     pub(crate) variables: &'a BTreeMap<String, String>,
     pub(crate) secrets: &'a BTreeMap<String, String>,
     pub(crate) recorder: &'a Recorder,
+    /// The most tool calls run for one answer.
+    pub(crate) max_calls_per_answer: usize,
+    /// Set when whoever asked is gone: the chat is cancelled before its next model
+    /// request or tool call.
+    pub(crate) cancelled: &'a AtomicBool,
+}
+
+/// Cancels a chat when dropped. The chat runs on a thread of its own; the request that
+/// started it holds this, so when the request is dropped, as when the CLI that sent it
+/// is stopped or the page is closed, the chat is cancelled too.
+pub(crate) struct CancelOnDrop(pub(crate) Arc<AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
 
 /// How a chat ended.
@@ -179,14 +222,32 @@ pub(crate) struct Outcome {
     /// The model's last words.
     pub(crate) reply: Option<String>,
     pub(crate) tool_calls: usize,
-    /// `answered`, or `turn-limit` when it was stopped at [`MAX_TURNS`].
-    pub(crate) stopped: &'static str,
+    pub(crate) stopped: Stopped,
+    /// The provider's reason, when it stopped the answer.
+    pub(crate) stop_reason: Option<String>,
+}
+
+/// Why a chat ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Stopped {
+    /// The model answered without asking for a tool.
+    Answered,
+    /// It was stopped at [`MAX_TURNS`].
+    TurnLimit,
+    /// The model's answer stopped at its output cap.
+    OutputLimit,
+    /// The provider stopped the answer: a refusal, a safety filter.
+    Provider,
 }
 
 /// Runs `task` to the model's answer or the turn limit. Blocking. Errors are the
 /// playground's or the provider's own words, with the key never in them.
 pub(crate) fn run(setup: &Setup<'_>, task: &str) -> Result<Outcome, String> {
-    let key = std::env::var(setup.choice.key_variable).unwrap_or_default();
+    // Trimmed as `choose` read it, so the header and the redaction use the same text.
+    let key = std::env::var(setup.choice.key_variable)
+        .map(|key| key.trim().to_owned())
+        .unwrap_or_default();
     let clean = |message: String| {
         if key.is_empty() {
             message
@@ -194,45 +255,135 @@ pub(crate) fn run(setup: &Setup<'_>, task: &str) -> Result<Outcome, String> {
             message.replace(&key, "[redacted]")
         }
     };
-    let mcp = McpHttp::new(
+    let http = McpHttp::new(
         setup.server_port,
         setup.blueprint,
         setup.token,
         setup.secrets,
     );
+    let mcp = McpConversation {
+        http: &http,
+        next_id: Cell::new(1),
+    };
     let ran = converse(setup, &mcp, &key, task).map_err(clean);
-    mcp.close();
+    http.close();
     ran
 }
 
-fn converse(setup: &Setup<'_>, mcp: &McpHttp, key: &str, task: &str) -> Result<Outcome, String> {
+fn converse(
+    setup: &Setup<'_>,
+    mcp: &McpConversation<'_>,
+    key: &str,
+    task: &str,
+) -> Result<Outcome, String> {
     let tools = connect(mcp, setup.variables)?;
-    let session = mcp.session();
+    let session = mcp.http.session();
     let log = Log {
         recorder: setup.recorder,
         session: session.as_deref(),
         agent: setup.label,
     };
-    log.say(0, ChatRole::User, task);
+    log.say(0, ChatRole::User, task, false);
     let mut turns = vec![Turn::User(task.to_owned())];
     let mut tool_calls = 0;
     let mut said = 0;
-    for _ in 0..MAX_TURNS {
-        let reply = ask(&setup.choice, key, &turns, &tools)?;
-        if let Some(text) = &reply.text {
+    let mut last_text = None;
+    for turn in 1..=MAX_TURNS {
+        stop_if_cancelled(setup)?;
+        let Reply {
+            text,
+            calls,
+            finish,
+        } = ask(&setup.choice, key, &turns, &tools)?;
+        if let Some(text) = &text {
             said += 1;
-            log.say(said, ChatRole::Assistant, text);
+            log.say(
+                said,
+                ChatRole::Assistant,
+                text,
+                finish == Finish::OutputLimit,
+            );
         }
-        let Reply { text, calls } = reply;
         if calls.is_empty() {
-            return Ok(outcome(setup, session, text, tool_calls, "answered"));
+            let (stopped, stop_reason) = match finish {
+                Finish::Complete => (Stopped::Answered, None),
+                Finish::OutputLimit => (Stopped::OutputLimit, None),
+                Finish::Other(reason) => (Stopped::Provider, Some(reason)),
+            };
+            let mut ended = outcome(setup, session, text, tool_calls, stopped);
+            ended.stop_reason = stop_reason;
+            return Ok(ended);
         }
-        let results: Vec<ToolResult> = calls.iter().map(|call| call_tool(mcp, call)).collect();
-        tool_calls += calls.len();
+        // No model would see what the last turn's calls returned, so they are not run.
+        if turn == MAX_TURNS {
+            last_text = text;
+            break;
+        }
+        let (results, ran) = run_calls(setup, mcp, &calls, &finish);
+        tool_calls += ran;
         turns.push(Turn::Assistant { text, calls });
         turns.push(Turn::Results(results));
     }
-    Ok(outcome(setup, session, None, tool_calls, "turn-limit"))
+    Ok(outcome(
+        setup,
+        session,
+        last_text,
+        tool_calls,
+        Stopped::TurnLimit,
+    ))
+}
+
+/// Runs what one answer asked for: a result for every call, in order, and how many ran.
+/// Once the chat is cancelled, calls past its limit per answer, calls without an
+/// arguments object, and an answer's last call when the output cap cut it are refused to
+/// the model.
+fn run_calls(
+    setup: &Setup<'_>,
+    mcp: &McpConversation<'_>,
+    calls: &[ToolCall],
+    finish: &Finish,
+) -> (Vec<ToolResult>, usize) {
+    let mut ran = 0;
+    let results = calls
+        .iter()
+        .enumerate()
+        .map(|(n, call)| {
+            if setup.cancelled.load(Ordering::Relaxed) {
+                refused(call, "not run: the chat was cancelled".to_owned())
+            } else if n >= setup.max_calls_per_answer {
+                refused(
+                    call,
+                    format!(
+                        "not run: at most {} tool calls per answer",
+                        setup.max_calls_per_answer
+                    ),
+                )
+            } else if call.arguments.is_err() {
+                refused(
+                    call,
+                    "not run: the arguments are not a JSON object".to_owned(),
+                )
+            } else if *finish == Finish::OutputLimit && n + 1 == calls.len() {
+                refused(
+                    call,
+                    "not run: the answer was cut at the output limit, so this call may be \
+                     incomplete"
+                        .to_owned(),
+                )
+            } else {
+                ran += 1;
+                call_tool(mcp, call)
+            }
+        })
+        .collect();
+    (results, ran)
+}
+
+fn stop_if_cancelled(setup: &Setup<'_>) -> Result<(), String> {
+    if setup.cancelled.load(Ordering::Relaxed) {
+        return Err("the chat was cancelled: whoever started it is gone".to_owned());
+    }
+    Ok(())
 }
 
 fn outcome(
@@ -240,7 +391,7 @@ fn outcome(
     session: Option<String>,
     reply: Option<String>,
     tool_calls: usize,
-    stopped: &'static str,
+    stopped: Stopped,
 ) -> Outcome {
     Outcome {
         session,
@@ -249,14 +400,52 @@ fn outcome(
         reply,
         tool_calls,
         stopped,
+        stop_reason: None,
+    }
+}
+
+/// The chat's MCP session, numbering its requests.
+struct McpConversation<'a> {
+    http: &'a McpHttp,
+    next_id: Cell<u64>,
+}
+
+impl McpConversation<'_> {
+    /// One JSON-RPC request's result, or its error's message.
+    fn request(&self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        let mut answer = None;
+        self.http
+            .send(
+                &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+                |reply| {
+                    if reply["id"] == id {
+                        answer = Some(reply);
+                    }
+                },
+            )
+            .map_err(|failure| failure.to_string())?;
+        let answer = answer.ok_or_else(|| format!("the playground did not answer `{method}`"))?;
+        if let Some(message) = answer["error"]["message"].as_str() {
+            return Err(format!("the playground refused `{method}`: {message}"));
+        }
+        Ok(answer["result"].clone())
+    }
+
+    fn notify(&self, method: &str) -> Result<(), String> {
+        self.http
+            .send(&json!({ "jsonrpc": "2.0", "method": method }), |_| {})
+            .map_err(|failure| failure.to_string())
     }
 }
 
 /// Starts the MCP session under the binding and lists its tools.
-fn connect(mcp: &McpHttp, variables: &BTreeMap<String, String>) -> Result<Vec<ToolSpec>, String> {
-    rpc(
-        mcp,
-        1,
+fn connect(
+    mcp: &McpConversation<'_>,
+    variables: &BTreeMap<String, String>,
+) -> Result<Vec<ToolSpec>, String> {
+    mcp.request(
         "initialize",
         json!({
             "protocolVersion": "2025-06-18",
@@ -265,12 +454,8 @@ fn connect(mcp: &McpHttp, variables: &BTreeMap<String, String>) -> Result<Vec<To
             "_meta": { "variables": variables },
         }),
     )?;
-    mcp.send(
-        &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
-        |_| {},
-    )
-    .map_err(|failure| failure.to_string())?;
-    let listed = rpc(mcp, 2, "tools/list", json!({}))?;
+    mcp.notify("notifications/initialized")?;
+    let listed = mcp.request("tools/list", json!({}))?;
     Ok(listed["tools"]
         .as_array()
         .map(Vec::as_slice)
@@ -286,34 +471,12 @@ fn connect(mcp: &McpHttp, variables: &BTreeMap<String, String>) -> Result<Vec<To
         .collect())
 }
 
-/// One JSON-RPC request's result, or its error's message.
-fn rpc(mcp: &McpHttp, id: u64, method: &str, params: Value) -> Result<Value, String> {
-    let mut answer = None;
-    mcp.send(
-        &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
-        |reply| {
-            if reply["id"] == id {
-                answer = Some(reply);
-            }
-        },
-    )
-    .map_err(|failure| failure.to_string())?;
-    let answer = answer.ok_or_else(|| format!("the playground did not answer `{method}`"))?;
-    if let Some(message) = answer["error"]["message"].as_str() {
-        return Err(format!("the playground refused `{method}`: {message}"));
-    }
-    Ok(answer["result"].clone())
-}
-
 /// Calls one tool; a refusal or a failure is the result the model sees.
-fn call_tool(mcp: &McpHttp, call: &ToolCall) -> ToolResult {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(100);
-    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let (content, is_error) = match rpc(
-        mcp,
-        id,
+fn call_tool(mcp: &McpConversation<'_>, call: &ToolCall) -> ToolResult {
+    let arguments = call.arguments.clone().unwrap_or_default();
+    let (content, is_error) = match mcp.request(
         "tools/call",
-        json!({ "name": call.name, "arguments": call.arguments }),
+        json!({ "name": call.name, "arguments": arguments }),
     ) {
         Ok(result) => {
             let text: Vec<&str> = result["content"]
@@ -327,39 +490,44 @@ fn call_tool(mcp: &McpHttp, call: &ToolCall) -> ToolResult {
         }
         Err(message) => (message, true),
     };
+    let (kept, cut) = super::within_bytes(&content, MAX_RESULT_BYTES);
     ToolResult {
         call_id: call.id.clone(),
         name: call.name.clone(),
-        content: capped(content),
+        content: if cut {
+            format!("{kept}\n[cut]")
+        } else {
+            content
+        },
         is_error,
     }
 }
 
-fn capped(mut text: String) -> String {
-    if text.len() > MAX_RESULT_BYTES {
-        let mut end = MAX_RESULT_BYTES;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
-        text.push_str("\n[cut]");
+/// The error result for a call that was not run.
+fn refused(call: &ToolCall, why: String) -> ToolResult {
+    ToolResult {
+        call_id: call.id.clone(),
+        name: call.name.clone(),
+        content: why,
+        is_error: true,
     }
-    text
 }
 
 /// One model request.
 fn ask(choice: &Choice, key: &str, turns: &[Turn], tools: &[ToolSpec]) -> Result<Reply, String> {
-    let request = build_tool_request(
-        choice.kind,
-        &choice.base_url,
-        &choice.model,
-        SYSTEM,
+    let request = build_tool_request(&ToolRequest {
+        kind: choice.kind,
+        base_url: &choice.base_url,
+        model: &choice.model,
+        system: SYSTEM,
         turns,
         tools,
-        MAX_OUTPUT_TOKENS,
-        key,
-    );
+        max_tokens: MAX_OUTPUT_TOKENS,
+        api_key: key,
+    });
+    // No redirects: a redirect would carry the key's header to wherever it points.
     let agent: ureq::Agent = ureq::Agent::config_builder()
+        .max_redirects(0)
         .http_status_as_error(false)
         .timeout_global(Some(PROVIDER_TIMEOUT))
         .build()
@@ -389,7 +557,7 @@ fn ask(choice: &Choice, key: &str, turns: &[Turn], tools: &[ToolSpec]) -> Result
         return Err(format!(
             "{provider} refused the request (HTTP {}): {}",
             status.as_u16(),
-            error_message(&body)
+            error_message(&body, key)
         ));
     }
     parse_tool_response(choice.kind, &body).map_err(|message| format!("{provider}: {message}"))
@@ -403,42 +571,21 @@ struct Log<'a> {
 }
 
 impl Log<'_> {
-    fn say(&self, n: usize, role: ChatRole, text: &str) {
+    /// Logs one message; `cut` when the model's output cap cut it.
+    fn say(&self, n: usize, role: ChatRole, text: &str, cut: bool) {
         let Some(session) = self.session else {
             return;
         };
-        let (text, truncated) = capped_chat(text);
         let turn = format!("{}-{n}", self.agent);
+        let mut said = message(&turn, role, text);
+        said.truncated |= cut;
         self.recorder.append_chat(
             session,
             format!("chat-{session}-{turn}"),
-            Position {
-                at_micros: super::now_micros(),
-                run: None,
-                call_index: None,
-                rank: 0,
-            },
-            EventBody::Chat(ChatTurn {
-                turn,
-                role,
-                text,
-                truncated,
-                agent: self.agent.to_owned(),
-            }),
+            Position::at(super::now_micros()),
+            chat_body(self.agent, said),
         );
     }
-}
-
-fn capped_chat(text: &str) -> (String, bool) {
-    const MAX: usize = 16 * 1024;
-    if text.len() <= MAX {
-        return (text.to_owned(), false);
-    }
-    let mut end = MAX;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    (text[..end].to_owned(), true)
 }
 
 #[cfg(test)]
@@ -501,12 +648,21 @@ mod tests {
     }
 
     #[test]
-    fn a_base_url_override_is_taken_with_or_without_v1() {
+    fn a_base_url_override_is_taken_with_or_without_its_version() {
         let chosen = choose(env(&[
             ("OPENAI_API_KEY", "o"),
             ("OPENAI_BASE_URL", "http://127.0.0.1:9/v1/"),
         ]))
         .unwrap();
         assert_eq!(chosen.base_url, "http://127.0.0.1:9");
+        let chosen = choose(env(&[
+            ("GEMINI_API_KEY", "g"),
+            (
+                "GOOGLE_GEMINI_BASE_URL",
+                "https://generativelanguage.googleapis.com/v1beta",
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(chosen.base_url, "https://generativelanguage.googleapis.com");
     }
 }

@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::Result;
@@ -38,6 +39,7 @@ use submilli_server::record::{
 };
 
 use super::super::Output;
+use super::super::agent;
 use super::super::api::{MAX_BODY_BYTES, feed};
 use super::super::client::{self, Probe, Running};
 use super::super::labels;
@@ -820,7 +822,9 @@ impl Actions {
                 "say what the agent should do",
             ));
         }
-        let choice = super::super::agent::configured()
+        let max_calls_per_answer = agent::max_calls_per_answer(request.max_calls_per_answer)
+            .map_err(|message| ActError::usage("invalid-max-calls", message))?;
+        let choice = agent::configured()
             .map_err(|message| ActError::new(EXIT_FAILURE, "no-provider", message))?;
         let blueprint = self.blueprint(&self.blueprint_name).await?;
         let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
@@ -828,8 +832,10 @@ impl Actions {
             .token(label)
             .map_err(|error| ActError::failure(format!("{error:#}")))?;
         let actions = Arc::clone(self);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let _cancel_when_dropped = agent::CancelOnDrop(Arc::clone(&cancelled));
         let ran = tokio::task::spawn_blocking(move || {
-            let setup = super::super::agent::Setup {
+            let setup = agent::Setup {
                 choice,
                 server_port: actions.server_port,
                 blueprint: &actions.blueprint_name,
@@ -838,8 +844,16 @@ impl Actions {
                 variables: &variables,
                 secrets: &secrets,
                 recorder: &actions.recorder,
+                max_calls_per_answer,
+                cancelled: &cancelled,
             };
-            super::super::agent::run(&setup, &request.task)
+            let ran = agent::run(&setup, &request.task);
+            if cancelled.load(Ordering::Relaxed) && ran.is_err() {
+                super::super::log::note(&format!(
+                    "a {label} chat was cancelled: whoever started it is gone"
+                ));
+            }
+            ran
         })
         .await
         .map_err(|error| ActError::failure(format!("the chat failed: {error}")))?;
@@ -856,6 +870,7 @@ impl Actions {
             model: outcome.model,
             tool_calls: outcome.tool_calls,
             stopped: outcome.stopped,
+            stop_reason: outcome.stop_reason,
             next: next(follow),
             untrusted: render::ChatUntrusted {
                 reply: outcome.reply,
@@ -2050,6 +2065,9 @@ fn write_blueprint(path: &Path, drafted_from: &[u8], new: &[u8]) -> Result<(), A
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ChatRequest {
     pub(crate) task: String,
+    /// The most tool calls run for one answer; the default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_calls_per_answer: Option<u16>,
 }
 
 /// An action as the CLI sends it to the running playground.
@@ -2348,7 +2366,8 @@ const ENVELOPE_FIELDS: [&str; 6] = [
 /// One stored event as `watch` prints it: trusted fields (sequence, kind, session, run,
 /// time, ids, caller and capability names, outcomes, sizes) at the top, and what came from
 /// inside the run (a decision's context, its near misses' values, its reason and its
-/// cause's, an MCP client's own name and tool call id) under `untrusted`.
+/// cause's, an MCP client's own name and tool call id, a console line) under `untrusted`.
+/// A chat message's id is built from the assistant's own ids, so it goes there too.
 ///
 /// A decision carries its `<run>.<n>` reference when the store numbered it: the number
 /// `show`, `explain`, and `draft-rule` take for the same decision.
@@ -2372,11 +2391,15 @@ fn watch_line(seq: Option<u64>, stored: &Value, session: &str) -> Value {
     }
     // A chat message: who spoke is ours to say; what it said and its ids came from the
     // assistant.
-    for (body, kind, untrusted_fields) in [
-        ("chat", "chat", &["turn", "text", "agent"][..]),
-        ("chat-replaced", "chat-replaced", &["turns"][..]),
+    for (kind, untrusted_fields) in [
+        ("chat", &["turn", "text", "agent"][..]),
+        ("chat-replaced", &["turns"][..]),
     ] {
-        if let Some(chat) = stored["body"][body].as_object() {
+        if let Some(chat) = stored["body"][kind].as_object() {
+            // Its id is built from the assistant's turn and agent ids.
+            if let Some(id) = line.remove("event_id") {
+                untrusted.insert("event_id".into(), id);
+            }
             line.insert("kind".into(), json!(kind));
             if let Some(at) = stored["position"]["at_micros"].as_u64() {
                 line.insert("at".into(), json!(render::rfc3339(at)));
@@ -2410,6 +2433,12 @@ fn watch_line(seq: Option<u64>, stored: &Value, session: &str) -> Value {
         if let Some(value) = fields.remove(field) {
             untrusted.insert(field.into(), value);
         }
+    }
+    // A console line is what the run wrote.
+    if kind == "console"
+        && let Some(value) = fields.remove("line")
+    {
+        untrusted.insert("line".into(), value);
     }
     if kind == "decision"
         && let Some(Value::Object(mut record)) = fields.remove("record")

@@ -26,12 +26,12 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::state::STAND_IN_TOKEN;
 use super::store::events::{ChatReplaced, ChatRole, ChatTurn, EventBody, Position};
 use super::store::{Recorder, Store};
 
 /// The stand-in agent's name in the assistant: only its hooks post chat.
 pub(crate) const STAND_IN_AGENT: &str = "submilli-standin";
-const STAND_IN_TOKEN: &str = "stand-in";
 /// The tool a Claude Code subagent hands its final report back with.
 const HANDBACK_TOOL: &str = "SubagentHandback";
 
@@ -142,34 +142,23 @@ pub(crate) fn transcript(text: &str) -> Transcript {
     read
 }
 
-fn message(turn: &str, role: ChatRole, text: &str) -> Message {
-    let (text, truncated) = capped(text);
+/// One message, cut to [`MAX_MESSAGE_BYTES`].
+pub(crate) fn message(turn: &str, role: ChatRole, text: &str) -> Message {
+    let (text, truncated) = super::within_bytes(text, MAX_MESSAGE_BYTES);
     Message {
         turn: turn.to_owned(),
         role,
-        text,
+        text: text.to_owned(),
         truncated,
         before_call: None,
     }
 }
 
-/// `text` cut to [`MAX_MESSAGE_BYTES`] at a character boundary, and whether it was cut.
-fn capped(text: &str) -> (String, bool) {
-    if text.len() <= MAX_MESSAGE_BYTES {
-        return (text.to_owned(), false);
-    }
-    let mut end = MAX_MESSAGE_BYTES;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    (text[..end].to_owned(), true)
-}
-
 // ---- the hook ------------------------------------------------------------------------------
 
 /// `submilli playground chat-hook`: posts the stand-in's chat for the hook on stdin.
-/// Always exits 0 and prints nothing, so it never blocks or changes the assistant's
-/// session, whether or not the playground is running.
+/// Always exits 0 and prints nothing, so it never changes the assistant's session, whether
+/// or not the playground is running, and its post is bounded so it never holds it up.
 pub(crate) fn execute_hook() -> ExitCode {
     let mut input = String::new();
     let read = std::io::stdin()
@@ -188,7 +177,7 @@ pub(crate) fn execute_hook() -> ExitCode {
     if let Ok(Ok(running)) = super::controls::act::connect_as(STAND_IN_TOKEN)
         && let Ok(body) = serde_json::to_value(&post)
     {
-        let _ = running.send::<Value>("POST", "/api/chat", Some(&body));
+        let _ = running.post_bounded::<Value>("/api/chat", &body);
     }
     ExitCode::SUCCESS
 }
@@ -213,9 +202,10 @@ pub(crate) fn hook_post(hook: &Value) -> Option<ChatPost> {
     } else {
         live_transcript(hook, agent)
     };
+    // Lossy: the line being written may end inside a character.
     let read = path
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .map(|text| transcript(&text))
+        .and_then(|path| std::fs::read(path).ok())
+        .map(|bytes| transcript(&String::from_utf8_lossy(&bytes)))
         .unwrap_or_default();
     let mut messages = read.messages;
     // Claude Code 2.1.289 gave the final answer here, and not in the transcript.
@@ -223,9 +213,11 @@ pub(crate) fn hook_post(hook: &Value) -> Option<ChatPost> {
         && let Some(last) = hook["last_assistant_message"]
             .as_str()
             .filter(|last| !last.trim().is_empty())
-        && !messages.iter().any(|message| message.text == *last)
     {
-        messages.push(message(&format!("{agent}:last"), ChatRole::Assistant, last));
+        let last = message(&format!("{agent}:last"), ChatRole::Assistant, last);
+        if !messages.iter().any(|message| message.text == last.text) {
+            messages.push(last);
+        }
     }
     let calls = if complete {
         read.calls
@@ -288,10 +280,11 @@ fn within_budget(mut messages: Vec<Message>) -> Vec<Message> {
 /// what it already logged, and what it holds until it knows.
 #[derive(Default)]
 pub(crate) struct ChatIntake {
-    agents: Mutex<HashMap<String, Agent>>,
+    stand_ins: Mutex<HashMap<String, StandInChat>>,
 }
 
-struct Agent {
+/// One stand-in's chat: where it goes, and what is logged and held.
+struct StandInChat {
     session: Option<String>,
     /// Turns in the log, and where each was placed.
     logged: HashMap<String, Position>,
@@ -303,7 +296,7 @@ struct Agent {
     complete: bool,
 }
 
-impl Agent {
+impl StandInChat {
     fn new(now: Instant) -> Self {
         Self {
             session: None,
@@ -331,91 +324,148 @@ impl Agent {
 impl ChatIntake {
     /// Takes one post; how many messages it logged.
     pub(crate) fn accept(&self, mut post: ChatPost, recorder: &Recorder, now: Instant) -> usize {
-        let at = Position {
-            at_micros: super::now_micros(),
-            run: None,
-            call_index: None,
-            rank: 0,
-        };
+        let at = Position::at(super::now_micros());
         post.messages.truncate(MAX_MESSAGES);
         for message in &mut post.messages {
-            let (text, cut) = capped(&message.text);
-            message.text = text;
-            message.truncated |= cut;
+            let (text, cut) = super::within_bytes(&message.text, MAX_MESSAGE_BYTES);
+            if cut {
+                message.text = text.to_owned();
+                message.truncated = true;
+            }
         }
-        let mut agents = self.agents.lock().unwrap_or_else(PoisonError::into_inner);
-        prune(&mut agents, now);
-        if !agents.contains_key(&post.agent) && agents.len() >= MAX_AGENTS {
+        let found = self.session_for(&post, recorder, now);
+        // Read before the lock too: the log may be long.
+        let first_events = match (&found, post.complete) {
+            (Some(session), true) => first_event_of_calls(recorder.store(), session),
+            _ => HashMap::new(),
+        };
+        let mut stand_ins = self.lock();
+        // Again: the map may have changed while the lock was released.
+        prune(&mut stand_ins, now);
+        if !stand_ins.contains_key(&post.agent) && stand_ins.len() >= MAX_AGENTS {
+            make_room(&mut stand_ins);
+        }
+        if !stand_ins.contains_key(&post.agent) && stand_ins.len() >= MAX_AGENTS {
             return 0;
         }
-        let agent = agents
+        let stand_in = stand_ins
             .entry(post.agent.clone())
-            .or_insert_with(|| Agent::new(now));
-        agent.last_seen = now;
-        if agent.session.is_none() {
-            agent.session = recorder.session_of_call(post.calls.iter().map(String::as_str));
+            .or_insert_with(|| StandInChat::new(now));
+        stand_in.last_seen = now;
+        if stand_in.session.is_none() {
+            stand_in.session = found.clone();
         }
-        let Some(session) = agent.session.clone() else {
+        let Some(session) = stand_in.session.clone() else {
             if post.complete {
-                agent.held.clear();
-                agent.held_bytes = 0;
+                stand_in.held.clear();
+                stand_in.held_bytes = 0;
             }
             for message in post.messages {
-                agent.hold(at, message);
+                stand_in.hold(at, message);
             }
             return 0;
         };
         let mut logged = 0;
-        for (position, message) in std::mem::take(&mut agent.held) {
-            logged += log_live(agent, recorder, &session, &post.agent, position, message);
+        for (position, message) in std::mem::take(&mut stand_in.held) {
+            logged += log_live(stand_in, recorder, &session, &post.agent, position, message);
         }
-        agent.held_bytes = 0;
+        stand_in.held_bytes = 0;
         if post.complete {
-            logged += log_complete(agent, recorder, &session, &post, at);
-        } else if !agent.complete {
+            let first_events = if found.as_deref() == Some(session.as_str()) {
+                first_events
+            } else {
+                first_event_of_calls(recorder.store(), &session)
+            };
+            logged += log_complete(stand_in, recorder, &session, &post, at, &first_events);
+        } else if !stand_in.complete {
             for message in post.messages {
-                logged += log_live(agent, recorder, &session, &post.agent, at, message);
+                logged += log_live(stand_in, recorder, &session, &post.agent, at, message);
             }
         }
         logged
+    }
+
+    /// The session `post`'s stand-in is known to chat in, else the one its tool calls ran
+    /// in, if either. Looking may read session logs, so it runs with the lock released;
+    /// stand-ins a later prune would forget are pruned first, so one back after a long
+    /// silence looks again.
+    fn session_for(&self, post: &ChatPost, recorder: &Recorder, now: Instant) -> Option<String> {
+        let known = {
+            let mut stand_ins = self.lock();
+            prune(&mut stand_ins, now);
+            stand_ins
+                .get(&post.agent)
+                .and_then(|stand_in| stand_in.session.clone())
+        };
+        known.or_else(|| recorder.session_of_call(post.calls.iter().map(String::as_str)))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, StandInChat>> {
+        self.stand_ins
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Forgets the stand-in heard from longest ago among those whose conversation is
+/// complete and logged, if any: a full intake makes room for a new one.
+fn make_room(stand_ins: &mut HashMap<String, StandInChat>) {
+    let done = stand_ins
+        .iter()
+        .filter(|(_, stand_in)| stand_in.complete && stand_in.held.is_empty())
+        .min_by_key(|(_, stand_in)| stand_in.last_seen)
+        .map(|(agent, _)| agent.clone());
+    if let Some(agent) = done {
+        stand_ins.remove(&agent);
     }
 }
 
 /// Forgets stand-ins not heard from for [`HELD_FOR`]: held chat that never found its
 /// session is dropped.
-fn prune(agents: &mut HashMap<String, Agent>, now: Instant) {
-    agents.retain(|_, agent| now.saturating_duration_since(agent.last_seen) < HELD_FOR);
+fn prune(stand_ins: &mut HashMap<String, StandInChat>, now: Instant) {
+    stand_ins.retain(|_, stand_in| now.saturating_duration_since(stand_in.last_seen) < HELD_FOR);
 }
 
 fn log_live(
-    agent: &mut Agent,
+    stand_in: &mut StandInChat,
     recorder: &Recorder,
     session: &str,
     agent_id: &str,
     position: Position,
     message: Message,
 ) -> usize {
-    if agent.logged.contains_key(&message.turn) {
+    if stand_in.logged.contains_key(&message.turn) {
         return 0;
     }
-    agent.logged.insert(message.turn.clone(), position);
+    stand_in.logged.insert(message.turn.clone(), position);
     let event_id = format!("chat-{agent_id}-{}", message.turn);
     recorder.append_chat(session, event_id, position, chat_body(agent_id, message));
     1
 }
 
 /// Replaces what was logged live with the complete conversation, each message just before
-/// the session's first event of the next tool call after it.
+/// the session's first event of the next tool call after it (`first_events`). A live
+/// message the copy lacks, as one cut to fit its post may, is kept.
 fn log_complete(
-    agent: &mut Agent,
+    stand_in: &mut StandInChat,
     recorder: &Recorder,
     session: &str,
     post: &ChatPost,
     at: Position,
+    first_events: &HashMap<String, Position>,
 ) -> usize {
-    let first_events = first_event_of_calls(recorder.store(), session);
-    if !agent.logged.is_empty() {
-        let mut turns: Vec<String> = agent.logged.keys().cloned().collect();
+    let copied: std::collections::HashSet<&str> = post
+        .messages
+        .iter()
+        .map(|message| message.turn.as_str())
+        .collect();
+    let mut turns: Vec<String> = stand_in
+        .logged
+        .keys()
+        .filter(|turn| copied.contains(turn.as_str()))
+        .cloned()
+        .collect();
+    if !turns.is_empty() {
         turns.sort();
         recorder.append_chat(
             session,
@@ -433,13 +483,8 @@ fn log_complete(
             None => at,
             Some(call) => first_events
                 .get(call)
-                .map(|first| Position {
-                    at_micros: first.at_micros.saturating_sub(1),
-                    run: None,
-                    call_index: None,
-                    rank: 0,
-                })
-                .or_else(|| agent.logged.get(&message.turn).copied())
+                .map(|first| Position::at(first.at_micros.saturating_sub(1)))
+                .or_else(|| stand_in.logged.get(&message.turn).copied())
                 .unwrap_or(at),
         };
         logged.insert(message.turn.clone(), position);
@@ -451,8 +496,8 @@ fn log_complete(
             chat_body(&post.agent, message.clone()),
         );
     }
-    agent.logged = logged;
-    agent.complete = true;
+    stand_in.logged = logged;
+    stand_in.complete = true;
     post.messages.len()
 }
 
@@ -476,7 +521,7 @@ fn first_event_of_calls(store: &Store, session: &str) -> HashMap<String, Positio
     first
 }
 
-fn chat_body(agent: &str, message: Message) -> EventBody {
+pub(crate) fn chat_body(agent: &str, message: Message) -> EventBody {
     EventBody::Chat(ChatTurn {
         turn: message.turn,
         role: message.role,
