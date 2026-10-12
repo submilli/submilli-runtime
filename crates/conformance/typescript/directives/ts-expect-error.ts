@@ -33,7 +33,7 @@ let invalidPlain: number = 'nope';
 
 let validPlain: string = 'nope';
 
-/*pruned*/;        
+/*pruned*/         
 /*pruned*/;                           // <-- compiles (as expected via comment)
 /*pruned*/;                           // Should error
 
