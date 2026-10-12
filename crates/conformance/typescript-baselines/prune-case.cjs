@@ -55,7 +55,7 @@ function prune(caseErrors, file) {
     const ranges = rangesToBlank(sourceFile, found.offsets);
     if (!ranges.length) return finish(`nothing to prune at offsets ${found.offsets.join(", ")}`);
     const previousText = text;
-    for (const range of ranges) text = blank(text, range.start, range.end, range.statementRequired);
+    for (const range of ranges) text = blank(text, range);
     if (text === previousText) return finish(`pruning changed nothing at offsets ${found.offsets.join(", ")}`);
     fs.writeFileSync(file, text);
   }
@@ -106,7 +106,8 @@ function offsetOf(text, line, column) {
 
 /** The ranges to blank for errors at `offsets`, deduplicated, right to left so
  * blanking one leaves the offsets of the rest in place. An outer statement's blank
- * covers any inner one. Each is `{ start, end, statementRequired }`. */
+ * covers any inner one. Each is `{ start, end, body }`, `body` being what `blank`
+ * leaves in its place. */
 function rangesToBlank(sourceFile, offsets) {
   const ranges = new Map();
   for (const offset of offsets) {
@@ -130,7 +131,7 @@ function addRange(ranges, range) {
 }
 
 /** The statement holding `offset`, unless it is a blank an earlier pass left in a
- * list of statements. An empty body, such as `if (a) ;`, widens to its statement. */
+ * list of statements. An empty body, such as `if (a) ;`, is the statement's. */
 function statementWithCodeAt(sourceFile, offset) {
   const unit = statementAt(sourceFile, offset);
   if (!unit) return null;
@@ -138,8 +139,12 @@ function statementWithCodeAt(sourceFile, offset) {
 }
 
 function isListMember(statement) {
+  return isBlockMember(statement) || ts.isCaseOrDefaultClause(statement.parent);
+}
+
+function isBlockMember(statement) {
   const parent = statement.parent;
-  return ts.isBlock(parent) || ts.isSourceFile(parent) || ts.isModuleBlock(parent) || ts.isCaseOrDefaultClause(parent);
+  return ts.isBlock(parent) || ts.isSourceFile(parent) || ts.isModuleBlock(parent);
 }
 
 /** The range blanking `unit` takes, widened to what must go with it. */
@@ -149,7 +154,7 @@ function statementRange(sourceFile, unit) {
     previous = widened;
     widened = widenForBody(sourceFile, widenForJumps(widened));
   }
-  return { start: widened.getStart(sourceFile), end: widened.end, statementRequired: needsStatement(widened) };
+  return { start: widened.getStart(sourceFile), end: widened.end, body: needsStatement(widened) ? "{}" : ";" };
 }
 
 /** What to blank for an error where `tsc`'s parse has no statement with code: the
@@ -176,7 +181,8 @@ function recoveryRanges(sourceFile, offset) {
   // A blank there means the statement before was blanked already and the error
   // stayed, so it isn't that statement's. A block left open, as `tsc` reads it,
   // holds the rest of the case.
-  if (!before || ts.isEmptyStatement(before) || !(isPrunable(before) || ts.isBlock(before))) return [];
+  if (!before || ts.isEmptyStatement(before)) return [];
+  if (!isPrunable(before) && !ts.isBlock(before)) return [];
   return [statementRange(sourceFile, before)];
 }
 
@@ -209,7 +215,11 @@ function gapTokens(text, start, end) {
     const lineEnd = text.indexOf("\n", tokenStart);
     const tokenEnd = isUnterminated && lineEnd !== -1 ? lineEnd : scanner.getTokenEnd();
     const isMarker = isComment && MARKERS.includes(text.slice(tokenStart, scanner.getTokenEnd()));
-    tokens.push({ start: tokenStart, end: Math.min(tokenEnd, end), statementRequired: false, isComment, isUnterminated, isMarker });
+    // A token goes for `;`, keeping the statements `tsc` read either side of it apart.
+    // A comment separates nothing, and a statement in its place would, such as
+    // between an overload and its implementation.
+    const body = isComment && !isUnterminated ? "" : ";";
+    tokens.push({ start: tokenStart, end: Math.min(tokenEnd, end), body, isComment, isUnterminated, isMarker });
   }
   return tokens;
 }
@@ -312,15 +322,15 @@ function needsStatement(node) {
   const parent = node.parent;
   // Our parser skips a lone `;` in a `switch`, where only the last clause needs a body.
   if (ts.isCaseOrDefaultClause(parent)) return parent === parent.parent.clauses.at(-1);
-  return !(ts.isBlock(parent) || ts.isSourceFile(parent) || ts.isModuleBlock(parent));
+  return !isBlockMember(node);
 }
 
 /** Spaces in place of `text[start..end)`, keeping its line breaks, led by a marker
- * where one fits, then `{}` where a statement is still needed and `;` elsewhere, so
- * the statements either side can't run together without the one between. */
-function blank(text, start, end, statementRequired) {
+ * where one fits, then `body`: `{}` where a statement is still needed and `;`
+ * elsewhere, so the statements either side can't run together without the one
+ * between, or nothing in place of a comment. */
+function blank(text, { start, end, body }) {
   const gap = text.slice(start, end).replace(/[^\n]/g, " ");
-  const body = statementRequired ? "{}" : ";";
   const marker = MARKERS.find((m) => m.length + body.length <= firstLineLength(gap)) ?? "";
   const head = marker + body;
   return text.slice(0, start) + head + gap.slice(head.length) + text.slice(end);

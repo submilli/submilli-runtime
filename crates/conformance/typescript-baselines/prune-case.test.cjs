@@ -26,6 +26,13 @@ test("an error on a comment blanks the comment, but not a pruning marker", () =>
   assert.deepEqual(blanked("class /**/;\n", "/**/"), ["class"]);
 });
 
+test("a comment's blank leaves no statement in its place", () => {
+  const source = "function f(): void;\n// @ts-expect-error\nfunction f() {}\n";
+  const sourceFile = ts.createSourceFile("case.ts", source, ts.ScriptTarget.Latest, true);
+  const [range] = rangesToBlank(sourceFile, [source.indexOf("// @")]);
+  assert.equal(range.body, "");
+});
+
 test("an unterminated comment blanks its first line", () => {
   assert.deepEqual(blanked("let a = 1;\n/* open\n\nfunction main(): void {}\n", "/*"), ["/* open"]);
 });

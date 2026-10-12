@@ -267,8 +267,10 @@ the case is a porter failure, as is one where a pass changes nothing.
 
 The blanked text starts with `/*pruned*/`, or `/**/` where that doesn't fit, then
 `{}` where a statement is still required, such as the body of an `if` or the last
-clause of a `switch`, and `;` elsewhere, so the statements either side can't run together. Every other line stays
-where it was, so line numbers still match the upstream case.
+clause of a `switch`, and `;` elsewhere, so the statements either side can't run
+together. A blanked comment leaves only the marker, since a statement in its place
+could separate an overload from its implementation. Every other line stays where it
+was, so line numbers still match the upstream case.
 
 ## Maintaining the suite
 
