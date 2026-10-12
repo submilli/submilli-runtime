@@ -1,0 +1,1 @@
+line 51, 52 type: bug SUB-1598 a method read on a union of objects reduces to the wider method type, where tsc keeps the union

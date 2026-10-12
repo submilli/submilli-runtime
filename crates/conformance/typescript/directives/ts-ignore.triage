@@ -1,1 +1,1 @@
-line 3, 9, 19, 22 extra: bug SUB-1196 (`// @ts-ignore`) `// @ts-ignore` doesn't suppress the next line's error
+line 3, 9, 19, 22 extra: by-design spec §Excluded-Features `// @ts-ignore` doesn't suppress the next line's error

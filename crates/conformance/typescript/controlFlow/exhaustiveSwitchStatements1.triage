@@ -1,5 +1,5 @@
 line 12 extra: by-design spec §1.5 code after an exhaustive `switch` is unreachable
 line 15 extra: by-design spec §1.8 `throw` accepts only `Error` values
-line 236 extra: bug SUB-1196 (non-exhaustive `switch`) a `switch` without `default` must cover every case, which the spec doesn't state
+line 236 extra: by-design spec §1.5 a `switch` over literals without `default` must cover every value, where tsc accepts it
 line 237 extra: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough
 line 240, 241 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it

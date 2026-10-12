@@ -1,1 +1,1 @@
-line 3 type: bug SUB-1196 (RegExp result shape) `exec`/`match` return a `RegExpMatch` record, not tsc's match array
+line 3 type: by-design spec §1.7 `exec`/`match` return a `RegExpMatch` record, not tsc's match array

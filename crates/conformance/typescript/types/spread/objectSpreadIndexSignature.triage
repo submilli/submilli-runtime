@@ -1,1 +1,1 @@
-line 6, 9 type: bug SUB-1196 (string-keyed records) a spread of a record keeps its index signature beside other fields and widens named fields by it, where tsc drops it or leaves the fields alone
+line 6, 9 type: by-design spec §1.2 a spread of a record keeps its index signature beside other fields and widens named fields by it, where tsc drops it or leaves the fields alone
