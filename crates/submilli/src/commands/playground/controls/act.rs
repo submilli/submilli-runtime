@@ -638,7 +638,8 @@ impl Actions {
     fn show_run(&self, id: u64, kind: &'static str) -> Result<Answer, ActError> {
         let reader = self.reader()?;
         let stored = self.load(id)?;
-        let mut result: ShowResult = read::show_stored(&reader, &stored, false)?;
+        let mut result: ShowResult =
+            read::show_stored(&reader, &stored, read::ShowOptions::default())?;
         result.kind = kind;
         let exit = exit_of(&stored);
         let mut answer = Answer::of(exit, &result, render::show_text);

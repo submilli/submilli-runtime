@@ -705,8 +705,21 @@ pub(crate) struct ShowResult {
     pub(crate) log_truncated: bool,
     pub(crate) calls: CallSummary,
     pub(crate) payloads_included: bool,
+    pub(crate) program_recorded: bool,
+    /// Whether `--program` asked for the program; when recorded, it is in
+    /// `untrusted.program`.
+    pub(crate) program_included: bool,
     pub(crate) next: Vec<String>,
     pub(crate) untrusted: ShowUntrusted,
+}
+
+/// What `show` adds beyond its summary.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ShowOptions {
+    /// Call bodies, results and console output in full.
+    pub(crate) include_payloads: bool,
+    /// The program the run ran, as the agent wrote it.
+    pub(crate) include_program: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -839,6 +852,9 @@ pub(crate) struct ShowUntrusted {
     pub(crate) calls: BTreeMap<u64, Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) test: Option<TestUntrusted>,
+    /// The program the run ran, in full: only with `--program`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) program: Option<String>,
 }
 
 /// What a test run says about its local state: true of every test run.
@@ -850,17 +866,21 @@ const TEST_NOT_STORED: &str = "the test report (calls served from the recording,
 pub(crate) fn show(
     reader: &Reader,
     id: u64,
-    include_payloads: bool,
+    options: ShowOptions,
 ) -> Result<ShowResult, ReadError> {
-    show_stored(reader, &reader.load(id)?, include_payloads)
+    show_stored(reader, &reader.load(id)?, options)
 }
 
 /// [`show`] of a run already loaded.
 pub(crate) fn show_stored(
     reader: &Reader,
     run: &StoredRun,
-    include_payloads: bool,
+    options: ShowOptions,
 ) -> Result<ShowResult, ReadError> {
+    let ShowOptions {
+        include_payloads,
+        include_program,
+    } = options;
     let changes = reader.changes()?;
     let under = DecidedUnder::find(&changes, run.recording.blueprint_version.as_deref());
     let mut untrusted = ShowUntrusted::default();
@@ -889,6 +909,9 @@ pub(crate) fn show_stored(
         .as_deref()
         .map(|result| cap_text(result, include_payloads));
     untrusted.console = cap_text(&run.console, include_payloads);
+    if include_program {
+        untrusted.program.clone_from(&run.recording.code);
+    }
 
     let denied = denied_refs(run);
     let outcome = Outcome::of(
@@ -930,6 +953,8 @@ pub(crate) fn show_stored(
         log_truncated: run.recording.log_truncated,
         calls,
         payloads_included: include_payloads,
+        program_recorded: run.recording.code.is_some(),
+        program_included: include_program,
         next,
         untrusted,
     })

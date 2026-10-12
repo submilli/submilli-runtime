@@ -348,6 +348,9 @@ pub struct ShowArgs {
     /// Include call request and response bodies, and results and console output in full.
     #[arg(long)]
     include_payloads: bool,
+    /// Include the program the run ran, as the agent wrote it.
+    #[arg(long)]
+    program: bool,
     /// Print JSON.
     #[arg(long)]
     json: bool,
@@ -543,7 +546,10 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Show(args) => read(
             ReadRequest::Show {
                 run: args.run,
-                include_payloads: args.include_payloads,
+                options: controls::read::ShowOptions {
+                    include_payloads: args.include_payloads,
+                    include_program: args.program,
+                },
             },
             args.json,
         ),

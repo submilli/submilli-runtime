@@ -557,6 +557,17 @@ pub(crate) fn show_text(result: &ShowResult) -> String {
     if !result.payloads_included && result.calls.with_bodies > 0 {
         let _ = writeln!(out, "payload bodies omitted; --include-payloads shows them");
     }
+    if let Some(program) = &result.untrusted.program {
+        if program.is_empty() {
+            fence.text("program", "(empty)", 1);
+        } else {
+            fence.text("program", program, usize::MAX);
+        }
+    } else if result.program_included {
+        let _ = writeln!(out, "program: not recorded for this run");
+    } else if result.program_recorded {
+        let _ = writeln!(out, "program omitted; --program shows it");
+    }
     fence.render(&mut out);
     next_lines(&mut out, &result.next);
     out
