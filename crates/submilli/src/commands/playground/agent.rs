@@ -22,17 +22,13 @@ use super::chat::{chat_body, message};
 use super::mcp_http::McpHttp;
 use super::store::Recorder;
 use super::store::events::{ChatRole, Position};
+use super::{DEFAULT_MAX_CALLS_PER_ANSWER, MAX_CALLS_PER_ANSWER_RANGE};
 
 /// The variable that picks the provider and model: `<provider>:<model>`.
 pub(crate) const MODEL_VARIABLE: &str = "SUBMILLI_PLAYGROUND_MODEL";
 
 /// How many times the model may be asked before the loop stops.
 pub(crate) const MAX_TURNS: usize = 20;
-/// The most tool calls run for one answer unless the chat says otherwise; the rest are
-/// refused to the model.
-pub(crate) const DEFAULT_MAX_CALLS_PER_ANSWER: u16 = 16;
-/// What that limit may be set to.
-pub(crate) const MAX_CALLS_PER_ANSWER_RANGE: std::ops::RangeInclusive<u16> = 1..=1000;
 /// How long one model request may take.
 pub(crate) const PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_OUTPUT_TOKENS: u64 = 4096;

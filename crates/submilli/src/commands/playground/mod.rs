@@ -66,6 +66,11 @@ const EXIT_PACKAGE_RESOLUTION: u8 = 5;
 /// `status`, `open`, or `stop` found no playground it can reach: none running, or
 /// one starting, stopping, or failing the nonce challenge.
 const EXIT_UNREACHABLE: u8 = 6;
+/// The most tool calls `chat` runs for one answer unless told otherwise; the rest are
+/// refused to the model.
+const DEFAULT_MAX_CALLS_PER_ANSWER: u16 = 16;
+/// What that limit may be set to.
+const MAX_CALLS_PER_ANSWER_RANGE: std::ops::RangeInclusive<u16> = 1..=1000;
 // A start interrupted while it waits stops what it launched and exits as the shell
 // reports the signal: 129 for SIGHUP, 130 for SIGINT, 143 for SIGTERM. A signal
 // the caller ignores (`nohup`) stays ignored.
@@ -239,10 +244,10 @@ pub struct ChatArgs {
     #[arg(
         long,
         value_name = "N",
-        default_value_t = agent::DEFAULT_MAX_CALLS_PER_ANSWER,
+        default_value_t = DEFAULT_MAX_CALLS_PER_ANSWER,
         value_parser = clap::value_parser!(u16).range(
-            i64::from(*agent::MAX_CALLS_PER_ANSWER_RANGE.start())
-                ..=i64::from(*agent::MAX_CALLS_PER_ANSWER_RANGE.end())
+            i64::from(*MAX_CALLS_PER_ANSWER_RANGE.start())
+                ..=i64::from(*MAX_CALLS_PER_ANSWER_RANGE.end())
         ),
     )]
     max_calls_per_answer: u16,
