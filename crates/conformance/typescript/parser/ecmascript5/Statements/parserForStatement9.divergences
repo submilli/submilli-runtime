@@ -1,0 +1,16 @@
+types: 24 of 33 tsc entries compared, 3 differ
+
+line 4: []
+  tsc:  []
+  ours: [undefined]
+
+line 4: x = !x
+  tsc:  true
+  ours: boolean
+
+line 5: x = !x
+  tsc:  true
+  ours: boolean
+
+errors:
+line 5: ours: field `x` does not exist on `{}` (tsc accepts)

@@ -1,0 +1,6 @@
+ts-expect-error.ts(9,1): error TS2578: Unused '@ts-expect-error' directive.
+ts-expect-error.ts(12,1): error TS2578: Unused '@ts-expect-error' directive.
+ts-expect-error.ts(22,1): error TS2578: Unused '@ts-expect-error' directive.
+ts-expect-error.ts(25,1): error TS2578: Unused '@ts-expect-error' directive.
+ts-expect-error.ts(29,1): error TS2578: Unused '@ts-expect-error' directive.
+ts-expect-error.ts(32,5): error TS2322: Type 'string' is not assignable to type 'number'.

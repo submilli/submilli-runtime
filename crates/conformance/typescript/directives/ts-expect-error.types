@@ -1,0 +1,120 @@
+=== ts-expect-error.ts ===
+// @ts-expect-error additional commenting
+let invalidCommentedFancySingle: number = 'nope';
+>invalidCommentedFancySingle : number
+>                            : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+/*
+ @ts-expect-error additional commenting */
+let invalidCommentedFancyMulti: number = 'nope';
+>invalidCommentedFancyMulti : number
+>                           : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+// @ts-expect-error additional commenting
+let validCommentedFancySingle: string = 'nope';
+>validCommentedFancySingle : string
+>                          : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+/* @ts-expect-error additional commenting */
+let validCommentedFancyMulti: string = 'nope';
+>validCommentedFancyMulti : string
+>                         : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+// @ts-expect-error
+let invalidCommentedPlainSingle: number = 'nope';
+>invalidCommentedPlainSingle : number
+>                            : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+/*
+ @ts-expect-error */
+let invalidCommentedPlainMulti: number = 'nope';
+>invalidCommentedPlainMulti : number
+>                           : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+// @ts-expect-error
+let validCommentedPlainSingle: string = 'nope';
+>validCommentedPlainSingle : string
+>                          : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+/* @ts-expect-error */
+let validCommentedPlainMulti1: string = 'nope';
+>validCommentedPlainMulti1 : string
+>                          : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+/*
+@ts-expect-error */
+let validCommentedPlainMulti2: string = 'nope';
+>validCommentedPlainMulti2 : string
+>                          : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+let invalidPlain: number = 'nope';
+>invalidPlain : number
+>             : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+let validPlain: string = 'nope';
+>validPlain : string
+>           : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+/*pruned*/;
+/*pruned*/;                           // <-- compiles (as expected via comment)
+/*pruned*/;                           // Should error
+
+/*pruned*/;                           // error
+/*pruned*/;                           // error
+
+// @ts-expect-error: additional commenting with no whitespace
+let invalidCommentedFancySingle_2: number = 'nope';
+>invalidCommentedFancySingle_2 : number
+>                              : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+/*
+ @ts-expect-error: additional commenting with no whitespace */
+let invalidCommentedFancyMulti_2: number = 'nope';
+>invalidCommentedFancyMulti_2 : number
+>                             : ^^^^^^
+>'nope' : "nope"
+>       : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

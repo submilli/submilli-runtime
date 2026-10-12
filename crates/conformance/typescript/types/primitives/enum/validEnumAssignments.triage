@@ -1,0 +1,2 @@
+line 21 type: by-design spec §1.6 after an assignment the variable has the assigned value's type, where tsc keeps the declared one (`n = E.A` on line 12)
+line 24, 25, 26 extra: by-design spec §1.2 enums are nominal, so a `number` isn't assignable to a numeric enum

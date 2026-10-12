@@ -1,0 +1,1 @@
+line 5 extra: by-design spec §1.2 enums are nominal, so a `number` isn't assignable to a numeric enum

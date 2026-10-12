@@ -1,0 +1,3 @@
+validEnumAssignments.ts(22,1): error TS2322: Type 'null' is not assignable to type 'E'.
+validEnumAssignments.ts(23,1): error TS2322: Type 'undefined' is not assignable to type 'E'.
+validEnumAssignments.ts(27,1): error TS2322: Type '-1' is not assignable to type 'E'.

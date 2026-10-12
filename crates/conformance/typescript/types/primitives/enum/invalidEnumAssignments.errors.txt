@@ -1,0 +1,7 @@
+invalidEnumAssignments.ts(15,1): error TS2322: Type 'E2.A' is not assignable to type 'E'.
+invalidEnumAssignments.ts(16,1): error TS2322: Type 'E.A' is not assignable to type 'E2'.
+invalidEnumAssignments.ts(17,1): error TS2322: Type 'void' is not assignable to type 'E'.
+invalidEnumAssignments.ts(17,5): error TS2352: Conversion of type 'null' to type 'void' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+invalidEnumAssignments.ts(18,1): error TS2322: Type '{}' is not assignable to type 'E'.
+invalidEnumAssignments.ts(19,1): error TS2322: Type '""' is not assignable to type 'E'.
+invalidEnumAssignments.ts(22,5): error TS2322: Type 'T' is not assignable to type 'E'.

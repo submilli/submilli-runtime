@@ -1,0 +1,2 @@
+line 3, 7, 16, 20, 44, 48 extra: by-design spec §Excluded-Features `// @ts-ignore` and `// @ts-expect-error` are excluded, so a directive neither hides the next line's error nor is reported unused
+line 9, 12, 22, 25, 29 missed: by-design spec §Excluded-Features `// @ts-ignore` and `// @ts-expect-error` are excluded, so a directive neither hides the next line's error nor is reported unused

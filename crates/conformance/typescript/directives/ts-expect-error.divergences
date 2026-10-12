@@ -1,0 +1,14 @@
+types: 13 of 27 tsc entries compared, 0 differ
+
+errors:
+line 9: tsc TS2578: Unused '@ts-expect-error' directive. (we accept)
+line 12: tsc TS2578: Unused '@ts-expect-error' directive. (we accept)
+line 22: tsc TS2578: Unused '@ts-expect-error' directive. (we accept)
+line 25: tsc TS2578: Unused '@ts-expect-error' directive. (we accept)
+line 29: tsc TS2578: Unused '@ts-expect-error' directive. (we accept)
+line 3: ours: expected `number`, got `string` (tsc accepts)
+line 7: ours: expected `number`, got `string` (tsc accepts)
+line 16: ours: expected `number`, got `string` (tsc accepts)
+line 20: ours: expected `number`, got `string` (tsc accepts)
+line 44: ours: expected `number`, got `string` (tsc accepts)
+line 48: ours: expected `number`, got `string` (tsc accepts)
