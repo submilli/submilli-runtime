@@ -153,9 +153,9 @@ impl KnownSecrets {
     ///
     /// Every string value is redacted, and every number that is a known secret becomes
     /// [`REDACTED`]. A string the runtime cut at a cap (a context string ending in its
-    /// truncation marker, or the body copy of a payload marked truncated) also loses a
-    /// trailing start of any form of a secret, at least [`MIN_SECRET_BYTES`] long, that
-    /// the cut left. A base64 body copy (`{"encoding": "base64", "data": ...}`) is decoded,
+    /// truncation marker, or the body copy of a payload, a console line, or a chat
+    /// message marked truncated) also loses a trailing start of any form of a secret, at
+    /// least [`MIN_SECRET_BYTES`] long, that the cut left. A base64 body copy (`{"encoding": "base64", "data": ...}`) is decoded,
     /// redacted as bytes, and encoded again, since a secret inside binary data does not
     /// appear in its base64 text at a fixed alignment.
     ///
@@ -377,7 +377,8 @@ impl Walk<'_> {
             }
             Value::Object(fields) => {
                 let copy = body_copy_encoding(fields);
-                // A payload record whose copy was cut: its body ends at the cap.
+                // A payload record whose copy was cut: its body ends at the cap. So does a
+                // console line or a chat message marked cut.
                 let body_ending = if fields.get("truncated") == Some(&Value::Bool(true)) {
                     Ending::Cut
                 } else {
@@ -388,7 +389,7 @@ impl Walk<'_> {
                     match (copy, key.as_str()) {
                         (Some(Encoding::Base64), "data") => self.base64_copy(item, ending),
                         (Some(Encoding::Text), "data") => self.value(item, ending),
-                        (None, "body") => self.value(item, body_ending),
+                        (None, "body" | "line" | "text") => self.value(item, body_ending),
                         _ => self.value(item, Ending::Whole),
                     }
                     self.path.pop();
@@ -801,6 +802,28 @@ mod tests {
                 "{}",
                 String::from_utf8_lossy(&data)
             );
+        }
+    }
+
+    #[test]
+    fn a_console_line_or_chat_message_cut_at_its_cap_loses_the_secrets_start() {
+        let known = known();
+        let cut = format!("token {}", &SECRET[..12]);
+        for truncated in [true, false] {
+            let console = redact(
+                &known,
+                serde_json::json!({ "event": {
+                    "kind": "console", "line": cut, "truncated": truncated } }),
+            );
+            let chat = redact(
+                &known,
+                serde_json::json!({ "chat": {
+                    "turn": "t", "role": "assistant", "text": cut, "truncated": truncated } }),
+            );
+            for text in [&console["event"]["line"], &chat["chat"]["text"]] {
+                let text = text.as_str().unwrap();
+                assert_eq!(text.ends_with(REDACTED), truncated, "{text}");
+            }
         }
     }
 

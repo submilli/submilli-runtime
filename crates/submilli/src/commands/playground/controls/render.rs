@@ -26,6 +26,7 @@ use std::fmt::Write as _;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::commands::playground::agent::{MAX_TURNS, Stopped};
 use crate::commands::playground::store::run::DecisionRef;
 
 use super::act::{
@@ -938,6 +939,73 @@ pub(crate) fn binding_text(result: &BindingResult) -> String {
             list_or_none(&result.to_bind_again)
         );
     }
+    out
+}
+
+/// What `chat` did. The model's reply comes from reading run results, so it is run data.
+#[derive(Debug, Serialize)]
+pub(crate) struct ChatResult {
+    pub(crate) session: Option<String>,
+    pub(crate) provider: &'static str,
+    pub(crate) model: String,
+    pub(crate) tool_calls: usize,
+    pub(crate) stopped: Stopped,
+    /// The provider's reason, when it stopped the answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stop_reason: Option<String>,
+    pub(crate) next: Vec<String>,
+    pub(crate) untrusted: ChatUntrusted,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ChatUntrusted {
+    pub(crate) reply: Option<String>,
+}
+
+pub(crate) fn chat_text(result: &ChatResult) -> String {
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "chat · {} {} · {} tool call{}",
+        result.provider,
+        clean(&result.model),
+        result.tool_calls,
+        if result.tool_calls == 1 { "" } else { "s" }
+    );
+    if let Some(session) = &result.session {
+        let _ = write!(out, " · session {}", clean(session));
+    }
+    let _ = writeln!(out);
+    match result.stopped {
+        Stopped::Answered => {}
+        Stopped::TurnLimit => {
+            let _ = writeln!(
+                out,
+                "stopped after {MAX_TURNS} model turns without a final answer"
+            );
+        }
+        Stopped::OutputLimit => {
+            let _ = writeln!(
+                out,
+                "stopped at the model's output limit; its answer may be cut short"
+            );
+        }
+        Stopped::Provider => {
+            let reason = result.stop_reason.as_deref().unwrap_or("no reason given");
+            let _ = writeln!(
+                out,
+                "{} stopped the model's answer: {}",
+                result.provider,
+                clean(reason)
+            );
+        }
+    }
+    if let Some(reply) = &result.untrusted.reply {
+        let mut fence = Fence::default();
+        fence.text("reply", reply, 200);
+        fence.render(&mut out);
+    }
+    next_lines(&mut out, &result.next);
     out
 }
 

@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::Result;
@@ -38,11 +39,12 @@ use submilli_server::record::{
 };
 
 use super::super::Output;
+use super::super::agent;
 use super::super::api::{MAX_BODY_BYTES, feed};
 use super::super::client::{self, Probe, Running};
 use super::super::labels;
 use super::super::project;
-use super::super::state::{self, InstanceRecord, RememberedBinding, StateDir};
+use super::super::state::{self, ADMIN_TOKEN, InstanceRecord, RememberedBinding, StateDir};
 use super::super::store::redact::REDACTED;
 use super::super::store::run::{DecisionRef, StoredRun, StoredTestReport};
 use super::super::store::sessions::SessionEntry;
@@ -413,6 +415,10 @@ pub(crate) struct Actions {
     pub(crate) page: Page,
     /// Runs a cancel was sent for, while they drain.
     pub(crate) cancelling: Mutex<BTreeSet<u64>>,
+    /// Where the stand-in's chat goes.
+    pub(crate) chat: super::super::chat::ChatIntake,
+    /// The server listener's port, for chat's MCP connection.
+    pub(crate) server_port: u16,
 }
 
 impl Actions {
@@ -778,10 +784,99 @@ impl Actions {
         }
     }
 
-    /// The binding with secret values, for the bridge.
-    pub(crate) fn bridge_binding(&self) -> Value {
-        let binding = self.binding();
-        json!({ "variables": binding.variables, "secrets": binding.secrets })
+    /// What the bridge connects with: the blueprint, and the values a new run of it gets,
+    /// secret values included. Refused as a run would be when a required value is missing.
+    pub(crate) async fn bridge_binding(&self) -> Answer {
+        answer(self.try_bridge_binding().await)
+    }
+
+    async fn try_bridge_binding(&self) -> Result<Answer, ActError> {
+        let blueprint = self.blueprint(&self.blueprint_name).await?;
+        let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
+        let result = json!({
+            "blueprint": self.blueprint_name,
+            "variables": variables,
+            "secrets": secrets,
+        });
+        Ok(Answer::of(EXIT_SUCCESS, &result, |_| String::new()))
+    }
+
+    /// Runs `request`'s task with the developer's own model key, its runs labeled
+    /// `label`.
+    pub(crate) async fn chat(
+        self: &Arc<Self>,
+        label: &'static str,
+        request: ChatRequest,
+    ) -> Answer {
+        answer(self.try_chat(label, request).await)
+    }
+
+    async fn try_chat(
+        self: &Arc<Self>,
+        label: &'static str,
+        request: ChatRequest,
+    ) -> Result<Answer, ActError> {
+        if request.task.trim().is_empty() {
+            return Err(ActError::usage(
+                "empty-task",
+                "say what the agent should do",
+            ));
+        }
+        let max_calls_per_answer = agent::max_calls_per_answer(request.max_calls_per_answer)
+            .map_err(|message| ActError::usage("invalid-max-calls", message))?;
+        let choice = agent::configured()
+            .map_err(|message| ActError::new(EXIT_FAILURE, "no-provider", message))?;
+        let blueprint = self.blueprint(&self.blueprint_name).await?;
+        let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
+        let token = StateDir::for_project(&self.project_root)
+            .token(label)
+            .map_err(|error| ActError::failure(format!("{error:#}")))?;
+        let actions = Arc::clone(self);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let _cancel_when_dropped = agent::CancelOnDrop(Arc::clone(&cancelled));
+        let ran = tokio::task::spawn_blocking(move || {
+            let setup = agent::Setup {
+                choice,
+                server_port: actions.server_port,
+                blueprint: &actions.blueprint_name,
+                label,
+                token: &token,
+                variables: &variables,
+                secrets: &secrets,
+                recorder: &actions.recorder,
+                max_calls_per_answer,
+                cancelled: &cancelled,
+            };
+            let ran = agent::run(&setup, &request.task);
+            if cancelled.load(Ordering::Relaxed) && ran.is_err() {
+                super::super::log::note(&format!(
+                    "a {label} chat was cancelled: whoever started it is gone"
+                ));
+            }
+            ran
+        })
+        .await
+        .map_err(|error| ActError::failure(format!("the chat failed: {error}")))?;
+        let outcome = ran.map_err(|message| ActError::failure(clean(&message)))?;
+        let follow = outcome.session.iter().flat_map(|session| {
+            [
+                Next::RunsInSession(session.clone()),
+                Next::Watch(session.clone()),
+            ]
+        });
+        let result = render::ChatResult {
+            session: outcome.session.clone(),
+            provider: outcome.provider,
+            model: outcome.model,
+            tool_calls: outcome.tool_calls,
+            stopped: outcome.stopped,
+            stop_reason: outcome.stop_reason,
+            next: next(follow),
+            untrusted: render::ChatUntrusted {
+                reply: outcome.reply,
+            },
+        };
+        Ok(Answer::of(EXIT_SUCCESS, &result, render::chat_text))
     }
 
     // ---- sessions ----
@@ -1966,6 +2061,15 @@ fn write_blueprint(path: &Path, drafted_from: &[u8], new: &[u8]) -> Result<(), A
 
 // ---- the CLI's side ------------------------------------------------------------------------
 
+/// A task for `chat`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ChatRequest {
+    pub(crate) task: String,
+    /// The most tool calls run for one answer; the default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_calls_per_answer: Option<u16>,
+}
+
 /// An action as the CLI sends it to the running playground.
 pub(crate) enum ActionRequest {
     Exec(ExecRequest),
@@ -1978,6 +2082,7 @@ pub(crate) enum ActionRequest {
     Rerun(u64),
     Clear,
     Cancel(u64),
+    Chat(ChatRequest),
 }
 
 impl ActionRequest {
@@ -2003,6 +2108,7 @@ impl ActionRequest {
             Self::Rerun(run) => ("POST", "/api/rerun", Some(json!({ "run": run }))),
             Self::Clear => ("POST", "/api/clear", Some(json!({}))),
             Self::Cancel(run) => ("POST", "/api/cancel", Some(json!({ "run": run }))),
+            Self::Chat(request) => ("POST", "/api/agent", body(serde_json::to_value(request))),
         }
     }
 }
@@ -2010,6 +2116,11 @@ impl ActionRequest {
 /// The running playground for the project around the current directory, or the answer
 /// that says it is not running.
 pub(crate) fn connect() -> Result<Result<Running, Answer>> {
+    connect_as(ADMIN_TOKEN)
+}
+
+/// [`connect`], sending requests with token `name`.
+pub(crate) fn connect_as(name: &str) -> Result<Result<Running, Answer>> {
     let not_running = || Ok(Err(Answer::from(ActError::not_running())));
     let Ok(cwd) = std::env::current_dir() else {
         return not_running();
@@ -2017,7 +2128,7 @@ pub(crate) fn connect() -> Result<Result<Running, Answer>> {
     let Some(root) = project::find_project_root(&cwd) else {
         return not_running();
     };
-    match client::probe(&StateDir::for_project(&root))? {
+    match client::probe_as(&StateDir::for_project(&root), name)? {
         Probe::Running(running) => Ok(Ok(running)),
         Probe::Busy(busy) => Ok(Err(Answer::from(ActError::new(
             EXIT_NOT_RUNNING,
@@ -2255,7 +2366,8 @@ const ENVELOPE_FIELDS: [&str; 6] = [
 /// One stored event as `watch` prints it: trusted fields (sequence, kind, session, run,
 /// time, ids, caller and capability names, outcomes, sizes) at the top, and what came from
 /// inside the run (a decision's context, its near misses' values, its reason and its
-/// cause's, an MCP client's own name and tool call id) under `untrusted`.
+/// cause's, an MCP client's own name and tool call id, a console line) under `untrusted`.
+/// A chat message's id is built from the assistant's own ids, so it goes there too.
 ///
 /// A decision carries its `<run>.<n>` reference when the store numbered it: the number
 /// `show`, `explain`, and `draft-rule` take for the same decision.
@@ -2277,6 +2389,32 @@ fn watch_line(seq: Option<u64>, stored: &Value, session: &str) -> Value {
         line.extend(gap.clone());
         return Value::Object(line);
     }
+    // A chat message: who spoke is ours to say; what it said and its ids came from the
+    // assistant.
+    for (kind, untrusted_fields) in [
+        ("chat", &["turn", "text", "agent"][..]),
+        ("chat-replaced", &["turns"][..]),
+    ] {
+        if let Some(chat) = stored["body"][kind].as_object() {
+            // Its id is built from the assistant's turn and agent ids.
+            if let Some(id) = line.remove("event_id") {
+                untrusted.insert("event_id".into(), id);
+            }
+            line.insert("kind".into(), json!(kind));
+            if let Some(at) = stored["position"]["at_micros"].as_u64() {
+                line.insert("at".into(), json!(render::rfc3339(at)));
+            }
+            for (field, value) in chat {
+                if untrusted_fields.contains(&field.as_str()) {
+                    untrusted.insert(field.clone(), value.clone());
+                } else {
+                    line.entry(field.clone()).or_insert_with(|| value.clone());
+                }
+            }
+            line.insert("untrusted".into(), Value::Object(untrusted));
+            return Value::Object(line);
+        }
+    }
     let Some(event) = stored["body"]["event"].as_object() else {
         line.insert("kind".into(), json!("unknown"));
         return Value::Object(line);
@@ -2295,6 +2433,12 @@ fn watch_line(seq: Option<u64>, stored: &Value, session: &str) -> Value {
         if let Some(value) = fields.remove(field) {
             untrusted.insert(field.into(), value);
         }
+    }
+    // A console line is what the run wrote.
+    if kind == "console"
+        && let Some(value) = fields.remove("line")
+    {
+        untrusted.insert("line".into(), value);
     }
     if kind == "decision"
         && let Some(Value::Object(mut record)) = fields.remove("record")

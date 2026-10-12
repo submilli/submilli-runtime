@@ -334,7 +334,10 @@ async fn run_inner(
     if runtime.telemetry == crate::config::RunTelemetry::Report {
         data.metrics = Arc::new(crate::metrics::SentryMetricsSink);
     }
-    data.console = Box::new(Sink(buf.clone()));
+    data.console = Box::new(Sink {
+        output: buf.clone(),
+        lines: log.clone().map(ConsoleLines::new),
+    });
     data.install_type_info(compiled.type_info.clone());
 
     let mut rt = crate::metrics::RuntimePhaseTimings::default();
@@ -831,13 +834,36 @@ fn captured_console(buf: &Mutex<Vec<u8>>) -> String {
 // A panic during writing may leave partial console output. AGENTS.md permits
 // panicking on poisoned access instead of recovering it; the panic that caused
 // poisoning is still subject to the no-panic policy.
-struct Sink(Arc<Mutex<Vec<u8>>>);
+struct Sink {
+    output: Arc<Mutex<Vec<u8>>>,
+    /// Reports each line as it is written, for a recorded run.
+    lines: Option<ConsoleLines>,
+}
 
 const MAX_CONSOLE_BYTES: usize = 1024 * 1024;
 
+/// The longest console line a session event carries; the run's console keeps the rest.
+const MAX_CONSOLE_LINE_BYTES: usize = 4 * 1024;
+/// The most console lines one run reports as session events; the run's console keeps the
+/// rest.
+const MAX_CONSOLE_LINES: usize = 1000;
+
 impl Write for Sink {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut output = self.0.lock().expect("console buffer lock poisoned");
+        self.append(buf)?;
+        if let Some(lines) = &mut self.lines {
+            lines.feed(buf);
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Sink {
+    fn append(&self, buf: &[u8]) -> std::io::Result<()> {
+        let mut output = self.output.lock().expect("console buffer lock poisoned");
         if buf.len() > MAX_CONSOLE_BYTES.saturating_sub(output.len()) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::FileTooLarge,
@@ -855,10 +881,62 @@ impl Write for Sink {
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::OutOfMemory, error))?;
         }
         output.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+/// Splits what the console accepted into lines and reports each complete one to the run's
+/// log, up to [`MAX_CONSOLE_LINES`]. `console.log` ends every line, so otherwise only
+/// output cut at the console's cap leaves a line unreported.
+struct ConsoleLines {
+    log: Arc<DecisionLog>,
+    /// The line so far, at most [`MAX_CONSOLE_LINE_BYTES`] of it.
+    pending: Vec<u8>,
+    truncated: bool,
+    reported: usize,
+}
+
+impl ConsoleLines {
+    fn new(log: Arc<DecisionLog>) -> Self {
+        Self {
+            log,
+            pending: Vec::new(),
+            truncated: false,
+            reported: 0,
+        }
+    }
+
+    fn feed(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() && self.reported < MAX_CONSOLE_LINES {
+            let (part, rest, ended) = match bytes.iter().position(|byte| *byte == b'\n') {
+                Some(end) => (&bytes[..end], &bytes[end + 1..], true),
+                None => (bytes, &[][..], false),
+            };
+            let room = MAX_CONSOLE_LINE_BYTES.saturating_sub(self.pending.len());
+            self.pending
+                .extend_from_slice(&part[..part.len().min(room)]);
+            self.truncated |= part.len() > room;
+            if ended {
+                self.report();
+            }
+            bytes = rest;
+        }
+    }
+
+    fn report(&mut self) {
+        // The cut may split a character: leave its start off rather than show it replaced.
+        if self.truncated
+            && let Err(error) = std::str::from_utf8(&self.pending)
+            && error.error_len().is_none()
+        {
+            self.pending.truncate(error.valid_up_to());
+        }
+        let line = String::from_utf8_lossy(&self.pending);
+        let line = line.strip_suffix('\r').unwrap_or(&line);
+        self.log.console_line(line, self.truncated);
+        self.pending.clear();
+        self.truncated = false;
+        self.reported += 1;
     }
 }
 
@@ -872,7 +950,10 @@ mod tests {
     #[test]
     fn console_sink_caps_retained_output_without_losing_prior_bytes() {
         let buffer = Arc::new(Mutex::new(Vec::new()));
-        let mut sink = Sink(buffer.clone());
+        let mut sink = Sink {
+            output: buffer.clone(),
+            lines: None,
+        };
         let chunk = vec![b'x'; MAX_CONSOLE_BYTES / 2];
         sink.write_all(&chunk).unwrap();
         sink.write_all(&chunk).unwrap();

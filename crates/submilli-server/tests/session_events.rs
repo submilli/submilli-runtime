@@ -326,6 +326,7 @@ fn kinds(events: &[SessionEvent]) -> Vec<&'static str> {
             EventKind::RunFinished { .. } => "run-finished",
             EventKind::Returned { .. } => "returned",
             EventKind::ToolCall { .. } => "tool-call",
+            EventKind::Console { .. } => "console",
         })
         .collect()
 }
@@ -386,6 +387,152 @@ async fn a_run_with_two_calls_emits_its_events_in_order() {
     );
     assert!(events.iter().all(|event| event.session_id.is_some()));
     assert_eq!(call_finished(&events, "fs.read").1, Some(5));
+}
+
+/// Each console line, with when it was written and the call before it.
+fn console_lines(events: &[SessionEvent]) -> Vec<(String, Option<u64>, u64, bool)> {
+    events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            EventKind::Console {
+                line,
+                written_micros,
+                after_call,
+                truncated,
+            } => Some((line.clone(), *after_call, *written_micros, *truncated)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn console_lines_arrive_in_order_between_the_calls_around_them() {
+    let server = server();
+    server
+        .execute(
+            r#"
+import * as fs from "submilli:fs";
+function main(): void {
+  console.log("before");
+  fs.writeText("/a.txt", "hello");
+  console.log("between\nand more");
+  fs.readText("/a.txt");
+  console.log("after");
+}
+"#,
+        )
+        .await;
+    let events = server.collected.first_run().await;
+    assert_eq!(
+        kinds(&events),
+        [
+            "run-started",
+            "console",
+            "call-started",
+            "decision",
+            "call-finished",
+            "console",
+            "console",
+            "call-started",
+            "decision",
+            "call-finished",
+            "console",
+            "run-finished",
+            "returned",
+        ]
+    );
+    let lines = console_lines(&events);
+    let text: Vec<_> = lines
+        .iter()
+        .map(|(line, after, _, _)| (line.as_str(), *after))
+        .collect();
+    assert_eq!(
+        text,
+        [
+            ("before", None),
+            ("between", Some(0)),
+            ("and more", Some(0)),
+            ("after", Some(1)),
+        ]
+    );
+    assert!(lines.windows(2).all(|w| w[0].2 <= w[1].2));
+    assert!(lines.iter().all(|line| !line.3));
+    assert_eq!(
+        console_bytes(&events),
+        "before\nbetween\nand more\nafter\n".len() as u64
+    );
+}
+
+#[tokio::test]
+async fn a_long_console_line_is_cut_and_marked() {
+    let server = server();
+    server
+        .execute(
+            r#"
+function main(): void {
+  console.log("x".repeat(100000));
+}
+"#,
+        )
+        .await;
+    let events = server.collected.first_run().await;
+    let lines = console_lines(&events);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].3);
+    assert!(lines[0].0.len() < 100_000);
+    assert!(lines[0].0.bytes().all(|byte| byte == b'x'));
+    // The run's console keeps the whole line.
+    assert_eq!(console_bytes(&events), 100_001);
+}
+
+#[tokio::test]
+async fn a_cut_through_a_character_leaves_it_off_and_keeps_real_replacement_characters() {
+    let server = server();
+    // 1365 replacement characters are 4095 bytes: the cut at 4096 splits the euro sign.
+    server
+        .execute(
+            r#"
+function main(): void {
+  console.log("\uFFFD".repeat(1365) + "\u20AC tail");
+}
+"#,
+        )
+        .await;
+    let events = server.collected.first_run().await;
+    let lines = console_lines(&events);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].3);
+    assert_eq!(lines[0].0, "\u{FFFD}".repeat(1365));
+}
+
+#[tokio::test]
+async fn a_run_reports_at_most_its_cap_of_console_lines() {
+    let server = server();
+    server
+        .execute(
+            r#"
+function main(): void {
+  for (let i = 0; i < 1500; i++) {
+    console.log("");
+  }
+}
+"#,
+        )
+        .await;
+    let events = server.collected.first_run().await;
+    // The cap is 1000 lines; the run's console keeps them all.
+    assert_eq!(console_lines(&events).len(), 1000);
+    assert_eq!(console_bytes(&events), 1500);
+}
+
+fn console_bytes(events: &[SessionEvent]) -> u64 {
+    events
+        .iter()
+        .find_map(|event| match &event.kind {
+            EventKind::RunFinished { console_bytes, .. } => Some(*console_bytes),
+            _ => None,
+        })
+        .expect("the run finished")
 }
 
 #[tokio::test]
