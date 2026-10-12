@@ -1,3 +1,4 @@
 line 94, 97 extra: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
 line 94, 97 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
 line 179 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it
+line 103, 104 type: bug SUB-1608 a pattern's defaults don't shape the initializer literal, where tsc makes defaulted members optional and allows missing ones

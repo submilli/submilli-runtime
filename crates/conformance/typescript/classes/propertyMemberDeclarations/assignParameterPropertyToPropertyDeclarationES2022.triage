@@ -1,0 +1,1 @@
+line 5, 15 extra: by-design spec §2.2 field initializers run before parameter properties are assigned, as under `useDefineForClassFields`, so an initializer can't read one

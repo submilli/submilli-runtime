@@ -1,0 +1,2 @@
+line 70 extra: by-design spec §1.2 a class or a whole enum is a type, not a value, so `typeof` has nothing to take
+line 71, 72 type: artifact we reject `typeof c` on line 70, so `ac` is an error type

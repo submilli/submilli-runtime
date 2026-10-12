@@ -1,0 +1,3 @@
+line 6, 7, 12, 13 type: bug SUB-1608 a pattern's defaults don't shape the initializer literal, where tsc makes defaulted members optional and allows missing ones
+line 26 type: bug SUB-1610 `x ?? []` checks the empty literal against the left operand's tuple type
+line 26 extra: bug SUB-1610 `x ?? []` checks the empty literal against the left operand's tuple type
