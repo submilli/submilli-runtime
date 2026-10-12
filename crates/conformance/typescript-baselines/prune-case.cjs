@@ -52,9 +52,11 @@ function prune(caseErrors, file) {
     }
     if (!found.offsets.length) return finish(null);
     const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-    const units = unitsToBlank(sourceFile, found.offsets);
-    if (!units.length) return finish(`nothing to prune at offsets ${found.offsets.join(", ")}`);
-    for (const unit of units) text = blank(text, unit.start, unit.end, unit.statementRequired);
+    const ranges = rangesToBlank(sourceFile, found.offsets);
+    if (!ranges.length) return finish(`nothing to prune at offsets ${found.offsets.join(", ")}`);
+    const previousText = text;
+    for (const range of ranges) text = blank(text, range.start, range.end, range.statementRequired);
+    if (text === previousText) return finish(`pruning changed nothing at offsets ${found.offsets.join(", ")}`);
     fs.writeFileSync(file, text);
   }
   return finish(`still pruning after ${MAX_PASSES} passes`);
@@ -105,33 +107,39 @@ function offsetOf(text, line, column) {
 /** The ranges to blank for errors at `offsets`, deduplicated, right to left so
  * blanking one leaves the offsets of the rest in place. An outer statement's blank
  * covers any inner one. Each is `{ start, end, statementRequired }`. */
-function unitsToBlank(sourceFile, offsets) {
-  const units = new Map();
+function rangesToBlank(sourceFile, offsets) {
+  const ranges = new Map();
   for (const offset of offsets) {
     const unit = statementWithCodeAt(sourceFile, offset);
-    if (unit) addRange(units, statementRange(sourceFile, unit));
+    if (unit) addRange(ranges, statementRange(sourceFile, unit));
   }
   // An error outside every statement with code, such as one at `main` after a
   // statement our parser couldn't finish, often goes once what caused it is pruned.
   // Only when no error is in one is it pruned by itself.
-  if (!units.size) {
+  if (!ranges.size) {
     for (const offset of offsets) {
-      for (const unit of recoveryUnits(sourceFile, offset)) {
-        addRange(units, ts.isStatement(unit) ? statementRange(sourceFile, unit) : unit);
-      }
+      for (const range of recoveryRanges(sourceFile, offset)) addRange(ranges, range);
     }
   }
-  const sorted = [...units.values()].sort((a, b) => b.start - a.start);
+  const sorted = [...ranges.values()].sort((a, b) => b.start - a.start);
   return sorted.filter((u) => !sorted.some((outer) => outer !== u && outer.start <= u.start && u.end <= outer.end));
 }
 
-function addRange(units, range) {
-  units.set(`${range.start}:${range.end}`, range);
+function addRange(ranges, range) {
+  ranges.set(`${range.start}:${range.end}`, range);
 }
 
+/** The statement holding `offset`, unless it is a blank an earlier pass left in a
+ * list of statements. An empty body, such as `if (a) ;`, widens to its statement. */
 function statementWithCodeAt(sourceFile, offset) {
   const unit = statementAt(sourceFile, offset);
-  return unit && hasCode(unit) ? unit : null;
+  if (!unit) return null;
+  return ts.isEmptyStatement(unit) && isListMember(unit) ? null : unit;
+}
+
+function isListMember(statement) {
+  const parent = statement.parent;
+  return ts.isBlock(parent) || ts.isSourceFile(parent) || ts.isModuleBlock(parent) || ts.isCaseOrDefaultClause(parent);
 }
 
 /** The range blanking `unit` takes, widened to what must go with it. */
@@ -148,34 +156,36 @@ function statementRange(sourceFile, unit) {
  * comment it is on, else the tokens `tsc` skipped around it, else the statement
  * before it. A parser reports an error at the token after what it couldn't parse,
  * such as a blank pruning left or `main`, and recovers by skipping tokens between
- * statements. Tokens are ranges. */
-function recoveryUnits(sourceFile, offset) {
+ * statements. */
+function recoveryRanges(sourceFile, offset) {
   const statements = enclosingStatements(sourceFile, offset);
   const before = statements.filter((s) => s.end <= offset).at(-1);
   // The statement holding `offset`, such as `main` or a blank, else the next one.
   const after = statements.find((s) => s.end > offset);
   const gapStart = before?.end ?? statements.pos;
-  const gapEnd = after?.getStart(sourceFile) ?? (statements === sourceFile.statements ? sourceFile.text.length : statements.end);
+  // At the top level, tokens after the last statement, such as an unterminated
+  // comment swallowing `main`, run to the end of the text.
+  const isTopLevel = statements === sourceFile.statements;
+  const gapEnd = after?.getStart(sourceFile) ?? (isTopLevel ? sourceFile.text.length : statements.end);
   const tokens = gapTokens(sourceFile.text, gapStart, gapEnd);
   // Such as `tsc`'s error on a `@ts-expect-error` whose statement pruning took.
-  const comment = tokens.find((t) => t.isComment && t.start <= offset && offset < t.end);
+  const comment = tokens.find((t) => t.isComment && !t.isMarker && t.start <= offset && offset < t.end);
   if (comment) return [comment];
   const skipped = tokens.filter((t) => !t.isComment || t.isUnterminated);
   if (skipped.length) return skipped;
-  // A block left open, as `tsc` reads it, holds the rest of the case.
-  return before && (isPrunable(before) || ts.isBlock(before)) ? [before] : [];
-}
-
-/** Whether `statement` has code of its own, rather than being what blanking left. */
-function hasCode(statement) {
-  return !ts.isEmptyStatement(statement) && !(ts.isBlock(statement) && !statement.statements.length);
+  // A blank there means the statement before was blanked already and the error
+  // stayed, so it isn't that statement's. A block left open, as `tsc` reads it,
+  // holds the rest of the case.
+  if (!before || ts.isEmptyStatement(before) || !(isPrunable(before) || ts.isBlock(before))) return [];
+  return [statementRange(sourceFile, before)];
 }
 
 /** The statements of the innermost block, clause or file around `offset`. */
 function enclosingStatements(sourceFile, offset) {
   let found = sourceFile.statements;
   const visit = (node) => {
-    if (offset < node.pos || offset > node.end) return;
+    if (offset < node.pos || offset >= node.end) return;
+    // An error at a block's opening `{` is about the code around the block.
     if (node !== sourceFile && node.statements && node.getStart(sourceFile) < offset) found = node.statements;
     ts.forEachChild(node, visit);
   };
@@ -188,7 +198,7 @@ function enclosingStatements(sourceFile, offset) {
  * line: the rest runs to the end of the case and holds the `main` the port
  * appended. */
 function gapTokens(text, start, end) {
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, /* skipTrivia */ false, ts.LanguageVariant.Standard, text);
   scanner.resetTokenState(start);
   const tokens = [];
   for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken && scanner.getTokenStart() < end; kind = scanner.scan()) {
@@ -198,7 +208,8 @@ function gapTokens(text, start, end) {
     const isUnterminated = isComment && scanner.isUnterminated();
     const lineEnd = text.indexOf("\n", tokenStart);
     const tokenEnd = isUnterminated && lineEnd !== -1 ? lineEnd : scanner.getTokenEnd();
-    tokens.push({ start: tokenStart, end: Math.min(tokenEnd, end), statementRequired: false, isComment, isUnterminated });
+    const isMarker = isComment && MARKERS.includes(text.slice(tokenStart, scanner.getTokenEnd()));
+    tokens.push({ start: tokenStart, end: Math.min(tokenEnd, end), statementRequired: false, isComment, isUnterminated, isMarker });
   }
   return tokens;
 }
@@ -333,4 +344,6 @@ function codeLines(text) {
   }).length;
 }
 
-main();
+module.exports = { rangesToBlank };
+
+if (require.main === module) main();

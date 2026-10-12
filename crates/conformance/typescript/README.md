@@ -260,8 +260,10 @@ a statement our parser couldn't finish, or on a blank an earlier pass left, wait
 while any other error is in a statement. When none is, it takes the comment it is on
 (such as a `@ts-expect-error` whose statement pruning took), else the tokens `tsc`
 skipped between the statements around it (a stray `\` or `}`, or the first line of an
-unterminated comment), else the statement before it, where a parser that couldn't
-finish one reports the error.
+unterminated comment, so that the rest of it, which holds the appended `main`, is
+code again), else the statement before it, where a parser that couldn't finish one
+reports the error. When that statement is a blank already, the error isn't its, and
+the case is a porter failure, as is one where a pass changes nothing.
 
 The blanked text starts with `/*pruned*/`, or `/**/` where that doesn't fit, then
 `{}` where a statement is still required, such as the body of an `if` or the last
