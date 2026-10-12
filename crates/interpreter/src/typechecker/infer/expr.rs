@@ -1449,7 +1449,16 @@ impl Inferer<'_> {
                 // type is TS-style: the branch that keeps the LHS
                 // contributes only the values that can short-circuit
                 // there (`falsy_part` for `&&`, `truthy_part` for `||`).
-                let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
+                let lhs_context = if op == BinOp::Or {
+                    self.left_operand_context(
+                        lhs,
+                        expected,
+                        &[Type::Null, Type::Undefined, Type::BooleanLiteral(false)],
+                    )?
+                } else {
+                    None
+                };
+                let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
                 let mut condition_error = false;
                 if matches!(lhs_ty.peel(), Type::Unknown) {
                     // `&&`/`||` on un-narrowed `unknown`
@@ -5441,7 +5450,9 @@ impl Inferer<'_> {
             [crate::ObjectLiteralMember::Spread { .. }]
         );
         let errors_before = self.error_count();
-        let (kind, ty) = self.infer_object_literal(literal, members, expected, span)?;
+        let spread_context = self.spread_context_for_next_literal.take();
+        let (kind, ty) =
+            self.infer_object_literal(literal, members, expected, spread_context, span)?;
         match expected {
             Some(expected) if lone_spread && self.error_count() == errors_before => {
                 self.spread_as_its_alternatives(kind, ty, expected, span)
@@ -5455,6 +5466,7 @@ impl Inferer<'_> {
         literal: ExprId,
         members: Vec<crate::ObjectLiteralMember>,
         expected: Option<&Type>,
+        spread_context: Option<Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if members
@@ -5593,7 +5605,8 @@ impl Inferer<'_> {
             (crate::ObjectField, crate::TypedObjectFieldSource),
         > = std::collections::BTreeMap::new();
 
-        for member in members {
+        let overwritten_after = fields_written_after(&members);
+        for (member, overwritten) in members.into_iter().zip(overwritten_after) {
             match member {
                 crate::ObjectLiteralMember::Computed { .. } => {
                     self.error(
@@ -5782,7 +5795,11 @@ impl Inferer<'_> {
                         if let Some((id, ty, _)) = inferred_fields.remove(&value) {
                             (id, ty)
                         } else {
-                            self.infer_expr(value, None)?
+                            self.infer_spread_source(
+                                value,
+                                expected.or(spread_context.as_ref()),
+                                &overwritten,
+                            )?
                         };
                     if let Some(value) = self.spread_source_index(typed_source, &source_ty)? {
                         for (field, _) in merged.values_mut() {
@@ -6481,15 +6498,23 @@ impl Inferer<'_> {
         };
 
         if elements.is_empty() {
-            // Without a hint, `[]` holds no element, so it is `never[]`, as in
-            // tsc, and fits any array type it is later used as.
-            let elem_ty = expected_elem.cloned().unwrap_or(Type::Never);
+            // `[]` holds no element, so it is `never[]`, as in tsc, and fits
+            // any array type it is used as. The typed node keeps the element
+            // type of the slot it lands in, which the array is built with. A
+            // slot element type still holding a type parameter stays the
+            // expression's own too: generic inference reads it back.
+            let slot_elem_ty = expected_elem.cloned().unwrap_or(Type::Never);
+            let literal_elem_ty = if type_contains_type_var(&slot_elem_ty) {
+                slot_elem_ty.clone()
+            } else {
+                Type::Never
+            };
             return Ok((
                 TypedExprKind::ArrayLiteral {
                     elements: Vec::new(),
-                    element_ty: elem_ty.clone(),
+                    element_ty: slot_elem_ty,
                 },
-                Type::Array(Box::new(elem_ty)),
+                Type::Array(Box::new(literal_elem_ty)),
             ));
         }
 
@@ -8843,6 +8868,9 @@ impl Inferer<'_> {
         keeps_returned_literals: bool,
         span: Span,
     ) -> Result<(TypedExprKind, Type, bool), CompilerFailure> {
+        if let Some(spans) = self.soft_context_function_spans.as_mut() {
+            spans.push(span);
+        }
         let errors_before = self.error_count();
         let ArrowContext {
             immediately_invoked,
@@ -9134,6 +9162,10 @@ impl Inferer<'_> {
             self.inferred_returns.take()
         };
 
+        // The fresh literal types the body returns, once it is a block, which a generic call
+        // taking this function literal may infer from (see
+        // `function_literal_returned_literals`).
+        let mut returned_fresh: Option<std::collections::BTreeSet<Type>> = None;
         let (typed_body, body_ret) = match body {
             ArrowBody::Expr(e) => {
                 let (id, t) = self.infer_returned_value(e, ret_hint.as_ref())?;
@@ -9149,7 +9181,14 @@ impl Inferer<'_> {
                     super::inference_failure("arrow block body is a Block, never a type-only decl")
                 })?;
                 let id = self.wrap_narrow_regions(id, &narrow_seed, span)?;
-                let collected = self.inferred_returns.take().unwrap_or_default();
+                let returned = self.inferred_returns.take().unwrap_or_default();
+                returned_fresh = Some(
+                    returned
+                        .iter()
+                        .flat_map(|value| value.fresh.iter().cloned())
+                        .collect(),
+                );
+                let collected = returned_value_types(returned);
                 let t = self.block_body_return_type(
                     annotated_ret.as_ref(),
                     collected,
@@ -9169,16 +9208,21 @@ impl Inferer<'_> {
         } else {
             let body = match typed_body {
                 ClosureBody::Block(body) => body,
-                ClosureBody::Expr(value) => self
-                    .typed_ast
-                    .try_push_stmt(crate::TypedStmt {
-                        kind: crate::TypedStmtKind::Return(Some(value)),
-                        span,
-                    })
-                    .map_err(super::arena_failure)?,
+                ClosureBody::Expr(value) => {
+                    returned_fresh = Some(self.fresh_literals(value)?);
+                    self.typed_ast
+                        .try_push_stmt(crate::TypedStmt {
+                            kind: crate::TypedStmtKind::Return(Some(value)),
+                            span,
+                        })
+                        .map_err(super::arena_failure)?
+                }
             };
             ClosureBody::Block(self.prepend_parameter_defaults(default_prologue, body)?)
         };
+        if let (ClosureBody::Block(body), Some(fresh)) = (&typed_body, returned_fresh) {
+            self.record_closure_returned_fresh(*body, fresh);
+        }
         // Restore frames.
         self.exit_closure_narrow_boundary()?;
         self.restore_reachability(prev_reachable);
@@ -10159,6 +10203,137 @@ impl Inferer<'_> {
         assignable(rhs_ty, &lhs_ty.widen_literal(), self.resolver()).then(|| lhs_ty.clone())
     }
 
+    /// The context `a || b` or `a ?? b` gives `a`, as TypeScript has it: the
+    /// expression's own, joined with the values that fall through to `b`, so a
+    /// branch that yields one (`(c ? [n, 1] : undefined) ?? [n, 2]`) still fits.
+    fn left_operand_context(
+        &self,
+        lhs: ExprId,
+        expected: Option<&Type>,
+        falls_through: &[Type],
+    ) -> Result<Option<Type>, CompilerFailure> {
+        let Some(want) = expected else {
+            return Ok(None);
+        };
+        if !self.shaped_by_context(lhs)? {
+            return Ok(None);
+        }
+        let mut members = vec![want.clone()];
+        members.extend_from_slice(falls_through);
+        Ok(Some(Type::union(members)))
+    }
+
+    /// Whether a context TypeScript gives `expr` without requiring it (the left
+    /// side of `||`, a spread's source) shapes its type here: a literal, or a
+    /// conditional choosing between values. Any other expression types alone,
+    /// since the context is no requirement on it: `maybe || "d"` with `maybe:
+    /// number | null` is wrong as a whole, not in `maybe`.
+    fn shaped_by_context(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        let id = peel_parens(self.ast, expr)?;
+        Ok(is_context_typed_literal(self.ast, id)?
+            || matches!(self.peeled_kind(id)?, ExprKind::Ternary { .. }))
+    }
+
+    /// The kind of `expr` inside any parentheses.
+    fn peeled_kind(&self, expr: ExprId) -> Result<&ExprKind, CompilerFailure> {
+        let id = peel_parens(self.ast, expr)?;
+        Ok(&self.ast.try_expr(id).map_err(super::arena_failure)?.kind)
+    }
+
+    /// Infers `expr`, keeping its literal types, under a `context` that guides
+    /// it without being a requirement: an expression that doesn't fit it is
+    /// inferred again alone, so a mismatch is reported once, where the value
+    /// is used. The context stays, errors and all, when every error is inside
+    /// a function literal, whose body tsc checks under the context too (and
+    /// re-inferring nested bodies would cost twice per level), or when `expr`
+    /// writes: the writes have already narrowed what a second pass would read.
+    fn infer_with_soft_context(
+        &mut self,
+        expr: ExprId,
+        context: Option<Type>,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let Some(context) = context else {
+            return self.infer_expr_keeping_literals(expr, None, true);
+        };
+        let diagnostics_before = self.diagnostics.len();
+        let errors_before = self.error_count();
+        let outermost = self.soft_context_function_spans.is_none();
+        let spans_before = self
+            .soft_context_function_spans
+            .get_or_insert_with(Vec::new)
+            .len();
+        let hinted = self.infer_expr_keeping_literals(expr, Some(&context), true);
+        let function_spans = if outermost {
+            self.soft_context_function_spans.take().unwrap_or_default()
+        } else {
+            self.soft_context_function_spans
+                .as_ref()
+                .map(|spans| spans[spans_before..].to_vec())
+                .unwrap_or_default()
+        };
+        let hinted = hinted?;
+        if self.error_count() == errors_before {
+            return Ok(hinted);
+        }
+        let only_inside_functions = self.diagnostics[diagnostics_before..]
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == crate::Severity::Error)
+            .all(|error| function_spans.iter().any(|span| span.encloses(error.span)));
+        if only_inside_functions || !self.writes_nothing(expr)? {
+            return Ok(hinted);
+        }
+        self.diagnostics.truncate(diagnostics_before);
+        self.infer_expr_keeping_literals(expr, None, true)
+    }
+
+    /// A spread's source in an object literal checked against `expected`. A
+    /// literal or conditional there takes the literal's context, as in tsc, so
+    /// `{ ...(c ? { kind: "circle" } : { kind: "square" }) }` keeps its kinds.
+    /// A context still holding a type parameter is left to the call inferring
+    /// it: a literal against one takes that context as its own type.
+    fn infer_spread_source(
+        &mut self,
+        value: ExprId,
+        expected: Option<&Type>,
+        overwritten: &std::collections::BTreeSet<String>,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let Some(want) = expected.filter(|want| !type_contains_type_var(want)) else {
+            return self.infer_expr(value, None);
+        };
+        if !self.shaped_by_context(value)? {
+            return self.infer_expr(value, None);
+        }
+        if !self.holds_spread(value)? {
+            let context = spread_source_context(want, overwritten);
+            return self.infer_with_soft_context(value, Some(context));
+        }
+        // A literal with spreads of its own would take the context as its own
+        // type, so only those spreads take it.
+        if !matches!(self.peeled_kind(value)?, ExprKind::ObjectLiteral { .. }) {
+            return self.infer_expr(value, None);
+        }
+        self.spread_context_for_next_literal = Some(spread_source_context(want, overwritten));
+        let inferred = self.infer_expr(value, None);
+        self.spread_context_for_next_literal = None;
+        inferred
+    }
+
+    /// Whether `expr` is an object literal with a spread of its own, or a
+    /// conditional with one as a branch. Such a literal takes its expected type
+    /// as its own (see `own_object_literal_type`), so under a spread's
+    /// all-optional context it would claim every field may be absent.
+    fn holds_spread(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        Ok(match self.peeled_kind(expr)? {
+            ExprKind::ObjectLiteral { members } => members
+                .iter()
+                .any(|member| matches!(member, crate::ObjectLiteralMember::Spread { .. })),
+            ExprKind::Ternary { then_, else_, .. } => {
+                self.holds_spread(*then_)? || self.holds_spread(*else_)?
+            }
+            _ => false,
+        })
+    }
+
     /// `a ?? b`. Result type is `union(strip_nullish(lhs), rhs)`.
     /// Emits a `Severity::Warning` when `lhs` is statically
     /// non-nullable (the `??` clause is unreachable). The right side takes
@@ -10170,7 +10345,9 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let (typed_lhs, lhs_ty) = self.infer_expr_keeping_literals(lhs, None, true)?;
+        let lhs_context =
+            self.left_operand_context(lhs, expected, &[Type::Null, Type::Undefined])?;
+        let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
         // The right side runs only where the left is `null` or `undefined`.
         let rhs_env = self.nullish_operand_env(typed_lhs)?;
         // An unreachable right side is never the result, so it is not held
@@ -12406,6 +12583,27 @@ struct ElementMismatch {
     already_errored: bool,
 }
 
+/// For each member of an object literal, the names of the fields a later
+/// member overwrites, which a spread at that member doesn't decide.
+fn fields_written_after(
+    members: &[crate::ObjectLiteralMember],
+) -> Vec<std::collections::BTreeSet<String>> {
+    let mut overwritten = std::collections::BTreeSet::new();
+    let mut per_member: Vec<_> = members
+        .iter()
+        .rev()
+        .map(|member| {
+            let after = overwritten.clone();
+            if let crate::ObjectLiteralMember::Field(field) = member {
+                overwritten.insert(field.name.name.clone());
+            }
+            after
+        })
+        .collect();
+    per_member.reverse();
+    per_member
+}
+
 /// The expression inside any parentheses around `expr`.
 pub(super) fn peel_parens(ast: &crate::Ast, mut expr: ExprId) -> Result<ExprId, CompilerFailure> {
     loop {
@@ -12483,6 +12681,78 @@ pub(super) fn cannot_be_typed_alone(ast: &crate::Ast, id: ExprId) -> Result<bool
             _ => false,
         },
     )
+}
+
+/// The types a block body's returns contribute to its return type, as tsc
+/// infers it from their union. Literals of one primitive form their union
+/// (`if (b) return 1; return 2;` returns `1 | 2`), beside the `null` or
+/// `undefined` a path returns. Every other mix widens each fresh literal, as
+/// does a union that is a single literal type: `if (b) return 1; return 1;`
+/// returns `number`.
+fn returned_value_types(returned: Vec<super::ReturnedValue>) -> Vec<(Type, Span)> {
+    let returned_union = Type::union(returned.iter().map(|value| value.ty.clone()).collect());
+    let is_nullish = |ty: &Type| matches!(ty.peel(), Type::Undefined | Type::Null | Type::Void);
+    let Some(first_value) = returned.iter().find(|value| !is_nullish(&value.ty)) else {
+        return widened_returns(returned);
+    };
+    let span = first_value.span;
+    let shared_literal_base = first_value.ty.literal_base();
+    let literals_of_one_primitive = shared_literal_base.is_some()
+        && returned
+            .iter()
+            .all(|value| is_nullish(&value.ty) || value.ty.literal_base() == shared_literal_base);
+    if returned_union.peel().is_literal_type() || !literals_of_one_primitive {
+        return widened_returns(returned);
+    }
+    let (nullish, values): (Vec<_>, Vec<_>) = returned
+        .into_iter()
+        .partition(|value| is_nullish(&value.ty));
+    let union = Type::union(values.into_iter().map(|value| value.ty).collect());
+    std::iter::once((union, span))
+        .chain(nullish.into_iter().map(|value| (value.ty, value.span)))
+        .collect()
+}
+
+fn widened_returns(returned: Vec<super::ReturnedValue>) -> Vec<(Type, Span)> {
+    returned
+        .into_iter()
+        .map(|value| (value.widened, value.span))
+        .collect()
+}
+
+/// The context a spread's source takes from its literal's expected type `ty`:
+/// that type with every object field optional, since the fields written after
+/// the spread may supply the rest. A field in `overwritten`, which a later
+/// field replaces, takes any value.
+fn spread_source_context(ty: &Type, overwritten: &std::collections::BTreeSet<String>) -> Type {
+    match ty.peel() {
+        Type::Object { index, fields } => Type::Object {
+            index: index.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, field)| {
+                    let ty = if overwritten.contains(name) {
+                        Type::Unknown
+                    } else {
+                        field.ty.clone()
+                    };
+                    let optional = crate::ObjectField {
+                        ty,
+                        optional: true,
+                        ..field.clone()
+                    };
+                    (name.clone(), optional)
+                })
+                .collect(),
+        },
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|member| spread_source_context(member, overwritten))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// Whether `id` is a literal form that takes its type from context when it

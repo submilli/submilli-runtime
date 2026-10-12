@@ -1,20 +1,8 @@
-types: 57 of 158 tsc entries compared, 8 differ
+types: 57 of 158 tsc entries compared, 5 differ
 
 line 18: { ...optionalString, ...optionalNumber }
   tsc:  { sn?: string | number | undefined; }
   ours: { sn: number | string }
-
-line 43: { ...{ a: 4, ...{ b: false, c: 'overriden' } }, d: 'actually new', ...{ a: 5, d: 'maybe new' } }
-  tsc:  { a: number; d: string; b: false; c: string; }
-  ours: { a: number; b: boolean; c: string; d: string }
-
-line 43: { a: 4, ...{ b: false, c: 'overriden' } }
-  tsc:  { b: false; c: string; a: number; }
-  ours: { a: number; b: boolean; c: string }
-
-line 43: { b: false, c: 'overriden' }
-  tsc:  { b: false; c: string; }
-  ours: { b: boolean; c: string }
 
 line 53: spreadZero
   tsc:  any

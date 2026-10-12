@@ -116,6 +116,9 @@ pub(super) struct LiteralFreshness {
     /// call's operands, their bindings and the freshness of what they read
     /// are all settled when the call is built, before anything asks.
     inferable_fresh_by_call: RefCell<BTreeMap<ExprId, BTreeSet<Type>>>,
+    /// The fresh literal types each function literal with a block body
+    /// returns, by its body.
+    closure_returned_fresh: BTreeMap<crate::StmtId, BTreeSet<Type>>,
 }
 
 /// A generic call argument's parameter type and its callee's declared return
@@ -198,10 +201,27 @@ impl Inferer<'_> {
         if !ty.peel().is_literal_type() {
             return Ok(ty.clone());
         }
+        Ok(widen_only(ty, &self.fresh_literals(value)?))
+    }
+
+    /// The literal types of `value` known to be fresh and not also regular.
+    pub(super) fn fresh_literals(&self, value: ExprId) -> Result<BTreeSet<Type>, CompilerFailure> {
         let mut fresh = self.known_fresh_literals(value)?;
         let regular = self.regular_literals(value)?;
         fresh.retain(|literal| !regular.contains(literal));
-        Ok(widen_only(ty, &fresh))
+        Ok(fresh)
+    }
+
+    /// Record the fresh literal types a function literal whose body is the
+    /// block `body` returns.
+    pub(super) fn record_closure_returned_fresh(
+        &mut self,
+        body: crate::StmtId,
+        fresh: BTreeSet<Type>,
+    ) {
+        self.literal_freshness
+            .closure_returned_fresh
+            .insert(body, fresh);
     }
 
     /// Whether `literal`, the type of `value`, is known to be fresh and not
@@ -602,11 +622,49 @@ impl Inferer<'_> {
                 TypedExprKind::GenericCall { args, .. }
                 | TypedExprKind::GenericMethodCall { args, .. } => {
                     fresh.extend(self.kept_fresh_literals(args)?);
+                    fresh.extend(self.function_literal_returned_literals(args)?);
                 }
                 _ => {}
             }
         }
         Ok(fresh)
+    }
+
+    /// The fresh literal types the function literals among a generic call's
+    /// `args` return, which a type parameter of the result may take: `mk(() =>
+    /// b ? 1 : 2)` with `mk<T>(f: () => T): T` is a fresh `1 | 2`, so a `let`
+    /// widens it, as tsc does, where `mk(() => mode)` keeps a declared `Mode`.
+    /// A body whose returns weren't recorded counts all it returns as fresh.
+    fn function_literal_returned_literals(
+        &self,
+        args: &[crate::GenericArgument],
+    ) -> Result<BTreeSet<Type>, CompilerFailure> {
+        let mut returned = BTreeSet::new();
+        for argument in args {
+            let expr = self
+                .typed_ast
+                .try_expr(argument.expr)
+                .map_err(crate::typechecker::arena_failure)?;
+            let TypedExprKind::Closure {
+                return_type, body, ..
+            } = &expr.kind
+            else {
+                continue;
+            };
+            let fresh = match body {
+                crate::ClosureBody::Expr(value) => self.fresh_literals(*value)?,
+                crate::ClosureBody::Block(body) => self
+                    .literal_freshness
+                    .closure_returned_fresh
+                    .get(body)
+                    .cloned()
+                    .unwrap_or_else(|| literal_members(return_type)),
+            };
+            let mut members = literal_members(return_type);
+            members.retain(|literal| fresh.contains(literal));
+            returned.extend(members);
+        }
+        Ok(returned)
     }
 
     /// The fresh literals of the arguments, among a generic call's `args`,
@@ -765,6 +823,7 @@ impl Inferer<'_> {
             }
             fresh.extend(own);
         }
+        fresh.extend(self.function_literal_returned_literals(args)?);
         if let Some(callee_return) = self.callee_return(args) {
             for literal in declared_literals(callee_return) {
                 fresh.remove(&literal);

@@ -1,16 +1,8 @@
-types: 45 of 106 tsc entries compared, 3 differ
+types: 45 of 106 tsc entries compared, 1 differ
 
 line 17: { x: 1, ...obj }
   tsc:  { x: number; } | { x: string; }
   ours: { x: number | string }
-
-line 26: { command: "hi", ...{ spoiler: true }, spoiler2: true, ...t }
-  tsc:  { command: string; ok: string; spoiler2: true; spoiler: true; }
-  ours: { command: string; ok: string; spoiler: boolean; spoiler2: true }
-
-line 26: { spoiler: true }
-  tsc:  { spoiler: true; }
-  ours: { spoiler: boolean }
 
 errors:
 line 5: tsc TS2783: 'b' is specified more than once, so this usage will be overwritten. (we accept)
