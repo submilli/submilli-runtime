@@ -37,6 +37,8 @@ const HANDBACK_TOOL: &str = "SubagentHandback";
 
 /// The longest message kept; the rest is cut and the message marked.
 const MAX_MESSAGE_BYTES: usize = 16 * 1024;
+/// The longest model name kept.
+const MAX_MODEL_BYTES: usize = 200;
 /// The most messages one post carries, and their total size: well inside the control
 /// API's body limit.
 const MAX_MESSAGES: usize = 1000;
@@ -73,6 +75,9 @@ pub(crate) struct Message {
     /// The next tool call after the message in the conversation, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) before_call: Option<String>,
+    /// The model that wrote an assistant message, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model: Option<String>,
 }
 
 // ---- the transcript ------------------------------------------------------------------------
@@ -106,6 +111,7 @@ pub(crate) fn transcript(text: &str) -> Transcript {
                 }
             }
             Some("assistant") => {
+                let model = entry["message"]["model"].as_str().and_then(model_name);
                 let blocks = content.as_array().map(Vec::as_slice).unwrap_or_default();
                 let said: Vec<&str> = blocks
                     .iter()
@@ -115,15 +121,17 @@ pub(crate) fn transcript(text: &str) -> Transcript {
                     .collect();
                 if !said.is_empty() {
                     waiting.push(read.messages.len());
-                    read.messages
-                        .push(message(turn, ChatRole::Assistant, &said.join("\n\n")));
+                    let mut said = message(turn, ChatRole::Assistant, &said.join("\n\n"));
+                    said.model.clone_from(&model);
+                    read.messages.push(said);
                 }
                 for block in blocks.iter().filter(|block| block["type"] == "tool_use") {
                     if block["name"] == HANDBACK_TOOL {
                         if let Some(report) = block["input"]["message"].as_str() {
                             let turn = format!("{turn}:report");
-                            read.messages
-                                .push(message(&turn, ChatRole::Assistant, report));
+                            let mut report = message(&turn, ChatRole::Assistant, report);
+                            report.model.clone_from(&model);
+                            read.messages.push(report);
                         }
                         continue;
                     }
@@ -142,6 +150,16 @@ pub(crate) fn transcript(text: &str) -> Transcript {
     read
 }
 
+/// A model name as kept, cut to [`MAX_MODEL_BYTES`]; none for an empty name or a
+/// stand-in for one such as `<synthetic>`.
+fn model_name(model: &str) -> Option<String> {
+    let model = model.trim();
+    if model.is_empty() || model.starts_with('<') {
+        return None;
+    }
+    Some(super::within_bytes(model, MAX_MODEL_BYTES).0.to_owned())
+}
+
 /// One message, cut to [`MAX_MESSAGE_BYTES`].
 pub(crate) fn message(turn: &str, role: ChatRole, text: &str) -> Message {
     let (text, truncated) = super::within_bytes(text, MAX_MESSAGE_BYTES);
@@ -151,6 +169,7 @@ pub(crate) fn message(turn: &str, role: ChatRole, text: &str) -> Message {
         text: text.to_owned(),
         truncated,
         before_call: None,
+        model: None,
     }
 }
 
@@ -312,7 +331,8 @@ impl StandInChat {
         if self.held.iter().any(|(_, held)| held.turn == message.turn) {
             return;
         }
-        let size = message.text.len() + message.turn.len();
+        let size =
+            message.text.len() + message.turn.len() + message.model.as_ref().map_or(0, String::len);
         if self.held_bytes + size > MAX_HELD_BYTES {
             return;
         }
@@ -332,6 +352,11 @@ impl ChatIntake {
                 message.text = text.to_owned();
                 message.truncated = true;
             }
+            // Kept as the hook keeps it, whoever posted: only on an answer, and capped.
+            message.model = match message.role {
+                ChatRole::Assistant => message.model.as_deref().and_then(model_name),
+                _ => None,
+            };
         }
         let found = self.session_for(&post, recorder, now);
         // Read before the lock too: the log may be long.
@@ -528,6 +553,7 @@ pub(crate) fn chat_body(agent: &str, message: Message) -> EventBody {
         text: message.text,
         truncated: message.truncated,
         agent: agent.to_owned(),
+        model: message.model,
     })
 }
 

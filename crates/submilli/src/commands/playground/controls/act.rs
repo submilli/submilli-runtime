@@ -2393,7 +2393,7 @@ fn watch_line(seq: Option<u64>, stored: &Value, session: &str) -> Value {
     // A chat message: who spoke is ours to say; what it said and its ids came from the
     // assistant.
     for (kind, untrusted_fields) in [
-        ("chat", &["turn", "text", "agent"][..]),
+        ("chat", &["turn", "text", "agent", "model"][..]),
         ("chat-replaced", &["turns"][..]),
     ] {
         if let Some(chat) = stored["body"][kind].as_object() {

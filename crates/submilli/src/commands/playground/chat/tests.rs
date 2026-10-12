@@ -154,6 +154,7 @@ fn says(turn: &str, text: &str) -> Message {
         text: text.into(),
         truncated: false,
         before_call: None,
+        model: None,
     }
 }
 
@@ -236,6 +237,73 @@ fn only_the_stand_ins_own_hooks_post() {
         );
     }
     assert_eq!(posted, 15, "every tool call of the stand-in, and its stop");
+}
+
+#[test]
+fn an_assistant_message_names_the_model_its_transcript_entry_does() {
+    let entries = [
+        json!({ "type": "user", "uuid": "u1", "message": { "content": "Total the charges." } }),
+        json!({ "type": "assistant", "uuid": "a1", "message": {
+            "model": "claude-haiku-5-5",
+            "content": [{ "type": "text", "text": "The total is $61.50." }],
+        } }),
+        json!({ "type": "assistant", "uuid": "a2", "message": {
+            "model": "<synthetic>",
+            "content": [{ "type": "text", "text": "No response requested." }],
+        } }),
+        json!({ "type": "assistant", "uuid": "a3", "message": {
+            "model": 7,
+            "content": [{ "type": "text", "text": "Seven." }],
+        } }),
+        json!({ "type": "assistant", "uuid": "a4", "message": {
+            "model": "m".repeat(5000),
+            "content": [{ "type": "tool_use", "id": "toolu_h", "name": "SubagentHandback",
+                          "input": { "message": "Done: $61.50." } }],
+        } }),
+    ];
+    let text: Vec<String> = entries.iter().map(Value::to_string).collect();
+    let read = transcript(&text.join("\n"));
+    let models: Vec<Option<usize>> = read
+        .messages
+        .iter()
+        .map(|message| message.model.as_ref().map(String::len))
+        .collect();
+    // The report names the model too, cut to what is kept.
+    assert_eq!(
+        models,
+        [None, Some("claude-haiku-5-5".len()), None, None, Some(200)]
+    );
+}
+
+#[test]
+fn a_posted_model_is_kept_only_on_an_answer_and_cut_whoever_posted_it() {
+    let mut world = World::new();
+    world.call(SESSION, "toolu_m");
+    let named = |turn: &str, role: ChatRole, model: &str| Message {
+        role,
+        model: Some(model.into()),
+        ..says(turn, turn)
+    };
+    world.post(live(
+        "agent-m",
+        "toolu_m",
+        vec![
+            named("task", ChatRole::User, "claude-haiku-5-5"),
+            named("long", ChatRole::Assistant, &"m".repeat(5000)),
+            named("synthetic", ChatRole::Assistant, "<synthetic>"),
+            named("answer", ChatRole::Assistant, "claude-haiku-5-5"),
+        ],
+    ));
+    let log = world.log(SESSION);
+    let models: Vec<Option<usize>> = log
+        .chat()
+        .into_iter()
+        .map(|(_, turn)| turn.model.as_ref().map(String::len))
+        .collect();
+    assert_eq!(
+        models,
+        [None, Some(200), None, Some("claude-haiku-5-5".len())]
+    );
 }
 
 #[test]

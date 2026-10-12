@@ -465,7 +465,7 @@ fn a_watched_chat_message_keeps_what_the_assistant_said_apart() {
         "position": { "at_micros": 1_791_468_192_000_000_u64, "rank": 0 },
         "body": { "chat": {
             "turn": HOSTILE, "role": "assistant", "text": HOSTILE,
-            "truncated": true, "agent": HOSTILE,
+            "truncated": true, "agent": HOSTILE, "model": HOSTILE,
         } },
     });
     let line = watch_line(Some(2), &chat, "s-1");
@@ -477,6 +477,7 @@ fn a_watched_chat_message_keeps_what_the_assistant_said_apart() {
     assert_eq!(line["untrusted"]["text"], HOSTILE);
     assert_eq!(line["untrusted"]["turn"], HOSTILE);
     assert_eq!(line["untrusted"]["agent"], HOSTILE);
+    assert_eq!(line["untrusted"]["model"], HOSTILE);
     assert_eq!(line["untrusted"]["event_id"], HOSTILE);
     let mut outside = line.clone();
     outside.as_object_mut().unwrap().remove("untrusted");

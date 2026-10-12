@@ -698,6 +698,8 @@ pub(crate) struct ShowResult {
     /// For a rerun, the run whose program it ran again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) rerun_of: Option<u64>,
+    /// The tests and reruns of this run, oldest first.
+    pub(crate) follow_ups: Vec<FollowUp>,
     pub(crate) decision_count: usize,
     /// Identical allowed decisions collapsed into one line; denials one per line.
     pub(crate) decisions: Vec<DecisionLine>,
@@ -711,6 +713,16 @@ pub(crate) struct ShowResult {
     pub(crate) program_included: bool,
     pub(crate) next: Vec<String>,
     pub(crate) untrusted: ShowUntrusted,
+}
+
+/// A test or rerun of a run, as `show` lists it under that run.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct FollowUp {
+    pub(crate) run: u64,
+    /// `test` or `rerun`.
+    pub(crate) kind: &'static str,
+    pub(crate) blueprint_version: Option<String>,
+    pub(crate) outcome: Outcome,
 }
 
 /// What `show` adds beyond its summary.
@@ -895,11 +907,12 @@ pub(crate) fn show_stored(
             .as_ref()
             .is_none_or(|report| report.stopped.is_some());
     // A cancelled run's error is the runtime's own note that it was cancelled, which the
-    // outcome already says; a test run's stop keeps its message, which says where.
+    // outcome already says. A test run's stop ends it the same way, and its test report
+    // says where it stopped.
     if let Some(error) = run
         .error
         .as_ref()
-        .filter(|error| error.kind != ErrorKind::Cancelled || stopped_by_test)
+        .filter(|error| error.kind != ErrorKind::Cancelled)
     {
         untrusted.error = Some(cap_text(&error.message, include_payloads));
         untrusted.diagnostics.clone_from(&error.diagnostics);
@@ -927,7 +940,9 @@ pub(crate) fn show_stored(
     } else {
         None
     };
-    let rerun_of = reader.reruns()?.get(&run.id).copied();
+    let reruns = reader.reruns()?;
+    let rerun_of = reruns.get(&run.id).copied();
+    let follow_ups = follow_ups_of(reader, run.id, &reruns)?;
     let next = show_next(run, &denied, &lines, test.as_ref(), rerun_of);
     let refs = (1..=run.recording.decisions.len())
         .map(|n| DecisionRef { run: run.id, n })
@@ -947,6 +962,7 @@ pub(crate) fn show_stored(
         note: (run.label == "app").then_some(APP_NOTE),
         test,
         rerun_of,
+        follow_ups,
         decision_count: run.recording.decisions.len(),
         decisions: lines,
         decisions_dropped: run.decisions_dropped,
@@ -958,6 +974,41 @@ pub(crate) fn show_stored(
         next,
         untrusted,
     })
+}
+
+/// The tests and reruns of run `id`, oldest first, from the index: a test names its
+/// source in its own record, a rerun in the links. `reruns` maps each rerun to its source.
+fn follow_ups_of(
+    reader: &Reader,
+    id: u64,
+    reruns: &BTreeMap<u64, u64>,
+) -> Result<Vec<FollowUp>, ReadError> {
+    let mut follow_ups: Vec<FollowUp> = reader
+        .summaries()?
+        .into_iter()
+        .filter_map(|summary| {
+            let kind = if summary.test_of.as_ref().and_then(|link| link.run) == Some(id) {
+                "test"
+            } else if reruns.get(&summary.id) == Some(&id) {
+                "rerun"
+            } else {
+                return None;
+            };
+            Some(FollowUp {
+                run: summary.id,
+                kind,
+                outcome: Outcome::of(
+                    summary.error,
+                    summary.dispatched,
+                    summary.entry == "test",
+                    None,
+                ),
+                blueprint_version: summary.blueprint_version,
+            })
+        })
+        .collect();
+    follow_ups.sort_by_key(|follow_up| follow_up.run);
+    Ok(follow_ups)
 }
 
 /// The run's decisions as `show` lists them, with each line's context and any runtime

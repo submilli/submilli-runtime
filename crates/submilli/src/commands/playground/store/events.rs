@@ -71,6 +71,9 @@ pub(crate) struct ChatTurn {
     pub(crate) truncated: bool,
     /// Who was talking: the agent's id in the assistant that ran it.
     pub(crate) agent: String,
+    /// The model that wrote an assistant message, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

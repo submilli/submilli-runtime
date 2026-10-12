@@ -788,6 +788,18 @@ fn runs_filter_by_recency_and_run_id() {
     assert!("10x".parse::<read::Since>().is_err());
 }
 
+/// The error a cancelled run is stored with: the runtime's own note.
+fn cancelled() -> crate::commands::playground::store::run::StoredError {
+    crate::commands::playground::store::run::StoredError {
+        kind: submilli_server::error::ErrorKind::Cancelled,
+        message: "internal: execution cancelled".into(),
+        diagnostics: Vec::new(),
+        caller: None,
+        capability: None,
+        source: None,
+    }
+}
+
 #[test]
 fn a_test_run_shows_its_source_its_variables_and_where_local_state_came_from() {
     let mut fixture = Fixture::new();
@@ -796,14 +808,8 @@ fn a_test_run_shows_its_source_its_variables_and_where_local_state_came_from() {
     test.entry = "test".into();
     test.test_of = Some(source);
     test.variables.insert("region".into(), "eu".into());
-    test.error = Some(crate::commands::playground::store::run::StoredError {
-        kind: submilli_server::error::ErrorKind::Cancelled,
-        message: format!("stopped at http POST https://x.test: {HOSTILE}"),
-        diagnostics: Vec::new(),
-        caller: None,
-        capability: None,
-        source: None,
-    });
+    // A stop cancels the run, so its error is the runtime's own note.
+    test.error = Some(cancelled());
     let id = fixture.run(test);
     let (reader, _dir) = fixture.reader();
     let shown = read::show(&reader, id, read::ShowOptions::default()).unwrap();
@@ -813,13 +819,62 @@ fn a_test_run_shows_its_source_its_variables_and_where_local_state_came_from() {
     let text = render::show_text(&shown);
     assert!(text.contains("came from today"), "{text}");
     assert!(text.contains("outcome: stopped"), "{text}");
-    assert_only_fenced(&text, HOSTILE);
-    assert_only_untrusted(&json_of(&shown), HOSTILE);
+    assert!(shown.untrusted.error.is_none());
+    assert!(!text.contains("internal"), "{text}");
     assert!(
         shown
             .next
             .contains(&format!("submilli playground compare {source} {id}"))
     );
+}
+
+#[test]
+fn a_run_lists_its_tests_and_reruns_oldest_first() {
+    let mut fixture = Fixture::new();
+    let source = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
+    let other = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));
+    let mut stopped = RunSpec::new(vec![charges_allowed(0, "cus_northwind")])
+        .label("test")
+        .version(2);
+    stopped.entry = "test".into();
+    stopped.test_of = Some(source);
+    stopped.error = Some(cancelled());
+    let test = fixture.run(stopped);
+    let rerun = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]).label("rerun"));
+    fixture.store.append_link(rerun, source).unwrap();
+    let mut elsewhere = RunSpec::new(Vec::new()).label("test");
+    elsewhere.entry = "test".into();
+    elsewhere.test_of = Some(other);
+    fixture.run(elsewhere);
+    let (reader, _dir) = fixture.reader();
+
+    let shown = read::show(&reader, source, read::ShowOptions::default()).unwrap();
+    let listed: Vec<(u64, &str)> = shown
+        .follow_ups
+        .iter()
+        .map(|follow_up| (follow_up.run, follow_up.kind))
+        .collect();
+    assert_eq!(listed, [(test, "test"), (rerun, "rerun")]);
+    let value = json_of(&shown);
+    assert_eq!(
+        value["follow_ups"][0]["outcome"],
+        json!({ "kind": "stopped" })
+    );
+    assert_eq!(
+        value["follow_ups"][1]["outcome"],
+        json!({ "kind": "completed" })
+    );
+    let text = render::show_text(&shown);
+    assert!(text.contains("follow-ups (2):"), "{text}");
+    assert!(
+        text.contains(&format!("\n  run {test:<6} test   v2   stopped\n")),
+        "{text}"
+    );
+
+    // A test lists nothing of its own, and names its source instead.
+    let tested = read::show(&reader, test, read::ShowOptions::default()).unwrap();
+    assert!(tested.follow_ups.is_empty());
+    assert!(!render::show_text(&tested).contains("follow-ups"));
 }
 
 #[test]

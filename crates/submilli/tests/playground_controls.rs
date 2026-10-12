@@ -1705,6 +1705,18 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                     "The answer is 42."
                 ]
             );
+            // Each answer names the model that wrote it; the task names none.
+            let model = result["model"].as_str().unwrap();
+            let models: Vec<Option<String>> = log
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|event| event["body"]["chat"].is_object())
+                .map(|event| event["body"]["chat"]["model"].as_str().map(str::to_owned))
+                .collect();
+            assert_eq!(
+                models,
+                [None, Some(model.to_owned()), Some(model.to_owned())]
+            );
 
             let text = playground.run(&["chat", "Compute six times seven."]);
             let printed = String::from_utf8_lossy(&text.stdout);

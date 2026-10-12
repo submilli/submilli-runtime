@@ -508,6 +508,19 @@ pub(crate) fn show_text(result: &ShowResult) -> String {
             "rerun of run {source}, live under the binding in force"
         );
     }
+    if !result.follow_ups.is_empty() {
+        let _ = writeln!(out, "follow-ups ({}):", result.follow_ups.len());
+        for follow_up in &result.follow_ups {
+            let _ = writeln!(
+                out,
+                "  run {:<6} {:<6} {:<4} {}",
+                follow_up.run,
+                follow_up.kind,
+                version_text(follow_up.blueprint_version.as_deref()),
+                follow_up.outcome.text()
+            );
+        }
+    }
     if result.decisions.is_empty() {
         let _ = writeln!(out, "decisions: none");
     } else {
