@@ -699,7 +699,7 @@ pub(crate) struct ShowResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) rerun_of: Option<u64>,
     /// The tests and reruns of this run, oldest first.
-    pub(crate) follow_ups: Vec<FollowUp>,
+    pub(crate) reruns: Vec<RerunLine>,
     pub(crate) decision_count: usize,
     /// Identical allowed decisions collapsed into one line; denials one per line.
     pub(crate) decisions: Vec<DecisionLine>,
@@ -717,7 +717,7 @@ pub(crate) struct ShowResult {
 
 /// A test or rerun of a run, as `show` lists it under that run.
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct FollowUp {
+pub(crate) struct RerunLine {
     pub(crate) run: u64,
     /// `test` or `rerun`.
     pub(crate) kind: &'static str,
@@ -940,9 +940,9 @@ pub(crate) fn show_stored(
     } else {
         None
     };
-    let reruns = reader.reruns()?;
-    let rerun_of = reruns.get(&run.id).copied();
-    let follow_ups = follow_ups_of(reader, run.id, &reruns)?;
+    let links = reader.reruns()?;
+    let rerun_of = links.get(&run.id).copied();
+    let reruns = reruns_of(reader, run.id, &links)?;
     let next = show_next(run, &denied, &lines, test.as_ref(), rerun_of);
     let refs = (1..=run.recording.decisions.len())
         .map(|n| DecisionRef { run: run.id, n })
@@ -962,7 +962,7 @@ pub(crate) fn show_stored(
         note: (run.label == "app").then_some(APP_NOTE),
         test,
         rerun_of,
-        follow_ups,
+        reruns,
         decision_count: run.recording.decisions.len(),
         decisions: lines,
         decisions_dropped: run.decisions_dropped,
@@ -977,24 +977,24 @@ pub(crate) fn show_stored(
 }
 
 /// The tests and reruns of run `id`, oldest first, from the index: a test names its
-/// source in its own record, a rerun in the links. `reruns` maps each rerun to its source.
-fn follow_ups_of(
+/// source in its own record, a rerun in the links. `links` maps each rerun to its source.
+fn reruns_of(
     reader: &Reader,
     id: u64,
-    reruns: &BTreeMap<u64, u64>,
-) -> Result<Vec<FollowUp>, ReadError> {
-    let mut follow_ups: Vec<FollowUp> = reader
+    links: &BTreeMap<u64, u64>,
+) -> Result<Vec<RerunLine>, ReadError> {
+    let mut reruns: Vec<RerunLine> = reader
         .summaries()?
         .into_iter()
         .filter_map(|summary| {
             let kind = if summary.test_of.as_ref().and_then(|link| link.run) == Some(id) {
                 "test"
-            } else if reruns.get(&summary.id) == Some(&id) {
+            } else if links.get(&summary.id) == Some(&id) {
                 "rerun"
             } else {
                 return None;
             };
-            Some(FollowUp {
+            Some(RerunLine {
                 run: summary.id,
                 kind,
                 outcome: Outcome::of(
@@ -1007,8 +1007,8 @@ fn follow_ups_of(
             })
         })
         .collect();
-    follow_ups.sort_by_key(|follow_up| follow_up.run);
-    Ok(follow_ups)
+    reruns.sort_by_key(|rerun| rerun.run);
+    Ok(reruns)
 }
 
 /// The run's decisions as `show` lists them, with each line's context and any runtime

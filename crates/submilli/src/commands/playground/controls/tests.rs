@@ -850,22 +850,19 @@ fn a_run_lists_its_tests_and_reruns_oldest_first() {
 
     let shown = read::show(&reader, source, read::ShowOptions::default()).unwrap();
     let listed: Vec<(u64, &str)> = shown
-        .follow_ups
+        .reruns
         .iter()
-        .map(|follow_up| (follow_up.run, follow_up.kind))
+        .map(|rerun| (rerun.run, rerun.kind))
         .collect();
     assert_eq!(listed, [(test, "test"), (rerun, "rerun")]);
     let value = json_of(&shown);
+    assert_eq!(value["reruns"][0]["outcome"], json!({ "kind": "stopped" }));
     assert_eq!(
-        value["follow_ups"][0]["outcome"],
-        json!({ "kind": "stopped" })
-    );
-    assert_eq!(
-        value["follow_ups"][1]["outcome"],
+        value["reruns"][1]["outcome"],
         json!({ "kind": "completed" })
     );
     let text = render::show_text(&shown);
-    assert!(text.contains("follow-ups (2):"), "{text}");
+    assert!(text.contains("reruns by you (2):"), "{text}");
     assert!(
         text.contains(&format!("\n  run {test:<6} test   v2   stopped\n")),
         "{text}"
@@ -873,8 +870,8 @@ fn a_run_lists_its_tests_and_reruns_oldest_first() {
 
     // A test lists nothing of its own, and names its source instead.
     let tested = read::show(&reader, test, read::ShowOptions::default()).unwrap();
-    assert!(tested.follow_ups.is_empty());
-    assert!(!render::show_text(&tested).contains("follow-ups"));
+    assert!(tested.reruns.is_empty());
+    assert!(!render::show_text(&tested).contains("reruns by you"));
 }
 
 #[test]
