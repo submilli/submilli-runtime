@@ -250,6 +250,53 @@ impl Server {
         body
     }
 
+    /// One MCP request to `/mcp/demo`, with the session id the server answers with.
+    async fn mcp(&self, body: Value, session: Option<&str>) -> (StatusCode, Option<String>) {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/mcp/demo")
+            .header("host", "localhost")
+            .header("authorization", format!("Bearer {APP_TOKEN}"))
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream");
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
+        let response = app(self.state.clone())
+            .oneshot(request.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let session = response
+            .headers()
+            .get("mcp-session-id")
+            .map(|id| id.to_str().unwrap().to_owned());
+        response.into_body().collect().await.unwrap();
+        (status, session)
+    }
+
+    /// Lists the root through the MCP file tool, which records a run of its own.
+    async fn mcp_file_tool(&self, tool: &str, arguments: Value) {
+        let (status, session) = self
+            .mcp(
+                json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                    "protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": { "name": "test", "version": "0" } } }),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "initialize");
+        let session = session.expect("a session id");
+        let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        assert_eq!(
+            self.mcp(initialized, Some(&session)).await.0,
+            StatusCode::ACCEPTED
+        );
+        let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": tool, "arguments": arguments } });
+        assert_eq!(self.mcp(call, Some(&session)).await.0, StatusCode::OK);
+    }
+
     fn last_run(&self) -> (RunStart, Vec<interpreter::runtime::DecisionRecord>) {
         self.runs.0.lock().unwrap().last().cloned().expect("a run")
     }
@@ -291,6 +338,21 @@ async fn every_run_records_the_version_tag_its_blueprint_was_applied_with() {
     let (start, _) = server.last_run();
     assert!(start.blueprint_hash.is_some());
     assert_eq!(start.blueprint_version, start.blueprint_hash);
+}
+
+#[tokio::test]
+async fn a_file_tool_run_records_the_version_tag_too() {
+    let server = Server::new();
+    server.apply(V1, "v1").await;
+    for (tool, arguments) in [
+        ("submilli__files__list", json!({})),
+        ("submilli__files__read", json!({ "path": "notes.txt" })),
+    ] {
+        server.mcp_file_tool(tool, arguments).await;
+        let (start, _) = server.last_run();
+        assert!(start.code.is_none(), "the last run is {tool}'s");
+        assert_eq!(start.blueprint_version.as_deref(), Some("v1"), "{tool}");
+    }
 }
 
 #[tokio::test]

@@ -21,8 +21,10 @@ use serde::Deserialize;
 use serde_json::json;
 use submilli_server::record::EventKind;
 
+use super::chat::ChatPost;
+use super::control_auth::Caller;
 use super::controls::act::{
-    ActError, Actions, Answer, BindRequest, DraftRequest, ExecRequest, RunRequest,
+    ActError, Actions, Answer, BindRequest, ChatRequest, DraftRequest, ExecRequest, RunRequest,
     SessionEndRequest, SessionStartRequest, TestRequest,
 };
 use super::controls::read::{self, AuditQuery, RunsQuery, Since};
@@ -54,9 +56,8 @@ pub(crate) struct Route {
     pub(crate) method: &'static str,
     pub(crate) path: &'static str,
     pub(crate) group: Group,
-    /// The CLI subcommand that does what the route does; `None` for what only the page
-    /// or the bridge use (the page itself, signing in, the nonce challenge, the bridge's
-    /// binding).
+    /// The CLI subcommand that does what the route does, or calls it; `None` for what
+    /// only the page uses (the page itself, signing in, the nonce challenge).
     pub(crate) command: Option<&'static str>,
     pub(crate) handler: fn() -> MethodRouter<ControlState>,
 }
@@ -246,11 +247,25 @@ pub(crate) const ROUTES: &[Route] = &[
         handler: || get(events),
     },
     Route {
+        method: "POST",
+        path: "/api/agent",
+        group: Group::Viewer,
+        command: Some("chat"),
+        handler: || post(agent),
+    },
+    Route {
         method: "GET",
         path: "/api/bridge/binding",
         group: Group::StandIn,
-        command: None,
+        command: Some("mcp"),
         handler: || get(bridge_binding),
+    },
+    Route {
+        method: "POST",
+        path: "/api/chat",
+        group: Group::StandIn,
+        command: Some("chat-hook"),
+        handler: || post(chat),
     },
 ];
 
@@ -427,7 +442,50 @@ async fn cancel(
 }
 
 async fn bridge_binding(State(state): State<ControlState>) -> Response {
-    Json(state.actions().bridge_binding()).into_response()
+    answered(state.actions().bridge_binding().await)
+}
+
+/// A task for the developer's own model key. Its runs are labeled by who asked: `chat`
+/// for the CLI, `browser-chat` for the page.
+async fn agent(
+    State(state): State<ControlState>,
+    headers: HeaderMap,
+    request: Result<Json<ChatRequest>, JsonRejection>,
+) -> Response {
+    let label = match state.caller(&headers) {
+        Some(Caller::Browser) => "browser-chat",
+        _ => "chat",
+    };
+    act_with(&state, request, |actions, request| async move {
+        actions.chat(label, request).await
+    })
+    .await
+}
+
+/// The stand-in's chat, from `chat-hook`.
+async fn chat(
+    State(state): State<ControlState>,
+    request: Result<Json<ChatPost>, JsonRejection>,
+) -> Response {
+    let post = match extracted(request) {
+        Ok(Json(post)) => post,
+        Err(refused) => return *refused,
+    };
+    let actions = Arc::clone(state.actions_arc());
+    let accepted = tokio::task::spawn_blocking(move || {
+        actions
+            .chat
+            .accept(post, &actions.recorder, std::time::Instant::now())
+    })
+    .await;
+    match accepted {
+        Ok(logged) => Json(json!({ "logged": logged })).into_response(),
+        Err(error) => host::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "chat_failed",
+            &format!("taking the chat failed: {error}"),
+        ),
+    }
 }
 
 // ---- reads, for the page -------------------------------------------------------------------
@@ -883,6 +941,8 @@ fn sse_event(event: &StoredEvent) -> Event {
     let name = match event.body {
         EventBody::Event(_) => "event",
         EventBody::Gap(_) => "gap",
+        EventBody::Chat(_) => "chat",
+        EventBody::ChatReplaced(_) => "chat-replaced",
     };
     Event::default()
         .id(event.session_seq.to_string())
@@ -928,9 +988,8 @@ mod tests {
         let subcommands = subcommands();
         for route in ROUTES {
             match route.group {
-                // The page, signing in, the nonce challenge, and the bridge's binding:
-                // the CLI's counterpart to the bridge's route is `playground mcp` itself.
-                Group::Public | Group::StandIn => {
+                // The page, signing in, and the nonce challenge.
+                Group::Public => {
                     assert!(
                         route.command.is_none(),
                         "{} {} names a command",
@@ -938,7 +997,7 @@ mod tests {
                         route.path
                     );
                 }
-                Group::Admin | Group::Viewer => {
+                Group::Admin | Group::Viewer | Group::StandIn => {
                     let command = route.command.unwrap_or_else(|| {
                         panic!("{} {} has no CLI subcommand", route.method, route.path)
                     });
@@ -956,10 +1015,12 @@ mod tests {
         assert_eq!(mapped["status"], ["/api/status"]);
         assert_eq!(mapped["stop"], ["/api/stop"]);
         assert_eq!(mapped["open"], ["/api/login-codes"]);
+        assert_eq!(mapped["mcp"], ["/api/bridge/binding"]);
+        assert_eq!(mapped["chat-hook"], ["/api/chat"]);
     }
 
     #[test]
-    fn routes_are_unique_and_the_bridge_route_is_the_stand_ins_alone() {
+    fn routes_are_unique_and_the_stand_in_routes_are_the_bridge_and_chat() {
         let mut seen = HashSet::new();
         for route in ROUTES {
             assert!(
@@ -970,6 +1031,6 @@ mod tests {
             );
         }
         let bridge: Vec<&str> = by_group(Group::StandIn).map(|route| route.path).collect();
-        assert_eq!(bridge, ["/api/bridge/binding"]);
+        assert_eq!(bridge, ["/api/bridge/binding", "/api/chat"]);
     }
 }
