@@ -1,0 +1,28 @@
+/*
+ * design-system.css is a verbatim copy of docs-site/src/styles/design-system.css,
+ * which is itself the docs site's copy of the private design system's tokens.css.
+ * Refresh it by copying that file again; keep page changes in this file.
+ */
+@import "./design-system.css";
+@import "@fontsource-variable/nunito";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+
+:root {
+  /* The self-hosted face registers as "Nunito Variable"; the tokens name "Nunito". */
+  --page-font: "SF Pro Rounded", "Nunito Variable", var(--font-rounded);
+}
+
+body {
+  margin: 0;
+  padding: 2rem;
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+  font-family: var(--page-font);
+}
+
+pre {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}

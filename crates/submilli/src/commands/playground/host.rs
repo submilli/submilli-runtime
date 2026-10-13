@@ -15,8 +15,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
-use axum::extract::{Request, State};
-use axum::http::header::{CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
+use axum::extract::{Path, Request, State};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS,
+};
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -858,41 +860,78 @@ pub(crate) async fn stop(State(state): State<ControlState>) -> Response {
     (StatusCode::ACCEPTED, Json(json!({ "stopping": true }))).into_response()
 }
 
-/// A stand-in until the page arrives: it trades the link's login code for a
-/// browser session, keeps the token out of the address bar, and shows the status.
+/// The page's built files, by path under its build directory: `index.html`, and the
+/// content-hashed files under `assets/` it loads.
+const PAGE_FILES: &[(&str, &[u8])] = include!(concat!(env!("OUT_DIR"), "/page_files.rs"));
+
+/// The page and its assets load only from this listener, and nothing else may frame,
+/// post from, or rebase them.
+const PAGE_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
+                        font-src 'self'; img-src 'self' data:; connect-src 'self'; \
+                        base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+fn page_file(path: &str) -> Option<&'static [u8]> {
+    PAGE_FILES
+        .iter()
+        .find(|(name, _)| *name == path)
+        .map(|(_, bytes)| *bytes)
+}
+
+/// The page. It names its assets by content hash, so it is never cached itself: a new
+/// build reaches the browser on the next load.
 pub(crate) async fn page() -> Response {
+    let Some(html) = page_file("index.html") else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "this build has no playground page",
+        );
+    };
     (
-        [(
-            CONTENT_TYPE,
-            HeaderValue::from_static("text/html; charset=utf-8"),
-        )],
-        PAGE,
+        [
+            (
+                CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            ),
+            (CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (CONTENT_SECURITY_POLICY, HeaderValue::from_static(PAGE_CSP)),
+        ],
+        html,
     )
         .into_response()
 }
 
-const PAGE: &str = r#"<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Submilli playground</title></head>
-<body><h1>Submilli playground</h1><pre id="status">Signing in...</pre>
-<script>
-(async () => {
-  const out = document.getElementById("status");
-  const code = new URLSearchParams(location.hash.slice(1)).get("login");
-  history.replaceState(null, "", location.pathname + location.search);
-  try {
-    if (code) {
-      const r = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) });
-      if (r.ok) localStorage.setItem("submilli-playground-session", (await r.json()).session_token);
+/// A file the page loads. Its name carries its content hash, so it never changes and
+/// the browser may keep it.
+pub(crate) async fn page_asset(Path(file): Path<String>) -> Response {
+    let Some(bytes) = page_file(&format!("assets/{file}")) else {
+        return error(StatusCode::NOT_FOUND, "not_found", "no such page asset");
+    };
+    (
+        [
+            (CONTENT_TYPE, HeaderValue::from_static(content_type(&file))),
+            (
+                CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            ),
+            (CONTENT_SECURITY_POLICY, HeaderValue::from_static(PAGE_CSP)),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+fn content_type(file: &str) -> &'static str {
+    match file.rsplit_once('.').map(|(_, extension)| extension) {
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("svg") => "image/svg+xml",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
     }
-    const token = localStorage.getItem("submilli-playground-session");
-    const r = await fetch("/api/status", { headers: token ? { authorization: "Bearer " + token } : {} });
-    if (r.status === 401) { localStorage.removeItem("submilli-playground-session"); out.textContent = "Run `submilli playground open` for a new link."; return; }
-    out.textContent = JSON.stringify(await r.json(), null, 2);
-  } catch (e) { out.textContent = String(e); }
-})();
-</script></body></html>
-"#;
+}
 
 #[cfg(test)]
 mod tests {
@@ -924,5 +963,42 @@ mod tests {
             ["allow-localhost", "allow-ip 10.1.0.0/16"]
         );
         let _: submilli_server::NetworkPolicy = granted.policy();
+    }
+
+    /// Text React carries that names a URL without ever requesting it: the XML
+    /// namespaces it creates elements in, and the link it puts in a production error
+    /// message.
+    const NOT_REQUESTED: &[&str] = &[
+        "http://www.w3.org/1998/Math/MathML",
+        "http://www.w3.org/1999/xhtml",
+        "http://www.w3.org/1999/xlink",
+        "http://www.w3.org/2000/svg",
+        "http://www.w3.org/XML/1998/namespace",
+        "https://reactjs.org/docs/error-decoder.html?invariant=",
+    ];
+
+    #[test]
+    fn no_page_file_names_another_origin() {
+        assert!(page_file("index.html").is_some());
+        for (name, bytes) in PAGE_FILES {
+            // The fonts' license text links to the license's home.
+            if name.ends_with(".txt") {
+                continue;
+            }
+            let mut text = String::from_utf8_lossy(bytes).into_owned();
+            for allowed in NOT_REQUESTED {
+                text = text.replace(allowed, "");
+            }
+            for scheme in ["http://", "https://"] {
+                assert!(
+                    !text.contains(scheme),
+                    "{name} names {}",
+                    text.split(scheme)
+                        .nth(1)
+                        .map(|rest| rest.chars().take(60).collect::<String>())
+                        .unwrap_or_default()
+                );
+            }
+        }
     }
 }

@@ -776,6 +776,69 @@ mod unix {
         assert_eq!(status, 200, "{body}");
     }
 
+    const PAGE_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
+                            font-src 'self'; img-src 'self' data:; connect-src 'self'; \
+                            base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn the_page_and_its_hashed_assets_are_served_under_the_content_security_policy() {
+        let project = Project::new();
+        let record = project.start(&[]);
+
+        let (status, headers, page) = request("GET", &control(&record, "/"), None, &[], None);
+        assert_eq!(status, 200);
+        assert_eq!(headers["content-type"], "text/html; charset=utf-8");
+        assert_eq!(headers["cache-control"], "no-store");
+        assert_eq!(headers["content-security-policy"], PAGE_CSP);
+        assert_eq!(headers["x-content-type-options"], "nosniff");
+
+        // The script and the stylesheet the page names, and a font the stylesheet names.
+        let linked = |text: &str, suffix: &str| {
+            text.split(['"', '(', ')'])
+                .find(|part| part.starts_with("/assets/") && part.ends_with(suffix))
+                .unwrap_or_else(|| panic!("no /assets/*{suffix} in {text}"))
+                .to_owned()
+        };
+        let script = linked(&page, ".js");
+        let stylesheet = linked(&page, ".css");
+        let (_, _, css) = request("GET", &control(&record, &stylesheet), None, &[], None);
+        let font = linked(&css, ".woff2");
+        for (path, content_type) in [
+            (script.as_str(), "text/javascript; charset=utf-8"),
+            (stylesheet.as_str(), "text/css; charset=utf-8"),
+            (font.as_str(), "font/woff2"),
+        ] {
+            let (status, headers, _) = request("GET", &control(&record, path), None, &[], None);
+            assert_eq!(status, 200, "{path}");
+            assert_eq!(headers["content-type"], content_type, "{path}");
+            assert_eq!(
+                headers["cache-control"], "public, max-age=31536000, immutable",
+                "{path}"
+            );
+            assert_eq!(headers["content-security-policy"], PAGE_CSP, "{path}");
+        }
+
+        let (status, headers, body) = request(
+            "GET",
+            &control(&record, "/assets/index-missing.js"),
+            None,
+            &[],
+            None,
+        );
+        assert_eq!(status, 404);
+        assert!(
+            headers["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("application/json")
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["error"],
+            "not_found"
+        );
+    }
+
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
     #[test]
     fn a_deeply_recursive_program_ends_with_a_resource_error_and_the_playground_stays_up() {

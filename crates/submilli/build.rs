@@ -1,5 +1,6 @@
 //! Generates the bundled skill file table from `skills/submilli`, so a file
-//! added to the skill ships without a matching source edit.
+//! added to the skill ships without a matching source edit, and the playground
+//! page's file table from its committed build, so `cargo build` needs no Node.
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
@@ -16,29 +17,44 @@ fn main() -> io::Result<()> {
     // Watching the directory re-runs this script when files are added or removed.
     println!("cargo:rerun-if-changed={}", skill_dir.display());
 
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("set by cargo"));
+    fs::write(
+        out_dir.join("skill_files.rs"),
+        file_table(&skill_dir, "include_str")?,
+    )?;
+
+    // Built by `npm run build` in `web/` and committed; CI checks it matches a fresh build.
+    let page_dir = manifest_dir
+        .join("src/commands/playground/web/dist")
+        .canonicalize()?;
+    println!("cargo:rerun-if-changed={}", page_dir.display());
+    fs::write(
+        out_dir.join("page_files.rs"),
+        file_table(&page_dir, "include_bytes")?,
+    )
+}
+
+/// `&[(path under dir, include!(file)), ...]` for every file under `dir`, sorted.
+fn file_table(dir: &Path, include: &str) -> io::Result<String> {
     let mut files = Vec::new();
-    collect_files(&skill_dir, &mut files)?;
+    collect_files(dir, &mut files)?;
     files.sort();
 
     let mut table = String::from("&[\n");
     for file in &files {
-        let relative = file
-            .strip_prefix(&skill_dir)
-            .expect("collected under skill_dir");
+        let relative = file.strip_prefix(dir).expect("collected under dir");
         let name = relative
             .iter()
-            .map(|part| part.to_str().expect("skill file names are UTF-8"))
+            .map(|part| part.to_str().expect("bundled file names are UTF-8"))
             .collect::<Vec<_>>()
             .join("/");
         table.push_str(&format!(
-            "    ({name:?}, include_str!({:?})),\n",
+            "    ({name:?}, {include}!({:?})),\n",
             file.display().to_string()
         ));
     }
     table.push(']');
-
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("set by cargo"));
-    fs::write(out_dir.join("skill_files.rs"), table)
+    Ok(table)
 }
 
 fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {

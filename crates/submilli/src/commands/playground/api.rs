@@ -72,6 +72,13 @@ pub(crate) const ROUTES: &[Route] = &[
         handler: || get(host::page),
     },
     Route {
+        method: "GET",
+        path: "/assets/{*file}",
+        group: Group::Public,
+        command: None,
+        handler: || get(host::page_asset),
+    },
+    Route {
         method: "POST",
         path: "/api/challenge",
         group: Group::Public,
