@@ -16,7 +16,7 @@
 const ts = require("typescript");
 const fs = require("fs");
 const path = require("path");
-const { VIRTUAL_ROOT, relativeSpecifier } = require("./case-files.cjs");
+const { VIRTUAL_ROOT, moduleOfFileName, relativeSpecifier } = require("./case-files.cjs");
 const { OPTION_LINE, caseProgram, lineIndex, tscErrors } = require("./tsc-case.cjs");
 
 const casesDir = path.join(__dirname, "..", "typescript");
@@ -46,20 +46,7 @@ function writeBaselines(file) {
  * each line of a file is a line of the case, so its entries go on that line. */
 function typesBaseline(file, text, sourceFiles, checker) {
   const entries = new Map(); // line -> [text, type][]
-  for (const sourceFile of sourceFiles) {
-    const visit = (node) => {
-      if (ts.isExpressionNode(node) || ts.isIdentifier(node) || ts.isDeclarationName(node)) {
-        const entry = typeEntry(node, sourceFile, checker);
-        if (entry) {
-          const [line, ...rest] = entry;
-          if (!entries.has(line)) entries.set(line, []);
-          entries.get(line).push(rest);
-        }
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(sourceFile);
-  }
+  for (const sourceFile of sourceFiles) collectEntries(sourceFile, checker, entries);
 
   const out = [`=== ${path.basename(file)} ===`];
   text.split("\n").forEach((rawLine, i) => {
@@ -76,6 +63,22 @@ function typesBaseline(file, text, sourceFiles, checker) {
     if (entries.has(i)) out.push("");
   });
   return out.join("\n") + "\n";
+}
+
+/** Adds the type entries of `sourceFile`'s nodes to `entries`, by line. */
+function collectEntries(sourceFile, checker, entries) {
+  const visit = (node) => {
+    if (ts.isExpressionNode(node) || ts.isIdentifier(node) || ts.isDeclarationName(node)) {
+      const entry = typeEntry(node, sourceFile, checker);
+      if (entry) {
+        const [line, ...rest] = entry;
+        if (!entries.has(line)) entries.set(line, []);
+        entries.get(line).push(rest);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
 }
 
 // Mirrors the harness's `writeTypeOrSymbol`: a node that is part of a type, or an
@@ -106,14 +109,9 @@ function typeEntry(node, sourceFile, checker) {
   const checkoutPrefix = `import("${path.dirname(sourceFile.fileName)}/`;
   const written = checker
     .typeToString(type, node.parent, flags)
-    .replace(new RegExp(`import\\("${VIRTUAL_ROOT}/([^"]*)"`, "g"), (_, to) => `import("${relativeSpecifier(moduleOf(sourceFile), to)}"`)
+    .replace(new RegExp(`import\\("${VIRTUAL_ROOT}/([^"]*)"`, "g"), (_, to) => `import("${relativeSpecifier(moduleOfFileName(sourceFile.fileName), to)}"`)
     .replaceAll(checkoutPrefix, 'import("./');
   return [line, text, written];
-}
-
-/** The module path of a multi-file case's file, as `case-files.cjs` names it. */
-function moduleOf(sourceFile) {
-  return sourceFile.fileName.slice(`${VIRTUAL_ROOT}/`.length).replace(/\.ts$/, "");
 }
 
 function errorLines(file) {

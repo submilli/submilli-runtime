@@ -44,7 +44,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use case_files::trim_js_space;
 use interpreter::{ExprId, Span, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
@@ -1528,19 +1527,8 @@ fn line_of(source: &str, offset: usize) -> usize {
 }
 
 /// A `// @name: value` compiler-option line, which the baseline writer leaves out.
-/// Must agree with `OPTION_LINE` in `typescript-baselines/tsc-case.cjs`:
-/// `^\s*//\s*@\w+\s*:`. JavaScript's `\s` includes a byte-order mark.
 fn is_option_line(line: &str) -> bool {
-    let Some(rest) = trim_js_space(line)
-        .strip_prefix("//")
-        .and_then(|r| trim_js_space(r).strip_prefix('@'))
-    else {
-        return false;
-    };
-    let name_len = rest
-        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .unwrap_or(rest.len());
-    name_len > 0 && trim_js_space(&rest[name_len..]).starts_with(':')
+    case_files::option_line(line).is_some()
 }
 
 fn collect_files(dir: &Path, keep: &mut impl FnMut(&Path) -> bool, out: &mut Vec<PathBuf>) {

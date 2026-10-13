@@ -41,7 +41,7 @@ function splitCase(text) {
     const owns = (index) => firstLine <= index && index < endLine;
     return {
       module,
-      fileName: `${VIRTUAL_ROOT}/${module}.ts`,
+      fileName: fileNameOf(module),
       text: lines.map((line, index) => (owns(index) ? line : " ".repeat(line.length))).join("\n"),
       firstLine,
       endLine,
@@ -51,9 +51,14 @@ function splitCase(text) {
   });
 }
 
-/** The file of `files` that owns 0-based line `line`. */
-function fileOwning(files, line) {
-  return files.find((f) => f.firstLine <= line && line < f.endLine);
+/** The module path of the case file `tsc` sees as `fileName`. */
+function moduleOfFileName(fileName) {
+  return fileName.slice(`${VIRTUAL_ROOT}/`.length).replace(/\.ts$/, "");
+}
+
+/** Where `tsc` sees the case file whose module path is `module`. */
+function fileNameOf(module) {
+  return `${VIRTUAL_ROOT}/${module}.ts`;
 }
 
 function modulePath(name) {
@@ -97,4 +102,4 @@ function relativeSpecifier(from, to) {
   return relative.startsWith("../") ? relative : `./${relative}`;
 }
 
-module.exports = { VIRTUAL_ROOT, splitCase, fileOwning, fileNames, eachFile, duplicateModules, relativeSpecifier };
+module.exports = { VIRTUAL_ROOT, splitCase, moduleOfFileName, fileNames, eachFile, duplicateModules, relativeSpecifier };

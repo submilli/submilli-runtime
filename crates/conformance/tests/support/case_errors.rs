@@ -53,6 +53,9 @@ const MISSING_FEATURE_PHRASES: &[&str] = &[
     "default value must be a literal",
     "lands in Layer",
     "cannot bind generic function",
+    // A multi-file case is checked as a package, which `tsc` doesn't restrict so.
+    "circular import",
+    "packages cannot declare main",
 ];
 
 /// Errors that name a feature we lack in some programs, and report the error `tsc`
@@ -72,6 +75,10 @@ const MAYBE_MISSING_FEATURE_PHRASES: &[&str] = &[
     "is an enum type, not a value",
     "is a class, not a value",
     "declares no `new` method",
+    // A module export or package we lack (re-exports, ambient modules), or one
+    // `tsc` can't find either.
+    "does not export `",
+    "package `",
 ];
 
 /// TypeScript library types we don't have. `unknown type` naming one is a feature we

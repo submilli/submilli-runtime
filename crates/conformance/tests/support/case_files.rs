@@ -71,23 +71,29 @@ fn blank_other_files(lines: &[&str], owners: &[usize], file: usize) -> String {
         .join("\n")
 }
 
-/// The value of a `// @filename: <name>` line, matched as `tsc-case.cjs` matches
-/// an option line.
+/// The value of a `// @filename: <name>` line.
 fn filename_option(line: &str) -> Option<&str> {
-    let rest = trim_js_space(trim_js_space(line).strip_prefix("//")?);
-    let rest = rest.strip_prefix('@')?;
+    option_line(line)
+        .filter(|(name, _)| name.eq_ignore_ascii_case("filename"))
+        .map(|(_, value)| value.trim())
+}
+
+/// The name and value of a `// @name: value` compiler-option line. Must agree
+/// with `OPTION_LINE` in `typescript-baselines/tsc-case.cjs`: `^\s*//\s*@(\w+)\s*:`.
+pub(super) fn option_line(line: &str) -> Option<(&str, &str)> {
+    let rest = trim_js_space(trim_js_space(line).strip_prefix("//")?).strip_prefix('@')?;
     let name_end = rest
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .unwrap_or(rest.len());
-    if !rest[..name_end].eq_ignore_ascii_case("filename") {
+    if name_end == 0 {
         return None;
     }
     let value = trim_js_space(&rest[name_end..]).strip_prefix(':')?;
-    Some(value.trim())
+    Some((&rest[..name_end], value))
 }
 
 /// `line` without the leading characters JavaScript's `\s` matches.
-pub(super) fn trim_js_space(line: &str) -> &str {
+fn trim_js_space(line: &str) -> &str {
     line.trim_start_matches(|c: char| (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}')
 }
 

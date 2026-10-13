@@ -242,9 +242,11 @@ function exclusionBeforePort(rel, source) {
     const kind = UNSUPPORTED_FILES.find(([pattern]) => pattern.test(name));
     if (kind) return exclusion(rel, REASONS.unsupported, kind[1]);
   }
-  const twice = duplicateModules(splitCase(source.replace(/\r\n?/g, "\n")) ?? []);
+  const text = source.replace(/\r\n?/g, "\n");
+  const files = splitCase(text);
+  const twice = duplicateModules(files ?? []);
   if (twice.length) return exclusion(rel, REASONS.unsupported, `${DUPLICATE_FILES_FEATURE}: \`${twice[0]}\``);
-  if (sharesGlobalScope(source)) return exclusion(rel, REASONS.unsupported, SHARED_SCOPE_FEATURE);
+  if (files && sharesGlobalScope(text)) return exclusion(rel, REASONS.unsupported, SHARED_SCOPE_FEATURE);
   if (CONSTRUCT_SIGNATURE.test(source)) return exclusion(rel, REASONS.unsupported, CONSTRUCT_SIGNATURE_FEATURE);
   return null;
 }
@@ -254,12 +256,10 @@ function isJavaScript(source) {
   return JAVASCRIPT_OPTION.test(source) || fileNames(source).some((name) => JAVASCRIPT_FILE.test(name));
 }
 
-/** Whether a multi-file case's files share declarations through the global scope:
- * a name in one file resolves to a script file's declaration in another, or two
- * script files declare the same name. */
-function sharesGlobalScope(source) {
-  const text = source.replace(/\r\n?/g, "\n");
-  if (!splitCase(text)) return false;
+/** Whether the files of the multi-file case `text` share declarations through
+ * the global scope: a name in one file resolves to a script file's declaration in
+ * another, or two script files declare the same name. */
+function sharesGlobalScope(text) {
   // The name is only what `caseProgram` calls a single file: this case has several.
   const { program, sourceFiles } = caseProgram("case.ts", text);
   const checker = program.getTypeChecker();

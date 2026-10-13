@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { splitCase, eachFile, relativeSpecifier } = require("./case-files.cjs");
 const { relativeImports } = require("./port-case.cjs");
-const { rangesToBlank, caseFileAt } = require("./prune-case.cjs");
+const { rangesToBlank, fileOfError } = require("./prune-case.cjs");
 const { exclusionBeforePort } = require("./port-suite.cjs");
 
 const CASE = "// @strict: true\n// @filename: a.ts\nexport let x = 1;\n// @Filename: /dir/b.ts\nimport { x } from \"a\";\nlet y = x;\n";
@@ -40,7 +40,7 @@ test("an import of another file of the case names it by relative path", () => {
 
 test("a case's files are pruned where they are in the case", () => {
   const source = "// @filename: a.ts\nexport let x = 1;\n// @filename: b.ts\nimport { x } from \"./a\";\nlet y = x;\n";
-  const ranges = rangesToBlank(caseFileAt("case.ts", source), [{ offset: source.indexOf("let y"), file: 1 }]);
+  const ranges = rangesToBlank(fileOfError("case.ts", source), [{ offset: source.indexOf("let y"), file: 1 }]);
   assert.deepEqual(ranges.map((r) => source.slice(r.start, r.end)), ["let y = x;"]);
 });
 
@@ -62,10 +62,10 @@ test("a multi-file case whose scripts share the global scope is left out", () =>
 
 test("a statement a file leaves unfinished is pruned in that file only", () => {
   const unterminated = "// @filename: a.ts\nexport const x = 1;\nlet t = `abc\n// @filename: b.ts\nimport { x } from \"./a\";\nconst y = x;\n";
-  const [range] = rangesToBlank(caseFileAt("case.ts", unterminated), [{ offset: unterminated.indexOf("let t"), file: 0 }]);
+  const [range] = rangesToBlank(fileOfError("case.ts", unterminated), [{ offset: unterminated.indexOf("let t"), file: 0 }]);
   assert.equal(unterminated.slice(range.start, range.end), "let t = `abc\n");
   const unclosed = "// @filename: a.ts\nexport function f(): void {\n  const k = 1;\n// @filename: b.ts\nimport { x } from \"./a\";\nconst z = 1;\n";
-  const [atEnd] = rangesToBlank(caseFileAt("case.ts", unclosed), [{ offset: unclosed.length, file: 0 }]);
+  const [atEnd] = rangesToBlank(fileOfError("case.ts", unclosed), [{ offset: unclosed.length, file: 0 }]);
   assert.equal(unclosed.slice(atEnd.start, atEnd.end), "export function f(): void {\n  const k = 1;");
 });
 
@@ -73,4 +73,10 @@ test("an import of a directory names its index", () => {
   const source = "// @filename: dir/index.ts\nexport let x = 1;\n// @filename: b.ts\nimport { x } from \"./dir\";\n";
   const files = splitCase(source);
   assert.match(relativeImports(files[1].text, files[1].fileName, files), /from "\.\/dir\/index"/);
+});
+
+test("an import of `.` names its directory's index, not a file of the same name", () => {
+  const source = "// @filename: a.ts\nexport let rootA = 1;\n// @filename: a/index.ts\nexport let indexInA = 1;\n// @filename: a/b.ts\nimport { indexInA } from \".\";\n";
+  const files = splitCase(source);
+  assert.match(relativeImports(files[2].text, files[2].fileName, files), /from "\.\/index"/);
 });

@@ -53,7 +53,7 @@ function prune(caseErrors, file) {
     }
     if (!found.errors.length) return finish(null);
     const offsets = found.errors.map((e) => e.offset).join(", ");
-    const ranges = rangesToBlank(caseFileAt(file, text), found.errors);
+    const ranges = rangesToBlank(fileOfError(file, text), found.errors);
     if (!ranges.length) return finish(`nothing to prune at offsets ${offsets}`);
     const previousText = text;
     for (const range of ranges) text = blank(text, range);
@@ -106,12 +106,12 @@ function offsetOf(text, line, column) {
   return start + column - 1;
 }
 
-/** For the case `file`, whose text is `text`, the file of the case an error is
- * in, given `{ offset, file }`, the file's index: `{ sourceFile, start, end,
- * offset }`, with the file parsed and the offsets it owns. A multi-file case's
+/** Returns a function from an error's `{ offset, file }`, `file` being the index
+ * of the case's file it is in, to `{ sourceFile, start, end, offset }`: that file
+ * parsed and the offsets it owns, for the case `file` whose text is `text`. A multi-file case's
  * files keep their offsets in the case, so what is blanked in one is blanked at the
  * same offsets in the case. */
-function caseFileAt(file, text) {
+function fileOfError(file, text) {
   const files = splitCase(text);
   if (!files) {
     const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
@@ -129,7 +129,7 @@ function caseFileAt(file, text) {
  * deduplicated, right to left so blanking one leaves the offsets of the rest in
  * place. An outer statement's blank covers any inner one. Each is `{ start, end,
  * body }`, `body` being what `blank` leaves in its place. `fileAt` gives the file
- * an error is in (`caseFileAt`). A range never leaves the offsets its file owns:
+ * an error is in (`fileOfError`). A range never leaves the offsets its file owns:
  * a statement a file leaves unfinished runs on over the lines of the files after
  * it, which are blank in it. */
 function rangesToBlank(fileAt, errors) {
@@ -383,6 +383,6 @@ function codeLines(text) {
   }).length;
 }
 
-module.exports = { rangesToBlank, caseFileAt };
+module.exports = { rangesToBlank, fileOfError };
 
 if (require.main === module) main();

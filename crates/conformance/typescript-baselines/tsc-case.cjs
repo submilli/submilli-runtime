@@ -29,11 +29,18 @@ function compilerOptions(file, text = fs.readFileSync(file, "utf8")) {
     noEmit: true,
   };
   Object.assign(options, moduleOptions(text));
-  for (const [, name, value] of text.matchAll(new RegExp(OPTION_LINE.source, "gm"))) {
-    const key = BOOLEAN_OPTIONS[name.toLowerCase()];
-    if (key) options[key] = value.split(",")[0].trim().toLowerCase() === "true";
+  for (const [name, key] of Object.entries(BOOLEAN_OPTIONS)) {
+    const value = optionValue(text, name);
+    if (value !== undefined) options[key] = value === "true";
   }
   return options;
+}
+
+/** The first value, lower-cased, of the last `// @name:` option line in `text`
+ * for `name` (lower case), as `tsc`'s harness reads it; none if no line sets it. */
+function optionValue(text, name) {
+  const lines = [...text.matchAll(new RegExp(OPTION_LINE.source, "gm"))].filter(([, key]) => key.toLowerCase() === name);
+  return lines.at(-1)?.[2].split(",")[0].trim().toLowerCase();
 }
 
 /** The module options of a multi-file case, whose files import each other by
@@ -42,8 +49,7 @@ function compilerOptions(file, text = fs.readFileSync(file, "utf8")) {
  * None for a single file. */
 function moduleOptions(text) {
   if (!splitCase(text)) return {};
-  const option = [...text.matchAll(new RegExp(OPTION_LINE.source, "gm"))].find(([, key]) => key.toLowerCase() === "module");
-  const name = option?.[2].split(",")[0].trim().toLowerCase();
+  const name = optionValue(text, "module");
   const kind = Object.entries(ts.ModuleKind).find(([key, value]) => typeof value === "number" && key.toLowerCase() === name)?.[1];
   const module = kind ?? ts.ModuleKind.ES2020;
   return { module, moduleResolution: moduleResolutionFor(module) };
@@ -83,7 +89,10 @@ function caseHost(files) {
     fileExists: (name) => texts.has(name) || base.fileExists(name),
     readFile: (name) => texts.get(name) ?? base.readFile(name),
     // Module resolution looks in a file's directory before it looks for the file.
-    directoryExists: (name) => [...texts.keys()].some((f) => f.startsWith(`${name}/`)) || base.directoryExists(name),
+    directoryExists: (name) => {
+      const directory = `${name.replace(/\/+$/, "")}/`;
+      return [...texts.keys()].some((f) => f.startsWith(directory)) || base.directoryExists(name);
+    },
     realpath: (name) => (texts.has(name) ? name : base.realpath?.(name) ?? name),
   };
 }

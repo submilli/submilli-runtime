@@ -5,7 +5,7 @@ in `/`) is left out whole, with its subdirectories, except for any case in the s
 Written by `../typescript-baselines/port-suite.cjs`: change its lists or the porter,
 not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't read.
 
-3804 entries: 2649 not supported, 706 the port changes what it checks, 113 duplicate, 335 checks too little, 1 porter failure.
+3804 entries: 2649 not supported, 705 the port changes what it checks, 113 duplicate, 336 checks too little, 1 porter failure.
 
 | Case | Reason | Detail |
 |:-----|:-------|:-------|
@@ -2156,7 +2156,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `moduleResolution/customConditions.ts` | not supported | `node_modules` packages |
 | `moduleResolution/declarationNotFoundPackageBundlesTypes.ts` | not supported | JavaScript |
 | `moduleResolution/extensionLoadingPriority.ts` | not supported | JavaScript |
-| `moduleResolution/importFromDot.ts` | the port changes what it checks | `tsc` then reports TS2307 |
+| `moduleResolution/importFromDot.ts` | checks too little | 3 after the port |
 | `moduleResolution/nestedPackageJsonRedirect.ts` | not supported | `node_modules` packages |
 | `moduleResolution/node10AlternateResult_noResolution.ts` | not supported | `node_modules` packages |
 | `moduleResolution/node10Alternateresult_noTypes.ts` | not supported | JavaScript |

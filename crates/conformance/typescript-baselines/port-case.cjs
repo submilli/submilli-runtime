@@ -25,7 +25,7 @@
 const ts = require("typescript");
 const fs = require("fs");
 const path = require("path");
-const { splitCase, eachFile, relativeSpecifier } = require("./case-files.cjs");
+const { splitCase, eachFile, moduleOfFileName, relativeSpecifier } = require("./case-files.cjs");
 const { caseProgram, moduleOptions } = require("./tsc-case.cjs");
 
 const PLACEHOLDER = (ty) => `null as unknown as (${ty})`;
@@ -64,7 +64,7 @@ function port(source, fileName) {
  * resolution, or with a `.js` extension. */
 function relativeImports(text, fileName, files) {
   const sourceFile = parse(text, fileName);
-  const from = files.find((f) => f.fileName === fileName).module;
+  const from = moduleOfFileName(fileName);
   const modules = new Set(files.map((f) => f.module));
   const edits = [];
   for (const statement of sourceFile.statements) {
@@ -80,14 +80,18 @@ function relativeImports(text, fileName, files) {
 }
 
 /** The case module a specifier in module `from` names, if any: a relative path
- * from `from`'s directory, or else a bare name, with or without an extension, and
- * a directory naming its `index`. */
+ * from `from`'s directory, or else a bare name, with or without an extension. A
+ * file name may also name a directory's `index`; `.`, `..` or a trailing `/`
+ * names only the directory, as TypeScript resolves it. */
 function caseModuleNamed(specifier, from, modules) {
   const bare = specifier.replace(/\.(ts|js)$/, "");
-  const name = bare.startsWith("./") || bare.startsWith("../")
+  const directory = /(^|\/)\.\.?$|\/$/.test(bare);
+  const name = /^\.\.?(\/|$)/.test(bare)
     ? path.posix.join(path.posix.dirname(`/${from}`), bare).slice(1)
     : bare.replace(/^\/+/, "");
-  return [name, `${name}/index`].find((module) => modules.has(module));
+  const module = name.replace(/\/$/, "");
+  const candidates = directory ? [`${module}/index`] : [module, `${module}/index`];
+  return candidates.map((m) => m.replace(/^\//, "")).find((m) => modules.has(m));
 }
 
 /** Renames each repeated `var` declaration in a scope `let` would share: the same

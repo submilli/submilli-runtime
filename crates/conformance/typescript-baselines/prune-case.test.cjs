@@ -1,12 +1,12 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
-const { rangesToBlank, caseFileAt } = require("./prune-case.cjs");
+const { rangesToBlank, fileOfError } = require("./prune-case.cjs");
 
 /** The text each range to blank covers, for an error at the first occurrence of
  * each needle. */
 function blanked(source, ...needles) {
   const errors = needles.map((needle) => ({ offset: source.indexOf(needle), file: 0 }));
-  return rangesToBlank(caseFileAt("case.ts", source), errors).map((r) => source.slice(r.start, r.end));
+  return rangesToBlank(fileOfError("case.ts", source), errors).map((r) => source.slice(r.start, r.end));
 }
 
 test("an error in a statement blanks that statement", () => {
@@ -26,7 +26,7 @@ test("an error on a comment blanks the comment, but not a pruning marker", () =>
 
 test("a comment's blank leaves no statement in its place", () => {
   const source = "function f(): void;\n// @ts-expect-error\nfunction f() {}\n";
-  const [range] = rangesToBlank(caseFileAt("case.ts", source), [{ offset: source.indexOf("// @"), file: 0 }]);
+  const [range] = rangesToBlank(fileOfError("case.ts", source), [{ offset: source.indexOf("// @"), file: 0 }]);
   assert.equal(range.body, "");
 });
 
