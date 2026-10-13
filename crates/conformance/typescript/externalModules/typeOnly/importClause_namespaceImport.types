@@ -1,0 +1,63 @@
+=== importClause_namespaceImport.ts ===
+/*pruned*/;
+/*pruned*/;
+export type C<T> = T;
+>C : T
+>  : ^
+>T : T
+>  : ^
+
+export const Value = {};
+>Value : {}
+>      : ^^
+>{} : {}
+>   : ^^
+
+
+import type * as types from './a';
+>types : typeof types
+>      : ^^^^^^^^^^^^
+
+types;
+>types : typeof types
+>      : ^^^^^^^^^^^^
+
+types.Value;
+>types.Value : {}
+>            : ^^
+>types : typeof types
+>      : ^^^^^^^^^^^^
+>Value : {}
+>      : ^^
+
+let v: types.Value = null as unknown as (types.Value);
+>v : types.Value
+>  : ^^^^^^^^^^^
+>types : any
+>      : ^^^
+>null as unknown as (types.Value) : types.Value
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>types : any
+>      : ^^^
+
+/*pruned*/;
+/*pruned*/;
+const c: types.C<string> = "";
+>c : string
+>  : ^^^^^^
+>types : any
+>      : ^^^
+>"" : ""
+>   : ^^
+
+const d = { types };
+>d : { types: typeof types; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>{ types } : { types: typeof types; }
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^
+>types : typeof types
+>      : ^^^^^^^^^^^^
+
+

@@ -1,0 +1,4 @@
+exportAsNamespace3.ts(11,1): error TS2448: Block-scoped variable 'ns' used before its declaration.
+exportAsNamespace3.ts(11,1): error TS2454: Variable 'ns' is used before being assigned.
+exportAsNamespace3.ts(12,1): error TS2448: Block-scoped variable 'ns' used before its declaration.
+exportAsNamespace3.ts(12,1): error TS2454: Variable 'ns' is used before being assigned.

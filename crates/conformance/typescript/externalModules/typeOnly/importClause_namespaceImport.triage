@@ -1,0 +1,1 @@
+line 16 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it

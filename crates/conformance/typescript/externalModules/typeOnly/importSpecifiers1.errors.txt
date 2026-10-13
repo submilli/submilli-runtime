@@ -1,0 +1,8 @@
+importSpecifiers1.ts(18,1): error TS2304: Cannot find name 'type'.
+importSpecifiers1.ts(23,1): error TS2304: Cannot find name 'type'.
+importSpecifiers1.ts(33,1): error TS1361: 'as' cannot be used as a value because it was imported using 'import type'.
+importSpecifiers1.ts(41,1): error TS2304: Cannot find name 'type'.
+importSpecifiers1.ts(42,1): error TS2304: Cannot find name 'as'.
+importSpecifiers1.ts(43,1): error TS1361: 'something' cannot be used as a value because it was imported using 'import type'.
+importSpecifiers1.ts(44,1): error TS1361: 's' cannot be used as a value because it was imported using 'import type'.
+importSpecifiers1.ts(47,15): error TS2206: The 'type' modifier cannot be used on a named import when 'import type' is used on its import statement.

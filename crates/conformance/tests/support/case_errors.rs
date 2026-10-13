@@ -132,13 +132,12 @@ pub(super) struct CaseError {
 /// Our typed AST of a case, and our errors on it. A multi-file case is checked as
 /// one package whose modules are its files, the last being the root.
 pub(super) fn case_errors(source: &str) -> (TypedAst, Vec<CaseError>) {
-    let (typed, diags, syntax_errors) = match case_files::split(source) {
-        Some(files) => typecheck_files(&files),
-        None => {
-            let parsed = parse_script(source, FileId(0));
-            let (typed, diags) = typecheck_to_typed_ast(source, FileId(0));
-            (typed, diags, parsed.diagnostics().to_vec())
-        }
+    let (typed, diags, syntax_errors) = if let Some(files) = case_files::split(source) {
+        typecheck_files(&files)
+    } else {
+        let parsed = parse_script(source, FileId(0));
+        let (typed, diags) = typecheck_to_typed_ast(source, FileId(0));
+        (typed, diags, parsed.diagnostics().to_vec())
     };
     let errors = diags
         .iter()
@@ -171,7 +170,10 @@ fn typecheck_files(files: &[case_files::CaseFile]) -> (TypedAst, Vec<Diagnostic>
             source: &file.text,
         })
         .collect();
-    let root = modules.last().map(|m| m.path.clone()).expect("a split case has files");
+    let root = modules
+        .last()
+        .map(|m| m.path.clone())
+        .expect("a split case has files");
     let (typed, diags) = typecheck_package_to_typed_ast(CASE_PACKAGE, root, &modules);
     (typed, diags, syntax_errors)
 }

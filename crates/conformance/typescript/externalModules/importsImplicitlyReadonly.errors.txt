@@ -1,0 +1,4 @@
+importsImplicitlyReadonly.ts(15,1): error TS2632: Cannot assign to 'x' because it is an import.
+importsImplicitlyReadonly.ts(16,1): error TS2632: Cannot assign to 'y' because it is an import.
+importsImplicitlyReadonly.ts(17,4): error TS2540: Cannot assign to 'x' because it is a read-only property.
+importsImplicitlyReadonly.ts(18,4): error TS2540: Cannot assign to 'y' because it is a read-only property.

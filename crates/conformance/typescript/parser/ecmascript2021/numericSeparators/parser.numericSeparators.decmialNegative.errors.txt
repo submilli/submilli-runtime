@@ -1,0 +1,51 @@
+parser.numericSeparators.decmialNegative.ts(3,1): error TS2304: Cannot find name '_10'.
+parser.numericSeparators.decmialNegative.ts(6,3): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(9,3): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(12,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(15,3): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(18,5): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(21,5): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(24,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(27,3): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(30,4): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(33,5): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(36,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(39,3): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(42,4): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(45,5): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(48,1): error TS2304: Cannot find name '_0'.
+parser.numericSeparators.decmialNegative.ts(51,6): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(54,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(54,3): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(57,5): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(60,8): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(63,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(66,4): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(69,5): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(72,6): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(75,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(78,3): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(81,4): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(84,6): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(87,1): error TS2304: Cannot find name '_0'.
+parser.numericSeparators.decmialNegative.ts(90,7): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(93,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(93,3): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(96,5): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(99,9): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(102,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(105,4): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(108,5): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(111,6): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(114,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(117,3): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(120,4): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(123,6): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(126,1): error TS2304: Cannot find name '_0'.
+parser.numericSeparators.decmialNegative.ts(129,7): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(132,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.decmialNegative.ts(132,3): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(135,5): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(138,9): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.decmialNegative.ts(141,2): error TS2304: Cannot find name '_'.
+parser.numericSeparators.decmialNegative.ts(153,3): error TS6188: Numeric separators are not allowed here.

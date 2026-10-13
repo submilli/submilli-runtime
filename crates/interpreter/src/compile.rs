@@ -371,7 +371,8 @@ pub fn typecheck_package_to_typed_ast(
             (ta, diagnostics)
         }
         Err(error) => {
-            let error = error.with_limit_span_cut(|file| sources.get(file).map(|s| s.text()));
+            let error =
+                error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text));
             diagnostics.extend(error.into_diagnostics(FileId(0)));
             (TypedAst::new(), diagnostics)
         }

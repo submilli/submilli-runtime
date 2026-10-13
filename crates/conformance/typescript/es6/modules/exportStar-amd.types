@@ -1,0 +1,59 @@
+=== exportStar-amd.ts ===
+
+export let x = 1;
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+export let y = 2;
+>y : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+
+/*pruned*/;
+export function foo(): void { }
+>foo : () => void
+>    : ^^^^^^^^^^
+
+
+let x = "x";
+>x : string
+>  : ^^^^^^
+>"x" : "x"
+>    : ^^^
+
+let y = "y";
+>y : string
+>  : ^^^^^^
+>"y" : "y"
+>    : ^^^
+
+let z = "z";
+>z : string
+>  : ^^^^^^
+>"z" : "z"
+>    : ^^^
+
+export { x, y, z };
+>x : string
+>  : ^^^^^^
+>y : string
+>  : ^^^^^^
+>z : string
+>  : ^^^^^^
+
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
+/**/;
+;
+;
+;
+;
+

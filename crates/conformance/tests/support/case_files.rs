@@ -28,7 +28,12 @@ pub(super) fn split(source: &str) -> Option<Vec<CaseFile>> {
         return None;
     }
     let lines: Vec<&str> = source.split('\n').collect();
-    let owner = |line: usize| starts.iter().rposition(|(start, _)| *start <= line).unwrap_or(0);
+    let owner = |line: usize| {
+        starts
+            .iter()
+            .rposition(|(start, _)| *start <= line)
+            .unwrap_or(0)
+    };
     let files = starts
         .iter()
         .enumerate()
@@ -100,7 +105,11 @@ mod tests {
             )
         );
         assert_eq!(files[1].text.len(), source.len());
-        assert!(files[1].text.ends_with("// @Filename: /b.ts\nimport { x } from \"./a\";\n"));
+        assert!(
+            files[1]
+                .text
+                .ends_with("// @Filename: /b.ts\nimport { x } from \"./a\";\n")
+        );
         assert!(files[1].text.starts_with("                \n"));
     }
 }

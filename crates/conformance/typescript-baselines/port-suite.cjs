@@ -515,7 +515,7 @@ function findCases(dir) {
     .sort();
 }
 
-module.exports = { portCase, exclusionBeforePort, isJavaScript, excludedDirectory, findCases, wasPruned, upstreamErrorCodes, portCausedErrors, codeOf, unsupportedCause, writeExcluded };
+module.exports = { exclusionBeforePort, isJavaScript, excludedDirectory, findCases, wasPruned, upstreamErrorCodes, portCausedErrors, codeOf, unsupportedCause, writeExcluded };
 
 if (require.main === module) main().catch((e) => {
   console.error(e);

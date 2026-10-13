@@ -1,0 +1,5 @@
+types: 4 of 20 tsc entries compared, 1 differ
+
+line 16: c
+  tsc:  string
+  ours: C<string>

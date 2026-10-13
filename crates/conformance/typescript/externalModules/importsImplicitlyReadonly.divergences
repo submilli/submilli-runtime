@@ -1,0 +1,22 @@
+types: 6 of 36 tsc entries compared, 4 differ
+
+line 15: x
+  tsc:  any
+  ours: number
+
+line 16: y
+  tsc:  any
+  ours: number
+
+line 21: a3
+  tsc:  typeof a1
+  ours: <error>
+
+line 22: a3
+  tsc:  typeof a1
+  ours: <error>
+
+errors:
+line 15: tsc TS2632: Cannot assign to 'x' because it is an import. (we accept)
+line 16: tsc TS2632: Cannot assign to 'y' because it is an import. (we accept)
+line 13: ours: namespace `a1` cannot be used as a value (tsc accepts)

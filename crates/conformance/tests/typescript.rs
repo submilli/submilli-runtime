@@ -8,6 +8,10 @@
 //! - `<case>.types` — the type `tsc` infers at every expression, line by line.
 //! - `<case>.errors.txt` — the errors `tsc` reports, when there are any.
 //!
+//! A case with several `// @filename:` files is checked as one package whose
+//! modules are those files; `support/case_files.rs` splits it so every position
+//! stays where it is in the case.
+//!
 //! The runner typechecks the case, pairs each baseline entry with the expression
 //! of the same text on the same line, and writes every place the two disagree to
 //! `<case>.divergences`. That file is committed: the test fails when the current
