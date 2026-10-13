@@ -120,6 +120,8 @@ pub struct SessionRecord {
     /// Caller-supplied `${vars.NAME}` bindings, bound once at session init.
     /// Persisted so a session resumed after a restart keeps its variable scoping.
     pub variables: BTreeMap<String, String>,
+    /// The application tools declared at creation, as their JSON array.
+    pub tools_json: Option<String>,
 }
 
 impl SessionRecord {
@@ -151,6 +153,7 @@ impl Default for SessionRecord {
             root_vfs_type: RootVfsType::None,
             mcp_state: None,
             variables: BTreeMap::new(),
+            tools_json: None,
         }
     }
 }
@@ -164,6 +167,7 @@ impl PartialEq for SessionRecord {
             && self.root_vfs_type == other.root_vfs_type
             && self.mcp_state.is_some() == other.mcp_state.is_some()
             && self.variables == other.variables
+            && self.tools_json == other.tools_json
     }
 }
 

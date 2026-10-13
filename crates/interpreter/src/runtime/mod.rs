@@ -26,6 +26,7 @@ pub mod security;
 pub mod session_kv;
 pub mod skills;
 pub mod token_ledger;
+pub mod tools;
 pub mod vfs;
 pub mod watchdog;
 
@@ -81,6 +82,10 @@ pub use session_kv::{
     SessionKvPage, SessionKvStore, SharedKvBudget,
 };
 pub use skills::{SKILLS_MODULE_NAME, Skill, SkillError, SkillInfo, SkillProvider};
+pub use tools::{
+    TOOLS_CAPABILITY, TOOLS_MODULE_NAME, TOOLS_PACKAGE, ToolCallError, ToolProvider,
+    install_tools_async, tools_call_package_declaration,
+};
 pub use vfs::{
     Access, CopyDirError, MAX_MEASURED_DEPTH, MountError, MountSpec, Vfs, VfsMode, copy_host_dir,
     copy_host_subdir, measure_dir, measure_host_dir, measure_host_dir_skipping_vanished,
@@ -137,6 +142,14 @@ pub struct StoreData {
     /// dispatches through, present when the embedder wires one. `None` in the
     /// pure-interpreter path, where MCP calls throw "transport not configured".
     pub mcp_transport: Option<Arc<dyn McpTransport>>,
+    /// The application tools `submilli:tools.call` (`@tools`) dispatches
+    /// through, present only when the embedder wires one. `None` makes every
+    /// call a catchable "no application tools" error.
+    pub tool_provider: Option<Arc<dyn ToolProvider>>,
+    /// Time this execution spent waiting outside the program on a host call
+    /// that must not count against its time limit (an application tool call).
+    /// An embedder's execution timeout subtracts it from the elapsed time.
+    pub clock_paused: std::time::Duration,
     /// The model provider `submilli:llm` dispatches through, present only when
     /// the embedder wires one. Left `None` the runtime has no model access at
     /// all rather than silently completing against some default — the guest
@@ -281,6 +294,8 @@ impl StoreData {
             auth_proxy: crate::stdlib::http::default_auth_proxy(),
             secret_provider: Arc::new(secrets::NoopSecretProvider),
             mcp_transport: None,
+            tool_provider: None,
+            clock_paused: std::time::Duration::ZERO,
             llm_provider: None,
             llm_budget: None,
             embedding_provider: None,

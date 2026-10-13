@@ -57,6 +57,7 @@ pub fn install_host_functions_for(
     install_core_host_functions(linker)?;
     stdlib.install_host_functions(linker)?;
     super::mcp::install_mcp_async(linker)?;
+    super::tools::install_tools_async(linker)?;
     Ok(())
 }
 
@@ -126,6 +127,7 @@ fn install_prelude(
         uri_error_vtable: error_host.uri_vtable,
         reference_error_vtable: error_host.reference_vtable,
         permission_denied_vtable: error_host.permission_denied_vtable,
+        timeout_error_vtable: error_host.timeout_vtable,
         error_field_names: error_host.field_names,
         permission_denied_field_names: error_host.permission_denied_field_names,
         error_tag: error_host.tag,
@@ -785,6 +787,7 @@ pub struct HostAbi {
     pub(crate) uri_error_vtable: Global,
     pub(crate) reference_error_vtable: Global,
     pub(crate) permission_denied_vtable: Global,
+    pub(crate) timeout_error_vtable: Global,
     pub(crate) error_field_names: Global,
     pub(crate) permission_denied_field_names: Global,
     pub(crate) error_tag: wasmtime::Tag,
@@ -803,6 +806,7 @@ pub(crate) struct HostAbiHandles {
     pub uri_error_vtable: Global,
     pub reference_error_vtable: Global,
     pub permission_denied_vtable: Global,
+    pub timeout_vtable: Global,
     pub error_field_names: Global,
     pub permission_denied_field_names: Global,
 }
@@ -825,6 +829,7 @@ pub(crate) fn error_abi(caller: &Caller<'_, StoreData>) -> wasmtime::Result<Host
         uri_error_vtable: abi.uri_error_vtable,
         reference_error_vtable: abi.reference_error_vtable,
         permission_denied_vtable: abi.permission_denied_vtable,
+        timeout_vtable: abi.timeout_error_vtable,
         error_field_names: abi.error_field_names,
         permission_denied_field_names: abi.permission_denied_field_names,
     })
@@ -1111,6 +1116,25 @@ pub fn quota_exceeded_error(message: impl Into<String>) -> wasmtime::Error {
 }
 
 /// Marker for a host failure that should surface to the guest as the built-in
+/// `TimeoutError` subclass: a wait outside the program ran out of time. Same
+/// contract as [`QuotaExceededError`].
+#[derive(Debug)]
+pub struct TimeoutError(pub String);
+
+impl std::fmt::Display for TimeoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for TimeoutError {}
+
+/// A host failure that throws the built-in `TimeoutError` at the guest boundary.
+pub fn timeout_error(message: impl Into<String>) -> wasmtime::Error {
+    wasmtime::Error::new(TimeoutError(message.into()))
+}
+
+/// Marker for a host failure that should surface to the guest as the built-in
 /// `SyntaxError` subclass — same contract as [`RangeError`].
 #[derive(Debug)]
 pub struct SyntaxError(pub String);
@@ -1194,6 +1218,8 @@ pub enum DenialSource {
     /// The path is in a volume mounted read-only. Unlike a policy decision,
     /// writing somewhere else is a legitimate response.
     ReadOnly,
+    /// The harness, or a person it asked, refused an application tool call.
+    Harness,
 }
 
 /// A denial the runtime threw that escaped the program, as the embedder sees it.
@@ -1210,6 +1236,7 @@ impl DenialSource {
             Self::Policy => "policy",
             Self::Invariant => "invariant",
             Self::ReadOnly => "read_only",
+            Self::Harness => "harness",
         }
     }
 }
@@ -1319,6 +1346,11 @@ impl std::fmt::Display for PermissionDenied {
                 " This volume cannot be written from this blueprint; write under a \
                  writable path instead (fs.info() lists each mount and its access)."
             }
+            DenialSource::Harness => {
+                " The application refused this call — do not work around the refusal \
+                 (another tool, raw HTTP, or other arguments to reach the same thing); \
+                 report it and stop."
+            }
         })
     }
 }
@@ -1354,6 +1386,15 @@ pub fn permission_denied_read_only(
     denied(caller, capability, reason, DenialSource::ReadOnly)
 }
 
+/// An application tool call the harness, or a person it asked, refused.
+pub fn permission_denied_by_harness(
+    caller: impl Into<String>,
+    capability: impl Into<String>,
+    reason: impl Into<String>,
+) -> wasmtime::Error {
+    denied(caller, capability, reason, DenialSource::Harness)
+}
+
 fn denied(
     caller: impl Into<String>,
     capability: impl Into<String>,
@@ -1373,6 +1414,8 @@ fn builtin_class_of(err: &wasmtime::Error) -> super::prelude::error::BuiltinErro
         super::prelude::error::BuiltinErrorClass::Range
     } else if err.downcast_ref::<QuotaExceededError>().is_some() {
         super::prelude::error::BuiltinErrorClass::QuotaExceeded
+    } else if err.downcast_ref::<TimeoutError>().is_some() {
+        super::prelude::error::BuiltinErrorClass::Timeout
     } else if err.downcast_ref::<TypeError>().is_some() {
         super::prelude::error::BuiltinErrorClass::Type
     } else if err.downcast_ref::<SyntaxError>().is_some() {
@@ -1677,6 +1720,7 @@ pub(crate) const CALL_MODULES: &[&str] = &[
     crate::stdlib::agents::MODULE_NAME,
     crate::stdlib::skills::MODULE_NAME,
     super::mcp::MCP_MODULE_NAME,
+    super::tools::TOOLS_MODULE_NAME,
 ];
 
 pub(crate) fn begins_calls(module: &str) -> bool {
@@ -1779,6 +1823,7 @@ pub fn internal_host_package_declarations() -> Vec<PackageDeclaration> {
     vec![
         super::json::json_module_definitions(),
         super::mcp::mcp_call_package_declaration(),
+        super::tools::tools_call_package_declaration(),
     ]
 }
 

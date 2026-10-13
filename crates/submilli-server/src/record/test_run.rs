@@ -67,6 +67,9 @@ pub enum TestError {
     /// The recording holds no program: a file-tool run, or a retried request that never
     /// ran one.
     NoProgram { source_run: String },
+    /// The program calls the session's application tools (`@tools`), whose
+    /// answers a test run cannot replay yet.
+    UsesTools { source_run: String },
     /// The blueprint the run used is no longer registered.
     BlueprintNotFound(String),
     /// The blueprint could not be read.
@@ -90,6 +93,11 @@ impl std::fmt::Display for TestError {
                 "run {source_run} recorded no program (it was a file tool, or a retry of a \
                  request answered earlier), so there is nothing to run; test the run that \
                  executed the program"
+            ),
+            Self::UsesTools { source_run } => write!(
+                f,
+                "run {source_run} calls application tools (`@tools`), and a test run cannot \
+                 replay their answers yet"
             ),
             Self::BlueprintNotFound(name) => write!(f, "blueprint '{name}' is not registered"),
             Self::Store(message) => f.write_str(message),
@@ -191,6 +199,13 @@ pub async fn test_program(state: &AppState, test: TestRun) -> Result<TestOutcome
     let Some(code) = recorded.code.clone() else {
         return Err(TestError::NoProgram { source_run });
     };
+    if crate::runner::parse(&code)
+        .ok()
+        .and_then(|parsed| parsed.imports().ok())
+        .is_some_and(|imports| imports.tools)
+    {
+        return Err(TestError::UsesTools { source_run });
+    }
     // Looked up once, with its version tag: the variables, the local-state copy, and
     // the run itself all use this blueprint, whatever registers meanwhile.
     let found = match state.blueprint_for_run(&recorded.blueprint_name).await {

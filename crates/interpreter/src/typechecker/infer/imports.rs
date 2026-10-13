@@ -243,6 +243,17 @@ impl<'a> Inferer<'a> {
                     );
                     continue;
                 }
+                if module == crate::runtime::TOOLS_PACKAGE {
+                    self.error_with_help(
+                        module_span,
+                        "`@tools` is unavailable — this session offers no application tools"
+                            .to_string(),
+                        vec![
+                            "application tools exist only in an HTTP session whose harness declared them, under a blueprint with a `tools.call` rule".to_string(),
+                        ],
+                    );
+                    continue;
+                }
                 if let Some(ns) = self.prelude_namespace_import(&module, &kind) {
                     if self.prelude_import_is_noop(&kind) {
                         continue;

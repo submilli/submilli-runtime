@@ -259,7 +259,7 @@ impl<V: Visitor> Walk<'_, V> {
                 self.expr(*value)?;
             }
             TypedExprKind::Call { args, .. }
-            | TypedExprKind::McpCall { args, .. }
+            | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. }
             | TypedExprKind::IntrinsicCall { args, .. } => {

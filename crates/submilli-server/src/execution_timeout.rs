@@ -1,8 +1,13 @@
 //! Per-store deadlines on the server's shared engine clock.
+//!
+//! A run's time limit counts its own work. Time spent waiting outside the
+//! program on a host call that pauses the clock (an application tool call,
+//! [`StoreData::clock_paused`](interpreter::runtime::StoreData::clock_paused))
+//! does not count.
 
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
-use wasmtime::{Engine, Store};
+use std::time::{Duration, Instant};
+use wasmtime::{Engine, Store, UpdateDeadline};
 
 const TICK: Duration = Duration::from_secs(1);
 
@@ -23,8 +28,35 @@ pub(crate) fn start_ticker(engine: &Engine) -> std::io::Result<JoinHandle<()>> {
         })
 }
 
-pub(crate) fn arm<T>(store: &mut Store<T>, timeout: Option<Duration>) {
+/// Arm `store` to stop after `timeout` of work. `paused` reads how long the
+/// store has spent waiting with the clock paused.
+///
+/// The tick deadline stays the authority while nothing has paused, so a store
+/// that never waits stops exactly as a plain epoch deadline would. Once it has
+/// paused, reaching the deadline re-derives the work done from the wall clock
+/// and, if the budget is not spent, pushes the deadline out by what remains.
+pub(crate) fn arm<T: 'static>(
+    store: &mut Store<T>,
+    timeout: Option<Duration>,
+    paused: fn(&T) -> Duration,
+) {
     store.set_epoch_deadline(deadline_ticks(timeout));
+    let Some(budget) = timeout.filter(|timeout| !timeout.is_zero()) else {
+        return;
+    };
+    let armed = Instant::now();
+    let paused_before = paused(store.data());
+    store.epoch_deadline_callback(move |store| {
+        let paused = paused(store.data()).saturating_sub(paused_before);
+        if paused.is_zero() {
+            return Ok(UpdateDeadline::Interrupt);
+        }
+        let worked = armed.elapsed().saturating_sub(paused);
+        Ok(match budget.checked_sub(worked) {
+            Some(left) if !left.is_zero() => UpdateDeadline::Continue(deadline_ticks(Some(left))),
+            _ => UpdateDeadline::Interrupt,
+        })
+    });
 }
 
 fn deadline_ticks(timeout: Option<Duration>) -> u64 {
@@ -133,7 +165,7 @@ mod tests {
         let run = instance
             .get_typed_func::<(), ()>(&mut store, "run")
             .unwrap();
-        arm(&mut store, Some(Duration::from_secs(1)));
+        arm(&mut store, Some(Duration::from_secs(1)), |_| Duration::ZERO);
         let mut execution = Box::pin(run.call_async(&mut store, ()));
         tokio::select! {
             _ = entered.notified() => {},
@@ -153,6 +185,73 @@ mod tests {
         ));
     }
 
+    /// A host call that pauses the clock waits past the deadline; the run then
+    /// keeps its unspent budget instead of stopping at its next check.
+    #[tokio::test]
+    async fn time_paused_in_a_host_call_does_not_count() {
+        use std::sync::Arc;
+        use wasmtime::{Caller, Extern, Func};
+        let config = RuntimeConfig::default();
+        let engine = config.engine().unwrap();
+        let mut store = config.store_async(&engine, Duration::ZERO).unwrap();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let host = Func::wrap_async(&mut store, {
+            let entered = entered.clone();
+            let release = release.clone();
+            move |mut caller: Caller<'_, Duration>, (): ()| {
+                let entered = entered.clone();
+                let release = release.clone();
+                Box::new(async move {
+                    let waited = Instant::now();
+                    entered.notify_one();
+                    release.notified().await;
+                    *caller.data_mut() += waited.elapsed();
+                })
+            }
+        });
+        let module = test_module(&engine, true);
+        let instance = Instance::new_async(&mut store, &module, &[Extern::Func(host)])
+            .await
+            .unwrap();
+        let run = instance
+            .get_typed_func::<(), ()>(&mut store, "run")
+            .unwrap();
+        let budget = Duration::from_millis(300);
+        arm(&mut store, Some(budget), |paused| *paused);
+        let mut execution = Box::pin(run.call_async(&mut store, ()));
+        tokio::select! {
+            _ = entered.notified() => {},
+            result = &mut execution => panic!("host did not wait: {result:?}"),
+        }
+        // The wait outlasts the deadline's ticks.
+        for _ in 0..3 {
+            engine.increment_epoch();
+        }
+        release.notify_one();
+        let released = Instant::now();
+        // The program now loops; it stops once it has worked past its budget.
+        let ticker = {
+            let engine = engine.clone();
+            std::thread::spawn(move || {
+                for _ in 0..10 {
+                    std::thread::sleep(Duration::from_millis(100));
+                    engine.increment_epoch();
+                }
+            })
+        };
+        let error = tokio::time::timeout(Duration::from_secs(5), execution)
+            .await
+            .unwrap()
+            .unwrap_err();
+        ticker.join().unwrap();
+        assert!(matches!(
+            error.downcast_ref::<Trap>(),
+            Some(Trap::Interrupt)
+        ));
+        assert!(released.elapsed() >= budget, "{:?}", released.elapsed());
+    }
+
     #[test]
     fn deadlines_round_up_and_do_not_overflow() {
         assert_eq!(deadline_ticks(None), u64::MAX);
@@ -169,9 +268,9 @@ mod tests {
         let mut older = config.store(&engine, ()).unwrap();
         let mut newer = config.store(&engine, ()).unwrap();
         let mut disabled = config.store(&engine, ()).unwrap();
-        arm(&mut older, Some(Duration::from_secs(2)));
+        arm(&mut older, Some(Duration::from_secs(2)), |_| Duration::ZERO);
         engine.increment_epoch();
-        arm(&mut newer, Some(Duration::from_secs(2)));
+        arm(&mut newer, Some(Duration::from_secs(2)), |_| Duration::ZERO);
         engine.increment_epoch();
         assert!(can_run(&mut older));
         engine.increment_epoch();

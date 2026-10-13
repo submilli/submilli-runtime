@@ -4,6 +4,7 @@ pub mod audit;
 
 mod adapters;
 pub mod app;
+mod app_tools;
 mod application;
 pub mod auth;
 pub mod blueprint;
@@ -25,6 +26,7 @@ pub mod metrics;
 pub mod packages;
 pub mod record;
 pub mod runner;
+pub mod runs;
 pub mod serve;
 pub mod session;
 pub mod session_manager;

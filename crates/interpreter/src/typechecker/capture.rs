@@ -708,7 +708,7 @@ impl State<'_> {
             TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
                 self.walk_expr(value)?;
             }
-            TypedExprKind::Call { args, .. } | TypedExprKind::McpCall { args, .. } => {
+            TypedExprKind::Call { args, .. } | TypedExprKind::VirtualCall { args, .. } => {
                 for a in args {
                     self.walk_expr(a)?;
                 }
@@ -1501,7 +1501,7 @@ mod tests {
                 walk_expr(ta, *value, out);
             }
             TypedExprKind::Call { args, .. }
-            | TypedExprKind::McpCall { args, .. }
+            | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. } => {
                 for &a in args {
@@ -1722,7 +1722,7 @@ mod tests {
             TypedExprKind::TypeofTag { value, .. } | TypedExprKind::InstanceOf { value, .. } => {
                 scan_expr(ta, *value)
             }
-            TypedExprKind::Call { args, .. } | TypedExprKind::McpCall { args, .. } => {
+            TypedExprKind::Call { args, .. } | TypedExprKind::VirtualCall { args, .. } => {
                 args.iter().find_map(|&a| scan_expr(ta, a))
             }
             TypedExprKind::CallClosure { callee, args } => {

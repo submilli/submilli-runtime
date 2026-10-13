@@ -249,6 +249,13 @@ pub struct Cli {
     #[arg(long, value_name = "PROMPTS")]
     max_llm_concurrency: Option<usize>,
 
+    /// Runs that may wait on the harness at once, server-wide: each suspended
+    /// at an application tool call (`@tools`), holding its program in memory.
+    /// [default: 256]
+    /// Env: `$SUBMILLI_MAX_SUSPENDED_RUNS`, which outranks the config file.
+    #[arg(long, value_name = "RUNS")]
+    max_suspended_runs: Option<usize>,
+
     /// Tokens every live execution's `submilli:embedding` calls may spend *in
     /// total*. Separate from `--max-llm-tokens`: embedding and `llm.call` spend
     /// against different provider credentials and neither can starve the other.

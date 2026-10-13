@@ -288,6 +288,9 @@ struct StoredRecord {
     /// Defaulted so records written before session variables existed still load.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     variables: BTreeMap<String, String>,
+    /// Defaulted so records written before application tools existed still load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tools: Option<String>,
 }
 
 impl StoredRecord {
@@ -314,6 +317,7 @@ impl StoredRecord {
             root_vfs_type: (!record.legacy_root_unresolved).then_some(record.root_vfs_type),
             mcp_state,
             variables: record.variables.clone(),
+            tools: record.tools_json.clone(),
         }
     }
 
@@ -347,6 +351,7 @@ impl StoredRecord {
             }),
             mcp_state: self.mcp_state,
             variables: self.variables,
+            tools_json: self.tools,
         };
         record.validate_lifecycle()?;
         Ok(record)

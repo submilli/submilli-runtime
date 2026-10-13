@@ -1,5 +1,6 @@
 //! Maps an MCP server's `tools/list` output to a `.d.subm`-shaped [`PackageDeclaration`]
-//! for the `@mcp/<server>` virtual package.
+//! for the `@mcp/<server>` virtual package. A session's application tools map the
+//! same way to the `@tools` virtual package ([`build_tools_definitions`]).
 //!
 //! Each tool becomes one exported function. Its `inputSchema` (a JSON Schema
 //! object) maps to a single `args` parameter typed by a structural object type —
@@ -20,7 +21,7 @@ use std::collections::BTreeMap;
 
 use interpreter::{
     DefaultValue, DocComment, ObjectField, PackageDeclaration, Param, Shape, Span, Type, ValueKind,
-    ValueSymbol, mangle,
+    ValueSymbol, VirtualDispatch, mangle,
 };
 use serde_json::{Map, Value};
 
@@ -60,11 +61,31 @@ pub fn build_mcp_definitions(
     tools: &[ToolCatalogEntry],
     pack: Option<&SchemaPack>,
 ) -> (PackageDeclaration, Vec<ToolWarning>) {
-    let pkg = package_name(server);
-    let mut defs = PackageDeclaration::with_package(&pkg);
-    // The structured signal that this is an MCP package — codegen routes its tool
-    // calls to `submilli:mcp.call` and skips per-tool imports, no name-prefix match.
-    defs.mcp_server = Some(server.to_string());
+    let dispatch = VirtualDispatch::Mcp {
+        server: server.to_string(),
+    };
+    build_virtual_definitions(dispatch, server, tools, pack)
+}
+
+/// Build the `@tools` [`PackageDeclaration`] from a session's application tool
+/// catalog, mapped exactly as an MCP server's tools are. Warnings carry an empty
+/// `server`.
+pub fn build_tools_definitions(
+    tools: &[ToolCatalogEntry],
+) -> (PackageDeclaration, Vec<ToolWarning>) {
+    build_virtual_definitions(VirtualDispatch::Tools, "", tools, None)
+}
+
+fn build_virtual_definitions(
+    dispatch: VirtualDispatch,
+    server: &str,
+    tools: &[ToolCatalogEntry],
+    pack: Option<&SchemaPack>,
+) -> (PackageDeclaration, Vec<ToolWarning>) {
+    let mut defs = PackageDeclaration::with_package(dispatch.package_name());
+    // The structured signal that this is a virtual package: codegen routes its
+    // calls to the package's single host fn and skips per-tool imports.
+    defs.virtual_dispatch = Some(dispatch);
     let mut warnings = Vec::new();
     let mut untyped = 0;
     let mut counts = BTreeMap::new();
@@ -600,10 +621,37 @@ mod tests {
     }
 
     #[test]
+    fn application_tools_map_to_the_tools_package() {
+        let (defs, warnings) = build_tools_definitions(&[
+            tool_out(
+                "query_orders",
+                r#"{"type":"object","properties":{"customer":{"type":"string"}},"required":["customer"]}"#,
+                r#"{"type":"object","properties":{"count":{"type":"number"}},"required":["count"]}"#,
+            ),
+            tool("bad-name", r#"{"type":"object"}"#),
+        ]);
+        assert_eq!(defs.package_name, "@tools");
+        assert_eq!(defs.virtual_dispatch, Some(VirtualDispatch::Tools));
+        assert_eq!(
+            defs.values["query_orders"].mangled_name,
+            mangle::host("@tools", "query_orders")
+        );
+        assert!(!defs.values.contains_key("bad-name"));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].server.is_empty());
+        assert!(warnings[0].message.contains("bad-name"), "{warnings:?}");
+    }
+
+    #[test]
     fn package_is_mcp_and_named() {
         let defs = defs_of("linear", &[]);
         assert_eq!(defs.package_name, "@mcp/linear");
-        assert_eq!(defs.mcp_server.as_deref(), Some("linear"));
+        assert_eq!(
+            defs.virtual_dispatch,
+            Some(VirtualDispatch::Mcp {
+                server: "linear".to_string()
+            })
+        );
         assert!(defs.values.is_empty());
     }
 

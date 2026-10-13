@@ -477,7 +477,7 @@ impl<'a> Walker<'a, '_, '_> {
                 self.call(mangled, span, &args)?;
                 stable()
             }
-            TypedExprKind::McpCall { tool, args, .. } => {
+            TypedExprKind::VirtualCall { tool, args, .. } => {
                 let args = self.package.authored(span, args);
                 self.consume_all(args, || Usage::PassedTo(tool.clone()))?;
                 stable()

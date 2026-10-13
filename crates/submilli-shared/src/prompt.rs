@@ -149,6 +149,15 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
         )
         .replace("{builtins}", &builtins_phrase())
         .replace("{mcp_packages}", &mcp_packages_phrase(blueprint))
+        .replace(
+            "{tools_package}",
+            // Only a REST session can suspend at a tool call, so MCP never offers them.
+            if matches!(surface, PromptSurface::Rest) && visibility.tools() {
+                TOOLS_GUIDANCE
+            } else {
+                ""
+            },
+        )
         .replace("{t_search}", search)
         .replace("{t_docs}", docs)
         .replace("{t_builtins_docs}", builtins)
@@ -161,6 +170,12 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
             },
         )
 }
+
+const TOOLS_GUIDANCE: &str = "\n\nThe application may offer its own tools as the `@tools` package. \
+Call `{t_search}` with `@tools` to see whether this session has them, and `{t_docs}` for their \
+signatures, then `import tools from \"@tools\"`. The application answers each call, which may \
+take a while: a call it refuses throws `PermissionDeniedError`, one it fails throws `Error`, \
+and one it does not answer in time throws `TimeoutError`.";
 
 const GIT_GUIDANCE: &str = "\n\nGit is available as `submilli:git`. Read its package docs before use; \
     init, clone, fetch/pull, and commit require their respective Git capabilities. \
@@ -673,6 +688,23 @@ mod tests {
                 assert!(!prompt.contains("{git_package}"));
             }
         }
+    }
+
+    #[test]
+    fn tools_guidance_needs_a_tools_call_grant_and_a_rest_caller() {
+        let granted = submilli_blueprint::parse(
+            "name: test\npermissions:\n  main:\n    - capability: tools.call\n      action: allow\n",
+        )
+        .unwrap();
+        let rest = execute_tool_description(&granted, PromptSurface::Rest);
+        assert!(rest.contains("`@tools` package"), "{rest}");
+        assert!(rest.contains("Call `search` with `@tools`"), "{rest}");
+        assert!(rest.contains("`TimeoutError`"));
+        assert!(!execute_tool_description(&granted, PromptSurface::Mcp).contains("@tools"));
+        let denied = submilli_blueprint::parse("name: test\ndefault: deny\n").unwrap();
+        let rest = execute_tool_description(&denied, PromptSurface::Rest);
+        assert!(!rest.contains("@tools"));
+        assert!(!rest.contains("{tools_package}"));
     }
 
     #[test]

@@ -1034,7 +1034,7 @@ impl TypedChildren {
             | TypedExprKind::NullishCoalesce { lhs, rhs } => self.exprs(&[*lhs, *rhs]),
             TypedExprKind::Unary { operand, .. } => self.expr(*operand),
             TypedExprKind::Call { args, .. }
-            | TypedExprKind::McpCall { args, .. }
+            | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::IntrinsicCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. } => self.exprs(args),

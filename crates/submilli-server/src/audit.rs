@@ -365,6 +365,9 @@ struct ExecutionState {
     summary_bytes: usize,
     started: bool,
     finished: bool,
+    /// The run outlives its request (it may suspend), so the run, not the
+    /// request's end, finishes this record.
+    handed_off: bool,
     outcome: &'static str,
     active_call: Option<(String, String)>,
 }
@@ -405,6 +408,7 @@ impl ExecutionAudit {
                 summary_bytes: 0,
                 started: false,
                 finished: false,
+                handed_off: false,
                 outcome: "pending",
                 active_call: None,
             }),
@@ -577,6 +581,21 @@ impl ExecutionAudit {
         self.log.emit("decision", fields);
     }
 
+    /// The run, not the request, finishes this record from now on.
+    pub(crate) fn hand_off(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.handed_off = true;
+        }
+    }
+
+    /// Finish the record as the request ends, unless the run was handed off.
+    fn finish_request(&self, success: bool) {
+        if self.state.lock().is_ok_and(|state| state.handed_off) {
+            return;
+        }
+        self.finish(success);
+    }
+
     pub(crate) fn finish(&self, success: bool) {
         let Ok(mut state) = self.state.lock() else {
             report("audit execution lock poisoned");
@@ -644,6 +663,7 @@ fn decision_fields(
                 "read_only" => "the destination volume is read-only",
                 "quota" => "resource budget exceeded",
                 "egress_guard" => "outbound destination refused",
+                "harness" => "the application refused the call",
                 _ => "caller invariant refused the capability",
             }),
         );
@@ -899,7 +919,7 @@ pub(crate) async fn request(
         .scope(context, async move {
             let response = next.run(request).await;
             if let Some(execution) = execution {
-                execution.finish(response.status().is_success());
+                execution.finish_request(response.status().is_success());
             }
             if let Some(owner) = mutation {
                 owner.finish(response.status());

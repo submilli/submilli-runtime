@@ -264,6 +264,84 @@ pub async fn blueprint_docs(
     Ok(docs_response(&params.name, lookup))
 }
 
+/// What a session's discovery routes answer from: its blueprint, the blueprint's
+/// MCP catalog, and the session's `@tools` package when programs may import it.
+async fn registered_session(
+    state: &AppState,
+    session_id: &str,
+) -> Result<
+    (
+        String,
+        submilli_blueprint::Blueprint,
+        std::sync::Arc<crate::mcp::McpCatalog>,
+        Option<interpreter::PackageDeclaration>,
+    ),
+    BlueprintMiss,
+> {
+    let unknown = || {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "unknown session", "session_id": session_id,
+            })),
+        )
+    };
+    let manager = state.session_manager();
+    let Some(name) = manager.blueprint_name(session_id).await.ok().flatten() else {
+        return Err(unknown());
+    };
+    let (blueprint, catalog) = registered_blueprint(state, &name).await?;
+    let tools = if submilli_shared::library_visibility::LibraryVisibility::for_blueprint(&blueprint)
+        .tools()
+    {
+        manager
+            .tools(session_id)
+            .await
+            .map_err(|_| unknown())?
+            .map(|tools| crate::app_tools::declaration(&tools).0)
+    } else {
+        None
+    };
+    Ok((name, blueprint, catalog, tools))
+}
+
+/// `GET /v1/sessions/{session}/packages/search`: the session's blueprint search,
+/// plus the session's own `@tools`.
+pub async fn session_search(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Query(params): Query<BlueprintSearchParams>,
+) -> Result<Json<serde_json::Value>, BlueprintMiss> {
+    let (name, blueprint, catalog, tools) = registered_session(&state, &session_id).await?;
+    crate::metrics::search();
+    Ok(Json(packages::search_json_for_session(
+        &params.q,
+        &catalog,
+        &blueprint,
+        state.package_store(),
+        packages::Fetch::Rest(&name),
+        tools.as_ref(),
+    )))
+}
+
+/// `GET /v1/sessions/{session}/packages/docs`: the session's blueprint docs,
+/// plus the session's own `@tools`.
+pub async fn session_docs(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Query(params): Query<BlueprintDocsParams>,
+) -> Result<axum::response::Response, BlueprintMiss> {
+    let (_, blueprint, catalog, tools) = registered_session(&state, &session_id).await?;
+    let lookup = packages::lookup_for_session(
+        &params.name,
+        &catalog,
+        &blueprint,
+        state.package_store(),
+        tools.as_ref(),
+    );
+    Ok(docs_response(&params.name, lookup))
+}
+
 /// `GET /v1/blueprints/{blueprint}/builtins` — the built-in catalog. It is the
 /// same for every blueprint; the route is nested so a harness addresses one
 /// blueprint throughout.

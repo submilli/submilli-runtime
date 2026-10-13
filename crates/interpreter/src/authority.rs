@@ -1722,16 +1722,27 @@ impl Visitor for CallVisitor<'_, '_> {
                         .add_unresolved(self.caller, span, "dynamic closure target")?;
                 }
             }
-            TypedExprKind::McpCall { server, tool, .. } => {
+            TypedExprKind::VirtualCall { target, tool, .. } => {
+                let tool_binding = ("tool".to_string(), format!("\"{tool}\""));
+                let (capability, known_bindings) = match target {
+                    crate::VirtualDispatch::Mcp { server } => (
+                        format!("mcp.{server}"),
+                        BTreeMap::from([
+                            tool_binding,
+                            ("transport".to_string(), "\"streamable_http\"".to_string()),
+                        ]),
+                    ),
+                    crate::VirtualDispatch::Tools => (
+                        crate::runtime::TOOLS_CAPABILITY.to_string(),
+                        BTreeMap::from([tool_binding]),
+                    ),
+                };
                 self.builder.push_effect(
                     self.caller,
                     AuthorityEffect {
-                        capability: Some(format!("mcp.{server}")),
+                        capability: Some(capability),
                         sink: source_span(self.builder.sources, span)?,
-                        known_bindings: BTreeMap::from([
-                            ("tool".to_string(), format!("\"{tool}\"")),
-                            ("transport".to_string(), "\"streamable_http\"".to_string()),
-                        ]),
+                        known_bindings,
                         unresolved: false,
                         reason: None,
                     },
@@ -2706,7 +2717,9 @@ export function unchecked(): void { get("https://example.com"); }
         .declaration;
 
         let mut mcp = PackageDeclaration::with_package("@mcp/issues");
-        mcp.mcp_server = Some("issues".to_string());
+        mcp.virtual_dispatch = Some(crate::VirtualDispatch::Mcp {
+            server: "issues".to_string(),
+        });
         mcp.values.insert(
             "create".to_string(),
             ValueSymbol {

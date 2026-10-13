@@ -15,8 +15,9 @@ use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{
     AuthProxy, DecisionLog, EmbeddingProvider, EmbeddingTokenBudget, ExecutionTokenBudget,
     HttpClient, LinkedPackageModule, LlmProvider, McpTransport, RuntimeConfig, SecretProvider,
-    SecurityCheck, SessionKvStore, StoreData, Vfs, VfsInfo, install_package_modules_async,
-    install_runtime_store_bound, install_tenant_limits, is_memory_exhausted,
+    SecurityCheck, SessionKvStore, StoreData, ToolProvider, Vfs, VfsInfo,
+    install_package_modules_async, install_runtime_store_bound, install_tenant_limits,
+    is_memory_exhausted,
 };
 use interpreter::{
     BacktraceMode, Diagnostic, FileId, ParsedScript, ScriptImports, Sources,
@@ -92,6 +93,9 @@ pub struct HostServices {
     pub http_client: Arc<dyn HttpClient>,
     /// Outbound `@mcp/<server>` dispatch — the JSON-RPC `tools/call` transport.
     pub mcp_transport: Arc<dyn McpTransport>,
+    /// What answers the session's `@tools` calls. `None` when the run has no
+    /// application tools.
+    pub tool_provider: Option<Arc<dyn ToolProvider>>,
     /// `submilli:session` storage for the session this run belongs to.
     pub session_kv: Arc<dyn SessionKvStore>,
     /// Outbound `submilli:llm` dispatch. `None` when no operator dispatch is
@@ -120,6 +124,14 @@ pub struct HostServices {
 pub(crate) struct RunnerImports<'a> {
     pub packages: &'a Arc<PreparedBlueprintPackages>,
     pub mcps: &'a Arc<McpCatalog>,
+    /// The session's `@tools` package, when the program may import it.
+    pub tools: Option<&'a Arc<ToolsPackage>>,
+}
+
+/// A session's `@tools` package, and what mapping its catalog warned about.
+pub(crate) struct ToolsPackage {
+    pub declaration: interpreter::PackageDeclaration,
+    pub warnings: Vec<String>,
 }
 
 pub(crate) struct RunnerRuntime<'a> {
@@ -154,6 +166,7 @@ pub(crate) async fn run(
     let telemetry = runtime.telemetry;
     let packages = Arc::clone(imports.packages);
     let mcps = Arc::clone(imports.mcps);
+    let tools = imports.tools.cloned();
     let (request, caller_gone) = tokio::sync::oneshot::channel();
     // This clone stays outside the owner task, so a run whose task panics is still
     // finished.
@@ -189,6 +202,7 @@ pub(crate) async fn run(
             RunnerImports {
                 packages: &packages,
                 mcps: &mcps,
+                tools: tools.as_ref(),
             },
             caller_gone,
             log.clone(),
@@ -276,6 +290,12 @@ async fn run_inner(
         .mcps
         .warnings()
         .map(|w| format!("@mcp/{}: {}", w.server, w.message))
+        .chain(
+            imports
+                .tools
+                .iter()
+                .flat_map(|tools| tools.warnings.iter().cloned()),
+        )
         .collect();
     if parsed.parsed.has_errors() {
         return compile_failure(
@@ -287,7 +307,10 @@ async fn run_inner(
     }
 
     let package_refs: Vec<_> = imports.packages.script_declarations.iter().collect();
-    let mcp_refs = imports.mcps.defs_refs();
+    let mut virtual_refs = imports.mcps.defs_refs();
+    if let Some(tools) = imports.tools {
+        virtual_refs.push(&tools.declaration);
+    }
     // The script's `file` id stamps compile diagnostics. Package sources are
     // also registered so package-originated traps render source context.
     if let Err(error) = register_package_sources(&mut parsed.sources, imports.packages) {
@@ -300,7 +323,7 @@ async fn run_inner(
             &parsed.parsed,
             &imports.packages.stdlib_declarations,
             &package_refs,
-            &mcp_refs,
+            &virtual_refs,
         )
     });
     let compiled = match compiled {
@@ -326,6 +349,7 @@ async fn run_inner(
     }
     data.http_client = services.http_client;
     data.mcp_transport = Some(services.mcp_transport);
+    data.tool_provider = services.tool_provider;
     data.session_kv = Some(services.session_kv);
     data.llm_provider = services.llm_provider;
     data.llm_budget = services.llm_budget;
@@ -386,7 +410,7 @@ async fn run_inner(
         // Installing a package runs its top-level statements, and instantiation
         // runs the program's, so the deadline covers both and their failure is
         // reported as one in `main` is.
-        crate::execution_timeout::arm(&mut store, runtime.config.timeout);
+        crate::execution_timeout::arm(&mut store, runtime.config.timeout, |data| data.clock_paused);
         let phase_start = Instant::now();
         let installed =
             install_package_modules_async(&mut linker, &mut store, &package_modules).await;
@@ -1122,6 +1146,7 @@ mod tests {
             security_check: security.clone(),
             http_client: defaults.http_client,
             mcp_transport: Arc::new(UnusedMcp),
+            tool_provider: None,
             session_kv: Arc::new(InMemorySessionKv::default()),
             llm_provider: None,
             llm_budget: None,
@@ -1165,6 +1190,7 @@ mod tests {
             RunnerImports {
                 packages: &packages,
                 mcps: &mcps,
+                tools: None,
             },
         ));
         tokio::select! {

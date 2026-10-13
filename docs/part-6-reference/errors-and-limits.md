@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1081f2542a8b2620364a570713e8edb0cee12a2d756478b403e11c07255ea722"
+  contentHash: "8326f989f6ac01da62e3e3d870b40ffcbde54a9229eb724d3e9267053d5dec61"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -34,7 +34,7 @@ gives all three forms and their precedence. A Blueprint can't raise them.
 | Time | `max_execution_time` | none (`0`) | seconds | One run | `timeout exceeded`, `kind` `timeout` | No |
 | Memory | `max_execution_memory` | 50 | megabytes (1,048,576 bytes) | One run | `memory exhausted`, `kind` `memory_exhausted` | No |
 | Stack | `max_execution_stack` | 512, at most 16,384 | kibibytes | One run | `call stack exhausted`, `kind` `runtime_error` | No |
-| Model tokens, one run | `max_execution_llm_tokens` | 1,000,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
+| Model tokens, one run | `max_execution_llm_tokens` | 1,000,000 | count, with suffixes | One run | `QuotaExceededError` | Yes, unless `0` |
 | Model tokens, all runs | `max_llm_tokens` | 20,000,000 | count, with suffixes | All live runs on the server | `QuotaExceededError` | Yes |
 | Prompts in flight | `max_llm_concurrency` | 4 | prompts | One `llm.batch` call | Further prompts wait | — |
 | Embedding tokens, one run | `max_execution_embedding_tokens` | 2,000,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
@@ -42,6 +42,7 @@ gives all three forms and their precedence. A Blueprint can't raise them.
 | Embedding requests, one run | `max_execution_embedding_requests` | 1,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
 | Embedding requests in flight | `max_embedding_concurrency` | 4 | requests | One `embed` call | Further requests wait | — |
 | Session state, all sessions | `max_session_state_memory` | 1,024 | megabytes | All live sessions on the server | `QuotaExceededError` | Yes |
+| Runs waiting on the harness | `max_suspended_runs` | 256, `0` turns tool calls off | runs | All runs on the server | `QuotaExceededError` | Yes |
 | Named volume size | `size_limit` of an entry under `volumes` | none (required) | bytes, or a size such as `1GB` (binary units), or `unlimited` | The volume, across every session and Blueprint that uses it | `QuotaExceededError` | Yes |
 
 Fuel counts work, at about one unit per WebAssembly instruction of the program,
@@ -247,11 +248,12 @@ The standard library throws these classes. Each extends `Error` and has
 
 | Class | Thrown when | Example message |
 | --- | --- | --- |
-| `PermissionDeniedError` | The Blueprint refuses an operation | `permission denied: caller=main capability=http.get: policy denied http.get for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.` |
+| `PermissionDeniedError` | The Blueprint refuses an operation, or the application refuses a `@tools` call | `permission denied: caller=main capability=http.get: policy denied http.get for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.` |
 | `QuotaExceededError` | A filesystem size limit, a model-token budget, or a session-state limit would be passed | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more` |
 | `RangeError` | A value is outside a fixed bound | `crypto.randomBytes: length 1048577 exceeds maximum 1048576` |
 | `TypeError` | An argument has the wrong form, or a service the call needs isn't present | ``http GET: the URL path "/a/../b" has the dot segment ".."; a URL parser removes a `.` segment, and a `..` segment with the segment before it, so build the path without them`` |
 | `SyntaxError` | JSON or a regular expression doesn't parse | `JSON.parse: EOF while parsing an object at line 1 column 1` |
+| `TimeoutError` | The harness did not answer an [application tool](/docs/reference/http-api#application-tools) call within the Blueprint's `tool_call_timeout` | `@tools.approve: the application did not answer in time` |
 | `Error` | Any other failure: network errors, the outbound network block, an MCP tool error, a timed-out call, a program's own `throw new Error(…)` | `http GET: network error: error sending request: blocked by network policy: localhost resolves only to private/loopback IP space; allow-list it on the server with --allow-ip / --allow-localhost / --allow-private` |
 
 ### `PermissionDeniedError`
@@ -274,6 +276,7 @@ error: PermissionDeniedError: permission denied: caller=main capability=http.get
 | --- | --- |
 | `policy denied <capability> for <caller>` | A `deny` rule, or the Blueprint's `default` |
 | `secret values are never available to main-module code, and no policy can grant this. …` | `secrets.get` called from the program |
+| `@tools.<tool>: <message>` | The application refused the call, with `capability` `tools.call` |
 
 For a capability on files, `<capability>` is followed by the path, after
 `.` and `..` are resolved, as in `policy denied fs.write on /big.txt for main`.
@@ -408,7 +411,7 @@ The server reports a failed run as an `error` object with a `kind`, a
 | `fuel_exhausted` | The run used its fuel. | `error: fuel exhausted` and the source excerpt |
 | `timeout` | The run passed `max_execution_time`. | `error: timeout exceeded` and the source excerpt |
 | `memory_exhausted` | The run passed `max_execution_memory`. | `memory exhausted: GC heap out of memory: no capacity for allocation of 2000044 bytes` |
-| `permission_denied` | A gated call was denied and no `catch` handled it. Carries `caller`, `capability`, and `source` (`policy`, `invariant`, or `read_only`). The `message` is the same text a `runtime_error` would carry. | `error: PermissionDeniedError: permission denied: caller=main capability=fs.read: …` and the source excerpt |
+| `permission_denied` | A gated call was denied and no `catch` handled it. Carries `caller`, `capability`, and `source` (`policy`, `invariant`, `read_only`, or `harness`). The `message` is the same text a `runtime_error` would carry. | `error: PermissionDeniedError: permission denied: caller=main capability=fs.read: …` and the source excerpt |
 | `runtime_error` | An uncaught error, a stack overflow, or a runtime fault. | `error: Error: customer cus_northwind not found` and the source excerpt |
 | `blueprint_not_found` | The request names a Blueprint the server doesn't hold. | `unknown blueprint: nope` |
 | `invalid_request` | A required variable is missing from the request, or the request has one the Blueprint doesn't declare. | `invalid variables: variable 'userId' is not declared in the blueprint` |

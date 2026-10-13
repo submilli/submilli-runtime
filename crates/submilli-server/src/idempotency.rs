@@ -50,6 +50,9 @@ pub enum Reservation {
     Proceed(ReservationGuard),
     /// Return this recorded status and body verbatim. Nothing runs.
     Replay(RecordedOutcome),
+    /// The earlier request's run is still going, and may be waiting on the harness:
+    /// answer with that run's current state. Nothing new runs.
+    Attached(String),
     Refused(Refusal),
 }
 
@@ -155,6 +158,8 @@ struct InFlight {
     fingerprint: String,
     resolution: Mutex<Option<Resolution>>,
     notify: Notify,
+    /// The run executing under this reservation, when it is one that may suspend.
+    run_id: std::sync::OnceLock<String>,
 }
 
 impl InFlight {
@@ -163,6 +168,7 @@ impl InFlight {
             fingerprint,
             resolution: Mutex::new(None),
             notify: Notify::new(),
+            run_id: std::sync::OnceLock::new(),
         }
     }
 
@@ -255,6 +261,13 @@ impl Coordinator {
             if let Some(handle) = self.live_handle(&entry_key) {
                 if handle.fingerprint != fingerprint {
                     return Reservation::Refused(Refusal::Conflict);
+                }
+                // A run that may wait on the harness for minutes is answered with
+                // its current state rather than waited for.
+                if let Some(run_id) = handle.run_id.get()
+                    && handle.lock().is_none()
+                {
+                    return Reservation::Attached(run_id.clone());
                 }
                 match self.await_resolution(&handle).await {
                     Some(Resolution::Completed(outcome)) => {
@@ -500,6 +513,12 @@ pub struct ReservationGuard {
 }
 
 impl ReservationGuard {
+    /// Name the run executing under this reservation, so a duplicate request is
+    /// answered with that run's state instead of waiting for it to finish.
+    pub fn attach_run(&self, run_id: &str) {
+        let _ = self.handle.run_id.set(run_id.to_owned());
+    }
+
     /// Record what the caller is about to receive, and hand the same bytes to
     /// any waiter.
     pub async fn complete(mut self, status: u16, body: String) {
@@ -635,6 +654,7 @@ mod tests {
         match reservation {
             Reservation::Proceed(guard) => guard,
             Reservation::Replay(_) => panic!("expected a fresh reservation, got a replay"),
+            Reservation::Attached(run) => panic!("expected a fresh reservation, got run {run}"),
             Reservation::Refused(refusal) => {
                 panic!("expected a fresh reservation, got {refusal:?}")
             }
@@ -646,6 +666,7 @@ mod tests {
             Reservation::Refused(refusal) => refusal,
             Reservation::Proceed(_) => panic!("expected a refusal, got a reservation"),
             Reservation::Replay(_) => panic!("expected a refusal, got a replay"),
+            Reservation::Attached(run) => panic!("expected a refusal, got run {run}"),
         }
     }
 
@@ -653,8 +674,30 @@ mod tests {
         match reservation {
             Reservation::Replay(outcome) => outcome,
             Reservation::Proceed(_) => panic!("expected a replay, got a reservation"),
+            Reservation::Attached(run) => panic!("expected a replay, got run {run}"),
             Reservation::Refused(refusal) => panic!("expected a replay, got {refusal:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_of_a_run_that_may_suspend_attaches_to_it_at_once() {
+        let coordinator = Arc::new(Coordinator::new(Arc::new(
+            InMemoryIdempotencyStore::default(),
+        )));
+        let guard = expect_guard(coordinator.reserve("s", "k", "code").await);
+        guard.attach_run("run-1");
+        let attached = tokio::time::timeout(
+            Duration::from_secs(1),
+            coordinator.reserve("s", "k", "code"),
+        )
+        .await
+        .expect("answered without waiting for the run");
+        assert!(matches!(attached, Reservation::Attached(run) if run == "run-1"));
+        guard.complete(200, "{}".into()).await;
+        assert_eq!(
+            expect_replay(coordinator.reserve("s", "k", "code").await).body,
+            "{}"
+        );
     }
 
     // --- the guard -------------------------------------------------------

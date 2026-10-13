@@ -153,7 +153,7 @@ rely on `const x: T = JSON.parse(s)`. A cast accepts a missing key for
 `x?: T | null`.
 `T` can be a primitive (`string`, `number`, `boolean`), an object type,
 an array, or a data-only `interface` you declare (no methods) — and
-combinations like `Issue[]`.{mcp_packages}{git_package}
+combinations like `Issue[]`.{mcp_packages}{tools_package}{git_package}
 
 {sandbox}
 {http_access}{session_guidance}{embedding_guidance}
@@ -186,6 +186,7 @@ resolved values.
 | `{session_guidance}` | session-state guidance only when `main` has potential `session.read` and `session.write` permission | policy default and `permissions:` rules |
 | `{llm_guidance}` | model-call guidance only when at least one model is declared and `main` has potential `llm.call` permission | policy `llm.models`, default, and `permissions:` rules |
 | `{embedding_guidance}` | embedding guidance only when at least one embedding alias is declared and `main` has potential `embedding.embed` permission | policy `embedding.models`, default, and `permissions:` rules |
+| `{tools_package}` | empty unless `main` has potential `tools.call` permission and the caller is REST; otherwise a note on the session's `@tools` package | policy default and `permissions:` rules |
 | `{git_package}` | empty unless Git is configured; otherwise a pointer to its package docs | policy `git:` block |
 
 HTTP, FS, and Code are advertised when the default action is not `deny`, or

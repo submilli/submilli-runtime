@@ -97,6 +97,7 @@ async fn decode(
         sealed_bindings: row.try_get("encrypted_harness_bindings")?,
         ephemeral_bindings: None,
         variables: variables.into_iter().collect(),
+        tools_json: row.try_get("tools_json")?,
     })
 }
 
@@ -129,10 +130,10 @@ pub(super) async fn write(
                 .ok_or_else(|| DatabaseError::Import("session workspace path is not UTF-8".into()))
         })
         .transpose()?;
-    sqlx::query("INSERT INTO sessions(session_id,record_version,status,closed_reason,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type,root_vfs_path,encrypted_harness_bindings) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET record_version=excluded.record_version,status=excluded.status,closed_reason=excluded.closed_reason,blueprint_name=excluded.blueprint_name,idle_timeout_ms=excluded.idle_timeout_ms,last_activity_unix_ms=excluded.last_activity_unix_ms,root_vfs_type=excluded.root_vfs_type,root_vfs_path=excluded.root_vfs_path,encrypted_harness_bindings=excluded.encrypted_harness_bindings")
+    sqlx::query("INSERT INTO sessions(session_id,record_version,status,closed_reason,blueprint_name,idle_timeout_ms,last_activity_unix_ms,root_vfs_type,root_vfs_path,encrypted_harness_bindings,tools_json) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET record_version=excluded.record_version,status=excluded.status,closed_reason=excluded.closed_reason,blueprint_name=excluded.blueprint_name,idle_timeout_ms=excluded.idle_timeout_ms,last_activity_unix_ms=excluded.last_activity_unix_ms,root_vfs_type=excluded.root_vfs_type,root_vfs_path=excluded.root_vfs_path,encrypted_harness_bindings=excluded.encrypted_harness_bindings,tools_json=excluded.tools_json")
         .bind(&record.session_id).bind(record.revision).bind(record.status.as_str()).bind(record.closed_reason.and_then(ClosedReason::as_storage))
         .bind(&record.blueprint_name).bind(timeout).bind(activity).bind((!record.legacy_root_unresolved).then(|| record.root_vfs_type.as_str()))
-        .bind(workspace).bind(&record.sealed_bindings)
+        .bind(workspace).bind(&record.sealed_bindings).bind(&record.tools_json)
         .execute(&mut *connection).await?;
     if record.cleanup_pending {
         super::queue_cleanup(connection, &SessionCleanup::from_record(record)).await?;

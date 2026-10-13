@@ -1773,9 +1773,10 @@ fn session_start_error(
         SessionStartError::UnknownBlueprint { .. } | SessionStartError::InvalidFilesystem(_) => {
             ActError::usage("blueprint-gone", error.to_string())
         }
-        SessionStartError::Store(_) | SessionStartError::Session(_) => {
-            ActError::failure(error.to_string())
-        }
+        // The playground declares no application tools, so their refusal is a failure.
+        SessionStartError::Store(_)
+        | SessionStartError::Session(_)
+        | SessionStartError::InvalidTools(_) => ActError::failure(error.to_string()),
     }
 }
 
@@ -1797,6 +1798,7 @@ fn test_error(
             ),
         )
         .next([Next::Show(source), Next::Runs]),
+        TestError::UsesTools { .. } => ActError::usage("uses-tools", error.to_string()),
         TestError::BlueprintNotFound(_) => ActError::usage("blueprint-gone", error.to_string()),
         TestError::InvalidVariables(message) => missing_variables(message),
         TestError::InvalidSecrets(message) => {

@@ -108,6 +108,8 @@ pub struct FileConfig {
     pub max_execution_llm_tokens: Option<u64>,
     /// Prompts one `llm.batch` dispatches at once.
     pub max_llm_concurrency: Option<usize>,
+    /// Runs that may wait on the harness at once, server-wide.
+    pub max_suspended_runs: Option<usize>,
     /// Tokens every live execution's `submilli:embedding` calls may spend in
     /// total.
     #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
@@ -268,6 +270,7 @@ pub(crate) struct EnvConfig {
     max_llm_tokens: Option<String>,
     max_execution_llm_tokens: Option<String>,
     max_llm_concurrency: Option<String>,
+    max_suspended_runs: Option<String>,
     max_embedding_tokens: Option<String>,
     max_execution_embedding_tokens: Option<String>,
     max_execution_embedding_requests: Option<String>,
@@ -360,6 +363,7 @@ impl EnvConfig {
             max_llm_tokens: var("SUBMILLI_MAX_LLM_TOKENS"),
             max_execution_llm_tokens: var("SUBMILLI_MAX_EXECUTION_LLM_TOKENS"),
             max_llm_concurrency: var("SUBMILLI_MAX_LLM_CONCURRENCY"),
+            max_suspended_runs: var("SUBMILLI_MAX_SUSPENDED_RUNS"),
             max_embedding_tokens: var("SUBMILLI_MAX_EMBEDDING_TOKENS"),
             max_execution_embedding_tokens: var("SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS"),
             max_execution_embedding_requests: var("SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS"),
@@ -499,6 +503,7 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_llm_tokens(cli, file, env)?;
     max_execution_llm_tokens(cli, file, env)?;
     max_llm_concurrency(cli, file, env)?;
+    max_suspended_runs(cli, file, env)?;
     max_embedding_tokens(cli, file, env)?;
     max_execution_embedding_tokens(cli, file, env)?;
     max_execution_embedding_requests(cli, file, env)?;
@@ -856,6 +861,21 @@ fn max_llm_concurrency(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<
     Ok(Some(limit))
 }
 
+/// The server-wide ceiling on runs waiting on the harness. `0` is allowed: it
+/// refuses every application tool call with `QuotaExceededError`.
+fn max_suspended_runs(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<usize>> {
+    let env_limit = parse_env(
+        "SUBMILLI_MAX_SUSPENDED_RUNS",
+        "a whole number of runs",
+        env.max_suspended_runs.as_ref(),
+    )?;
+    Ok(explicit(
+        cli.max_suspended_runs,
+        env_limit,
+        file.max_suspended_runs,
+    ))
+}
+
 /// The server-wide embedding token ceiling. `None` leaves
 /// [`ServerConfig::max_embedding_tokens`] unset so the session manager's default
 /// applies.
@@ -985,6 +1005,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let max_session_state_memory = max_session_state_memory(&cli, &file, &env)?;
     let max_llm_tokens = max_llm_tokens(&cli, &file, &env)?;
     let max_llm_concurrency = max_llm_concurrency(&cli, &file, &env)?;
+    let max_suspended_runs = max_suspended_runs(&cli, &file, &env)?;
     // The other `LlmLimits` fields are embedder-only, the way `session_kv_limits`
     // is: the per-execution ceiling is the one an operator tunes alongside the
     // aggregate, so it is the only one that gets a rung on the ladder.
@@ -1068,6 +1089,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         llm_limits,
         max_llm_tokens,
         max_llm_concurrency,
+        max_suspended_runs,
         embedding_limits,
         max_embedding_tokens,
         max_embedding_concurrency,
@@ -1477,6 +1499,7 @@ mod tests {
             max_llm_tokens: None,
             max_execution_llm_tokens: None,
             max_llm_concurrency: None,
+            max_suspended_runs: None,
             max_embedding_tokens: None,
             max_execution_embedding_tokens: None,
             max_execution_embedding_requests: None,

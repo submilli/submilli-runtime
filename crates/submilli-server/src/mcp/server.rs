@@ -404,6 +404,8 @@ impl SubmilliMcp {
                     .get::<McpToolCall>()
                     .map(|call| call.0.clone()),
                 idempotency_key: None,
+                // MCP's `tools/call` cannot suspend: no application tools here.
+                tools: None,
             },
         )
         .await;
