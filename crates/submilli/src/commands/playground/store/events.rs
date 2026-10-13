@@ -58,6 +58,9 @@ pub(crate) enum EventBody {
     /// The chat turns named are replaced by the ones logged after this entry with the
     /// same ids: a complete copy of the conversation replacing what was posted live.
     ChatReplaced(ChatReplaced),
+    /// The tools one answer of the playground's own chat called, and what each returned:
+    /// what a later message in the session hands back to the model with the conversation.
+    ChatTools(ChatTools),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +85,46 @@ pub(crate) enum ChatRole {
     /// The task, or anything else said to the agent.
     User,
     Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ChatTools {
+    /// Stable for the answer, built like a message's.
+    pub(crate) turn: String,
+    /// Who was talking: the chat's label, as on its messages.
+    pub(crate) agent: String,
+    pub(crate) calls: Vec<ChatToolCall>,
+    /// One for each call, in the same order.
+    pub(crate) results: Vec<ChatToolResult>,
+}
+
+/// A tool call as the model asked for it. Its arguments are capped, and with known
+/// secrets masked like everything in the log.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ChatToolCall {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    /// The arguments object; `None` when the model sent something else, or the object
+    /// was over the cap, and `arguments_text` holds that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) arguments: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) arguments_text: Option<String>,
+    /// A provider's opaque signature on the call, handed back with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) signature: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ChatToolResult {
+    pub(crate) call_id: String,
+    pub(crate) name: String,
+    /// Capped.
+    pub(crate) content: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) truncated: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) is_error: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
