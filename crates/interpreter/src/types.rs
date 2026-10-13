@@ -692,8 +692,13 @@ impl Type {
     /// Whether this is `{}`: the object type with no fields and no index
     /// signature. As in TypeScript, it holds every value but `null` and
     /// `undefined`, primitives included, so codegen lowers it as `unknown`.
+    /// A refinement such as `T & {}` is not `{}`: it holds only `T`'s values.
     pub fn is_empty_object(&self) -> bool {
-        matches!(self.peel(), Type::Object { fields, index: None } if fields.is_empty())
+        let mut t = self;
+        while let Type::Alias { ty, .. } | Type::Readonly(ty) = t {
+            t = ty;
+        }
+        matches!(t, Type::Object { fields, index: None } if fields.is_empty())
     }
 
     /// [`peel`](Self::peel), with `{}` read as `unknown`: the type whose
@@ -703,10 +708,13 @@ impl Type {
     pub fn lowered(&self) -> &Type {
         const UNKNOWN: &Type = &Type::Unknown;
         let peeled = self.peel();
-        if peeled.is_empty_object() {
-            return UNKNOWN;
+        match peeled {
+            Type::Object {
+                fields,
+                index: None,
+            } if fields.is_empty() => UNKNOWN,
+            _ => peeled,
         }
-        peeled
     }
 
     /// [`peel`](Self::peel), but stopping at a [`Type::Readonly`] wrapper, for
@@ -1044,6 +1052,17 @@ impl Type {
         flat.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
         fold_boolean_literals(&mut flat);
         fold_enum_members(&mut flat);
+        // `T | (T & {})` holds `T`'s values: the refinement adds nothing.
+        let refines_a_member = |member: &Type| {
+            matches!(member, Type::Refined { original, .. }
+                if flat.iter().any(|other| other.without_aliases() == original.without_aliases()))
+        };
+        let refined: Vec<bool> = flat.iter().map(refines_a_member).collect();
+        let mut index = 0;
+        flat.retain(|_| {
+            index += 1;
+            !refined[index - 1]
+        });
         // `{} | null | undefined` holds every value: it is `unknown`.
         if flat.iter().any(Type::is_empty_object)
             && flat.iter().any(|m| matches!(m.peel(), Type::Null))

@@ -713,16 +713,21 @@ pub fn strip_null(ty: &Type) -> Type {
     }
     match ty.peel() {
         Type::Null => Type::Error,
-        Type::Union(members) => {
-            let non_null: Vec<Type> = members
+        Type::Union(members) => without_nullish_refinements(Type::union(
+            members
                 .iter()
                 .filter(|m| !matches!(m.peel(), Type::Null))
-                .cloned()
-                .collect();
-            Type::union(non_null)
-        }
+                .map(|m| match m.peel() {
+                    Type::GenericParam { .. } => strip_null(m),
+                    _ => m.clone(),
+                })
+                .collect(),
+        )),
         // `unknown` is `{} | null | undefined`, as in TypeScript.
         Type::Unknown => Type::union(vec![Type::empty_object(), Type::Undefined]),
+        // A type parameter may hold any value: `T` minus `null` is
+        // `T & ({} | undefined)`.
+        Type::GenericParam { .. } => preserve_refinement(ty, strip_null(&Type::Unknown)),
         // `ty` itself, not its peel: peeling drops a `readonly` wrapper.
         _ => ty.clone(),
     }
@@ -741,14 +746,18 @@ pub fn strip_undefined(ty: &Type) -> Type {
     }
     match ty.peel() {
         Type::Undefined => Type::Error,
-        Type::Union(members) => Type::union(
+        Type::Union(members) => without_nullish_refinements(Type::union(
             members
                 .iter()
                 .filter(|member| !matches!(member.peel(), Type::Undefined))
-                .cloned()
+                .map(|member| match member.peel() {
+                    Type::GenericParam { .. } => strip_undefined(member),
+                    _ => member.clone(),
+                })
                 .collect(),
-        ),
+        )),
         Type::Unknown => Type::union(vec![Type::empty_object(), Type::Null]),
+        Type::GenericParam { .. } => preserve_refinement(ty, strip_undefined(&Type::Unknown)),
         _ => ty.clone(),
     }
 }
@@ -1068,6 +1077,8 @@ pub fn truthy_part(ty: &Type) -> Type {
         .filter(|m| truthiness_class(m) != TruthinessClass::AlwaysFalsy)
         .map(|m| match m.without_aliases() {
             Type::Boolean => Type::BooleanLiteral(true),
+            // A truthy `T` is `T & {}`, as in TypeScript.
+            Type::GenericParam { .. } => intersect_with(m, TypeFacts::TRUTHY),
             _ => m.clone(),
         })
         .collect();
@@ -1269,14 +1280,17 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
     if matches!(peeled, Type::Unknown) && tests_only_presence(facts) {
         return intersect_with(&unknown_as_union(), facts);
     }
+    if matches!(peeled, Type::GenericParam { .. }) && tests_only_presence(facts) {
+        return preserve_refinement(ty, intersect_with(&Type::Unknown, facts));
+    }
     match peeled {
-        Type::Union(members) => Type::union(
+        Type::Union(members) => without_nullish_refinements(Type::union(
             members
                 .iter()
                 .map(|m| intersect_with(m, facts))
                 .filter(|ty| !matches!(ty, Type::Error))
                 .collect(),
-        ),
+        )),
         // An explicit typeof test supplies the runtime fact that a void
         // value's static type alone cannot establish.
         Type::Void if facts.contains(TypeFacts::IS_UNDEFINED) => Type::Undefined,
@@ -1309,6 +1323,9 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
         }
         return Type::Unknown;
     }
+    if matches!(peeled, Type::GenericParam { .. }) {
+        return preserve_refinement(ty, subtract(&Type::Unknown, facts));
+    }
     // A `void` result may hold any value, so no test rules it out: `typeof
     // v !== "undefined"` keeps it, though `typeof v === "undefined"` may
     // narrow it to `undefined`.
@@ -1334,6 +1351,10 @@ pub(super) fn with_source_refinement(source: &Type, shape: Type) -> Type {
 pub(super) fn preserve_refinement(original: &Type, shape: Type) -> Type {
     if matches!(shape, Type::Error | Type::Never) {
         return shape;
+    }
+    // A shape that proves nothing leaves the type parameter as it was.
+    if matches!(shape, Type::Unknown) {
+        return original.clone();
     }
     Type::Refined {
         original: Box::new(original.clone()),
@@ -1398,6 +1419,39 @@ fn tests_only_presence(facts: TypeFacts) -> bool {
         | TypeFacts::NE_UNDEFINED
         | TypeFacts::IS_UNDEFINED;
     facts != TypeFacts::EMPTY && presence.contains(facts)
+}
+
+/// `union` with each refined type parameter's own `null` or `undefined`
+/// dropped where the union holds that value already, as TypeScript reduces
+/// `(T & ({} | null)) | null` to `(T & {}) | null`.
+fn without_nullish_refinements(union: Type) -> Type {
+    let Type::Union(members) = &union else {
+        return union;
+    };
+    let holds = |value: &Type| members.iter().any(|member| member.peel() == value);
+    let (holds_null, holds_undefined) = (holds(&Type::Null), holds(&Type::Undefined));
+    if !holds_null && !holds_undefined {
+        return union;
+    }
+    Type::union(
+        members
+            .iter()
+            .filter_map(|member| match member {
+                Type::Refined { original, ty } => {
+                    let mut shape = (**ty).clone();
+                    if holds_null {
+                        shape = strip_null(&shape);
+                    }
+                    if holds_undefined {
+                        shape = strip_undefined(&shape);
+                    }
+                    // `T & null` beside `null` adds nothing.
+                    (!is_ruled_out(&shape)).then(|| preserve_refinement(original, shape))
+                }
+                other => Some(other.clone()),
+            })
+            .collect(),
+    )
 }
 
 /// `unknown` as the values it holds: `{} | null | undefined`. Built directly,

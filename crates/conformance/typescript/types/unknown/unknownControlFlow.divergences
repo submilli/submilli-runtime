@@ -1,4 +1,4 @@
-types: 198 of 284 tsc entries compared, 36 differ
+types: 198 of 284 tsc entries compared, 26 differ
 
 line 23: x2
   tsc:  {} | null | undefined
@@ -11,14 +11,6 @@ line 24: x3
 line 25: x4
   tsc:  ThisOrThatNode | null | undefined
   ours: unknown
-
-line 45: x
-  tsc:  NonNullable<T>
-  ours: T
-
-line 54: x
-  tsc:  NonNullable<T>
-  ours: T
 
 line 87: x
   tsc:  {}
@@ -36,45 +28,21 @@ line 96: x
   tsc:  null | undefined
   ours: null
 
-line 102: x
-  tsc:  T & ({} | null)
-  ours: T
-
-line 108: x
-  tsc:  T & ({} | undefined)
-  ours: T
-
-line 113: x
-  tsc:  T & ({} | null)
-  ours: T
-
-line 114: x
-  tsc:  T & {}
-  ours: T
-
 line 120: x
   tsc:  NonNullable<T>
-  ours: T
+  ours: T & ({} | null)
 
 line 126: x
   tsc:  NonNullable<T>
-  ours: T
-
-line 168: x
-  tsc:  (T & {}) | null
-  ours: T | null
-
-line 171: x
-  tsc:  (T & {}) | undefined
-  ours: T | undefined
+  ours: T & ({} | undefined)
 
 line 174: x
   tsc:  NonNullable<T>
-  ours: T | null
+  ours: (T & {}) | null
 
 line 177: x
   tsc:  NonNullable<T>
-  ours: T | undefined
+  ours: (T & {}) | undefined
 
 line 183: x
   tsc:  object
@@ -88,13 +56,9 @@ line 191: x && typeof x === "object"
   tsc:  boolean
   ours: boolean | T
 
-line 191: x
-  tsc:  NonNullable<T>
-  ours: T
-
 line 192: x
   tsc:  T & object
-  ours: T
+  ours: T & {}
 
 line 194: typeof x === "object" && x
   tsc:  false | (T & object) | (T & null)
@@ -106,7 +70,7 @@ line 194: x
 
 line 195: x
   tsc:  T & object
-  ours: T
+  ours: T & {}
 
 line 253: a
   tsc:  (T & object) | (T & null)
@@ -118,23 +82,19 @@ line 253: b
 
 line 256: a
   tsc:  T & object
-  ours: T
+  ours: T & {}
 
 line 256: b
   tsc:  T & object
-  ours: T
+  ours: T & {}
 
 line 259: a
   tsc:  T & object
-  ours: T
+  ours: T & {}
 
 line 259: b
   tsc:  T & object
-  ours: T
-
-line 270: y
-  tsc:  T & ({} | undefined)
-  ours: T
+  ours: T & {}
 
 line 366: x
   tsc:  string | number

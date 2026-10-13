@@ -1052,8 +1052,33 @@ fn same_type_with_options(text: &str, tsc_ty: &str, our_ty: &str, exact_optional
     if text == "this" && tsc_ty == "this" && names_a_class(our_ty) {
         return true;
     }
-    normalize_type_with_options(tsc_ty, exact_optional)
+    normalize_type_with_options(&expand_non_nullable(tsc_ty), exact_optional)
         == normalize_type_with_options(our_ty, exact_optional)
+}
+
+/// `tsc_ty` with each `NonNullable<T>` of a type parameter spelled as what the
+/// library alias means, `T & {}`, which is how we print it.
+fn expand_non_nullable(tsc_ty: &str) -> String {
+    const ALIAS: &str = "NonNullable<";
+    let mut out = String::new();
+    let mut rest = tsc_ty;
+    while let Some(start) = rest.find(ALIAS) {
+        let after = &rest[start + ALIAS.len()..];
+        let Some(end) = after.find('>').filter(|&end| is_identifier(&after[..end])) else {
+            break;
+        };
+        out.push_str(&rest[..start]);
+        out.push_str(&format!("({} & {{}})", &after[..end]));
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    match out
+        .strip_prefix('(')
+        .and_then(|inner| inner.strip_suffix(')'))
+    {
+        Some(inner) if !inner.contains(['(', ')']) => inner.to_string(),
+        _ => out,
+    }
 }
 
 /// Whether `ty` is a single named type, `Name` or `Name<…>`, that isn't a
@@ -2121,4 +2146,11 @@ fn parameter_initialization_copies_do_not_create_source_reads() {
         .collect();
     assert_eq!(items.len(), 2, "the destructured binding and body read");
     assert!(items.iter().all(|entry| entry.ty == "number"));
+}
+
+#[test]
+fn non_nullable_of_a_type_parameter_is_its_intersection_with_empty_object() {
+    assert!(same_type("x", "NonNullable<T>", "T & {}"));
+    assert!(same_type("x", "U | NonNullable<T>", "U | (T & {})"));
+    assert!(!same_type("x", "NonNullable<T>", "T"));
 }

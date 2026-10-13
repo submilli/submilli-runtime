@@ -744,7 +744,7 @@ impl<'a> Inferer<'a> {
                 path.clone(),
                 narrowing::NarrowedView {
                     narrowed_ty: if can_be_compared {
-                        compared_ty.clone()
+                        with_type_parameters_of(&path_ty, compared_ty.clone())
                     } else {
                         narrowing::RULED_OUT
                     },
@@ -3006,4 +3006,24 @@ struct DiscriminantRoot {
     span: Span,
     kind: crate::TypedExprKind,
     key: DiscriminantKey,
+}
+
+/// `compared` with the type parameters among `ty`'s members, which equality
+/// with `null` or `undefined` leaves as they were, as in TypeScript: a `T`
+/// may hold either.
+fn with_type_parameters_of(ty: &Type, compared: Type) -> Type {
+    let members = match ty.peel() {
+        Type::Union(members) => members.as_slice(),
+        _ => std::slice::from_ref(ty),
+    };
+    let mut kept: Vec<Type> = members
+        .iter()
+        .filter(|member| matches!(member.peel(), Type::GenericParam { .. }))
+        .cloned()
+        .collect();
+    if kept.is_empty() {
+        return compared;
+    }
+    kept.push(compared);
+    Type::union(kept)
 }
