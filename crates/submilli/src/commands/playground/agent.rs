@@ -21,7 +21,9 @@ use submilli_shared::llm::tools::{
 use super::chat::{chat_body, message};
 use super::mcp_http::{Failure, McpHttp};
 use super::store::Recorder;
-use super::store::events::{ChatRole, Position};
+use super::store::events::{
+    ChatRole, ChatToolCall, ChatToolResult, ChatTools, EventBody, Position,
+};
 use super::{DEFAULT_MAX_CALLS_PER_ANSWER, MAX_CALLS_PER_ANSWER_RANGE};
 
 /// The variable that picks the provider and model: `<provider>:<model>`.
@@ -424,38 +426,98 @@ pub(crate) struct Resume {
     pub(crate) said: usize,
 }
 
+/// One entry of a session's chat log, as [`history`] reads it.
+pub(crate) enum Logged<'m> {
+    /// A message.
+    Said(ChatRole, &'m str),
+    /// The tools one answer called, and what they returned.
+    Tools(&'m ChatTools),
+}
+
 /// The conversation a session's chat log holds, oldest first, as the model is shown it:
-/// what was said, without the tool calls and their results, which the log does not keep.
-/// Consecutive messages from the same side are joined, so the sides alternate.
-pub(crate) fn history<'m>(messages: impl IntoIterator<Item = (ChatRole, &'m str)>) -> Vec<Turn> {
+/// what was said, and the tools each answer called with what they returned, so a later
+/// message is answered knowing what the earlier ones ran. Consecutive messages from the
+/// same side are joined, so the sides alternate. A session logged before its tool calls
+/// were has only what was said.
+pub(crate) fn history<'m>(logged: impl IntoIterator<Item = Logged<'m>>) -> Vec<Turn> {
     let mut turns: Vec<Turn> = Vec::new();
-    for (role, text) in messages {
-        match (role, turns.last_mut()) {
-            (ChatRole::User, Some(Turn::User(said))) => {
-                said.push_str("\n\n");
-                said.push_str(text);
+    for entry in logged {
+        match entry {
+            Logged::Said(role, text) => said(&mut turns, role, text),
+            Logged::Tools(tools) => {
+                let calls = tools.calls.iter().map(kept_call).collect();
+                // The calls belong to the answer's words, when it said any first.
+                match turns.last_mut() {
+                    Some(Turn::Assistant { calls: held, .. }) if held.is_empty() => {
+                        *held = calls;
+                    }
+                    _ => turns.push(Turn::Assistant { text: None, calls }),
+                }
+                turns.push(Turn::Results(
+                    tools.results.iter().map(kept_result).collect(),
+                ));
             }
-            (
-                ChatRole::Assistant,
-                Some(Turn::Assistant {
-                    text: Some(said), ..
-                }),
-            ) => {
-                said.push_str("\n\n");
-                said.push_str(text);
-            }
-            (ChatRole::User, _) => turns.push(Turn::User(text.to_owned())),
-            (ChatRole::Assistant, _) => turns.push(Turn::Assistant {
-                text: Some(text.to_owned()),
-                calls: Vec::new(),
-            }),
         }
     }
     // A model is asked with the user's turn first.
-    if matches!(turns.first(), Some(Turn::Assistant { .. })) {
+    while turns
+        .first()
+        .is_some_and(|turn| !matches!(turn, Turn::User(_)))
+    {
         turns.remove(0);
     }
     turns
+}
+
+fn said(turns: &mut Vec<Turn>, role: ChatRole, text: &str) {
+    match (role, turns.last_mut()) {
+        (ChatRole::User, Some(Turn::User(said))) => {
+            said.push_str("\n\n");
+            said.push_str(text);
+        }
+        (
+            ChatRole::Assistant,
+            Some(Turn::Assistant {
+                text: Some(said),
+                calls,
+            }),
+        ) if calls.is_empty() => {
+            said.push_str("\n\n");
+            said.push_str(text);
+        }
+        (ChatRole::User, _) => turns.push(Turn::User(text.to_owned())),
+        (ChatRole::Assistant, _) => turns.push(Turn::Assistant {
+            text: Some(text.to_owned()),
+            calls: Vec::new(),
+        }),
+    }
+}
+
+/// A logged call as the model is handed it back.
+fn kept_call(call: &ChatToolCall) -> ToolCall {
+    ToolCall {
+        id: call.id.clone(),
+        name: call.name.clone(),
+        arguments: call
+            .arguments
+            .clone()
+            .ok_or_else(|| call.arguments_text.clone().unwrap_or_default()),
+        signature: call.signature.clone(),
+    }
+}
+
+/// A logged result as the model is handed it back, saying where it was cut.
+fn kept_result(result: &ChatToolResult) -> ToolResult {
+    let mut content = result.content.clone();
+    if result.truncated {
+        content.push_str("\n[cut here: the rest was not kept]");
+    }
+    ToolResult {
+        call_id: result.call_id.clone(),
+        name: result.name.clone(),
+        content,
+        is_error: result.is_error,
+    }
 }
 
 /// [`history`] with `task` said after it: joined to the last turn when that is the
@@ -605,6 +667,7 @@ fn converse(
         }
         let (results, ran) = run_calls(setup, mcp, &calls, &finish);
         tool_calls += ran;
+        log.tools(turn, &calls, &results);
         turns.push(Turn::Assistant { text, calls });
         turns.push(Turn::Results(results));
     }
@@ -889,6 +952,62 @@ impl Log<'_> {
             chat_body(self.agent, said),
         );
     }
+
+    /// Logs the tools answer `turn` called and what they returned, each capped as the
+    /// model was handed it.
+    fn tools(&self, turn: usize, calls: &[ToolCall], results: &[ToolResult]) {
+        let Some(session) = self.session else {
+            return;
+        };
+        let id = format!("{}-{}-tools-{turn}", self.agent, self.earlier);
+        let calls = calls
+            .iter()
+            .map(|call| {
+                let (arguments, arguments_text) = match &call.arguments {
+                    Ok(arguments)
+                        if serde_json::to_vec(arguments)
+                            .is_ok_and(|bytes| bytes.len() <= MAX_RESULT_BYTES) =>
+                    {
+                        (Some(arguments.clone()), None)
+                    }
+                    Ok(arguments) => (None, Some(Value::Object(arguments.clone()).to_string())),
+                    Err(text) => (None, Some(text.clone())),
+                };
+                ChatToolCall {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments,
+                    arguments_text: arguments_text
+                        .map(|text| super::within_bytes(&text, MAX_RESULT_BYTES).0.to_owned()),
+                    signature: call.signature.clone(),
+                }
+            })
+            .collect();
+        let results = results
+            .iter()
+            .map(|result| {
+                let (content, truncated) = super::within_bytes(&result.content, MAX_RESULT_BYTES);
+                ChatToolResult {
+                    call_id: result.call_id.clone(),
+                    name: result.name.clone(),
+                    content: content.to_owned(),
+                    truncated,
+                    is_error: result.is_error,
+                }
+            })
+            .collect();
+        self.recorder.append_chat(
+            session,
+            format!("chat-{session}-{id}"),
+            Position::at(super::now_micros()),
+            EventBody::ChatTools(ChatTools {
+                turn: id,
+                agent: self.agent.to_owned(),
+                calls,
+                results,
+            }),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1010,11 +1129,11 @@ mod tests {
     #[test]
     fn the_history_alternates_starts_with_the_user_and_takes_the_next_message() {
         let turns = history([
-            (ChatRole::Assistant, "stray"),
-            (ChatRole::User, "Total cus_acme's charges."),
-            (ChatRole::Assistant, "Running it."),
-            (ChatRole::Assistant, "That was refused."),
-            (ChatRole::User, "Why?"),
+            Logged::Said(ChatRole::Assistant, "stray"),
+            Logged::Said(ChatRole::User, "Total cus_acme's charges."),
+            Logged::Said(ChatRole::Assistant, "Running it."),
+            Logged::Said(ChatRole::Assistant, "That was refused."),
+            Logged::Said(ChatRole::User, "Why?"),
         ]);
         assert_eq!(
             turns,
@@ -1035,10 +1154,104 @@ mod tests {
             Turn::User("Why?\n\nThen last month's only.".into())
         );
         let answered = with_task(
-            history([(ChatRole::User, "a"), (ChatRole::Assistant, "b")]),
+            history([
+                Logged::Said(ChatRole::User, "a"),
+                Logged::Said(ChatRole::Assistant, "b"),
+            ]),
             "c",
         );
         assert_eq!(answered.last(), Some(&Turn::User("c".into())));
+    }
+
+    fn tools(calls: &[(&str, Option<Value>)], results: &[(&str, &str, bool)]) -> ChatTools {
+        ChatTools {
+            turn: "chat-0-tools-1".into(),
+            agent: "chat".into(),
+            calls: calls
+                .iter()
+                .map(|(id, arguments)| ChatToolCall {
+                    id: (*id).into(),
+                    name: "execute".into(),
+                    arguments: arguments.as_ref().and_then(|a| a.as_object().cloned()),
+                    arguments_text: arguments.is_none().then(|| "not json".into()),
+                    signature: None,
+                })
+                .collect(),
+            results: results
+                .iter()
+                .map(|(id, content, truncated)| ChatToolResult {
+                    call_id: (*id).into(),
+                    name: "execute".into(),
+                    content: (*content).into(),
+                    truncated: *truncated,
+                    is_error: false,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_history_hands_back_each_answers_tool_calls_and_what_they_returned() {
+        let ran = tools(
+            &[
+                ("call_1", Some(json!({ "code": "main()" }))),
+                ("call_2", None),
+            ],
+            &[("call_1", "{\"total\":5}", false), ("call_2", "abc", true)],
+        );
+        let again = tools(&[("call_3", Some(json!({})))], &[("call_3", "ok", false)]);
+        let turns = history([
+            Logged::Tools(&again),
+            Logged::Said(ChatRole::User, "Total my charges."),
+            Logged::Said(ChatRole::Assistant, "Running it."),
+            Logged::Tools(&ran),
+            Logged::Said(ChatRole::Assistant, "Your total is 5."),
+            Logged::Tools(&again),
+            Logged::Said(ChatRole::Assistant, "Checked again."),
+        ]);
+        let call = |id: &str, arguments: Result<Value, &str>| ToolCall {
+            id: id.into(),
+            name: "execute".into(),
+            arguments: arguments
+                .map(|a| a.as_object().cloned().unwrap())
+                .map_err(str::to_owned),
+            signature: None,
+        };
+        let result = |id: &str, content: &str| ToolResult {
+            call_id: id.into(),
+            name: "execute".into(),
+            content: content.into(),
+            is_error: false,
+        };
+        assert_eq!(
+            turns,
+            [
+                // Tools before the first message have no question to answer, so they go.
+                Turn::User("Total my charges.".into()),
+                // The calls go with the words said before them.
+                Turn::Assistant {
+                    text: Some("Running it.".into()),
+                    calls: vec![
+                        call("call_1", Ok(json!({ "code": "main()" }))),
+                        call("call_2", Err("not json")),
+                    ],
+                },
+                Turn::Results(vec![
+                    result("call_1", "{\"total\":5}"),
+                    result("call_2", "abc\n[cut here: the rest was not kept]"),
+                ]),
+                // Words after the results start a turn of their own.
+                Turn::Assistant {
+                    text: Some("Your total is 5.".into()),
+                    calls: vec![call("call_3", Ok(json!({})))],
+                },
+                Turn::Results(vec![result("call_3", "ok")]),
+                Turn::Assistant {
+                    text: Some("Checked again.".into()),
+                    calls: Vec::new(),
+                },
+            ]
+        );
     }
 
     fn settings(effort: Option<&str>, max_output: Option<u64>, provider: Value) -> Settings {

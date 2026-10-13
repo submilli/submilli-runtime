@@ -1738,6 +1738,72 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         }
 
         #[test]
+        fn a_continued_chat_hands_the_model_the_tools_its_earlier_answers_called() {
+            let (port, bodies) = model_api(|n| match n {
+                0 => call_execute(n),
+                _ => json!({ "content": [{ "type": "text", "text": format!("Answer {n}.") }],
+                             "stop_reason": "end_turn" }),
+            });
+            let playground = Playground::starter();
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let first = playground.expect(0, &["chat", "Total the charges."]);
+            let session = first["session"].as_str().unwrap().to_owned();
+            playground.expect(0, &["chat", "--session", &session, "Only last month."]);
+
+            // The second message's request holds the first answer's call and its result,
+            // as the model made and saw them, then the answer and the new message.
+            let bodies = bodies.lock().unwrap().clone();
+            assert_eq!(bodies.len(), 3);
+            let messages = bodies[2]["messages"].as_array().unwrap();
+            let roles: Vec<&str> = messages
+                .iter()
+                .map(|message| message["role"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                roles,
+                ["user", "assistant", "user", "assistant", "user"],
+                "{messages:#?}"
+            );
+            let blocks = |at: usize| messages[at]["content"].as_array().unwrap().clone();
+            let call = blocks(1);
+            assert_eq!(call[0]["text"], "Running it.", "{call:#?}");
+            assert_eq!(call[1]["type"], "tool_use");
+            assert_eq!(call[1]["id"], "call_0");
+            assert_eq!(call[1]["input"]["code"], PROGRAM);
+            let result = blocks(2);
+            assert_eq!(result[0]["type"], "tool_result", "{result:#?}");
+            assert_eq!(result[0]["tool_use_id"], "call_0");
+            assert!(
+                result[0]["content"].to_string().contains("42"),
+                "{result:#?}"
+            );
+            assert!(messages[3]["content"].to_string().contains("Answer 1."));
+            assert!(
+                messages[4]["content"]
+                    .to_string()
+                    .contains("Only last month.")
+            );
+
+            // `watch` shows the calls with what came from the model and the run kept
+            // apart, as untrusted.
+            let watched = playground.run(&["watch", &session]);
+            let tools: Vec<Value> = String::from_utf8_lossy(&watched.stdout)
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|line| line["kind"] == "chat-tools")
+                .collect();
+            assert_eq!(
+                tools.len(),
+                1,
+                "{}",
+                String::from_utf8_lossy(&watched.stdout)
+            );
+            assert_eq!(tools[0]["untrusted"]["calls"][0]["id"], "call_0");
+            assert!(tools[0].get("calls").is_none() && tools[0].get("results").is_none());
+        }
+
+        #[test]
         fn a_chat_carries_on_in_its_session_with_the_conversation_and_its_model() {
             let (port, bodies) = model_api(|n| match n {
                 1 => call_execute(n),
