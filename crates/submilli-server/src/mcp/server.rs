@@ -750,7 +750,10 @@ impl SubmilliMcp {
         let policy = log.as_ref().map_or(policy.clone(), |log| log.wrap(policy));
         let call = policy.recorder().map(|recorder| {
             let marker = recorder.enter_host_call();
-            (marker, recorder.begin_call("main", capability, None))
+            (
+                marker,
+                recorder.begin_call("main", capability, Default::default()),
+            )
         });
         let outcome = policy.check_with_cwd("main", capability, &context, config.cwd());
         let audit_context = policy.audit_context(capability, &context, config.cwd());

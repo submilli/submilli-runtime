@@ -35,9 +35,10 @@ pub use agents::{
 };
 pub use call_log::{BodyCopy, CallOutcome, CallRecord, ModelUsage, PayloadRecord};
 pub use decision::{
-    CallSite, CallTicket, ConsoleLine, DecisionAction, DecisionCause, DecisionExplanation,
-    DecisionLog, DecisionLogConfig, DecisionLogOutput, DecisionRecord, DecisionRecorder, EntryPath,
-    FailureReasonRecord, FailureRecord, NearMissRecord, RecordObserver, RuleCitation, SourceLine,
+    CallOrigin, CallSite, CallTicket, ConsoleLine, DecisionAction, DecisionCause,
+    DecisionExplanation, DecisionLog, DecisionLogConfig, DecisionLogOutput, DecisionRecord,
+    DecisionRecorder, EntryPath, FailureReasonRecord, FailureRecord, NearMissRecord, PackageLine,
+    RecordObserver, RuleCitation, SourceLine,
 };
 pub use disk_quota::{DiskQuota, Holder, OpenFileGuard, QuotaCharge, QuotaExceeded};
 pub use embedding::{

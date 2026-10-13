@@ -128,8 +128,12 @@ impl CapabilityGuard {
         let Some(recorder) = self.security_check.recorder() else {
             return CallSite::default();
         };
-        let line = self.parent.and_then(|parent| parent.line);
-        let ticket = recorder.begin_call(&self.caller, capability, line);
+        // A package line, when there is one, is on the parent call's record.
+        let origin = crate::runtime::decision::CallOrigin {
+            line: self.parent.and_then(|parent| parent.line),
+            package: None,
+        };
+        let ticket = recorder.begin_call(&self.caller, capability, origin);
         let index = self.hops.fetch_add(1, Ordering::Relaxed);
         CallSite::new(
             Some(ticket),
