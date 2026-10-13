@@ -16,7 +16,7 @@ export interface Status {
   blueprint_status: { version: number | null; refused: BlueprintRefusal | null };
   binding: { variables: Record<string, string>; secrets: string[] };
   /** The variables the blueprint in force declares. */
-  variables?: DeclaredVariable[];
+  declared_variables?: DeclaredVariable[];
 }
 
 export interface DeclaredVariable {
@@ -193,8 +193,10 @@ export interface BlueprintVersion {
 export interface PackageSource {
   package: string;
   module: string;
-  path: string;
+  bytes: number;
   truncated: boolean;
+  /** When the text was cut, how much of the module it holds. */
+  note?: string | null;
   untrusted: { text: string };
 }
 
