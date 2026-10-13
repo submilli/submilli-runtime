@@ -302,6 +302,21 @@ test("an accepted test is sent with its mode and loads the run it made", async (
   await expect.poll(() => store.getSnapshot().data.runs[6]?.run).toBe(6);
 });
 
+test("an accepted test or rerun reads the status again, since its run ends in another session", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  const { store, started } = start(server, "");
+  await started;
+  await expect.poll(() => store.getSnapshot().data.events.length).toBe(43);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const reads = () => server.requests().filter((r) => r === "GET /api/status").length;
+  const before = reads();
+  await store.test(2);
+  await expect.poll(reads).toBe(before + 1);
+  await store.rerun(1);
+  await expect.poll(reads).toBe(before + 2);
+});
+
 test("a drafted rule is returned for the page to show", async () => {
   const server = new FakeServer();
   signedIn(server);

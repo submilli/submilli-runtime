@@ -147,6 +147,19 @@ export function readSession(events: StoredEvent[]): Session {
   return { steps, calls, returned, finished };
 }
 
+/** The runs that have started and not finished, oldest first: what Cancel can stop. */
+export function runsInFlight(events: StoredEvent[]): number[] {
+  const started: number[] = [];
+  const finished = new Set<number>();
+  for (const e of events) {
+    const ev = eventOf(e);
+    if (!ev || e.run === undefined) continue;
+    if (ev.kind === "run-started" && !started.includes(e.run)) started.push(e.run);
+    else if (ev.kind === "run-finished") finished.add(e.run);
+  }
+  return started.filter((n) => !finished.has(n));
+}
+
 // ---- the cursor
 
 /** The cursor before the first step. Step keys start with `turn:` or `ev:`, so it can't clash. */

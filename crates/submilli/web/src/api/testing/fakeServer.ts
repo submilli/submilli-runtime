@@ -104,7 +104,7 @@ export class FakeServer {
       if ((m = path.match(/^\/api\/runs\/(\d+)$/))) return recorded(`show-${m[1]}.json`);
       if ((m = path.match(/^\/api\/decisions\/([\d.]+)$/))) return recorded(`explain-${m[1]}.json`);
       if ((m = path.match(/^\/api\/compare\/(\d+)\/(\d+)$/))) return recorded(`compare-${m[1]}-${m[2]}.json`);
-      if (path === "/api/changes") return recorded(`changes-v${query.get("version")}.json`);
+      if (path === "/api/changes") return recorded(query.has("version") ? `changes-v${query.get("version")}.json` : "changes.json");
       if (path === "/api/packages/source") {
         if (query.get("package") === "@acme/billing" && query.get("module") === "lib") {
           return Response.json({

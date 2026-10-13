@@ -13,7 +13,8 @@ export const FILTERS: { filter: Filter; name: string }[] = [
   { filter: "follow", name: "With reruns" },
 ];
 
-export type Dialog = null | "sessions" | "bp" | "pkgs" | "allvars";
+/** `confirm` asks before a live test or rerun; `draft` shows a drafted rule. */
+export type Dialog = null | "sessions" | "bp" | "pkgs" | "allvars" | "confirm" | "draft";
 
 /** A new session as the page holds it until the first message is sent with it. */
 export interface Fresh {

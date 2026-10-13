@@ -1,16 +1,24 @@
-import { useEffect, useState } from "react";
+// The page's top: the signed-out screen, the first load, or the page itself.
+import { SIGNED_OUT_LINE } from "./api/login";
+import type { PageStore } from "./store/store";
+import { useStore } from "./store/useStore";
+import { Page } from "./ui/Page";
+import { LOADING, loadFailed } from "./ui/wording";
 
-import { loadStatus } from "./session";
-
-export function App() {
-  const [text, setText] = useState("Signing in...");
-  useEffect(() => {
-    loadStatus().then(setText, (error: unknown) => setText(String(error)));
-  }, []);
+function Screen({ line }: { line: string }) {
   return (
-    <main>
-      <h1>Submilli playground</h1>
-      <pre>{text}</pre>
-    </main>
+    <div className="pg pg-screen">
+      <div className="pg-brand">
+        Submilli <span>Playground</span>
+      </div>
+      <p>{line}</p>
+    </div>
   );
+}
+
+export function App({ store }: { store: PageStore }) {
+  const snap = useStore(store);
+  if (snap.auth === "signed-out") return <Screen line={SIGNED_OUT_LINE} />;
+  if (!snap.data.status) return <Screen line={snap.loadError ? loadFailed(snap.loadError) : LOADING} />;
+  return <Page store={store} snap={snap} />;
 }

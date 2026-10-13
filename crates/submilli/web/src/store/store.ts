@@ -394,6 +394,19 @@ export function createStore(options: StoreOptions = {}) {
       if (found) setData({ versions: { ...snap.data.versions, [version]: found } });
     });
 
+  /** The list of blueprint versions, read each time, keeping any text already loaded. */
+  const loadVersions = async () => {
+    let changes: Changes;
+    try {
+      changes = await client.read<Changes>("/api/changes");
+    } catch {
+      return;
+    }
+    const versions = { ...snap.data.versions };
+    for (const v of changes.versions) versions[v.version] = { ...v, ...versions[v.version] };
+    setData({ versions });
+  };
+
   const loadSource = (pkg: string, module: string) => {
     const key = sourceKey(pkg, module);
     return once(`source:${key}`, async () => {
@@ -429,8 +442,13 @@ export function createStore(options: StoreOptions = {}) {
   };
 
   /** After a test or rerun of `run`, its record lists the new follow-up; read it again. */
-  const followedUp = (run: number, outcome: ActionOutcome<unknown>) => {
-    if (outcome.ok) void loadRun(run, true);
+  const followedUp = <T,>(run: number, outcome: ActionOutcome<T>): ActionOutcome<T> => {
+    if (outcome.ok) {
+      void loadRun(run, true);
+      // Its run ends in a throwaway session whose events this feed never sees, so the
+      // blueprint version it ran against would otherwise show only on the next re-read.
+      void refreshStatus();
+    }
     return outcome;
   };
 
@@ -543,6 +561,7 @@ export function createStore(options: StoreOptions = {}) {
 
     loadExplain,
     loadVersion,
+    loadVersions,
     loadSource,
 
     test,
