@@ -45,7 +45,7 @@ test("undefined and void cases are eligible without weakening unrelated exclusio
   assert.equal(excludedDirectory("expressions/unaryOperators/voidOperator/void.ts"), false);
   assert.equal(exclusionBeforePort("typeGuardTypeOfUndefined.ts", "const x = undefined;"), null);
   assert.equal(excludedDirectory("types/any/assignment.ts"), true);
-  assert.notEqual(exclusionBeforePort("multi.ts", "// @filename: a.ts"), null);
+  assert.notEqual(exclusionBeforePort("multi.ts", "// @filename: a.js"), null);
 });
 
 test("case lists reject escapes and are exact, sorted and deduplicated", () => {

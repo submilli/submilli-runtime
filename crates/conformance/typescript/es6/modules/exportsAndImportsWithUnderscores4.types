@@ -1,0 +1,173 @@
+=== exportsAndImportsWithUnderscores4.ts ===
+
+/*pruned*/;
+export function _(): void {
+>_ : () => void
+>  : ^^^^^^^^^^
+
+    console.log("_");
+>console.log("_") : void
+>                 : ^^^^
+>console.log : (...data: any[]) => void
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^
+>console : Console
+>        : ^^^^^^^
+>log : (...data: any[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>"_" : "_"
+>    : ^^^
+
+}
+export function __(): void {
+>__ : () => void
+>   : ^^^^^^^^^^
+
+    console.log("__");
+>console.log("__") : void
+>                  : ^^^^
+>console.log : (...data: any[]) => void
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^
+>console : Console
+>        : ^^^^^^^
+>log : (...data: any[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>"__" : "__"
+>     : ^^^^
+
+}
+export function ___(): void {
+>___ : () => void
+>    : ^^^^^^^^^^
+
+    console.log("___");
+>console.log("___") : void
+>                   : ^^^^
+>console.log : (...data: any[]) => void
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^
+>console : Console
+>        : ^^^^^^^
+>log : (...data: any[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>"___" : "___"
+>      : ^^^^^
+
+}
+export function _hi(): void {
+>_hi : () => void
+>    : ^^^^^^^^^^
+
+    console.log("_hi");
+>console.log("_hi") : void
+>                   : ^^^^
+>console.log : (...data: any[]) => void
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^
+>console : Console
+>        : ^^^^^^^
+>log : (...data: any[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>"_hi" : "_hi"
+>      : ^^^^^
+
+}
+export function __proto(): void {
+>__proto : () => void
+>        : ^^^^^^^^^^
+
+    console.log("__proto");
+>console.log("__proto") : void
+>                       : ^^^^
+>console.log : (...data: any[]) => void
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^
+>console : Console
+>        : ^^^^^^^
+>log : (...data: any[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>"__proto" : "__proto"
+>          : ^^^^^^^^^
+
+}
+export function __esmodule(): void {
+>__esmodule : () => void
+>           : ^^^^^^^^^^
+
+    console.log("__esmodule");
+>console.log("__esmodule") : void
+>                          : ^^^^
+>console.log : (...data: any[]) => void
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^
+>console : Console
+>        : ^^^^^^^
+>log : (...data: any[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>"__esmodule" : "__esmodule"
+>             : ^^^^^^^^^^^^
+
+}
+export function ___hello(): void {
+>___hello : () => void
+>         : ^^^^^^^^^^
+
+    console.log("___hello");
+>console.log("___hello") : void
+>                        : ^^^^
+>console.log : (...data: any[]) => void
+>            : ^^^^^^^^^^^^^^^^^^^^^^^^
+>console : Console
+>        : ^^^^^^^
+>log : (...data: any[]) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>"___hello" : "___hello"
+>           : ^^^^^^^^^^
+
+}
+
+import {_, __, ___hello, __esmodule, __proto, _hi}  from "./m1";
+>_ : () => void
+>  : ^^^^^^^^^^
+>__ : () => void
+>   : ^^^^^^^^^^
+>___hello : () => void
+>         : ^^^^^^^^^^
+>__esmodule : () => void
+>           : ^^^^^^^^^^
+>__proto : () => void
+>        : ^^^^^^^^^^
+>_hi : () => void
+>    : ^^^^^^^^^^
+
+_();
+>_() : void
+>    : ^^^^
+>_ : () => void
+>  : ^^^^^^^^^^
+
+__();
+>__() : void
+>     : ^^^^
+>__ : () => void
+>   : ^^^^^^^^^^
+
+___hello();
+>___hello() : void
+>           : ^^^^
+>___hello : () => void
+>         : ^^^^^^^^^^
+
+__esmodule();
+>__esmodule() : void
+>             : ^^^^
+>__esmodule : () => void
+>           : ^^^^^^^^^^
+
+__proto();
+>__proto() : void
+>          : ^^^^
+>__proto : () => void
+>        : ^^^^^^^^^^
+
+_hi();
+>_hi() : void
+>      : ^^^^
+>_hi : () => void
+>    : ^^^^^^^^^^
+

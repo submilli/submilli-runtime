@@ -7,7 +7,7 @@
 // each feature whose name contains <text>, to check a detector against what it
 // matched.
 //
-// A feature is done when every single-file upstream TypeScript test that uses it
+// A feature is done when every upstream TypeScript test that uses it
 // is in the suite or excluded with a reason, and every test262 area it names has
 // been ported (each area records what it skipped, and why), and the suite checks
 // every form of it the spec's feature matrix names (each operator, each list a
@@ -32,6 +32,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { isJavaScript } = require("./port-suite.cjs");
 
 const conformanceDir = path.join(__dirname, "..");
 const workspace = path.join(conformanceDir, "..", "..");
@@ -295,10 +296,6 @@ const FEATURES = [
 
 const sample = process.env.COVERAGE_SAMPLE;
 
-// Options that make an upstream case several files, or JavaScript, as in
-// `port-suite.cjs`: the port makes one TypeScript file, so these can't be ported.
-const MULTI_FILE_OR_JS = /^\s*\/\/\s*@(filename|allowJs|checkJs)\s*:/im;
-
 // Rows of the spec's feature matrix marked for Phase 1 or 2 that the compiler
 // rejects today, so they aren't supported yet and have no row above.
 const NOT_YET_SUPPORTED = [
@@ -377,14 +374,14 @@ function renderFocused(features, caseCount, inSuite, excluded) {
   return lines.join("\n") + "\n";
 }
 
-// Every single-file upstream TypeScript case, recording in each feature the
+// Every upstream TypeScript case, recording in each feature the
 // cases that use it. Returns how many there are.
 function upstreamCases(conformance, features) {
   let count = 0;
   for (const file of walk(conformance)) {
     if (!file.endsWith(".ts") || file.endsWith(".d.ts")) continue;
     const source = fs.readFileSync(file, "utf8");
-    if (MULTI_FILE_OR_JS.test(source)) continue;
+    if (isJavaScript(source)) continue;
     count++;
     const rel = path.relative(conformance, file);
     let tree;
@@ -496,7 +493,7 @@ function render(features, test262, { upstream, inSuite, excluded }) {
     "",
     "Every feature Submilli supports, whether the suites have dealt with every upstream",
     "test about it, and whether they check each of its forms. A feature is **done** when",
-    "every single-file upstream TypeScript test that uses it is in the suite or excluded",
+    "every upstream TypeScript test that uses it is in the suite or excluded",
     "with a reason, every test262 area it names has been ported, and the TypeScript suite",
     "checks every form of it at least once; **open** otherwise. **None upstream** means",
     "neither suite has a test that uses it, and **n/a** that none can, with the reason.",
@@ -516,7 +513,7 @@ function render(features, test262, { upstream, inSuite, excluded }) {
     "`COVERAGE_SAMPLE=<feature>` prints what it counted. It shows a feature that",
     "pruning nearly removed.",
     "",
-    `Upstream: ${upstream} single-file TypeScript tests. Suite: ${inSuite.size} TypeScript cases, ${[...test262.values()].reduce((n, a) => n + a.cases, 0)} test262 cases.`,
+    `Upstream: ${upstream} TypeScript tests. Suite: ${inSuite.size} TypeScript cases, ${[...test262.values()].reduce((n, a) => n + a.cases, 0)} test262 cases.`,
     "",
   ];
   const statuses = new Map();

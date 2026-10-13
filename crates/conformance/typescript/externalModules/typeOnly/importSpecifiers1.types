@@ -1,0 +1,112 @@
+=== importSpecifiers1.ts ===
+
+export const as = 0;
+>as : 0
+>   : ^
+>0 : 0
+>  : ^
+
+export const type = 0;
+>type : 0
+>     : ^
+>0 : 0
+>  : ^
+
+export const something = 0;
+>something : 0
+>          : ^
+>0 : 0
+>  : ^
+
+
+import { type } from "./mod";
+>type : 0
+>     : ^
+
+/*pruned*/;
+type;
+>type : 0
+>     : ^
+
+;   // Error (used in emitting position)
+
+import { type as as } from "./mod";
+>type : 0
+>     : ^
+>as : 0
+>   : ^
+
+type; // Error (cannot resolve name)
+>type : any
+>     : ^^^
+
+as;
+>as : 0
+>   : ^
+
+
+/*pruned*/;
+type; // Error (cannot resolve name)
+>type : any
+>     : ^^^
+
+;   // Error (used in emitting position)
+
+/*pruned*/;                               // Error
+
+import { type type as as } from "./mod";
+>type : 0
+>     : ^
+>as : 0
+>   : ^
+
+import { type as type } from "./mod";
+>type : 0
+>     : ^
+>type : 0
+>     : ^
+
+type;
+>type : 0
+>     : ^
+
+as; // Error (used in emitting position)
+>as : 0
+>   : ^
+
+
+/*pruned*/;                          // Error
+/*pruned*/;                             // Error
+/*pruned*/;                                // Error
+import { type something } from "./mod";
+>something : 0
+>          : ^
+
+import { type something as s } from "./mod";
+>something : 0
+>          : ^
+>s : 0
+>  : ^
+
+type; // Error (cannot resolve name)
+>type : any
+>     : ^^^
+
+as; // Error (cannot resolve name)
+>as : any
+>   : ^^^
+
+something; // Error (used in emitting position)
+>something : 0
+>          : ^
+
+s; // Error (used in emitting position)
+>s : 0
+>  : ^
+
+
+import type { type something } from "./mod"; // Error
+>something : any
+>          : ^^^
+
+

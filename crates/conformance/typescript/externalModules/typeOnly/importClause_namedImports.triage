@@ -1,0 +1,1 @@
+line 10 missed: by-design spec §1.10 `import type` is a no-op synonym for a plain import, so a type-only import can be used as a value

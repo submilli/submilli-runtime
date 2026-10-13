@@ -317,6 +317,90 @@ pub fn typecheck_to_typed_ast(source: &str, file: FileId) -> (TypedAst, Vec<Diag
     }
 }
 
+/// [`typecheck_to_typed_ast`] for the modules of one package, which import each
+/// other by relative path. Every module is checked, imported or not, and inference
+/// runs past syntax errors, as for a script. The typed AST holds every module's
+/// declarations; each span carries the [`FileId`] of its module, which is its index
+/// in `modules`.
+pub fn typecheck_package_to_typed_ast(
+    package_name: &str,
+    root_module: ModulePath,
+    modules: &[PackageSourceModule<'_>],
+) -> (TypedAst, Vec<Diagnostic>) {
+    let mut sources = Sources::new();
+    let mut diagnostics = Vec::new();
+    let Some(parsed_modules) = parse_modules_past_errors(&mut sources, modules, &mut diagnostics)
+    else {
+        return (TypedAst::new(), diagnostics);
+    };
+    let module_refs = parsed_modules
+        .iter()
+        .map(|(path, file, ast)| (path.clone(), *file, ast))
+        .collect();
+    let stdlib_defs = runtime::stdlib_package_declarations();
+    match crate::typechecker::infer::infer_package_checked(
+        package_name,
+        root_module,
+        module_refs,
+        &sources,
+        runtime_external_packages(&stdlib_defs),
+        BTreeMap::new(),
+    ) {
+        Ok((ta, _, package_diagnostics)) => {
+            diagnostics.extend(package_diagnostics);
+            (ta, diagnostics)
+        }
+        Err(error) => {
+            let error =
+                error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text));
+            diagnostics.extend(error.into_diagnostics(FileId(0)));
+            (TypedAst::new(), diagnostics)
+        }
+    }
+}
+
+/// Registers and parses each module, adding its diagnostics, errors included, to
+/// `diagnostics`. `None` when one fails fatally, so nothing can be checked.
+fn parse_modules_past_errors(
+    sources: &mut Sources,
+    modules: &[PackageSourceModule<'_>],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Vec<(ModulePath, FileId, Ast)>> {
+    let mut parsed_modules = Vec::with_capacity(modules.len());
+    for module in modules {
+        let file = match sources.add(module.path.clone(), module.source) {
+            Ok(file) => file,
+            Err(error) => {
+                let error = CompileError::from(error.into_compiler_failure(CompilerStage::Parse));
+                diagnostics.extend(error.into_diagnostics(FileId(0)));
+                return None;
+            }
+        };
+        let parsed = parse_script(module.source, file);
+        if let Some(error) = parsed.failure {
+            diagnostics.extend(error.into_diagnostics(file));
+            return None;
+        }
+        diagnostics.extend(parsed.diagnostics);
+        parsed_modules.push((module.path.clone(), file, parsed.ast));
+    }
+    Some(parsed_modules)
+}
+
+/// The packages every package may import without declaring them: the stdlib's,
+/// the prelude's and the host's, by name.
+fn runtime_external_packages(
+    stdlib_defs: &[PackageDeclaration],
+) -> BTreeMap<String, PackageDeclaration> {
+    let (prelude_defs, host_defs, _) = prelude::cached_runtime_package_declarations();
+    stdlib_defs
+        .iter()
+        .chain(prelude_defs)
+        .chain(host_defs)
+        .map(|defs| (defs.package_name.clone(), defs.clone()))
+        .collect()
+}
+
 /// Compile a script module. `filename` is the DWARF compile-unit name for
 /// backtrace source mapping; `file` is this source's [`FileId`] in the caller's
 /// [`Sources`](crate::Sources) registry. `packages` are real package
@@ -603,17 +687,7 @@ fn compile_package_sources(
         .iter()
         .map(|(path, file, ast)| (path.clone(), *file, ast))
         .collect();
-    let mut external_packages: BTreeMap<String, PackageDeclaration> = stdlib_defs
-        .iter()
-        .map(|defs| (defs.package_name.clone(), defs.clone()))
-        .collect();
-    let (prelude_defs, host_defs, _) = prelude::cached_runtime_package_declarations();
-    for defs in prelude_defs {
-        external_packages.insert(defs.package_name.clone(), defs.clone());
-    }
-    for defs in host_defs {
-        external_packages.insert(defs.package_name.clone(), defs.clone());
-    }
+    let mut external_packages = runtime_external_packages(stdlib_defs);
     for defs in dependencies {
         external_packages.insert(defs.package_name.clone(), (*defs).clone());
     }

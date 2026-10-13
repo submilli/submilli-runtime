@@ -1,0 +1,4 @@
+types: 6 of 19 tsc entries compared, 0 differ
+
+errors:
+line 10: tsc TS1361: 'A' cannot be used as a value because it was imported using 'import type'. (we accept)

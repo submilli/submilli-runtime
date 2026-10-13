@@ -14,6 +14,9 @@ const path = require("path");
 const os = require("os");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
+const ts = require("typescript");
+const { fileNames, splitCase, duplicateModules } = require("./case-files.cjs");
+const { caseProgram } = require("./tsc-case.cjs");
 
 const run = promisify(execFile);
 const casesDir = path.join(__dirname, "..", "typescript");
@@ -22,7 +25,6 @@ const CONCURRENCY = 8;
 // Why an upstream case is left out. The detail says which feature, error or case.
 const REASONS = {
   unsupported: "not supported",
-  multiFile: "multi-file or JavaScript",
   port: "the port changes what it checks",
   duplicate: "duplicate",
   thin: "checks too little",
@@ -97,11 +99,35 @@ const EXCLUDED_NAMES = [
   [/Construct(or)?Signature/, "construct signatures"],
   [/extend\w+Interface/, "adding to a built-in interface"],
   [/InJs/, "JavaScript"],
+  [/topLevelAwait/, "async/await"],
 ];
 
-// Options that make a case several files, or JavaScript: the port makes one
-// TypeScript file.
-const MULTI_FILE_OR_JS = /^\s*\/\/\s*@(filename|allowJs|checkJs)\s*:/im;
+// Options that make a case JavaScript.
+const JAVASCRIPT_OPTION = /^\s*\/\/\s*@(allowJs|checkJs)\s*:\s*true/im;
+
+const JAVASCRIPT_FILE = /\.(js|jsx|mjs|cjs)$/i;
+const JAVASCRIPT_FEATURE = "JavaScript";
+
+// The files of a case that aren't TypeScript modules we can check, and what they
+// are. The first that matches a file's name names it.
+const UNSUPPORTED_FILES = [
+  [/(^|\/)node_modules\//, "`node_modules` packages"],
+  [/\.d\.[mc]?ts$/i, "declaration files (`.d.ts`)"],
+  [/\.tsx$/i, "JSX"],
+  [/\.json$/i, "JSON modules"],
+  [/\.[mc]ts$/i, "`.mts` and `.cts` files"],
+  [/^(?!.*\.ts$)/, "files other than `.ts`"],
+];
+
+// A multi-file case's file with no `import` or `export` is a script, whose
+// top-level declarations are global: every file sees them. Our files are modules,
+// each seeing only what it imports, so a case whose files use what another
+// script declares, or whose scripts declare the same name, checks something else.
+const SHARED_SCOPE_FEATURE = "script files sharing one global scope";
+
+// Two files of a case with one name: upstream checks both, where a module path
+// can name only one.
+const DUPLICATE_FILES_FEATURE = "two files with one name";
 
 // A construct signature, `new (): T`. One in an object type is rejected, but one
 // in an interface is read as a method named `new`, which pruning can't take out,
@@ -211,9 +237,66 @@ function excludedDirectory(rel) {
 function exclusionBeforePort(rel, source) {
   const named = EXCLUDED_NAMES.find(([pattern]) => pattern.test(path.basename(rel, ".ts")));
   if (named) return exclusion(rel, REASONS.unsupported, named[1]);
-  if (MULTI_FILE_OR_JS.test(source)) return exclusion(rel, REASONS.multiFile, "");
+  if (isJavaScript(source)) return exclusion(rel, REASONS.unsupported, JAVASCRIPT_FEATURE);
+  for (const name of fileNames(source)) {
+    const kind = UNSUPPORTED_FILES.find(([pattern]) => pattern.test(name));
+    if (kind) return exclusion(rel, REASONS.unsupported, kind[1]);
+  }
+  const text = source.replace(/\r\n?/g, "\n");
+  const files = splitCase(text);
+  const twice = duplicateModules(files ?? []);
+  if (twice.length) return exclusion(rel, REASONS.unsupported, `${DUPLICATE_FILES_FEATURE}: \`${twice[0]}\``);
+  if (files && sharesGlobalScope(text)) return exclusion(rel, REASONS.unsupported, SHARED_SCOPE_FEATURE);
   if (CONSTRUCT_SIGNATURE.test(source)) return exclusion(rel, REASONS.unsupported, CONSTRUCT_SIGNATURE_FEATURE);
   return null;
+}
+
+/** Whether an upstream case is JavaScript, by its options or a file's name. */
+function isJavaScript(source) {
+  return JAVASCRIPT_OPTION.test(source) || fileNames(source).some((name) => JAVASCRIPT_FILE.test(name));
+}
+
+/** Whether the files of the multi-file case `text` share declarations through
+ * the global scope: a name in one file resolves to a script file's declaration in
+ * another, or two script files declare the same name. */
+function sharesGlobalScope(text) {
+  // The name is only what `caseProgram` calls a single file: this case has several.
+  const { program, sourceFiles } = caseProgram("case.ts", text);
+  const checker = program.getTypeChecker();
+  const scripts = new Set(sourceFiles.filter((f) => !ts.isExternalModule(f)));
+  const declared = new Map(); // name → script file declaring it
+  for (const script of scripts) {
+    for (const name of topLevelNames(script)) {
+      if (declared.has(name) && declared.get(name) !== script) return true;
+      declared.set(name, script);
+    }
+  }
+  return sourceFiles.some((sourceFile) => usesAnotherScript(sourceFile, scripts, checker));
+}
+
+/** Whether a name in `sourceFile` resolves to a declaration in another of `scripts`. */
+function usesAnotherScript(sourceFile, scripts, checker) {
+  let found = false;
+  const visit = (node) => {
+    if (found) return;
+    if (ts.isIdentifier(node)) {
+      const declarations = checker.getSymbolAtLocation(node)?.declarations ?? [];
+      found = declarations.some((d) => d.getSourceFile() !== sourceFile && scripts.has(d.getSourceFile()));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+}
+
+/** The names a file declares at its top level. */
+function topLevelNames(sourceFile) {
+  return sourceFile.statements.flatMap((statement) => {
+    if (ts.isVariableStatement(statement)) {
+      return statement.declarationList.declarations.filter((d) => ts.isIdentifier(d.name)).map((d) => d.name.text);
+    }
+    return statement.name && ts.isIdentifier(statement.name) ? [statement.name.text] : [];
+  });
 }
 
 /** Whether pruning cut something from a case: `prune-case.cjs` marks what it blanks. */
@@ -333,7 +416,10 @@ function dropDuplicates(ported) {
 
 /** Writes ../typescript/EXCLUDED.md: every upstream case left out, and why. */
 function writeExcluded(excluded) {
-  const cell = (text) => text.replace(/\|/g, "\\|");
+  // A control character, such as the NUL a scanner case is about, is escaped so
+  // the file stays text.
+  const cell = (text) =>
+    text.replace(/\|/g, "\\|").replace(/[\u0000-\u0008\u000b-\u001f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
   const rows = [...excluded]
     .sort((a, b) => a.rel.localeCompare(b.rel))
     .map(({ rel, reason, detail }) => `| \`${rel}\` | ${reason} | ${cell(detail)} |`);
@@ -441,7 +527,7 @@ function findCases(dir) {
     .sort();
 }
 
-module.exports = { exclusionBeforePort, excludedDirectory, findCases, wasPruned, upstreamErrorCodes, portCausedErrors, codeOf, unsupportedCause, writeExcluded };
+module.exports = { exclusionBeforePort, isJavaScript, excludedDirectory, findCases, wasPruned, upstreamErrorCodes, portCausedErrors, codeOf, unsupportedCause, writeExcluded };
 
 if (require.main === module) main().catch((e) => {
   console.error(e);

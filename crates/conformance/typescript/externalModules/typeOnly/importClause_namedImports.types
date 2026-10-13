@@ -1,0 +1,58 @@
+=== importClause_namedImports.ts ===
+export class A {}
+>A : A
+>  : ^
+
+export type B  = { b: string };
+>B : B
+>  : ^
+>b : string
+>  : ^^^^^^
+
+export const C = "";
+>C : ""
+>  : ^^
+>"" : ""
+>   : ^^
+
+
+import type { A, B, C } from './abc';
+>A : A
+>  : ^
+>B : B
+>  : ^
+>C : any
+>  : ^^^
+
+new A();
+>new A() : A
+>        : ^
+>A : typeof A
+>  : ^^^^^^^^
+
+/*pruned*/;
+let b: B = null as unknown as (B);
+>b : B
+>  : ^
+>null as unknown as (B) : B
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+b.b;
+>b.b : string
+>    : ^^^^^^
+>b : B
+>  : ^
+>b : string
+>  : ^^^^^^
+
+const c = { A };
+>c : { A: typeof A; }
+>  : ^^^^^^^^^^^^^^^^
+>{ A } : { A: typeof A; }
+>      : ^^^^^^^^^^^^^^^^
+>A : typeof A
+>  : ^^^^^^^^
+
+

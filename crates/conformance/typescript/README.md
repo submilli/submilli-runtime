@@ -42,7 +42,8 @@ suite when:
   directories about a feature we exclude or haven't built, such as `types/any` or
   `types/intersection`, and the case names about one elsewhere, such as index
   signatures, each with the feature;
-- it is one TypeScript file, not several (`@filename`) or JavaScript;
+- it is TypeScript, not JavaScript, and each of its files is a module we can check
+  (see [Multi-file cases](#multi-file-cases));
 - the port leaves it checking the same thing: `tsc` reports no error on it the
   upstream baseline lacks (such as a redeclaration from `var` becoming `let`, or one
   from making a `@strict: false` case strict), other than for a class field with no
@@ -63,8 +64,7 @@ reasons and a detail:
 
 | Reason | Detail |
 |:-------|:-------|
-| not supported | The feature, for a listed directory or name. For a case pruning cut too much of, our first error that lacked support and the code it was on. |
-| multi-file or JavaScript | |
+| not supported | The feature, for a listed directory or name, for JavaScript, or for a kind of file we can't check. For a case pruning cut too much of, our first error that lacked support and the code it was on. |
 | the port changes what it checks | The error `tsc` reports on the port and not upstream. |
 | duplicate | The case it is a copy of. |
 | checks too little | How many things it checks, when pruning cut nothing. |
@@ -73,6 +73,38 @@ reasons and a detail:
 `port-suite.cjs` writes the file on every run, so it always covers every upstream
 conformance case. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 read.
+
+## Multi-file cases
+
+An upstream case can hold several files, each starting at a `// @filename: <name>`
+line. The port keeps such a case as one `.ts` file, so its baselines, `.divergences`
+and `.triage` look like any other case's and name lines of the case.
+
+`typescript-baselines/case-files.cjs` and `tests/support/case_files.rs` split a case
+with two or more such lines the same way: each file is the whole case with every
+line of the other files blanked to spaces, and lines before the first `@filename`
+belong to the first file. A position in any file is then the same position in the
+case, for `tsc` and for us. `tsc` checks the files as one program, with the case's
+`@module` (its first value, or ES2020), since some module kinds reject `export =`
+and `import x = require()` where others take them. We check them as the modules of one
+package, the last file being its root, so each is checked whether or not another
+imports it. A package can't declare `main`, so the port appends none.
+
+A case is left out as not supported when:
+
+- it is JavaScript: `@allowJs` or `@checkJs`, or a `.js`, `.jsx`, `.mjs` or `.cjs`
+  file;
+- a file is a declaration file (`.d.ts`), JSX (`.tsx`), JSON, `.mts` or `.cts`, or
+  under `node_modules`;
+- two files have one name, which upstream checks as two files; or
+- its files share the global scope: a file with no `import` or `export` is a
+  script, whose declarations every file sees, while each of our modules sees only
+  what it imports. Such a case is left out when a file uses what another script
+  declares, or two scripts declare the same name.
+
+Upstream's multi-file cases are mostly about the module system, such as default
+exports, `export =` and namespaces. Pruning removes what we don't support, as in
+any case, and a case left checking too little is left out.
 
 ## What the test checks
 
@@ -223,7 +255,11 @@ line where it was:
    how a field's type is inferred (`readonly c = 1` is `1`, `c = 1` is `number`)
    checks less once ported.
 5. `// @strict: false` becomes `// @strict: true`. Submilli is always strict.
-6. `function main(): void {}` is appended.
+6. `function main(): void {}` is appended, except to a multi-file case.
+7. In a multi-file case, an import or re-export naming another of its files names it
+   by relative path with no extension (`"m1"` and `"./m1.js"` become `"./m1"`),
+   since that is how our modules import each other. Each step above is made file by
+   file.
 
 `port-suite.cjs` runs the whole pipeline over every upstream case: port, prune,
 baselines, `.divergences`. [Maintaining the suite](#maintaining-the-suite) says when to
