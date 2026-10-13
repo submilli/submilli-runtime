@@ -275,7 +275,7 @@ fn emit_structural_test_inner(
     ctx.charge_validator_step(emitter)?;
     let checkpoint = diagnostic::checkpoint(emitter, ctx);
     let i32_block = BlockType::Result(ValType::I32);
-    match ty.peel() {
+    match ty.lowered() {
         Type::Union(members) => {
             let best = diagnostic::union_start(emitter, ctx);
             let mut first = true;
@@ -309,14 +309,23 @@ fn emit_structural_test_inner(
             emitter.instruction(Instruction::LocalGet(value_local));
             crate::codegen::function_emitter::expr::emit_is_undefined(emitter, ctx)?;
         }
+        // `{}` holds every value but `null` and `undefined`.
+        Type::Unknown if ty.is_empty_object() => {
+            emitter.instruction(Instruction::LocalGet(value_local));
+            emitter.instruction(Instruction::RefIsNull);
+            emitter.instruction(Instruction::LocalGet(value_local));
+            crate::codegen::function_emitter::expr::emit_is_undefined(emitter, ctx)?;
+            emitter.instruction(Instruction::I32Or);
+            emitter.instruction(Instruction::I32Eqz);
+        }
         Type::Unknown => emitter.instruction(Instruction::I32Const(1)),
         Type::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)?),
         Type::Boolean => emit_ref_test(emitter, value_local, boxed_boolean_idx(ctx)?),
         Type::String => emit_ref_test(emitter, value_local, string_idx(ctx)?),
         Type::NumberEnum { .. } | Type::StringEnum { .. } => {
             if let Some(crate::FieldNarrowingTest::Shape(members)) =
-                ctx.ta.runtime_type_tests.get(ty.peel())
-                && members.peel() != ty.peel()
+                ctx.ta.runtime_type_tests.get(ty.lowered())
+                && members.lowered() != ty.lowered()
             {
                 emit_structural_test_inner(
                     emitter,
@@ -627,7 +636,7 @@ fn emit_structural_test_inner(
         Type::AliasRef { .. } => {
             let func_idx = ctx
                 .symbols
-                .runtime_validator_idx(ty.peel())
+                .runtime_validator_idx(ty.lowered())
                 .ok_or_else(|| {
                     crate::codegen::internal_failure(
                         "recursive runtime validator pre-allocated during discovery",
@@ -658,7 +667,7 @@ fn emit_structural_test_inner(
                 .ok_or_else(|| crate::codegen::internal_failure("class vtable global recorded"))?;
             emitter.instruction(Instruction::LocalGet(value_local));
             cast::emit_nominal_instance_test(emitter, ctx, vtable_global)?;
-            if let Some(validator) = ctx.symbols.runtime_validator_idx(ty.peel()) {
+            if let Some(validator) = ctx.symbols.runtime_validator_idx(ty.lowered()) {
                 emitter.emit_if(BlockType::Result(ValType::I32));
                 emitter.instruction(Instruction::LocalGet(value_local));
                 let visited = emit_validator_state(emitter, ctx, validator_state)?;
@@ -700,8 +709,7 @@ fn emit_function_structural_test(
     let target = super::closure_coercions::DefaultsFitTarget::exact(signature, has_rest);
     // A `void` function fits a function type returning `unknown`, as in
     // TypeScript; the cast adapts its convention.
-    let returns_unknown =
-        matches!(ty.peel(), Type::Function { ret, .. } if matches!(ret.peel(), Type::Unknown));
+    let returns_unknown = matches!(ty.lowered(), Type::Function { ret, .. } if matches!(ret.lowered(), Type::Unknown));
     let target = if returns_unknown {
         target.either_convention()
     } else {
@@ -741,7 +749,7 @@ fn emit_interface_ref_test(
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let key = ty.peel().clone();
+    let key = ty.lowered().clone();
     if ctx.symbols.generic_runtime_validator(&key).is_some() {
         emit_validator_or_representation(emitter, ctx, value_local, ty, &key, validator_state)?;
         return Ok(());
@@ -808,7 +816,7 @@ pub(crate) fn emit_checked_cast_on_stack(
     if diagnostic::has_nested_paths(target_ty) {
         diagnostic::begin(emitter, ctx);
     }
-    match ctx.ta.runtime_type_tests.get(target_ty.peel()) {
+    match ctx.ta.runtime_type_tests.get(target_ty.lowered()) {
         Some(crate::FieldNarrowingTest::Interface(test)) => {
             emit_interface_test(emitter, ctx, scratch, target_ty, test)?;
         }
@@ -818,7 +826,7 @@ pub(crate) fn emit_checked_cast_on_stack(
         // A function that declares fewer parameters than the target, or
         // trailing defaults, still fits when its adapter can stand for the
         // target, which the cast then builds.
-        _ if matches!(target_ty.peel(), Type::Function { .. }) => {
+        _ if matches!(target_ty.lowered(), Type::Function { .. }) => {
             emit_structural_test(emitter, ctx, scratch, target_ty, target_ty)?;
         }
         _ => emit_target_test(emitter, ctx, scratch, target_ty)?,
@@ -863,15 +871,15 @@ pub(crate) fn emit_checked_parameter_cast_on_stack(
 }
 
 fn is_interface_parameter(ty: &Type) -> bool {
-    match ty.peel() {
+    match ty.lowered() {
         Type::InterfaceRef { .. } => true,
         Type::Union(members) => {
             let mut non_null = members
                 .iter()
-                .filter(|member| !matches!(member.peel(), Type::Null | Type::Undefined));
+                .filter(|member| !matches!(member.lowered(), Type::Null | Type::Undefined));
             non_null
                 .next()
-                .is_some_and(|member| matches!(member.peel(), Type::InterfaceRef { .. }))
+                .is_some_and(|member| matches!(member.lowered(), Type::InterfaceRef { .. }))
                 && non_null.next().is_none()
         }
         _ => false,
@@ -891,8 +899,8 @@ pub(crate) fn emit_operation_cast_on_stack(
     emitter.instruction(Instruction::LocalSet(scratch));
     // Operation checks validate only the carrier, so they have no nested path.
     let previous_diagnostic = emitter.cast_diagnostic.take();
-    if matches!(target_ty.peel(), Type::Function { .. }) {
-        let signature = crate::codegen::closures::classify(target_ty.peel())?;
+    if matches!(target_ty.lowered(), Type::Function { .. }) {
+        let signature = crate::codegen::closures::classify(target_ty.lowered())?;
         emit_representation_test(emitter, ctx, scratch, target_ty)?;
         let opposite = crate::codegen::closures::ClosureSig {
             is_void: !signature.is_void,
@@ -903,7 +911,7 @@ pub(crate) fn emit_operation_cast_on_stack(
             emitter.instruction(Instruction::I32Or);
         }
         if matches!(
-            target_ty.peel(),
+            target_ty.lowered(),
             Type::Function {
                 has_rest: false,
                 ..
@@ -1120,11 +1128,11 @@ pub(crate) fn emit_narrowed_field_read_as(
     // Prefer the concrete read-time descriptor. It includes generic
     // substitutions and nested interface metadata that the declaration could
     // not know; imported legacy declarations fall back to their recorded test.
-    let runtime_test = ctx.ta.runtime_type_tests.get(check_ty.peel());
+    let runtime_test = ctx.ta.runtime_type_tests.get(check_ty.lowered());
     let test = if check
         .minimal_test_target
         .as_ref()
-        .is_some_and(|target| target.peel() == check_ty.peel())
+        .is_some_and(|target| target.lowered() == check_ty.lowered())
     {
         if matches!(check.test, crate::FieldNarrowingTest::NonNull) {
             &check.test
@@ -1809,9 +1817,9 @@ pub(crate) fn emit_runtime_validator_body(
     emitter.instruction(Instruction::I32Const(validator_id));
     emitter.instruction(Instruction::ArraySet(intr.raw_index_array));
     let mut interface_stack = std::collections::BTreeSet::new();
-    if key.peel() == body.peel()
+    if key.lowered() == body.lowered()
         && let Some(crate::FieldNarrowingTest::Interface(test)) =
-            ctx.ta.runtime_type_tests.get(key.peel())
+            ctx.ta.runtime_type_tests.get(key.lowered())
     {
         emit_interface_test_inner(
             &mut emitter,
@@ -2056,7 +2064,7 @@ fn emit_runtime_type_string_checked(
 
 /// Whether `ty` spells `undefined`. A required `unknown` field still needs its key.
 fn admits_undefined(ty: &Type) -> bool {
-    match ty.peel() {
+    match ty.lowered() {
         Type::Undefined | Type::Void => true,
         Type::Union(members) => members.iter().any(admits_undefined),
         _ => false,

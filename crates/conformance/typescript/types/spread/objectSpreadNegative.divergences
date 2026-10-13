@@ -21,10 +21,6 @@ line 58: spreadStr
   ours: {}
 
 errors:
-line 34: tsc TS2783: 'b' is specified more than once, so this usage will be overwritten. (we accept)
-line 39: tsc TS2783: 'b' is specified more than once, so this usage will be overwritten. (we accept)
-line 41: tsc TS2783: 'b' is specified more than once, so this usage will be overwritten. (we accept)
-line 43: tsc TS2783: 'd' is specified more than once, so this usage will be overwritten. (we accept)
 line 53: ours: field `toFixed` does not exist on `{}` (tsc accepts)
 line 55: ours: field `valueOf` does not exist on `{}` (tsc accepts)
 line 57: ours: field `length` does not exist on `{}` (tsc accepts)

@@ -1,16 +1,4 @@
-types: 30 of 45 tsc entries compared, 8 differ
-
-line 5: a
-  tsc:  number
-  ours: never
-
-line 8: a
-  tsc:  string
-  ours: never
-
-line 11: a
-  tsc:  boolean
-  ours: never
+types: 30 of 45 tsc entries compared, 5 differ
 
 line 15: b
   tsc:  number

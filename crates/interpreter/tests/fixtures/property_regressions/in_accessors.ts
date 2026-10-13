@@ -7,7 +7,7 @@ class Getter implements Named {
     method(): number { return 1; }
 }
 function hasName(value: Named): boolean { return "name" in value; }
-function hasUnknown(value: unknown): boolean { return value !== null && "name" in value; }
+function hasUnknown(value: unknown): boolean { return typeof value === "object" && value !== null && "name" in value; }
 function main(): void {
     assert(!hasName(new Empty()), "method-bearing interface optional null absent");
     const getter = new Getter();

@@ -1,6 +1,6 @@
 
 function has_value(x: unknown): boolean {
-  if (x !== null && "value" in x) {
+  if (typeof x === "object" && x !== null && "value" in x) {
     const v: unknown = x.value;
     const _: unknown = v;
     return true;

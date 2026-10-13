@@ -382,7 +382,7 @@ fn emit_expr_value(
         TypedExprKind::TypeofTag { value, tag } => {
             emit_typeof_tag(emitter, ctx, *value, *tag)?;
         }
-        TypedExprKind::InstanceOf { value, class } => match class.peel() {
+        TypedExprKind::InstanceOf { value, class } => match class.lowered() {
             Type::ClassRef { mangled, .. } => {
                 let vtable_global =
                     ctx.symbols
@@ -665,7 +665,7 @@ fn emit_global_ref(
 
 /// The static-dispatch interface `ty` names, if any.
 fn static_interface<'a>(ctx: &CodegenCtx, ty: &'a Type) -> Option<&'a crate::MangledName> {
-    match ty.peel() {
+    match ty.lowered() {
         Type::InterfaceRef { mangled, .. }
             if ctx.symbols.iface_dispatch(mangled) == Some(crate::Dispatch::Static) =>
         {
@@ -781,7 +781,7 @@ fn emit_symbol_call(
         ))
     })?;
     if crate::codegen::field_guards::guarded_constructor(ctx, mangled, result_ty)? {
-        let Type::ClassRef { mangled: class, .. } = result_ty.peel() else {
+        let Type::ClassRef { mangled: class, .. } = result_ty.lowered() else {
             return Err(crate::codegen::internal_failure("constructor class"));
         };
         emit_args_into_slots(emitter, ctx, args, ctx.symbols.class_ctor_abi(class))?;
@@ -856,7 +856,7 @@ fn emit_interface_property(
         ctx.ta
             .source_type(*receiver)
             .map_err(crate::codegen::arena_failure)?
-            .peel(),
+            .lowered(),
         Type::InterfaceRef { .. }
     ) {
         emitter.instruction(Instruction::RefAsNonNull);
@@ -921,7 +921,7 @@ fn emit_index_access(
             checked_ty,
         )?;
         cast::emit_coerce_to_slot(emitter, ctx, checked_ty, result_ty)?;
-    } else if recv_ty.peel() == &Type::Uint8Array {
+    } else if recv_ty.lowered() == &Type::Uint8Array {
         emit_expr(emitter, ctx, *receiver)?;
         emit_uint8_index_with_receiver_on_stack(emitter, ctx, *index)?;
     } else {
@@ -1257,7 +1257,7 @@ fn emit_field_access(
         return Ok(());
     }
     // Class instance: nominal receiver, array-backed object payload.
-    if let Type::ClassRef { mangled, .. } = receiver_ty.peel() {
+    if let Type::ClassRef { mangled, .. } = receiver_ty.lowered() {
         if ctx.symbols.is_class_payload_method(mangled, &name.name) {
             emit_receiver(emitter, ctx, *receiver)?;
             emit_class_method_value(
@@ -1923,7 +1923,7 @@ fn emit_postfix_unary(
                 .source_type(*receiver)
                 .map_err(crate::codegen::arena_failure)?
                 .clone();
-            if let Type::ClassRef { mangled, .. } = receiver_ty.peel() {
+            if let Type::ClassRef { mangled, .. } = receiver_ty.lowered() {
                 emit_class_field_postfix(
                     emitter, ctx, *receiver, mangled, &name.name, op, target_ty,
                 )?;
@@ -1976,7 +1976,7 @@ fn emit_index_postfix(
         .ta
         .source_type(receiver)
         .map_err(crate::codegen::arena_failure)?
-        .peel()
+        .lowered()
         == &Type::Uint8Array;
     let result_ty = if is_uint8 {
         Type::Number
@@ -2650,7 +2650,7 @@ fn emit_spread_shape_argument(
 /// copy: `null`, `undefined`, or a falsy primitive such as the `false` of
 /// `c && { … }`.
 fn may_hold_non_object(ty: &Type) -> bool {
-    match ty.peel() {
+    match ty.lowered() {
         Type::Union(members) => members.iter().any(may_hold_non_object),
         Type::Null
         | Type::Undefined
@@ -2659,7 +2659,9 @@ fn may_hold_non_object(ty: &Type) -> bool {
         | Type::Number
         | Type::NumberLiteral(_)
         | Type::String
-        | Type::StringLiteral(_) => true,
+        | Type::StringLiteral(_)
+        // `{}`, which holds primitives too.
+        | Type::Unknown => true,
         _ => false,
     }
 }
@@ -2863,11 +2865,11 @@ fn coerce_field_receiver_to_object_shape(
     receiver_ty: &Type,
     object_shape: u32,
 ) {
-    let universal = match receiver_ty.peel() {
+    let universal = match receiver_ty.lowered() {
         Type::InterfaceRef { .. } | Type::Unknown => true,
         Type::Union(members) => members
             .iter()
-            .any(|m| !matches!(m.peel(), Type::Object { .. })),
+            .any(|m| !matches!(m.lowered(), Type::Object { .. })),
         _ => false,
     };
     if universal {
@@ -2924,7 +2926,7 @@ fn emit_chain_access(
             // Class receiver: resolve the slot statically, mirroring the
             // non-optional `FieldAccess` path. The name scan below would read a
             // null for an accessor property, which backs no payload slot.
-            if let Type::ClassRef { mangled, .. } = receiver_ty.peel() {
+            if let Type::ClassRef { mangled, .. } = receiver_ty.lowered() {
                 if ctx.symbols.is_class_payload_method(mangled, &name.name) {
                     emit_class_method_value(
                         emitter,
@@ -2997,10 +2999,10 @@ fn emit_chain_access(
                     check_ty,
                 )?;
                 cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty)?;
-            } else if receiver_ty.peel() == &Type::Uint8Array {
+            } else if receiver_ty.lowered() == &Type::Uint8Array {
                 emit_uint8_index_with_receiver_on_stack(emitter, ctx, *idx)?;
             } else {
-                let source_ty = match receiver_ty.peel() {
+                let source_ty = match receiver_ty.lowered() {
                     Type::Array(element) => element.as_ref(),
                     Type::Tuple(elements) => match &ctx
                         .ta
@@ -3050,7 +3052,7 @@ fn emit_chain_access(
                     "interface property getter recorded during the dependency-import pass",
                 )
             })?;
-            if matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
+            if matches!(receiver_ty.lowered(), Type::InterfaceRef { .. }) {
                 emitter.instruction(Instruction::RefAsNonNull);
             }
             emitter.instruction(Instruction::Call(func_idx));
@@ -3561,7 +3563,7 @@ fn emit_logical(
         BinOp::And => falsy_part(&lhs_ty),
         _ => truthy_part(&lhs_ty),
     };
-    let lhs_is_never_kept = matches!(kept_lhs_ty.peel(), Type::Never);
+    let lhs_is_never_kept = matches!(kept_lhs_ty.lowered(), Type::Never);
     let emit_kept_lhs_branch = |emitter: &mut FunctionEmitter| {
         if lhs_is_never_kept {
             emitter.instruction(Instruction::Unreachable);
@@ -3610,7 +3612,7 @@ fn try_emit_unreachable_for_never_operand(
             .try_expr(operand)
             .map_err(crate::codegen::arena_failure)?
             .ty;
-        has_never_operand |= matches!(ty.peel(), Type::Never);
+        has_never_operand |= matches!(ty.lowered(), Type::Never);
     }
     if !has_never_operand {
         return Ok(false);
@@ -4397,7 +4399,7 @@ fn is_optional_tuple_position(
 }
 
 fn tuple_permits_missing_index(receiver: &Type, index: f64) -> bool {
-    match receiver.peel() {
+    match receiver.lowered() {
         Type::Tuple(elements) => {
             index >= elements.required_len() as f64 && index < elements.len() as f64
         }
@@ -4600,7 +4602,7 @@ fn emit_direct_call(
         if is_host
             && params
                 .get(i)
-                .is_some_and(|p| matches!(p.peel(), Type::String))
+                .is_some_and(|p| matches!(p.lowered(), Type::String))
         {
             emitter.instruction(Instruction::StructGet {
                 struct_type_index: string_type_idx,
@@ -4612,7 +4614,7 @@ fn emit_direct_call(
     if ctx.symbols.resultless_functions.contains(&wasm_idx) {
         emit_undefined(emitter, ctx)?;
     }
-    let _: () = if is_host && matches!(ret.peel(), Type::String) {
+    let _: () = if is_host && matches!(ret.lowered(), Type::String) {
         let scratch = emitter.add_anonymous_local(ValType::Ref(RefType {
             nullable: false,
             heap_type: HeapType::Concrete(raw_string_type_idx),
@@ -4769,7 +4771,7 @@ fn emit_indirect_closure_call_with_receiver_on_stack(
     // (`type NumberFn = (x: number) => number; let f: NumberFn | null`
     // → after `strip_null`, the type is the alias, not the underlying
     // function). `classify` panics on non-Function inputs, so peel.
-    let callee_ty = callee_ty.peel();
+    let callee_ty = callee_ty.lowered();
     let closure_sig = crate::codegen::closures::classify(callee_ty)?;
     let closure_struct_idx = ctx
         .symbols
@@ -4817,7 +4819,7 @@ fn emit_indirect_closure_call_with_receiver_on_stack(
     emitter.instruction(Instruction::CallRef(fn_type_idx));
     // Unbox the erased return to the language-level type. Void keeps the erased
     // completion; primitives unwrap and references cast to their declared type.
-    let Type::Function { ret, .. } = callee_ty.peel() else {
+    let Type::Function { ret, .. } = callee_ty.lowered() else {
         return Err(crate::codegen::internal_failure(
             "indirect call requires a function type",
         ));
@@ -4997,7 +4999,7 @@ fn has_numeric_operands(
     operands: &[ExprId],
     result_ty: &Type,
 ) -> Result<bool, crate::compiler_error::CompilerFailure> {
-    if !matches!(result_ty.peel(), Type::Number | Type::NumberLiteral(_)) {
+    if !matches!(result_ty.lowered(), Type::Number | Type::NumberLiteral(_)) {
         return Ok(false);
     }
     for &operand in operands {
@@ -5323,7 +5325,7 @@ fn emit_method_call_with_receiver_on_stack(
                 // peel so aliased InterfaceRef (e.g.
                 // `type Query = Map<string, string>`) still
                 // triggers the coercion.
-                if matches!(recv_ty.peel(), Type::InterfaceRef { .. }) {
+                if matches!(recv_ty.lowered(), Type::InterfaceRef { .. }) {
                     emitter.instruction(Instruction::RefAsNonNull);
                 }
             }
@@ -5392,7 +5394,7 @@ fn emit_method_call_with_receiver_on_stack(
     // the user had written `(recv.method)(args)` against a
     // function-typed field. Reuses the `$ObjectShape` field-name scan
     // machinery and the closure ABI.
-    if matches!(recv_ty.peel(), Type::InterfaceRef { .. }) {
+    if matches!(recv_ty.lowered(), Type::InterfaceRef { .. }) {
         emit_interface_method_via_shape_with_receiver_on_stack(
             emitter,
             ctx,
@@ -5842,7 +5844,7 @@ fn emit_slot_return_cast(
     call_ret_ty: &Type,
     abi: Option<&MethodSlotAbi>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    if matches!(call_ret_ty.peel(), Type::Never) {
+    if matches!(call_ret_ty.lowered(), Type::Never) {
         emitter.instruction(Instruction::Unreachable);
         return Ok(());
     }

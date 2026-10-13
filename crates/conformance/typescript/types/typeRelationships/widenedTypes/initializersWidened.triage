@@ -1,1 +1,0 @@
-line 21, 22, 23, 25, 26, 27 missed: bug SUB-1154 tsc rejects a condition that is always truthy or always falsy

@@ -1,5 +1,1 @@
 types: 48 of 80 tsc entries compared, 0 differ
-
-errors:
-line 15: tsc TS2783: 'a' is specified more than once, so this usage will be overwritten. (we accept)
-line 17: tsc TS2783: 'a' is specified more than once, so this usage will be overwritten. (we accept)

@@ -1,1 +1,0 @@
-line 117 extra: bug SUB-1437 a primitive isn't assignable to `{}` or `Object` (so `unknown` isn't assignable to `{} | null | undefined`)

@@ -723,10 +723,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
             Param::new("shape", Type::Unknown),
             Param::new("mask", Type::Unknown),
         ],
-        Type::Object {
-            index: None,
-            fields: Default::default(),
-        },
+        // Lowers to the non-null `$ObjectShape` the host function returns.
+        Type::any_object(),
     );
     // `Dispatch::Static` drops the constructor receiver, so no receiver param.
     // Types mirror the prelude MethodSigs: `Type::Array`/`Type::Tuple` lower to

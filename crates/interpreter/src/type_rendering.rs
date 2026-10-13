@@ -83,7 +83,7 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
                 match kind {
                     ListKind::Plain => push(&mut frames, Frame::Type(ty, depth))?,
                     ListKind::Union => {
-                        let parens = matches!(ty, Type::Function { .. });
+                        let parens = matches!(ty, Type::Function { .. } | Type::Refined { .. });
                         if parens {
                             out.push("(")?;
                             push(&mut frames, Frame::Text(")"))?;
@@ -260,7 +260,7 @@ fn write_node<'a>(
         Type::Array(inner) => {
             let parens = matches!(
                 inner.as_ref(),
-                Type::Union(_) | Type::Function { .. } | Type::Readonly(_)
+                Type::Union(_) | Type::Function { .. } | Type::Readonly(_) | Type::Refined { .. }
             );
             if parens {
                 out.push("(")?;
@@ -288,9 +288,14 @@ fn write_node<'a>(
                 },
             )
         }
+        // `T & ({} | null)`, as tsc prints an intersection with a union.
         Type::Refined { original, ty } => {
+            let parens = matches!(ty.as_ref(), Type::Union(_));
+            if parens {
+                push(frames, Frame::Text(")"))?;
+            }
             push(frames, Frame::Type(ty, child))?;
-            push(frames, Frame::Text(" & "))?;
+            push(frames, Frame::Text(if parens { " & (" } else { " & " }))?;
             push(frames, Frame::Type(original, child))
         }
         Type::InterfaceRef { name, args, .. }

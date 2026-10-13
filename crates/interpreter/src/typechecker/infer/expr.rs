@@ -832,6 +832,8 @@ impl Inferer<'_> {
             );
         }
         self.check_expression_arity(&kind, &ty, span);
+        self.note_tested_read_after_inference(expr_id, &ty)?;
+        self.check_and_left_operand(expr_id)?;
         let id = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -892,7 +894,7 @@ impl Inferer<'_> {
     }
 
     /// Whether `name` reads the global `undefined`, which no binding shadows.
-    fn names_global_undefined(&self, name: &str) -> bool {
+    pub(super) fn names_global_undefined(&self, name: &str) -> bool {
         name == "undefined"
             && self.scopes.get("undefined").is_none()
             && !self.top_symbols.contains_key("undefined")
@@ -1459,6 +1461,7 @@ impl Inferer<'_> {
                     None
                 };
                 let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
+                self.check_constant_truthiness(lhs)?;
                 let mut condition_error = false;
                 if matches!(lhs_ty.peel(), Type::Unknown) {
                     // `&&`/`||` on un-narrowed `unknown`
@@ -1632,6 +1635,7 @@ impl Inferer<'_> {
                 // The operand keeps a literal type, which can decide the result:
                 // `!true` is `false`.
                 let (id, operand_ty) = self.infer_expr_keeping_literals(operand, None, true)?;
+                self.check_constant_truthiness(operand)?;
                 if matches!(operand_ty.peel(), Type::Unknown) {
                     // `!x` on un-narrowed `unknown` rejected
                     // with a "narrow first" hint.
@@ -5606,6 +5610,9 @@ impl Inferer<'_> {
         > = std::collections::BTreeMap::new();
 
         let overwritten_after = fields_written_after(&members);
+        // Fields written out so far, by name, for the check that a later spread
+        // doesn't always overwrite one of them.
+        let mut written_fields: BTreeMap<String, Span> = BTreeMap::new();
         for (member, overwritten) in members.into_iter().zip(overwritten_after) {
             match member {
                 crate::ObjectLiteralMember::Computed { .. } => {
@@ -5615,6 +5622,7 @@ impl Inferer<'_> {
                     );
                 }
                 crate::ObjectLiteralMember::Field(field) => {
+                    written_fields.insert(field.name.name.clone(), field.name.span);
                     if is_reserved_object_field(&field.name.name) {
                         self.error(field.name.span, reserved_field_message(&field.name.name));
                         // Continue inferring the value so cascading
@@ -5812,6 +5820,7 @@ impl Inferer<'_> {
                     else {
                         continue;
                     };
+                    self.report_fields_the_spread_overwrites(&mut written_fields, &fields);
                     let source_index = spread_count;
                     spread_count += 1;
                     object_members.push(crate::TypedObjectMember::Spread {
@@ -6200,6 +6209,32 @@ impl Inferer<'_> {
         members
             .iter()
             .any(|member| self.resolver().index_signature(member).is_some())
+    }
+
+    /// A field written before a spread that always sets it is dead: the spread
+    /// overwrites it whatever the value. tsc reports it (TS2783); a spread field
+    /// that may be absent, because it is optional or missing from one of the
+    /// spread's alternatives, leaves the earlier value in place and is fine.
+    fn report_fields_the_spread_overwrites(
+        &mut self,
+        written_fields: &mut BTreeMap<String, Span>,
+        spread_fields: &ObjectFields,
+    ) {
+        for (name, field) in spread_fields {
+            if field.optional {
+                continue;
+            }
+            // Reported once, however many spreads after it set the field.
+            if let Some(span) = written_fields.remove(name) {
+                self.error_with_help(
+                    span,
+                    format!("`{name}` is specified more than once, so this value is always overwritten"),
+                    vec![format!(
+                        "the spread after it always sets `{name}`; remove this field, or move it after the spread"
+                    )],
+                );
+            }
+        }
     }
 
     /// The fields a spread copies, and whether they must be found by name at
@@ -10152,11 +10187,13 @@ impl Inferer<'_> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
         let cond_span = self.ast.try_expr(cond).map_err(super::arena_failure)?.span;
         self.check_condition_ty(&cond_ty, cond_span);
+        self.check_constant_truthiness(cond)?;
+        let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
+        self.check_condition_operands(cond, then_span)?;
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
         let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected)?;
-        let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span)?;
 
         let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected)?;
@@ -10375,7 +10412,9 @@ impl Inferer<'_> {
         // message would print `<error>` at the user.
         let lhs_decides =
             !type_admits_nullish(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error);
-        if lhs_decides {
+        // The error for a left side whose syntax is never nullish says the same.
+        let reported_constant = self.check_constant_nullishness(lhs)?;
+        if lhs_decides && !reported_constant {
             self.diagnostics.push(crate::Diagnostic {
                 severity: Severity::Warning,
                 span,
@@ -10403,7 +10442,13 @@ impl Inferer<'_> {
             let present = super::narrowing::strip_nullish(&lhs_ty);
             match empty_literal_join(self.ast, (lhs, &present), (rhs, &rhs_ty))? {
                 Some(joined) => joined,
-                None => conditional_result_type(present, rhs_ty, self.resolver()),
+                // TypeScript reduces `a ?? b` by subtype, so `{} | "d"` is `{}`.
+                None => match conditional_result_type(present, rhs_ty, self.resolver()) {
+                    Type::Union(members) => {
+                        Type::union(crate::types::without_members_of_empty_object(members))
+                    }
+                    joined => joined,
+                },
             }
         };
         Ok((
@@ -12441,10 +12486,12 @@ fn conditional_result_type(
 }
 
 fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
-    if matches!(left.peel(), Type::Object { .. })
+    // `c ? 1 : {}` is `1 | {}` in TypeScript; only widening reduces it to `{}`.
+    let one_is_empty_object = left.is_empty_object() != right.is_empty_object();
+    let distinct_object_shapes = matches!(left.peel(), Type::Object { .. })
         && matches!(right.peel(), Type::Object { .. })
-        && left.peel() != right.peel()
-    {
+        && left.peel() != right.peel();
+    if distinct_object_shapes || one_is_empty_object {
         Type::union(vec![left, right])
     } else if assignable(&left, &right, types) {
         right

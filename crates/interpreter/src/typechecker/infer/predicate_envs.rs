@@ -744,7 +744,7 @@ impl<'a> Inferer<'a> {
                 path.clone(),
                 narrowing::NarrowedView {
                     narrowed_ty: if can_be_compared {
-                        compared_ty.clone()
+                        with_type_parameters_of(&path_ty, compared_ty.clone())
                     } else {
                         narrowing::RULED_OUT
                     },
@@ -757,7 +757,17 @@ impl<'a> Inferer<'a> {
         }
         // A field that is only the compared value reads as `never` once proven
         // otherwise, but re-reads its live value: an alias may have written it.
-        let stripped = if compares_undefined {
+        // `typeof x === "object"` leaves an `unknown` `x` an object or `null`,
+        // which Submilli spells `unknown` for want of an `object` type; ruling
+        // out a nullish value then leaves it `unknown`, not `{}`, so `in` and
+        // field tests still apply.
+        let tested_object = matches!(path_ty.peel(), Type::Unknown)
+            && self
+                .lookup_narrowed_view(&path)
+                .is_some_and(|view| view.facts.contains(narrowing::TypeFacts::IS_OBJECT));
+        let stripped = if tested_object {
+            path_ty.clone()
+        } else if compares_undefined {
             narrowing::strip_undefined(&path_ty)
         } else {
             narrowing::strip_null(&path_ty)
@@ -2001,6 +2011,7 @@ impl<'a> Inferer<'a> {
         let equal = if matches!(member.peel(), Type::Null | Type::Undefined | Type::Void) {
             None
         } else if matches!(member.peel(), Type::Unknown)
+            || member.is_empty_object()
             || member.peel() == &literal_ty.widen_literal()
         {
             Some(literal_ty)
@@ -2995,4 +3006,24 @@ struct DiscriminantRoot {
     span: Span,
     kind: crate::TypedExprKind,
     key: DiscriminantKey,
+}
+
+/// `compared` with the type parameters among `ty`'s members, which equality
+/// with `null` or `undefined` leaves as they were, as in TypeScript: a `T`
+/// may hold either.
+fn with_type_parameters_of(ty: &Type, compared: Type) -> Type {
+    let members = match ty.peel() {
+        Type::Union(members) => members.as_slice(),
+        _ => std::slice::from_ref(ty),
+    };
+    let mut kept: Vec<Type> = members
+        .iter()
+        .filter(|member| matches!(member.peel(), Type::GenericParam { .. }))
+        .cloned()
+        .collect();
+    if kept.is_empty() {
+        return compared;
+    }
+    kept.push(compared);
+    Type::union(kept)
 }

@@ -698,6 +698,18 @@ fn assignable_rec(
     if !types.limits.spend_work(1) {
         return false;
     }
+    // `unknown` and a type parameter fit a union that holds every value, as
+    // in TypeScript.
+    if matches!(actual.peel(), Type::Unknown | Type::GenericParam { .. })
+        && expected.holds_every_value()
+    {
+        return true;
+    }
+    if matches!(actual.without_aliases(), Type::Refined { .. })
+        && refinement_fits_union(actual, expected, types, seen)
+    {
+        return true;
+    }
     if let Type::Refined { original, ty } = expected.without_aliases() {
         return assignable_rec(actual, original, types, seen)
             && assignable_rec(actual, ty, types, seen);
@@ -814,6 +826,10 @@ fn assignable_rec(
         return result;
     }
     match (actual, expected) {
+        // `{}` holds every value but `null` and `undefined`, as in TypeScript.
+        (Type::Null | Type::Undefined | Type::Void, _) if expected.is_empty_object() => false,
+        (Type::GenericParam { .. }, _) if expected.is_empty_object() => false,
+        (_, _) if expected.is_empty_object() => true,
         (Type::GenericParam { id: a, .. }, Type::GenericParam { id: b, .. }) => a == b,
         (Type::GenericParam { .. }, _) | (_, Type::GenericParam { .. }) => false,
         // Explicit before the `==` fallback, which would reject `StringLiteral("foo") <: String`.
@@ -1510,6 +1526,35 @@ pub(super) fn literal_to_type(lit: &narrowing::LiteralValue) -> Type {
         narrowing::LiteralValue::Null => Type::Null,
         narrowing::LiteralValue::Undefined => Type::Undefined,
     }
+}
+
+/// Whether `actual`, a refinement, fits the union
+/// `expected` (through aliases only: an expected refinement keeps requiring
+/// its own original). It fits through one member that neither its original
+/// nor its shape alone fits (`T & {}` into `(T & {}) | undefined`), or piece by
+/// piece: `T & ({} | null)` is `(T & {}) | null`. When it doesn't, the
+/// refined-expected and refined-actual rules still get their turn.
+fn refinement_fits_union(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    let Type::Union(members) = expected.without_aliases() else {
+        return false;
+    };
+    if members
+        .iter()
+        .any(|member| assignable_rec(actual, member, types, seen))
+    {
+        return true;
+    }
+    let Some(pieces) = actual.refinement_pieces() else {
+        return false;
+    };
+    pieces
+        .iter()
+        .all(|piece| assignable_rec(piece, expected, types, seen))
 }
 
 #[cfg(test)]

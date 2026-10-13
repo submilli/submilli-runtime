@@ -23,6 +23,7 @@ mod iife;
 mod import_graph;
 mod imports;
 mod inference_sources;
+mod likely_mistakes;
 mod literal_freshness;
 mod literal_prebinding;
 mod lookup;
@@ -183,6 +184,9 @@ pub fn infer_with_transitive_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
+        function_reads: BTreeSet::new(),
+        enum_member_reads: BTreeMap::new(),
+        if_condition_ands: BTreeMap::new(),
         literal_hint_interfaces: BTreeMap::new(),
         held_arguments: BTreeMap::new(),
         values_widening_candidates: BTreeSet::new(),
@@ -470,6 +474,9 @@ pub fn infer_package_checked<'a>(
         inferred_returns: None,
         inference_source_literals: BTreeSet::new(),
         arguments_with_replaceable_hints: BTreeSet::new(),
+        function_reads: BTreeSet::new(),
+        enum_member_reads: BTreeMap::new(),
+        if_condition_ands: BTreeMap::new(),
         literal_hint_interfaces: BTreeMap::new(),
         held_arguments: BTreeMap::new(),
         values_widening_candidates: BTreeSet::new(),
@@ -945,6 +952,13 @@ pub(super) struct Inferer<'a> {
     /// their inference without being a requirement:
     /// an argument that doesn't fit it decides the type parameter instead.
     pub(super) arguments_with_replaceable_hints: BTreeSet<crate::ExprId>,
+    /// Reads, by expression, whose type is a function; see [`likely_mistakes`].
+    pub(super) function_reads: BTreeSet<crate::ExprId>,
+    /// Reads, by expression, of one enum member, with whether it is truthy.
+    pub(super) enum_member_reads: BTreeMap<crate::ExprId, bool>,
+    /// The `&&` operators an `if` condition tests through parentheses, `&&` and
+    /// `||`, with the span of the `if`'s body, which may use their left operand.
+    pub(super) if_condition_ands: BTreeMap<crate::ExprId, crate::Span>,
     /// Object literal arguments hinted by a generic interface expanded to its
     /// fields, with that interface's name, so a missing field can still name
     /// it.

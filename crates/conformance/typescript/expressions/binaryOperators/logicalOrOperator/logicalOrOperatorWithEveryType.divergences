@@ -111,21 +111,3 @@ line 125: rf8
 line 125: a8 || undefined
   tsc:  string[]
   ours: string[] | undefined
-
-errors:
-line 38: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 39: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 49: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 50: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 60: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 61: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 71: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 72: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 93: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 94: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 104: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 105: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 115: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 116: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 126: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 127: tsc TS2873: This kind of expression is always falsy. (we accept)

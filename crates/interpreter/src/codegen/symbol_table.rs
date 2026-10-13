@@ -176,7 +176,7 @@ pub struct MethodSlotAbi {
 /// regardless of which package is compiling it. A union erases whole if any
 /// member does; a fully concrete union already lowers identically everywhere.
 pub fn is_erased(ty: &Type) -> bool {
-    match ty.peel() {
+    match ty.lowered() {
         Type::TypeVar(_) | Type::GenericParam { .. } | Type::ClassRef { .. } => true,
         Type::Union(members) => members.iter().any(is_erased),
         _ => false,
@@ -198,7 +198,7 @@ pub(crate) fn is_nullable_ref(val: ValType) -> bool {
 /// it has to decide "can this value be null at runtime" — the null-aware `===`
 /// dispatch, `JSON.stringify`, and the object-shape `toJson` emitter.
 pub(crate) fn may_hold_null(ty: &Type) -> bool {
-    match ty.peel() {
+    match ty.lowered() {
         // A recursion back-edge is a name codegen has no body for, and the alias
         // it names often does list `null` (`type J = number | null | Wrap[]`).
         Type::Null
@@ -857,7 +857,7 @@ impl SymbolTable {
         }
         | Type::InterfaceRef {
             mangled: identity, ..
-        }) = key.peel()
+        }) = key.lowered()
         else {
             return None;
         };
@@ -989,7 +989,7 @@ impl SymbolTable {
     }
 
     pub fn value_type(&self, ty: &Type) -> Result<ValType, crate::compiler_error::CompilerFailure> {
-        let ty = ty.peel();
+        let ty = ty.lowered();
         Ok(match ty {
             Type::Number | Type::NumberLiteral(_) => ValType::F64,
             Type::Boolean | Type::BooleanLiteral(_) => ValType::I32,
@@ -1129,7 +1129,7 @@ impl SymbolTable {
                 // Object-only union → `$ObjectShape`; mixed union → `$Object`.
                 let all_object_or_null = members
                     .iter()
-                    .all(|m| matches!(m.peel(), Type::Object { .. } | Type::Null));
+                    .all(|m| matches!(m.lowered(), Type::Object { .. } | Type::Null));
                 let heap_idx = if all_object_or_null {
                     self.intrinsic_type_indices()
                         .ok_or_else(|| {
@@ -1150,7 +1150,7 @@ impl SymbolTable {
                 let nullable = lowered.iter().copied().any(is_nullable_ref)
                     || members
                         .iter()
-                        .any(|member| matches!(member.peel(), Type::Undefined));
+                        .any(|member| matches!(member.lowered(), Type::Undefined));
                 ValType::Ref(RefType {
                     nullable,
                     heap_type: HeapType::Concrete(heap_idx),

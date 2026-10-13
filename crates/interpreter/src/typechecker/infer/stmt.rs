@@ -724,6 +724,12 @@ impl Inferer<'_> {
         else_block: Option<StmtId>,
         span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
+        let then_body_span = self
+            .ast
+            .try_stmt(then_block)
+            .map_err(super::arena_failure)?
+            .span;
+        self.note_if_condition_ands(condition, then_body_span)?;
         let (typed_cond, cond_ty) = self.infer_expr(condition, None)?;
         let cond_span = self
             .ast
@@ -731,6 +737,8 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         self.check_condition_ty(&cond_ty, cond_span);
+        self.check_constant_truthiness(condition)?;
+        self.check_condition_operands(condition, then_body_span)?;
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
         let entry_reachable = self.reachable;
         let then_possible = self.condition_can_be(typed_cond, true)?;
@@ -3173,7 +3181,11 @@ impl Inferer<'_> {
                 .try_expr(view.source)
                 .map_err(super::arena_failure)?
                 .span;
-            let narrowed_ty = narrowing::join_flow_types(&view.narrowed_ty, &post.narrowed_ty);
+            let Some(narrowed_ty) =
+                narrowing::join_narrowed_types(&view.narrowed_ty, &post.narrowed_ty)
+            else {
+                continue;
+            };
             entry_env.insert(
                 path,
                 narrowing::NarrowedView {
@@ -3481,6 +3493,7 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         self.check_condition_ty(&ty, cond_span);
+        self.check_constant_truthiness(condition)?;
         let writes = self
             .clause_write_scopes
             .pop()
@@ -3510,6 +3523,7 @@ impl Inferer<'_> {
             .span;
         let (typed, ty) = self.infer_expr(condition, None)?;
         self.check_condition_ty(&ty, cond_span);
+        self.check_constant_truthiness(condition)?;
         let (_, false_env) = self.predicate_envs(typed)?;
         let mut exit = self.snapshot_active_narrowings(0).0;
         exit.extend_env(false_env);

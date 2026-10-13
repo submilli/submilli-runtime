@@ -344,7 +344,7 @@ pub fn emit_coercion(
 /// Its adapter binds the arguments through the host, which packs the rest.
 fn packs_rest_arguments(source: &crate::Type, target: ClosureSig) -> bool {
     matches!(
-        source.peel(),
+        source.lowered(),
         crate::Type::Function { params, has_rest: true, .. } if params.len() != usize::from(target.arity)
     )
 }
@@ -354,7 +354,7 @@ fn packs_rest_arguments(source: &crate::Type, target: ClosureSig) -> bool {
 /// check [`emit_erased_cast`] makes is skipped.
 fn takes_fewer_arguments(source: &crate::Type, target: ClosureSig) -> bool {
     matches!(
-        source.peel(),
+        source.lowered(),
         crate::Type::Function { params, has_rest: false, .. } if params.len() < usize::from(target.arity)
     )
 }

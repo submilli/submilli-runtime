@@ -43,8 +43,9 @@ function main(): void {
   assert(log.join(",") === "f,n", "void conditional on the right");
 
   log = [];
+  const none: null = null as null;
   n() ?? f();
-  null ?? f();
+  none ?? f();
   assert(log.join(",") === "n,f", "a left side that is never null, and one that always is");
 
   log = [];

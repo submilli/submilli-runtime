@@ -1,4 +1,4 @@
-// expect-error: cannot read field `length` on `unknown`
+// expect-error: field `length` does not exist on `{}`
 
 function main(): void {
   const x: unknown = "hello";

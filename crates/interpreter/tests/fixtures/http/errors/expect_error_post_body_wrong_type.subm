@@ -1,4 +1,4 @@
-// expect-error: expected `string | Uint8Array | {} | unknown[] | null | undefined`, got `number`
+// expect-error: expected `string | Uint8Array | { [key: string]: unknown } | unknown[] | null | undefined`, got `number`
 
 import { post } from "submilli:http";
 

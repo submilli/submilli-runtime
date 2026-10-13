@@ -673,12 +673,107 @@ impl Type {
         }
     }
 
+    /// Whether this holds every value: `unknown`, or a union of `{}`, `null`
+    /// and `undefined` (and possibly more). Through aliases only: a refinement
+    /// like `T & unknown` holds only `T`'s values.
+    pub fn holds_every_value(&self) -> bool {
+        let members: &[Type] = match self.without_aliases() {
+            Type::Unknown => return true,
+            Type::Union(members) => members,
+            _ => return false,
+        };
+        // Through aliases only: `T & undefined` holds `undefined` only when `T`
+        // does.
+        members.iter().any(Type::is_empty_object)
+            && members
+                .iter()
+                .any(|m| matches!(m.without_aliases(), Type::Null))
+            && members
+                .iter()
+                .any(|m| matches!(m.without_aliases(), Type::Undefined))
+    }
+
+    /// The pieces of a refinement whose shape is a union: `T & ({} | null)`
+    /// is `T & {}` and `null`. `None` for any other type.
+    pub fn refinement_pieces(&self) -> Option<Vec<Type>> {
+        let Type::Refined { original, ty } = self.without_aliases() else {
+            return None;
+        };
+        let Type::Union(parts) = ty.peel() else {
+            return None;
+        };
+        Some(
+            parts
+                .iter()
+                .map(|part| match part.peel() {
+                    Type::Null | Type::Undefined | Type::Void => part.clone(),
+                    _ => Type::Refined {
+                        original: original.clone(),
+                        ty: Box::new(part.clone()),
+                    },
+                })
+                .collect(),
+        )
+    }
+
+    /// Whether this is a narrowed type parameter, like `T & {}`.
+    pub fn refines_type_parameter(&self) -> bool {
+        matches!(self.without_aliases(), Type::Refined { original, .. }
+            if matches!(original.peel(), Type::GenericParam { .. }))
+    }
+
     pub fn peel(&self) -> &Type {
         let mut t = self;
         while let Type::Alias { ty, .. } | Type::Refined { ty, .. } | Type::Readonly(ty) = t {
             t = ty;
         }
         t
+    }
+
+    /// `{ [key: string]: unknown }`: any object, interface or class instance,
+    /// for host declarations that read a value as an object. Not `{}`, which
+    /// also holds primitives that have no object representation.
+    pub fn any_object() -> Type {
+        Type::Object {
+            index: Some(IndexSignature {
+                value: Box::new(Type::Unknown),
+                readonly: false,
+            }),
+            fields: BTreeMap::new(),
+        }
+    }
+
+    /// `{}`, the object type with no fields.
+    pub fn empty_object() -> Type {
+        Type::Object {
+            fields: BTreeMap::new(),
+            index: None,
+        }
+    }
+
+    /// Whether this is `{}`: the object type with no fields and no index
+    /// signature. As in TypeScript, it holds every value but `null` and
+    /// `undefined`, primitives included, so codegen lowers it as `unknown`.
+    /// A refinement such as `T & {}` is not `{}`: it holds only `T`'s values.
+    pub fn is_empty_object(&self) -> bool {
+        let mut t = self;
+        while let Type::Alias { ty, .. } | Type::Readonly(ty) = t {
+            t = ty;
+        }
+        matches!(t, Type::Object { fields, index: None } if fields.is_empty())
+    }
+
+    /// [`peel`](Self::peel), with `{}` read as `unknown`: the type whose
+    /// representation and run-time operations a value of this type uses.
+    /// Codegen matches on this rather than on `peel`, so a `{}` holding a
+    /// number is never treated as an object struct. `peel` reads a refinement
+    /// as its shape, so `T & {}` lowers as `unknown`, like `T` itself.
+    pub fn lowered(&self) -> &Type {
+        let peeled = self.peel();
+        if peeled.is_empty_object() {
+            return &Type::Unknown;
+        }
+        peeled
     }
 
     /// [`peel`](Self::peel), but stopping at a [`Type::Readonly`] wrapper, for
@@ -881,7 +976,9 @@ impl Type {
             // A union widens memberwise, which also collapses it when the members
             // share a base: `1 | 2` is `number`, not `number | number`, because
             // `Type::union` deduplicates.
-            Type::Union(members) => Type::union(members.iter().map(Type::widen_literal).collect()),
+            Type::Union(members) => Type::union(without_members_of_empty_object(
+                members.iter().map(Type::widen_literal).collect(),
+            )),
             _ => self.clone(),
         }
     }
@@ -955,8 +1052,9 @@ impl Type {
     /// document root, so `JSON.stringify` returns `undefined` for it.
     /// Objects and arrays holding such values still produce a document.
     pub fn stringifies_to_undefined(leaf: &Type) -> bool {
+        // `{}` may hold a function, as `unknown` may.
         matches!(
-            leaf,
+            leaf.lowered(),
             Type::Undefined
                 | Type::Void
                 | Type::Unknown
@@ -1014,6 +1112,17 @@ impl Type {
         flat.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
         fold_boolean_literals(&mut flat);
         fold_enum_members(&mut flat);
+        // `T | (T & {})` holds `T`'s values: the refinement adds nothing.
+        let refines_a_member = |member: &Type| {
+            matches!(member, Type::Refined { original, .. }
+                if flat.iter().any(|other| other.without_aliases() == original.without_aliases()))
+        };
+        let kept: Vec<Type> = flat
+            .iter()
+            .filter(|member| !refines_a_member(member))
+            .cloned()
+            .collect();
+        flat = kept;
         if flat.len() > 1 {
             return Type::Union(flat);
         }
@@ -1207,6 +1316,35 @@ fn canonical_bigint_digits(digits: &str) -> String {
     match magnitude.trim_start_matches('0') {
         "" => "0".to_string(),
         trimmed => format!("{sign}{trimmed}"),
+    }
+}
+
+/// Drops the members a `{}` among `members` already holds: every one that
+/// cannot be `null` or `undefined` and is no bare type parameter. TypeScript
+/// reduces a union this way when it widens a literal, joins flow types and
+/// types `a ?? b`.
+pub fn without_members_of_empty_object(members: Vec<Type>) -> Vec<Type> {
+    if !members.iter().any(Type::is_empty_object) {
+        return members;
+    }
+    members
+        .into_iter()
+        .filter(|member| member.is_empty_object() || may_hold_values_outside_empty_object(member))
+        .collect()
+}
+
+/// Whether `ty` may hold a value `{}` does not: `null` or `undefined` (as
+/// `T & ({} | undefined)` may), or any value of a type parameter.
+fn may_hold_values_outside_empty_object(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Null
+        | Type::Undefined
+        | Type::Void
+        | Type::Unknown
+        | Type::GenericParam { .. }
+        | Type::TypeVar(_) => true,
+        Type::Union(members) => members.iter().any(may_hold_values_outside_empty_object),
+        _ => false,
     }
 }
 

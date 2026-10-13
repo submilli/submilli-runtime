@@ -281,7 +281,14 @@ impl Inferer<'_> {
         // One literal type can be fresh in one operand and regular in
         // another, and `widen_only` must not widen the regular copy.
         fresh.retain(|literal| !regular.contains(literal));
-        Ok(widen_unless_regular(&widen_only(ty, &fresh), &regular))
+        let widened = widen_unless_regular(&widen_only(ty, &fresh), &regular);
+        // TypeScript reduces a widened union by subtype: `1 | {}` is `{}`.
+        Ok(match widened {
+            Type::Union(members) if widened != *ty => {
+                Type::union(crate::types::without_members_of_empty_object(members))
+            }
+            widened => widened,
+        })
     }
 
     /// The type a binding declared `declared_ty` narrows to on being

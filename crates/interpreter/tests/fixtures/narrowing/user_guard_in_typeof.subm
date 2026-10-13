@@ -1,5 +1,5 @@
 function unknown_to_object(x: unknown): x is { name: string } {
-  if (x !== null && "name" in x && typeof x.name === "string") {
+  if (typeof x === "object" && x !== null && "name" in x && typeof x.name === "string") {
     return true;
   }
   return false;

@@ -1,14 +1,10 @@
-types: 46 of 51 tsc entries compared, 23 differ
+types: 46 of 51 tsc entries compared, 20 differ
 
 line 6: r1
   tsc:  NonNullable<T>
   ours: T
 
 line 6: t && t
-  tsc:  NonNullable<T>
-  ours: T
-
-line 6: t
   tsc:  NonNullable<T>
   ours: T
 
@@ -44,10 +40,6 @@ line 11: u && u
   tsc:  NonNullable<U>
   ours: U
 
-line 11: u
-  tsc:  NonNullable<U>
-  ours: U
-
 line 12: r6
   tsc:  U
   ours: U | V
@@ -77,10 +69,6 @@ line 16: r9
   ours: V
 
 line 16: v && v
-  tsc:  NonNullable<V>
-  ours: V
-
-line 16: v
   tsc:  NonNullable<V>
   ours: V
 

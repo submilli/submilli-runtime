@@ -1,7 +1,1 @@
 types: 130 of 155 tsc entries compared, 0 differ
-
-errors:
-line 28: tsc TS2872: This kind of expression is always truthy. (we accept)
-line 31: tsc TS2872: This kind of expression is always truthy. (we accept)
-line 54: tsc TS2872: This kind of expression is always truthy. (we accept)
-line 57: tsc TS2872: This kind of expression is always truthy. (we accept)

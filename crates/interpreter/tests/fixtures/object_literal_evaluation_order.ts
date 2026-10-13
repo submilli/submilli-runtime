@@ -25,7 +25,7 @@ function main(): void {
 
   log = "";
   const full: { a: number } = { a: 2 };
-  const overwritten = { a: mark("x"), ...full };
+  const overwritten = { ...{ a: mark("x") }, ...full };
   assert(log === "x", "an overwritten value still runs");
   assert(overwritten.a === 2, "the spread's value wins");
 
