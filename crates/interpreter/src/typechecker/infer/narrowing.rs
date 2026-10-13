@@ -717,9 +717,12 @@ pub fn strip_null(ty: &Type) -> Type {
             members
                 .iter()
                 .filter(|m| !matches!(m.peel(), Type::Null))
-                .map(|m| match m.peel() {
-                    Type::GenericParam { .. } => strip_null(m),
-                    _ => m.clone(),
+                .map(|m| {
+                    if is_type_parameter_or_its_narrowing(m) {
+                        strip_null(m)
+                    } else {
+                        m.clone()
+                    }
                 })
                 .collect(),
         )),
@@ -750,9 +753,12 @@ pub fn strip_undefined(ty: &Type) -> Type {
             members
                 .iter()
                 .filter(|member| !matches!(member.peel(), Type::Undefined))
-                .map(|member| match member.peel() {
-                    Type::GenericParam { .. } => strip_undefined(member),
-                    _ => member.clone(),
+                .map(|member| {
+                    if is_type_parameter_or_its_narrowing(member) {
+                        strip_undefined(member)
+                    } else {
+                        member.clone()
+                    }
                 })
                 .collect(),
         )),
@@ -760,6 +766,12 @@ pub fn strip_undefined(ty: &Type) -> Type {
         Type::GenericParam { .. } => preserve_refinement(ty, strip_undefined(&Type::Unknown)),
         _ => ty.clone(),
     }
+}
+
+/// A union member that a nullish test narrows in place: a type parameter, or
+/// a narrowing of one such as `T & ({} | null)`, whose shape `peel` hides.
+fn is_type_parameter_or_its_narrowing(member: &Type) -> bool {
+    matches!(member.peel(), Type::GenericParam { .. }) || member.refines_type_parameter()
 }
 
 /// Remove both nullish alternatives for optional access and non-null assertions.

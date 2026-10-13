@@ -117,6 +117,19 @@ function orText<V>(value: V | string | null | undefined): string {
   return typeof value === "string" ? value : "other";
 }
 
+function presentOr<T>(value: T, flag: boolean): string {
+  if (value !== undefined) {
+    const picked = flag ? value : null;
+    if (picked !== null) {
+      const present: {} = picked;
+      return String(present);
+    }
+    const fallback: {} = orNull(value) ?? "none";
+    return String(fallback);
+  }
+  return "absent";
+}
+
 function throughOptionals<T>(value: T): string {
   if (value !== undefined) {
     const a: T | undefined = maybe(value);
@@ -145,5 +158,6 @@ function main(): void {
   assert(definedOnly(1, 2).length === 3, "a one-sided narrowing of `T` passes on and joins another");
   assert(JSON.stringify(collect<number | string | null>([1, null, "a"])) === "[1,null,\"a\"]", "a `T` element fits `{} | null | undefined`");
   assert(throughOptionals<number | null>(null) === "nullnullnull1other", "a narrowed `T` binds a `V | null` parameter as itself");
+  assert(presentOr(0, true) === "0" && presentOr<number | null>(null, false) === "none", "a union holding a narrowed `T` narrows again");
   assert(throughOptionals<number | undefined>(undefined) === "absent", "an absent `T` skips the calls");
 }

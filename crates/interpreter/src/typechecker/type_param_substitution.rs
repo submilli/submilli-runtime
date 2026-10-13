@@ -1074,14 +1074,15 @@ impl<'a> Unifier<'a> {
         }
     }
 
-    /// Unifies a union parameter with an argument that is not a union by
-    /// trying its members. Each member sees the argument as written: a
+    /// Unifies a union parameter with an argument that is not a union (a
+    /// narrowed type parameter counts as one, whatever its shape) by trying
+    /// its members. Each member sees the argument as written: a
     /// readonly array must not fit a mutable member.
     #[allow(clippy::result_large_err)]
     fn unify_into_union_members(
         &mut self,
         param_ty: &Type,
-        pa: &[Type],
+        members: &[Type],
         arg_ty: &Type,
     ) -> Result<(), UnifyError> {
         // Bottom fits every arm. Give an unbound variable a chance to
@@ -1096,22 +1097,22 @@ impl<'a> Unifier<'a> {
             }
             self.restore(snap);
         }
-        if self.infer_from_readonly_into_mutable_member(pa, arg_ty) {
+        if self.infer_from_readonly_into_mutable_member(members, arg_ty) {
             return Ok(());
         }
-        if self.unify_by_lone_type_var_rule(pa, arg_ty) {
+        if self.unify_by_lone_type_var_rule(members, arg_ty) {
             return Ok(());
         }
-        if self.defer_to_fitting_fallback(pa, arg_ty) {
+        if self.defer_to_fitting_fallback(members, arg_ty) {
             return Ok(());
         }
-        if self.infer_through_structured_member(pa, arg_ty) {
+        if self.infer_through_structured_member(members, arg_ty) {
             return Ok(());
         }
-        if self.defer_to_identical_member(pa, arg_ty) {
+        if self.defer_to_identical_member(members, arg_ty) {
             return Ok(());
         }
-        for m in self.fallback_type_vars_last(pa) {
+        for m in self.fallback_type_vars_last(members) {
             let snap = self.snapshot();
             if self.unify(m, arg_ty).is_ok() {
                 return Ok(());
