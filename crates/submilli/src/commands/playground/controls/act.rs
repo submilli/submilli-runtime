@@ -638,7 +638,8 @@ impl Actions {
     fn show_run(&self, id: u64, kind: &'static str) -> Result<Answer, ActError> {
         let reader = self.reader()?;
         let stored = self.load(id)?;
-        let mut result: ShowResult = read::show_stored(&reader, &stored, false)?;
+        let mut result: ShowResult =
+            read::show_stored(&reader, &stored, read::ShowOptions::default())?;
         result.kind = kind;
         let exit = exit_of(&stored);
         let mut answer = Answer::of(exit, &result, render::show_text);
@@ -2392,7 +2393,7 @@ fn watch_line(seq: Option<u64>, stored: &Value, session: &str) -> Value {
     // A chat message: who spoke is ours to say; what it said and its ids came from the
     // assistant.
     for (kind, untrusted_fields) in [
-        ("chat", &["turn", "text", "agent"][..]),
+        ("chat", &["turn", "text", "agent", "model"][..]),
         ("chat-replaced", &["turns"][..]),
     ] {
         if let Some(chat) = stored["body"][kind].as_object() {

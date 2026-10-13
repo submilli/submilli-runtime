@@ -123,14 +123,15 @@ pub enum PlaygroundCmd {
     Bind(BindArgs),
     /// Start a session with its variables fixed, or end one.
     Session(SessionArgs),
-    /// Re-resolve a run's decisions under the blueprint in force. Runs nothing and
-    /// records nothing.
+    /// After a blueprint edit, see which of a run's decisions would change: re-resolves
+    /// them under the blueprint in force. Runs nothing and records nothing.
     Recheck(RunArg),
-    /// Run a recorded program again under the blueprint in force, with its calls answered
-    /// from the recording; it stops at a call with nothing recorded.
+    /// After a blueprint edit, see whether a recorded program gets through now: runs it
+    /// again under the blueprint in force, with its calls answered from the recording.
+    /// It stops at a call with nothing recorded.
     Test(TestArgs),
-    /// Run a recorded program again live under the current binding, as a new run linked
-    /// to its source.
+    /// After a package edit, or to try other variables, run a recorded program again for
+    /// real under the current binding, as a new run linked to its source.
     Rerun(RunArg),
     /// Draft a rule that allows exactly one refused call; `--write` puts it in the
     /// blueprint file. Works with the playground stopped.
@@ -348,6 +349,9 @@ pub struct ShowArgs {
     /// Include call request and response bodies, and results and console output in full.
     #[arg(long)]
     include_payloads: bool,
+    /// Include the program the run ran, as the agent wrote it.
+    #[arg(long)]
+    program: bool,
     /// Print JSON.
     #[arg(long)]
     json: bool,
@@ -543,7 +547,10 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Show(args) => read(
             ReadRequest::Show {
                 run: args.run,
-                include_payloads: args.include_payloads,
+                options: controls::read::ShowOptions {
+                    include_payloads: args.include_payloads,
+                    include_program: args.program,
+                },
             },
             args.json,
         ),

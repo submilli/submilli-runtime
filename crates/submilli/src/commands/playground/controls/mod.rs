@@ -221,12 +221,18 @@ fn running_page(state: &StateDir) -> Page {
 /// A read control, as the CLI asks for it.
 pub(crate) enum ReadRequest {
     Runs(read::RunsQuery),
-    Show { run: u64, include_payloads: bool },
+    Show {
+        run: u64,
+        options: read::ShowOptions,
+    },
     Explain(DecisionRef),
     Compare(u64, u64),
     Audit(read::AuditQuery),
     Changes(Option<u64>),
-    Sessions { limit: usize, now_micros: u64 },
+    Sessions {
+        limit: usize,
+        now_micros: u64,
+    },
 }
 
 /// Runs a read control against the project around the current directory and prints
@@ -240,11 +246,9 @@ pub(crate) fn execute_read(request: ReadRequest, output: Output) -> Result<ExitC
         ReadRequest::Runs(query) => {
             read::runs(&reader, &query).map(|result| emit(&result, render::runs_text, output))
         }
-        ReadRequest::Show {
-            run,
-            include_payloads,
-        } => read::show(&reader, run, include_payloads)
-            .map(|result| emit(&result, render::show_text, output)),
+        ReadRequest::Show { run, options } => {
+            read::show(&reader, run, options).map(|result| emit(&result, render::show_text, output))
+        }
         ReadRequest::Explain(decision) => read::explain(&reader, decision)
             .map(|result| emit(&result, render::explain_text, output)),
         ReadRequest::Compare(a, b) => {

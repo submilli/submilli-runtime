@@ -556,6 +556,7 @@ async fn runs(
 #[serde(default)]
 struct ShowParams {
     include_payloads: bool,
+    program: bool,
 }
 
 async fn show(
@@ -568,7 +569,11 @@ async fn show(
         (Err(refused), _) | (_, Err(refused)) => return *refused,
     };
     read_with(&state, move |reader| {
-        read::show(reader, run, params.include_payloads)
+        let options = read::ShowOptions {
+            include_payloads: params.include_payloads,
+            include_program: params.program,
+        };
+        read::show(reader, run, options)
     })
     .await
 }

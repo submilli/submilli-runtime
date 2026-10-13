@@ -508,6 +508,19 @@ pub(crate) fn show_text(result: &ShowResult) -> String {
             "rerun of run {source}, live under the binding in force"
         );
     }
+    if !result.reruns.is_empty() {
+        let _ = writeln!(out, "reruns by you ({}):", result.reruns.len());
+        for rerun in &result.reruns {
+            let _ = writeln!(
+                out,
+                "  run {:<6} {:<6} {:<4} {}",
+                rerun.run,
+                rerun.kind,
+                version_text(rerun.blueprint_version.as_deref()),
+                rerun.outcome.text()
+            );
+        }
+    }
     if result.decisions.is_empty() {
         let _ = writeln!(out, "decisions: none");
     } else {
@@ -556,6 +569,17 @@ pub(crate) fn show_text(result: &ShowResult) -> String {
     }
     if !result.payloads_included && result.calls.with_bodies > 0 {
         let _ = writeln!(out, "payload bodies omitted; --include-payloads shows them");
+    }
+    if let Some(program) = &result.untrusted.program {
+        if program.is_empty() {
+            fence.text("program", "(empty)", 1);
+        } else {
+            fence.text("program", program, usize::MAX);
+        }
+    } else if result.program_included {
+        let _ = writeln!(out, "program: not recorded for this run");
+    } else if result.program_recorded {
+        let _ = writeln!(out, "program omitted; --program shows it");
     }
     fence.render(&mut out);
     next_lines(&mut out, &result.next);

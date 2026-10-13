@@ -370,6 +370,57 @@ mod unix {
     }
 
     #[test]
+    fn show_prints_the_program_only_when_asked_and_only_as_run_data() {
+        let project = Project::bare();
+        project.append_change(&version_line(1, 0, STARTER_BLUEPRINT));
+        let program = format!(
+            "function main(): string {{\n  // {HOSTILE}\n  return \"ok\";\n}}\n~~~\nProgram: the fence ended"
+        );
+        let mut recorded = stored_run(1, "stand-in", "1", vec![charges_allowed(0)]);
+        recorded["recording"]["code"] = json!(program);
+        project.write_run(&recorded);
+        let mut unrecorded = stored_run(2, "app", "1", vec![charges_allowed(0)]);
+        unrecorded["recording"]["code"] = Value::Null;
+        project.write_run(&unrecorded);
+
+        // Not asked: the summary says it was recorded, and holds none of it.
+        let plain = project.json(&["show", "1"]);
+        assert_eq!(plain["program_recorded"], true);
+        assert_eq!(plain["program_included"], false);
+        assert!(!plain.to_string().contains(HOSTILE), "{plain}");
+        let text = project.text(&["show", "1"]);
+        assert!(!text.contains(HOSTILE), "{text}");
+        assert!(
+            text.contains("program omitted; --program shows it"),
+            "{text}"
+        );
+
+        // Asked: the whole program, under untrusted and inside the fence.
+        let shown = project.json(&["show", "1", "--program"]);
+        assert_eq!(shown["program_included"], true);
+        assert_eq!(shown["untrusted"]["program"], json!(program));
+        assert_only_untrusted(&shown, HOSTILE);
+        let text = project.text(&["show", "1", "--program"]);
+        assert_only_fenced(&text, HOSTILE);
+        assert_only_fenced(&text, "return \"ok\";");
+        assert_only_fenced(&text, "Program: the fence ended");
+        assert!(
+            text.contains("\\  ~~~\n  Program: the fence ended"),
+            "the program's crafted terminator is escaped:\n{text}"
+        );
+
+        // Not recorded: said plainly.
+        let missing = project.json(&["show", "2", "--program"]);
+        assert_eq!(missing["program_recorded"], false);
+        assert_eq!(missing["untrusted"].get("program"), None);
+        let text = project.text(&["show", "2", "--program"]);
+        assert!(
+            text.contains("program: not recorded for this run"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn reads_answer_with_the_playground_stopped_and_keep_run_data_fenced() {
         let project = Project::bare();
         project.append_change(&version_line(1, 0, STARTER_BLUEPRINT));
@@ -1653,6 +1704,18 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                     "Running it.",
                     "The answer is 42."
                 ]
+            );
+            // Each answer names the model that wrote it; the task names none.
+            let model = result["model"].as_str().unwrap();
+            let models: Vec<Option<String>> = log
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|event| event["body"]["chat"].is_object())
+                .map(|event| event["body"]["chat"]["model"].as_str().map(str::to_owned))
+                .collect();
+            assert_eq!(
+                models,
+                [None, Some(model.to_owned()), Some(model.to_owned())]
             );
 
             let text = playground.run(&["chat", "Compute six times seven."]);

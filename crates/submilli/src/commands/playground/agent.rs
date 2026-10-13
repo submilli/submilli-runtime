@@ -278,6 +278,7 @@ fn converse(
         recorder: setup.recorder,
         session: session.as_deref(),
         agent: setup.label,
+        model: &setup.choice.model,
     };
     log.say(0, ChatRole::User, task, false);
     let mut turns = vec![Turn::User(task.to_owned())];
@@ -564,6 +565,8 @@ struct Log<'a> {
     recorder: &'a Recorder,
     session: Option<&'a str>,
     agent: &'a str,
+    /// The model answering, named on its messages.
+    model: &'a str,
 }
 
 impl Log<'_> {
@@ -575,6 +578,9 @@ impl Log<'_> {
         let turn = format!("{}-{n}", self.agent);
         let mut said = message(&turn, role, text);
         said.truncated |= cut;
+        if role == ChatRole::Assistant {
+            said.model = Some(self.model.to_owned());
+        }
         self.recorder.append_chat(
             session,
             format!("chat-{session}-{turn}"),
