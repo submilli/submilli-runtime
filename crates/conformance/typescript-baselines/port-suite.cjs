@@ -14,6 +14,9 @@ const path = require("path");
 const os = require("os");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
+const ts = require("typescript");
+const { fileNames, splitCase } = require("./case-files.cjs");
+const { caseProgram } = require("./tsc-case.cjs");
 
 const run = promisify(execFile);
 const casesDir = path.join(__dirname, "..", "typescript");
@@ -22,7 +25,6 @@ const CONCURRENCY = 8;
 // Why an upstream case is left out. The detail says which feature, error or case.
 const REASONS = {
   unsupported: "not supported",
-  multiFile: "multi-file or JavaScript",
   port: "the port changes what it checks",
   duplicate: "duplicate",
   thin: "checks too little",
@@ -99,9 +101,26 @@ const EXCLUDED_NAMES = [
   [/InJs/, "JavaScript"],
 ];
 
-// Options that make a case several files, or JavaScript: the port makes one
-// TypeScript file.
-const MULTI_FILE_OR_JS = /^\s*\/\/\s*@(filename|allowJs|checkJs)\s*:/im;
+// Options that make a case JavaScript.
+const JAVASCRIPT_OPTION = /^\s*\/\/\s*@(allowJs|checkJs)\s*:\s*true/im;
+
+// The files of a case that aren't TypeScript modules we can check, and what they
+// are. The first that matches a file's name names it.
+const UNSUPPORTED_FILES = [
+  [/\.(js|jsx|mjs|cjs)$/i, "JavaScript"],
+  [/(^|\/)node_modules\//, "`node_modules` packages"],
+  [/\.d\.[mc]?ts$/i, "declaration files (`.d.ts`)"],
+  [/\.tsx$/i, "JSX"],
+  [/\.json$/i, "JSON modules"],
+  [/\.[mc]ts$/i, "`.mts` and `.cts` files"],
+  [/^(?!.*\.ts$)/, "files other than `.ts`"],
+];
+
+// A multi-file case's file with no `import` or `export` is a script, whose
+// top-level declarations are global: every file sees them. Our files are modules,
+// each seeing only what it imports, so a case whose files use what another
+// script declares, or whose scripts declare the same name, checks something else.
+const SHARED_SCOPE_FEATURE = "script files sharing one global scope";
 
 // A construct signature, `new (): T`. One in an object type is rejected, but one
 // in an interface is read as a method named `new`, which pruning can't take out,
@@ -211,9 +230,56 @@ function excludedDirectory(rel) {
 function exclusionBeforePort(rel, source) {
   const named = EXCLUDED_NAMES.find(([pattern]) => pattern.test(path.basename(rel, ".ts")));
   if (named) return exclusion(rel, REASONS.unsupported, named[1]);
-  if (MULTI_FILE_OR_JS.test(source)) return exclusion(rel, REASONS.multiFile, "");
+  if (JAVASCRIPT_OPTION.test(source)) return exclusion(rel, REASONS.unsupported, "JavaScript");
+  for (const name of fileNames(source)) {
+    const kind = UNSUPPORTED_FILES.find(([pattern]) => pattern.test(name));
+    if (kind) return exclusion(rel, REASONS.unsupported, kind[1]);
+  }
+  if (sharesGlobalScope(source)) return exclusion(rel, REASONS.unsupported, SHARED_SCOPE_FEATURE);
   if (CONSTRUCT_SIGNATURE.test(source)) return exclusion(rel, REASONS.unsupported, CONSTRUCT_SIGNATURE_FEATURE);
   return null;
+}
+
+/** Whether a multi-file case's files share declarations through the global scope:
+ * a name in one file resolves to a script file's declaration in another, or two
+ * script files declare the same name. */
+function sharesGlobalScope(source) {
+  const text = source.replace(/\r\n?/g, "\n");
+  if (!splitCase(text)) return false;
+  const { program, sourceFiles } = caseProgram("case.ts", text);
+  const checker = program.getTypeChecker();
+  const scripts = new Set(sourceFiles.filter((f) => !ts.isExternalModule(f)));
+  const declared = new Map(); // name → script file declaring it
+  for (const script of scripts) {
+    for (const name of topLevelNames(script)) {
+      if (declared.has(name) && declared.get(name) !== script) return true;
+      declared.set(name, script);
+    }
+  }
+  const usesAnotherScript = (sourceFile) => {
+    let found = false;
+    const visit = (node) => {
+      if (found) return;
+      if (ts.isIdentifier(node)) {
+        const declarations = checker.getSymbolAtLocation(node)?.declarations ?? [];
+        found = declarations.some((d) => d.getSourceFile() !== sourceFile && scripts.has(d.getSourceFile()));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+    return found;
+  };
+  return sourceFiles.some(usesAnotherScript);
+}
+
+/** The names a file declares at its top level. */
+function topLevelNames(sourceFile) {
+  return sourceFile.statements.flatMap((statement) => {
+    if (ts.isVariableStatement(statement)) {
+      return statement.declarationList.declarations.filter((d) => ts.isIdentifier(d.name)).map((d) => d.name.text);
+    }
+    return statement.name && ts.isIdentifier(statement.name) ? [statement.name.text] : [];
+  });
 }
 
 /** Whether pruning cut something from a case: `prune-case.cjs` marks what it blanks. */

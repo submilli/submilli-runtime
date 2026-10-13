@@ -28,6 +28,8 @@ mod case_selection;
 
 #[path = "support/case_errors.rs"]
 mod case_errors;
+#[path = "support/case_files.rs"]
+mod case_files;
 #[path = "support/triage.rs"]
 mod triage;
 #[path = "support/typed_reachability.rs"]

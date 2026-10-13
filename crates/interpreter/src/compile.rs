@@ -317,6 +317,67 @@ pub fn typecheck_to_typed_ast(source: &str, file: FileId) -> (TypedAst, Vec<Diag
     }
 }
 
+/// [`typecheck_to_typed_ast`] for the modules of one package, which import each
+/// other by relative path. Every module is checked, imported or not, and inference
+/// runs past syntax errors, as for a script. The typed AST holds every module's
+/// declarations; each span carries the [`FileId`] of its module, which is its index
+/// in `modules`.
+pub fn typecheck_package_to_typed_ast(
+    package_name: &str,
+    root_module: ModulePath,
+    modules: &[PackageSourceModule<'_>],
+) -> (TypedAst, Vec<Diagnostic>) {
+    let mut sources = Sources::new();
+    let mut parsed_modules = Vec::with_capacity(modules.len());
+    let mut diagnostics = Vec::new();
+    for module in modules {
+        let file = match sources.add(module.path.clone(), module.source) {
+            Ok(file) => file,
+            Err(error) => {
+                let error = CompileError::from(error.into_compiler_failure(CompilerStage::Parse));
+                return (TypedAst::new(), error.into_diagnostics(FileId(0)));
+            }
+        };
+        let parsed = parse_script(module.source, file);
+        if let Some(error) = parsed.failure {
+            diagnostics.extend(error.into_diagnostics(file));
+            return (TypedAst::new(), diagnostics);
+        }
+        diagnostics.extend(parsed.diagnostics);
+        parsed_modules.push((module.path.clone(), file, parsed.ast));
+    }
+    let module_refs = parsed_modules
+        .iter()
+        .map(|(path, file, ast)| (path.clone(), *file, ast))
+        .collect();
+    let stdlib_defs = runtime::stdlib_package_declarations();
+    let (prelude_defs, host_defs, _) = prelude::cached_runtime_package_declarations();
+    let external_packages = stdlib_defs
+        .iter()
+        .chain(prelude_defs)
+        .chain(host_defs)
+        .map(|defs| (defs.package_name.clone(), defs.clone()))
+        .collect();
+    match crate::typechecker::infer::infer_package_checked(
+        package_name,
+        root_module,
+        module_refs,
+        &sources,
+        external_packages,
+        BTreeMap::new(),
+    ) {
+        Ok((ta, _, package_diagnostics)) => {
+            diagnostics.extend(package_diagnostics);
+            (ta, diagnostics)
+        }
+        Err(error) => {
+            let error = error.with_limit_span_cut(|file| sources.get(file).map(|s| s.text()));
+            diagnostics.extend(error.into_diagnostics(FileId(0)));
+            (TypedAst::new(), diagnostics)
+        }
+    }
+}
+
 /// Compile a script module. `filename` is the DWARF compile-unit name for
 /// backtrace source mapping; `file` is this source's [`FileId`] in the caller's
 /// [`Sources`](crate::Sources) registry. `packages` are real package

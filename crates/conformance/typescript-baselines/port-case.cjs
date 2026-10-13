@@ -17,10 +17,16 @@
 //   infers `any`, nothing is written.
 // - `// @strict: false` and `// @strictNullChecks: false` become `true`, and `function main(): void {}`
 //   is appended.
+// - In a multi-file case (`case-files.cjs`), each step is made file by file, an
+//   import naming another of the case's files names it by relative path, and no
+//   `main` is appended: the files are the modules of a package, which has none.
 //
 // Usage: node port-case.cjs <upstream case.ts> <ported case.ts>
 const ts = require("typescript");
 const fs = require("fs");
+const path = require("path");
+const { splitCase, eachFile, relativeSpecifier } = require("./case-files.cjs");
+const { caseProgram } = require("./tsc-case.cjs");
 
 const PLACEHOLDER = (ty) => `null as unknown as (${ty})`;
 
@@ -39,13 +45,48 @@ function port(source, fileName) {
   // Without strict null checks tsc erases `null` and `undefined` from types,
   // conflating what Submilli keeps apart.
   text = text.replace(/^(\s*\/\/\s*@strictNullChecks\s*:\s*)false\b/im, "$1true");
-  text = renameRedeclarations(text, fileName);
-  text = rewriteTokens(text);
-  text = fillDeclarations(text, fileName);
+  const multiFile = splitCase(text) !== null;
+  text = eachFile(text, fileName, renameRedeclarations);
+  text = eachFile(text, fileName, rewriteTokens);
+  text = eachFile(text, fileName, (fileText, name) => fillDeclarations(fileText, name, multiFile));
+  if (multiFile) text = eachFile(text, fileName, (fileText, name) => relativeImports(fileText, name, splitCase(text)));
   // Infer from the rewritten program, including its declaration placeholders.
   text = annotateInferredTypes(text, fileName);
-  if (!/^\s*function\s+main\s*\(/m.test(text)) text += "\n\nfunction main(): void {}\n";
+  if (!multiFile && !/^\s*function\s+main\s*\(/m.test(text)) text += "\n\nfunction main(): void {}\n";
   return text;
+}
+
+/** Writes each import or re-export of another of the case's files as a relative
+ * path with no extension, which is how Submilli's modules import each other.
+ * Upstream often names one bare (`"m1"`), resolved by TypeScript's classic module
+ * resolution, or with a `.js` extension. */
+function relativeImports(text, fileName, files) {
+  const sourceFile = parse(text, fileName);
+  const from = files.find((f) => f.fileName === fileName).module;
+  const modules = new Set(files.map((f) => f.module));
+  const edits = [];
+  for (const statement of sourceFile.statements) {
+    const specifier = statement.moduleSpecifier;
+    if (!(ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement))) continue;
+    if (!specifier || !ts.isStringLiteral(specifier)) continue;
+    const to = caseModuleNamed(specifier.text, from, modules);
+    if (to === undefined) continue;
+    const quote = text[specifier.getStart(sourceFile)];
+    edits.push({ start: specifier.getStart(sourceFile), end: specifier.end, text: `${quote}${relativeSpecifier(from, to)}${quote}` });
+  }
+  return applyEdits(text, edits);
+}
+
+/** The case module a specifier in module `from` names, if any: a relative path
+ * from `from`'s directory, or else a bare name, with or without an extension. */
+function caseModuleNamed(specifier, from, modules) {
+  const bare = specifier.replace(/\.(ts|js)$/, "");
+  if (bare.startsWith("./") || bare.startsWith("../")) {
+    const resolved = path.posix.join(path.posix.dirname(`/${from}`), bare).slice(1);
+    return modules.has(resolved) ? resolved : undefined;
+  }
+  const name = bare.replace(/^\/+/, "");
+  return modules.has(name) ? name : undefined;
 }
 
 /** Renames each repeated `var` declaration in a scope `let` would share: the same
@@ -97,7 +138,7 @@ function rewriteTokens(text) {
 }
 
 /** Give each typed binding with no value, and each `declare function`, a placeholder. */
-function fillDeclarations(text, fileName) {
+function fillDeclarations(text, fileName, multiFile = false) {
   const sourceFile = parse(text, fileName);
   const edits = [];
   const visit = (node) => {
@@ -113,7 +154,8 @@ function fillDeclarations(text, fileName) {
       }
       if (filled && text[node.end - 1] !== ";") edits.push({ start: node.end, end: node.end, text: ";" });
       // A value supplied here is not an ambient declaration another module can import.
-      if (filled) removeModifier(node, ts.SyntaxKind.ExportKeyword, sourceFile, edits);
+      // In a multi-file case another module does import it.
+      if (filled && !multiFile) removeModifier(node, ts.SyntaxKind.ExportKeyword, sourceFile, edits);
     } else if (ts.isFunctionDeclaration(node) && hasDeclare(node)) {
       removeDeclare(node, sourceFile, edits);
       const ret = node.type ? node.type.getText(sourceFile) : "void";
@@ -155,9 +197,16 @@ function removeModifier(node, kind, sourceFile, edits) {
  * return type of a function declaration, class method or getter, and the type of a class
  * field or of a parameter with a default value. */
 function annotateInferredTypes(text, fileName) {
-  const program = ts.createProgram([fileName], { strict: true, target: ts.ScriptTarget.ES2020 }, host(text, fileName));
+  const options = { strict: true, target: ts.ScriptTarget.ES2020 };
+  if (splitCase(text)) Object.assign(options, { module: ts.ModuleKind.ES2020, moduleResolution: ts.ModuleResolutionKind.Bundler });
+  const { program, sourceFiles } = caseProgram(fileName, text, options);
   const checker = program.getTypeChecker();
-  const sourceFile = program.getSourceFile(fileName);
+  const annotated = new Map(sourceFiles.map((sourceFile) => [sourceFile.fileName, annotateFile(sourceFile, checker)]));
+  return eachFile(text, fileName, (_, name) => annotated.get(name));
+}
+
+function annotateFile(sourceFile, checker) {
+  const text = sourceFile.text;
   const edits = [];
   const spell = (type, node) => checker.typeToString(type, node, ts.TypeFormatFlags.NoTruncation);
   // A type that can't be written where it goes: `any`, a class expression's, or `this`.
@@ -199,20 +248,6 @@ function parse(text, fileName) {
   return ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
 }
 
-/** A compiler host that serves `text` for `fileName` and the default libraries from disk. */
-function host(text, fileName) {
-  const base = ts.createCompilerHost({});
-  return {
-    ...base,
-    getSourceFile(name, languageVersion) {
-      if (name === fileName) return ts.createSourceFile(name, text, languageVersion, true);
-      return base.getSourceFile(name, languageVersion);
-    },
-    fileExists: (name) => name === fileName || base.fileExists(name),
-    readFile: (name) => (name === fileName ? text : base.readFile(name)),
-  };
-}
-
 function applyEdits(text, edits) {
   // Right to left; edits at one position apply in reverse, so they read in the
   // order they were made.
@@ -222,5 +257,5 @@ function applyEdits(text, edits) {
   return out;
 }
 
-module.exports = { port };
+module.exports = { port, relativeImports };
 if (require.main === module) main();

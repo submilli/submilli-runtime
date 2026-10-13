@@ -2,7 +2,15 @@
 //! agree with an error `tsc` reports. Shared by the runner and by the
 //! `typescript_case_errors` example the pruner calls, so the two judge an error
 //! the same way.
-use interpreter::{Diagnostic, FileId, Severity, TypedAst, parse_script, typecheck_to_typed_ast};
+use interpreter::{
+    Diagnostic, FileId, ModulePath, PackageSourceModule, Severity, TypedAst, parse_script,
+    typecheck_package_to_typed_ast, typecheck_to_typed_ast,
+};
+
+use super::case_files;
+
+/// The package a multi-file case's files are modules of.
+const CASE_PACKAGE: &str = "@conformance/case";
 
 /// Lexer and parser errors are about syntax we don't parse, except for these checks,
 /// which `tsc` makes too and so can agree with it. ("invalid assignment target" is
@@ -121,10 +129,17 @@ pub(super) struct CaseError {
     pub support: Support,
 }
 
+/// Our typed AST of a case, and our errors on it. A multi-file case is checked as
+/// one package whose modules are its files, the last being the root.
 pub(super) fn case_errors(source: &str) -> (TypedAst, Vec<CaseError>) {
-    let parsed = parse_script(source, FileId(0));
-    let syntax_errors = parsed.diagnostics();
-    let (typed, diags) = typecheck_to_typed_ast(source, FileId(0));
+    let (typed, diags, syntax_errors) = match case_files::split(source) {
+        Some(files) => typecheck_files(&files),
+        None => {
+            let parsed = parse_script(source, FileId(0));
+            let (typed, diags) = typecheck_to_typed_ast(source, FileId(0));
+            (typed, diags, parsed.diagnostics().to_vec())
+        }
+    };
     let errors = diags
         .iter()
         .filter(|d| matches!(d.severity, Severity::Error))
@@ -134,11 +149,31 @@ pub(super) fn case_errors(source: &str) -> (TypedAst, Vec<CaseError>) {
                 line,
                 column,
                 message: d.message.clone(),
-                support: support(d, syntax_errors),
+                support: support(d, &syntax_errors),
             }
         })
         .collect();
     (typed, errors)
+}
+
+/// Each file's text keeps its offsets in the case, so a diagnostic's span reads
+/// against the case whatever its file.
+fn typecheck_files(files: &[case_files::CaseFile]) -> (TypedAst, Vec<Diagnostic>, Vec<Diagnostic>) {
+    let syntax_errors = files
+        .iter()
+        .zip(0u32..)
+        .flat_map(|(file, id)| parse_script(&file.text, FileId(id)).diagnostics().to_vec())
+        .collect();
+    let modules: Vec<PackageSourceModule<'_>> = files
+        .iter()
+        .map(|file| PackageSourceModule {
+            path: ModulePath::from(file.module.as_str()),
+            source: &file.text,
+        })
+        .collect();
+    let root = modules.last().map(|m| m.path.clone()).expect("a split case has files");
+    let (typed, diags) = typecheck_package_to_typed_ast(CASE_PACKAGE, root, &modules);
+    (typed, diags, syntax_errors)
 }
 
 fn support(diag: &Diagnostic, syntax_errors: &[Diagnostic]) -> Support {

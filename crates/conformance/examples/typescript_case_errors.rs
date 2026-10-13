@@ -7,6 +7,8 @@
 
 #[path = "../tests/support/case_errors.rs"]
 mod case_errors;
+#[path = "../tests/support/case_files.rs"]
+mod case_files;
 
 use case_errors::Support;
 

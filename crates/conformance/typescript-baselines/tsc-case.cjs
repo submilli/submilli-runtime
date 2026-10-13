@@ -3,6 +3,7 @@
 // the suite porter, so all three judge a case by the same `tsc`.
 const ts = require("typescript");
 const fs = require("fs");
+const { splitCase } = require("./case-files.cjs");
 
 // A `// @name: value` compiler-option line. `is_option_line` in
 // tests/typescript.rs must agree with it: the runner maps baseline lines back to
@@ -19,7 +20,7 @@ const BOOLEAN_OPTIONS = {
   nouncheckedindexedaccess: "noUncheckedIndexedAccess",
 };
 
-function compilerOptions(file) {
+function compilerOptions(file, text = fs.readFileSync(file, "utf8")) {
   const options = {
     strict: true,
     target: ts.ScriptTarget.ES2020,
@@ -27,7 +28,8 @@ function compilerOptions(file) {
     module: ts.ModuleKind.ES2020,
     noEmit: true,
   };
-  const text = fs.readFileSync(file, "utf8");
+  // A multi-file case's files import each other by relative path, with no extension.
+  if (splitCase(text)) options.moduleResolution = ts.ModuleResolutionKind.Bundler;
   for (const [, name, value] of text.matchAll(new RegExp(OPTION_LINE.source, "gm"))) {
     const key = BOOLEAN_OPTIONS[name.toLowerCase()];
     if (key) options[key] = value.split(",")[0].trim().toLowerCase() === "true";
@@ -41,23 +43,52 @@ function lineIndex(sourceFile, pos) {
   return sourceFile.text.slice(0, pos).split("\n").length - 1;
 }
 
-/** `tsc`'s errors on the case: where each starts, its 1-based line and column, code
- * and message. */
-function tscErrors(file) {
-  const program = ts.createProgram([file], compilerOptions(file));
-  const sourceFile = program.getSourceFile(file);
-  return [...program.getSyntacticDiagnostics(sourceFile), ...program.getSemanticDiagnostics(sourceFile)]
-    .filter((d) => d.category === ts.DiagnosticCategory.Error && d.file === sourceFile)
-    .map((d) => ({
-      start: d.start,
-      line: lineIndex(sourceFile, d.start) + 1,
-      column: sourceFile.getLineAndCharacterOfPosition(d.start).character + 1,
-      code: d.code,
-      message: ts.flattenDiagnosticMessageText(d.messageText, " "),
-    }));
+/** The program `tsc` checks the case `file` as, given its `text`, and the case's
+ * source files in it: one, or one per file of a multi-file case
+ * (`case-files.cjs`). */
+function caseProgram(file, text = fs.readFileSync(file, "utf8"), options = compilerOptions(file, text)) {
+  const files = splitCase(text) ?? [{ fileName: file, text }];
+  const program = ts.createProgram(files.map((f) => f.fileName), options, caseHost(files));
+  return { program, sourceFiles: files.map((f) => program.getSourceFile(f.fileName)) };
 }
 
-module.exports = { OPTION_LINE, compilerOptions, lineIndex, tscErrors };
+/** A compiler host that serves `files` and the default libraries from disk. */
+function caseHost(files) {
+  const base = ts.createCompilerHost({});
+  const texts = new Map(files.map((f) => [f.fileName, f.text]));
+  return {
+    ...base,
+    getSourceFile(name, languageVersion) {
+      if (texts.has(name)) return ts.createSourceFile(name, texts.get(name), languageVersion, true);
+      return base.getSourceFile(name, languageVersion);
+    },
+    fileExists: (name) => texts.has(name) || base.fileExists(name),
+    readFile: (name) => texts.get(name) ?? base.readFile(name),
+    // Module resolution looks in a file's directory before it looks for the file.
+    directoryExists: (name) => [...texts.keys()].some((f) => f.startsWith(`${name}/`)) || base.directoryExists(name),
+    realpath: (name) => (texts.has(name) ? name : base.realpath?.(name) ?? name),
+  };
+}
+
+/** `tsc`'s errors on the case: where each starts, its 1-based line and column, code
+ * and message. In a multi-file case, positions in any file are positions in the
+ * case. */
+function tscErrors(file) {
+  const { program, sourceFiles } = caseProgram(file);
+  return sourceFiles.flatMap((sourceFile) =>
+    [...program.getSyntacticDiagnostics(sourceFile), ...program.getSemanticDiagnostics(sourceFile)]
+      .filter((d) => d.category === ts.DiagnosticCategory.Error && d.file === sourceFile)
+      .map((d) => ({
+        start: d.start,
+        line: lineIndex(sourceFile, d.start) + 1,
+        column: sourceFile.getLineAndCharacterOfPosition(d.start).character + 1,
+        code: d.code,
+        message: ts.flattenDiagnosticMessageText(d.messageText, " "),
+      })),
+  );
+}
+
+module.exports = { OPTION_LINE, compilerOptions, caseProgram, caseHost, lineIndex, tscErrors };
 
 // `node tsc-case.cjs <case.ts>` prints its errors as JSON, for callers that check
 // many cases at once in child processes.

@@ -10,6 +10,7 @@ const ts = require("typescript");
 const fs = require("fs");
 const { spawnSync } = require("child_process");
 const { tscErrors } = require("./tsc-case.cjs");
+const { splitCase, ownersOf, FILENAME_LINE } = require("./case-files.cjs");
 
 const CHECK_TIMEOUT_MS = 20_000;
 const MAX_PASSES = 40;
@@ -51,8 +52,7 @@ function prune(caseErrors, file) {
       if (!lacking.has(key)) lacking.set(key, { message, code });
     }
     if (!found.offsets.length) return finish(null);
-    const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-    const ranges = rangesToBlank(sourceFile, found.offsets);
+    const ranges = rangesToBlank(sourceFileAt(file, text), found.offsets);
     if (!ranges.length) return finish(`nothing to prune at offsets ${found.offsets.join(", ")}`);
     const previousText = text;
     for (const range of ranges) text = blank(text, range);
@@ -104,22 +104,40 @@ function offsetOf(text, line, column) {
   return start + column - 1;
 }
 
+/** For each offset in the case `file`, whose text is `text`, the file of the case
+ * it is in, parsed. A multi-file case's files keep their offsets in the case, so
+ * what is blanked in one is blanked at the same offsets in the case. */
+function sourceFileAt(file, text) {
+  const files = splitCase(text);
+  if (!files) {
+    const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    return () => sourceFile;
+  }
+  const sourceFiles = files.map((f) => ts.createSourceFile(f.fileName, f.text, ts.ScriptTarget.Latest, true));
+  const lines = text.split("\n");
+  const starts = lines.flatMap((line, index) => (FILENAME_LINE.test(line) ? [{ index }] : []));
+  const owners = ownersOf(lines.length, starts);
+  return (offset) => sourceFiles[owners[text.slice(0, offset).split("\n").length - 1]];
+}
+
 /** The ranges to blank for errors at `offsets`, deduplicated, right to left so
  * blanking one leaves the offsets of the rest in place. An outer statement's blank
  * covers any inner one. Each is `{ start, end, body }`, `body` being what `blank`
- * leaves in its place. */
-function rangesToBlank(sourceFile, offsets) {
+ * leaves in its place. `sourceFileAt` gives the parsed file an offset is in, or
+ * is that file. */
+function rangesToBlank(sourceFileAt, offsets) {
+  const fileAt = typeof sourceFileAt === "function" ? sourceFileAt : () => sourceFileAt;
   const ranges = new Map();
   for (const offset of offsets) {
-    const unit = statementWithCodeAt(sourceFile, offset);
-    if (unit) addRange(ranges, statementRange(sourceFile, unit));
+    const unit = statementWithCodeAt(fileAt(offset), offset);
+    if (unit) addRange(ranges, statementRange(fileAt(offset), unit));
   }
   // An error outside every statement with code, such as one at `main` after a
   // statement our parser couldn't finish, often goes once what caused it is pruned.
   // Only when no error is in one is it pruned by itself.
   if (!ranges.size) {
     for (const offset of offsets) {
-      for (const range of recoveryRanges(sourceFile, offset)) addRange(ranges, range);
+      for (const range of recoveryRanges(fileAt(offset), offset)) addRange(ranges, range);
     }
   }
   const sorted = [...ranges.values()].sort((a, b) => b.start - a.start);
@@ -354,6 +372,6 @@ function codeLines(text) {
   }).length;
 }
 
-module.exports = { rangesToBlank };
+module.exports = { rangesToBlank, sourceFileAt };
 
 if (require.main === module) main();

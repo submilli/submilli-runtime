@@ -16,7 +16,8 @@
 const ts = require("typescript");
 const fs = require("fs");
 const path = require("path");
-const { OPTION_LINE, compilerOptions, lineIndex, tscErrors } = require("./tsc-case.cjs");
+const { VIRTUAL_ROOT } = require("./case-files.cjs");
+const { OPTION_LINE, caseProgram, lineIndex, tscErrors } = require("./tsc-case.cjs");
 
 const casesDir = path.join(__dirname, "..", "typescript");
 function main() {
@@ -28,12 +29,12 @@ function main() {
 }
 
 function writeBaselines(file) {
-  const program = ts.createProgram([file], compilerOptions(file));
+  const text = fs.readFileSync(file, "utf8");
+  const { program, sourceFiles } = caseProgram(file, text);
   const checker = program.getTypeChecker();
-  const sourceFile = program.getSourceFile(file);
   const base = file.slice(0, -".ts".length);
 
-  fs.writeFileSync(`${base}.types`, typesBaseline(sourceFile, checker));
+  fs.writeFileSync(`${base}.types`, typesBaseline(file, text, sourceFiles, checker));
 
   const errors = errorLines(file);
   const errorsPath = `${base}.errors.txt`;
@@ -41,23 +42,27 @@ function writeBaselines(file) {
   else fs.rmSync(errorsPath, { force: true });
 }
 
-function typesBaseline(sourceFile, checker) {
+/** The baseline of the case `file`, whose text is `text`. A multi-file case has one:
+ * each line of a file is a line of the case, so its entries go on that line. */
+function typesBaseline(file, text, sourceFiles, checker) {
   const entries = new Map(); // line -> [text, type][]
-  const visit = (node) => {
-    if (ts.isExpressionNode(node) || ts.isIdentifier(node) || ts.isDeclarationName(node)) {
-      const entry = typeEntry(node, sourceFile, checker);
-      if (entry) {
-        const [line, ...rest] = entry;
-        if (!entries.has(line)) entries.set(line, []);
-        entries.get(line).push(rest);
+  for (const sourceFile of sourceFiles) {
+    const visit = (node) => {
+      if (ts.isExpressionNode(node) || ts.isIdentifier(node) || ts.isDeclarationName(node)) {
+        const entry = typeEntry(node, sourceFile, checker);
+        if (entry) {
+          const [line, ...rest] = entry;
+          if (!entries.has(line)) entries.set(line, []);
+          entries.get(line).push(rest);
+        }
       }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
 
-  const out = [`=== ${path.basename(sourceFile.fileName)} ===`];
-  sourceFile.text.split("\n").forEach((rawLine, i) => {
+  const out = [`=== ${path.basename(file)} ===`];
+  text.split("\n").forEach((rawLine, i) => {
     const line = rawLine.replace(/\r$/, "");
     // The harness leaves out the `// @option:` lines; so does this.
     if (OPTION_LINE.test(line)) return;
@@ -97,8 +102,12 @@ function typeEntry(node, sourceFile, checker) {
   const flags = ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.AllowUniqueESSymbolType;
   // A module's type names its file by absolute path; make it relative to the case,
   // so the baseline doesn't carry the path of the checkout that wrote it.
+  // A multi-file case's files are under a virtual root instead.
   const checkoutPrefix = `import("${path.dirname(sourceFile.fileName)}/`;
-  const written = checker.typeToString(type, node.parent, flags).replaceAll(checkoutPrefix, 'import("./');
+  const written = checker
+    .typeToString(type, node.parent, flags)
+    .replaceAll(checkoutPrefix, 'import("./')
+    .replaceAll(`import("${VIRTUAL_ROOT}/`, 'import("./');
   return [line, text, written];
 }
 
