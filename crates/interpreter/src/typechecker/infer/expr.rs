@@ -10189,7 +10189,7 @@ impl Inferer<'_> {
         self.check_condition_ty(&cond_ty, cond_span);
         self.check_constant_truthiness(cond)?;
         let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
-        self.check_tested_functions(cond, then_span)?;
+        self.check_condition_operands(cond, then_span)?;
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 

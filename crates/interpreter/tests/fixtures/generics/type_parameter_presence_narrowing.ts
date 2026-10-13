@@ -69,6 +69,19 @@ function regroup<T>(value: T): number {
   return [either, defined, nonNull].length;
 }
 
+function definedOnly<T>(value: T, other: T): T[] {
+  if (value !== undefined && other !== null) {
+    let copy = value;
+    copy = keep(value);
+    const box = { v: value };
+    box.v = value;
+    const both = [value, other];
+    both.push(copy);
+    return both;
+  }
+  return [];
+}
+
 function orMaybe<T>(value: T): {} | null | undefined {
   return value;
 }
@@ -95,5 +108,6 @@ function main(): void {
   assert(orMaybe(0) === 0, "a `T` fits `{} | null | undefined`");
   assert(lastDefined([1, 2, undefined]) === 2, "one narrowing of `T` fits a union holding another");
   assert(regroup(0) === 3, "narrowings of `T` regroup into unions");
+  assert(definedOnly(1, 2).length === 3, "a one-sided narrowing of `T` passes on and joins another");
   assert(JSON.stringify(collect<number | string | null>([1, null, "a"])) === "[1,null,\"a\"]", "a `T` element fits `{} | null | undefined`");
 }

@@ -17,8 +17,8 @@ const ALWAYS: Outcomes = 1;
 const NEVER: Outcomes = 2;
 const SOMETIMES: Outcomes = ALWAYS | NEVER;
 
-/// A read the uncalled-function check compares by name: a binding or `this`,
-/// then the fields read from it.
+/// Where a read the uncalled-function check compares by name starts: a
+/// binding or `this`.
 #[derive(PartialEq, Eq)]
 enum PathRoot {
     Binding(String),
@@ -85,7 +85,7 @@ impl Inferer<'_> {
     /// TS2774 and TS2845 for the condition of an `if` or a conditional: reports
     /// a function tested for truthiness that `body`, the code the condition
     /// guards, never uses, and an enum member, whose value is fixed.
-    pub(super) fn check_tested_functions(
+    pub(super) fn check_condition_operands(
         &mut self,
         condition: ExprId,
         body: Span,

@@ -1632,18 +1632,6 @@ pub(super) fn object_shape_type(optional_numbers: &[&str]) -> Type {
     }
 }
 
-/// A fields or options bag the host reads by name: any object, interface or
-/// class instance. Not `{}`, which also holds primitives.
-pub(super) fn any_object_type() -> Type {
-    Type::Object {
-        index: Some(crate::types::IndexSignature {
-            value: Box::new(Type::Unknown),
-            readonly: false,
-        }),
-        fields: BTreeMap::new(),
-    }
-}
-
 pub(super) fn declare_direct_fn(
     defs: &mut PackageDeclaration,
     name: &str,

@@ -738,7 +738,7 @@ impl Inferer<'_> {
             .span;
         self.check_condition_ty(&cond_ty, cond_span);
         self.check_constant_truthiness(condition)?;
-        self.check_tested_functions(condition, then_body_span)?;
+        self.check_condition_operands(condition, then_body_span)?;
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
         let entry_reachable = self.reachable;
         let then_possible = self.condition_can_be(typed_cond, true)?;

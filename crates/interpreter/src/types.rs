@@ -706,6 +706,19 @@ impl Type {
         t
     }
 
+    /// `{ [key: string]: unknown }`: any object, interface or class instance,
+    /// for host declarations that read a value as an object. Not `{}`, which
+    /// also holds primitives that have no object representation.
+    pub fn any_object() -> Type {
+        Type::Object {
+            index: Some(IndexSignature {
+                value: Box::new(Type::Unknown),
+                readonly: false,
+            }),
+            fields: BTreeMap::new(),
+        }
+    }
+
     /// `{}`, the object type with no fields.
     pub fn empty_object() -> Type {
         Type::Object {

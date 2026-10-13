@@ -1095,8 +1095,8 @@ pub fn is_never_falsy(ty: &Type) -> bool {
 /// The type of `x` where `x` is known falsy: keep `null` and falsy literals,
 /// collapse `string` to `""` and `boolean` to `false`, drop never-falsy
 /// reference types. `{}` stays `{}`: it may hold `0` or `""`, though
-/// TypeScript's `&&` drops it. `number` stays `number` — a `0` literal would be unsound
-/// for `NaN`/`-0`.
+/// TypeScript's `&&` drops it. `number` stays `number` — a `0` literal would
+/// be unsound for `NaN`/`-0`.
 pub fn falsy_part(ty: &Type) -> Type {
     if let Type::Refined {
         original,

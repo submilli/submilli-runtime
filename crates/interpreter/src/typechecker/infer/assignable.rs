@@ -708,8 +708,10 @@ fn assignable_rec(
     // A refinement may fit a union through one member that neither its
     // original nor its shape alone fits (`T & {}` into `(T & {}) | undefined`),
     // or piece by piece: `T & ({} | null)` is `(T & {}) | null`.
+    // Through aliases only: an expected refinement keeps its own original,
+    // which the refined-expected rule below requires (`T & {}` is no `U & {}`).
     if let Type::Refined { original, ty } = actual.without_aliases()
-        && let Type::Union(members) = expected.peel()
+        && let Type::Union(members) = expected.without_aliases()
     {
         if members
             .iter()
@@ -717,8 +719,8 @@ fn assignable_rec(
         {
             return true;
         }
-        if let Type::Union(parts) = ty.peel() {
-            return parts.iter().all(|part| {
+        if let Type::Union(parts) = ty.peel()
+            && parts.iter().all(|part| {
                 let piece = match part.peel() {
                     Type::Null | Type::Undefined | Type::Void => part.clone(),
                     _ => Type::Refined {
@@ -727,7 +729,9 @@ fn assignable_rec(
                     },
                 };
                 assignable_rec(&piece, expected, types, seen)
-            });
+            })
+        {
+            return true;
         }
     }
     if let Type::Refined { original, ty } = expected.without_aliases() {
