@@ -75,9 +75,7 @@ const MAYBE_MISSING_FEATURE_PHRASES: &[&str] = &[
     "is an enum type, not a value",
     "is a class, not a value",
     "declares no `new` method",
-    // A module export or package we lack (re-exports, ambient modules), or one
-    // `tsc` can't find either.
-    "does not export `",
+    // A package we lack (an ambient module), or one `tsc` can't find either.
     "package `",
 ];
 
@@ -202,11 +200,17 @@ fn support(diag: &Diagnostic, syntax_errors: &[Diagnostic]) -> Support {
         || names_library_type(&diag.message)
     {
         Support::Lacking
-    } else if mentions(MAYBE_MISSING_FEATURE_PHRASES) {
+    } else if mentions(MAYBE_MISSING_FEATURE_PHRASES) || is_missing_module_export(&diag.message) {
         Support::Unclear
     } else {
         Support::Supported
     }
+}
+
+/// A module export a case's file lacks: one we don't make (a re-export of an
+/// imported binding), or one `tsc` reports missing too.
+fn is_missing_module_export(message: &str) -> bool {
+    message.starts_with("module `") && message.contains("` does not export `")
 }
 
 fn names_library_type(message: &str) -> bool {

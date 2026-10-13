@@ -87,9 +87,11 @@ function caseModuleNamed(specifier, from, modules) {
   const bare = specifier.replace(/\.(ts|js)$/, "");
   const directory = /(^|\/)\.\.?$|\/$/.test(bare);
   const name = /^\.\.?(\/|$)/.test(bare)
-    ? path.posix.join(path.posix.dirname(`/${from}`), bare).slice(1)
+    ? path.posix.normalize(path.posix.join(path.posix.dirname(from), bare))
     : bare.replace(/^\/+/, "");
-  const module = name.replace(/\/$/, "");
+  // Above the case's root, where `tsc` finds nothing either.
+  if (name === ".." || name.startsWith("../")) return undefined;
+  const module = name.replace(/\/$/, "").replace(/^\.$/, "");
   const candidates = directory ? [`${module}/index`] : [module, `${module}/index`];
   return candidates.map((m) => m.replace(/^\//, "")).find((m) => modules.has(m));
 }

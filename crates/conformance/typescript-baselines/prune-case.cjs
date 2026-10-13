@@ -106,9 +106,9 @@ function offsetOf(text, line, column) {
   return start + column - 1;
 }
 
-/** Returns a function from an error's `{ offset, file }`, `file` being the index
- * of the case's file it is in, to `{ sourceFile, start, end, offset }`: that file
- * parsed and the offsets it owns, for the case `file` whose text is `text`. A multi-file case's
+/** For the case `file` whose text is `text`, a function from an error's
+ * `{ offset, file }` (`file` being a file index) to the case file it is in:
+ * `{ sourceFile, start, end, offset }`, the file parsed and the offsets it owns. A multi-file case's
  * files keep their offsets in the case, so what is blanked in one is blanked at the
  * same offsets in the case. */
 function fileOfError(file, text) {

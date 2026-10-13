@@ -5,9 +5,9 @@ const ts = require("typescript");
 const fs = require("fs");
 const { splitCase } = require("./case-files.cjs");
 
-// A `// @name: value` compiler-option line. `is_option_line` in
-// tests/typescript.rs must agree with it: the runner maps baseline lines back to
-// the case by skipping the same lines.
+// A `// @name: value` compiler-option line. `option_line` in
+// tests/support/case_files.rs must agree with it: the runner maps baseline lines
+// back to the case by skipping the same lines.
 const OPTION_LINE = /^\s*\/\/\s*@(\w+)\s*:\s*([^\r\n]*)/;
 
 // The case options that change what `tsc` infers. Submilli is always strict, so

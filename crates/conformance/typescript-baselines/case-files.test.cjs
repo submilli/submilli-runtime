@@ -80,3 +80,11 @@ test("an import of `.` names its directory's index, not a file of the same name"
   const files = splitCase(source);
   assert.match(relativeImports(files[2].text, files[2].fileName, files), /from "\.\/index"/);
 });
+
+test("`.` at the case's root names the root index, and `..` above it nothing", () => {
+  const source = "// @filename: index.ts\nexport let r = 1;\n// @filename: b.ts\nimport { r } from \".\";\nimport { s } from \"..\";\n";
+  const files = splitCase(source);
+  const ported = relativeImports(files[1].text, files[1].fileName, files);
+  assert.match(ported, /from "\.\/index"/);
+  assert.match(ported, /from "\.\."/);
+});
