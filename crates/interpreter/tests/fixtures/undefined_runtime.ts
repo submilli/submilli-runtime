@@ -17,7 +17,8 @@ function main(): void {
     assert(dictionary["missing"] === undefined, "dictionary miss");
     assert(String(undefined) === "undefined", "undefined string conversion");
     assert(Number.isNaN(Number(undefined)), "undefined numeric conversion");
-    assert(!!undefined === false, "undefined boolean conversion");
+    const missingValue: string | undefined = undefined;
+    assert(!!missingValue === false, "undefined boolean conversion");
     assert(!Object.is(null, undefined), "null differs from undefined");
     assert(Object.is(undefined, undefined), "undefined equals itself");
     assert(Object.is(undefined), "omitted comparison argument is undefined");

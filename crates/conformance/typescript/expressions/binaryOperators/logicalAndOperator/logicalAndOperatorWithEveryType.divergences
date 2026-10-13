@@ -171,21 +171,3 @@ line 124: rj9
 line 124: null && undefined
   tsc:  null
   ours: null | undefined
-
-errors:
-line 36: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 37: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 47: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 48: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 58: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 59: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 69: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 70: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 91: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 92: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 102: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 103: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 113: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 114: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 124: tsc TS2873: This kind of expression is always falsy. (we accept)
-line 125: tsc TS2873: This kind of expression is always falsy. (we accept)

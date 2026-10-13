@@ -6,9 +6,10 @@ function main(): void {
   assert(!truthy(""), "empty string is falsy");
   assert(truthy("a"), "non-empty string is truthy");
   assert(truthy(" "), "whitespace is truthy");
-  if ("") {
+  const empty: string = "";
+  if (empty) {
     assert(false, "if (\"\") must not enter");
   }
-  const x: string = "" ? "a" : "b";
+  const x: string = empty ? "a" : "b";
   assert(x === "b", "ternary on empty string");
 }

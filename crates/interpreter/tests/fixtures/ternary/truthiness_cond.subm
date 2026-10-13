@@ -1,8 +1,11 @@
 function main(): void {
-  const x: string = 5 ? "a" : "b";
+  const five: number = 5;
+  const zero: number = 0;
+  const empty: string = "";
+  const x: string = five ? "a" : "b";
   assert(x === "a", "nonzero number is truthy");
-  const y: string = 0 ? "a" : "b";
+  const y: string = zero ? "a" : "b";
   assert(y === "b", "zero is falsy");
-  const s: string = "" ? "a" : "b";
+  const s: string = empty ? "a" : "b";
   assert(s === "b", "empty string is falsy");
 }

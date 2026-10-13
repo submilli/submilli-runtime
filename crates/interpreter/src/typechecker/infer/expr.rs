@@ -832,6 +832,7 @@ impl Inferer<'_> {
             );
         }
         self.check_expression_arity(&kind, &ty, span);
+        self.check_tested_read(expr_id, &ty)?;
         let id = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -892,7 +893,7 @@ impl Inferer<'_> {
     }
 
     /// Whether `name` reads the global `undefined`, which no binding shadows.
-    fn names_global_undefined(&self, name: &str) -> bool {
+    pub(super) fn names_global_undefined(&self, name: &str) -> bool {
         name == "undefined"
             && self.scopes.get("undefined").is_none()
             && !self.top_symbols.contains_key("undefined")
@@ -1459,6 +1460,7 @@ impl Inferer<'_> {
                     None
                 };
                 let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
+                self.check_constant_truthiness(lhs)?;
                 let mut condition_error = false;
                 if matches!(lhs_ty.peel(), Type::Unknown) {
                     // `&&`/`||` on un-narrowed `unknown`
@@ -1632,6 +1634,7 @@ impl Inferer<'_> {
                 // The operand keeps a literal type, which can decide the result:
                 // `!true` is `false`.
                 let (id, operand_ty) = self.infer_expr_keeping_literals(operand, None, true)?;
+                self.check_constant_truthiness(operand)?;
                 if matches!(operand_ty.peel(), Type::Unknown) {
                     // `!x` on un-narrowed `unknown` rejected
                     // with a "narrow first" hint.
@@ -10182,11 +10185,13 @@ impl Inferer<'_> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
         let cond_span = self.ast.try_expr(cond).map_err(super::arena_failure)?.span;
         self.check_condition_ty(&cond_ty, cond_span);
+        self.check_constant_truthiness(cond)?;
+        let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
+        self.check_tested_functions(cond, then_span)?;
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
         let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected)?;
-        let then_span = self.ast.try_expr(then_).map_err(super::arena_failure)?.span;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span)?;
 
         let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected)?;
@@ -10405,7 +10410,9 @@ impl Inferer<'_> {
         // message would print `<error>` at the user.
         let lhs_decides =
             !type_admits_nullish(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error);
-        if lhs_decides {
+        // The error for a left side whose syntax is never nullish says the same.
+        let reported_constant = self.check_constant_nullishness(lhs)?;
+        if lhs_decides && !reported_constant {
             self.diagnostics.push(crate::Diagnostic {
                 severity: Severity::Warning,
                 span,

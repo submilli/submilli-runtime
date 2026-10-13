@@ -1,4 +1,1 @@
 types: 117 of 147 tsc entries compared, 0 differ
-
-errors:
-line 63: tsc TS2869: Right operand of ?? is unreachable because the left operand is never nullish. (we accept)

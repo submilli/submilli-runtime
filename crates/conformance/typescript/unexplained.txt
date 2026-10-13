@@ -270,15 +270,11 @@ expressions/binaryOperators/logicalAndOperator/logicalAndOperatorStrictMode.ts 8
 expressions/binaryOperators/logicalAndOperator/logicalAndOperatorWithEveryType.ts 63 type
 expressions/binaryOperators/logicalAndOperator/logicalAndOperatorWithEveryType.ts 65 type
 expressions/binaryOperators/logicalAndOperator/logicalAndOperatorWithEveryType.ts 69 type
-expressions/binaryOperators/logicalAndOperator/logicalAndOperatorWithEveryType.ts 69 missed
 expressions/binaryOperators/logicalAndOperator/logicalAndOperatorWithEveryType.ts 70 type
-expressions/binaryOperators/logicalAndOperator/logicalAndOperatorWithEveryType.ts 70 missed
 expressions/binaryOperators/logicalAndOperator/logicalAndOperatorWithEveryType.ts 114 type
 expressions/binaryOperators/logicalAndOperator/logicalAndOperatorWithEveryType.ts 124 type
 expressions/binaryOperators/logicalOrOperator/logicalOrOperatorWithEveryType.ts 69 type
 expressions/binaryOperators/logicalOrOperator/logicalOrOperatorWithEveryType.ts 70 type
-expressions/binaryOperators/logicalOrOperator/logicalOrOperatorWithEveryType.ts 71 missed
-expressions/binaryOperators/logicalOrOperator/logicalOrOperatorWithEveryType.ts 72 missed
 expressions/functionCalls/callWithMissingVoid.ts 24 extra
 expressions/functionCalls/callWithMissingVoid.ts 25 type
 expressions/functionCalls/callWithMissingVoid.ts 25 missed
@@ -302,7 +298,6 @@ parser/ecmascript5/parser15.4.4.14-9-2.ts 20 type
 parser/ecmascript5/parser15.4.4.14-9-2.ts 20 missed
 parser/ecmascript5/parser15.4.4.14-9-2.ts 21 type
 parser/ecmascript5/parser15.4.4.14-9-2.ts 21 missed
-statements/ifDoWhileStatements/ifDoWhileStatements.ts 160 missed
 types/contextualTypes/methodDeclarations/contextuallyTypedBindingInitializer.ts 13 type
 types/literal/literalTypes2.ts 103 type
 types/literal/literalTypes2.ts 104 type
@@ -359,12 +354,6 @@ types/typeRelationships/subtypesAndSuperTypes/subtypingWithCallSignaturesWithRes
 types/typeRelationships/subtypesAndSuperTypes/subtypingWithCallSignaturesWithRestParameters.ts 83 extra
 types/typeRelationships/subtypesAndSuperTypes/subtypingWithCallSignaturesWithRestParameters.ts 107 extra
 types/typeRelationships/subtypesAndSuperTypes/subtypingWithCallSignaturesWithRestParameters.ts 123 extra
-types/typeRelationships/widenedTypes/initializersWidened.ts 21 missed
-types/typeRelationships/widenedTypes/initializersWidened.ts 22 missed
-types/typeRelationships/widenedTypes/initializersWidened.ts 23 missed
-types/typeRelationships/widenedTypes/initializersWidened.ts 25 missed
-types/typeRelationships/widenedTypes/initializersWidened.ts 26 missed
-types/typeRelationships/widenedTypes/initializersWidened.ts 27 missed
 types/typeRelationships/widenedTypes/strictNullChecksNoWidening.ts 4 type
 types/typeRelationships/widenedTypes/strictNullChecksNoWidening.ts 5 type
 types/typeRelationships/widenedTypes/strictNullChecksNoWidening.ts 8 type

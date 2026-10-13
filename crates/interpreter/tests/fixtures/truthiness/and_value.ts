@@ -15,11 +15,13 @@ function main(): void {
   const v2: number | null = nb && nb.n;
   assert(v2 === null, "null lhs short-circuits to null");
 
-  const r: null | boolean = null && boom();
+  const none: null = null as null;
+  const empty: string = "";
+  const r: null | boolean = none && boom();
   assert(r === null, "&& keeps the falsy null lhs");
   const s: number | boolean = 0 && boom();
   assert((s as number) === 0, "&& keeps the falsy zero lhs");
-  const t: string | boolean = ("" && boom()) as string | boolean;
+  const t: string | boolean = (empty && boom()) as string | boolean;
   assert((t as string) === "", "&& keeps the empty-string lhs");
   assert(true || boom(), "|| short-circuits on a truthy lhs");
 
