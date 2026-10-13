@@ -1,0 +1,1 @@
+line 28 type: bug SUB-1608 a pattern's defaults don't shape the initializer literal, where tsc makes defaulted members optional and allows missing ones

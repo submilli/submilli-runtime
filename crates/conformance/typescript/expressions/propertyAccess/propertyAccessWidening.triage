@@ -1,0 +1,1 @@
+line 19, 20 extra: bug SUB-1620 a union with an empty object literal isn't normalized, so `(o || {}).a` is rejected

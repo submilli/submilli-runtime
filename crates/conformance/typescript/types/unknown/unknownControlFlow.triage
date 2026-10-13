@@ -11,3 +11,4 @@ line 366, 375 type: by-design spec §1.6 `==` is an alias for `===`, so `x == y`
 
 line 86, 92, 119, 125, 173, 176 extra: by-design spec §1.6 `==` and `!=` against `null` or `undefined` are rejected, since they compare like `===` and would miss the other nullish value
 line 90, 96 type: by-design spec §1.6 `!=` against `null` or `undefined` is rejected and checked as `!==`, so the equality branch contains only the tested nullish value
+line 23, 24, 25 extra: bug SUB-1437 a primitive isn't assignable to `{}` or `Object` (so `unknown` isn't assignable to `{} | null | undefined`)

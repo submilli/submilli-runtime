@@ -1,0 +1,1 @@
+line 14, 15, 16, 19, 20, 21, 25 extra: bug SUB-1619 calling a union of function types is rejected when a member has a rest parameter

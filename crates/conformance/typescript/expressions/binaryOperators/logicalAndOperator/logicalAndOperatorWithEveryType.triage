@@ -1,3 +1,8 @@
 line 36, 37, 47, 48, 58, 59, 91, 92, 102, 103, 113, 114, 124, 125 missed: bug SUB-1154 tsc rejects a condition that is always truthy or always falsy
 line 30, 52, 85, 96, 107, 118 type: by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
 line 36, 37, 47, 48, 58, 59, 91, 92, 102, 103 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a` is always falsy
+line 63 type: by-design spec §1.6 `&&` keeps `number` whole in its falsy part, where tsc narrows to `0`
+line 65 type: by-design spec §1.1 a `void` result may hold any value, since a value-returning function stored as a `void` one returns it (so truthiness doesn't narrow a `void` to `never`)
+line 69, 114, 124 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a` is always falsy
+line 69, 70 missed: bug SUB-1154 tsc rejects a condition that is always truthy or always falsy
+line 70 type: by-design spec §1.6 `a && b` is `falsy_part(a) | b`, even when `a` is always falsy (`undefined | void` prints as `void`)

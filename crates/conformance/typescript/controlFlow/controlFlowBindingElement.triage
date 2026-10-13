@@ -1,1 +1,2 @@
 line 55, 70, 85 extra: artifact the test relies on the DOM library's `window`, which Submilli doesn't provide
+line 42 extra: by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand

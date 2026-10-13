@@ -1,0 +1,1 @@
+line 47, 48, 49, 50, 51, 52, 53, 54, 74, 75, 76, 77, 78, 79, 80, 81, 101, 102, 103, 104, 105, 106, 107, 108 type: bug SUB-1612 a template literal with a bitwise interpolation is `string`, where tsc folds it to a literal

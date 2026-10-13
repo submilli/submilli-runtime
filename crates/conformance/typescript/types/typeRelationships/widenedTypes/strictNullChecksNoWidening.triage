@@ -1,0 +1,3 @@
+line 4 type: by-design spec §Excluded-Features there is no `any`, so `let b = null` is `null`, where tsc makes it an evolving `any`
+line 5 type: by-design spec §Excluded-Features there is no `any`, so `let b = null` is `null`, where tsc makes it an evolving `any` (here `let a2 = undefined` is `undefined`)
+line 8 type: by-design spec §Excluded-Features there is no `any`, so an unannotated `let x = []` is `never[]`, where tsc makes it an evolving `any[]`
