@@ -1,2 +1,1 @@
-line 5, 11, 26 missed: bug SUB-1153 a property a later spread always overwrites
 line 17 type: by-design spec §2.5 a spread of a union merges its members into one object type with optional fields

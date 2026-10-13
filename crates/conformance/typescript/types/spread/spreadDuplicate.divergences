@@ -23,7 +23,3 @@ line 22: d2
 line 22: { a: 123, ...(t ? d : {}) }
   tsc:  { a: string | number; }
   ours: { a: number | string | undefined }
-
-errors:
-line 14: tsc TS2783: 'a' is specified more than once, so this usage will be overwritten. (we accept)
-line 16: tsc TS2783: 'a' is specified more than once, so this usage will be overwritten. (we accept)

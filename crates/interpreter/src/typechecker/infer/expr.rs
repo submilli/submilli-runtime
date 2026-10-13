@@ -5606,6 +5606,9 @@ impl Inferer<'_> {
         > = std::collections::BTreeMap::new();
 
         let overwritten_after = fields_written_after(&members);
+        // Fields written out so far, by name, for the check that a later spread
+        // doesn't always overwrite one of them.
+        let mut written_fields: BTreeMap<String, Span> = BTreeMap::new();
         for (member, overwritten) in members.into_iter().zip(overwritten_after) {
             match member {
                 crate::ObjectLiteralMember::Computed { .. } => {
@@ -5615,6 +5618,7 @@ impl Inferer<'_> {
                     );
                 }
                 crate::ObjectLiteralMember::Field(field) => {
+                    written_fields.insert(field.name.name.clone(), field.name.span);
                     if is_reserved_object_field(&field.name.name) {
                         self.error(field.name.span, reserved_field_message(&field.name.name));
                         // Continue inferring the value so cascading
@@ -5812,6 +5816,7 @@ impl Inferer<'_> {
                     else {
                         continue;
                     };
+                    self.report_fields_the_spread_overwrites(&written_fields, &fields);
                     let source_index = spread_count;
                     spread_count += 1;
                     object_members.push(crate::TypedObjectMember::Spread {
@@ -6210,6 +6215,31 @@ impl Inferer<'_> {
     /// TypeScript. Only structural object types and interfaces with an index
     /// signature spread; anything else is reported. A `by_name` spread's fields
     /// are recorded in `TypedAst::spread_mask_fields`, which codegen reads.
+    /// A field written before a spread that always sets it is dead: the spread
+    /// overwrites it whatever the value. tsc reports it (TS2783); a spread field
+    /// that may be absent, because it is optional or missing from one of the
+    /// spread's alternatives, leaves the earlier value in place and is fine.
+    fn report_fields_the_spread_overwrites(
+        &mut self,
+        written_fields: &BTreeMap<String, Span>,
+        spread_fields: &ObjectFields,
+    ) {
+        for (name, field) in spread_fields {
+            if field.optional {
+                continue;
+            }
+            if let Some(span) = written_fields.get(name) {
+                self.error_with_help(
+                    *span,
+                    format!("`{name}` is specified more than once, so this value is always overwritten"),
+                    vec![format!(
+                        "the spread after it always sets `{name}`; remove this field, or move it after the spread"
+                    )],
+                );
+            }
+        }
+    }
+
     pub(super) fn spread_source_fields(
         &mut self,
         typed_source: ExprId,
