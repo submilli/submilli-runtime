@@ -1001,6 +1001,7 @@ fn call(
             CallOutcome::Unfinished
         }),
         line: None,
+        package_line: None,
         request: Some(Box::new(request)),
         response: response.map(Box::new),
         usage: None,

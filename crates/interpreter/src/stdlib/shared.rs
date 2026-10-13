@@ -3,7 +3,9 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use crate::runtime::decision::{CallSite, CallTicket, EntryPath, SourceLine};
+use crate::runtime::decision::{
+    CallOrigin, CallSite, CallTicket, EntryPath, PackageLine, SourceLine,
+};
 use crate::runtime::fs::{ContainError, ContentPath, LinkPath, resolve_content, resolve_link};
 use crate::runtime::fuel;
 use crate::runtime::host::{
@@ -142,38 +144,61 @@ pub(crate) fn check_security_call(
     Ok(ticket)
 }
 
-/// Begins the recorder's call for a host function at its entry, with the line of the
-/// submitted program that led to it. `None` when no recorder is installed.
+/// Begins the recorder's call for a host function at its entry, with where in the
+/// submitted program, and in a package, it came from. `None` when no recorder is installed.
 pub(crate) fn begin_recorded_call(
     store: &impl wasmtime::AsContext<Data = StoreData>,
     caller: &str,
     capability: &str,
 ) -> Option<CallTicket> {
     let recorder = store.as_context().data().security_check.recorder()?;
-    Some(recorder.begin_call(caller, capability, source_line(store)))
+    Some(recorder.begin_call(caller, capability, call_origin(store)))
 }
 
-/// The line in the submitted program that is running, or `None` when the lookup fails.
+/// Where the running call came from: the line in the submitted program, and the line
+/// inside a package when the program reached the call through one. Each is `None` when
+/// its lookup fails.
 ///
 /// Walks a full backtrace, which costs more than [`running_package`]'s module visit, so
 /// it runs only while a recorder is installed and still wants lines, uncharged to guest
-/// fuel (see `DecisionLogConfig::max_line_capture_frames`). Package frames are skipped:
-/// the line is the user's call into the package, not a line inside it.
-pub(crate) fn source_line(
-    store: &impl wasmtime::AsContext<Data = StoreData>,
-) -> Option<SourceLine> {
-    let recorder = store.as_context().data().security_check.recorder()?;
+/// fuel (see `DecisionLogConfig::max_line_capture_frames`). The program's line is its own
+/// call into the package; the package's line is the innermost frame of package code.
+pub(crate) fn call_origin(store: &impl wasmtime::AsContext<Data = StoreData>) -> CallOrigin {
+    let Some(recorder) = store.as_context().data().security_check.recorder() else {
+        return CallOrigin::default();
+    };
     if !recorder.wants_line() {
-        return None;
+        return CallOrigin::default();
     }
     let backtrace = wasmtime::WasmBacktrace::force_capture(store);
     recorder.note_line_capture(backtrace.frames().len());
-    let frame = backtrace
-        .frames()
+    let frames = backtrace.frames();
+    let program = frames
         .iter()
-        .find(|frame| frame.module().name() == Some(crate::mangle::USER_PACKAGE))?;
+        .position(|frame| frame.module().name() == Some(crate::mangle::USER_PACKAGE));
+    let line = program.and_then(|at| {
+        let symbol = frames[at].symbols().first()?;
+        Some(SourceLine {
+            line: symbol.line()?,
+            column: symbol.column(),
+        })
+    });
+    // Frames inside the program's call: a package's frames carry its name on their path.
+    let package = frames[..program.unwrap_or(frames.len())]
+        .iter()
+        .find_map(package_line);
+    CallOrigin { line, package }
+}
+
+/// The package line a frame is at, when it is package code with a known line.
+fn package_line(frame: &wasmtime::FrameInfo) -> Option<PackageLine> {
+    let package = frame.module().name()?;
     let symbol = frame.symbols().first()?;
-    Some(SourceLine {
+    let module = symbol.file()?.strip_prefix(package)?.strip_prefix('/')?;
+    Some(PackageLine {
+        package: package.to_owned(),
+        module: module.to_owned(),
+        function: symbol.name().map(ToString::to_string),
         line: symbol.line()?,
         column: symbol.column(),
     })
@@ -301,7 +326,7 @@ pub(crate) fn audit_entry_denial(
     let security = store.as_context().data().security_check.as_ref();
     let ticket = security
         .recorder()
-        .map(|recorder| recorder.begin_call(caller, capability, source_line(store)));
+        .map(|recorder| recorder.begin_call(caller, capability, call_origin(store)));
     audit_denial_at(
         security,
         caller,
