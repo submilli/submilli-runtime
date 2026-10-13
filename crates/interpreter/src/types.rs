@@ -681,9 +681,15 @@ impl Type {
             Type::Union(members) => members,
             _ => return false,
         };
+        // Through aliases only: `T & undefined` holds `undefined` only when `T`
+        // does.
         members.iter().any(Type::is_empty_object)
-            && members.iter().any(|m| matches!(m.peel(), Type::Null))
-            && members.iter().any(|m| matches!(m.peel(), Type::Undefined))
+            && members
+                .iter()
+                .any(|m| matches!(m.without_aliases(), Type::Null))
+            && members
+                .iter()
+                .any(|m| matches!(m.without_aliases(), Type::Undefined))
     }
 
     /// Whether this is a narrowed type parameter, like `T & {}`.
@@ -726,15 +732,11 @@ impl Type {
     /// number is never treated as an object struct. `peel` reads a refinement
     /// as its shape, so `T & {}` lowers as `unknown`, like `T` itself.
     pub fn lowered(&self) -> &Type {
-        const UNKNOWN: &Type = &Type::Unknown;
         let peeled = self.peel();
-        match peeled {
-            Type::Object {
-                fields,
-                index: None,
-            } if fields.is_empty() => UNKNOWN,
-            _ => peeled,
+        if peeled.is_empty_object() {
+            return &Type::Unknown;
         }
+        peeled
     }
 
     /// [`peel`](Self::peel), but stopping at a [`Type::Readonly`] wrapper, for

@@ -54,6 +54,7 @@ function main(): void {
   const maybe: {} | null | undefined = 0;
   assert((maybe || "fallback") === "fallback", "`{} | null | undefined` can be tested");
   assert(testedAfterJoin(0) === "falsy" && testedAfterJoin(null) === "null", "a join keeps `{} | null | undefined`");
+  assert(toggledInLoop(1) === "null" && toggledInLoop(2) === "truthy", "a loop join keeps `{} | null | undefined`");
   const parsed: unknown = JSON.parse("0");
   const anyValue: {} | null | undefined = parsed;
   assert(anyValue === 0, "`unknown` fits `{} | null | undefined`");
@@ -65,10 +66,28 @@ function main(): void {
 }
 
 function testedAfterJoin(value: {} | null | undefined): string {
+  let tag = "";
   if (value === null) {
-    return "null";
+    tag = "null";
+  } else {
+    tag = "other";
+  }
+  if (tag === "null") {
+    return tag;
   }
   return value ? "truthy" : "falsy";
+}
+
+function toggledInLoop(rounds: number): string {
+  let value: {} | null | undefined = 0;
+  for (let i = 0; i < rounds; i++) {
+    if (value === null) {
+      value = i;
+    } else {
+      value = null;
+    }
+  }
+  return value ? "truthy" : String(value);
 }
 
 function castThrows(json: string, asArray: boolean = false, asField: boolean = false): boolean {

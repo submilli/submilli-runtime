@@ -1523,12 +1523,10 @@ pub fn union_envs(
     let mut joined_narrowings = NarrowEnv::new();
     for (path, a_view) in &a_narrowings {
         if let Some(b_view) = b_narrowings.get(path) {
-            let joined_ty = join_flow_types(&a_view.narrowed_ty, &b_view.narrowed_ty);
-            // A join that holds every value narrows nothing: reads see the
-            // declared type again, `unknown` or a written `{} | null | undefined`.
-            if joined_ty.holds_every_value() {
+            let Some(joined_ty) = join_narrowed_types(&a_view.narrowed_ty, &b_view.narrowed_ty)
+            else {
                 continue;
-            }
+            };
             // A ruled-out view has no shadow, so the join reads through the other.
             let a_view = if is_ruled_out(&a_view.narrowed_ty) {
                 b_view
@@ -1604,9 +1602,17 @@ pub fn is_ruled_out(ty: &Type) -> bool {
     matches!(ty, Type::Error)
 }
 
+/// The join of two narrowings of one path, or `None` when it holds every
+/// value: then it narrows nothing, and reads see the declared type again,
+/// `unknown` or a written `{} | null | undefined`.
+pub(super) fn join_narrowed_types(left: &Type, right: &Type) -> Option<Type> {
+    let joined = join_flow_types(left, right);
+    (!joined.holds_every_value()).then_some(joined)
+}
+
 /// Flow joins collapse a literal already covered by a broad primitive. Keep
 /// authored unions unchanged: their overlap is meaningful to JSON diagnostics.
-pub(super) fn join_flow_types(left: &Type, right: &Type) -> Type {
+fn join_flow_types(left: &Type, right: &Type) -> Type {
     // A ruled-out side holds no value, so it adds nothing to the other.
     if is_ruled_out(left) {
         return right.clone();

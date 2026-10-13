@@ -49,8 +49,36 @@ function lastPresent<T>(items: T[]): T | null {
   return best;
 }
 
+function lastDefined<T>(items: T[]): T | null {
+  let best = items[0] || null;
+  for (const item of items) {
+    if (item !== undefined) {
+      best = item;
+    }
+  }
+  return best;
+}
+
+function regroup<T>(value: T): number {
+  let either = value !== undefined ? value : null;
+  if (value) {
+    either = value;
+  }
+  const defined = value !== undefined ? value : null;
+  const nonNull = value !== null ? value : undefined;
+  return [either, defined, nonNull].length;
+}
+
 function orMaybe<T>(value: T): {} | null | undefined {
   return value;
+}
+
+function collect<T>(values: T[]): ({} | null | undefined)[] {
+  const out: ({} | null | undefined)[] = [];
+  for (const value of values) {
+    out.push(value);
+  }
+  return out;
 }
 
 function main(): void {
@@ -65,4 +93,7 @@ function main(): void {
   assert(passOn<number | undefined>(undefined) === undefined, "an absent `T` passes on");
   assert(lastPresent([1, 0, 2, 0]) === 2, "a narrowed `T` fits a `T | null` variable");
   assert(orMaybe(0) === 0, "a `T` fits `{} | null | undefined`");
+  assert(lastDefined([1, 2, undefined]) === 2, "one narrowing of `T` fits a union holding another");
+  assert(regroup(0) === 3, "narrowings of `T` regroup into unions");
+  assert(JSON.stringify(collect<number | string | null>([1, null, "a"])) === "[1,null,\"a\"]", "a `T` element fits `{} | null | undefined`");
 }
