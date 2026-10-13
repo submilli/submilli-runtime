@@ -17,8 +17,8 @@ const ALWAYS: Outcomes = 1;
 const NEVER: Outcomes = 2;
 const SOMETIMES: Outcomes = ALWAYS | NEVER;
 
-/// Where a read the uncalled-function check compares by name starts: a
-/// binding or `this`.
+/// The start of a read path the uncalled-function check compares by name:
+/// a binding or `this`.
 #[derive(PartialEq, Eq)]
 enum PathRoot {
     Binding(String),
@@ -95,11 +95,7 @@ impl Inferer<'_> {
 
     /// TS2774 and TS2845 for the left operand of an `&&`. When the `&&` is
     /// (part of) an `if` condition, the `if`'s body may use it too.
-    fn check_tested_function_in_and(
-        &mut self,
-        and: ExprId,
-        lhs: ExprId,
-    ) -> Result<(), CompilerFailure> {
+    fn check_and_operand(&mut self, and: ExprId, lhs: ExprId) -> Result<(), CompilerFailure> {
         let body = self.if_condition_ands.get(&and).copied();
         self.check_tested_condition(lhs, body)
     }
@@ -216,7 +212,7 @@ impl Inferer<'_> {
             ..
         } = self.ast.try_expr(expr).map_err(super::arena_failure)?.kind
         {
-            self.check_tested_function_in_and(expr, lhs)?;
+            self.check_and_operand(expr, lhs)?;
         }
         Ok(())
     }

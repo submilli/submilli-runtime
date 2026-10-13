@@ -654,6 +654,18 @@ impl<'a> Unifier<'a> {
         // peel aliases — unification is structural, alias label doesn't participate.
         // A type variable still binds to a readonly argument as readonly, or the
         // call's result would hand back a writable view of it.
+        // A narrowed type parameter is not a union, so tsc infers it whole
+        // into a union's one bare type parameter: `T & ({} | null)` binds
+        // `V | null`'s `V` to itself, not to its shape's `{}`.
+        if arg_ty.refines_type_parameter()
+            && let Type::Union(members) = param_ty.peel()
+            && let [type_var] = members
+                .iter()
+                .filter(|member| matches!(member.peel(), Type::TypeVar(_)))
+                .collect::<Vec<_>>()[..]
+        {
+            return self.unify(type_var, arg_ty);
+        }
         // A narrowed type parameter (`T & {}`) binds as itself, as in
         // TypeScript: its shape alone would lose that it is still a `T`.
         let bindable_arg = if arg_ty.refines_type_parameter() {

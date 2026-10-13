@@ -674,9 +674,10 @@ impl Type {
     }
 
     /// Whether this holds every value: `unknown`, or a union of `{}`, `null`
-    /// and `undefined` (and possibly more).
+    /// and `undefined` (and possibly more). Through aliases only: a refinement
+    /// like `T & unknown` holds only `T`'s values.
     pub fn holds_every_value(&self) -> bool {
-        let members: &[Type] = match self.peel() {
+        let members: &[Type] = match self.without_aliases() {
             Type::Unknown => return true,
             Type::Union(members) => members,
             _ => return false,
@@ -690,6 +691,29 @@ impl Type {
             && members
                 .iter()
                 .any(|m| matches!(m.without_aliases(), Type::Undefined))
+    }
+
+    /// A refinement whose shape is a union, as the union of its pieces:
+    /// `T & ({} | null)` is `(T & {}) | null`. `None` for any other type.
+    pub fn refinement_pieces(&self) -> Option<Type> {
+        let Type::Refined { original, ty } = self.without_aliases() else {
+            return None;
+        };
+        let Type::Union(parts) = ty.peel() else {
+            return None;
+        };
+        Some(Type::Union(
+            parts
+                .iter()
+                .map(|part| match part.peel() {
+                    Type::Null | Type::Undefined | Type::Void => part.clone(),
+                    _ => Type::Refined {
+                        original: original.clone(),
+                        ty: Box::new(part.clone()),
+                    },
+                })
+                .collect(),
+        ))
     }
 
     /// Whether this is a narrowed type parameter, like `T & {}`.

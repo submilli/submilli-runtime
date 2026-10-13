@@ -705,34 +705,10 @@ fn assignable_rec(
     {
         return true;
     }
-    // A refinement may fit a union through one member that neither its
-    // original nor its shape alone fits (`T & {}` into `(T & {}) | undefined`),
-    // or piece by piece: `T & ({} | null)` is `(T & {}) | null`.
-    // Through aliases only: an expected refinement keeps its own original,
-    // which the refined-expected rule below requires (`T & {}` is no `U & {}`).
-    if let Type::Refined { original, ty } = actual.without_aliases()
-        && let Type::Union(members) = expected.without_aliases()
+    if matches!(actual.without_aliases(), Type::Refined { .. })
+        && refinement_fits_union(actual, expected, types, seen)
     {
-        if members
-            .iter()
-            .any(|member| assignable_rec(actual, member, types, seen))
-        {
-            return true;
-        }
-        if let Type::Union(parts) = ty.peel()
-            && parts.iter().all(|part| {
-                let piece = match part.peel() {
-                    Type::Null | Type::Undefined | Type::Void => part.clone(),
-                    _ => Type::Refined {
-                        original: original.clone(),
-                        ty: Box::new(part.clone()),
-                    },
-                };
-                assignable_rec(&piece, expected, types, seen)
-            })
-        {
-            return true;
-        }
+        return true;
     }
     if let Type::Refined { original, ty } = expected.without_aliases() {
         return assignable_rec(actual, original, types, seen)
@@ -1550,6 +1526,35 @@ pub(super) fn literal_to_type(lit: &narrowing::LiteralValue) -> Type {
         narrowing::LiteralValue::Null => Type::Null,
         narrowing::LiteralValue::Undefined => Type::Undefined,
     }
+}
+
+/// Whether `actual`, a refinement, fits the union
+/// `expected` (through aliases only: an expected refinement keeps requiring
+/// its own original). It fits through one member that neither its original
+/// nor its shape alone fits (`T & {}` into `(T & {}) | undefined`), or piece by
+/// piece: `T & ({} | null)` is `(T & {}) | null`. When it doesn't, the
+/// refined-expected and refined-actual rules still get their turn.
+fn refinement_fits_union(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    let Type::Union(members) = expected.without_aliases() else {
+        return false;
+    };
+    if members
+        .iter()
+        .any(|member| assignable_rec(actual, member, types, seen))
+    {
+        return true;
+    }
+    let Some(Type::Union(pieces)) = actual.refinement_pieces() else {
+        return false;
+    };
+    pieces
+        .iter()
+        .all(|piece| assignable_rec(piece, expected, types, seen))
 }
 
 #[cfg(test)]
