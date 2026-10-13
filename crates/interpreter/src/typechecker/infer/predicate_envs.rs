@@ -757,7 +757,17 @@ impl<'a> Inferer<'a> {
         }
         // A field that is only the compared value reads as `never` once proven
         // otherwise, but re-reads its live value: an alias may have written it.
-        let stripped = if compares_undefined {
+        // `typeof x === "object"` leaves an `unknown` `x` an object or `null`,
+        // which Submilli spells `unknown` for want of an `object` type; ruling
+        // out a nullish value then leaves it `unknown`, not `{}`, so `in` and
+        // field tests still apply.
+        let tested_object = matches!(path_ty.peel(), Type::Unknown)
+            && self
+                .lookup_narrowed_view(&path)
+                .is_some_and(|view| view.facts.contains(narrowing::TypeFacts::IS_OBJECT));
+        let stripped = if tested_object {
+            path_ty.clone()
+        } else if compares_undefined {
             narrowing::strip_undefined(&path_ty)
         } else {
             narrowing::strip_null(&path_ty)
@@ -2001,6 +2011,7 @@ impl<'a> Inferer<'a> {
         let equal = if matches!(member.peel(), Type::Null | Type::Undefined | Type::Void) {
             None
         } else if matches!(member.peel(), Type::Unknown)
+            || member.is_empty_object()
             || member.peel() == &literal_ty.widen_literal()
         {
             Some(literal_ty)

@@ -814,6 +814,10 @@ fn assignable_rec(
         return result;
     }
     match (actual, expected) {
+        // `{}` holds every value but `null` and `undefined`, as in TypeScript.
+        (Type::Null | Type::Undefined | Type::Void, _) if expected.is_empty_object() => false,
+        (Type::GenericParam { .. }, _) if expected.is_empty_object() => false,
+        (_, _) if expected.is_empty_object() => true,
         (Type::GenericParam { id: a, .. }, Type::GenericParam { id: b, .. }) => a == b,
         (Type::GenericParam { .. }, _) | (_, Type::GenericParam { .. }) => false,
         // Explicit before the `==` fallback, which would reject `StringLiteral("foo") <: String`.

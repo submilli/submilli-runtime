@@ -88,7 +88,7 @@ pub fn emit_box(
     ctx: &CodegenCtx<'_>,
     ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let ty = ty.peel();
+    let ty = ty.lowered();
     match ty {
         Type::Number | Type::NumberLiteral(_) => {
             let boxed_idx = ctx
@@ -205,7 +205,7 @@ pub fn emit_coerce_to_slot(
     }
     // Never: the call already threw, but the wasm validator still needs a
     // well-typed cast sequence; emit_cast_to covers this. Traps here are fine.
-    if matches!(source_ty.peel(), Type::Never) {
+    if matches!(source_ty.lowered(), Type::Never) {
         emit_cast_to(emitter, ctx, target_ty)?;
         return Ok(());
     }
@@ -236,7 +236,7 @@ pub fn emit_coerce_to_wasm_slot(
     // point is unreachable. The validator still has to see a well-typed stack
     // and the value's slot may be a primitive it can't be cast into, so make
     // the rest of the sequence stack-polymorphic instead.
-    if matches!(source_ty.peel(), Type::Never) {
+    if matches!(source_ty.lowered(), Type::Never) {
         emitter.instruction(Instruction::Unreachable);
         return Ok(());
     }
@@ -350,15 +350,15 @@ fn emit_ref_truthiness(
     nullable: bool,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     use TruthinessClass::*;
-    let peeled = cond_ty.peel();
+    let peeled = cond_ty.lowered();
     let members: Vec<&Type> = match peeled {
         Type::Union(members) => members.iter().collect(),
         single => vec![single],
     };
     let classes: Vec<TruthinessClass> = members
         .iter()
-        .filter(|m| !matches!(m.peel(), Type::Null))
-        .map(|m| match m.peel() {
+        .filter(|m| !matches!(m.lowered(), Type::Null))
+        .map(|m| match m.lowered() {
             Type::Void => Dynamic,
             Type::Undefined => AlwaysFalsy,
             _ => truthiness_class(m),
@@ -384,7 +384,7 @@ fn emit_ref_truthiness(
     let needs = |class: TruthinessClass, literal: fn(&Type) -> bool| {
         classes.contains(&class)
             || classes.contains(&Dynamic)
-            || members.iter().any(|m| literal(m.peel()))
+            || members.iter().any(|m| literal(m.lowered()))
     };
     let test_string = needs(StringLike, |m| matches!(m, Type::StringLiteral(_)));
     let test_number = needs(NumberLike, |m| matches!(m, Type::NumberLiteral(_)));
@@ -393,7 +393,7 @@ fn emit_ref_truthiness(
     let test_undefined = classes.contains(&Dynamic)
         || members
             .iter()
-            .any(|member| matches!(member.peel(), Type::Undefined));
+            .any(|member| matches!(member.lowered(), Type::Undefined));
 
     let slot = ctx.symbols.value_type(cond_ty)?;
     let tmp = emitter.add_anonymous_local(slot)?;
@@ -505,7 +505,7 @@ pub fn emit_narrowing_cast(
     cast_info: &crate::typechecker::infer::narrowing::CastInfo,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     use crate::typechecker::infer::narrowing::CastKind;
-    if matches!(cast_info.to_ty.peel(), Type::Never) {
+    if matches!(cast_info.to_ty.lowered(), Type::Never) {
         emitter.instruction(Instruction::Drop);
         emitter.instruction(Instruction::Unreachable);
         return Ok(());
@@ -593,7 +593,7 @@ pub fn emit_cast_to(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     // codegen casts on the structural shape — peel through
     // aliases. The alias label is purely a typechecker/display thing.
-    let ty = ty.peel();
+    let ty = ty.lowered();
     // Every per-type cast below assumes non-null input, so lift unless the target
     // admits a null of its own.
     if !target_allows_null(ctx, ty)? {
@@ -782,7 +782,7 @@ pub fn target_allows_null(
     ctx: &CodegenCtx<'_>,
     ty: &Type,
 ) -> Result<bool, crate::compiler_error::CompilerFailure> {
-    let ty = ty.peel();
+    let ty = ty.lowered();
     Ok(matches!(
         ty,
         Type::Null

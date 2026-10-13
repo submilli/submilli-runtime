@@ -1,8 +1,4 @@
-types: 36 of 74 tsc entries compared, 6 differ
-
-line 16: r3
-  tsc:  {}
-  ours: number | {}
+types: 36 of 74 tsc entries compared, 5 differ
 
 line 19: r6
   tsc:  ((x: number) => void) | ((x: Object) => void)

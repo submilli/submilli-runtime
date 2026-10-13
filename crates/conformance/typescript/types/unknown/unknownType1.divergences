@@ -1,4 +1,5 @@
-types: 49 of 92 tsc entries compared, 0 differ
+types: 49 of 92 tsc entries compared, 1 differ
 
-errors:
-line 117: ours: expected `{} | null | undefined`, got `unknown` (tsc accepts)
+line 117: v7
+  tsc:  {} | null | undefined
+  ours: unknown

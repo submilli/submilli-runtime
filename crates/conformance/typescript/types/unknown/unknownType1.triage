@@ -1,0 +1,1 @@
+line 117 type: by-design spec §1.2 `{} | null | undefined` holds every value, so it is `unknown`

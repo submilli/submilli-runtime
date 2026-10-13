@@ -1,11 +1,15 @@
-types: 198 of 284 tsc entries compared, 41 differ
+types: 198 of 284 tsc entries compared, 36 differ
 
-line 30: x
-  tsc:  {}
+line 23: x2
+  tsc:  {} | null | undefined
   ours: unknown
 
-line 39: x
-  tsc:  {}
+line 24: x3
+  tsc:  {} | { x: string; } | null | undefined
+  ours: unknown
+
+line 25: x4
+  tsc:  ThisOrThatNode | null | undefined
   ours: unknown
 
 line 45: x
@@ -16,25 +20,9 @@ line 54: x
   tsc:  NonNullable<T>
   ours: T
 
-line 69: x
-  tsc:  {} | null
-  ours: unknown
-
-line 75: x
-  tsc:  {} | undefined
-  ours: unknown
-
-line 80: x
-  tsc:  {} | null
-  ours: unknown
-
-line 81: x
-  tsc:  {}
-  ours: unknown
-
 line 87: x
   tsc:  {}
-  ours: unknown
+  ours: {} | null
 
 line 90: x
   tsc:  null | undefined
@@ -42,7 +30,7 @@ line 90: x
 
 line 93: x
   tsc:  {}
-  ours: unknown
+  ours: {} | undefined
 
 line 96: x
   tsc:  null | undefined
@@ -156,19 +144,8 @@ line 375: x
   tsc:  string | number
   ours: number
 
-line 382: encoding
-  tsc:  {} | null
-  ours: unknown
-
-line 402: value
-  tsc:  {} | null
-  ours: unknown
-
 errors:
 line 294: tsc TS2345: Argument of type '"foo"' is not assignable to parameter of type 'never'. (we accept)
-line 23: ours: expected `{} | null | undefined`, got `unknown` (tsc accepts)
-line 24: ours: expected `{} | { x: string } | null | undefined`, got `unknown` (tsc accepts)
-line 25: ours: expected `ThisOrThatNode | null | undefined`, got `unknown` (tsc accepts)
 line 29: ours: cannot use `unknown` as a condition (tsc accepts)
 line 35: ours: cannot use `unknown` in a boolean context (tsc accepts)
 line 86: ours: `x != undefined` does not also match `null`: `==` compares like `===` (tsc accepts)

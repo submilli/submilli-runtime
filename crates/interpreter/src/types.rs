@@ -681,6 +681,34 @@ impl Type {
         t
     }
 
+    /// `{}`, the object type with no fields.
+    pub fn empty_object() -> Type {
+        Type::Object {
+            fields: BTreeMap::new(),
+            index: None,
+        }
+    }
+
+    /// Whether this is `{}`: the object type with no fields and no index
+    /// signature. As in TypeScript, it holds every value but `null` and
+    /// `undefined`, primitives included, so codegen lowers it as `unknown`.
+    pub fn is_empty_object(&self) -> bool {
+        matches!(self.peel(), Type::Object { fields, index: None } if fields.is_empty())
+    }
+
+    /// [`peel`](Self::peel), with `{}` read as `unknown`: the type whose
+    /// representation and run-time operations a value of this type uses.
+    /// Codegen matches on this rather than on `peel`, so a `{}` holding a
+    /// number is never treated as an object struct.
+    pub fn lowered(&self) -> &Type {
+        const UNKNOWN: &Type = &Type::Unknown;
+        let peeled = self.peel();
+        if peeled.is_empty_object() {
+            return UNKNOWN;
+        }
+        peeled
+    }
+
     /// [`peel`](Self::peel), but stopping at a [`Type::Readonly`] wrapper, for
     /// sites that carry a type onward and must not drop its readonly-ness.
     pub fn peel_preserving_readonly(&self) -> &Type {
@@ -881,7 +909,9 @@ impl Type {
             // A union widens memberwise, which also collapses it when the members
             // share a base: `1 | 2` is `number`, not `number | number`, because
             // `Type::union` deduplicates.
-            Type::Union(members) => Type::union(members.iter().map(Type::widen_literal).collect()),
+            Type::Union(members) => Type::union(without_members_of_empty_object(
+                members.iter().map(Type::widen_literal).collect(),
+            )),
             _ => self.clone(),
         }
     }
@@ -1014,6 +1044,13 @@ impl Type {
         flat.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
         fold_boolean_literals(&mut flat);
         fold_enum_members(&mut flat);
+        // `{} | null | undefined` holds every value: it is `unknown`.
+        if flat.iter().any(Type::is_empty_object)
+            && flat.iter().any(|m| matches!(m.peel(), Type::Null))
+            && flat.iter().any(|m| matches!(m.peel(), Type::Undefined))
+        {
+            return Type::Unknown;
+        }
         if flat.len() > 1 {
             return Type::Union(flat);
         }
@@ -1208,6 +1245,25 @@ fn canonical_bigint_digits(digits: &str) -> String {
         "" => "0".to_string(),
         trimmed => format!("{sign}{trimmed}"),
     }
+}
+
+/// Drops the members a `{}` among `members` already holds: every one but
+/// `null`, `undefined`, `void` and a type parameter. TypeScript reduces them
+/// so where it widens a literal, joins flow types, and types `a ?? b`.
+pub fn without_members_of_empty_object(members: Vec<Type>) -> Vec<Type> {
+    if !members.iter().any(Type::is_empty_object) {
+        return members;
+    }
+    members
+        .into_iter()
+        .filter(|member| {
+            member.is_empty_object()
+                || matches!(
+                    member.peel(),
+                    Type::Null | Type::Undefined | Type::Void | Type::GenericParam { .. }
+                )
+        })
+        .collect()
 }
 
 /// `boolean` is `true | false`: a union holding both literals, or `boolean`

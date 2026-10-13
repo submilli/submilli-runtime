@@ -1,9 +1,1 @@
-types: 48 of 61 tsc entries compared, 2 differ
-
-line 21: aa7
-  tsc:  {}
-  ours: unknown
-
-line 21: a7 ?? 'whatever'
-  tsc:  {}
-  ours: unknown
+types: 48 of 61 tsc entries compared, 0 differ

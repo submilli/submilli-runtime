@@ -158,11 +158,14 @@ fn optional_body_type() -> Type {
     Type::Union(vec![
         Type::String,
         Type::Uint8Array,
-        // An empty object is the top object type — any structural object is
-        // assignable to it by width subtyping, so this accepts arbitrary object
-        // bodies (JSON-encoded at runtime via the `$Object` `toJson` vtable slot).
+        // Any object, interface or class instance, JSON-encoded at runtime via
+        // the `$Object` `toJson` vtable slot. Not `{}`, which also holds
+        // numbers and booleans.
         Type::Object {
-            index: None,
+            index: Some(crate::types::IndexSignature {
+                value: Box::new(Type::Unknown),
+                readonly: false,
+            }),
             fields: BTreeMap::new(),
         },
         Type::Array(Box::new(Type::Unknown)),

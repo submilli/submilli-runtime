@@ -67,7 +67,7 @@ impl ClosureSig {
 }
 
 pub fn classify(sig: &Type) -> Result<ClosureSig, crate::compiler_error::CompilerFailure> {
-    let Type::Function { params, ret, .. } = sig.peel() else {
+    let Type::Function { params, ret, .. } = sig.lowered() else {
         return Err(super::internal_failure(
             "closure classification requires a function type",
         ));

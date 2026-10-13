@@ -10440,7 +10440,13 @@ impl Inferer<'_> {
             let present = super::narrowing::strip_nullish(&lhs_ty);
             match empty_literal_join(self.ast, (lhs, &present), (rhs, &rhs_ty))? {
                 Some(joined) => joined,
-                None => conditional_result_type(present, rhs_ty, self.resolver()),
+                // TypeScript reduces `a ?? b` by subtype, so `{} | "d"` is `{}`.
+                None => match conditional_result_type(present, rhs_ty, self.resolver()) {
+                    Type::Union(members) => {
+                        Type::union(crate::types::without_members_of_empty_object(members))
+                    }
+                    joined => joined,
+                },
             }
         };
         Ok((
@@ -12478,9 +12484,12 @@ fn conditional_result_type(
 }
 
 fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
+    // `c ? 1 : {}` is `1 | {}` in TypeScript; only widening reduces it to `{}`.
+    let one_is_empty_object = left.is_empty_object() != right.is_empty_object();
     if matches!(left.peel(), Type::Object { .. })
         && matches!(right.peel(), Type::Object { .. })
         && left.peel() != right.peel()
+        || one_is_empty_object
     {
         Type::union(vec![left, right])
     } else if assignable(&left, &right, types) {

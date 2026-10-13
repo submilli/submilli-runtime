@@ -1,5 +1,5 @@
 function describe(x: unknown): string {
-  if (x !== null && "name" in x && typeof x.name === "string") {
+  if (typeof x === "object" && x !== null && "name" in x && typeof x.name === "string") {
     return x.name;
   }
   return "n/a";

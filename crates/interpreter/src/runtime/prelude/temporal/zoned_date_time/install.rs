@@ -628,7 +628,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
             ]),
         )
     };
-    let optional_options = || Type::Union(vec![shared::object_shape_type(&[]), Type::Undefined]);
+    let optional_options = || Type::Union(vec![shared::any_object_type(), Type::Undefined]);
 
     shared::declare_direct_fn(
         defs,

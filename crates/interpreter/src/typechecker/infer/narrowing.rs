@@ -721,11 +721,8 @@ pub fn strip_null(ty: &Type) -> Type {
                 .collect();
             Type::union(non_null)
         }
-        // `unknown` may or may not be null. Stripping null
-        // leaves `unknown` — we don't statically know the non-null
-        // subset. The NE_NULL fact attached by the caller carries the
-        // load-bearing information; the narrowed type stays dynamic.
-        Type::Unknown => Type::Unknown,
+        // `unknown` is `{} | null | undefined`, as in TypeScript.
+        Type::Unknown => Type::union(vec![Type::empty_object(), Type::Undefined]),
         // `ty` itself, not its peel: peeling drops a `readonly` wrapper.
         _ => ty.clone(),
     }
@@ -751,6 +748,7 @@ pub fn strip_undefined(ty: &Type) -> Type {
                 .cloned()
                 .collect(),
         ),
+        Type::Unknown => Type::union(vec![Type::empty_object(), Type::Null]),
         _ => ty.clone(),
     }
 }
@@ -999,7 +997,7 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
         Type::StringEnum { .. } => StringLike,
         // `{}` admits every value but `null` and `undefined`, falsy primitives
         // included.
-        empty if is_empty_object(empty) => Dynamic,
+        empty if empty.is_empty_object() => Dynamic,
         Type::Object { .. }
         | Type::Array(_)
         | Type::Tuple(_)
@@ -1009,11 +1007,6 @@ pub fn truthiness_class(member: &Type) -> TruthinessClass {
         | Type::ClassRef { .. } => AlwaysTruthy,
         _ => Dynamic,
     }
-}
-
-/// Whether `ty` is `{}`, the object type with no members.
-fn is_empty_object(ty: &Type) -> bool {
-    matches!(ty.peel(), Type::Object { fields, index } if fields.is_empty() && index.is_none())
 }
 
 /// Whether every member of `ty` is always truthy or always falsy, so a
@@ -1106,7 +1099,7 @@ pub fn falsy_part(ty: &Type) -> Type {
             TruthinessClass::AlwaysTruthy => None,
             // `{}` has no definitely falsy part, which is all TypeScript keeps
             // of a member whose truthiness is unknown.
-            TruthinessClass::Dynamic if is_empty_object(m) => None,
+            TruthinessClass::Dynamic if m.is_empty_object() => None,
             TruthinessClass::StringLike => Some(match m.peel() {
                 Type::String => Type::StringLiteral(String::new()),
                 _ => m.clone(),
@@ -1256,6 +1249,14 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
     if let Some(asserted) = asserted_type_for_facts(facts) {
         match peeled {
             Type::Unknown => return asserted,
+            // `{}` holds every primitive, so a `typeof` test pins it as it does
+            // `unknown`. It holds no `null` or `undefined`, so those tests fall
+            // through and rule it out.
+            empty
+                if empty.is_empty_object() && !matches!(asserted, Type::Null | Type::Undefined) =>
+            {
+                return asserted;
+            }
             Type::GenericParam { .. } => {
                 return Type::Refined {
                     original: Box::new(ty.clone()),
@@ -1264,6 +1265,9 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
             }
             _ => {}
         }
+    }
+    if matches!(peeled, Type::Unknown) && tests_only_presence(facts) {
+        return intersect_with(&unknown_as_union(), facts);
     }
     match peeled {
         Type::Union(members) => Type::union(
@@ -1294,9 +1298,15 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
         return preserve_refinement(original, subtract(shape, facts));
     }
     let peeled = ty.peel();
-    // false-branch on `unknown` is still `unknown` — we can't pin
-    // down "unknown minus T" statically.
+    // `unknown` minus `null` or `undefined` is the rest of `{} | null |
+    // undefined`, as in TypeScript; minus any other type it stays `unknown`.
     if matches!(peeled, Type::Unknown) {
+        if tests_only_presence(facts)
+            && !facts.contains(TypeFacts::TRUTHY)
+            && !facts.contains(TypeFacts::FALSY)
+        {
+            return subtract(&unknown_as_union(), facts);
+        }
         return Type::Unknown;
     }
     // A `void` result may hold any value, so no test rules it out: `typeof
@@ -1374,6 +1384,27 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
         },
         _ => ty.clone(),
     }
+}
+
+/// Whether `facts` test only whether a value is present: truthiness, `null`
+/// and `undefined`. Against those, `unknown` narrows as `{} | null |
+/// undefined`, which is what TypeScript takes it to mean.
+fn tests_only_presence(facts: TypeFacts) -> bool {
+    let presence = TypeFacts::TRUTHY
+        | TypeFacts::FALSY
+        | TypeFacts::EQ_NULL
+        | TypeFacts::NE_NULL
+        | TypeFacts::EQ_UNDEFINED
+        | TypeFacts::NE_UNDEFINED
+        | TypeFacts::IS_UNDEFINED;
+    facts != TypeFacts::EMPTY && presence.contains(facts)
+}
+
+/// `unknown` as the values it holds: `{} | null | undefined`. Built directly,
+/// since [`Type::union`] folds those members back into `unknown`, as it does
+/// what is left of them when a narrowing rules nothing out.
+fn unknown_as_union() -> Type {
+    Type::Union(vec![Type::empty_object(), Type::Null, Type::Undefined])
 }
 
 /// Map a [`TypeFacts`] mask to the concrete `Type` it asserts when narrowing
@@ -1516,9 +1547,10 @@ pub(super) fn join_flow_types(left: &Type, right: &Type) -> Type {
         return left.clone();
     }
     let joined = Type::union(vec![left.clone(), right.clone()]);
-    let Type::Union(mut members) = joined else {
+    let Type::Union(members) = joined else {
         return joined;
     };
+    let mut members = crate::types::without_members_of_empty_object(members);
     let has_number = members
         .iter()
         .any(|ty| matches!(ty.without_aliases(), Type::Number));
@@ -1874,30 +1906,36 @@ mod tests {
     }
 
     #[test]
-    fn intersect_unknown_with_truthy_stays_unknown() {
-        // Truthiness doesn't pin a concrete type — unknown stays
-        // unknown (with the TRUTHY/NE_NULL fact carried on the view).
+    fn intersect_unknown_with_truthy_is_empty_object() {
+        // A truthy `unknown` is neither `null` nor `undefined`: `{}`.
         assert_eq!(
             intersect_with(&Type::Unknown, TypeFacts::TRUTHY),
-            Type::Unknown
+            Type::empty_object()
         );
     }
 
     #[test]
-    fn subtract_unknown_stays_unknown() {
-        // False-branch of any predicate on unknown is still unknown —
-        // we can't statically pin down "unknown minus T".
+    fn subtract_unknown_removes_only_nullish_values() {
+        // `unknown` minus a type other than `null` or `undefined` stays
+        // `unknown`; minus those, it is the rest of `{} | null | undefined`.
         assert_eq!(
             subtract(&Type::Unknown, TypeFacts::IS_STRING),
             Type::Unknown
         );
-        assert_eq!(subtract(&Type::Unknown, TypeFacts::EQ_NULL), Type::Unknown);
+        assert_eq!(
+            subtract(&Type::Unknown, TypeFacts::EQ_NULL),
+            Type::union(vec![Type::empty_object(), Type::Undefined])
+        );
         assert_eq!(subtract(&Type::Unknown, TypeFacts::TRUTHY), Type::Unknown);
     }
 
     #[test]
-    fn strip_null_unknown_preserves_unknown() {
-        assert_eq!(strip_null(&Type::Unknown), Type::Unknown);
+    fn strip_null_from_unknown_leaves_empty_object_or_undefined() {
+        assert_eq!(
+            strip_null(&Type::Unknown),
+            Type::union(vec![Type::empty_object(), Type::Undefined])
+        );
+        assert_eq!(strip_nullish(&Type::Unknown), Type::empty_object());
     }
 
     #[test]

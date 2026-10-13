@@ -167,20 +167,14 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "with",
         shared::prelude_key("PlainMonthDay", "with"),
-        vec![
-            receiver(),
-            Param::new("fields", shared::object_shape_type(&[])),
-        ],
+        vec![receiver(), Param::new("fields", shared::any_object_type())],
         ty(),
     );
     shared::declare_direct_fn(
         defs,
         "toPlainDate",
         shared::prelude_key("PlainMonthDay", "toPlainDate"),
-        vec![
-            receiver(),
-            Param::new("fields", shared::object_shape_type(&[])),
-        ],
+        vec![receiver(), Param::new("fields", shared::any_object_type())],
         shared::temporal_type("PlainDate"),
     );
     for (field, ret) in [

@@ -304,10 +304,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "with",
         shared::prelude_key("PlainDate", "with"),
-        vec![
-            receiver(),
-            Param::new("fields", shared::object_shape_type(&[])),
-        ],
+        vec![receiver(), Param::new("fields", shared::any_object_type())],
         ty(),
     );
     for (method, ret) in [
@@ -396,7 +393,7 @@ fn declare_arithmetic(
                 Param::new("other", ty()),
                 Param::with_default(
                     "options",
-                    Type::Union(vec![shared::object_shape_type(&[]), Type::Undefined]),
+                    Type::Union(vec![shared::any_object_type(), Type::Undefined]),
                     DefaultValue::Undefined,
                 ),
             ],

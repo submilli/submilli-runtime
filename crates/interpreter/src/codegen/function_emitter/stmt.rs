@@ -462,7 +462,7 @@ fn emit_assign_field(
     }
     let recv = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty)?)?;
     emitter.instruction(Instruction::LocalSet(recv));
-    match receiver_ty.peel() {
+    match receiver_ty.lowered() {
         // Class instance: nominal receiver, array-backed object payload.
         Type::ClassRef { mangled, .. } => {
             emit_class_field_store(emitter, ctx, receiver, recv, mangled, name, value)?;
@@ -611,7 +611,7 @@ fn emit_assign_index(
         ctx.ta
             .source_type(receiver)
             .map_err(crate::codegen::arena_failure)?
-            .peel(),
+            .lowered(),
         Type::Uint8Array
     ) {
         emit_uint8_index_store(emitter, ctx, receiver, index, value)?;
@@ -856,7 +856,7 @@ fn catch_filter_class(
     ctx: &CodegenCtx,
     clause_ty: &Type,
 ) -> Result<Option<(u32, u32)>, crate::compiler_error::CompilerFailure> {
-    let Type::ClassRef { mangled, .. } = clause_ty.peel() else {
+    let Type::ClassRef { mangled, .. } = clause_ty.lowered() else {
         return Ok(None);
     };
     if *mangled == crate::mangle::prelude("Error") {
@@ -989,7 +989,7 @@ fn emit_switch(
     // so per-case tests use f64.eq instead of a structural-equality call.
     emit_expr(emitter, ctx, discriminant)?;
     let disc_val = switch_disc_local_type(ctx, discriminant_ty)?;
-    if matches!(discriminant_ty.peel(), Type::NumberEnum { .. }) {
+    if matches!(discriminant_ty.lowered(), Type::NumberEnum { .. }) {
         let boxed_idx = ctx.symbols.boxed_number_type_idx().ok_or_else(|| {
             crate::codegen::internal_failure("boxed_number type registered with intrinsics")
         })?;
@@ -1052,7 +1052,7 @@ fn switch_disc_local_type(
     ctx: &CodegenCtx,
     ty: &Type,
 ) -> Result<ValType, crate::compiler_error::CompilerFailure> {
-    Ok(if matches!(ty.peel(), Type::NumberEnum { .. }) {
+    Ok(if matches!(ty.lowered(), Type::NumberEnum { .. }) {
         ValType::F64
     } else {
         ctx.symbols.value_type(ty)?

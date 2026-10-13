@@ -100,7 +100,7 @@ fn emit_defined_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx,
     // Peel first: the scalar arms below lower unboxed, so an alias reaching the
     // `_` vtable arm would push an f64/i32 where a ref is expected. A union of
     // number literals (`1 | 2`) lowers to an unboxed f64 too.
-    let peeled = match arg_ty.peel() {
+    let peeled = match arg_ty.lowered() {
         Type::Union(members) if is_unboxed_number_union(members) => &Type::Number,
         peeled => peeled,
     };
@@ -135,7 +135,7 @@ fn is_unboxed_number_union(members: &[Type]) -> bool {
     !members.is_empty()
         && members
             .iter()
-            .all(|member| matches!(member.peel(), Type::Number | Type::NumberLiteral(_)))
+            .all(|member| matches!(member.lowered(), Type::Number | Type::NumberLiteral(_)))
 }
 
 fn emit_stringify_nullable(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
@@ -304,7 +304,7 @@ fn emit_stringify_space_arg(
         .map_err(crate::codegen::arena_failure)?
         .ty
         .clone();
-    Ok(match space_ty.peel() {
+    Ok(match space_ty.lowered() {
         Type::Number | Type::NumberLiteral(_) => {
             emit_expr(emitter, ctx, space)?;
             let local = emitter.add_anonymous_local(ValType::F64)?;
@@ -488,7 +488,7 @@ pub(crate) fn emit_main_output_shim(
         emitter.emit_else();
         emitter.instruction(Instruction::LocalGet(value));
     }
-    let scalar_output = match source_return_ty.peel() {
+    let scalar_output = match source_return_ty.lowered() {
         Type::String
         | Type::StringLiteral(_)
         | Type::Number
@@ -501,7 +501,7 @@ pub(crate) fn emit_main_output_shim(
     if return_ty == &Type::Unknown && scalar_output {
         emit_nullable_primitive_to_string(&mut emitter, ctx);
     } else {
-        emit_main_output_value(&mut emitter, ctx, return_ty.peel());
+        emit_main_output_value(&mut emitter, ctx, return_ty.lowered());
     }
     if optional_output {
         emitter.emit_end();
@@ -540,7 +540,7 @@ fn emit_main_output_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_t
 fn is_primitive_union(members: &[Type]) -> bool {
     let mut has_primitive = false;
     for member in members {
-        match member.peel() {
+        match member.lowered() {
             Type::Null | Type::Undefined => {}
             Type::String
             | Type::StringLiteral(_)

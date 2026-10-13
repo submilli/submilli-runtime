@@ -373,7 +373,3 @@ types/union/unionTypeReduction2.ts 12 type
 types/union/unionTypeReduction2.ts 12 extra
 types/union/unionTypeReduction2.ts 13 type
 types/union/unionTypeReduction2.ts 61 type
-types/unknown/unknownControlFlow.ts 23 extra
-types/unknown/unknownControlFlow.ts 24 extra
-types/unknown/unknownControlFlow.ts 25 extra
-types/unknown/unknownType1.ts 117 extra

@@ -30,7 +30,7 @@ pub fn parameters(ty: &Type) -> Vec<String> {
 }
 
 fn collect_parameters(ty: &Type, names: &mut BTreeSet<String>) {
-    match ty.peel() {
+    match ty.lowered() {
         Type::TypeVar(name) | Type::GenericParam { name, .. } => {
             names.insert(name.clone());
         }
@@ -204,7 +204,7 @@ pub fn validator_environment(
     key: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     if let Some((names, _)) = ctx.symbols.generic_runtime_validator(key)
-        && let Type::AliasRef { args, .. } | Type::InterfaceRef { args, .. } = key.peel()
+        && let Type::AliasRef { args, .. } | Type::InterfaceRef { args, .. } = key.lowered()
     {
         if names.len() != args.len() {
             return Err(crate::codegen::internal_failure(
@@ -233,7 +233,7 @@ fn emit(
     ctx: &CodegenCtx,
     ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    if let Type::TypeVar(name) | Type::GenericParam { name, .. } = ty.peel() {
+    if let Type::TypeVar(name) | Type::GenericParam { name, .. } = ty.lowered() {
         if let Some(&(local, slot)) = emitter.runtime_type_params.get(name) {
             emitter.instruction(Instruction::LocalGet(local));
             emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(

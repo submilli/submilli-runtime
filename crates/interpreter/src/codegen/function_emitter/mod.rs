@@ -1249,7 +1249,7 @@ pub fn emit_closure_function(
         // The env field may hold the erased `(ref null $Object)` form: env struct
         // types are emitted before class type indices are recorded, so a
         // class-typed capture's field widens while the local resolves concrete.
-        if !c.boxed && matches!(c.ty.peel(), crate::Type::ClassRef { .. }) {
+        if !c.boxed && matches!(c.ty.lowered(), crate::Type::ClassRef { .. }) {
             cast::emit_cast_to(&mut emitter, ctx, &c.ty)?;
         } else if !c.boxed
             && let ValType::Ref(local_ref) = local_ty
@@ -1335,8 +1335,8 @@ pub(crate) fn emit_body_end(
     return_type: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let accepts_undefined = return_type.is_void()
-        || matches!(return_type.peel(), Type::Unknown | Type::Undefined)
-        || matches!(return_type.peel(), Type::Union(members) if members.iter().any(|member| matches!(member.peel(), Type::Undefined | Type::Void)));
+        || matches!(return_type.lowered(), Type::Unknown | Type::Undefined)
+        || matches!(return_type.lowered(), Type::Union(members) if members.iter().any(|member| matches!(member.lowered(), Type::Undefined | Type::Void)));
     if !accepts_undefined {
         use crate::codegen::throw;
         if throw::body_end_may_be_reached(ctx.ta) {

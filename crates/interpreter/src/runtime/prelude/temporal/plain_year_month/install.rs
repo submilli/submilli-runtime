@@ -296,7 +296,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
                 Param::new("other", ty()),
                 Param::with_default(
                     "options",
-                    Type::Union(vec![shared::object_shape_type(&[]), Type::Undefined]),
+                    Type::Union(vec![shared::any_object_type(), Type::Undefined]),
                     DefaultValue::Undefined,
                 ),
             ],
@@ -307,20 +307,14 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "with",
         shared::prelude_key("PlainYearMonth", "with"),
-        vec![
-            receiver(),
-            Param::new("fields", shared::object_shape_type(&[])),
-        ],
+        vec![receiver(), Param::new("fields", shared::any_object_type())],
         ty(),
     );
     shared::declare_direct_fn(
         defs,
         "toPlainDate",
         shared::prelude_key("PlainYearMonth", "toPlainDate"),
-        vec![
-            receiver(),
-            Param::new("fields", shared::object_shape_type(&[])),
-        ],
+        vec![receiver(), Param::new("fields", shared::any_object_type())],
         shared::temporal_type("PlainDate"),
     );
     for (field, ret) in [

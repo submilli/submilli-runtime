@@ -110,7 +110,7 @@ pub(super) fn guarded_constructor(
     function: &crate::MangledName,
     result: &Type,
 ) -> Result<bool, crate::compiler_error::CompilerFailure> {
-    let Type::ClassRef { mangled, .. } = result.peel() else {
+    let Type::ClassRef { mangled, .. } = result.lowered() else {
         return Ok(false);
     };
     Ok(*function == crate::mangle::extend(mangled, "constructor")
@@ -126,7 +126,7 @@ pub(super) fn constructor_argument(
     ctx: &CodegenCtx,
     class: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let Type::ClassRef { mangled, .. } = class.peel() else {
+    let Type::ClassRef { mangled, .. } = class.lowered() else {
         return Err(crate::codegen::internal_failure(
             "guarded constructor requires a class type",
         ));

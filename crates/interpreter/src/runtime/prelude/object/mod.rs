@@ -723,8 +723,13 @@ pub fn declare(defs: &mut PackageDeclaration) {
             Param::new("shape", Type::Unknown),
             Param::new("mask", Type::Unknown),
         ],
+        // Any object type but `{}`, which may hold primitives, lowers to the
+        // non-null `$ObjectShape` the host function returns.
         Type::Object {
-            index: None,
+            index: Some(crate::types::IndexSignature {
+                value: Box::new(Type::Unknown),
+                readonly: false,
+            }),
             fields: Default::default(),
         },
     );
