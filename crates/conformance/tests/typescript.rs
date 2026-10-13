@@ -8,6 +8,10 @@
 //! - `<case>.types` — the type `tsc` infers at every expression, line by line.
 //! - `<case>.errors.txt` — the errors `tsc` reports, when there are any.
 //!
+//! A case with several `// @filename:` files is checked as one package whose
+//! modules are those files; `support/case_files.rs` splits it so every position
+//! stays where it is in the case.
+//!
 //! The runner typechecks the case, pairs each baseline entry with the expression
 //! of the same text on the same line, and writes every place the two disagree to
 //! `<case>.divergences`. That file is committed: the test fails when the current
@@ -28,6 +32,8 @@ mod case_selection;
 
 #[path = "support/case_errors.rs"]
 mod case_errors;
+#[path = "support/case_files.rs"]
+mod case_files;
 #[path = "support/triage.rs"]
 mod triage;
 #[path = "support/typed_reachability.rs"]
@@ -1521,24 +1527,8 @@ fn line_of(source: &str, offset: usize) -> usize {
 }
 
 /// A `// @name: value` compiler-option line, which the baseline writer leaves out.
-/// Must agree with `OPTION_LINE` in `typescript-baselines/tsc-case.cjs`:
-/// `^\s*//\s*@\w+\s*:`. JavaScript's `\s` includes a byte-order mark.
 fn is_option_line(line: &str) -> bool {
-    let Some(rest) = trim_js_space(line)
-        .strip_prefix("//")
-        .and_then(|r| trim_js_space(r).strip_prefix('@'))
-    else {
-        return false;
-    };
-    let name_len = rest
-        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .unwrap_or(rest.len());
-    name_len > 0 && trim_js_space(&rest[name_len..]).starts_with(':')
-}
-
-/// `line` without the leading characters JavaScript's `\s` matches.
-fn trim_js_space(line: &str) -> &str {
-    line.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+    case_files::option_line(line).is_some()
 }
 
 fn collect_files(dir: &Path, keep: &mut impl FnMut(&Path) -> bool, out: &mut Vec<PathBuf>) {

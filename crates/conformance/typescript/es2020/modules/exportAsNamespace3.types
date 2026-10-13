@@ -1,0 +1,66 @@
+=== exportAsNamespace3.ts ===
+export const a = 1;
+>a : 1
+>  : ^
+>1 : 1
+>  : ^
+
+export const b = 2;
+>b : 2
+>  : ^
+>2 : 2
+>  : ^
+
+
+/*pruned*/;
+ns.a;
+>ns.a : number
+>     : ^^^^^^
+>ns : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+ns.b;
+>ns.b : number
+>     : ^^^^^^
+>ns : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+let ns = {a: 1, b: 2}
+>ns : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{a: 1, b: 2} : { a: number; b: number; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+>b : number
+>  : ^^^^^^
+>2 : 2
+>  : ^
+
+ns.a;
+>ns.a : number
+>     : ^^^^^^
+>ns : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+
+ns.b;
+>ns.b : number
+>     : ^^^^^^
+>ns : { a: number; b: number; }
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : number
+>  : ^^^^^^
+
+
+/*pruned*/;
+
+/**/;
+/**/;

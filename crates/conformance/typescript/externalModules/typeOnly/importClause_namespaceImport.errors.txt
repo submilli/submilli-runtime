@@ -1,0 +1,5 @@
+importClause_namespaceImport.ts(11,1): error TS1361: 'types' cannot be used as a value because it was imported using 'import type'.
+importClause_namespaceImport.ts(12,1): error TS1361: 'types' cannot be used as a value because it was imported using 'import type'.
+importClause_namespaceImport.ts(13,8): error TS2749: 'types.Value' refers to a value, but is being used as a type here. Did you mean 'typeof types.Value'?
+importClause_namespaceImport.ts(13,42): error TS2749: 'types.Value' refers to a value, but is being used as a type here. Did you mean 'typeof types.Value'?
+importClause_namespaceImport.ts(17,13): error TS1361: 'types' cannot be used as a value because it was imported using 'import type'.

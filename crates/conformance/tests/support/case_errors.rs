@@ -2,7 +2,15 @@
 //! agree with an error `tsc` reports. Shared by the runner and by the
 //! `typescript_case_errors` example the pruner calls, so the two judge an error
 //! the same way.
-use interpreter::{Diagnostic, FileId, Severity, TypedAst, parse_script, typecheck_to_typed_ast};
+use interpreter::{
+    Diagnostic, FileId, ModulePath, PackageSourceModule, Severity, TypedAst, parse_script,
+    typecheck_package_to_typed_ast, typecheck_to_typed_ast,
+};
+
+use super::case_files;
+
+/// The package a multi-file case's files are modules of.
+const CASE_PACKAGE: &str = "@conformance/case";
 
 /// Lexer and parser errors are about syntax we don't parse, except for these checks,
 /// which `tsc` makes too and so can agree with it. ("invalid assignment target" is
@@ -45,6 +53,9 @@ const MISSING_FEATURE_PHRASES: &[&str] = &[
     "default value must be a literal",
     "lands in Layer",
     "cannot bind generic function",
+    // A multi-file case is checked as a package, which `tsc` doesn't restrict so.
+    "circular import",
+    "packages cannot declare main",
 ];
 
 /// Errors that name a feature we lack in some programs, and report the error `tsc`
@@ -64,6 +75,8 @@ const MAYBE_MISSING_FEATURE_PHRASES: &[&str] = &[
     "is an enum type, not a value",
     "is a class, not a value",
     "declares no `new` method",
+    // A package we lack (an ambient module), or one `tsc` can't find either.
+    "package `",
 ];
 
 /// TypeScript library types we don't have. `unknown type` naming one is a feature we
@@ -117,14 +130,24 @@ pub(super) struct CaseError {
     /// the runner compares by line.
     #[allow(dead_code)]
     pub column: usize,
+    /// The index of the case's file it is in, for the pruner: an error at the end
+    /// of one file is on the case's last line, which another file owns.
+    #[allow(dead_code)]
+    pub file: usize,
     pub message: String,
     pub support: Support,
 }
 
+/// Our typed AST of a case, and our errors on it. A multi-file case is checked as
+/// one package whose modules are its files, the last being the root.
 pub(super) fn case_errors(source: &str) -> (TypedAst, Vec<CaseError>) {
-    let parsed = parse_script(source, FileId(0));
-    let syntax_errors = parsed.diagnostics();
-    let (typed, diags) = typecheck_to_typed_ast(source, FileId(0));
+    let (typed, diags, syntax_errors) = if let Some(files) = case_files::split(source) {
+        typecheck_files(&files)
+    } else {
+        let parsed = parse_script(source, FileId(0));
+        let (typed, diags) = typecheck_to_typed_ast(source, FileId(0));
+        (typed, diags, parsed.diagnostics().to_vec())
+    };
     let errors = diags
         .iter()
         .filter(|d| matches!(d.severity, Severity::Error))
@@ -133,12 +156,38 @@ pub(super) fn case_errors(source: &str) -> (TypedAst, Vec<CaseError>) {
             CaseError {
                 line,
                 column,
+                file: d.span.file.0 as usize,
                 message: d.message.clone(),
-                support: support(d, syntax_errors),
+                support: support(d, &syntax_errors),
             }
         })
         .collect();
     (typed, errors)
+}
+
+/// The typed AST of a multi-file case, our diagnostics on it, and those of them
+/// the parser reports. Each file's text keeps its offsets in the case, so a
+/// diagnostic's span reads against the case whatever its file.
+fn typecheck_files(files: &[case_files::CaseFile]) -> (TypedAst, Vec<Diagnostic>, Vec<Diagnostic>) {
+    let syntax_errors = files
+        .iter()
+        // A file's id is its index, as `typecheck_package_to_typed_ast` gives it.
+        .zip(0u32..)
+        .flat_map(|(file, id)| parse_script(&file.text, FileId(id)).diagnostics().to_vec())
+        .collect();
+    let modules: Vec<PackageSourceModule<'_>> = files
+        .iter()
+        .map(|file| PackageSourceModule {
+            path: ModulePath::from(file.module.as_str()),
+            source: &file.text,
+        })
+        .collect();
+    let root = modules
+        .last()
+        .map(|m| m.path.clone())
+        .expect("a split case has files");
+    let (typed, diags) = typecheck_package_to_typed_ast(CASE_PACKAGE, root, &modules);
+    (typed, diags, syntax_errors)
 }
 
 fn support(diag: &Diagnostic, syntax_errors: &[Diagnostic]) -> Support {
@@ -151,11 +200,17 @@ fn support(diag: &Diagnostic, syntax_errors: &[Diagnostic]) -> Support {
         || names_library_type(&diag.message)
     {
         Support::Lacking
-    } else if mentions(MAYBE_MISSING_FEATURE_PHRASES) {
+    } else if mentions(MAYBE_MISSING_FEATURE_PHRASES) || is_missing_module_export(&diag.message) {
         Support::Unclear
     } else {
         Support::Supported
     }
+}
+
+/// A module export a case's file lacks: one we don't make (a re-export of an
+/// imported binding), or one `tsc` reports missing too.
+fn is_missing_module_export(message: &str) -> bool {
+    message.starts_with("module `") && message.contains("` does not export `")
 }
 
 fn names_library_type(message: &str) -> bool {

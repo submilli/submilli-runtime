@@ -1,0 +1,8 @@
+parser.numericSeparators.hexNegative.ts(3,5): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.hexNegative.ts(6,3): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.hexNegative.ts(9,2): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.hexNegative.ts(12,6): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.hexNegative.ts(16,13): error TS6189: Multiple consecutive numeric separators are not permitted.
+parser.numericSeparators.hexNegative.ts(19,3): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.hexNegative.ts(19,4): error TS6188: Numeric separators are not allowed here.
+parser.numericSeparators.hexNegative.ts(19,5): error TS6188: Numeric separators are not allowed here.

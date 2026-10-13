@@ -5,33 +5,33 @@ in `/`) is left out whole, with its subdirectories, except for any case in the s
 Written by `../typescript-baselines/port-suite.cjs`: change its lists or the porter,
 not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't read.
 
-3816 entries: 1689 not supported, 1019 multi-file or JavaScript, 684 the port changes what it checks, 108 duplicate, 316 checks too little.
+3804 entries: 2649 not supported, 705 the port changes what it checks, 113 duplicate, 336 checks too little, 1 porter failure.
 
 | Case | Reason | Detail |
 |:-----|:-------|:-------|
 | `additionalChecks/noPropertyAccessFromIndexSignature1.ts` | not supported | index signatures |
 | `ambient/ambientDeclarations.ts` | the port changes what it checks | `tsc` then reports TS7006, TS7019, TS7008, TS7005 |
-| `ambient/ambientDeclarationsExternal.ts` | multi-file or JavaScript |  |
-| `ambient/ambientDeclarationsPatterns_merging1.ts` | multi-file or JavaScript |  |
-| `ambient/ambientDeclarationsPatterns_merging2.ts` | multi-file or JavaScript |  |
-| `ambient/ambientDeclarationsPatterns_merging3.ts` | multi-file or JavaScript |  |
+| `ambient/ambientDeclarationsExternal.ts` | not supported | script files sharing one global scope |
+| `ambient/ambientDeclarationsPatterns_merging1.ts` | the port changes what it checks | `tsc` then reports TS1039 |
+| `ambient/ambientDeclarationsPatterns_merging2.ts` | the port changes what it checks | `tsc` then reports TS1039 |
+| `ambient/ambientDeclarationsPatterns_merging3.ts` | not supported | script files sharing one global scope |
 | `ambient/ambientDeclarationsPatterns_tooManyAsterisks.ts` | not supported | expected `;` after expression, on ` declare module "too*many*asterisks" { } ` |
-| `ambient/ambientDeclarationsPatterns.ts` | multi-file or JavaScript |  |
+| `ambient/ambientDeclarationsPatterns.ts` | not supported | declaration files (`.d.ts`) |
 | `ambient/ambientEnumDeclaration1.ts` | not supported | expected `;` after expression, on ` declare enum E { ` |
 | `ambient/ambientEnumDeclaration2.ts` | not supported | expected `;` after expression, on ` declare enum E { ` |
 | `ambient/ambientErrors.ts` | the port changes what it checks | `tsc` then reports TS1128, TS2393, TS7005 |
 | `ambient/ambientExternalModuleInsideNonAmbient.ts` | not supported | expected `;` after expression, on ` namespace M { ` |
 | `ambient/ambientExternalModuleInsideNonAmbientExternalModule.ts` | not supported | expected a declaration after `export`, on ` export declare module "M" { } ` |
-| `ambient/ambientExternalModuleMerging.ts` | multi-file or JavaScript |  |
+| `ambient/ambientExternalModuleMerging.ts` | not supported | script files sharing one global scope |
 | `ambient/ambientInsideNonAmbient.ts` | the port changes what it checks | `tsc` then reports TS7005 |
 | `ambient/ambientInsideNonAmbientExternalModule.ts` | the port changes what it checks | `tsc` then reports TS7005 |
 | `ambient/ambientModuleDeclarationWithReservedIdentifierInDottedPath.ts` | not supported | expected `;` after expression, on ` declare namespace chrome.debugger { ` |
 | `ambient/ambientModuleDeclarationWithReservedIdentifierInDottedPath2.ts` | not supported | expected `;` after expression, on ` declare namespace chrome.debugger { ` |
 | `ambient/ambientShorthand_declarationEmit.ts` | not supported | expected `;` after expression, on ` declare module "foo"; ` |
-| `ambient/ambientShorthand_duplicate.ts` | multi-file or JavaScript |  |
-| `ambient/ambientShorthand_merging.ts` | multi-file or JavaScript |  |
-| `ambient/ambientShorthand_reExport.ts` | multi-file or JavaScript |  |
-| `ambient/ambientShorthand.ts` | multi-file or JavaScript |  |
+| `ambient/ambientShorthand_duplicate.ts` | not supported | declaration files (`.d.ts`) |
+| `ambient/ambientShorthand_merging.ts` | not supported | declaration files (`.d.ts`) |
+| `ambient/ambientShorthand_reExport.ts` | not supported | declaration files (`.d.ts`) |
+| `ambient/ambientShorthand.ts` | not supported | declaration files (`.d.ts`) |
 | `async/` | not supported | async/await |
 | `asyncGenerators/` | not supported | async/await and generators |
 | `classes/awaitAndYieldInProperty.ts` | the port changes what it checks | `tsc` then reports TS1003, TS1005, TS1128, TS2304, TS2693, TS2364 |
@@ -79,7 +79,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/classDeclarations/classHeritageSpecification/classExtendsEveryObjectType2.ts` | not supported | tuple types must have at least one element, on ` class C6 extends []{ } // error ` |
 | `classes/classDeclarations/classHeritageSpecification/classExtendsItself.ts` | checks too little | 3 after the port |
 | `classes/classDeclarations/classHeritageSpecification/classExtendsItselfIndirectly2.ts` | not supported | expected `;` after expression, on ` namespace M { ` |
-| `classes/classDeclarations/classHeritageSpecification/classExtendsItselfIndirectly3.ts` | multi-file or JavaScript |  |
+| `classes/classDeclarations/classHeritageSpecification/classExtendsItselfIndirectly3.ts` | not supported | script files sharing one global scope |
 | `classes/classDeclarations/classHeritageSpecification/classExtendsShadowedConstructorFunction.ts` | not supported | expected `;` after expression, on ` namespace M { ` |
 | `classes/classDeclarations/classHeritageSpecification/classExtendsValidConstructorFunction.ts` | the port changes what it checks | `tsc` then reports TS7009 |
 | `classes/classDeclarations/classHeritageSpecification/classIsSubtypeOfBaseType.ts` | checks too little | 1 after the port |
@@ -92,9 +92,9 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/classDeclarations/classWithPredefinedTypesAsNames2.ts` | not supported | `void` is a reserved keyword and can't be used as a name, on ` class void {} ` |
 | `classes/classDeclarations/classWithSemicolonClassElement1.ts` | checks too little | 0 after the port |
 | `classes/classDeclarations/classWithSemicolonClassElement2.ts` | duplicate | of `classes/classDeclarations/classWithSemicolonClassElement1.ts` |
-| `classes/classDeclarations/declaredClassMergedwithSelf.ts` | multi-file or JavaScript |  |
+| `classes/classDeclarations/declaredClassMergedwithSelf.ts` | not supported | script files sharing one global scope |
 | `classes/classDeclarations/mergeClassInterfaceAndModule.ts` | not supported | expected `;` after expression, on ` declare class C1 {} ` |
-| `classes/classDeclarations/mergedClassInterface.ts` | multi-file or JavaScript |  |
+| `classes/classDeclarations/mergedClassInterface.ts` | not supported | script files sharing one global scope |
 | `classes/classDeclarations/modifierOnClassDeclarationMemberInFunction.ts` | not supported | a `class` must be declared at the top level of the module, on ` class C { ` |
 | `classes/classExpression.ts` | not supported | expected expression, on ` let x = class C { ` |
 | `classes/classExpressions/classExpression1.ts` | not supported | expected expression, on ` let v = class C {}; ` |
@@ -109,7 +109,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/classExpressions/classWithStaticFieldInParameterInitializer.2.ts` | the port changes what it checks | `tsc` then reports TS2448, TS2507 |
 | `classes/classExpressions/classWithStaticFieldInParameterInitializer.3.ts` | the port changes what it checks | `tsc` then reports TS2373, TS2448, TS2507 |
 | `classes/classExpressions/classWithStaticFieldInParameterInitializer.ts` | not supported | expected expression, on ` ((b = class { static x: number = 1 }) => {})(); ` |
-| `classes/classExpressions/extendClassExpressionFromModule.ts` | multi-file or JavaScript |  |
+| `classes/classExpressions/extendClassExpressionFromModule.ts` | not supported | expected a declaration after `export`, on ` export = x; ` |
 | `classes/classExpressions/genericClassExpressionInFunction.ts` | the port changes what it checks | `tsc` then reports TS1003, TS1005, TS2304, TS2339 |
 | `classes/classExpressions/modifierOnClassExpressionMemberInFunction.ts` | not supported | expected expression, on ` let x = class C { ` |
 | `classes/classStaticBlock/` | not supported | static blocks |
@@ -163,7 +163,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/accessibility/protectedStaticClassPropertyAccessibleWithinSubclass2.ts` | not supported | `protected` is not supported, on ` protected static x: string; ` |
 | `classes/members/accessibility/protectedStaticNotAccessibleInClodule.ts` | not supported | `protected` is not supported, on ` protected static bar: string; ` |
 | `classes/members/classTypes/genericSetterInClassType.ts` | not supported | unexpected character `#`, on ` #value!: T; ` |
-| `classes/members/classTypes/genericSetterInClassTypeJsDoc.ts` | multi-file or JavaScript |  |
+| `classes/members/classTypes/genericSetterInClassTypeJsDoc.ts` | not supported | JavaScript |
 | `classes/members/classTypes/indexersInClassType.ts` | not supported | expected class member name, on ` [x: number]: Date; ` |
 | `classes/members/classTypes/instancePropertiesInheritedIntoClassType.ts` | not supported | expected `;` after expression, on ` namespace NonGeneric { ` |
 | `classes/members/classTypes/instancePropertyInClassType.ts` | not supported | expected `;` after expression, on ` namespace NonGeneric { ` |
@@ -191,7 +191,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/inheritanceAndOverriding/derivedClassWithPrivateStaticShadowingProtectedStatic.ts` | not supported | `protected` is not supported, on ` protected static x: string; ` |
 | `classes/members/inheritanceAndOverriding/derivedClassWithPrivateStaticShadowingPublicStatic.ts` | not supported | static accessors are not supported, on ` public static get a(): number { return 1; } ` |
 | `classes/members/inheritanceAndOverriding/derivedGenericClassWithAny.ts` | not supported | expected `,` or `>`, on ` class C<T extends number> { ` |
-| `classes/members/instanceAndStaticMembers/superInStaticMembers1.ts` | multi-file or JavaScript |  |
+| `classes/members/instanceAndStaticMembers/superInStaticMembers1.ts` | not supported | expected a declaration after `export`, on ` export declare namespace Bar { type _ = unknown; } ` |
 | `classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers1.ts` | not supported | expected `;` after expression, on ` declare class B { ` |
 | `classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers2.ts` | not supported | expected `;` after expression, on ` declare class B { ` |
 | `classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers3.ts` | not supported | expected `;` after expression, on ` declare class B { ` |
@@ -234,7 +234,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/privateNames/privateNameDeclaration.ts` | not supported | unexpected character `#`, on ` #foo: string; ` |
 | `classes/members/privateNames/privateNameDeclarationMerging.ts` | not supported | construct signatures |
 | `classes/members/privateNames/privateNameDuplicateField.ts` | not supported | unexpected character `#`, on ` #foo = "foo"; ` |
-| `classes/members/privateNames/privateNameEmitHelpers.ts` | multi-file or JavaScript |  |
+| `classes/members/privateNames/privateNameEmitHelpers.ts` | not supported | `node_modules` packages |
 | `classes/members/privateNames/privateNameEnum.ts` | not supported | unexpected character `#`, on ` #x ` |
 | `classes/members/privateNames/privateNameES5Ban.ts` | not supported | unexpected character `#`, on ` #field = 123; ` |
 | `classes/members/privateNames/privateNameField.ts` | not supported | unexpected character `#`, on ` #name: string; ` |
@@ -248,7 +248,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/privateNames/privateNameFieldsESNext.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `classes/members/privateNames/privateNameFieldUnaryMutation.ts` | not supported | unexpected character `#`, on ` #test: number = 24; ` |
 | `classes/members/privateNames/privateNameHashCharName.ts` | the port changes what it checks | `tsc` then reports TS7008 |
-| `classes/members/privateNames/privateNameImplicitDeclaration.ts` | multi-file or JavaScript |  |
+| `classes/members/privateNames/privateNameImplicitDeclaration.ts` | not supported | JavaScript |
 | `classes/members/privateNames/privateNameInInExpression.ts` | not supported | unexpected character `#`, on ` #field = 1; ` |
 | `classes/members/privateNames/privateNameInInExpressionTransform.ts` | not supported | unexpected character `#`, on ` #field = 1; ` |
 | `classes/members/privateNames/privateNameInInExpressionUnused.ts` | not supported | unexpected character `#`, on ` #unused: undefined; // expect unused error ` |
@@ -256,8 +256,8 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/privateNames/privateNameInObjectLiteral-1.ts` | not supported | unexpected character `#`, on ` #foo: 1 ` |
 | `classes/members/privateNames/privateNameInObjectLiteral-2.ts` | not supported | unexpected character `#`, on ` #foo() { ` |
 | `classes/members/privateNames/privateNameInObjectLiteral-3.ts` | not supported | unexpected character `#`, on ` get #foo() { ` |
-| `classes/members/privateNames/privateNameJsBadAssignment.ts` | multi-file or JavaScript |  |
-| `classes/members/privateNames/privateNameJsBadDeclaration.ts` | multi-file or JavaScript |  |
+| `classes/members/privateNames/privateNameJsBadAssignment.ts` | not supported | JavaScript |
+| `classes/members/privateNames/privateNameJsBadDeclaration.ts` | not supported | JavaScript |
 | `classes/members/privateNames/privateNameLateSuper.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `classes/members/privateNames/privateNameLateSuperUseDefineForClassFields.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `classes/members/privateNames/privateNameMethod.ts` | not supported | unexpected character `#`, on ` #method(param: string): string { ` |
@@ -290,7 +290,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/privateNames/privateNameSetterExprReturnValue.ts` | not supported | unexpected character `#`, on ` set #foo(a: number) {} ` |
 | `classes/members/privateNames/privateNameSetterNoGetter.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `classes/members/privateNames/privateNamesIncompatibleModifiers.ts` | not supported | unexpected character `#`, on ` public #foo = 3;         // Error ` |
-| `classes/members/privateNames/privateNamesIncompatibleModifiersJs.ts` | multi-file or JavaScript |  |
+| `classes/members/privateNames/privateNamesIncompatibleModifiersJs.ts` | not supported | JavaScript |
 | `classes/members/privateNames/privateNamesInGenericClasses.ts` | not supported | unexpected character `#`, on ` #foo: T; ` |
 | `classes/members/privateNames/privateNamesInNestedClasses-1.ts` | not supported | unexpected character `#`, on ` #foo = "A's #foo"; ` |
 | `classes/members/privateNames/privateNamesInNestedClasses-2.ts` | not supported | unexpected character `#`, on ` static #x = 5; ` |
@@ -303,7 +303,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/privateNames/privateNameStaticAccessorsCallExpression.ts` | the port changes what it checks | `tsc` then reports TS7009 |
 | `classes/members/privateNames/privateNameStaticAccessorssDerivedClasses.ts` | not supported | unexpected character `#`, on ` static get #prop(): number { return  123; } ` |
 | `classes/members/privateNames/privateNameStaticAndStaticInitializer.ts` | not supported | unexpected character `#`, on ` static #foo = 1; ` |
-| `classes/members/privateNames/privateNameStaticEmitHelpers.ts` | multi-file or JavaScript |  |
+| `classes/members/privateNames/privateNameStaticEmitHelpers.ts` | not supported | `node_modules` packages |
 | `classes/members/privateNames/privateNameStaticFieldAccess.ts` | not supported | unexpected character `#`, on ` static #myField = "hello world"; ` |
 | `classes/members/privateNames/privateNameStaticFieldAssignment.ts` | not supported | unexpected character `#`, on ` static #field = 0; ` |
 | `classes/members/privateNames/privateNameStaticFieldCallExpression.ts` | the port changes what it checks | `tsc` then reports TS2683, TS7006, TS7019, TS7009 |
@@ -321,18 +321,18 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/members/privateNames/privateNameStaticMethodInStaticFieldInit.ts` | not supported | unexpected character `#`, on ` static s: number = C.#method(); ` |
 | `classes/members/privateNames/privateNameStaticsAndStaticMethods.ts` | not supported | unexpected character `#`, on ` static #foo(a: number): void {} ` |
 | `classes/members/privateNames/privateNamesUnique-1.ts` | not supported | unexpected character `#`, on ` #foo: number; ` |
-| `classes/members/privateNames/privateNamesUnique-2.ts` | multi-file or JavaScript |  |
+| `classes/members/privateNames/privateNamesUnique-2.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `classes/members/privateNames/privateNamesUnique-3.ts` | not supported | unexpected character `#`, on ` #foo = 1; ` |
 | `classes/members/privateNames/privateNamesUnique-4.ts` | not supported | unexpected character `#`, on ` class C { #something: number } ` |
 | `classes/members/privateNames/privateNamesUnique-5.ts` | not supported | unexpected character `#`, on ` #foo: number; ` |
 | `classes/members/privateNames/privateNamesUseBeforeDef.ts` | the port changes what it checks | `tsc` then reports TS7022 |
-| `classes/members/privateNames/privateNameUncheckedJsOptionalChain.ts` | multi-file or JavaScript |  |
+| `classes/members/privateNames/privateNameUncheckedJsOptionalChain.ts` | not supported | JavaScript |
 | `classes/members/privateNames/privateNameUnused.ts` | not supported | unexpected character `#`, on ` #used = "used"; ` |
 | `classes/members/privateNames/privateNameWhenNotUseDefineForClassFieldsInEsNext.ts` | the port changes what it checks | `tsc` then reports TS1003, TS1005, TS1128, TS2348, TS2304 |
 | `classes/members/privateNames/privateStaticNameShadowing.ts` | not supported | unexpected character `#`, on ` static #f = X.#m(); ` |
 | `classes/members/privateNames/privateWriteOnlyAccessorRead.ts` | not supported | unexpected character `#`, on ` set #value(v: { foo: { bar: number } }) {} ` |
 | `classes/members/privateNames/typeFromPrivatePropertyAssignment.ts` | not supported | unexpected character `#`, on ` #a?: Foo; ` |
-| `classes/members/privateNames/typeFromPrivatePropertyAssignmentJs.ts` | multi-file or JavaScript |  |
+| `classes/members/privateNames/typeFromPrivatePropertyAssignmentJs.ts` | not supported | JavaScript |
 | `classes/methodDeclarations/optionalMethodDeclarations.ts` | checks too little | 0 after the port |
 | `classes/mixinAbstractClasses.2.ts` | not supported | expected `,` or `>`, on ` function Mixin<TBaseClass extends abstract new (...args: any) => any>(baseCla... ` |
 | `classes/mixinAbstractClasses.ts` | not supported | expected `,` or `>`, on ` function Mixin<TBaseClass extends abstract new (...args: any) => any>(baseCla... ` |
@@ -377,7 +377,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/propertyMemberDeclarations/autoAccessorAllowedModifiers.ts` | not supported | unexpected character `#`, on ` accessor #j: any; ` |
 | `classes/propertyMemberDeclarations/autoAccessorDisallowedModifiers.ts` | the port changes what it checks | `tsc` then reports TS2792 |
 | `classes/propertyMemberDeclarations/autoAccessorExperimentalDecorators.ts` | the port changes what it checks | `tsc` then reports TS1240 |
-| `classes/propertyMemberDeclarations/autoAccessorNoUseDefineForClassFields.ts` | multi-file or JavaScript |  |
+| `classes/propertyMemberDeclarations/autoAccessorNoUseDefineForClassFields.ts` | not supported | expected `:` and a type for the class field, on ` static accessor x: number = 0; ` |
 | `classes/propertyMemberDeclarations/canFollowGetSetKeyword.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `classes/propertyMemberDeclarations/constructorParameterShadowsOuterScopes.ts` | not supported | class fields require a type annotation, on ` b = x; // error, evaluated in scope of constructor, cannot reference x ` |
 | `classes/propertyMemberDeclarations/constructorParameterShadowsOuterScopes2.ts` | the port changes what it checks | `tsc` then reports TS2301 |
@@ -421,10 +421,10 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `classes/propertyMemberDeclarations/staticAutoAccessorsWithDecorators.ts` | not supported | unexpected character `@`, on ` @((t, c) => {}) ` |
 | `classes/propertyMemberDeclarations/staticPropertyAndFunctionWithSameName.ts` | checks too little | 0 after the port |
 | `classes/propertyMemberDeclarations/staticPropertyNameConflicts.ts` | not supported | expected type, on ` } as const; ` |
-| `classes/propertyMemberDeclarations/staticPropertyNameConflictsInAmbientContext.ts` | multi-file or JavaScript |  |
+| `classes/propertyMemberDeclarations/staticPropertyNameConflictsInAmbientContext.ts` | not supported | declaration files (`.d.ts`) |
 | `classes/propertyMemberDeclarations/strictPropertyInitialization.ts` | not supported | unexpected character `#`, on ` #f: number; //Error ` |
 | `classes/propertyMemberDeclarations/thisInInstanceMemberInitializer.ts` | not supported | class fields require a type annotation, on ` x = this; ` |
-| `classes/propertyMemberDeclarations/thisPropertyOverridesAccessors.ts` | multi-file or JavaScript |  |
+| `classes/propertyMemberDeclarations/thisPropertyOverridesAccessors.ts` | not supported | JavaScript |
 | `classes/propertyMemberDeclarations/twoAccessorsWithSameName.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `classes/propertyMemberDeclarations/twoAccessorsWithSameName2.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `classes/staticIndexSignature/` | not supported | index signatures |
@@ -436,9 +436,9 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `constEnums/constEnumPropertyAccess1.ts` | not supported | `enum` is a reserved keyword and can't be used as a name, on ` const enum G { ` |
 | `constEnums/constEnumPropertyAccess2.ts` | not supported | `enum` is a reserved keyword and can't be used as a name, on ` const enum G { ` |
 | `constEnums/constEnumPropertyAccess3.ts` | not supported | `enum` is a reserved keyword and can't be used as a name, on ` const enum E { ` |
-| `constEnums/importElisionConstEnumMerge1.ts` | multi-file or JavaScript |  |
+| `constEnums/importElisionConstEnumMerge1.ts` | not supported | `enum` is a reserved keyword and can't be used as a name, on ` export const enum Enum { ` |
 | `controlFlow/assertionTypePredicates1.ts` | the port changes what it checks | `tsc` then reports TS2322 |
-| `controlFlow/assertionTypePredicates2.ts` | multi-file or JavaScript |  |
+| `controlFlow/assertionTypePredicates2.ts` | not supported | JavaScript |
 | `controlFlow/controlFlowAliasing2.ts` | the port changes what it checks | `tsc` then reports TS2339 |
 | `controlFlow/controlFlowCommaOperator.ts` | not supported | expected `)`, on ` if (y = "", typeof x === "string") { ` |
 | `controlFlow/controlFlowDeleteOperator.ts` | not supported | `delete` |
@@ -465,41 +465,41 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `declarationEmit/declarationEmitWorkWithInlineComments.ts` | checks too little | 0 after the port |
 | `declarationEmit/exportDefaultExpressionComments.ts` | not supported | `export default` is not supported, on ` export default null ` |
 | `declarationEmit/exportDefaultNamespace.ts` | not supported | `export default` is not supported, on ` export default function someFunc(): string { ` |
-| `declarationEmit/leaveOptionalParameterAsWritten.ts` | multi-file or JavaScript |  |
-| `declarationEmit/libReferenceDeclarationEmit.ts` | multi-file or JavaScript |  |
-| `declarationEmit/libReferenceDeclarationEmitBundle.ts` | multi-file or JavaScript |  |
-| `declarationEmit/libReferenceNoLib.ts` | multi-file or JavaScript |  |
-| `declarationEmit/libReferenceNoLibBundle.ts` | multi-file or JavaScript |  |
-| `declarationEmit/typeofImportTypeOnlyExport.ts` | multi-file or JavaScript |  |
+| `declarationEmit/leaveOptionalParameterAsWritten.ts` | not supported | expected `;` after expression, on ` declare global { ` |
+| `declarationEmit/libReferenceDeclarationEmit.ts` | not supported | empty export specifier list, on ` export {} ` |
+| `declarationEmit/libReferenceDeclarationEmitBundle.ts` | not supported | empty export specifier list, on ` export {} ` |
+| `declarationEmit/libReferenceNoLib.ts` | not supported | expected a declaration after `export`, on ` export declare interface HTMLElement { field: string; } ` |
+| `declarationEmit/libReferenceNoLibBundle.ts` | not supported | expected a declaration after `export`, on ` export declare interface HTMLElement { field: string; } ` |
+| `declarationEmit/typeofImportTypeOnlyExport.ts` | not supported | expected `)`, on ` <C>(class_: C) => ` |
 | `declarationEmit/typePredicates/declarationEmitIdentifierPredicates01.ts` | not supported | `any` is not supported, on ` export function f(x: any): x is number { ` |
 | `declarationEmit/typePredicates/declarationEmitIdentifierPredicatesWithPrivateName01.ts` | not supported | `any` is not supported, on ` export function f(x: any): x is I { ` |
 | `declarationEmit/typePredicates/declarationEmitThisPredicates01.ts` | not supported | expected type, on ` m(): this is D { ` |
 | `declarationEmit/typePredicates/declarationEmitThisPredicates02.ts` | not supported | expected type, on ` m(): this is Foo { ` |
 | `declarationEmit/typePredicates/declarationEmitThisPredicatesWithPrivateName01.ts` | not supported | expected type, on ` m(): this is D { ` |
 | `declarationEmit/typePredicates/declarationEmitThisPredicatesWithPrivateName02.ts` | not supported | expected type, on ` m(): this is Foo { ` |
-| `declarationEmit/typeReferenceRelatedFiles.ts` | multi-file or JavaScript |  |
-| `declarationEmit/typesVersionsDeclarationEmit.ambient.ts` | multi-file or JavaScript |  |
-| `declarationEmit/typesVersionsDeclarationEmit.multiFile.ts` | multi-file or JavaScript |  |
-| `declarationEmit/typesVersionsDeclarationEmit.multiFileBackReferenceToSelf.ts` | multi-file or JavaScript |  |
-| `declarationEmit/typesVersionsDeclarationEmit.multiFileBackReferenceToUnmapped.ts` | multi-file or JavaScript |  |
+| `declarationEmit/typeReferenceRelatedFiles.ts` | not supported | `node_modules` packages |
+| `declarationEmit/typesVersionsDeclarationEmit.ambient.ts` | not supported | `node_modules` packages |
+| `declarationEmit/typesVersionsDeclarationEmit.multiFile.ts` | not supported | `node_modules` packages |
+| `declarationEmit/typesVersionsDeclarationEmit.multiFileBackReferenceToSelf.ts` | not supported | `node_modules` packages |
+| `declarationEmit/typesVersionsDeclarationEmit.multiFileBackReferenceToUnmapped.ts` | not supported | `node_modules` packages |
 | `decorators/` | not supported | decorators |
-| `directives/ts-expect-error-js.ts` | multi-file or JavaScript |  |
-| `directives/ts-expect-error-nocheck-js.ts` | multi-file or JavaScript |  |
+| `directives/ts-expect-error-js.ts` | not supported | JavaScript |
+| `directives/ts-expect-error-nocheck-js.ts` | not supported | JavaScript |
 | `directives/ts-expect-error-nocheck.ts` | checks too little | 1 after the port |
 | `dynamicImport/` | not supported | dynamic imports |
-| `emitter/es2015/asyncGenerators/emitter.asyncGenerators.classMethods.es2015.ts` | multi-file or JavaScript |  |
-| `emitter/es2015/asyncGenerators/emitter.asyncGenerators.functionDeclarations.es2015.ts` | multi-file or JavaScript |  |
-| `emitter/es2015/asyncGenerators/emitter.asyncGenerators.functionExpressions.es2015.ts` | multi-file or JavaScript |  |
-| `emitter/es2015/asyncGenerators/emitter.asyncGenerators.objectLiteralMethods.es2015.ts` | multi-file or JavaScript |  |
-| `emitter/es2018/asyncGenerators/emitter.asyncGenerators.classMethods.es2018.ts` | multi-file or JavaScript |  |
-| `emitter/es2018/asyncGenerators/emitter.asyncGenerators.functionDeclarations.es2018.ts` | multi-file or JavaScript |  |
-| `emitter/es2018/asyncGenerators/emitter.asyncGenerators.functionExpressions.es2018.ts` | multi-file or JavaScript |  |
-| `emitter/es2018/asyncGenerators/emitter.asyncGenerators.objectLiteralMethods.es2018.ts` | multi-file or JavaScript |  |
+| `emitter/es2015/asyncGenerators/emitter.asyncGenerators.classMethods.es2015.ts` | not supported | expected `:` and a type for the class field, on ` async * f(): AsyncGenerator<never, void, unknown> { ` |
+| `emitter/es2015/asyncGenerators/emitter.asyncGenerators.functionDeclarations.es2015.ts` | not supported | expected `;` after expression, on ` async function * f1(): AsyncGenerator<never, void, unknown> { ` |
+| `emitter/es2015/asyncGenerators/emitter.asyncGenerators.functionExpressions.es2015.ts` | the port changes what it checks | `tsc` then reports TS7057 |
+| `emitter/es2015/asyncGenerators/emitter.asyncGenerators.objectLiteralMethods.es2015.ts` | the port changes what it checks | `tsc` then reports TS7057 |
+| `emitter/es2018/asyncGenerators/emitter.asyncGenerators.classMethods.es2018.ts` | not supported | expected `:` and a type for the class field, on ` async * f(): AsyncGenerator<never, void, unknown> { ` |
+| `emitter/es2018/asyncGenerators/emitter.asyncGenerators.functionDeclarations.es2018.ts` | not supported | expected `;` after expression, on ` async function * f1(): AsyncGenerator<never, void, unknown> { ` |
+| `emitter/es2018/asyncGenerators/emitter.asyncGenerators.functionExpressions.es2018.ts` | the port changes what it checks | `tsc` then reports TS7057 |
+| `emitter/es2018/asyncGenerators/emitter.asyncGenerators.objectLiteralMethods.es2018.ts` | the port changes what it checks | `tsc` then reports TS7057 |
 | `emitter/es2019/noCatchBinding/emitter.noCatchBinding.es2019.ts` | checks too little | 0 after the port |
-| `emitter/es5/asyncGenerators/emitter.asyncGenerators.classMethods.es5.ts` | multi-file or JavaScript |  |
-| `emitter/es5/asyncGenerators/emitter.asyncGenerators.functionDeclarations.es5.ts` | multi-file or JavaScript |  |
-| `emitter/es5/asyncGenerators/emitter.asyncGenerators.functionExpressions.es5.ts` | multi-file or JavaScript |  |
-| `emitter/es5/asyncGenerators/emitter.asyncGenerators.objectLiteralMethods.es5.ts` | multi-file or JavaScript |  |
+| `emitter/es5/asyncGenerators/emitter.asyncGenerators.classMethods.es5.ts` | not supported | expected `:` and a type for the class field, on ` async * f(): AsyncGenerator<never, void, unknown> { ` |
+| `emitter/es5/asyncGenerators/emitter.asyncGenerators.functionDeclarations.es5.ts` | not supported | expected `;` after expression, on ` async function * f1(): AsyncGenerator<never, void, unknown> { ` |
+| `emitter/es5/asyncGenerators/emitter.asyncGenerators.functionExpressions.es5.ts` | the port changes what it checks | `tsc` then reports TS7057 |
+| `emitter/es5/asyncGenerators/emitter.asyncGenerators.objectLiteralMethods.es5.ts` | the port changes what it checks | `tsc` then reports TS7057 |
 | `enums/awaitAndYield.ts` | the port changes what it checks | `tsc` then reports TS18033, TS2322 |
 | `enums/enumBasics.ts` | the port changes what it checks | `tsc` then reports TS7015 |
 | `enums/enumClassification.ts` | not supported | mixed numeric and string enum members are not allowed, on ` D = 10, ` |
@@ -526,28 +526,27 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es2018/invalidTaggedTemplateEscapeSequences.ts` | not supported | invalid unicode escape: expected hex digits, on `` const x = tag`\u{hello} ${ 100 } \xtraordinary ${ 200 } wonderful ${ 300 } \u... `` |
 | `es2018/usePromiseFinally.ts` | checks too little | 1 after the port |
 | `es2019/globalThisAmbientModules.ts` | the port changes what it checks | `tsc` then reports TS1039 |
-| `es2019/globalThisCollision.ts` | multi-file or JavaScript |  |
+| `es2019/globalThisCollision.ts` | not supported | JavaScript |
 | `es2019/globalThisGlobalExportAsGlobal.ts` | not supported | expected `;` after expression, on ` declare global { ` |
-| `es2019/globalThisPropertyAssignment.ts` | multi-file or JavaScript |  |
+| `es2019/globalThisPropertyAssignment.ts` | not supported | JavaScript |
 | `es2019/globalThisReadonlyProperties.ts` | not supported | `any` is not supported, on ` globalThis.globalThis = 1 as any // should error ` |
 | `es2019/globalThisTypeIndexAccess.ts` | not supported | expected `]` to close array type, on ` const w_e: (typeof globalThis)["globalThis"] = null as unknown as ((typeof gl... ` |
 | `es2019/globalThisUnknown.ts` | the port changes what it checks | `tsc` then reports TS7017, TS7015, TS7053 |
 | `es2019/globalThisUnknownNoImplicitAny.ts` | not supported | `let` declaration requires an initializer, on ` let win: Window & typeof globalThis = null as unknown as (Window & typeof glo... ` |
-| `es2019/globalThisVarDeclaration.ts` | multi-file or JavaScript |  |
-| `es2019/importMeta/importMeta.ts` | multi-file or JavaScript |  |
+| `es2019/globalThisVarDeclaration.ts` | not supported | JavaScript |
+| `es2019/importMeta/importMeta.ts` | not supported | expected `)`, on ` (async () => { ` |
 | `es2019/importMeta/importMetaNarrowing.ts` | not supported | expected `;` after expression, on ` declare global { interface ImportMeta {foo?: () => void} }; ` |
 | `es2020/bigintMissingES2019.ts` | the port changes what it checks | `tsc` then reports TS2559 |
 | `es2020/bigintMissingES2020.ts` | the port changes what it checks | `tsc` then reports TS2559 |
 | `es2020/bigintMissingESNext.ts` | the port changes what it checks | `tsc` then reports TS2559 |
 | `es2020/intlNumberFormatES2020.ts` | not supported | unknown type `Intl.NumberFormatPartTypes`, on ` const types: Intl.NumberFormatPartTypes[] = [ 'compact', 'unit', 'unknown' ]; ` |
-| `es2020/modules/exportAsNamespace_exportAssignment.ts` | multi-file or JavaScript |  |
-| `es2020/modules/exportAsNamespace_missingEmitHelpers.ts` | multi-file or JavaScript |  |
+| `es2020/modules/exportAsNamespace_exportAssignment.ts` | not supported | expected a declaration after `export`, on ` export = {} ` |
+| `es2020/modules/exportAsNamespace_missingEmitHelpers.ts` | not supported | empty export specifier list, on ` export {} ` |
 | `es2020/modules/exportAsNamespace_nonExistent.ts` | the port changes what it checks | `tsc` then reports TS2792 |
-| `es2020/modules/exportAsNamespace1.ts` | multi-file or JavaScript |  |
-| `es2020/modules/exportAsNamespace2.ts` | multi-file or JavaScript |  |
-| `es2020/modules/exportAsNamespace3.ts` | multi-file or JavaScript |  |
-| `es2020/modules/exportAsNamespace4.ts` | multi-file or JavaScript |  |
-| `es2020/modules/exportAsNamespace5.ts` | multi-file or JavaScript |  |
+| `es2020/modules/exportAsNamespace1.ts` | not supported | expected a declaration after `export`, on ` export * as ns from './0'; ` |
+| `es2020/modules/exportAsNamespace2.ts` | not supported | expected a declaration after `export`, on ` export * as ns from './0'; ` |
+| `es2020/modules/exportAsNamespace4.ts` | not supported | expected a declaration after `export`, on ` export * as default from './0'; ` |
+| `es2020/modules/exportAsNamespace5.ts` | not supported | declaration files (`.d.ts`) |
 | `es2021/es2021LocalesObjectArgument.ts` | the port changes what it checks | `tsc` then reports TS2339 |
 | `es2021/intlDateTimeFormatRangeES2021.ts` | the port changes what it checks | `tsc` then reports TS2339, TS2551 |
 | `es2021/logicalAssignment/logicalAssignment1.ts` | not supported | expected expression, on ` a &&= "foo" ` |
@@ -561,7 +560,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es2022/arbitraryModuleNamespaceIdentifiers/arbitraryModuleNamespaceIdentifiers_exportEmpty.ts` | the port changes what it checks | `tsc` then reports TS18057 |
 | `es2022/arbitraryModuleNamespaceIdentifiers/arbitraryModuleNamespaceIdentifiers_importEmpty.ts` | the port changes what it checks | `tsc` then reports TS18057 |
 | `es2022/arbitraryModuleNamespaceIdentifiers/arbitraryModuleNamespaceIdentifiers_module.ts` | not supported | expected local name after `as`, on ` export { someValue as "<X>" }; ` |
-| `es2022/arbitraryModuleNamespaceIdentifiers/arbitraryModuleNamespaceIdentifiers_syntax.ts` | multi-file or JavaScript |  |
+| `es2022/arbitraryModuleNamespaceIdentifiers/arbitraryModuleNamespaceIdentifiers_syntax.ts` | not supported | expected local name after `as`, on ` export { foo as "valid 1" }; ` |
 | `es2022/es2022IntlAPIs.ts` | the port changes what it checks | `tsc` then reports TS2339 |
 | `es2022/es2022LocalesObjectArgument.ts` | the port changes what it checks | `tsc` then reports TS2339 |
 | `es2022/es2024SharedMemory.ts` | the port changes what it checks | `tsc` then reports TS2300 |
@@ -694,7 +693,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es6/destructuring/destructuringParameterDeclaration7ES5.ts` | not supported | empty object destructuring pattern, on ` function foo({}, {foo, bar}: ISomething): void {} ` |
 | `es6/destructuring/destructuringParameterDeclaration7ES5iterable.ts` | not supported | empty object destructuring pattern, on ` function foo({}, {foo, bar}: ISomething): void {} ` |
 | `es6/destructuring/destructuringParameterDeclaration8.ts` | not supported | nested destructuring is not supported, on ` nested: { p = 'c' } ` |
-| `es6/destructuring/destructuringParameterDeclaration9.ts` | multi-file or JavaScript |  |
+| `es6/destructuring/destructuringParameterDeclaration9.ts` | not supported | JavaScript |
 | `es6/destructuring/destructuringParameterProperties1.ts` | not supported | `public` is a reserved word in strict mode and can't be used as a name, on ` constructor(public [x, y, z]: string[]) { ` |
 | `es6/destructuring/destructuringParameterProperties2.ts` | not supported | `private` is a reserved word in strict mode and can't be used as a name, on ` constructor(private k: number, private [a, b, c]: [number, string, boolean]) { ` |
 | `es6/destructuring/destructuringParameterProperties3.ts` | the port changes what it checks | `tsc` then reports TS2451 |
@@ -782,8 +781,8 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es6/destructuring/objectBindingPatternKeywordIdentifiers06.ts` | checks too little | 1 after the port |
 | `es6/destructuring/optionalBindingParameters1.ts` | not supported | a destructured parameter cannot be optional; use a default value, on ` function foo([x,y,z]?: [string, number, boolean]): void { ` |
 | `es6/destructuring/optionalBindingParameters2.ts` | not supported | a destructured parameter cannot be optional; use a default value, on ` function foo({ x, y, z }?: { x: string; y: number; z: boolean }): void { ` |
-| `es6/destructuring/optionalBindingParameters3.ts` | multi-file or JavaScript |  |
-| `es6/destructuring/optionalBindingParameters4.ts` | multi-file or JavaScript |  |
+| `es6/destructuring/optionalBindingParameters3.ts` | not supported | JavaScript |
+| `es6/destructuring/optionalBindingParameters4.ts` | not supported | JavaScript |
 | `es6/destructuring/optionalBindingParametersInOverloads1.ts` | not supported | a destructured parameter cannot be optional; use a default value, on ` function foo([x, y, z] ?: [string, number, boolean]); ` |
 | `es6/destructuring/optionalBindingParametersInOverloads2.ts` | not supported | a destructured parameter cannot be optional; use a default value, on ` function foo({ x, y, z }?: { x: string; y: number; z: boolean }); ` |
 | `es6/destructuring/restElementWithAssignmentPattern1.ts` | not supported | expected `;` after declaration, on ` let a: string = null as unknown as (string), b: number = null as unknown as (... ` |
@@ -877,61 +876,58 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es6/memberFunctionDeclarations/MemberFunctionDeclaration6_es6.ts` | not supported | expected class member name, on ` *foo ` |
 | `es6/memberFunctionDeclarations/MemberFunctionDeclaration7_es6.ts` | not supported | expected class member name, on ` *foo<T>(): Generator<never, void, unknown> { } ` |
 | `es6/memberFunctionDeclarations/MemberFunctionDeclaration8_es6.ts` | not supported | unexpected character `¬`, on ` if (a) ¬ * bar; ` |
-| `es6/moduleExportsAmd/anonymousDefaultExportsAmd.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsAmd/decoratedDefaultExportsGetExportedAmd.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsAmd/defaultExportsGetExportedAmd.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsAmd/outFilerootDirModuleNamesAmd.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsCommonjs/anonymousDefaultExportsCommonjs.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsCommonjs/decoratedDefaultExportsGetExportedCommonjs.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsCommonjs/defaultExportsGetExportedCommonjs.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsSystem/anonymousDefaultExportsSystem.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsSystem/decoratedDefaultExportsGetExportedSystem.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsSystem/defaultExportsGetExportedSystem.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsSystem/outFilerootDirModuleNamesSystem.ts` | multi-file or JavaScript |  |
+| `es6/moduleExportsAmd/anonymousDefaultExportsAmd.ts` | not supported | `export default` is not supported, on ` export default class {} ` |
+| `es6/moduleExportsAmd/decoratedDefaultExportsGetExportedAmd.ts` | not supported | unexpected character `@`, on ` @decorator ` |
+| `es6/moduleExportsAmd/defaultExportsGetExportedAmd.ts` | not supported | `export default` is not supported, on ` export default class Foo {} ` |
+| `es6/moduleExportsAmd/outFilerootDirModuleNamesAmd.ts` | not supported | `export default` is not supported, on ` export default class Foo {} ` |
+| `es6/moduleExportsCommonjs/anonymousDefaultExportsCommonjs.ts` | not supported | `export default` is not supported, on ` export default class {} ` |
+| `es6/moduleExportsCommonjs/decoratedDefaultExportsGetExportedCommonjs.ts` | not supported | unexpected character `@`, on ` @decorator ` |
+| `es6/moduleExportsCommonjs/defaultExportsGetExportedCommonjs.ts` | not supported | `export default` is not supported, on ` export default class Foo {} ` |
+| `es6/moduleExportsSystem/anonymousDefaultExportsSystem.ts` | not supported | `export default` is not supported, on ` export default class {} ` |
+| `es6/moduleExportsSystem/decoratedDefaultExportsGetExportedSystem.ts` | not supported | unexpected character `@`, on ` @decorator ` |
+| `es6/moduleExportsSystem/defaultExportsGetExportedSystem.ts` | not supported | `export default` is not supported, on ` export default class Foo {} ` |
+| `es6/moduleExportsSystem/outFilerootDirModuleNamesSystem.ts` | not supported | `export default` is not supported, on ` export default class Foo {} ` |
 | `es6/moduleExportsSystem/topLevelVarHoistingCommonJS.ts` | the port changes what it checks | `tsc` then reports TS2304 |
 | `es6/moduleExportsSystem/topLevelVarHoistingSystem.ts` | the port changes what it checks | `tsc` then reports TS2304 |
-| `es6/moduleExportsUmd/anonymousDefaultExportsUmd.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsUmd/decoratedDefaultExportsGetExportedUmd.ts` | multi-file or JavaScript |  |
-| `es6/moduleExportsUmd/defaultExportsGetExportedUmd.ts` | multi-file or JavaScript |  |
-| `es6/modules/defaultExportInAwaitExpression01.ts` | multi-file or JavaScript |  |
-| `es6/modules/defaultExportInAwaitExpression02.ts` | multi-file or JavaScript |  |
-| `es6/modules/defaultExportsCannotMerge01.ts` | multi-file or JavaScript |  |
-| `es6/modules/defaultExportsCannotMerge02.ts` | multi-file or JavaScript |  |
-| `es6/modules/defaultExportsCannotMerge03.ts` | multi-file or JavaScript |  |
+| `es6/moduleExportsUmd/anonymousDefaultExportsUmd.ts` | not supported | `export default` is not supported, on ` export default class {} ` |
+| `es6/moduleExportsUmd/decoratedDefaultExportsGetExportedUmd.ts` | not supported | unexpected character `@`, on ` @decorator ` |
+| `es6/moduleExportsUmd/defaultExportsGetExportedUmd.ts` | not supported | `export default` is not supported, on ` export default class Foo {} ` |
+| `es6/modules/defaultExportInAwaitExpression01.ts` | not supported | `export default` is not supported, on ` export default x; ` |
+| `es6/modules/defaultExportInAwaitExpression02.ts` | not supported | `export default` is not supported, on ` export default x; ` |
+| `es6/modules/defaultExportsCannotMerge01.ts` | the port changes what it checks | `tsc` then reports TS2749, TS2503, TS2339 |
+| `es6/modules/defaultExportsCannotMerge02.ts` | the port changes what it checks | `tsc` then reports TS2348, TS2702, TS2339 |
+| `es6/modules/defaultExportsCannotMerge03.ts` | the port changes what it checks | `tsc` then reports TS2348, TS2702, TS2339 |
 | `es6/modules/defaultExportsCannotMerge04.ts` | the port changes what it checks | `tsc` then reports TS7005 |
 | `es6/modules/defaultExportWithOverloads01.ts` | the port changes what it checks | `tsc` then reports TS7010 |
-| `es6/modules/exportAndImport-es5-amd.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportAndImport-es5.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportBinding.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports1-amd.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports1-es6.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports1.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports2-amd.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports2-es6.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports2.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports3-amd.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports3-es6.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports3.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports4-amd.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports4-es6.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports4.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImports5.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImportsWithContextualKeywordNames01.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImportsWithContextualKeywordNames02.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImportsWithUnderscores1.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImportsWithUnderscores2.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImportsWithUnderscores3.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportsAndImportsWithUnderscores4.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportSpellingSuggestion.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportStar-amd.ts` | multi-file or JavaScript |  |
-| `es6/modules/exportStar.ts` | multi-file or JavaScript |  |
+| `es6/modules/exportAndImport-es5-amd.ts` | not supported | `export default` is not supported, on ` export default function f1(): void { ` |
+| `es6/modules/exportAndImport-es5.ts` | not supported | `export default` is not supported, on ` export default function f1(): void { ` |
+| `es6/modules/exportBinding.ts` | not supported | `export default` is not supported, on ` export default x; ` |
+| `es6/modules/exportsAndImports1-amd.ts` | the port changes what it checks | `tsc` then reports TS7005 |
+| `es6/modules/exportsAndImports1-es6.ts` | the port changes what it checks | `tsc` then reports TS7005 |
+| `es6/modules/exportsAndImports1.ts` | the port changes what it checks | `tsc` then reports TS7005 |
+| `es6/modules/exportsAndImports2-amd.ts` | checks too little | 2 after the port |
+| `es6/modules/exportsAndImports2-es6.ts` | duplicate | of `es6/modules/exportsAndImports2-amd.ts` |
+| `es6/modules/exportsAndImports2.ts` | duplicate | of `es6/modules/exportsAndImports2-amd.ts` |
+| `es6/modules/exportsAndImports3-amd.ts` | the port changes what it checks | `tsc` then reports TS7005 |
+| `es6/modules/exportsAndImports3-es6.ts` | the port changes what it checks | `tsc` then reports TS7005 |
+| `es6/modules/exportsAndImports3.ts` | the port changes what it checks | `tsc` then reports TS7005 |
+| `es6/modules/exportsAndImports4-amd.ts` | not supported | `export default` is not supported, on ` export default "hello"; ` |
+| `es6/modules/exportsAndImports4-es6.ts` | not supported | `export default` is not supported, on ` export default "hello"; ` |
+| `es6/modules/exportsAndImports4.ts` | not supported | `export default` is not supported, on ` export default "hello"; ` |
+| `es6/modules/exportsAndImports5.ts` | checks too little | 1 after the port |
+| `es6/modules/exportsAndImportsWithContextualKeywordNames01.ts` | not supported | expected `,` or `}`, on ` set foo(x: number) { ` |
+| `es6/modules/exportsAndImportsWithContextualKeywordNames02.ts` | not supported | `return` is a reserved keyword and can't be used as a name, on ` export { as as return, as }; ` |
+| `es6/modules/exportsAndImportsWithUnderscores1.ts` | not supported | `any` is not supported, on ` let R: any = null as unknown as (any); ` |
+| `es6/modules/exportsAndImportsWithUnderscores2.ts` | not supported | `any` is not supported, on ` let R: any = null as unknown as (any); ` |
+| `es6/modules/exportsAndImportsWithUnderscores3.ts` | not supported | `any` is not supported, on ` let R: any = null as unknown as (any); ` |
+| `es6/modules/exportStar.ts` | duplicate | of `es6/modules/exportStar-amd.ts` |
 | `es6/modules/importEmptyFromModuleNotExisted.ts` | the port changes what it checks | `tsc` then reports TS2792 |
-| `es6/modules/multipleDefaultExports01.ts` | multi-file or JavaScript |  |
-| `es6/modules/multipleDefaultExports02.ts` | multi-file or JavaScript |  |
+| `es6/modules/multipleDefaultExports01.ts` | not supported | `export default` is not supported, on ` export default class foo { ` |
+| `es6/modules/multipleDefaultExports02.ts` | not supported | `export default` is not supported, on ` export default function foo(): void { ` |
 | `es6/modules/multipleDefaultExports03.ts` | not supported | `export default` is not supported, on ` export default class C { ` |
 | `es6/modules/multipleDefaultExports04.ts` | not supported | `export default` is not supported, on ` export default function f(): void { ` |
 | `es6/modules/multipleDefaultExports05.ts` | not supported | `export default` is not supported, on ` export default class AA1 {} ` |
-| `es6/modules/reExportDefaultExport.ts` | multi-file or JavaScript |  |
+| `es6/modules/reExportDefaultExport.ts` | not supported | `export default` is not supported, on ` export default function f(): void { ` |
 | `es6/newTarget/invalidNewTarget.es5.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `es6/newTarget/invalidNewTarget.es6.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `es6/newTarget/newTarget.es5.ts` | not supported | expected expression, on ` const a = new.target; ` |
@@ -959,7 +955,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `es6/shorthandPropertyAssignment/objectLiteralShorthandPropertiesWithModule.ts` | the port changes what it checks | `tsc` then reports TS7005 |
 | `es6/shorthandPropertyAssignment/objectLiteralShorthandPropertiesWithModuleES6.ts` | the port changes what it checks | `tsc` then reports TS7005 |
 | `es6/spread/arrayLiteralSpreadES5iterable.ts` | duplicate | of `es6/spread/arrayLiteralSpread.ts` |
-| `es6/spread/arraySpreadImportHelpers.ts` | multi-file or JavaScript |  |
+| `es6/spread/arraySpreadImportHelpers.ts` | not supported | declaration files (`.d.ts`) |
 | `es6/spread/arraySpreadInCall.ts` | not supported | expected expression, on ` f1(1, 2, 3, 4, ...[5, 6]); ` |
 | `es6/spread/iteratorSpreadInArray.ts` | not supported | expected class member name, on ` [Symbol.iterator](): this { ` |
 | `es6/spread/iteratorSpreadInArray10.ts` | not supported | expected class member name, on ` [Symbol.iterator](): this { ` |
@@ -1252,7 +1248,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `expressions/arrayLiterals/arrayLiterals.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `expressions/arrayLiterals/arrayLiterals2ES5.ts` | the port changes what it checks | `tsc` then reports TS7034, TS7005 |
 | `expressions/asOperator/asOpEmitParens.ts` | not supported | construct signatures |
-| `expressions/asOperator/asOperator4.ts` | multi-file or JavaScript |  |
+| `expressions/asOperator/asOperator4.ts` | not supported | `any` is not supported, on ` <any>foo; ` |
 | `expressions/asOperator/asOperatorAmbiguity.ts` | not supported | `any` is not supported, on ` let x: any = null as unknown as (any); ` |
 | `expressions/asOperator/asOperatorASI.ts` | not supported | `any` is not supported, on ` function as(...args: any[]): void { } ` |
 | `expressions/asOperator/asOperatorContextualType.ts` | checks too little | 2 after the port |
@@ -1383,7 +1379,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `expressions/thisKeyword/thisInInvalidContextsExternalModule.ts` | the port changes what it checks | `tsc` then reports TS7008, TS2683, TS1203 |
 | `expressions/thisKeyword/typeOfThisGeneral.ts` | the port changes what it checks | it renames the repeated `var` declarations whose types `tsc` checks (TS2403) |
 | `expressions/thisKeyword/typeOfThisInConstructorParamList.ts` | checks too little | 1 after the port |
-| `expressions/typeAssertions/constAssertionOnEnum.ts` | multi-file or JavaScript |  |
+| `expressions/typeAssertions/constAssertionOnEnum.ts` | not supported | expected type, on ` let foo = Foo.A as const; ` |
 | `expressions/typeAssertions/constAssertions.ts` | not supported | expected type, on ` let v1 = 'abc' as const; ` |
 | `expressions/typeAssertions/typeAssertions.ts` | the port changes what it checks | `tsc` then reports TS7008 |
 | `expressions/typeGuards/typeGuardFunction.ts` | the port changes what it checks | `tsc` then reports TS7006 |
@@ -1459,14 +1455,14 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `expressions/unaryOperators/voidOperator/voidOperatorWithStringType.ts` | the port changes what it checks | `tsc` then reports TS2339 |
 | `expressions/valuesAndReferences/assignments.ts` | the port changes what it checks | `tsc` then reports TS7006 |
 | `expressions/valuesAndReferences/assignmentToParenthesizedIdentifiers.ts` | the port changes what it checks | `tsc` then reports TS2339 |
-| `externalModules/amdImportAsPrimaryExpression.ts` | multi-file or JavaScript |  |
-| `externalModules/amdImportNotAsPrimaryExpression.ts` | multi-file or JavaScript |  |
+| `externalModules/amdImportAsPrimaryExpression.ts` | not supported | expected `from` after import specifier list, on ` import foo = require("./foo_0"); ` |
+| `externalModules/amdImportNotAsPrimaryExpression.ts` | not supported | expected a declaration after `export`, on ` export namespace M1 { ` |
 | `externalModules/asiPreventsParsingAsAmbientExternalModule02.ts` | not supported | expected `;` after expression, on ` namespace container { ` |
-| `externalModules/circularReference.ts` | multi-file or JavaScript |  |
-| `externalModules/commonJSImportAsPrimaryExpression.ts` | multi-file or JavaScript |  |
-| `externalModules/commonJsImportBindingElementNarrowType.ts` | multi-file or JavaScript |  |
-| `externalModules/commonJSImportNotAsPrimaryExpression.ts` | multi-file or JavaScript |  |
-| `externalModules/duplicateExportAssignments.ts` | multi-file or JavaScript |  |
+| `externalModules/circularReference.ts` | not supported | expected `from` after import specifier list, on ` import foo2 = require('./foo2'); ` |
+| `externalModules/commonJSImportAsPrimaryExpression.ts` | not supported | expected `from` after import specifier list, on ` import foo = require("./foo_0"); ` |
+| `externalModules/commonJsImportBindingElementNarrowType.ts` | not supported | JavaScript |
+| `externalModules/commonJSImportNotAsPrimaryExpression.ts` | duplicate | of `externalModules/amdImportNotAsPrimaryExpression.ts` |
+| `externalModules/duplicateExportAssignments.ts` | not supported | expected a declaration after `export`, on ` export = x; ` |
 | `externalModules/es6/es6modulekind.ts` | not supported | `export default` is not supported, on ` export default class A ` |
 | `externalModules/es6/es6modulekindExportClassNameWithObject.ts` | checks too little | 0 after the port |
 | `externalModules/es6/es6modulekindWithES2015Target.ts` | not supported | `export default` is not supported, on ` export default class A ` |
@@ -1498,26 +1494,26 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `externalModules/esnext/esnextmodulekindWithES5Target9.ts` | the port changes what it checks | `tsc` then reports TS2792 |
 | `externalModules/esnext/exnextmodulekindExportClassNameWithObject.ts` | duplicate | of `externalModules/es6/es6modulekindExportClassNameWithObject.ts` |
 | `externalModules/exportAmbientClassNameWithObject.ts` | not supported | expected a declaration after `export`, on ` export declare class Object {} ` |
-| `externalModules/exportAssignDottedName.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignImportedIdentifier.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentAndDeclaration.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentCircularModules.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentConstrainedGenericType.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentGenericType.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentMergedInterface.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentMergedModule.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentOfExportNamespaceWithDefault.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentTopLevelClodule.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentTopLevelEnumdule.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentTopLevelFundule.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignmentTopLevelIdentifier.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignNonIdentifier.ts` | multi-file or JavaScript |  |
-| `externalModules/exportAssignTypes.ts` | multi-file or JavaScript |  |
+| `externalModules/exportAssignDottedName.ts` | not supported | expected `from` after import specifier list, on ` import foo1 = require('./foo1'); ` |
+| `externalModules/exportAssignImportedIdentifier.ts` | not supported | expected `from` after import specifier list, on ` import foo1 = require('./foo1'); ` |
+| `externalModules/exportAssignmentAndDeclaration.ts` | the port changes what it checks | `tsc` then reports TS1203 |
+| `externalModules/exportAssignmentCircularModules.ts` | the port changes what it checks | `tsc` then reports TS7022 |
+| `externalModules/exportAssignmentConstrainedGenericType.ts` | not supported | expected `,` or `>`, on ` class Foo<T extends {a: string; b:number;}>{ ` |
+| `externalModules/exportAssignmentGenericType.ts` | not supported | expected a declaration after `export`, on ` export = Foo; ` |
+| `externalModules/exportAssignmentMergedInterface.ts` | not supported | expected a declaration after `export`, on ` export = Foo; ` |
+| `externalModules/exportAssignmentMergedModule.ts` | not supported | expected `;` after expression, on ` namespace Foo { ` |
+| `externalModules/exportAssignmentOfExportNamespaceWithDefault.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/exportAssignmentTopLevelClodule.ts` | not supported | expected `;` after expression, on ` namespace Foo { ` |
+| `externalModules/exportAssignmentTopLevelEnumdule.ts` | not supported | expected `;` after expression, on ` namespace foo { ` |
+| `externalModules/exportAssignmentTopLevelFundule.ts` | not supported | expected `;` after expression, on ` namespace foo { ` |
+| `externalModules/exportAssignmentTopLevelIdentifier.ts` | not supported | expected `;` after expression, on ` namespace Foo { ` |
+| `externalModules/exportAssignNonIdentifier.ts` | not supported | expected a declaration after `export`, on ` export = typeof x; // Ok ` |
+| `externalModules/exportAssignTypes.ts` | the port changes what it checks | `tsc` then reports TS7034, TS7005 |
 | `externalModules/exportClassNameWithObjectAMD.ts` | duplicate | of `externalModules/es6/es6modulekindExportClassNameWithObject.ts` |
 | `externalModules/exportClassNameWithObjectCommonJS.ts` | duplicate | of `externalModules/es6/es6modulekindExportClassNameWithObject.ts` |
 | `externalModules/exportClassNameWithObjectSystem.ts` | duplicate | of `externalModules/es6/es6modulekindExportClassNameWithObject.ts` |
 | `externalModules/exportClassNameWithObjectUMD.ts` | duplicate | of `externalModules/es6/es6modulekindExportClassNameWithObject.ts` |
-| `externalModules/exportDeclaredModule.ts` | multi-file or JavaScript |  |
+| `externalModules/exportDeclaredModule.ts` | the port changes what it checks | `tsc` then reports TS1039 |
 | `externalModules/exportDefaultClassNameWithObject.ts` | not supported | `export default` is not supported, on ` export default class Object {} ` |
 | `externalModules/exportNonInitializedVariablesAMD.ts` | the port changes what it checks | `tsc` then reports TS7005 |
 | `externalModules/exportNonInitializedVariablesCommonJS.ts` | the port changes what it checks | `tsc` then reports TS7005 |
@@ -1526,165 +1522,161 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `externalModules/exportNonInitializedVariablesSystem.ts` | the port changes what it checks | `tsc` then reports TS7005 |
 | `externalModules/exportNonInitializedVariablesUMD.ts` | the port changes what it checks | `tsc` then reports TS7005 |
 | `externalModules/exportNonLocalDeclarations.ts` | checks too little | 2 after the port |
-| `externalModules/exportNonVisibleType.ts` | multi-file or JavaScript |  |
-| `externalModules/exportTypeMergedWithExportStarAsNamespace.ts` | multi-file or JavaScript |  |
-| `externalModules/globalAugmentationModuleResolution.ts` | multi-file or JavaScript |  |
-| `externalModules/importImportOnlyModule.ts` | multi-file or JavaScript |  |
-| `externalModules/importNonExternalModule.ts` | multi-file or JavaScript |  |
-| `externalModules/importNonStringLiteral.ts` | multi-file or JavaScript |  |
-| `externalModules/importsImplicitlyReadonly.ts` | multi-file or JavaScript |  |
-| `externalModules/importTsBeforeDTs.ts` | multi-file or JavaScript |  |
-| `externalModules/initializersInDeclarations.ts` | multi-file or JavaScript |  |
-| `externalModules/invalidSyntaxNamespaceImportWithAMD.ts` | multi-file or JavaScript |  |
-| `externalModules/invalidSyntaxNamespaceImportWithCommonjs.ts` | multi-file or JavaScript |  |
-| `externalModules/invalidSyntaxNamespaceImportWithSystem.ts` | multi-file or JavaScript |  |
-| `externalModules/moduleResolutionWithExtensions.ts` | multi-file or JavaScript |  |
-| `externalModules/moduleResolutionWithoutExtension1.ts` | multi-file or JavaScript |  |
-| `externalModules/moduleResolutionWithoutExtension2.ts` | multi-file or JavaScript |  |
-| `externalModules/moduleResolutionWithoutExtension3.ts` | multi-file or JavaScript |  |
-| `externalModules/moduleResolutionWithoutExtension4.ts` | multi-file or JavaScript |  |
-| `externalModules/moduleResolutionWithoutExtension5.ts` | multi-file or JavaScript |  |
-| `externalModules/moduleResolutionWithoutExtension6.ts` | multi-file or JavaScript |  |
-| `externalModules/moduleResolutionWithoutExtension7.ts` | multi-file or JavaScript |  |
-| `externalModules/moduleResolutionWithoutExtension8.ts` | multi-file or JavaScript |  |
-| `externalModules/moduleScoping.ts` | multi-file or JavaScript |  |
+| `externalModules/exportNonVisibleType.ts` | not supported | expected a declaration after `export`, on ` export = x; // Should fail, I1 not exported. ` |
+| `externalModules/exportTypeMergedWithExportStarAsNamespace.ts` | not supported | expected a declaration after `export`, on ` export * as Something from "./Something" ` |
+| `externalModules/globalAugmentationModuleResolution.ts` | the port changes what it checks | `tsc` then reports TS1039 |
+| `externalModules/importImportOnlyModule.ts` | not supported | expected `from` after import specifier list, on ` import c1 = require('./foo_0'); // Makes this an external module ` |
+| `externalModules/importNonExternalModule.ts` | not supported | expected `;` after expression, on ` namespace foo { ` |
+| `externalModules/importNonStringLiteral.ts` | not supported | expected `from` after import specifier list, on ` import foo = require(x); // invalid ` |
+| `externalModules/importTsBeforeDTs.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/initializersInDeclarations.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/invalidSyntaxNamespaceImportWithAMD.ts` | not supported | expected `as <name>` after `import *`, on ` import * from Zero from "./0" ` |
+| `externalModules/invalidSyntaxNamespaceImportWithCommonjs.ts` | not supported | expected `as <name>` after `import *`, on ` import * from Zero from "./0" ` |
+| `externalModules/invalidSyntaxNamespaceImportWithSystem.ts` | not supported | expected `as <name>` after `import *`, on ` import * from Zero from "./0" ` |
+| `externalModules/moduleResolutionWithExtensions.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/moduleResolutionWithoutExtension1.ts` | not supported | `.mts` and `.cts` files |
+| `externalModules/moduleResolutionWithoutExtension2.ts` | not supported | `.mts` and `.cts` files |
+| `externalModules/moduleResolutionWithoutExtension3.ts` | not supported | JSX |
+| `externalModules/moduleResolutionWithoutExtension4.ts` | not supported | JSX |
+| `externalModules/moduleResolutionWithoutExtension5.ts` | not supported | `.mts` and `.cts` files |
+| `externalModules/moduleResolutionWithoutExtension6.ts` | not supported | `.mts` and `.cts` files |
+| `externalModules/moduleResolutionWithoutExtension7.ts` | not supported | `.mts` and `.cts` files |
+| `externalModules/moduleResolutionWithoutExtension8.ts` | not supported | `.mts` and `.cts` files |
+| `externalModules/moduleScoping.ts` | not supported | script files sharing one global scope |
 | `externalModules/multipleExportDefault1.ts` | not supported | `export default` is not supported, on ` export default function Foo (): void { ` |
 | `externalModules/multipleExportDefault2.ts` | not supported | `export default` is not supported, on ` export default { ` |
 | `externalModules/multipleExportDefault3.ts` | not supported | `export default` is not supported, on ` export default { ` |
 | `externalModules/multipleExportDefault4.ts` | not supported | `export default` is not supported, on ` export default class C { } ` |
 | `externalModules/multipleExportDefault5.ts` | not supported | `export default` is not supported, on ` export default function bar(): void { } ` |
 | `externalModules/multipleExportDefault6.ts` | not supported | `export default` is not supported, on ` export default { ` |
-| `externalModules/nameDelimitedBySlashes.ts` | multi-file or JavaScript |  |
-| `externalModules/nameWithFileExtension.ts` | multi-file or JavaScript |  |
-| `externalModules/nameWithRelativePaths.ts` | multi-file or JavaScript |  |
-| `externalModules/reexportClassDefinition.ts` | multi-file or JavaScript |  |
-| `externalModules/relativePathMustResolve.ts` | multi-file or JavaScript |  |
-| `externalModules/relativePathToDeclarationFile.ts` | multi-file or JavaScript |  |
-| `externalModules/rewriteRelativeImportExtensions/cjsErrors.ts` | multi-file or JavaScript |  |
-| `externalModules/rewriteRelativeImportExtensions/emit.ts` | multi-file or JavaScript |  |
-| `externalModules/rewriteRelativeImportExtensions/emitModuleCommonJS.ts` | multi-file or JavaScript |  |
-| `externalModules/rewriteRelativeImportExtensions/nodeModulesTsFiles.ts` | multi-file or JavaScript |  |
-| `externalModules/rewriteRelativeImportExtensions/nonTSExtensions.ts` | multi-file or JavaScript |  |
-| `externalModules/rewriteRelativeImportExtensions/packageJsonImportsErrors.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelAmbientModule.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelAwait.1.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelAwait.2.ts` | the port changes what it checks | `tsc` then reports TS1039 |
-| `externalModules/topLevelAwait.3.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelAwaitErrors.1.ts` | the port changes what it checks | `tsc` then reports TS7031 |
-| `externalModules/topLevelAwaitErrors.10.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelAwaitErrors.11.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelAwaitErrors.12.ts` | the port changes what it checks | `tsc` then reports TS1039 |
-| `externalModules/topLevelAwaitErrors.2.ts` | not supported | empty export specifier list, on ` export {}; ` |
-| `externalModules/topLevelAwaitErrors.3.ts` | not supported | empty export specifier list, on ` export {}; ` |
-| `externalModules/topLevelAwaitErrors.4.ts` | not supported | empty export specifier list, on ` export {}; ` |
-| `externalModules/topLevelAwaitErrors.5.ts` | checks too little | 1 after the port |
-| `externalModules/topLevelAwaitErrors.6.ts` | checks too little | 1 after the port |
-| `externalModules/topLevelAwaitErrors.7.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelAwaitErrors.8.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelAwaitErrors.9.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelAwaitNonModule.ts` | the port changes what it checks | `tsc` then reports TS1378, TS1432 |
-| `externalModules/topLevelFileModule.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelFileModuleMissing.ts` | multi-file or JavaScript |  |
-| `externalModules/topLevelModuleDeclarationAndFile.ts` | multi-file or JavaScript |  |
-| `externalModules/typeAndNamespaceExportMerge.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/allowsImportingTsExtension.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/ambient.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/chained.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/chained2.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/circular1.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/circular2.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/circular3.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/circular4.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/cjsImportInES2015.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/computedPropertyName.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/enums.ts` | multi-file or JavaScript |  |
+| `externalModules/nameDelimitedBySlashes.ts` | not supported | expected `from` after import specifier list, on ` import foo = require('./test/foo_0'); ` |
+| `externalModules/nameWithFileExtension.ts` | not supported | expected `from` after import specifier list, on ` import foo = require('./foo_0.js'); ` |
+| `externalModules/nameWithRelativePaths.ts` | not supported | expected a declaration after `export`, on ` export namespace M2 { ` |
+| `externalModules/reexportClassDefinition.ts` | not supported | expected a declaration after `export`, on ` export = x; ` |
+| `externalModules/relativePathMustResolve.ts` | not supported | expected `from` after import specifier list, on ` import foo = require('./test/foo'); ` |
+| `externalModules/relativePathToDeclarationFile.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/rewriteRelativeImportExtensions/cjsErrors.ts` | not supported | expected a declaration after `export`, on ` export = {}; ` |
+| `externalModules/rewriteRelativeImportExtensions/emit.ts` | not supported | JavaScript |
+| `externalModules/rewriteRelativeImportExtensions/emitModuleCommonJS.ts` | not supported | JavaScript |
+| `externalModules/rewriteRelativeImportExtensions/nodeModulesTsFiles.ts` | not supported | `node_modules` packages |
+| `externalModules/rewriteRelativeImportExtensions/nonTSExtensions.ts` | not supported | JSON modules |
+| `externalModules/rewriteRelativeImportExtensions/packageJsonImportsErrors.ts` | not supported | JSON modules |
+| `externalModules/topLevelAmbientModule.ts` | not supported | script files sharing one global scope |
+| `externalModules/topLevelAwait.1.ts` | not supported | async/await |
+| `externalModules/topLevelAwait.2.ts` | not supported | async/await |
+| `externalModules/topLevelAwait.3.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.1.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.10.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.11.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.12.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.2.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.3.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.4.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.5.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.6.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.7.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.8.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitErrors.9.ts` | not supported | async/await |
+| `externalModules/topLevelAwaitNonModule.ts` | not supported | async/await |
+| `externalModules/topLevelFileModule.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/topLevelFileModuleMissing.ts` | not supported | expected `from` after import specifier list, on ` import foo = require("vs/foo"); ` |
+| `externalModules/topLevelModuleDeclarationAndFile.ts` | not supported | script files sharing one global scope |
+| `externalModules/typeAndNamespaceExportMerge.ts` | not supported | expected a declaration after `export`, on ` export * as Drink from "./constants"; ` |
+| `externalModules/typeOnly/allowsImportingTsExtension.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/typeOnly/ambient.ts` | not supported | expected `:` and a type for the class field, on ` export class A { a!: string } ` |
+| `externalModules/typeOnly/chained.ts` | not supported | expected `:` and a type for the class field, on ` class A { a!: string } ` |
+| `externalModules/typeOnly/chained2.ts` | not supported | expected `:` and a type for the class field, on ` class A { a!: string } ` |
+| `externalModules/typeOnly/circular1.ts` | checks too little | 1 after the port |
+| `externalModules/typeOnly/circular2.ts` | checks too little | 2 after the port |
+| `externalModules/typeOnly/circular3.ts` | checks too little | 1 after the port |
+| `externalModules/typeOnly/circular4.ts` | not supported | expected a declaration after `export`, on ` export namespace ns1 { ` |
+| `externalModules/typeOnly/cjsImportInES2015.ts` | not supported | `node_modules` packages |
+| `externalModules/typeOnly/computedPropertyName.ts` | not supported | expected `:` after index parameter name, on ` [onInit]?(): void; ` |
+| `externalModules/typeOnly/enums.ts` | not supported | `enum` is a reserved keyword and can't be used as a name, on ` const enum SymbolFlags { ` |
 | `externalModules/typeOnly/exportDeclaration_missingBraces.ts` | not supported | expected `;` after expression, on ` namespace ns { ` |
-| `externalModules/typeOnly/exportDeclaration_moduleSpecifier-isolatedModules.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportDeclaration_moduleSpecifier.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportDeclaration_value.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportDeclaration.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportDefault.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace_js.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace1.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace10.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace11.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace12.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace2.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace3.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace4.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace5.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace6.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace7.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace8.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportNamespace9.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportSpecifiers_js.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/exportSpecifiers.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/extendsClause.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/filterNamespace_import.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/generic.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/grammarErrors.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/implementsClause.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importClause_default.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importClause_namedImports.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importClause_namespaceImport.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importDefaultNamedType.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importDefaultNamedType2.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importDefaultNamedType3.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importEquals1.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importEquals2.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importEquals3.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importEqualsDeclaration.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importsNotUsedAsValues_error.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importSpecifiers_js.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/importSpecifiers1.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/mergedWithLocalValue.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/namespaceImportTypeQuery.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/namespaceImportTypeQuery2.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/namespaceImportTypeQuery3.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/namespaceImportTypeQuery4.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/namespaceMemberAccess.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/nestedNamespace.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/preserveValueImports_errors.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/preserveValueImports_importsNotUsedAsValues.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/preserveValueImports_mixedImports.ts` | multi-file or JavaScript |  |
+| `externalModules/typeOnly/exportDeclaration_moduleSpecifier-isolatedModules.ts` | checks too little | 0 after the port |
+| `externalModules/typeOnly/exportDeclaration_moduleSpecifier.ts` | not supported | `as` to `A` is not yet supported: class types aren't yet supported as `as` targets, on ` const a: A = null as unknown as (A); ` |
+| `externalModules/typeOnly/exportDeclaration_value.ts` | checks too little | 4 after the port |
+| `externalModules/typeOnly/exportDeclaration.ts` | not supported | expected a declaration after `export`, on ` export = A; ` |
+| `externalModules/typeOnly/exportDefault.ts` | not supported | `export default` is not supported, on ` export default types; ` |
+| `externalModules/typeOnly/exportNamespace_js.ts` | not supported | JavaScript |
+| `externalModules/typeOnly/exportNamespace1.ts` | not supported | expected a declaration after `export`, on ` export * from './b'; ` |
+| `externalModules/typeOnly/exportNamespace10.ts` | not supported | expected a declaration after `export`, on ` export type * as ns from "./a"; ` |
+| `externalModules/typeOnly/exportNamespace11.ts` | not supported | expected a declaration after `export`, on ` export type * from './ghost' ` |
+| `externalModules/typeOnly/exportNamespace12.ts` | not supported | expected a declaration after `export`, on ` export type * from './values' ` |
+| `externalModules/typeOnly/exportNamespace2.ts` | not supported | expected a declaration after `export`, on ` export * as a from './a'; ` |
+| `externalModules/typeOnly/exportNamespace3.ts` | not supported | expected a declaration after `export`, on ` export * as a from './b'; ` |
+| `externalModules/typeOnly/exportNamespace4.ts` | not supported | expected a declaration after `export`, on ` export type * from './a'; ` |
+| `externalModules/typeOnly/exportNamespace5.ts` | not supported | expected a declaration after `export`, on ` export type * from "./a"; ` |
+| `externalModules/typeOnly/exportNamespace6.ts` | not supported | expected a declaration after `export`, on ` export type * from "./a"; ` |
+| `externalModules/typeOnly/exportNamespace7.ts` | not supported | expected a declaration after `export`, on ` export type * from "./a"; ` |
+| `externalModules/typeOnly/exportNamespace8.ts` | not supported | expected a declaration after `export`, on ` export type * from "./a"; ` |
+| `externalModules/typeOnly/exportNamespace9.ts` | not supported | expected a declaration after `export`, on ` export type * from "./a"; ` |
+| `externalModules/typeOnly/exportSpecifiers_js.ts` | not supported | JavaScript |
+| `externalModules/typeOnly/exportSpecifiers.ts` | not supported | expected local name after `as`, on ` export { type as }; ` |
+| `externalModules/typeOnly/extendsClause.ts` | not supported | unknown type `types.C`, on ` interface S extends types.C {} ` |
+| `externalModules/typeOnly/filterNamespace_import.ts` | not supported | expected `;` after expression, on ` namespace ns { ` |
+| `externalModules/typeOnly/generic.ts` | not supported | expected `:` and a type for the class field, on ` export class A<T> { a!: T } ` |
+| `externalModules/typeOnly/grammarErrors.ts` | not supported | JavaScript |
+| `externalModules/typeOnly/implementsClause.ts` | checks too little | 0 after the port |
+| `externalModules/typeOnly/importClause_default.ts` | not supported | `export default` is not supported, on ` export default class A { a!: string } ` |
+| `externalModules/typeOnly/importDefaultNamedType.ts` | not supported | `export default` is not supported, on ` export default class A {} ` |
+| `externalModules/typeOnly/importDefaultNamedType2.ts` | not supported | `export default` is not supported, on ` export default class A {} ` |
+| `externalModules/typeOnly/importDefaultNamedType3.ts` | not supported | expected `from` after import specifier list, on ` import type from = require('./a'); ` |
+| `externalModules/typeOnly/importEquals1.ts` | the port changes what it checks | `tsc` then reports TS1259 |
+| `externalModules/typeOnly/importEquals2.ts` | not supported | expected a declaration after `export`, on ` export = a; ` |
+| `externalModules/typeOnly/importEquals3.ts` | not supported | expected `from` after import specifier list, on ` import A = a.A; // Error ` |
+| `externalModules/typeOnly/importEqualsDeclaration.ts` | not supported | expected `:` and a type for the class field, on ` class A { a!: string } ` |
+| `externalModules/typeOnly/importsNotUsedAsValues_error.ts` | not supported | `export default` is not supported, on ` export default class {} ` |
+| `externalModules/typeOnly/importSpecifiers_js.ts` | not supported | JavaScript |
+| `externalModules/typeOnly/mergedWithLocalValue.ts` | checks too little | 3 after the port |
+| `externalModules/typeOnly/namespaceImportTypeQuery.ts` | not supported | `any` is not supported, on ` A: undefined as any, ` |
+| `externalModules/typeOnly/namespaceImportTypeQuery2.ts` | not supported | `any` is not supported, on ` A: undefined as any, // ok ` |
+| `externalModules/typeOnly/namespaceImportTypeQuery3.ts` | not supported | `any` is not supported, on ` A: undefined as any, // ok ` |
+| `externalModules/typeOnly/namespaceImportTypeQuery4.ts` | not supported | `any` is not supported, on ` A: undefined as any, // error ` |
+| `externalModules/typeOnly/namespaceMemberAccess.ts` | not supported | expected `:` and a type for the class field, on ` class A { a!: string } ` |
+| `externalModules/typeOnly/nestedNamespace.ts` | not supported | expected a declaration after `export`, on ` export namespace types { ` |
+| `externalModules/typeOnly/preserveValueImports_errors.ts` | not supported | `default` is a reserved keyword and can't be used as a name, on ` export type { A as default }; ` |
+| `externalModules/typeOnly/preserveValueImports_importsNotUsedAsValues.ts` | not supported | `any` is not supported, on ` export type C = any; ` |
+| `externalModules/typeOnly/preserveValueImports_mixedImports.ts` | checks too little | 0 after the port |
 | `externalModules/typeOnly/preserveValueImports_module.ts` | not supported | empty export specifier list, on ` export {}; ` |
-| `externalModules/typeOnly/preserveValueImports.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/renamed.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/typeOnlyESMImportFromCJS.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnly/typeQuery.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnlyMerge1.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnlyMerge2.ts` | multi-file or JavaScript |  |
-| `externalModules/typeOnlyMerge3.ts` | multi-file or JavaScript |  |
-| `externalModules/typesOnlyExternalModuleStillHasInstance.ts` | multi-file or JavaScript |  |
-| `externalModules/typeValueMerge1.ts` | multi-file or JavaScript |  |
-| `externalModules/umd-augmentation-1.ts` | multi-file or JavaScript |  |
-| `externalModules/umd-augmentation-2.ts` | multi-file or JavaScript |  |
-| `externalModules/umd-augmentation-3.ts` | multi-file or JavaScript |  |
-| `externalModules/umd-augmentation-4.ts` | multi-file or JavaScript |  |
-| `externalModules/umd-errors.ts` | multi-file or JavaScript |  |
-| `externalModules/umd1.ts` | multi-file or JavaScript |  |
-| `externalModules/umd2.ts` | multi-file or JavaScript |  |
-| `externalModules/umd3.ts` | multi-file or JavaScript |  |
-| `externalModules/umd4.ts` | multi-file or JavaScript |  |
-| `externalModules/umd5.ts` | multi-file or JavaScript |  |
-| `externalModules/umd6.ts` | multi-file or JavaScript |  |
-| `externalModules/umd7.ts` | multi-file or JavaScript |  |
-| `externalModules/umd8.ts` | multi-file or JavaScript |  |
-| `externalModules/umd9.ts` | multi-file or JavaScript |  |
-| `externalModules/valuesMergingAcrossModules.ts` | multi-file or JavaScript |  |
-| `externalModules/verbatimModuleSyntaxAmbientConstEnum.ts` | multi-file or JavaScript |  |
+| `externalModules/typeOnly/preserveValueImports.ts` | not supported | `export default` is not supported, on ` export default {}; ` |
+| `externalModules/typeOnly/renamed.ts` | not supported | expected `:` and a type for the class field, on ` class A { a!: string } ` |
+| `externalModules/typeOnly/typeOnlyESMImportFromCJS.ts` | not supported | `.mts` and `.cts` files |
+| `externalModules/typeOnly/typeQuery.ts` | not supported | `A` is a class, not a value, so `typeof` has no type to take, on ` let AConstructor: typeof A = null as unknown as (typeof A); ` |
+| `externalModules/typeOnlyMerge1.ts` | checks too little | 2 after the port |
+| `externalModules/typeOnlyMerge2.ts` | not supported | `any` is not supported, on ` type A = any; ` |
+| `externalModules/typeOnlyMerge3.ts` | not supported | expected `;` after expression, on ` namespace A { ` |
+| `externalModules/typesOnlyExternalModuleStillHasInstance.ts` | not supported | expected a declaration after `export`, on ` export namespace M2 { ` |
+| `externalModules/typeValueMerge1.ts` | checks too little | 1 after the port |
+| `externalModules/umd-augmentation-1.ts` | not supported | `node_modules` packages |
+| `externalModules/umd-augmentation-2.ts` | not supported | `node_modules` packages |
+| `externalModules/umd-augmentation-3.ts` | not supported | `node_modules` packages |
+| `externalModules/umd-augmentation-4.ts` | not supported | `node_modules` packages |
+| `externalModules/umd-errors.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/umd1.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/umd2.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/umd3.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/umd4.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/umd5.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/umd6.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/umd7.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/umd8.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/umd9.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/valuesMergingAcrossModules.ts` | not supported | expected `;` after expression, on ` namespace A { ` |
+| `externalModules/verbatimModuleSyntaxAmbientConstEnum.ts` | not supported | `node_modules` packages |
 | `externalModules/verbatimModuleSyntaxCompat.ts` | not supported | empty export specifier list, on ` export {}; ` |
-| `externalModules/verbatimModuleSyntaxCompat2.ts` | multi-file or JavaScript |  |
-| `externalModules/verbatimModuleSyntaxCompat3.ts` | multi-file or JavaScript |  |
-| `externalModules/verbatimModuleSyntaxCompat4.ts` | multi-file or JavaScript |  |
+| `externalModules/verbatimModuleSyntaxCompat2.ts` | not supported | JSON modules |
+| `externalModules/verbatimModuleSyntaxCompat3.ts` | not supported | JSON modules |
+| `externalModules/verbatimModuleSyntaxCompat4.ts` | not supported | JSON modules |
 | `externalModules/verbatimModuleSyntaxConstEnum.ts` | not supported | `enum` is a reserved keyword and can't be used as a name, on ` export const enum E { ` |
-| `externalModules/verbatimModuleSyntaxConstEnumUsage.ts` | multi-file or JavaScript |  |
-| `externalModules/verbatimModuleSyntaxDeclarationFile.ts` | multi-file or JavaScript |  |
+| `externalModules/verbatimModuleSyntaxConstEnumUsage.ts` | not supported | expected a number or string literal for enum initializer, on ` a = Foo.a, ` |
+| `externalModules/verbatimModuleSyntaxDeclarationFile.ts` | not supported | declaration files (`.d.ts`) |
 | `externalModules/verbatimModuleSyntaxInternalImportEquals.ts` | not supported | empty export specifier list, on ` export {}; ` |
-| `externalModules/verbatimModuleSyntaxNoElisionCJS.ts` | multi-file or JavaScript |  |
-| `externalModules/verbatimModuleSyntaxNoElisionESM.ts` | multi-file or JavaScript |  |
-| `externalModules/verbatimModuleSyntaxRestrictionsCJS.ts` | multi-file or JavaScript |  |
-| `externalModules/verbatimModuleSyntaxRestrictionsESM.ts` | multi-file or JavaScript |  |
+| `externalModules/verbatimModuleSyntaxNoElisionCJS.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/verbatimModuleSyntaxNoElisionESM.ts` | not supported | `export default` is not supported, on ` export default 1; // ok ` |
+| `externalModules/verbatimModuleSyntaxRestrictionsCJS.ts` | not supported | declaration files (`.d.ts`) |
+| `externalModules/verbatimModuleSyntaxRestrictionsESM.ts` | not supported | declaration files (`.d.ts`) |
 | `fixSignatureCaching.ts` | the port changes what it checks | `tsc` then reports TS7006, TS2683, TS2322, TS2580 |
 | `functions/functionImplementationErrors.ts` | the port changes what it checks | `tsc` then reports TS7006, TS7008 |
 | `functions/functionImplementations.ts` | the port changes what it checks | it renames the repeated `var` declarations whose types `tsc` checks (TS2403) |
@@ -1705,39 +1697,39 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `functions/strictBindCallApply1.ts` | the port changes what it checks | `tsc` then reports TS2393 |
 | `functions/strictBindCallApply2.ts` | not supported | `this` is a reserved keyword and can't be used as a name, on ` function fn(this: Foo): void {} ` |
 | `generators/` | not supported | generators |
-| `importAssertion/importAssertion1.ts` | multi-file or JavaScript |  |
-| `importAssertion/importAssertion2.ts` | multi-file or JavaScript |  |
-| `importAssertion/importAssertion3.ts` | multi-file or JavaScript |  |
+| `importAssertion/importAssertion1.ts` | not supported | side-effect-only imports are not supported, on ` import './0' with { type: "json" } ` |
+| `importAssertion/importAssertion2.ts` | not supported | empty export specifier list, on ` export {} from './0' with { type: "json" } ` |
+| `importAssertion/importAssertion3.ts` | not supported | empty export specifier list, on ` export type {} from './0' with { type: "json" } ` |
 | `importAssertion/importAssertion4.ts` | the port changes what it checks | `tsc` then reports TS2792 |
 | `importAssertion/importAssertion5.ts` | the port changes what it checks | `tsc` then reports TS2792, TS2322, TS2304, TS2858 |
-| `importAttributes/importAttributes1.ts` | multi-file or JavaScript |  |
-| `importAttributes/importAttributes10.ts` | multi-file or JavaScript |  |
-| `importAttributes/importAttributes11.ts` | multi-file or JavaScript |  |
-| `importAttributes/importAttributes2.ts` | multi-file or JavaScript |  |
-| `importAttributes/importAttributes3.ts` | multi-file or JavaScript |  |
+| `importAttributes/importAttributes1.ts` | not supported | side-effect-only imports are not supported, on ` import './0' with { type: "json" } ` |
+| `importAttributes/importAttributes10.ts` | not supported | JSON modules |
+| `importAttributes/importAttributes11.ts` | not supported | JSON modules |
+| `importAttributes/importAttributes2.ts` | not supported | empty export specifier list, on ` export {} from './0' with { type: "json" } ` |
+| `importAttributes/importAttributes3.ts` | not supported | empty export specifier list, on ` export type {} from './0' with { type: "json" } ` |
 | `importAttributes/importAttributes4.ts` | the port changes what it checks | `tsc` then reports TS2792 |
 | `importAttributes/importAttributes5.ts` | the port changes what it checks | `tsc` then reports TS2792, TS2322, TS2304, TS2858 |
-| `importAttributes/importAttributes6.ts` | multi-file or JavaScript |  |
-| `importAttributes/importAttributes7.ts` | multi-file or JavaScript |  |
-| `importAttributes/importAttributes8.ts` | multi-file or JavaScript |  |
-| `importAttributes/importAttributes9.ts` | multi-file or JavaScript |  |
-| `importDefer/dynamicImportDefer.ts` | multi-file or JavaScript |  |
-| `importDefer/dynamicImportDeferInvalidStandalone.ts` | multi-file or JavaScript |  |
-| `importDefer/exportDeferInvalid.ts` | multi-file or JavaScript |  |
-| `importDefer/importBindingDefer.ts` | multi-file or JavaScript |  |
-| `importDefer/importBindingDefer2.ts` | multi-file or JavaScript |  |
-| `importDefer/importDefaultBindingDefer.ts` | multi-file or JavaScript |  |
-| `importDefer/importDeferComments.ts` | multi-file or JavaScript |  |
-| `importDefer/importDeferDeclaration.ts` | multi-file or JavaScript |  |
-| `importDefer/importDeferFromInvalid.ts` | multi-file or JavaScript |  |
-| `importDefer/importDeferInvalidDefault.ts` | multi-file or JavaScript |  |
-| `importDefer/importDeferInvalidNamed.ts` | multi-file or JavaScript |  |
-| `importDefer/importDeferNamespace.ts` | multi-file or JavaScript |  |
-| `importDefer/importDeferTypeConflict1.ts` | multi-file or JavaScript |  |
-| `importDefer/importDeferTypeConflict2.ts` | multi-file or JavaScript |  |
-| `importDefer/importEqualsBindingDefer.ts` | multi-file or JavaScript |  |
-| `importDefer/importMetaPropertyInvalidInCall.ts` | multi-file or JavaScript |  |
-| `importDefer/typeofImportDefer.ts` | multi-file or JavaScript |  |
+| `importAttributes/importAttributes6.ts` | not supported | `.mts` and `.cts` files |
+| `importAttributes/importAttributes7.ts` | not supported | `export default` is not supported, on ` export default { ` |
+| `importAttributes/importAttributes8.ts` | not supported | `export default` is not supported, on ` export default { ` |
+| `importAttributes/importAttributes9.ts` | not supported | `export default` is not supported, on ` export default {}; ` |
+| `importDefer/dynamicImportDefer.ts` | not supported | expected `{` or namespace name after `import`, on ` import.defer("./a.js").then(ns => { ` |
+| `importDefer/dynamicImportDeferInvalidStandalone.ts` | not supported | expected `{` or namespace name after `import`, on ` import.defer; ` |
+| `importDefer/exportDeferInvalid.ts` | not supported | expected a declaration after `export`, on ` export defer * as ns from "a"; ` |
+| `importDefer/importBindingDefer.ts` | not supported | `export default` is not supported, on ` export default 2; ` |
+| `importDefer/importBindingDefer2.ts` | not supported | `export default` is not supported, on ` export default 2; ` |
+| `importDefer/importDefaultBindingDefer.ts` | not supported | `export default` is not supported, on ` export default function defer(): void { ` |
+| `importDefer/importDeferComments.ts` | not supported | empty export specifier list, on ` export {}; ` |
+| `importDefer/importDeferDeclaration.ts` | not supported | expected `from` after import specifier list, on ` import defer * as ns from "./a"; ` |
+| `importDefer/importDeferFromInvalid.ts` | not supported | `export default` is not supported, on ` export default 2; ` |
+| `importDefer/importDeferInvalidDefault.ts` | not supported | `export default` is not supported, on ` export default function foo(): void { ` |
+| `importDefer/importDeferInvalidNamed.ts` | not supported | expected `from` after import specifier list, on ` import defer { foo } from "./a"; ` |
+| `importDefer/importDeferNamespace.ts` | not supported | expected `from` after import specifier list, on ` import defer * as aNs from "./a"; ` |
+| `importDefer/importDeferTypeConflict1.ts` | not supported | expected `from` after import specifier list, on ` import type defer * as ns1 from "./a"; ` |
+| `importDefer/importDeferTypeConflict2.ts` | not supported | expected `from` after import specifier list, on ` import defer type * as ns1 from "./a"; ` |
+| `importDefer/importEqualsBindingDefer.ts` | not supported | expected a declaration after `export`, on ` export = 2; ` |
+| `importDefer/importMetaPropertyInvalidInCall.ts` | not supported | expected `{` or namespace name after `import`, on ` import.foo(); ` |
+| `importDefer/typeofImportDefer.ts` | not supported | `import` is a reserved keyword and can't be used as a name, on ` export type X = typeof import.defer("./a").Foo; ` |
 | `inferFromBindingPattern.ts` | not supported | expected `,` or `>`, on ` function f1<T extends string>(): T { return null as unknown as (T); } ` |
 | `interfaces/declarationMerging/genericAndNonGenericInterfaceWithTheSameName.ts` | not supported | expected `;` after expression, on ` namespace M { ` |
 | `interfaces/declarationMerging/genericAndNonGenericInterfaceWithTheSameName2.ts` | not supported | expected `;` after expression, on ` namespace M { ` |
@@ -1804,504 +1796,504 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `interfaces/interfacesExtendingClasses/interfaceExtendingClassWithProtecteds.ts` | not supported | `protected` is not supported, on ` protected x!: string; ` |
 | `interfaces/interfacesExtendingClasses/interfaceExtendingClassWithProtecteds2.ts` | not supported | `protected` is not supported, on ` protected x!: string; ` |
 | `internalModules/` | not supported | user-declared namespaces |
-| `jsdoc/assertionsAndNonReturningFunctions.ts` | multi-file or JavaScript |  |
-| `jsdoc/callbackCrossModule.ts` | multi-file or JavaScript |  |
-| `jsdoc/callbackOnConstructor.ts` | multi-file or JavaScript |  |
-| `jsdoc/callbackTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/callbackTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/callbackTag3.ts` | multi-file or JavaScript |  |
-| `jsdoc/callbackTag4.ts` | multi-file or JavaScript |  |
-| `jsdoc/callbackTagNamespace.ts` | multi-file or JavaScript |  |
-| `jsdoc/callbackTagNestedParameter.ts` | multi-file or JavaScript |  |
-| `jsdoc/callbackTagVariadicType.ts` | multi-file or JavaScript |  |
-| `jsdoc/callOfPropertylessConstructorFunction.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkExportsObjectAssignProperty.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkExportsObjectAssignPrototypeProperty.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocOnEndOfFile.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocOptionalParamOrder.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocParamOnVariableDeclaredFunctionExpression.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocParamTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocReturnTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocReturnTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag10.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag11.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag12.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag13.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag14.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag15.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag3.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag4.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag5.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag6.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag7.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag8.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocSatisfiesTag9.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypedefInParamTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypedefOnlySourceFile.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypeTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypeTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypeTag3.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypeTag4.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypeTag5.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypeTag6.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypeTag7.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypeTag8.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypeTagOnObjectProperty1.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkJsdocTypeTagOnObjectProperty2.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkObjectDefineProperty.ts` | multi-file or JavaScript |  |
-| `jsdoc/checkOtherObjectAssignProperty.ts` | multi-file or JavaScript |  |
-| `jsdoc/constructorTagOnClassConstructor.ts` | multi-file or JavaScript |  |
-| `jsdoc/constructorTagOnNestedBinaryExpression.ts` | multi-file or JavaScript |  |
-| `jsdoc/constructorTagOnObjectLiteralMethod.ts` | multi-file or JavaScript |  |
-| `jsdoc/constructorTagWithThisTag.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClassAccessor.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClasses.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClassesErr.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClassExtendsVisibility.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClassImplementsGenericsSerialization.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClassLeadingOptional.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClassLikeHeuristic.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClassMethod.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClassStatic.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClassStatic2.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsClassStaticMethodAugmentation.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsCommonjsRelativePath.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsComputedNames.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsConstsAsNamespacesWithReferences.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsCrossfileMerge.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsDefault.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsDefaultsErr.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsDocCommentsOnConsts.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsEnums.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsEnumTag.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignedClassExpression.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignedClassExpressionAnonymous.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignedClassExpressionAnonymousWithSub.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignedClassExpressionShadowing.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignedClassInstance1.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignedClassInstance2.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignedClassInstance3.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignedConstructorFunction.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignedConstructorFunctionWithSub.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignedVisibility.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignmentExpressionPlusSecondary.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportAssignmentWithKeywordName.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportDefinePropertyEmit.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportDoubleAssignmentInClosure.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportedClassAliases.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportForms.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportFormsErr.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportSpecifierNonlocal.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsExportSubAssignments.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsFunctionClassesCjsExportAssignment.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsFunctionJSDoc.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsFunctionKeywordProp.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsFunctionKeywordPropExhaustive.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsFunctionLikeClasses.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsFunctionLikeClasses2.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsFunctionPrototypeStatic.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsFunctions.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsFunctionsCjs.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsFunctionWithDefaultAssignedMember.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsGetterSetter.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsImportAliasExposedWithinNamespace.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsImportAliasExposedWithinNamespaceCjs.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsImportNamespacedType.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsImportTypeBundled.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsInterfaces.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsJSDocRedirectedLookups.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsJson.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsMissingGenerics.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsMissingTypeParameters.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsModuleReferenceHasEmit.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsMultipleExportFromMerge.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsNestedParams.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsNonIdentifierInferredNames.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsOptionalTypeLiteralProps1.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsOptionalTypeLiteralProps2.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsPackageJson.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsParameterTagReusesInputNodeInEmit1.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsParameterTagReusesInputNodeInEmit2.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsPrivateFields01.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsReactComponents.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsReexportAliases.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsReexportAliasesEsModuleInterop.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsReexportedCjsAlias.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsReferenceToClassInstanceCrossFile.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsRestArgsWithThisTypeInJSDocFunction.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsReusesExistingNodesMappingJSDocTypes.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsReusesExistingTypeAnnotations.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsSubclassWithExplicitNoArgumentConstructor.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsThisTypes.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypeAliases.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypedefAndImportTypes.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypedefAndLatebound.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypedefDescriptionsPreserved.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypedefFunction.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypedefPropertyAndExportAssignment.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypeReassignmentFromDeclaration.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypeReassignmentFromDeclaration2.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypeReferences.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypeReferences2.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypeReferences3.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsTypeReferences4.ts` | multi-file or JavaScript |  |
-| `jsdoc/declarations/jsDeclarationsUniqueSymbolUsage.ts` | multi-file or JavaScript |  |
-| `jsdoc/enumTag.ts` | multi-file or JavaScript |  |
-| `jsdoc/enumTagCircularReference.ts` | multi-file or JavaScript |  |
-| `jsdoc/enumTagImported.ts` | multi-file or JavaScript |  |
-| `jsdoc/enumTagOnExports.ts` | multi-file or JavaScript |  |
-| `jsdoc/enumTagOnExports2.ts` | multi-file or JavaScript |  |
-| `jsdoc/enumTagUseBeforeDefCrash.ts` | multi-file or JavaScript |  |
-| `jsdoc/errorIsolation.ts` | multi-file or JavaScript |  |
-| `jsdoc/errorOnFunctionReturnType.ts` | multi-file or JavaScript |  |
-| `jsdoc/exportedAliasedEnumTag.ts` | multi-file or JavaScript |  |
-| `jsdoc/exportedEnumTypeAndValue.ts` | multi-file or JavaScript |  |
-| `jsdoc/extendsTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/extendsTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/extendsTag3.ts` | multi-file or JavaScript |  |
-| `jsdoc/extendsTag4.ts` | multi-file or JavaScript |  |
-| `jsdoc/extendsTag5.ts` | multi-file or JavaScript |  |
-| `jsdoc/extendsTag6.ts` | multi-file or JavaScript |  |
-| `jsdoc/extendsTagEmit.ts` | multi-file or JavaScript |  |
-| `jsdoc/importDeferJsdoc.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag10.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag11.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag12.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag13.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag14.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag15.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag16.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag17.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag18.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag19.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag20.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag21.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag22.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag23.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag24.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag25.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag3.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag4.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag5.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag6.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag7.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag8.ts` | multi-file or JavaScript |  |
-| `jsdoc/importTag9.ts` | multi-file or JavaScript |  |
-| `jsdoc/inferThis.ts` | multi-file or JavaScript |  |
-| `jsdoc/instantiateTemplateTagTypeParameterOnVariableStatement.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocAccessibilityTags.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocAccessibilityTagsDeclarations.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocAugments_errorInExtendsExpression.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocAugments_nameMismatch.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocAugments_noExtends.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocAugments_notAClass.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocAugments_qualifiedName.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocAugments_withTypeParameter.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocAugmentsMissingType.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocBindingInUnreachableCode.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocCatchClauseWithTypeAnnotation.ts` | multi-file or JavaScript |  |
+| `jsdoc/assertionsAndNonReturningFunctions.ts` | not supported | JavaScript |
+| `jsdoc/callbackCrossModule.ts` | not supported | JavaScript |
+| `jsdoc/callbackOnConstructor.ts` | not supported | JavaScript |
+| `jsdoc/callbackTag1.ts` | not supported | JavaScript |
+| `jsdoc/callbackTag2.ts` | not supported | JavaScript |
+| `jsdoc/callbackTag3.ts` | not supported | JavaScript |
+| `jsdoc/callbackTag4.ts` | not supported | JavaScript |
+| `jsdoc/callbackTagNamespace.ts` | not supported | JavaScript |
+| `jsdoc/callbackTagNestedParameter.ts` | not supported | JavaScript |
+| `jsdoc/callbackTagVariadicType.ts` | not supported | JavaScript |
+| `jsdoc/callOfPropertylessConstructorFunction.ts` | not supported | JavaScript |
+| `jsdoc/checkExportsObjectAssignProperty.ts` | not supported | JavaScript |
+| `jsdoc/checkExportsObjectAssignPrototypeProperty.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocOnEndOfFile.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocOptionalParamOrder.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocParamOnVariableDeclaredFunctionExpression.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocParamTag1.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocReturnTag1.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocReturnTag2.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag1.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag10.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag11.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag12.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag13.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag14.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag15.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag2.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag3.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag4.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag5.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag6.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag7.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag8.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocSatisfiesTag9.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypedefInParamTag1.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypedefOnlySourceFile.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypeTag1.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypeTag2.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypeTag3.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypeTag4.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypeTag5.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypeTag6.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypeTag7.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypeTag8.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypeTagOnObjectProperty1.ts` | not supported | JavaScript |
+| `jsdoc/checkJsdocTypeTagOnObjectProperty2.ts` | not supported | JavaScript |
+| `jsdoc/checkObjectDefineProperty.ts` | not supported | JavaScript |
+| `jsdoc/checkOtherObjectAssignProperty.ts` | not supported | JavaScript |
+| `jsdoc/constructorTagOnClassConstructor.ts` | not supported | JavaScript |
+| `jsdoc/constructorTagOnNestedBinaryExpression.ts` | not supported | JavaScript |
+| `jsdoc/constructorTagOnObjectLiteralMethod.ts` | not supported | JavaScript |
+| `jsdoc/constructorTagWithThisTag.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClassAccessor.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClasses.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClassesErr.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClassExtendsVisibility.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClassImplementsGenericsSerialization.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClassLeadingOptional.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClassLikeHeuristic.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClassMethod.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClassStatic.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClassStatic2.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsClassStaticMethodAugmentation.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsCommonjsRelativePath.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsComputedNames.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsConstsAsNamespacesWithReferences.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsCrossfileMerge.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsDefault.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsDefaultsErr.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsDocCommentsOnConsts.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsEnums.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsEnumTag.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignedClassExpression.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignedClassExpressionAnonymous.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignedClassExpressionAnonymousWithSub.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignedClassExpressionShadowing.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignedClassInstance1.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignedClassInstance2.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignedClassInstance3.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignedConstructorFunction.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignedConstructorFunctionWithSub.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignedVisibility.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignmentExpressionPlusSecondary.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportAssignmentWithKeywordName.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportDefinePropertyEmit.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportDoubleAssignmentInClosure.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportedClassAliases.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportForms.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportFormsErr.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportSpecifierNonlocal.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsExportSubAssignments.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsFunctionClassesCjsExportAssignment.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsFunctionJSDoc.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsFunctionKeywordProp.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsFunctionKeywordPropExhaustive.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsFunctionLikeClasses.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsFunctionLikeClasses2.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsFunctionPrototypeStatic.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsFunctions.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsFunctionsCjs.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsFunctionWithDefaultAssignedMember.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsGetterSetter.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsImportAliasExposedWithinNamespace.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsImportAliasExposedWithinNamespaceCjs.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsImportNamespacedType.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsImportTypeBundled.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsInterfaces.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsJSDocRedirectedLookups.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsJson.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsMissingGenerics.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsMissingTypeParameters.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsModuleReferenceHasEmit.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsMultipleExportFromMerge.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsNestedParams.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsNonIdentifierInferredNames.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsOptionalTypeLiteralProps1.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsOptionalTypeLiteralProps2.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsPackageJson.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsParameterTagReusesInputNodeInEmit1.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsParameterTagReusesInputNodeInEmit2.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsPrivateFields01.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsReactComponents.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsReexportAliases.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsReexportAliasesEsModuleInterop.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsReexportedCjsAlias.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsReferenceToClassInstanceCrossFile.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsRestArgsWithThisTypeInJSDocFunction.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsReusesExistingNodesMappingJSDocTypes.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsReusesExistingTypeAnnotations.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsSubclassWithExplicitNoArgumentConstructor.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsThisTypes.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypeAliases.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypedefAndImportTypes.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypedefAndLatebound.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypedefDescriptionsPreserved.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypedefFunction.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypedefPropertyAndExportAssignment.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypeReassignmentFromDeclaration.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypeReassignmentFromDeclaration2.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypeReferences.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypeReferences2.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypeReferences3.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsTypeReferences4.ts` | not supported | JavaScript |
+| `jsdoc/declarations/jsDeclarationsUniqueSymbolUsage.ts` | not supported | JavaScript |
+| `jsdoc/enumTag.ts` | not supported | JavaScript |
+| `jsdoc/enumTagCircularReference.ts` | not supported | JavaScript |
+| `jsdoc/enumTagImported.ts` | not supported | JavaScript |
+| `jsdoc/enumTagOnExports.ts` | not supported | JavaScript |
+| `jsdoc/enumTagOnExports2.ts` | not supported | JavaScript |
+| `jsdoc/enumTagUseBeforeDefCrash.ts` | not supported | JavaScript |
+| `jsdoc/errorIsolation.ts` | not supported | JavaScript |
+| `jsdoc/errorOnFunctionReturnType.ts` | not supported | JavaScript |
+| `jsdoc/exportedAliasedEnumTag.ts` | not supported | JavaScript |
+| `jsdoc/exportedEnumTypeAndValue.ts` | not supported | JavaScript |
+| `jsdoc/extendsTag1.ts` | not supported | JavaScript |
+| `jsdoc/extendsTag2.ts` | not supported | JavaScript |
+| `jsdoc/extendsTag3.ts` | not supported | JavaScript |
+| `jsdoc/extendsTag4.ts` | not supported | JavaScript |
+| `jsdoc/extendsTag5.ts` | not supported | JavaScript |
+| `jsdoc/extendsTag6.ts` | not supported | JavaScript |
+| `jsdoc/extendsTagEmit.ts` | not supported | JavaScript |
+| `jsdoc/importDeferJsdoc.ts` | not supported | JavaScript |
+| `jsdoc/importTag1.ts` | not supported | JavaScript |
+| `jsdoc/importTag10.ts` | not supported | JavaScript |
+| `jsdoc/importTag11.ts` | not supported | JavaScript |
+| `jsdoc/importTag12.ts` | not supported | JavaScript |
+| `jsdoc/importTag13.ts` | not supported | JavaScript |
+| `jsdoc/importTag14.ts` | not supported | JavaScript |
+| `jsdoc/importTag15.ts` | not supported | JavaScript |
+| `jsdoc/importTag16.ts` | not supported | JavaScript |
+| `jsdoc/importTag17.ts` | not supported | JavaScript |
+| `jsdoc/importTag18.ts` | not supported | JavaScript |
+| `jsdoc/importTag19.ts` | not supported | JavaScript |
+| `jsdoc/importTag2.ts` | not supported | JavaScript |
+| `jsdoc/importTag20.ts` | not supported | JavaScript |
+| `jsdoc/importTag21.ts` | not supported | JavaScript |
+| `jsdoc/importTag22.ts` | not supported | `node_modules` packages |
+| `jsdoc/importTag23.ts` | not supported | JavaScript |
+| `jsdoc/importTag24.ts` | not supported | JavaScript |
+| `jsdoc/importTag25.ts` | not supported | JavaScript |
+| `jsdoc/importTag3.ts` | not supported | JavaScript |
+| `jsdoc/importTag4.ts` | not supported | JavaScript |
+| `jsdoc/importTag5.ts` | not supported | JavaScript |
+| `jsdoc/importTag6.ts` | not supported | JavaScript |
+| `jsdoc/importTag7.ts` | not supported | JavaScript |
+| `jsdoc/importTag8.ts` | not supported | JavaScript |
+| `jsdoc/importTag9.ts` | not supported | JavaScript |
+| `jsdoc/inferThis.ts` | not supported | JavaScript |
+| `jsdoc/instantiateTemplateTagTypeParameterOnVariableStatement.ts` | not supported | JavaScript |
+| `jsdoc/jsdocAccessibilityTags.ts` | not supported | JavaScript |
+| `jsdoc/jsdocAccessibilityTagsDeclarations.ts` | not supported | JavaScript |
+| `jsdoc/jsdocAugments_errorInExtendsExpression.ts` | not supported | JavaScript |
+| `jsdoc/jsdocAugments_nameMismatch.ts` | not supported | JavaScript |
+| `jsdoc/jsdocAugments_noExtends.ts` | not supported | JavaScript |
+| `jsdoc/jsdocAugments_notAClass.ts` | not supported | JavaScript |
+| `jsdoc/jsdocAugments_qualifiedName.ts` | not supported | JavaScript |
+| `jsdoc/jsdocAugments_withTypeParameter.ts` | not supported | JavaScript |
+| `jsdoc/jsdocAugmentsMissingType.ts` | not supported | JavaScript |
+| `jsdoc/jsdocBindingInUnreachableCode.ts` | not supported | JavaScript |
+| `jsdoc/jsdocCatchClauseWithTypeAnnotation.ts` | not supported | JavaScript |
 | `jsdoc/jsdocDisallowedInTypescript.ts` | not supported | expected identifier after `.` in type name, on ` let ara: Array.<number> = [1,2,3]; ` |
-| `jsdoc/jsdocFunction_missingReturn.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocFunctionType.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImplements_class.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImplements_interface_multiple.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImplements_interface.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImplements_missingType.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImplements_namespacedInterface.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImplements_properties.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImplements_signatures.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImplementsTag.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImportType.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImportType2.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImportTypeReferenceToClassAlias.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImportTypeReferenceToCommonjsModule.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImportTypeReferenceToESModule.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocImportTypeReferenceToStringLiteral.ts` | multi-file or JavaScript |  |
+| `jsdoc/jsdocFunction_missingReturn.ts` | not supported | JavaScript |
+| `jsdoc/jsdocFunctionType.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImplements_class.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImplements_interface_multiple.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImplements_interface.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImplements_missingType.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImplements_namespacedInterface.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImplements_properties.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImplements_signatures.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImplementsTag.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImportType.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImportType2.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImportTypeReferenceToClassAlias.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImportTypeReferenceToCommonjsModule.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImportTypeReferenceToESModule.ts` | not supported | JavaScript |
+| `jsdoc/jsdocImportTypeReferenceToStringLiteral.ts` | not supported | JavaScript |
 | `jsdoc/jsdocIndexSignature.ts` | not supported | index signatures |
-| `jsdoc/jsdocLinkTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocLinkTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocLinkTag3.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocLinkTag4.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocLinkTag5.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocLinkTag6.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocLinkTag7.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocLinkTag8.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocLinkTag9.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocLiteral.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocNeverUndefinedNull.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocOuterTypeParameters1.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocOuterTypeParameters2.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocOuterTypeParameters3.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocOverrideTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocParamTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocParamTagTypeLiteral.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocParseBackquotedParamName.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocParseDotDotDotInJSDocFunction.ts` | multi-file or JavaScript |  |
+| `jsdoc/jsdocLinkTag1.ts` | checks too little | 0 after the port |
+| `jsdoc/jsdocLinkTag2.ts` | not supported | JavaScript |
+| `jsdoc/jsdocLinkTag3.ts` | checks too little | 1 after the port |
+| `jsdoc/jsdocLinkTag4.ts` | checks too little | 1 after the port |
+| `jsdoc/jsdocLinkTag5.ts` | checks too little | 0 after the port |
+| `jsdoc/jsdocLinkTag6.ts` | checks too little | 0 after the port |
+| `jsdoc/jsdocLinkTag7.ts` | not supported | JavaScript |
+| `jsdoc/jsdocLinkTag8.ts` | not supported | JavaScript |
+| `jsdoc/jsdocLinkTag9.ts` | checks too little | 0 after the port |
+| `jsdoc/jsdocLiteral.ts` | not supported | JavaScript |
+| `jsdoc/jsdocNeverUndefinedNull.ts` | not supported | JavaScript |
+| `jsdoc/jsdocOuterTypeParameters1.ts` | not supported | JavaScript |
+| `jsdoc/jsdocOuterTypeParameters2.ts` | not supported | JavaScript |
+| `jsdoc/jsdocOuterTypeParameters3.ts` | not supported | JavaScript |
+| `jsdoc/jsdocOverrideTag1.ts` | not supported | JavaScript |
+| `jsdoc/jsdocParamTag2.ts` | not supported | JavaScript |
+| `jsdoc/jsdocParamTagTypeLiteral.ts` | not supported | JavaScript |
+| `jsdoc/jsdocParseBackquotedParamName.ts` | not supported | JavaScript |
+| `jsdoc/jsdocParseDotDotDotInJSDocFunction.ts` | not supported | JavaScript |
 | `jsdoc/jsdocParseErrorsInTypescript.ts` | not supported | expected expression, on ` function parse1(n: number=): void { } ` |
-| `jsdoc/jsdocParseHigherOrderFunction.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocParseMatchingBackticks.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocParseParenthesizedJSDocParameter.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocParseStarEquals.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocPostfixEqualsAddsOptionality.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocPrefixPostfixParsing.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocPrivateName1.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocPrivateName2.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocPrototypePropertyAccessWithType.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocReadonly.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocReadonlyDeclarations.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocReturnTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocSignatureOnReturnedFunction.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateClass.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateConstructorFunction.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateConstructorFunction2.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateTag.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateTag3.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateTag4.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateTag5.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateTag6.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateTag7.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateTag8.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateTagDefault.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTemplateTagNameResolution.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocThisType.ts` | multi-file or JavaScript |  |
+| `jsdoc/jsdocParseHigherOrderFunction.ts` | not supported | JavaScript |
+| `jsdoc/jsdocParseMatchingBackticks.ts` | not supported | JavaScript |
+| `jsdoc/jsdocParseParenthesizedJSDocParameter.ts` | not supported | JavaScript |
+| `jsdoc/jsdocParseStarEquals.ts` | not supported | JavaScript |
+| `jsdoc/jsdocPostfixEqualsAddsOptionality.ts` | not supported | JavaScript |
+| `jsdoc/jsdocPrefixPostfixParsing.ts` | not supported | JavaScript |
+| `jsdoc/jsdocPrivateName1.ts` | not supported | JavaScript |
+| `jsdoc/jsdocPrivateName2.ts` | not supported | JavaScript |
+| `jsdoc/jsdocPrototypePropertyAccessWithType.ts` | not supported | JavaScript |
+| `jsdoc/jsdocReadonly.ts` | not supported | JavaScript |
+| `jsdoc/jsdocReadonlyDeclarations.ts` | not supported | JavaScript |
+| `jsdoc/jsdocReturnTag1.ts` | not supported | JavaScript |
+| `jsdoc/jsdocSignatureOnReturnedFunction.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateClass.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateConstructorFunction.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateConstructorFunction2.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateTag.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateTag2.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateTag3.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateTag4.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateTag5.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateTag6.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateTag7.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateTag8.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateTagDefault.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTemplateTagNameResolution.ts` | not supported | JavaScript |
+| `jsdoc/jsdocThisType.ts` | not supported | JavaScript |
 | `jsdoc/jsdocTwoLineTypedef.ts` | checks too little | 0 after the port |
-| `jsdoc/jsdocTypeDefAtStartOfFile.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeFromChainedAssignment.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeFromChainedAssignment2.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeFromChainedAssignment3.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeReferenceExports.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeReferenceToImport.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeReferenceToImportOfClassExpression.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeReferenceToImportOfFunctionExpression.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeReferenceToMergedClass.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeReferenceToValue.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeReferenceUseBeforeDef.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeTag.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeTagCast.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeTagOnParameter1.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeTagParameterType.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocTypeTagRequiredParameters.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocVariableDeclarationWithTypeAnnotation.ts` | multi-file or JavaScript |  |
-| `jsdoc/jsdocVariadicType.ts` | multi-file or JavaScript |  |
-| `jsdoc/linkTagEmit1.ts` | multi-file or JavaScript |  |
-| `jsdoc/moduleExportsElementAccessAssignment.ts` | multi-file or JavaScript |  |
-| `jsdoc/moduleExportsElementAccessAssignment2.ts` | multi-file or JavaScript |  |
-| `jsdoc/noAssertForUnparseableTypedefs.ts` | multi-file or JavaScript |  |
-| `jsdoc/noDuplicateJsdoc1.ts` | multi-file or JavaScript |  |
-| `jsdoc/overloadTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/overloadTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/overloadTag3.ts` | multi-file or JavaScript |  |
-| `jsdoc/paramTagBracketsAddOptionalUndefined.ts` | multi-file or JavaScript |  |
-| `jsdoc/paramTagNestedWithoutTopLevelObject.ts` | multi-file or JavaScript |  |
-| `jsdoc/paramTagNestedWithoutTopLevelObject2.ts` | multi-file or JavaScript |  |
-| `jsdoc/paramTagNestedWithoutTopLevelObject3.ts` | multi-file or JavaScript |  |
-| `jsdoc/paramTagNestedWithoutTopLevelObject4.ts` | multi-file or JavaScript |  |
-| `jsdoc/paramTagOnCallExpression.ts` | multi-file or JavaScript |  |
-| `jsdoc/paramTagOnFunctionUsingArguments.ts` | multi-file or JavaScript |  |
-| `jsdoc/paramTagTypeResolution.ts` | multi-file or JavaScript |  |
-| `jsdoc/paramTagTypeResolution2.ts` | multi-file or JavaScript |  |
-| `jsdoc/paramTagWrapping.ts` | multi-file or JavaScript |  |
+| `jsdoc/jsdocTypeDefAtStartOfFile.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeFromChainedAssignment.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeFromChainedAssignment2.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeFromChainedAssignment3.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeReferenceExports.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeReferenceToImport.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeReferenceToImportOfClassExpression.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeReferenceToImportOfFunctionExpression.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeReferenceToMergedClass.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeReferenceToValue.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeReferenceUseBeforeDef.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeTag.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeTagCast.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeTagOnParameter1.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeTagParameterType.ts` | not supported | JavaScript |
+| `jsdoc/jsdocTypeTagRequiredParameters.ts` | not supported | JavaScript |
+| `jsdoc/jsdocVariableDeclarationWithTypeAnnotation.ts` | not supported | JavaScript |
+| `jsdoc/jsdocVariadicType.ts` | not supported | JavaScript |
+| `jsdoc/linkTagEmit1.ts` | not supported | JavaScript |
+| `jsdoc/moduleExportsElementAccessAssignment.ts` | not supported | JavaScript |
+| `jsdoc/moduleExportsElementAccessAssignment2.ts` | not supported | JavaScript |
+| `jsdoc/noAssertForUnparseableTypedefs.ts` | not supported | JavaScript |
+| `jsdoc/noDuplicateJsdoc1.ts` | not supported | JavaScript |
+| `jsdoc/overloadTag1.ts` | not supported | JavaScript |
+| `jsdoc/overloadTag2.ts` | not supported | JavaScript |
+| `jsdoc/overloadTag3.ts` | not supported | JavaScript |
+| `jsdoc/paramTagBracketsAddOptionalUndefined.ts` | not supported | JavaScript |
+| `jsdoc/paramTagNestedWithoutTopLevelObject.ts` | not supported | JavaScript |
+| `jsdoc/paramTagNestedWithoutTopLevelObject2.ts` | not supported | JavaScript |
+| `jsdoc/paramTagNestedWithoutTopLevelObject3.ts` | not supported | JavaScript |
+| `jsdoc/paramTagNestedWithoutTopLevelObject4.ts` | not supported | JavaScript |
+| `jsdoc/paramTagOnCallExpression.ts` | not supported | JavaScript |
+| `jsdoc/paramTagOnFunctionUsingArguments.ts` | not supported | JavaScript |
+| `jsdoc/paramTagTypeResolution.ts` | not supported | JavaScript |
+| `jsdoc/paramTagTypeResolution2.ts` | not supported | JavaScript |
+| `jsdoc/paramTagWrapping.ts` | not supported | JavaScript |
 | `jsdoc/parseLinkTag.ts` | the port changes what it checks | `tsc` then reports TS7034, TS7005 |
 | `jsdoc/parseThrowsTag.ts` | checks too little | 0 after the port |
-| `jsdoc/returnTagTypeGuard.ts` | multi-file or JavaScript |  |
+| `jsdoc/returnTagTypeGuard.ts` | not supported | JavaScript |
 | `jsdoc/seeTag1.ts` | not supported | expected `;` after expression, on ` namespace NS { ` |
-| `jsdoc/seeTag3.ts` | multi-file or JavaScript |  |
-| `jsdoc/seeTag4.ts` | multi-file or JavaScript |  |
-| `jsdoc/syntaxErrors.ts` | multi-file or JavaScript |  |
-| `jsdoc/templateInsideCallback.ts` | multi-file or JavaScript |  |
+| `jsdoc/seeTag3.ts` | not supported | JavaScript |
+| `jsdoc/seeTag4.ts` | not supported | JavaScript |
+| `jsdoc/syntaxErrors.ts` | not supported | JavaScript |
+| `jsdoc/templateInsideCallback.ts` | not supported | JavaScript |
 | `jsdoc/thisPrototypeMethodCompoundAssignment.ts` | not supported | expected expression, on ` Element.prototype.remove ??= function () { ` |
-| `jsdoc/thisPrototypeMethodCompoundAssignmentJs.ts` | multi-file or JavaScript |  |
-| `jsdoc/thisTag1.ts` | multi-file or JavaScript |  |
-| `jsdoc/thisTag2.ts` | multi-file or JavaScript |  |
-| `jsdoc/thisTag3.ts` | multi-file or JavaScript |  |
-| `jsdoc/tsNoCheckForTypescript.ts` | multi-file or JavaScript |  |
-| `jsdoc/tsNoCheckForTypescriptComments1.ts` | multi-file or JavaScript |  |
-| `jsdoc/tsNoCheckForTypescriptComments2.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefCrossModule.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefCrossModule2.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefCrossModule3.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefCrossModule4.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefCrossModule5.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefDuplicateTypeDeclaration.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefInnerNamepaths.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefMultipleTypeParameters.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefOnSemicolonClassElement.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefOnStatements.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefScope1.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefTagExtraneousProperty.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefTagNested.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefTagTypeResolution.ts` | multi-file or JavaScript |  |
-| `jsdoc/typedefTagWrapping.ts` | multi-file or JavaScript |  |
+| `jsdoc/thisPrototypeMethodCompoundAssignmentJs.ts` | not supported | JavaScript |
+| `jsdoc/thisTag1.ts` | not supported | JavaScript |
+| `jsdoc/thisTag2.ts` | not supported | JavaScript |
+| `jsdoc/thisTag3.ts` | not supported | JavaScript |
+| `jsdoc/tsNoCheckForTypescript.ts` | checks too little | 1 after the port |
+| `jsdoc/tsNoCheckForTypescriptComments1.ts` | checks too little | 1 after the port |
+| `jsdoc/tsNoCheckForTypescriptComments2.ts` | duplicate | of `jsdoc/tsNoCheckForTypescript.ts` |
+| `jsdoc/typedefCrossModule.ts` | not supported | JavaScript |
+| `jsdoc/typedefCrossModule2.ts` | not supported | JavaScript |
+| `jsdoc/typedefCrossModule3.ts` | not supported | JavaScript |
+| `jsdoc/typedefCrossModule4.ts` | not supported | JavaScript |
+| `jsdoc/typedefCrossModule5.ts` | not supported | JavaScript |
+| `jsdoc/typedefDuplicateTypeDeclaration.ts` | not supported | JavaScript |
+| `jsdoc/typedefInnerNamepaths.ts` | not supported | JavaScript |
+| `jsdoc/typedefMultipleTypeParameters.ts` | not supported | JavaScript |
+| `jsdoc/typedefOnSemicolonClassElement.ts` | not supported | JavaScript |
+| `jsdoc/typedefOnStatements.ts` | not supported | JavaScript |
+| `jsdoc/typedefScope1.ts` | not supported | JavaScript |
+| `jsdoc/typedefTagExtraneousProperty.ts` | not supported | JavaScript |
+| `jsdoc/typedefTagNested.ts` | not supported | JavaScript |
+| `jsdoc/typedefTagTypeResolution.ts` | not supported | JavaScript |
+| `jsdoc/typedefTagWrapping.ts` | not supported | JavaScript |
 | `jsdoc/typeParameterExtendsUnionConstraintDistributed.ts` | not supported | expected `,` or `>`, on ` function f<T extends A>(a: T): A & T { return a; } // Shouldn't error ` |
-| `jsdoc/typeTagCircularReferenceOnConstructorFunction.ts` | multi-file or JavaScript |  |
-| `jsdoc/typeTagModuleExports.ts` | multi-file or JavaScript |  |
-| `jsdoc/typeTagNoErasure.ts` | multi-file or JavaScript |  |
-| `jsdoc/typeTagOnPropertyAssignment.ts` | multi-file or JavaScript |  |
-| `jsdoc/typeTagPrototypeAssignment.ts` | multi-file or JavaScript |  |
-| `jsdoc/typeTagWithGenericSignature.ts` | multi-file or JavaScript |  |
-| `jsx/jsxAttributeInitializer.ts` | multi-file or JavaScript |  |
-| `jsx/jsxUnclosedParserRecovery.ts` | multi-file or JavaScript |  |
-| `jsx/tsxEmitSpreadAttribute.ts` | multi-file or JavaScript |  |
-| `jsx/tsxReactEmitSpreadAttribute.ts` | multi-file or JavaScript |  |
-| `moduleResolution/allowImportingTsExtensions.ts` | multi-file or JavaScript |  |
-| `moduleResolution/allowImportingTypesDtsExtension.ts` | multi-file or JavaScript |  |
-| `moduleResolution/bundler/bundlerCommonJS.ts` | multi-file or JavaScript |  |
-| `moduleResolution/bundler/bundlerConditionsExcludesNode.ts` | multi-file or JavaScript |  |
-| `moduleResolution/bundler/bundlerDirectoryModule.ts` | multi-file or JavaScript |  |
-| `moduleResolution/bundler/bundlerImportESM.ts` | multi-file or JavaScript |  |
-| `moduleResolution/bundler/bundlerImportTsExtensions.ts` | multi-file or JavaScript |  |
-| `moduleResolution/bundler/bundlerNodeModules1.ts` | multi-file or JavaScript |  |
-| `moduleResolution/bundler/bundlerOptionsCompat.ts` | multi-file or JavaScript |  |
-| `moduleResolution/bundler/bundlerRelative1.ts` | multi-file or JavaScript |  |
-| `moduleResolution/bundler/bundlerSyntaxRestrictions.ts` | multi-file or JavaScript |  |
-| `moduleResolution/conditionalExportsResolutionFallback.ts` | multi-file or JavaScript |  |
-| `moduleResolution/conditionalExportsResolutionFallbackNull.ts` | multi-file or JavaScript |  |
-| `moduleResolution/customConditions.ts` | multi-file or JavaScript |  |
-| `moduleResolution/declarationNotFoundPackageBundlesTypes.ts` | multi-file or JavaScript |  |
-| `moduleResolution/extensionLoadingPriority.ts` | multi-file or JavaScript |  |
-| `moduleResolution/importFromDot.ts` | multi-file or JavaScript |  |
-| `moduleResolution/nestedPackageJsonRedirect.ts` | multi-file or JavaScript |  |
-| `moduleResolution/node10AlternateResult_noResolution.ts` | multi-file or JavaScript |  |
-| `moduleResolution/node10Alternateresult_noTypes.ts` | multi-file or JavaScript |  |
-| `moduleResolution/node10IsNode_node.ts` | multi-file or JavaScript |  |
-| `moduleResolution/node10IsNode_node10.ts` | multi-file or JavaScript |  |
-| `moduleResolution/nodeModulesAtTypesPriority.ts` | multi-file or JavaScript |  |
-| `moduleResolution/packageJsonExportsOptionsCompat.ts` | multi-file or JavaScript |  |
-| `moduleResolution/packageJsonImportsExportsOptionCompat.ts` | multi-file or JavaScript |  |
-| `moduleResolution/packageJsonMain_isNonRecursive.ts` | multi-file or JavaScript |  |
-| `moduleResolution/packageJsonMain.ts` | multi-file or JavaScript |  |
-| `moduleResolution/resolutionModeCache.ts` | multi-file or JavaScript |  |
-| `moduleResolution/resolutionModeImportType1.ts` | multi-file or JavaScript |  |
-| `moduleResolution/resolutionModeTripleSlash1.ts` | multi-file or JavaScript |  |
-| `moduleResolution/resolutionModeTripleSlash2.ts` | multi-file or JavaScript |  |
-| `moduleResolution/resolutionModeTripleSlash3.ts` | multi-file or JavaScript |  |
-| `moduleResolution/resolutionModeTripleSlash4.ts` | multi-file or JavaScript |  |
-| `moduleResolution/resolutionModeTripleSlash5.ts` | multi-file or JavaScript |  |
-| `moduleResolution/resolutionModeTypeOnlyImport1.ts` | multi-file or JavaScript |  |
-| `moduleResolution/resolvesWithoutExportsDiagnostic1.ts` | multi-file or JavaScript |  |
-| `moduleResolution/scopedPackages.ts` | multi-file or JavaScript |  |
-| `moduleResolution/scopedPackagesClassic.ts` | multi-file or JavaScript |  |
-| `moduleResolution/selfNameModuleAugmentation.ts` | multi-file or JavaScript |  |
-| `moduleResolution/typesVersions.ambientModules.ts` | multi-file or JavaScript |  |
-| `moduleResolution/typesVersions.emptyTypes.ts` | multi-file or JavaScript |  |
-| `moduleResolution/typesVersions.justIndex.ts` | multi-file or JavaScript |  |
-| `moduleResolution/typesVersions.multiFile.ts` | multi-file or JavaScript |  |
-| `moduleResolution/untypedModuleImport_allowJs.ts` | multi-file or JavaScript |  |
-| `moduleResolution/untypedModuleImport_noImplicitAny_relativePath.ts` | multi-file or JavaScript |  |
-| `moduleResolution/untypedModuleImport_noImplicitAny_scoped.ts` | multi-file or JavaScript |  |
-| `moduleResolution/untypedModuleImport_noImplicitAny_typesForPackageExist.ts` | multi-file or JavaScript |  |
-| `moduleResolution/untypedModuleImport_noImplicitAny.ts` | multi-file or JavaScript |  |
-| `moduleResolution/untypedModuleImport_vsAmbient.ts` | multi-file or JavaScript |  |
-| `moduleResolution/untypedModuleImport_withAugmentation.ts` | multi-file or JavaScript |  |
-| `moduleResolution/untypedModuleImport.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeAllowJsPackageSelfName.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeAllowJsPackageSelfName2.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJs1.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsCjsFromJs.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsConditionalPackageExports.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsDynamicImport.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsExportAssignment.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsExportlessJsModuleDetectionAuto.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsGeneratedNameCollisions.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsImportAssignment.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsImportHelpersCollisions1.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsImportHelpersCollisions2.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsImportHelpersCollisions3.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsImportMeta.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsPackageExports.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsPackageImports.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsPackagePatternExports.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsPackagePatternExportsExclude.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsPackagePatternExportsTrailers.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsSynchronousCallErrors.ts` | multi-file or JavaScript |  |
-| `node/allowJs/nodeModulesAllowJsTopLevelAwait.ts` | multi-file or JavaScript |  |
-| `node/esmModuleExports1.ts` | multi-file or JavaScript |  |
-| `node/esmModuleExports2.ts` | multi-file or JavaScript |  |
-| `node/esmModuleExports3.ts` | multi-file or JavaScript |  |
-| `node/legacyNodeModulesExportsSpecifierGenerationConditions.ts` | multi-file or JavaScript |  |
-| `node/nodeModules1.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesCJSEmit1.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesCjsFormatFileAlwaysHasDefault.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesCJSResolvingToESM1_emptyPackageJson.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesCJSResolvingToESM2_cjsPackageJson.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesCJSResolvingToESM3_modulePackageJson.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesCJSResolvingToESM4_noPackageJson.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesConditionalPackageExports.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesDeclarationEmitDynamicImportWithPackageExports.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesDeclarationEmitWithPackageExports.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesDynamicImport.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesExportAssignments.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesExportsBlocksSpecifierResolution.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesExportsBlocksTypesVersions.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesExportsDoubleAsterisk.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesExportsSourceTs.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesExportsSpecifierGenerationConditions.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesExportsSpecifierGenerationDirectory.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesExportsSpecifierGenerationPattern.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesForbidenSyntax.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesGeneratedNameCollisions.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportAssertions.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportAssignments.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportAttributes.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportAttributesModeDeclarationEmit1.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportAttributesModeDeclarationEmit2.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportAttributesModeDeclarationEmitErrors.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportAttributesTypeModeDeclarationEmit.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportAttributesTypeModeDeclarationEmitErrors.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportHelpersCollisions.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportHelpersCollisions2.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportHelpersCollisions3.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportMeta.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportModeDeclarationEmit1.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportModeDeclarationEmit2.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportModeDeclarationEmitErrors1.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportResolutionIntoExport.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportResolutionNoCycle.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportTypeModeDeclarationEmit1.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesImportTypeModeDeclarationEmitErrors1.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesJson.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesNoDirectoryModule.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesPackageExports.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesPackageImports.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesPackageImportsRootWildcard.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesPackageImportsRootWildcardNode16.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesPackagePatternExports.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesPackagePatternExportsExclude.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesPackagePatternExportsTrailers.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesResolveJsonModule.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesSynchronousCallErrors.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTopLevelAwait.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit1.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit2.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit3.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit4.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit5.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit6.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit7.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeOverride1.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeOverride2.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeOverride3.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeOverride4.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeOverride5.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeOverrideModeError.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTripleSlashReferenceModeOverrideOldResolutionError.ts` | multi-file or JavaScript |  |
-| `node/nodeModulesTypesVersionPackageExports.ts` | multi-file or JavaScript |  |
-| `node/nodePackageSelfName.ts` | multi-file or JavaScript |  |
-| `node/nodePackageSelfNameScoped.ts` | multi-file or JavaScript |  |
-| `nonjsExtensions/declarationFileForHtmlFileWithinDeclarationFile.ts` | multi-file or JavaScript |  |
-| `nonjsExtensions/declarationFileForHtmlImport.ts` | multi-file or JavaScript |  |
-| `nonjsExtensions/declarationFileForJsonImport.ts` | multi-file or JavaScript |  |
-| `nonjsExtensions/declarationFileForTsJsImport.ts` | multi-file or JavaScript |  |
-| `nonjsExtensions/declarationFilesForNodeNativeModules.ts` | multi-file or JavaScript |  |
-| `override/override_js1.ts` | multi-file or JavaScript |  |
-| `override/override_js2.ts` | multi-file or JavaScript |  |
-| `override/override_js3.ts` | multi-file or JavaScript |  |
-| `override/override_js4.ts` | multi-file or JavaScript |  |
+| `jsdoc/typeTagCircularReferenceOnConstructorFunction.ts` | not supported | JavaScript |
+| `jsdoc/typeTagModuleExports.ts` | not supported | JavaScript |
+| `jsdoc/typeTagNoErasure.ts` | not supported | JavaScript |
+| `jsdoc/typeTagOnPropertyAssignment.ts` | not supported | JavaScript |
+| `jsdoc/typeTagPrototypeAssignment.ts` | not supported | JavaScript |
+| `jsdoc/typeTagWithGenericSignature.ts` | not supported | JavaScript |
+| `jsx/jsxAttributeInitializer.ts` | not supported | JSX |
+| `jsx/jsxUnclosedParserRecovery.ts` | not supported | JSX |
+| `jsx/tsxEmitSpreadAttribute.ts` | not supported | JSX |
+| `jsx/tsxReactEmitSpreadAttribute.ts` | not supported | JSX |
+| `moduleResolution/allowImportingTsExtensions.ts` | not supported | JSX |
+| `moduleResolution/allowImportingTypesDtsExtension.ts` | not supported | declaration files (`.d.ts`) |
+| `moduleResolution/bundler/bundlerCommonJS.ts` | not supported | `node_modules` packages |
+| `moduleResolution/bundler/bundlerConditionsExcludesNode.ts` | not supported | JavaScript |
+| `moduleResolution/bundler/bundlerDirectoryModule.ts` | not supported | JavaScript |
+| `moduleResolution/bundler/bundlerImportESM.ts` | not supported | `.mts` and `.cts` files |
+| `moduleResolution/bundler/bundlerImportTsExtensions.ts` | not supported | JavaScript |
+| `moduleResolution/bundler/bundlerNodeModules1.ts` | not supported | JavaScript |
+| `moduleResolution/bundler/bundlerOptionsCompat.ts` | not supported | JSON modules |
+| `moduleResolution/bundler/bundlerRelative1.ts` | not supported | JSON modules |
+| `moduleResolution/bundler/bundlerSyntaxRestrictions.ts` | not supported | JavaScript |
+| `moduleResolution/conditionalExportsResolutionFallback.ts` | not supported | JavaScript |
+| `moduleResolution/conditionalExportsResolutionFallbackNull.ts` | not supported | JavaScript |
+| `moduleResolution/customConditions.ts` | not supported | `node_modules` packages |
+| `moduleResolution/declarationNotFoundPackageBundlesTypes.ts` | not supported | JavaScript |
+| `moduleResolution/extensionLoadingPriority.ts` | not supported | JavaScript |
+| `moduleResolution/importFromDot.ts` | checks too little | 3 after the port |
+| `moduleResolution/nestedPackageJsonRedirect.ts` | not supported | `node_modules` packages |
+| `moduleResolution/node10AlternateResult_noResolution.ts` | not supported | `node_modules` packages |
+| `moduleResolution/node10Alternateresult_noTypes.ts` | not supported | JavaScript |
+| `moduleResolution/node10IsNode_node.ts` | not supported | `node_modules` packages |
+| `moduleResolution/node10IsNode_node10.ts` | not supported | `node_modules` packages |
+| `moduleResolution/nodeModulesAtTypesPriority.ts` | not supported | JavaScript |
+| `moduleResolution/packageJsonExportsOptionsCompat.ts` | not supported | JSON modules |
+| `moduleResolution/packageJsonImportsExportsOptionCompat.ts` | checks too little | 0 after the port |
+| `moduleResolution/packageJsonMain_isNonRecursive.ts` | not supported | JavaScript |
+| `moduleResolution/packageJsonMain.ts` | not supported | JavaScript |
+| `moduleResolution/resolutionModeCache.ts` | not supported | `node_modules` packages |
+| `moduleResolution/resolutionModeImportType1.ts` | not supported | `node_modules` packages |
+| `moduleResolution/resolutionModeTripleSlash1.ts` | not supported | `node_modules` packages |
+| `moduleResolution/resolutionModeTripleSlash2.ts` | not supported | `node_modules` packages |
+| `moduleResolution/resolutionModeTripleSlash3.ts` | not supported | `node_modules` packages |
+| `moduleResolution/resolutionModeTripleSlash4.ts` | not supported | `node_modules` packages |
+| `moduleResolution/resolutionModeTripleSlash5.ts` | not supported | `node_modules` packages |
+| `moduleResolution/resolutionModeTypeOnlyImport1.ts` | not supported | `node_modules` packages |
+| `moduleResolution/resolvesWithoutExportsDiagnostic1.ts` | not supported | JavaScript |
+| `moduleResolution/scopedPackages.ts` | not supported | `node_modules` packages |
+| `moduleResolution/scopedPackagesClassic.ts` | not supported | `node_modules` packages |
+| `moduleResolution/selfNameModuleAugmentation.ts` | not supported | JavaScript |
+| `moduleResolution/typesVersions.ambientModules.ts` | not supported | `node_modules` packages |
+| `moduleResolution/typesVersions.emptyTypes.ts` | not supported | JSON modules |
+| `moduleResolution/typesVersions.justIndex.ts` | not supported | JSON modules |
+| `moduleResolution/typesVersions.multiFile.ts` | not supported | `node_modules` packages |
+| `moduleResolution/untypedModuleImport_allowJs.ts` | not supported | JavaScript |
+| `moduleResolution/untypedModuleImport_noImplicitAny_relativePath.ts` | not supported | JavaScript |
+| `moduleResolution/untypedModuleImport_noImplicitAny_scoped.ts` | not supported | JavaScript |
+| `moduleResolution/untypedModuleImport_noImplicitAny_typesForPackageExist.ts` | not supported | JavaScript |
+| `moduleResolution/untypedModuleImport_noImplicitAny.ts` | not supported | JavaScript |
+| `moduleResolution/untypedModuleImport_vsAmbient.ts` | not supported | JavaScript |
+| `moduleResolution/untypedModuleImport_withAugmentation.ts` | not supported | JavaScript |
+| `moduleResolution/untypedModuleImport.ts` | not supported | JavaScript |
+| `node/allowJs/nodeAllowJsPackageSelfName.ts` | not supported | JavaScript |
+| `node/allowJs/nodeAllowJsPackageSelfName2.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJs1.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsCjsFromJs.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsConditionalPackageExports.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsDynamicImport.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsExportAssignment.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsExportlessJsModuleDetectionAuto.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsGeneratedNameCollisions.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsImportAssignment.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsImportHelpersCollisions1.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsImportHelpersCollisions2.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsImportHelpersCollisions3.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsImportMeta.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsPackageExports.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsPackageImports.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsPackagePatternExports.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsPackagePatternExportsExclude.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsPackagePatternExportsTrailers.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsSynchronousCallErrors.ts` | not supported | JavaScript |
+| `node/allowJs/nodeModulesAllowJsTopLevelAwait.ts` | not supported | JavaScript |
+| `node/esmModuleExports1.ts` | not supported | JavaScript |
+| `node/esmModuleExports2.ts` | not supported | JavaScript |
+| `node/esmModuleExports3.ts` | not supported | JavaScript |
+| `node/legacyNodeModulesExportsSpecifierGenerationConditions.ts` | not supported | `node_modules` packages |
+| `node/nodeModules1.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesCJSEmit1.ts` | not supported | JavaScript |
+| `node/nodeModulesCjsFormatFileAlwaysHasDefault.ts` | not supported | JSON modules |
+| `node/nodeModulesCJSResolvingToESM1_emptyPackageJson.ts` | not supported | JavaScript |
+| `node/nodeModulesCJSResolvingToESM2_cjsPackageJson.ts` | not supported | JavaScript |
+| `node/nodeModulesCJSResolvingToESM3_modulePackageJson.ts` | not supported | JavaScript |
+| `node/nodeModulesCJSResolvingToESM4_noPackageJson.ts` | not supported | JavaScript |
+| `node/nodeModulesConditionalPackageExports.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesDeclarationEmitDynamicImportWithPackageExports.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesDeclarationEmitWithPackageExports.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesDynamicImport.ts` | not supported | JSON modules |
+| `node/nodeModulesExportAssignments.ts` | not supported | JSON modules |
+| `node/nodeModulesExportsBlocksSpecifierResolution.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesExportsBlocksTypesVersions.ts` | not supported | JavaScript |
+| `node/nodeModulesExportsDoubleAsterisk.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesExportsSourceTs.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesExportsSpecifierGenerationConditions.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesExportsSpecifierGenerationDirectory.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesExportsSpecifierGenerationPattern.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesForbidenSyntax.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesGeneratedNameCollisions.ts` | not supported | JSON modules |
+| `node/nodeModulesImportAssertions.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesImportAssignments.ts` | not supported | JSON modules |
+| `node/nodeModulesImportAttributes.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesImportAttributesModeDeclarationEmit1.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesImportAttributesModeDeclarationEmit2.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesImportAttributesModeDeclarationEmitErrors.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesImportAttributesTypeModeDeclarationEmit.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesImportAttributesTypeModeDeclarationEmitErrors.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesImportHelpersCollisions.ts` | not supported | JSON modules |
+| `node/nodeModulesImportHelpersCollisions2.ts` | not supported | JSON modules |
+| `node/nodeModulesImportHelpersCollisions3.ts` | not supported | JSON modules |
+| `node/nodeModulesImportMeta.ts` | not supported | JSON modules |
+| `node/nodeModulesImportModeDeclarationEmit1.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesImportModeDeclarationEmit2.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesImportModeDeclarationEmitErrors1.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesImportResolutionIntoExport.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesImportResolutionNoCycle.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesImportTypeModeDeclarationEmit1.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesImportTypeModeDeclarationEmitErrors1.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesJson.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesNoDirectoryModule.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesPackageExports.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesPackageImports.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesPackageImportsRootWildcard.ts` | not supported | JSON modules |
+| `node/nodeModulesPackageImportsRootWildcardNode16.ts` | not supported | JSON modules |
+| `node/nodeModulesPackagePatternExports.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesPackagePatternExportsExclude.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesPackagePatternExportsTrailers.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesResolveJsonModule.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodeModulesSynchronousCallErrors.ts` | not supported | JSON modules |
+| `node/nodeModulesTopLevelAwait.ts` | not supported | JSON modules |
+| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit1.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit2.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit3.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit4.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit5.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit6.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeDeclarationEmit7.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeOverride1.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeOverride2.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeOverride3.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeOverride4.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeOverride5.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeOverrideModeError.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTripleSlashReferenceModeOverrideOldResolutionError.ts` | not supported | `node_modules` packages |
+| `node/nodeModulesTypesVersionPackageExports.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodePackageSelfName.ts` | not supported | `.mts` and `.cts` files |
+| `node/nodePackageSelfNameScoped.ts` | not supported | `.mts` and `.cts` files |
+| `nonjsExtensions/declarationFileForHtmlFileWithinDeclarationFile.ts` | not supported | declaration files (`.d.ts`) |
+| `nonjsExtensions/declarationFileForHtmlImport.ts` | the port changes what it checks | `tsc` then reports TS1046, TS1039 |
+| `nonjsExtensions/declarationFileForJsonImport.ts` | not supported | JSON modules |
+| `nonjsExtensions/declarationFileForTsJsImport.ts` | not supported | JSON modules |
+| `nonjsExtensions/declarationFilesForNodeNativeModules.ts` | not supported | JSON modules |
+| `override/override_js1.ts` | not supported | JavaScript |
+| `override/override_js2.ts` | not supported | JavaScript |
+| `override/override_js3.ts` | not supported | JavaScript |
+| `override/override_js4.ts` | not supported | JavaScript |
 | `override/override1.ts` | the port changes what it checks | `tsc` then reports TS1003, TS1005, TS2304 |
 | `override/override10.ts` | not supported | expected `;` after expression, on ` abstract class Base { ` |
 | `override/override11.ts` | not supported | parameter requires a type annotation, on ` constructor (override public foo: number) { ` |
@@ -2330,14 +2322,10 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript2018/asyncGenerators/` | not supported | async/await and generators |
 | `parser/ecmascript2018/forAwait/` | not supported | async/await |
 | `parser/ecmascript2021/numericSeparators/parser.numericSeparators.binary.ts` | checks too little | 0 after the port |
-| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.binaryNegative.ts` | multi-file or JavaScript |  |
 | `parser/ecmascript2021/numericSeparators/parser.numericSeparators.decimal.ts` | checks too little | 0 after the port |
-| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.decmialNegative.ts` | multi-file or JavaScript |  |
 | `parser/ecmascript2021/numericSeparators/parser.numericSeparators.hex.ts` | checks too little | 0 after the port |
-| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.hexNegative.ts` | multi-file or JavaScript |  |
 | `parser/ecmascript2021/numericSeparators/parser.numericSeparators.octal.ts` | checks too little | 0 after the port |
-| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.octalNegative.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.unicodeEscape.ts` | multi-file or JavaScript |  |
+| `parser/ecmascript2021/numericSeparators/parser.numericSeparators.unicodeEscape.ts` | not supported | invalid unicode escape: expected `}`, on ` "\u{10_ffff}" ` |
 | `parser/ecmascript3/Accessors/parserES3Accessors1.ts` | checks too little | 1 after the port |
 | `parser/ecmascript3/Accessors/parserES3Accessors2.ts` | the port changes what it checks | `tsc` then reports TS7032, TS7006 |
 | `parser/ecmascript3/Accessors/parserES3Accessors3.ts` | not supported | expected `,` or `}`, on ` let v = { get Foo() { } }; ` |
@@ -2371,22 +2359,22 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript5/ArrayLiteralExpressions/parserArrayLiteralExpression8.ts` | not supported | expected expression, on ` let v = [,1,]; ` |
 | `parser/ecmascript5/ArrayLiteralExpressions/parserArrayLiteralExpression9.ts` | checks too little | 2 after the port |
 | `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression1.ts` | not supported | `public` is a reserved word in strict mode and can't be used as a name, on ` let v = (public x: string) => { }; ` |
-| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression10.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression11.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression12.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression13.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression14.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression15.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression16.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression17.ts` | multi-file or JavaScript |  |
+| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression10.ts` | not supported | JavaScript |
+| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression11.ts` | not supported | JavaScript |
+| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression12.ts` | not supported | JavaScript |
+| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression13.ts` | not supported | JavaScript |
+| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression14.ts` | not supported | JavaScript |
+| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression15.ts` | not supported | JavaScript |
+| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression16.ts` | not supported | JavaScript |
+| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression17.ts` | not supported | JavaScript |
 | `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression2.ts` | not supported | expected `;` after assignment, on ` a = () => { } \|\| a ` |
 | `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression3.ts` | not supported | expected `)`, on ` a = (() => { } \|\| a) ` |
 | `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression4.ts` | not supported | expected `)`, on ` a = (() => { }, a) ` |
 | `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression5.ts` | checks too little | 3 after the port |
 | `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression6.ts` | not supported | expected `)`, on ` return true ? (q ? true : false) : (b = q.length, function() { }); ` |
 | `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression7.ts` | not supported | expected `,` or `}`, on ` async m() { ` |
-| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression8.ts` | multi-file or JavaScript |  |
-| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression9.ts` | multi-file or JavaScript |  |
+| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression8.ts` | not supported | JavaScript |
+| `parser/ecmascript5/ArrowFunctionExpressions/parserArrowFunctionExpression9.ts` | not supported | JavaScript |
 | `parser/ecmascript5/AutomaticSemicolonInsertion/parserAutomaticSemicolonInsertion1.ts` | not supported | expected field name in object type, on ` (): void ` |
 | `parser/ecmascript5/CatchClauses/parserCatchClauseWithTypeAnnotation1.ts` | checks too little | 1 after the port |
 | `parser/ecmascript5/ClassDeclarations/parserClass1.ts` | checks too little | 1 after the port |
@@ -3009,207 +2997,207 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `parser/ecmascript6/ShorthandPropertyAssignment/parserShorthandPropertyAssignment5.ts` | not supported | expected `,` or `}`, on ` let obj = { greet? }; ` |
 | `parser/ecmascript6/Symbols/` | not supported | `Symbol` |
 | `pedantic/noUncheckedIndexedAccess.ts` | the port changes what it checks | `tsc` then reports TS1335 |
-| `references/library-reference-1.ts` | multi-file or JavaScript |  |
-| `references/library-reference-10.ts` | multi-file or JavaScript |  |
-| `references/library-reference-11.ts` | multi-file or JavaScript |  |
-| `references/library-reference-12.ts` | multi-file or JavaScript |  |
-| `references/library-reference-13.ts` | multi-file or JavaScript |  |
-| `references/library-reference-14.ts` | multi-file or JavaScript |  |
-| `references/library-reference-15.ts` | multi-file or JavaScript |  |
-| `references/library-reference-2.ts` | multi-file or JavaScript |  |
-| `references/library-reference-3.ts` | multi-file or JavaScript |  |
-| `references/library-reference-4.ts` | multi-file or JavaScript |  |
-| `references/library-reference-5.ts` | multi-file or JavaScript |  |
-| `references/library-reference-6.ts` | multi-file or JavaScript |  |
-| `references/library-reference-7.ts` | multi-file or JavaScript |  |
-| `references/library-reference-8.ts` | multi-file or JavaScript |  |
-| `references/library-reference-scoped-packages.ts` | multi-file or JavaScript |  |
-| `salsa/annotatedThisPropertyInitializerDoesntNarrow.ts` | multi-file or JavaScript |  |
-| `salsa/assignmentToVoidZero1.ts` | multi-file or JavaScript |  |
-| `salsa/assignmentToVoidZero2.ts` | multi-file or JavaScript |  |
-| `salsa/binderUninitializedModuleExportsAssignment.ts` | multi-file or JavaScript |  |
-| `salsa/chainedPrototypeAssignment.ts` | multi-file or JavaScript |  |
-| `salsa/checkSpecialPropertyAssignments.ts` | multi-file or JavaScript |  |
-| `salsa/circularMultipleAssignmentDeclaration.ts` | multi-file or JavaScript |  |
-| `salsa/classCanExtendConstructorFunction.ts` | multi-file or JavaScript |  |
-| `salsa/commonJSAliasedExport.ts` | multi-file or JavaScript |  |
-| `salsa/commonJSImportClassTypeReference.ts` | multi-file or JavaScript |  |
-| `salsa/commonJSImportExportedClassExpression.ts` | multi-file or JavaScript |  |
-| `salsa/commonJSImportNestedClassTypeReference.ts` | multi-file or JavaScript |  |
-| `salsa/commonJSReexport.ts` | multi-file or JavaScript |  |
-| `salsa/conflictingCommonJSES2015Exports.ts` | multi-file or JavaScript |  |
-| `salsa/constructorFunctionMergeWithClass.ts` | multi-file or JavaScript |  |
-| `salsa/constructorFunctionMethodTypeParameters.ts` | multi-file or JavaScript |  |
-| `salsa/constructorFunctions.ts` | multi-file or JavaScript |  |
-| `salsa/constructorFunctions2.ts` | multi-file or JavaScript |  |
-| `salsa/constructorFunctions3.ts` | multi-file or JavaScript |  |
-| `salsa/constructorFunctionsStrict.ts` | multi-file or JavaScript |  |
+| `references/library-reference-1.ts` | not supported | declaration files (`.d.ts`) |
+| `references/library-reference-10.ts` | not supported | JSON modules |
+| `references/library-reference-11.ts` | not supported | JavaScript |
+| `references/library-reference-12.ts` | not supported | `node_modules` packages |
+| `references/library-reference-13.ts` | not supported | JSON modules |
+| `references/library-reference-14.ts` | not supported | declaration files (`.d.ts`) |
+| `references/library-reference-15.ts` | not supported | declaration files (`.d.ts`) |
+| `references/library-reference-2.ts` | not supported | JSON modules |
+| `references/library-reference-3.ts` | not supported | `node_modules` packages |
+| `references/library-reference-4.ts` | not supported | `node_modules` packages |
+| `references/library-reference-5.ts` | not supported | `node_modules` packages |
+| `references/library-reference-6.ts` | not supported | `node_modules` packages |
+| `references/library-reference-7.ts` | not supported | `node_modules` packages |
+| `references/library-reference-8.ts` | not supported | declaration files (`.d.ts`) |
+| `references/library-reference-scoped-packages.ts` | not supported | `node_modules` packages |
+| `salsa/annotatedThisPropertyInitializerDoesntNarrow.ts` | not supported | JavaScript |
+| `salsa/assignmentToVoidZero1.ts` | not supported | JavaScript |
+| `salsa/assignmentToVoidZero2.ts` | not supported | JavaScript |
+| `salsa/binderUninitializedModuleExportsAssignment.ts` | not supported | JavaScript |
+| `salsa/chainedPrototypeAssignment.ts` | not supported | JavaScript |
+| `salsa/checkSpecialPropertyAssignments.ts` | not supported | JavaScript |
+| `salsa/circularMultipleAssignmentDeclaration.ts` | not supported | JavaScript |
+| `salsa/classCanExtendConstructorFunction.ts` | not supported | JavaScript |
+| `salsa/commonJSAliasedExport.ts` | not supported | JavaScript |
+| `salsa/commonJSImportClassTypeReference.ts` | not supported | JavaScript |
+| `salsa/commonJSImportExportedClassExpression.ts` | not supported | JavaScript |
+| `salsa/commonJSImportNestedClassTypeReference.ts` | not supported | JavaScript |
+| `salsa/commonJSReexport.ts` | not supported | JavaScript |
+| `salsa/conflictingCommonJSES2015Exports.ts` | not supported | JavaScript |
+| `salsa/constructorFunctionMergeWithClass.ts` | not supported | JavaScript |
+| `salsa/constructorFunctionMethodTypeParameters.ts` | not supported | JavaScript |
+| `salsa/constructorFunctions.ts` | not supported | JavaScript |
+| `salsa/constructorFunctions2.ts` | not supported | JavaScript |
+| `salsa/constructorFunctions3.ts` | not supported | JavaScript |
+| `salsa/constructorFunctionsStrict.ts` | not supported | JavaScript |
 | `salsa/constructorNameInAccessor.ts` | not supported | parameter requires a type annotation, on ` set constructor(value) {} ` |
 | `salsa/constructorNameInGenerator.ts` | not supported | expected class member name, on ` *constructor(): Generator<never, void, unknown> {} ` |
 | `salsa/constructorNameInObjectLiteralAccessor.ts` | not supported | expected `,` or `}`, on ` get constructor() { return }, ` |
-| `salsa/contextualTypedSpecialAssignment.ts` | multi-file or JavaScript |  |
-| `salsa/defaultPropertyAssignedClassWithPrototype.ts` | multi-file or JavaScript |  |
-| `salsa/enumMergeWithExpando.ts` | multi-file or JavaScript |  |
-| `salsa/expandoOnAlias.ts` | multi-file or JavaScript |  |
+| `salsa/contextualTypedSpecialAssignment.ts` | not supported | JavaScript |
+| `salsa/defaultPropertyAssignedClassWithPrototype.ts` | not supported | JavaScript |
+| `salsa/enumMergeWithExpando.ts` | not supported | JavaScript |
+| `salsa/expandoOnAlias.ts` | not supported | JavaScript |
 | `salsa/exportDefaultInJsFile01.ts` | not supported | JavaScript |
 | `salsa/exportDefaultInJsFile02.ts` | not supported | JavaScript |
-| `salsa/exportNestedNamespaces.ts` | multi-file or JavaScript |  |
-| `salsa/exportNestedNamespaces2.ts` | multi-file or JavaScript |  |
-| `salsa/exportPropertyAssignmentNameResolution.ts` | multi-file or JavaScript |  |
-| `salsa/globalMergeWithCommonJSAssignmentDeclaration.ts` | multi-file or JavaScript |  |
-| `salsa/importAliasModuleExports.ts` | multi-file or JavaScript |  |
-| `salsa/importingExportingTypes.ts` | multi-file or JavaScript |  |
-| `salsa/inferingFromAny.ts` | multi-file or JavaScript |  |
-| `salsa/inferringClassMembersFromAssignments.ts` | multi-file or JavaScript |  |
-| `salsa/inferringClassMembersFromAssignments2.ts` | multi-file or JavaScript |  |
-| `salsa/inferringClassMembersFromAssignments3.ts` | multi-file or JavaScript |  |
-| `salsa/inferringClassMembersFromAssignments4.ts` | multi-file or JavaScript |  |
-| `salsa/inferringClassMembersFromAssignments5.ts` | multi-file or JavaScript |  |
-| `salsa/inferringClassMembersFromAssignments6.ts` | multi-file or JavaScript |  |
-| `salsa/inferringClassMembersFromAssignments7.ts` | multi-file or JavaScript |  |
+| `salsa/exportNestedNamespaces.ts` | not supported | JavaScript |
+| `salsa/exportNestedNamespaces2.ts` | not supported | JavaScript |
+| `salsa/exportPropertyAssignmentNameResolution.ts` | not supported | JavaScript |
+| `salsa/globalMergeWithCommonJSAssignmentDeclaration.ts` | not supported | JavaScript |
+| `salsa/importAliasModuleExports.ts` | not supported | JavaScript |
+| `salsa/importingExportingTypes.ts` | not supported | JavaScript |
+| `salsa/inferingFromAny.ts` | not supported | JavaScript |
+| `salsa/inferringClassMembersFromAssignments.ts` | not supported | JavaScript |
+| `salsa/inferringClassMembersFromAssignments2.ts` | not supported | JavaScript |
+| `salsa/inferringClassMembersFromAssignments3.ts` | not supported | JavaScript |
+| `salsa/inferringClassMembersFromAssignments4.ts` | not supported | JavaScript |
+| `salsa/inferringClassMembersFromAssignments5.ts` | not supported | JavaScript |
+| `salsa/inferringClassMembersFromAssignments6.ts` | not supported | JavaScript |
+| `salsa/inferringClassMembersFromAssignments7.ts` | not supported | JavaScript |
 | `salsa/inferringClassMembersFromAssignments8.ts` | the port changes what it checks | `tsc` then reports TS2683, TS7009 |
-| `salsa/inferringClassStaticMembersFromAssignments.ts` | multi-file or JavaScript |  |
-| `salsa/jsContainerMergeJsContainer.ts` | multi-file or JavaScript |  |
-| `salsa/jsContainerMergeTsDeclaration.ts` | multi-file or JavaScript |  |
-| `salsa/jsContainerMergeTsDeclaration2.ts` | multi-file or JavaScript |  |
-| `salsa/jsContainerMergeTsDeclaration3.ts` | multi-file or JavaScript |  |
-| `salsa/jsdocConstructorFunctionTypeReference.ts` | multi-file or JavaScript |  |
-| `salsa/jsObjectsMarkedAsOpenEnded.ts` | multi-file or JavaScript |  |
-| `salsa/lateBoundAssignmentDeclarationSupport1.ts` | multi-file or JavaScript |  |
-| `salsa/lateBoundAssignmentDeclarationSupport2.ts` | multi-file or JavaScript |  |
-| `salsa/lateBoundAssignmentDeclarationSupport3.ts` | multi-file or JavaScript |  |
-| `salsa/lateBoundAssignmentDeclarationSupport4.ts` | multi-file or JavaScript |  |
-| `salsa/lateBoundAssignmentDeclarationSupport5.ts` | multi-file or JavaScript |  |
-| `salsa/lateBoundAssignmentDeclarationSupport6.ts` | multi-file or JavaScript |  |
-| `salsa/lateBoundAssignmentDeclarationSupport7.ts` | multi-file or JavaScript |  |
-| `salsa/lateBoundClassMemberAssignmentJS.ts` | multi-file or JavaScript |  |
-| `salsa/lateBoundClassMemberAssignmentJS2.ts` | multi-file or JavaScript |  |
-| `salsa/lateBoundClassMemberAssignmentJS3.ts` | multi-file or JavaScript |  |
-| `salsa/malformedTags.ts` | multi-file or JavaScript |  |
-| `salsa/methodsReturningThis.ts` | multi-file or JavaScript |  |
+| `salsa/inferringClassStaticMembersFromAssignments.ts` | not supported | JavaScript |
+| `salsa/jsContainerMergeJsContainer.ts` | not supported | JavaScript |
+| `salsa/jsContainerMergeTsDeclaration.ts` | not supported | JavaScript |
+| `salsa/jsContainerMergeTsDeclaration2.ts` | not supported | JavaScript |
+| `salsa/jsContainerMergeTsDeclaration3.ts` | not supported | JavaScript |
+| `salsa/jsdocConstructorFunctionTypeReference.ts` | not supported | JavaScript |
+| `salsa/jsObjectsMarkedAsOpenEnded.ts` | not supported | JavaScript |
+| `salsa/lateBoundAssignmentDeclarationSupport1.ts` | not supported | JavaScript |
+| `salsa/lateBoundAssignmentDeclarationSupport2.ts` | not supported | JavaScript |
+| `salsa/lateBoundAssignmentDeclarationSupport3.ts` | not supported | JavaScript |
+| `salsa/lateBoundAssignmentDeclarationSupport4.ts` | not supported | JavaScript |
+| `salsa/lateBoundAssignmentDeclarationSupport5.ts` | not supported | JavaScript |
+| `salsa/lateBoundAssignmentDeclarationSupport6.ts` | not supported | JavaScript |
+| `salsa/lateBoundAssignmentDeclarationSupport7.ts` | not supported | JavaScript |
+| `salsa/lateBoundClassMemberAssignmentJS.ts` | not supported | JavaScript |
+| `salsa/lateBoundClassMemberAssignmentJS2.ts` | not supported | JavaScript |
+| `salsa/lateBoundClassMemberAssignmentJS3.ts` | not supported | JavaScript |
+| `salsa/malformedTags.ts` | not supported | JavaScript |
+| `salsa/methodsReturningThis.ts` | not supported | JavaScript |
 | `salsa/mixedPropertyElementAccessAssignmentDeclaration.ts` | the port changes what it checks | `tsc` then reports TS7034, TS7005 |
-| `salsa/moduleExportAlias.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAlias2.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAlias3.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAlias4.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAlias5.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAliasElementAccessExpression.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAliasExports.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAliasImported.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAliasUnknown.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAssignment.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAssignment2.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAssignment3.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAssignment4.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAssignment5.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAssignment6.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportAssignment7.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportDuplicateAlias.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportDuplicateAlias2.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportDuplicateAlias3.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportNestedNamespaces.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportPropertyAssignmentDefault.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportsAliasLoop1.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportsAliasLoop2.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportWithExportPropertyAssignment.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportWithExportPropertyAssignment2.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportWithExportPropertyAssignment3.ts` | multi-file or JavaScript |  |
-| `salsa/moduleExportWithExportPropertyAssignment4.ts` | multi-file or JavaScript |  |
-| `salsa/multipleDeclarations.ts` | multi-file or JavaScript |  |
-| `salsa/namespaceAssignmentToRequireAlias.ts` | multi-file or JavaScript |  |
-| `salsa/nestedDestructuringOfRequire.ts` | multi-file or JavaScript |  |
-| `salsa/nestedPrototypeAssignment.ts` | multi-file or JavaScript |  |
-| `salsa/plainJSBinderErrors.ts` | multi-file or JavaScript |  |
-| `salsa/plainJSGrammarErrors.ts` | multi-file or JavaScript |  |
-| `salsa/plainJSGrammarErrors2.ts` | multi-file or JavaScript |  |
-| `salsa/plainJSGrammarErrors3.ts` | multi-file or JavaScript |  |
-| `salsa/plainJSGrammarErrors4.ts` | multi-file or JavaScript |  |
-| `salsa/plainJSRedeclare.ts` | multi-file or JavaScript |  |
-| `salsa/plainJSRedeclare2.ts` | multi-file or JavaScript |  |
-| `salsa/plainJSRedeclare3.ts` | multi-file or JavaScript |  |
-| `salsa/plainJSReservedStrict.ts` | multi-file or JavaScript |  |
-| `salsa/plainJSTypeErrors.ts` | multi-file or JavaScript |  |
-| `salsa/privateConstructorFunction.ts` | multi-file or JavaScript |  |
-| `salsa/privateIdentifierExpando.ts` | multi-file or JavaScript |  |
-| `salsa/propertiesOfGenericConstructorFunctions.ts` | multi-file or JavaScript |  |
-| `salsa/propertyAssignmentOnImportedSymbol.ts` | multi-file or JavaScript |  |
-| `salsa/propertyAssignmentOnParenthesizedNumber.ts` | multi-file or JavaScript |  |
-| `salsa/propertyAssignmentOnUnresolvedImportedSymbol.ts` | multi-file or JavaScript |  |
-| `salsa/propertyAssignmentUseParentType2.ts` | multi-file or JavaScript |  |
+| `salsa/moduleExportAlias.ts` | not supported | JavaScript |
+| `salsa/moduleExportAlias2.ts` | not supported | JavaScript |
+| `salsa/moduleExportAlias3.ts` | not supported | JavaScript |
+| `salsa/moduleExportAlias4.ts` | not supported | JavaScript |
+| `salsa/moduleExportAlias5.ts` | not supported | JavaScript |
+| `salsa/moduleExportAliasElementAccessExpression.ts` | not supported | JavaScript |
+| `salsa/moduleExportAliasExports.ts` | not supported | JavaScript |
+| `salsa/moduleExportAliasImported.ts` | not supported | JavaScript |
+| `salsa/moduleExportAliasUnknown.ts` | not supported | JavaScript |
+| `salsa/moduleExportAssignment.ts` | not supported | JavaScript |
+| `salsa/moduleExportAssignment2.ts` | not supported | JavaScript |
+| `salsa/moduleExportAssignment3.ts` | not supported | JavaScript |
+| `salsa/moduleExportAssignment4.ts` | not supported | JavaScript |
+| `salsa/moduleExportAssignment5.ts` | not supported | JavaScript |
+| `salsa/moduleExportAssignment6.ts` | not supported | JavaScript |
+| `salsa/moduleExportAssignment7.ts` | not supported | JavaScript |
+| `salsa/moduleExportDuplicateAlias.ts` | not supported | JavaScript |
+| `salsa/moduleExportDuplicateAlias2.ts` | not supported | JavaScript |
+| `salsa/moduleExportDuplicateAlias3.ts` | not supported | JavaScript |
+| `salsa/moduleExportNestedNamespaces.ts` | not supported | JavaScript |
+| `salsa/moduleExportPropertyAssignmentDefault.ts` | not supported | JavaScript |
+| `salsa/moduleExportsAliasLoop1.ts` | not supported | JavaScript |
+| `salsa/moduleExportsAliasLoop2.ts` | not supported | JavaScript |
+| `salsa/moduleExportWithExportPropertyAssignment.ts` | not supported | JavaScript |
+| `salsa/moduleExportWithExportPropertyAssignment2.ts` | not supported | JavaScript |
+| `salsa/moduleExportWithExportPropertyAssignment3.ts` | not supported | JavaScript |
+| `salsa/moduleExportWithExportPropertyAssignment4.ts` | not supported | JavaScript |
+| `salsa/multipleDeclarations.ts` | not supported | JavaScript |
+| `salsa/namespaceAssignmentToRequireAlias.ts` | not supported | JavaScript |
+| `salsa/nestedDestructuringOfRequire.ts` | not supported | JavaScript |
+| `salsa/nestedPrototypeAssignment.ts` | not supported | JavaScript |
+| `salsa/plainJSBinderErrors.ts` | not supported | JavaScript |
+| `salsa/plainJSGrammarErrors.ts` | not supported | JavaScript |
+| `salsa/plainJSGrammarErrors2.ts` | not supported | JavaScript |
+| `salsa/plainJSGrammarErrors3.ts` | not supported | JavaScript |
+| `salsa/plainJSGrammarErrors4.ts` | not supported | JavaScript |
+| `salsa/plainJSRedeclare.ts` | not supported | JavaScript |
+| `salsa/plainJSRedeclare2.ts` | not supported | JavaScript |
+| `salsa/plainJSRedeclare3.ts` | not supported | JavaScript |
+| `salsa/plainJSReservedStrict.ts` | not supported | JavaScript |
+| `salsa/plainJSTypeErrors.ts` | not supported | JavaScript |
+| `salsa/privateConstructorFunction.ts` | not supported | JavaScript |
+| `salsa/privateIdentifierExpando.ts` | not supported | JavaScript |
+| `salsa/propertiesOfGenericConstructorFunctions.ts` | not supported | JavaScript |
+| `salsa/propertyAssignmentOnImportedSymbol.ts` | not supported | JavaScript |
+| `salsa/propertyAssignmentOnParenthesizedNumber.ts` | not supported | JavaScript |
+| `salsa/propertyAssignmentOnUnresolvedImportedSymbol.ts` | not supported | JavaScript |
+| `salsa/propertyAssignmentUseParentType2.ts` | not supported | JavaScript |
 | `salsa/propertyAssignmentUseParentType3.ts` | not supported | `any` is not supported, on ` function foo2(): any[] { ` |
-| `salsa/prototypePropertyAssignmentMergeAcrossFiles.ts` | multi-file or JavaScript |  |
-| `salsa/prototypePropertyAssignmentMergeAcrossFiles2.ts` | multi-file or JavaScript |  |
-| `salsa/prototypePropertyAssignmentMergedTypeReference.ts` | multi-file or JavaScript |  |
-| `salsa/prototypePropertyAssignmentMergeWithInterfaceMethod.ts` | multi-file or JavaScript |  |
-| `salsa/reExportJsFromTs.ts` | multi-file or JavaScript |  |
-| `salsa/requireAssertsFromTypescript.ts` | multi-file or JavaScript |  |
-| `salsa/requireOfESWithPropertyAccess.ts` | multi-file or JavaScript |  |
-| `salsa/requireTwoPropertyAccesses.ts` | multi-file or JavaScript |  |
-| `salsa/sourceFileMergeWithFunction.ts` | multi-file or JavaScript |  |
-| `salsa/spellingUncheckedJS.ts` | multi-file or JavaScript |  |
-| `salsa/thisPropertyAssignment.ts` | multi-file or JavaScript |  |
-| `salsa/thisPropertyAssignmentCircular.ts` | multi-file or JavaScript |  |
-| `salsa/thisPropertyAssignmentComputed.ts` | multi-file or JavaScript |  |
-| `salsa/thisPropertyAssignmentInherited.ts` | multi-file or JavaScript |  |
-| `salsa/thisTypeOfConstructorFunctions.ts` | multi-file or JavaScript |  |
-| `salsa/topLevelThisAssignment.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromContextualThisType.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromJSConstructor.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromJSInitializer.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromJSInitializer2.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromJSInitializer3.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromJSInitializer4.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromParamTagForFunction.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment10_1.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment10.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment11.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment12.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment13.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment14.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment15.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment16.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment17.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment18.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment19.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment2.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment20.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment21.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment22.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment23.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment24.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment25.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment26.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment27.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment28.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment3.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment32.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment33.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment34.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment35.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment37.ts` | multi-file or JavaScript |  |
+| `salsa/prototypePropertyAssignmentMergeAcrossFiles.ts` | not supported | JavaScript |
+| `salsa/prototypePropertyAssignmentMergeAcrossFiles2.ts` | not supported | JavaScript |
+| `salsa/prototypePropertyAssignmentMergedTypeReference.ts` | not supported | JavaScript |
+| `salsa/prototypePropertyAssignmentMergeWithInterfaceMethod.ts` | not supported | JavaScript |
+| `salsa/reExportJsFromTs.ts` | not supported | JavaScript |
+| `salsa/requireAssertsFromTypescript.ts` | not supported | JavaScript |
+| `salsa/requireOfESWithPropertyAccess.ts` | not supported | JavaScript |
+| `salsa/requireTwoPropertyAccesses.ts` | not supported | JavaScript |
+| `salsa/sourceFileMergeWithFunction.ts` | not supported | declaration files (`.d.ts`) |
+| `salsa/spellingUncheckedJS.ts` | not supported | JavaScript |
+| `salsa/thisPropertyAssignment.ts` | not supported | JavaScript |
+| `salsa/thisPropertyAssignmentCircular.ts` | not supported | JavaScript |
+| `salsa/thisPropertyAssignmentComputed.ts` | not supported | JavaScript |
+| `salsa/thisPropertyAssignmentInherited.ts` | not supported | JavaScript |
+| `salsa/thisTypeOfConstructorFunctions.ts` | not supported | JavaScript |
+| `salsa/topLevelThisAssignment.ts` | not supported | JavaScript |
+| `salsa/typeFromContextualThisType.ts` | not supported | JavaScript |
+| `salsa/typeFromJSConstructor.ts` | not supported | JavaScript |
+| `salsa/typeFromJSInitializer.ts` | not supported | JavaScript |
+| `salsa/typeFromJSInitializer2.ts` | not supported | JavaScript |
+| `salsa/typeFromJSInitializer3.ts` | not supported | JavaScript |
+| `salsa/typeFromJSInitializer4.ts` | not supported | JavaScript |
+| `salsa/typeFromParamTagForFunction.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment10_1.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment10.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment11.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment12.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment13.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment14.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment15.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment16.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment17.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment18.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment19.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment2.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment20.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment21.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment22.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment23.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment24.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment25.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment26.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment27.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment28.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment3.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment32.ts` | not supported | script files sharing one global scope |
+| `salsa/typeFromPropertyAssignment33.ts` | not supported | script files sharing one global scope |
+| `salsa/typeFromPropertyAssignment34.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment35.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment37.ts` | not supported | JavaScript |
 | `salsa/typeFromPropertyAssignment38.ts` | checks too little | 4 after the port |
-| `salsa/typeFromPropertyAssignment39.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment4.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment40.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment5.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment6.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment7.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment8_1.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment8.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment9_1.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignment9.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignmentOutOfOrder.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPropertyAssignmentWithExport.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPrototypeAssignment.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPrototypeAssignment2.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPrototypeAssignment3.ts` | multi-file or JavaScript |  |
-| `salsa/typeFromPrototypeAssignment4.ts` | multi-file or JavaScript |  |
-| `salsa/typeLookupInIIFE.ts` | multi-file or JavaScript |  |
-| `salsa/typeTagOnFunctionReferencesGeneric.ts` | multi-file or JavaScript |  |
-| `salsa/unannotatedParametersAreOptional.ts` | multi-file or JavaScript |  |
-| `salsa/varRequireFromJavascript.ts` | multi-file or JavaScript |  |
-| `salsa/varRequireFromTypescript.ts` | multi-file or JavaScript |  |
+| `salsa/typeFromPropertyAssignment39.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment4.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment40.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment5.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment6.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment7.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment8_1.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment8.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment9_1.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignment9.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignmentOutOfOrder.ts` | not supported | JavaScript |
+| `salsa/typeFromPropertyAssignmentWithExport.ts` | not supported | JavaScript |
+| `salsa/typeFromPrototypeAssignment.ts` | not supported | JavaScript |
+| `salsa/typeFromPrototypeAssignment2.ts` | not supported | JavaScript |
+| `salsa/typeFromPrototypeAssignment3.ts` | not supported | JavaScript |
+| `salsa/typeFromPrototypeAssignment4.ts` | not supported | JavaScript |
+| `salsa/typeLookupInIIFE.ts` | not supported | JavaScript |
+| `salsa/typeTagOnFunctionReferencesGeneric.ts` | not supported | JavaScript |
+| `salsa/unannotatedParametersAreOptional.ts` | not supported | JavaScript |
+| `salsa/varRequireFromJavascript.ts` | not supported | JavaScript |
+| `salsa/varRequireFromTypescript.ts` | not supported | JavaScript |
 | `scanner/ecmascript3/scannerES3NumericLiteral1.ts` | checks too little | 0 after the port |
 | `scanner/ecmascript3/scannerES3NumericLiteral2.ts` | checks too little | 1 after the port |
 | `scanner/ecmascript3/scannerES3NumericLiteral3.ts` | checks too little | 1 after the port |
@@ -3240,10 +3228,10 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `scanner/ecmascript5/scannerS7.8.4_A7.1_T4.ts` | not supported | invalid unicode escape: expected 4 hex digits, on ` "\u000G" ` |
 | `scanner/ecmascript5/scannerStringLiterals.ts` | not supported | unknown escape sequence `\ `, on ` '\u2192\   ' ` |
 | `scanner/ecmascript5/scannerStringLiteralWithContainingNullCharacter1.ts` | checks too little | 0 after the port |
-| `scanner/ecmascript5/scannerUnexpectedNullCharacter1.ts` | not supported | unexpected byte 0x00, on ` foo + bar; ` |
+| `scanner/ecmascript5/scannerUnexpectedNullCharacter1.ts` | not supported | unexpected byte 0x00, on ` foo\u0000+\u0000bar; ` |
 | `scanner/ecmascript5/scannerUnicodeEscapeInKeyword1.ts` | not supported | unexpected character `\`, on ` \u0076ar x = "hello"; ` |
-| `scanner/ecmascript5/scannerUnicodeEscapeInKeyword2.ts` | multi-file or JavaScript |  |
-| `scanner/jsdocInvalidTokens.ts` | multi-file or JavaScript |  |
+| `scanner/ecmascript5/scannerUnicodeEscapeInKeyword2.ts` | porter failure | nothing to prune at offsets 75, 415, 84, 424; our first unsupported error: unexpected character `\` |
+| `scanner/jsdocInvalidTokens.ts` | not supported | JavaScript |
 | `statements/breakStatements/doWhileBreakStatements.ts` | not supported | expected `;` after expression, on ` ONE: ` |
 | `statements/breakStatements/forBreakStatements.ts` | not supported | expected `;` after expression, on ` ONE: ` |
 | `statements/breakStatements/forInBreakStatements.ts` | not supported | `let` declaration requires an initializer, on ` for(let x in {}) { ` |
@@ -3793,7 +3781,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/typeRelationships/typeInference/keyofInferenceIntersectsResults.ts` | not supported | expected `,` or `>`, on ` function foo<T = X>(x: keyof T, y: keyof T): T { return null as unknown as (T... ` |
 | `types/typeRelationships/typeInference/keyofInferenceLowerPriorityThanReturn.ts` | not supported | expected `;` after expression, on ` declare class Write { ` |
 | `types/typeRelationships/typeInference/noInfer.ts` | not supported | expected type, on `` type T04 = NoInfer<`foo${string}`>; `` |
-| `types/typeRelationships/typeInference/noInferRedeclaration.ts` | multi-file or JavaScript |  |
+| `types/typeRelationships/typeInference/noInferRedeclaration.ts` | not supported | expected `)`, on ` export const f = <T>(x: T, y: NoInfer<T>) => x; ` |
 | `types/typeRelationships/typeInference/unionAndIntersectionInference1.ts` | not supported | intersection types |
 | `types/typeRelationships/typeInference/unionAndIntersectionInference2.ts` | not supported | intersection types |
 | `types/typeRelationships/typeInference/unionAndIntersectionInference3.ts` | not supported | intersection types |
@@ -3816,12 +3804,12 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/uniqueSymbol/` | not supported | `Symbol` |
 | `types/unknown/unknownType2.ts` | the port changes what it checks | `tsc` then reports TS1335 |
 | `types/witness/witness.ts` | the port changes what it checks | it renames the repeated `var` declarations whose types `tsc` checks (TS2403) |
-| `typings/typingsLookup1.ts` | multi-file or JavaScript |  |
-| `typings/typingsLookup2.ts` | multi-file or JavaScript |  |
-| `typings/typingsLookup3.ts` | multi-file or JavaScript |  |
-| `typings/typingsLookup4.ts` | multi-file or JavaScript |  |
-| `typings/typingsLookupAmd.ts` | multi-file or JavaScript |  |
-| `typings/typingsSuggestion1.ts` | multi-file or JavaScript |  |
-| `typings/typingsSuggestion2.ts` | multi-file or JavaScript |  |
-| `typings/typingsSuggestionBun1.ts` | multi-file or JavaScript |  |
-| `typings/typingsSuggestionBun2.ts` | multi-file or JavaScript |  |
+| `typings/typingsLookup1.ts` | not supported | JSON modules |
+| `typings/typingsLookup2.ts` | not supported | JSON modules |
+| `typings/typingsLookup3.ts` | not supported | JSON modules |
+| `typings/typingsLookup4.ts` | not supported | JSON modules |
+| `typings/typingsLookupAmd.ts` | not supported | `node_modules` packages |
+| `typings/typingsSuggestion1.ts` | not supported | JSON modules |
+| `typings/typingsSuggestion2.ts` | not supported | JSON modules |
+| `typings/typingsSuggestionBun1.ts` | not supported | JSON modules |
+| `typings/typingsSuggestionBun2.ts` | not supported | JSON modules |
