@@ -147,7 +147,7 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .kind
         else {
-            return self.check_tested_function(condition, condition, body);
+            return self.check_tested_operand(condition, condition, body);
         };
         let location = self.skip_parens(rhs)?;
         if matches!(
@@ -162,7 +162,7 @@ impl Inferer<'_> {
         ) {
             return self.check_tested_condition(location, body);
         }
-        self.check_tested_function(location, condition, body)
+        self.check_tested_operand(location, condition, body)
     }
 
     /// Notes, for the `if` about to check `condition`, the `&&` operators its
@@ -192,25 +192,31 @@ impl Inferer<'_> {
         Ok(())
     }
 
-    /// After inferring `expr`: records a read the condition checks look at, and
-    /// checks the left operand of an `&&`.
-    pub(super) fn note_read_or_check_and(
+    /// After inferring `expr`: records a read of a function or enum member,
+    /// which the condition checks look at.
+    pub(super) fn note_tested_read_after_inference(
         &mut self,
         expr: ExprId,
         ty: &Type,
     ) -> Result<(), CompilerFailure> {
-        match self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
-            ExprKind::Identifier(_)
-            | ExprKind::FieldAccess { .. }
-            | ExprKind::OptionalChain { .. } => {
-                self.note_tested_read(expr, ty);
-            }
-            ExprKind::Binary {
-                op: BinOp::And,
-                lhs,
-                ..
-            } => self.check_tested_function_in_and(expr, lhs)?,
-            _ => {}
+        if matches!(
+            self.ast.try_expr(expr).map_err(super::arena_failure)?.kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. } | ExprKind::OptionalChain { .. }
+        ) {
+            self.note_tested_read(expr, ty);
+        }
+        Ok(())
+    }
+
+    /// After inferring `expr`: when it is an `&&`, checks its left operand.
+    pub(super) fn check_and_left_operand(&mut self, expr: ExprId) -> Result<(), CompilerFailure> {
+        if let ExprKind::Binary {
+            op: BinOp::And,
+            lhs,
+            ..
+        } = self.ast.try_expr(expr).map_err(super::arena_failure)?.kind
+        {
+            self.check_tested_function_in_and(expr, lhs)?;
         }
         Ok(())
     }
@@ -245,7 +251,7 @@ impl Inferer<'_> {
     /// Reports `tested` when it is an enum member (always the same
     /// truthiness), or a function that is always defined and that neither
     /// `body` nor the rest of the `&&` chain around `condition` uses.
-    fn check_tested_function(
+    fn check_tested_operand(
         &mut self,
         tested: ExprId,
         condition: ExprId,
@@ -266,25 +272,39 @@ impl Inferer<'_> {
         let Some((root, fields)) = self.read_path(tested)? else {
             return Ok(());
         };
-        let mut used = match body {
-            Some(body) => self.path_read_within(body, &root, &fields)?,
-            None => false,
-        };
-        for operand in self.and_chain_right_operands(condition)? {
-            if used {
-                break;
-            }
-            used = self.names_read_within(operand, &root, &fields)?;
+        if self.tested_function_is_used(condition, body, &root, &fields)? {
+            return Ok(());
         }
-        if !used {
-            self.error_with_help(
-                span,
-                "this condition will always return true since this function is always defined"
-                    .to_string(),
-                vec!["did you mean to call it instead?".to_string()],
-            );
-        }
+        self.error_with_help(
+            span,
+            "this condition will always return true since this function is always defined"
+                .to_string(),
+            vec!["did you mean to call it instead?".to_string()],
+        );
         Ok(())
+    }
+
+    /// Whether the tested function `root` and `fields` name is used where tsc
+    /// looks: in `body`, or in the right operands of the `&&` chain around
+    /// `condition`.
+    fn tested_function_is_used(
+        &self,
+        condition: ExprId,
+        body: Option<Span>,
+        root: &PathRoot,
+        fields: &[String],
+    ) -> Result<bool, CompilerFailure> {
+        if let Some(body) = body
+            && self.path_read_within(body, root, fields)?
+        {
+            return Ok(true);
+        }
+        for operand in self.and_chain_right_operands(condition)? {
+            if self.names_read_within(operand, root, fields)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// The right operands of the `&&` chain `condition` sits in, as tsc's
@@ -292,29 +312,26 @@ impl Inferer<'_> {
     /// `&&` whose operand `condition` is, and up through each `&&` that
     /// directly holds the previous one.
     fn and_chain_right_operands(&self, condition: ExprId) -> Result<Vec<Span>, CompilerFailure> {
-        let mut operands = Vec::new();
-        let mut child = condition;
-        while let Some((and, rhs)) = self.enclosing_and(child)? {
-            operands.push(self.ast.try_expr(rhs).map_err(super::arena_failure)?.span);
-            child = and;
-        }
-        Ok(operands)
-    }
-
-    /// The `&&` with `child` as an operand, and its right operand.
-    fn enclosing_and(&self, child: ExprId) -> Result<Option<(ExprId, ExprId)>, CompilerFailure> {
+        // Each `&&` by its operands, collected in one pass over the arena.
+        let mut enclosing_and = std::collections::BTreeMap::new();
         for id in self.ast.expr_ids().map_err(super::arena_failure)? {
             if let ExprKind::Binary {
                 op: BinOp::And,
                 lhs,
                 rhs,
             } = self.ast.try_expr(id).map_err(super::arena_failure)?.kind
-                && (lhs == child || rhs == child)
             {
-                return Ok(Some((id, rhs)));
+                enclosing_and.insert(lhs, (id, rhs));
+                enclosing_and.insert(rhs, (id, rhs));
             }
         }
-        Ok(None)
+        let mut operands = Vec::new();
+        let mut child = condition;
+        while let Some(&(and, rhs)) = enclosing_and.get(&child) {
+            operands.push(self.ast.try_expr(rhs).map_err(super::arena_failure)?.span);
+            child = and;
+        }
+        Ok(operands)
     }
 
     /// A member of a numeric or string enum read as `E.A`, tested for
@@ -521,9 +538,10 @@ impl Inferer<'_> {
                 ExprKind::Ternary { then_, else_, .. } => {
                     self.syntactic_nullishness(*then_)? | self.syntactic_nullishness(*else_)?
                 }
-                // tsc counts `void x` as never nullish, though it is
-                // `undefined`; it is one of the operators it lists none for.
                 ExprKind::Null => ALWAYS,
+                // tsc counts `void x` as never nullish, though it is
+                // `undefined`: it lists no case for it.
+                ExprKind::Void { .. } => NEVER,
                 ExprKind::Identifier(ident) if self.reads_global_undefined(expr, &ident.name) => {
                     ALWAYS
                 }

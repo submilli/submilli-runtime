@@ -39,6 +39,20 @@ function andPresent<T>(value: T): string {
   return "absent";
 }
 
+function lastPresent<T>(items: T[]): T | null {
+  let best = items[0] || null;
+  for (const item of items) {
+    if (item) {
+      best = item;
+    }
+  }
+  return best;
+}
+
+function orMaybe<T>(value: T): {} | null | undefined {
+  return value;
+}
+
 function main(): void {
   assert(orElse<number>(null, 3) === 3, "`null` falls back");
   assert(orElse(0, 3) === 0, "a falsy value that is present is kept");
@@ -48,4 +62,7 @@ function main(): void {
   assert(isPresent(0) && !isPresent(null) && !isPresent(undefined), "`T & {}` holds only present values");
   assert(passOn(2) === 2 && passOn(0) === 0 && passOn(null) === null, "a narrowed `T` passes on as a `T`");
   assert(andPresent(0) === "0" && andPresent(1) === "and", "`&&` keeps a falsy present `T`");
+  assert(passOn<number | undefined>(undefined) === undefined, "an absent `T` passes on");
+  assert(lastPresent([1, 0, 2, 0]) === 2, "a narrowed `T` fits a `T | null` variable");
+  assert(orMaybe(0) === 0, "a `T` fits `{} | null | undefined`");
 }

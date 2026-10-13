@@ -53,15 +53,29 @@ function main(): void {
 
   const maybe: {} | null | undefined = 0;
   assert((maybe || "fallback") === "fallback", "`{} | null | undefined` can be tested");
+  assert(testedAfterJoin(0) === "falsy" && testedAfterJoin(null) === "null", "a join keeps `{} | null | undefined`");
+  const parsed: unknown = JSON.parse("0");
+  const anyValue: {} | null | undefined = parsed;
+  assert(anyValue === 0, "`unknown` fits `{} | null | undefined`");
+  assert(castThrows("{\"a\":null}", false, true), "a cast to `{ a: {} }` rejects a `null` field");
 
   let changing: {} = 1;
   changing = "x";
   assert(changing === "x", "a `{}` variable takes values of any type");
 }
 
-function castThrows(json: string, asArray: boolean = false): boolean {
+function testedAfterJoin(value: {} | null | undefined): string {
+  if (value === null) {
+    return "null";
+  }
+  return value ? "truthy" : "falsy";
+}
+
+function castThrows(json: string, asArray: boolean = false, asField: boolean = false): boolean {
   try {
-    if (asArray) {
+    if (asField) {
+      JSON.parse(json) as { a: {} };
+    } else if (asArray) {
       JSON.parse(json) as {}[];
     } else {
       JSON.parse(json) as {};

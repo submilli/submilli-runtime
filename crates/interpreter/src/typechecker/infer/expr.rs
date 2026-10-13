@@ -832,7 +832,8 @@ impl Inferer<'_> {
             );
         }
         self.check_expression_arity(&kind, &ty, span);
-        self.note_read_or_check_and(expr_id, &ty)?;
+        self.note_tested_read_after_inference(expr_id, &ty)?;
+        self.check_and_left_operand(expr_id)?;
         let id = self
             .typed_ast
             .try_push_expr(TypedExpr {

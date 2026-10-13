@@ -3182,6 +3182,10 @@ impl Inferer<'_> {
                 .map_err(super::arena_failure)?
                 .span;
             let narrowed_ty = narrowing::join_flow_types(&view.narrowed_ty, &post.narrowed_ty);
+            // Holding every value, the join narrows nothing.
+            if narrowed_ty.holds_every_value() {
+                continue;
+            }
             entry_env.insert(
                 path,
                 narrowing::NarrowedView {

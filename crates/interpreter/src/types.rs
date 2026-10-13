@@ -673,6 +673,19 @@ impl Type {
         }
     }
 
+    /// Whether this holds every value: `unknown`, or a union of `{}`, `null`
+    /// and `undefined` (and possibly more).
+    pub fn holds_every_value(&self) -> bool {
+        let members: &[Type] = match self.peel() {
+            Type::Unknown => return true,
+            Type::Union(members) => members,
+            _ => return false,
+        };
+        members.iter().any(Type::is_empty_object)
+            && members.iter().any(|m| matches!(m.peel(), Type::Null))
+            && members.iter().any(|m| matches!(m.peel(), Type::Undefined))
+    }
+
     /// Whether this is a narrowed type parameter, like `T & {}`.
     pub fn refines_type_parameter(&self) -> bool {
         matches!(self.without_aliases(), Type::Refined { original, .. }
@@ -1269,21 +1282,21 @@ fn canonical_bigint_digits(digits: &str) -> String {
 
 /// Drops the members a `{}` among `members` already holds: every one that
 /// cannot be `null` or `undefined` and is no bare type parameter. TypeScript
-/// reduces them so where it widens a literal, joins flow types, and types
-/// `a ?? b`.
+/// reduces a union this way when it widens a literal, joins flow types and
+/// types `a ?? b`.
 pub fn without_members_of_empty_object(members: Vec<Type>) -> Vec<Type> {
     if !members.iter().any(Type::is_empty_object) {
         return members;
     }
     members
         .into_iter()
-        .filter(|member| member.is_empty_object() || outside_empty_object(member))
+        .filter(|member| member.is_empty_object() || may_hold_values_outside_empty_object(member))
         .collect()
 }
 
-/// Whether some value of `ty` is no `{}`: it may be `null` or `undefined`
-/// (`T & ({} | undefined)` included), or it is a type parameter.
-fn outside_empty_object(ty: &Type) -> bool {
+/// Whether `ty` may hold a value `{}` does not: `null` or `undefined` (as
+/// `T & ({} | undefined)` may), or any value of a type parameter.
+fn may_hold_values_outside_empty_object(ty: &Type) -> bool {
     match ty.peel() {
         Type::Null
         | Type::Undefined
@@ -1291,7 +1304,7 @@ fn outside_empty_object(ty: &Type) -> bool {
         | Type::Unknown
         | Type::GenericParam { .. }
         | Type::TypeVar(_) => true,
-        Type::Union(members) => members.iter().any(outside_empty_object),
+        Type::Union(members) => members.iter().any(may_hold_values_outside_empty_object),
         _ => false,
     }
 }

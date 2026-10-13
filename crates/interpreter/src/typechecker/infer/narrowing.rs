@@ -1461,17 +1461,10 @@ fn unknown_as_union() -> Type {
     Type::Union(vec![Type::empty_object(), Type::Null, Type::Undefined])
 }
 
-/// `ty`, or `unknown` when it holds all of `{} | null | undefined`: what is
-/// left of `unknown` when a narrowing rules nothing out, or what a flow join
-/// of its narrowed parts gives back, as TypeScript's `recombineUnknownType`.
-/// A declared `{} | null | undefined` stays as written.
+/// What is left of `unknown` after a narrowing: `unknown` again when the
+/// narrowing ruled nothing out, as TypeScript's `recombineUnknownType` does.
 fn recombine_unknown(ty: Type) -> Type {
-    let members = union_members(&ty);
-    let holds = |test: fn(&Type) -> bool| members.iter().copied().any(test);
-    if holds(Type::is_empty_object)
-        && holds(|m| matches!(m.peel(), Type::Null))
-        && holds(|m| matches!(m.peel(), Type::Undefined))
-    {
+    if ty.holds_every_value() {
         return Type::Unknown;
     }
     ty
@@ -1531,6 +1524,11 @@ pub fn union_envs(
     for (path, a_view) in &a_narrowings {
         if let Some(b_view) = b_narrowings.get(path) {
             let joined_ty = join_flow_types(&a_view.narrowed_ty, &b_view.narrowed_ty);
+            // A join that holds every value narrows nothing: reads see the
+            // declared type again, `unknown` or a written `{} | null | undefined`.
+            if joined_ty.holds_every_value() {
+                continue;
+            }
             // A ruled-out view has no shadow, so the join reads through the other.
             let a_view = if is_ruled_out(&a_view.narrowed_ty) {
                 b_view
@@ -1632,7 +1630,7 @@ pub(super) fn join_flow_types(left: &Type, right: &Type) -> Type {
         Type::StringLiteral(_) => !has_string,
         _ => true,
     });
-    recombine_unknown(Type::union(members))
+    Type::union(members)
 }
 
 /// Recurses into `Type::Union` members only — composite slots have fixed runtime

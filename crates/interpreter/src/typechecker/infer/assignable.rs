@@ -698,6 +698,23 @@ fn assignable_rec(
     if !types.limits.spend_work(1) {
         return false;
     }
+    // `unknown` and a type parameter fit a union that holds every value, as
+    // in TypeScript.
+    if matches!(actual.peel(), Type::Unknown | Type::GenericParam { .. })
+        && expected.holds_every_value()
+    {
+        return true;
+    }
+    // A refinement fits a union that lists it: neither its original nor its
+    // shape alone may (`T & {}` into `(T & {}) | undefined`).
+    if let Type::Refined { .. } = actual.without_aliases()
+        && let Type::Union(members) = expected.peel()
+        && members
+            .iter()
+            .any(|member| member.without_aliases() == actual.without_aliases())
+    {
+        return true;
+    }
     if let Type::Refined { original, ty } = expected.without_aliases() {
         return assignable_rec(actual, original, types, seen)
             && assignable_rec(actual, ty, types, seen);
@@ -715,9 +732,6 @@ fn assignable_rec(
         .iter()
         .any(|(a, e)| same_alias_instance(actual, a) && same_alias_instance(expected, e))
     {
-        return true;
-    }
-    if matches!(actual.peel(), Type::Unknown) && holds_every_value(expected) {
         return true;
     }
     // Distribute unions, including named unions, before expanding back-edges.
@@ -1517,17 +1531,6 @@ pub(super) fn literal_to_type(lit: &narrowing::LiteralValue) -> Type {
         narrowing::LiteralValue::Null => Type::Null,
         narrowing::LiteralValue::Undefined => Type::Undefined,
     }
-}
-
-/// Whether `ty` is a union holding `{}`, `null` and `undefined`, and so every
-/// value: TypeScript lets `unknown` into it.
-fn holds_every_value(ty: &Type) -> bool {
-    let Type::Union(members) = ty.peel() else {
-        return false;
-    };
-    members.iter().any(Type::is_empty_object)
-        && members.iter().any(|m| matches!(m.peel(), Type::Null))
-        && members.iter().any(|m| matches!(m.peel(), Type::Undefined))
 }
 
 #[cfg(test)]
