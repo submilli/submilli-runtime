@@ -30,12 +30,13 @@ by [AGENTS.md](../AGENTS.md#no-panic-execution-paths).
 
 ## Active work
 
-Entries marked **fixed on main** were merged in PR #151, PR #152, PR #163 or PR #169. Entries marked **fixed
-on branch** have completed focused verification and review; other N entries
-remain open unless explicitly accepted as an operational limitation. N16 remains
-open in this pinned inventory; twelve entries are fixed on main, N13/N17 are
-fixed on this branch, and
-N09/N10 are accepted operational limitations. Evidence means:
+Entries marked **fixed on main** were merged in PR #151, PR #152, PR #163,
+PR #169, PR #172, PR #189 or PR #206. Entries marked **fixed on branch** have
+completed focused verification and review; other N entries remain open unless
+explicitly accepted as an operational limitation. Fifteen entries, N13, N16 and
+N17 among them, are fixed on main; the `submilli-wasm` 0.1.12 adoption that
+resolves N16's engine residual is on branch. N09/N10 are accepted operational
+limitations. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
   The entry says whether this was a public API, source input, or only a dependency
@@ -59,11 +60,11 @@ N09/N10 are accepted operational limitations. Evidence means:
 | N10 | **Accepted operational limitation:** UUID entropy failure panic | Pinned dependency inspection; explicit maintainer decision, 2026-10-08 |
 | N11 | **Fixed on main:** bound lexer diagnostic collection before rendering | 100,000-byte regression passes |
 | N12 | **Fixed on main:** traverse validation children lazily with fallible ancestor frames | Wide-input and allocation-failure regressions |
-| N13 | **Adopted locally:** bound expanded Wasm locals across a module | Engine PR #8 merged; released 0.1.11 selected in manifest and lockfile |
+| N13 | **Fixed on main:** bound expanded Wasm locals across a module | Engine PR #8 merged; first released in 0.1.11, still in the selected 0.1.12 |
 | N14 | **Fixed on main:** bound aggregate MCP discovery pages/tools/schemas | Paginated localhost and aggregate-limit regressions pass |
 | N15 | **Fixed on main:** bound artifact reads and retained package data before loading | File and wide-closure regressions pass |
-| N16 | Admit native string-builder output before allocation | Inspection; host allocation before store limit |
-| N17 | **Fixed on branch:** validate reaper configuration and check timer deadlines | Invalid setup/recovery, timer contract and sweep regressions |
+| N16 | **Fixed on main:** build string results in place under the GC limiter | Memory-cap, host-allocation and fixture regressions; engine 0.1.12 adopted on this branch |
+| N17 | **Fixed on main:** validate reaper configuration and check timer deadlines | Invalid setup/recovery, timer contract and sweep regressions |
 
 | ID | Investigation | Exit condition |
 | --- | --- | --- |
@@ -477,17 +478,18 @@ released version here. Test repeated compressed local groups under a deliberatel
 small compile budget and successful ordinary module loading.
 
 **Progress:** engine [PR #8](https://github.com/submilli/submilli-wasm/pull/8)
-merged as `ccd2b116` and shipped in `submilli-wasm` 0.1.11. This workspace now
-selects 0.1.11 in both its manifest and lockfile. The released implementation
-checks the aggregate count before expansion, uses checked arithmetic and fallible
-reservation, and limits indexes to `u32`. The runtime accepts the engine default
-of 8,388,608 expanded locals per module; no runtime override is introduced.
-The engine PR reports aggregate rejection, exact-limit acceptance, per-module
-override, ordinary loading and default-limit regressions. Runtime adoption
-verification passed 35 focused cross-module GC and memory-cap integration tests,
-workspace Clippy with warnings denied, and workspace formatting. HTTP and
-nightly-only coverage were excluded. The adoption is implemented on this branch;
-these results are separate from the upstream engine test results.
+merged as `ccd2b116` and shipped in `submilli-wasm` 0.1.11. This workspace
+selected 0.1.11 in its manifest and lockfile, and now selects 0.1.12, which
+keeps the change. The released implementation checks the aggregate count before
+expansion, uses checked arithmetic and fallible reservation, and limits indexes
+to `u32`. The runtime accepts the engine default of 8,388,608 expanded locals
+per module; no runtime override is introduced. The engine PR reports aggregate
+rejection, exact-limit acceptance, per-module override, ordinary loading and
+default-limit regressions. Runtime adoption verification passed 35 focused
+cross-module GC and memory-cap integration tests, workspace Clippy with warnings
+denied, and workspace formatting. HTTP and nightly-only coverage were excluded.
+The adoption merged through PR #189; these results are separate from the
+upstream engine test results.
 
 ### N14 — MCP discovery limits each response but retains unbounded pages
 
@@ -617,6 +619,15 @@ native reservation through their GC write, now read the receiver in place too
 its extra units against the cap as a growing native buffer, refunded on every
 exit path when the buffer drops. The poisoned-lock exception above carries
 over to the replacement measurement, `string_builders_allocate_only_their_result`.
+
+**Completed (2026-10-13):** `submilli-wasm` 0.1.12 (engine PR #9) builds every
+host-API (`ArrayRef`) array body with fallible allocation: `ArrayRef::new`,
+zeroed or pattern-filled, `new_fixed`, and the packed `i8` and `i16` slice
+constructors (`i64` and `new_zeroed_i8` already were). This branch selects
+0.1.12 in the manifest and lockfile, which resolves the residual dependency
+limitation above. Guest array instructions and constant expressions still build
+their admitted bodies with infallible allocation; that engine gap is outside N16
+and tracked as N19 in the Linear SUB-633 inventory.
 
 ### N17 — Public reaper timer configuration
 
