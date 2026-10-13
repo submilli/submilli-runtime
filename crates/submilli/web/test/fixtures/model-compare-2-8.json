@@ -1,0 +1,52 @@
+{
+ "kind": "compare",
+ "before": {
+  "run": 2,
+  "page": "http://127.0.0.1:47100/#run=2",
+  "blueprint_version": "1",
+  "source": "chat",
+  "decision_refs": [
+   "2.1"
+  ]
+ },
+ "after": {
+  "run": 8,
+  "page": "http://127.0.0.1:47100/#run=8",
+  "blueprint_version": "2",
+  "source": "test",
+  "decision_refs": [
+   "8.1"
+  ]
+ },
+ "changes": [
+  {
+   "kind": "newly-allowed",
+   "before": "2.1",
+   "after": "8.1",
+   "caller": "main",
+   "capability": "acme.com/charges.list",
+   "decided_by": "by `globex-support`",
+   "rule": {
+    "caller": "main",
+    "index": 2,
+    "position": 3,
+    "name": "globex-support",
+    "line": 35,
+    "column": 3,
+    "end_line": 38
+   }
+  }
+ ],
+ "unmatched": [],
+ "alignment": "the nth decision of each caller and capability in one run with the nth of the same caller and capability in the other",
+ "next": [
+  "submilli playground explain 8.1"
+ ],
+ "untrusted": {
+  "contexts": {
+   "8.1": {
+    "customerId": "cus_globex"
+   }
+  }
+ }
+}

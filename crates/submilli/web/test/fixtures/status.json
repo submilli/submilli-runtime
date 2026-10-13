@@ -37,5 +37,11 @@
    "customerId": "cus_northwind"
   },
   "secrets": []
- }
+ },
+ "declared_variables": [
+  {
+   "name": "customerId",
+   "required": true
+  }
+ ]
 }

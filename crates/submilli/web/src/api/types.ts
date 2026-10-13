@@ -16,7 +16,7 @@ export interface Status {
   blueprint_status: { version: number | null; refused: BlueprintRefusal | null };
   binding: { variables: Record<string, string>; secrets: string[] };
   /** The variables the blueprint in force declares. */
-  declared_variables?: DeclaredVariable[];
+  declared_variables: DeclaredVariable[];
 }
 
 export interface DeclaredVariable {
@@ -158,7 +158,8 @@ export interface RuleRef {
   caller: string;
   index: number;
   position: number;
-  name: string;
+  /** `null` for a rule written without a name. */
+  name: string | null;
   line: number;
   column: number;
   end_line: number;
@@ -235,12 +236,21 @@ export interface AgentResult {
 export interface StoredEvent {
   session_seq: number;
   event_id: string;
+  /** Where the server placed the event: the order to read a session in. */
+  position: EventPosition;
   /** The playground's run number, for an event of a run. */
   run?: number;
   backfilled?: boolean;
   /** For a decision, its number in its run: the `n` in `<run>.<n>`. */
   decision?: number;
   body: EventBody;
+}
+
+export interface EventPosition {
+  at_micros: number;
+  run?: number;
+  call_index?: number;
+  rank: number;
 }
 
 export type EventBody =
