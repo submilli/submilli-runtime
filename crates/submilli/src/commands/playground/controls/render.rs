@@ -923,6 +923,9 @@ pub(crate) fn sessions_text(result: &SessionsResult) -> String {
         if let Some(model) = &session.model {
             let _ = write!(line, "  model {}", clean(model));
         }
+        if let Some(settings) = &session.settings {
+            let _ = write!(line, " ({})", settings_text(settings));
+        }
         if session.denied {
             line.push_str("  DENIED");
         }
@@ -975,6 +978,9 @@ pub(crate) struct ChatResult {
     pub(crate) session: Option<String>,
     /// Whether this message carried on a session an earlier one started.
     pub(crate) continued: bool,
+    /// The session's settings, when it has any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) settings: Option<Value>,
     pub(crate) provider: &'static str,
     pub(crate) model: String,
     pub(crate) tool_calls: usize,
@@ -1001,6 +1007,9 @@ pub(crate) fn chat_text(result: &ChatResult) -> String {
         result.tool_calls,
         if result.tool_calls == 1 { "" } else { "s" }
     );
+    if let Some(settings) = &result.settings {
+        let _ = write!(out, " · {}", settings_text(settings));
+    }
     if let Some(session) = &result.session {
         let _ = write!(
             out,
@@ -1050,6 +1059,23 @@ pub(crate) fn chat_text(result: &ChatResult) -> String {
     }
     next_lines(&mut out, &result.next);
     out
+}
+
+/// A chat session's settings in a few words: `effort high, max output 8000, provider
+/// settings temperature`.
+fn settings_text(settings: &Value) -> String {
+    let mut parts = Vec::new();
+    if let Some(effort) = settings["effort"].as_str() {
+        parts.push(format!("effort {}", clean(effort)));
+    }
+    if let Some(max) = settings["max_output"].as_u64() {
+        parts.push(format!("max output {max}"));
+    }
+    if let Some(fields) = settings["provider"].as_object() {
+        let names: Vec<String> = fields.keys().map(|name| clean(name)).collect();
+        parts.push(format!("provider settings {}", names.join(" ")));
+    }
+    parts.join(", ")
 }
 
 pub(crate) fn session_text(result: &SessionResult) -> String {

@@ -253,6 +253,17 @@ pub struct ChatArgs {
     /// carried on keeps its own.
     #[arg(long, value_name = "PROVIDER:MODEL", conflicts_with = "session")]
     model: Option<String>,
+    /// How hard a new session's model reasons. OpenAI models only, for now.
+    #[arg(long, value_name = "LEVEL", value_parser = ["low", "medium", "high"], conflicts_with = "session")]
+    effort: Option<String>,
+    /// The most tokens one answer of a new session's model may take. Default: 4096.
+    #[arg(long, value_name = "TOKENS", value_parser = clap::value_parser!(u64).range(1..=1_000_000), conflicts_with = "session")]
+    max_output: Option<u64>,
+    /// Fields a new session adds to every request to its provider, as a JSON object in
+    /// the provider's own API terms, such as `{"temperature": 0.2}`. Fields the
+    /// playground sets itself (the model, messages, tools, instructions) are refused.
+    #[arg(long, value_name = "JSON", value_parser = parse_provider_settings, conflicts_with = "session")]
+    provider_settings: Option<serde_json::Map<String, serde_json::Value>>,
     /// The most tool calls run for one answer of the model; the rest are refused to it.
     #[arg(
         long,
@@ -267,6 +278,17 @@ pub struct ChatArgs {
     /// Print JSON.
     #[arg(long)]
     json: bool,
+}
+
+/// `--provider-settings`: a JSON object.
+fn parse_provider_settings(
+    text: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    match serde_json::from_str(text) {
+        Ok(serde_json::Value::Object(fields)) => Ok(fields),
+        Ok(_) => Err("give a JSON object, such as {\"temperature\": 0.2}".to_owned()),
+        Err(error) => Err(format!("not JSON: {error}")),
+    }
 }
 
 #[derive(ClapArgs)]
@@ -619,6 +641,9 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
                 task: args.task,
                 session: args.session,
                 model: args.model,
+                effort: args.effort,
+                max_output: args.max_output,
+                provider_settings: args.provider_settings,
                 max_calls_per_answer: Some(args.max_calls_per_answer),
             }),
             args.json,

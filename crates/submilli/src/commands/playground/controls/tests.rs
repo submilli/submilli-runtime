@@ -684,6 +684,7 @@ fn sessions_list_newest_first_with_variables_run_counts_and_the_denial() {
             label: "assistant".into(),
             idle_timeout_ms: None,
             model: None,
+            settings: None,
         })
         .unwrap();
     let (reader, _dir) = fixture.reader();
@@ -1290,6 +1291,7 @@ fn a_started_session_idle_past_its_own_timeout_lists_as_expired() {
                 label: "assistant".into(),
                 idle_timeout_ms,
                 model: None,
+                settings: None,
             })
             .unwrap();
     }
@@ -1345,6 +1347,7 @@ fn sessions_list_with_a_change_log_that_cannot_be_read() {
             label: "assistant".into(),
             idle_timeout_ms: Some(60_000),
             model: None,
+            settings: None,
         })
         .unwrap();
     let mut log = std::fs::OpenOptions::new()

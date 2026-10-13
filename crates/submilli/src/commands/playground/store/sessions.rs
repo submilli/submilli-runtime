@@ -41,6 +41,10 @@ pub(crate) enum SessionEntry {
         /// `<provider>:<model>`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
+        /// For a session own-key chat started with settings of its own, those settings:
+        /// `effort`, `max_output`, and `provider` fields, fixed for its life.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        settings: Option<serde_json::Value>,
     },
     /// The session was closed.
     Ended { session_id: String },
@@ -95,6 +99,7 @@ mod tests {
                 label: "assistant".into(),
                 idle_timeout_ms: None,
                 model: None,
+                settings: None,
             })
             .unwrap();
         // A write cut short by a crash.

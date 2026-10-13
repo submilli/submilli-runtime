@@ -828,13 +828,28 @@ impl Actions {
         }
         let max_calls_per_answer = agent::max_calls_per_answer(request.max_calls_per_answer)
             .map_err(|message| ActError::usage("invalid-max-calls", message))?;
-        let (choice, resume, answering) = if let Some(session) = &request.session {
+        let asked = agent::Settings {
+            effort: request.effort.clone(),
+            max_output: request.max_output,
+            provider: request.provider_settings.clone().unwrap_or_default(),
+        };
+        let (choice, settings, resume, answering) = if let Some(session) = &request.session {
+            if !asked.is_default() {
+                return Err(ActError::usage(
+                    "settings-fixed",
+                    format!(
+                        "session {} keeps the settings it started with; start a new chat to \
+                         change them",
+                        clean(session)
+                    ),
+                ));
+            }
             // Claimed before the conversation is read, so it is read whole.
             let answering = Answering::claim(&self.chatting, session)?;
-            let (choice, resume) = self
+            let (choice, settings, resume) = self
                 .chat_to_continue(session, request.model.as_deref())
                 .await?;
-            (choice, Some(resume), Some(answering))
+            (choice, settings, Some(resume), Some(answering))
         } else {
             let choice = match &request.model {
                 Some(named) => agent::configured_named(named, "--model")
@@ -842,8 +857,12 @@ impl Actions {
                 None => agent::configured()
                     .map_err(|message| ActError::new(EXIT_FAILURE, "no-provider", message))?,
             };
-            (choice, None, None)
+            agent::check_settings(&choice, &asked)
+                .map_err(|message| ActError::usage("invalid-settings", message))?;
+            (choice, asked, None, None)
         };
+        let settings_shown =
+            (!settings.is_default()).then(|| serde_json::to_value(&settings).unwrap_or_default());
         let continued = resume.is_some();
         // A session carried on keeps the variables and secrets it started with; a new one
         // takes the binding's.
@@ -875,6 +894,7 @@ impl Actions {
                         blueprint,
                         variables.clone(),
                         &model,
+                        &settings,
                     ));
                 }
             };
@@ -891,6 +911,7 @@ impl Actions {
                 cancelled: &cancelled,
                 resume,
                 started: &started,
+                settings: &settings,
             };
             let ran = agent::run(&setup, &request.task);
             if cancelled.load(Ordering::Relaxed) && ran.is_err() {
@@ -912,6 +933,7 @@ impl Actions {
         let result = render::ChatResult {
             session: outcome.session.clone(),
             continued,
+            settings: settings_shown,
             provider: outcome.provider,
             model: outcome.model,
             tool_calls: outcome.tool_calls,
@@ -931,23 +953,29 @@ impl Actions {
         &self,
         session: &str,
         model: Option<&str>,
-    ) -> Result<(agent::Choice, agent::Resume), ActError> {
+    ) -> Result<(agent::Choice, agent::Settings, agent::Resume), ActError> {
         let store = Arc::clone(&self.store);
         let id = session.to_owned();
-        let (fixed_model, ended, log) = tokio::task::spawn_blocking(move || {
+        let (fixed_model, fixed_settings, ended, log) = tokio::task::spawn_blocking(move || {
             let mut fixed_model = None;
+            let mut fixed_settings = None;
             let mut ended = false;
             for line in store.session_log()? {
                 if line.entry.session_id() != id {
                     continue;
                 }
                 match line.entry {
-                    SessionEntry::Started { model, .. } => fixed_model = model,
+                    SessionEntry::Started {
+                        model, settings, ..
+                    } => {
+                        fixed_model = model;
+                        fixed_settings = settings;
+                    }
                     SessionEntry::Ended { .. } => ended = true,
                 }
             }
             let log = store.read_events(Some(&id))?;
-            Ok::<_, StoreError>((fixed_model, ended, log))
+            Ok::<_, StoreError>((fixed_model, fixed_settings, ended, log))
         })
         .await
         .map_err(|error| ActError::failure(format!("reading the session failed: {error}")))?
@@ -999,6 +1027,12 @@ impl Actions {
         }
         let choice = agent::configured_named(&fixed_model, &format!("session {shown}'s model"))
             .map_err(|message| ActError::new(EXIT_FAILURE, "no-provider", message))?;
+        let settings: agent::Settings = match fixed_settings {
+            Some(value) => serde_json::from_value(value).map_err(|error| {
+                ActError::failure(format!("session {shown}'s settings do not read: {error}"))
+            })?,
+            None => agent::Settings::default(),
+        };
         // Only what the developer and the model said: chat from anything else posting to
         // the session is not handed to the model as the developer's words.
         let said: Vec<(ChatRole, &str)> = log
@@ -1021,7 +1055,7 @@ impl Actions {
             history: agent::history(said),
             said: numbered.len(),
         };
-        Ok((choice, resume))
+        Ok((choice, settings, resume))
     }
 
     /// Lists chat session `session` with its model. Only noted when that fails: the chat
@@ -1033,6 +1067,7 @@ impl Actions {
         blueprint: &Blueprint,
         variables: BTreeMap<String, String>,
         model: &str,
+        settings: &agent::Settings,
     ) {
         let variables = match session_variables(&self.app, session).await {
             Ok(Some(fixed)) => fixed,
@@ -1046,6 +1081,8 @@ impl Actions {
             // under, which is this one.
             idle_timeout_ms: u64::try_from(blueprint.idle_timeout.as_millis()).ok(),
             model: Some(model.to_owned()),
+            settings: (!settings.is_default())
+                .then(|| serde_json::to_value(settings).unwrap_or_default()),
         });
         if let Err(error) = logged {
             super::super::log::note(&format!(
@@ -1090,6 +1127,7 @@ impl Actions {
                     // starts under, which is this one.
                     idle_timeout_ms: u64::try_from(blueprint.idle_timeout.as_millis()).ok(),
                     model: None,
+                    settings: None,
                 })
                 .map(|()| variables)
                 .map_err(|error| ActError::store(&error))
@@ -2294,6 +2332,15 @@ pub(crate) struct ChatRequest {
     /// absent. A session carried on keeps its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) model: Option<String>,
+    /// How hard a new session's model reasons: `low`, `medium`, or `high`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) effort: Option<String>,
+    /// The most tokens one answer of a new session's model may take.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_output: Option<u64>,
+    /// Fields a new session adds to every request to its provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provider_settings: Option<serde_json::Map<String, Value>>,
     /// The most tool calls run for one answer; the default when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) max_calls_per_answer: Option<u16>,

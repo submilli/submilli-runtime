@@ -1894,6 +1894,84 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         }
 
         #[test]
+        fn a_chat_sessions_settings_go_with_every_message_in_it() {
+            let (port, bodies) = model_api(|n| {
+                json!({ "content": [{ "type": "text", "text": format!("Answer {n}.") }],
+                        "stop_reason": "end_turn" })
+            });
+            let playground = Playground::starter();
+            let page = start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+
+            let first = playground.expect(
+                0,
+                &[
+                    "chat",
+                    "--max-output",
+                    "1234",
+                    "--provider-settings",
+                    r#"{"temperature": 0.2}"#,
+                    "Total the charges.",
+                ],
+            );
+            assert_eq!(
+                first["settings"],
+                json!({ "max_output": 1234, "provider": { "temperature": 0.2 } })
+            );
+            let session = first["session"].as_str().unwrap().to_owned();
+            playground.expect(0, &["chat", "--session", &session, "And last month?"]);
+            let sent = bodies.lock().unwrap().clone();
+            assert_eq!(sent.len(), 2);
+            for body in &sent {
+                assert_eq!(
+                    (body["max_tokens"].clone(), body["temperature"].clone()),
+                    (json!(1234), json!(0.2))
+                );
+            }
+            let sessions = playground.run(&["sessions"]);
+            let listed = String::from_utf8_lossy(&sessions.stdout);
+            assert!(
+                listed.contains("(max output 1234, provider settings temperature)"),
+                "{listed}"
+            );
+
+            // A session keeps its settings, and a setting the provider can't take is refused
+            // before any request.
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .build()
+                .into();
+            let answer = agent
+                .post(&format!("{page}/api/agent"))
+                .header(
+                    "authorization",
+                    &format!("Bearer {}", playground.token("admin")),
+                )
+                .send_json(json!({ "task": "x", "session": session, "max_output": 9 }))
+                .unwrap()
+                .body_mut()
+                .read_to_string()
+                .unwrap();
+            assert!(answer.contains("settings-fixed"), "{answer}");
+            let effort = playground.run(&["chat", "--effort", "high", "x"]);
+            assert_eq!(effort.status.code(), Some(2), "{}", stderr(&effort));
+            assert!(
+                stderr(&effort).contains("not available for anthropic"),
+                "{}",
+                stderr(&effort)
+            );
+            let messages =
+                playground.run(&["chat", "--provider-settings", r#"{"messages": []}"#, "x"]);
+            assert!(
+                stderr(&messages).contains("`messages`"),
+                "{}",
+                stderr(&messages)
+            );
+            assert_eq!(bodies.lock().unwrap().len(), 2);
+            playground.stop();
+        }
+
+        #[test]
         fn chat_stops_at_the_turn_limit_and_says_so_with_no_key() {
             let (port, bodies) = model_api(call_execute);
             let playground = Playground::starter();

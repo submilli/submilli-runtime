@@ -32,6 +32,8 @@ pub(crate) const MAX_TURNS: usize = 20;
 /// How long one model request may take.
 pub(crate) const PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_OUTPUT_TOKENS: u64 = 4096;
+/// The largest JSON of provider settings taken.
+const MAX_PROVIDER_SETTINGS_BYTES: usize = 16 * 1024;
 /// The MCP protocol version chat speaks.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The most of a tool's result handed back to the model.
@@ -256,6 +258,139 @@ impl Choice {
     }
 }
 
+/// How a session's model is asked, fixed for the session like its model.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Settings {
+    /// How hard the model reasons: `low`, `medium`, or `high`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) effort: Option<String>,
+    /// The most tokens one answer may take.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_output: Option<u64>,
+    /// Fields added to every request to the provider, as its API names them.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub(crate) provider: serde_json::Map<String, Value>,
+}
+
+impl Settings {
+    pub(crate) fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Checks `settings` for `choice`'s provider by building a request with them, so what
+/// is refused here is exactly what a request would refuse.
+pub(crate) fn check_settings(choice: &Choice, settings: &Settings) -> Result<(), String> {
+    if let Some(effort) = &settings.effort
+        && !matches!(effort.as_str(), "low" | "medium" | "high")
+    {
+        return Err(format!("effort is `{effort}`; use low, medium, or high"));
+    }
+    if settings.max_output == Some(0) {
+        return Err("the most output tokens is at least 1".to_owned());
+    }
+    let size = serde_json::to_string(&settings.provider).map_or(0, |json| json.len());
+    if size > MAX_PROVIDER_SETTINGS_BYTES {
+        return Err(format!(
+            "the provider settings are {size} bytes; the most taken is {MAX_PROVIDER_SETTINGS_BYTES}"
+        ));
+    }
+    request(choice, "", &[], &[], settings).map(|_| ())
+}
+
+/// The request for the conversation's next turn under `settings`: the effort's fields,
+/// then the provider settings, each refused where it would change a field the playground
+/// sets itself.
+fn request(
+    choice: &Choice,
+    key: &str,
+    turns: &[Turn],
+    tools: &[ToolSpec],
+    settings: &Settings,
+) -> Result<submilli_shared::llm::wire::WireRequest, String> {
+    let mut request = build_tool_request(&ToolRequest {
+        kind: choice.kind,
+        base_url: &choice.base_url,
+        model: &choice.model,
+        system: SYSTEM,
+        turns,
+        tools,
+        max_tokens: settings.max_output.unwrap_or(MAX_OUTPUT_TOKENS),
+        api_key: key,
+    });
+    if let Some(effort) = &settings.effort {
+        let fields = match choice.kind {
+            ProviderKind::OpenAi => json!({ "reasoning": { "effort": effort } }),
+            ProviderKind::Anthropic => {
+                return Err(format!(
+                    "effort is not available for {} yet: Claude's thinking has to be handed \
+                     back with each tool result, which chat does not do yet",
+                    choice.provider
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "effort is not available for {} yet: its thinking setting differs by \
+                     model; set it with the provider settings",
+                    choice.provider
+                ));
+            }
+        };
+        merge(&mut request.body, &fields, "").map_err(|path| {
+            format!("effort would change `{path}`, which the playground sets itself")
+        })?;
+    }
+    if settings.provider.contains_key("stream") {
+        return Err(
+            "the provider settings cannot set `stream`: chat reads whole answers".to_owned(),
+        );
+    }
+    if choice.kind == ProviderKind::Anthropic && settings.provider.contains_key("thinking") {
+        return Err(
+            "the provider settings cannot turn on Claude's `thinking` yet: it has to be \
+             handed back with each tool result, which chat does not do yet"
+                .to_owned(),
+        );
+    }
+    merge(
+        &mut request.body,
+        &Value::Object(settings.provider.clone()),
+        "",
+    )
+    .map_err(|path| {
+        let set_by = if settings.effort.is_some() {
+            " or effort"
+        } else {
+            ""
+        };
+        format!("the provider settings set `{path}`, which the playground{set_by} sets itself")
+    })?;
+    Ok(request)
+}
+
+/// Adds `fields` to `body`, object into object; the path of the first field `body`
+/// already holds otherwise.
+fn merge(body: &mut Value, fields: &Value, path: &str) -> Result<(), String> {
+    let (Some(body), Some(fields)) = (body.as_object_mut(), fields.as_object()) else {
+        return Err(path.to_owned());
+    };
+    for (name, value) in fields {
+        let at = if path.is_empty() {
+            name.clone()
+        } else {
+            format!("{path}.{name}")
+        };
+        match body.get_mut(name) {
+            None => {
+                body.insert(name.clone(), value.clone());
+            }
+            Some(held) if held.is_object() && value.is_object() => merge(held, value, &at)?,
+            Some(_) => return Err(at),
+        }
+    }
+    Ok(())
+}
+
 /// Where a chat runs: the endpoint, its token, the binding, and the log its turns go to.
 pub(crate) struct Setup<'a> {
     pub(crate) choice: Choice,
@@ -276,6 +411,8 @@ pub(crate) struct Setup<'a> {
     pub(crate) resume: Option<Resume>,
     /// Told a new chat's session id as soon as the session starts.
     pub(crate) started: &'a dyn Fn(&str),
+    /// How the model is asked: the session's own when it is carried on.
+    pub(crate) settings: &'a Settings,
 }
 
 /// An earlier chat to carry on: its session, and what was said in it.
@@ -441,7 +578,7 @@ fn converse(
             text,
             calls,
             finish,
-        } = ask(&setup.choice, key, &turns, &tools)?;
+        } = ask(&setup.choice, key, &turns, &tools, setup.settings)?;
         if let Some(text) = &text {
             said += 1;
             log.say(
@@ -676,17 +813,14 @@ fn refused(call: &ToolCall, why: String) -> ToolResult {
 }
 
 /// One model request.
-fn ask(choice: &Choice, key: &str, turns: &[Turn], tools: &[ToolSpec]) -> Result<Reply, String> {
-    let request = build_tool_request(&ToolRequest {
-        kind: choice.kind,
-        base_url: &choice.base_url,
-        model: &choice.model,
-        system: SYSTEM,
-        turns,
-        tools,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        api_key: key,
-    });
+fn ask(
+    choice: &Choice,
+    key: &str,
+    turns: &[Turn],
+    tools: &[ToolSpec],
+    settings: &Settings,
+) -> Result<Reply, String> {
+    let request = request(choice, key, turns, tools, settings)?;
     // No redirects: a redirect would carry the key's header to wherever it points.
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .max_redirects(0)
@@ -905,5 +1039,71 @@ mod tests {
             "c",
         );
         assert_eq!(answered.last(), Some(&Turn::User("c".into())));
+    }
+
+    fn settings(effort: Option<&str>, max_output: Option<u64>, provider: Value) -> Settings {
+        Settings {
+            effort: effort.map(str::to_owned),
+            max_output,
+            provider: provider.as_object().cloned().unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn settings_go_into_the_request_and_never_over_what_the_playground_sets() {
+        let keys = env(&[("OPENAI_API_KEY", "o"), ("ANTHROPIC_API_KEY", "a")]);
+        let openai = choose_named(&keys, "openai:gpt-6-luna", "--model").unwrap();
+        let asked = settings(
+            Some("high"),
+            Some(8000),
+            json!({ "temperature": 0.2, "reasoning": { "summary": "auto" } }),
+        );
+        let body = request(&openai, "o", &[], &[], &asked).unwrap().body;
+        assert_eq!(
+            body["reasoning"],
+            json!({ "effort": "high", "summary": "auto" })
+        );
+        assert_eq!(body["temperature"], 0.2);
+        assert_eq!(body["max_output_tokens"], 8000);
+
+        for (provider, refused) in [
+            (json!({ "model": "other" }), "`model`"),
+            (json!({ "input": [] }), "`input`"),
+            (json!({ "stream": true }), "`stream`"),
+            (
+                json!({ "reasoning": { "effort": "low" } }),
+                "`reasoning.effort`",
+            ),
+        ] {
+            let error =
+                check_settings(&openai, &settings(Some("high"), None, provider)).unwrap_err();
+            assert!(error.contains(refused), "{error}");
+        }
+        let bad = check_settings(&openai, &settings(Some("max"), None, json!({}))).unwrap_err();
+        assert!(bad.contains("low, medium, or high"), "{bad}");
+
+        // Claude's thinking is not carried between tool calls yet, so neither way in is open.
+        let claude = choose_named(&keys, "anthropic:claude-haiku-5-5", "--model").unwrap();
+        let effort = check_settings(&claude, &settings(Some("low"), None, json!({}))).unwrap_err();
+        assert!(effort.contains("not available for anthropic"), "{effort}");
+        let thinking = check_settings(
+            &claude,
+            &settings(None, None, json!({ "thinking": { "type": "enabled" } })),
+        )
+        .unwrap_err();
+        assert!(thinking.contains("`thinking`"), "{thinking}");
+        let fine = request(
+            &claude,
+            "a",
+            &[],
+            &[],
+            &settings(None, Some(1234), json!({ "top_k": 5 })),
+        )
+        .unwrap()
+        .body;
+        assert_eq!(
+            (fine["max_tokens"].clone(), fine["top_k"].clone()),
+            (json!(1234), json!(5))
+        );
     }
 }

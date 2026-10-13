@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "297a099314ebe8b4f52e66a077688c5d7fa3e476bda00ded6f581538f3b12cd6"
+  contentHash: "3566a2b67ff2e3d642ea0b5bf08a3550941a0cadae2557fea63d9acb79e7ba7d"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -2281,6 +2281,9 @@ Arguments:
 Options:
       --session <ID>              Carry on this chat session: the agent sees the conversation so far, under the session's fixed variables, and answers with the session's own model
       --model <PROVIDER:MODEL>    The model for a new session, as `<provider>:<model>`, from a provider whose key the playground started with. Default: the playground's configured model. A session carried on keeps its own
+      --effort <LEVEL>            How hard a new session's model reasons. OpenAI models only, for now [possible values: low, medium, high]
+      --max-output <TOKENS>       The most tokens one answer of a new session's model may take. Default: 4096
+      --provider-settings <JSON>  Fields a new session adds to every request to its provider, as a JSON object in the provider's own API terms, such as `{"temperature": 0.2}`. Fields the playground sets itself (the model, messages, tools, instructions) are refused
       --max-calls-per-answer <N>  The most tool calls run for one answer of the model; the rest are refused to it [default: 16]
       --json                      Print JSON
   -h, --help                      Print help
