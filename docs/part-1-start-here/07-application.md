@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "b1e1361a3aeb6f12fb14857abc8880eacd955626170edc2f384c2a829cbbd173"
+  contentHash: "642206f247e61e031fc6bd389e484c1a5b6de2d559b64c53958a1c1b72c3960d"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -140,7 +140,7 @@ throws, or is denied, is also an ordinary answer, with `error` set and
   "console": ["2 charges, 6150 cents"],
   "error": {
     "kind": "runtime_error",
-    "message": "error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list for main. …"
+    "message": "error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = \"cus_initech\" for main. …"
   }
 }
 ```

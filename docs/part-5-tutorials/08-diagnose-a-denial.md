@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ddfb5a1c574fa30ee8b025baa90336a0e0e86cbfb0e5e179141f73dad190c508"
+  contentHash: "cddb3996823a334f1bbce4b8252b0a5bd1d1406f89a14006b11fec264d269917"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -127,8 +127,8 @@ submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total-inj
 
 ```text
 2 charges, 6150 cents
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list for main"
+error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_initech" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"cus_initech\" for main"
   at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
 27 | export function listCharges(customerId: string): Charge[] {
 28 |     check("acme.com/charges.list", { customerId });
@@ -155,7 +155,7 @@ The reason tells a refusal by policy from one no rule can change:
 
 | Reason | Cause |
 | --- | --- |
-| `policy denied <capability> for <caller>` | A `deny` rule, or the default |
+| `policy denied <capability> with <values> for <caller>` | A `deny` rule, or the default |
 | `secret values are never available to main-module code …` | `secrets.get` from `main`, which no rule can grant |
 
 Notice that the message doesn't name the rule or the filter that refused.
@@ -204,8 +204,8 @@ submilli run --blueprint blueprint.yaml --var customerId=cus_initech total-injec
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list for main"
+error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"cus_northwind\" for main"
   at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
 27 | export function listCharges(customerId: string): Charge[] {
 28 |     check("acme.com/charges.list", { customerId });
@@ -253,8 +253,8 @@ submilli run --blueprint blueprint.yaml --var customerId=cus_northwind total.ts
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list for main"
+error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"cus_northwind\" for main"
   at listCharges (@submilli/acme-billing/lib:28:38)  [thrown here]
 ```
 

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "63bd26274885095d39e877f555f6881a0fc89a76a8c947a4e75667dd297c25df"
+  contentHash: "066c88b7f950d53f57f7e94068f05e830095441e94d574273dac03c72625b97f"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -152,7 +152,7 @@ error: case.yaml: `permissions.main` rule 1 for `mcp.a` tests `name`, which the 
 A denied call throws:
 
 ```text
-PermissionDeniedError: permission denied: caller=main capability=mcp.helpdesk: policy denied mcp.helpdesk for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
+PermissionDeniedError: permission denied: caller=main capability=mcp.helpdesk: policy denied mcp.helpdesk for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
 ```
 
 Rule matching is in [Permissions](/docs/reference/permissions), the filter

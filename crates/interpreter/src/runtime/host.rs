@@ -1306,9 +1306,9 @@ impl std::fmt::Display for PermissionDenied {
         )?;
         f.write_str(match source {
             DenialSource::Policy => {
-                " This operation is forbidden by the operator's policy — do not work \
-                 around the denial (another package, raw HTTP, altered arguments); \
-                 report it and stop."
+                " This request is forbidden by the operator's policy — do not work \
+                 around the denial (another package, raw HTTP, or other arguments to \
+                 reach the same thing); report it and stop."
             }
             DenialSource::Invariant => {
                 " Do not work around this denial: not through another package, not by \

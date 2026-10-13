@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: "ai-assisted"
   confirmed: true
-  contentHash: "a734ed1753d65a1f7fd245e7b33965484366b0bd58d477d834b249389524cfc8"
+  contentHash: "1a0ac76acad8ea36b2fe29c550e16c25ebfcd778b7f4324b760a3ad219bb412b"
   confirmedAt: "2026-10-06T10:02:34.830065+00:00"
 ---
 
@@ -425,8 +425,8 @@ node app.mjs total-injected.ts
 
 ```
 [program] 2 charges, 6150 cents
-[denied]  error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
-  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list for main"
+[denied]  error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_initech" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "acme.com/charges.list", reason = "policy denied acme.com/charges.list with customerId = \"cus_initech\" for main"
   at listCharges (@acme/billing/lib:28:38)  [thrown here]
 27 | export function listCharges(customerId: string): Charge[] {
 28 |     check("acme.com/charges.list", { customerId });
