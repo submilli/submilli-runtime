@@ -1,0 +1,45 @@
+=== numberAssignableToEnum.ts ===
+enum E { A }
+>E : E
+>  : ^
+>A : E.A
+>  : ^^^
+
+let n: number = null as unknown as (number);
+>n : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let e: E = null as unknown as (E);
+>e : E
+>  : ^
+>null as unknown as (E) : E
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+e = n;
+>e = n : number
+>      : ^^^^^^
+>e : E
+>  : ^
+>n : number
+>  : ^^^^^^
+
+n = e;
+>n = e : E
+>      : ^
+>n : number
+>  : ^^^^^^
+>e : E
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

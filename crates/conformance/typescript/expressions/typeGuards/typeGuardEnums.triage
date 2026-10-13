@@ -1,0 +1,1 @@
+line 5, 7, 8, 14, 18 type: bug SUB-1625 a union of `number` and a numeric enum drops the enum

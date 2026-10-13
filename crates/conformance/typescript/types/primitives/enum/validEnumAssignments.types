@@ -1,0 +1,152 @@
+=== validEnumAssignments.ts ===
+enum E {
+>E : E
+>  : ^
+
+    A,
+>A : E.A
+>  : ^^^
+
+    B
+>B : E.B
+>  : ^^^
+
+}
+
+let n: number = null as unknown as (number);
+>n : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let e: E = null as unknown as (E);
+>e : E
+>  : ^
+>null as unknown as (E) : E
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+n = e;
+>n = e : E
+>      : ^
+>n : number
+>  : ^^^^^^
+>e : E
+>  : ^
+
+n = E.A;
+>n = E.A : E.A
+>        : ^^^
+>n : number
+>  : ^^^^^^
+>E.A : E.A
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E.A
+>  : ^^^
+
+
+/**/;
+/**/;
+/**/;
+
+e = e;
+>e = e : E
+>      : ^
+>e : E
+>  : ^
+>e : E
+>  : ^
+
+e = E.A;
+>e = E.A : E.A
+>        : ^^^
+>e : E
+>  : ^
+>E.A : E.A
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E.A
+>  : ^^^
+
+e = E.B;
+>e = E.B : E.B
+>        : ^^^
+>e : E
+>  : ^
+>E.B : E.B
+>    : ^^^
+>E : typeof E
+>  : ^^^^^^^^
+>B : E.B
+>  : ^^^
+
+e = n;
+>e = n : number
+>      : ^^^^^^
+>e : E
+>  : ^
+>n : number
+>  : ^^^^^^
+
+e = null;
+>e = null : null
+>         : ^^^^
+>e : E
+>  : ^
+
+e = undefined;
+>e = undefined : undefined
+>              : ^^^^^^^^^
+>e : E
+>  : ^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+e = 1;
+>e = 1 : 1
+>      : ^
+>e : E
+>  : ^
+>1 : 1
+>  : ^
+
+e = 1.;
+>e = 1. : 1
+>       : ^
+>e : E
+>  : ^
+>1. : 1
+>   : ^
+
+e = 1.0;
+>e = 1.0 : 1
+>        : ^
+>e : E
+>  : ^
+>1.0 : 1
+>    : ^
+
+e = -1;
+>e = -1 : -1
+>       : ^^
+>e : E
+>  : ^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

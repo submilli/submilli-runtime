@@ -255,10 +255,22 @@ narrows to, and removing a call to a function that never returns or that asserts
 drops what the call proved. The baselines follow what is left, so the two sides still
 describe the same program, but such a case can test less than its name says.
 
+An error where `tsc`'s parse has no statement with code, such as one at `main` after
+a statement our parser couldn't finish, or on a blank an earlier pass left, waits
+while any other error is in a statement. When none is, it takes the comment it is on
+(such as a `@ts-expect-error` whose statement pruning took), else the tokens `tsc`
+skipped between the statements around it (a stray `\` or `}`, or the first line of an
+unterminated comment, so that the rest of it, which holds the appended `main`, is
+code again), else the statement before it, where a parser that couldn't finish one
+reports the error. When that statement is a blank already, the error isn't its, and
+the case is a porter failure, as is one where a pass changes nothing.
+
 The blanked text starts with `/*pruned*/`, or `/**/` where that doesn't fit, then
 `{}` where a statement is still required, such as the body of an `if` or the last
-clause of a `switch`, and `;` elsewhere, so the statements either side can't run together. Every other line stays
-where it was, so line numbers still match the upstream case.
+clause of a `switch`, and `;` elsewhere, so the statements either side can't run
+together. A blanked comment leaves only the marker, since a statement in its place
+could separate an overload from its implementation. Every other line stays where it
+was, so line numbers still match the upstream case.
 
 ## Maintaining the suite
 

@@ -1,0 +1,2 @@
+for-of52.ts(2,11): error TS2451: Cannot redeclare block-scoped variable 'v'.
+for-of52.ts(2,14): error TS2451: Cannot redeclare block-scoped variable 'v'.
