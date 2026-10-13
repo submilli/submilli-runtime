@@ -10,7 +10,7 @@ const ts = require("typescript");
 const fs = require("fs");
 const { spawnSync } = require("child_process");
 const { tscErrors } = require("./tsc-case.cjs");
-const { splitCase, ownersOf, FILENAME_LINE } = require("./case-files.cjs");
+const { splitCase } = require("./case-files.cjs");
 
 const CHECK_TIMEOUT_MS = 20_000;
 const MAX_PASSES = 40;
@@ -44,26 +44,28 @@ function prune(caseErrors, file) {
     lacking: [...lacking.values()],
   });
   for (; passes < MAX_PASSES; passes++) {
-    const found = offsetsToPrune(caseErrors, file, text, originalTscErrors);
+    const found = errorsToPrune(caseErrors, file, text, originalTscErrors);
     if (found.error) return finish(found.error);
     for (const { line, message } of found.lacking) {
       const code = (text.split("\n")[line - 1] ?? "").trim();
       const key = `${message}\n${code}`;
       if (!lacking.has(key)) lacking.set(key, { message, code });
     }
-    if (!found.offsets.length) return finish(null);
-    const ranges = rangesToBlank(sourceFileAt(file, text), found.offsets);
-    if (!ranges.length) return finish(`nothing to prune at offsets ${found.offsets.join(", ")}`);
+    if (!found.errors.length) return finish(null);
+    const offsets = found.errors.map((e) => e.offset).join(", ");
+    const ranges = rangesToBlank(caseFileAt(file, text), found.errors);
+    if (!ranges.length) return finish(`nothing to prune at offsets ${offsets}`);
     const previousText = text;
     for (const range of ranges) text = blank(text, range);
-    if (text === previousText) return finish(`pruning changed nothing at offsets ${found.offsets.join(", ")}`);
+    if (text === previousText) return finish(`pruning changed nothing at offsets ${offsets}`);
     fs.writeFileSync(file, text);
   }
   return finish(`still pruning after ${MAX_PASSES} passes`);
 }
 
-/** Where each of our errors that lacks support is, and each `tsc` error pruning caused. */
-function offsetsToPrune(caseErrors, file, text, originalTscErrors) {
+/** Where each of our errors that lacks support is, and each `tsc` error pruning
+ * caused: `{ offset, file }`, the file being the index of the case's file it is in. */
+function errorsToPrune(caseErrors, file, text, originalTscErrors) {
   const ours = ourErrors(caseErrors, file);
   if (ours.error) return ours;
   const tsc = tscErrors(file);
@@ -71,11 +73,11 @@ function offsetsToPrune(caseErrors, file, text, originalTscErrors) {
   // An error about a feature we may lack is a type error where `tsc` rejects the
   // line too, and the feature we lack where it doesn't.
   const lacking = ours.errors.filter((e) => e.kind === "unsupported" || (e.kind === "unclear" && !tscRejects.has(e.line)));
-  const offsets = lacking.map((e) => offsetOf(text, e.line, e.column));
+  const errors = lacking.map((e) => ({ offset: offsetOf(text, e.line, e.column), file: e.file }));
   for (const e of tsc) {
-    if (!originalTscErrors.has(errorKey(e))) offsets.push(e.start);
+    if (!originalTscErrors.has(errorKey(e))) errors.push({ offset: e.start, file: e.file });
   }
-  return { offsets, lacking };
+  return { errors, lacking };
 }
 
 function ourErrors(caseErrors, file) {
@@ -86,8 +88,8 @@ function ourErrors(caseErrors, file) {
     .split("\n")
     .filter(Boolean)
     .map((row) => {
-      const [line, column, kind, message] = row.split("\t");
-      return { line: Number(line), column: Number(column), kind, message };
+      const [line, column, file, kind, message] = row.split("\t");
+      return { line: Number(line), column: Number(column), file: Number(file), kind, message };
     });
   return { errors };
 }
@@ -104,40 +106,49 @@ function offsetOf(text, line, column) {
   return start + column - 1;
 }
 
-/** For each offset in the case `file`, whose text is `text`, the file of the case
- * it is in, parsed. A multi-file case's files keep their offsets in the case, so
- * what is blanked in one is blanked at the same offsets in the case. */
-function sourceFileAt(file, text) {
+/** For the case `file`, whose text is `text`, the file of the case an error is
+ * in, given `{ offset, file }`, the file's index: `{ sourceFile, start, end,
+ * offset }`, with the file parsed and the offsets it owns. A multi-file case's
+ * files keep their offsets in the case, so what is blanked in one is blanked at the
+ * same offsets in the case. */
+function caseFileAt(file, text) {
   const files = splitCase(text);
   if (!files) {
     const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-    return () => sourceFile;
+    return ({ offset }) => ({ sourceFile, start: 0, end: text.length, offset });
   }
-  const sourceFiles = files.map((f) => ts.createSourceFile(f.fileName, f.text, ts.ScriptTarget.Latest, true));
-  const lines = text.split("\n");
-  const starts = lines.flatMap((line, index) => (FILENAME_LINE.test(line) ? [{ index }] : []));
-  const owners = ownersOf(lines.length, starts);
-  return (offset) => sourceFiles[owners[text.slice(0, offset).split("\n").length - 1]];
+  const parsed = files.map((f) => ({
+    sourceFile: ts.createSourceFile(f.fileName, f.text, ts.ScriptTarget.Latest, true),
+    start: f.start,
+    end: f.end,
+  }));
+  return ({ offset, file: index }) => ({ ...parsed[index], offset });
 }
 
-/** The ranges to blank for errors at `offsets`, deduplicated, right to left so
- * blanking one leaves the offsets of the rest in place. An outer statement's blank
- * covers any inner one. Each is `{ start, end, body }`, `body` being what `blank`
- * leaves in its place. `sourceFileAt` gives the parsed file an offset is in, or
- * is that file. */
-function rangesToBlank(sourceFileAt, offsets) {
-  const fileAt = typeof sourceFileAt === "function" ? sourceFileAt : () => sourceFileAt;
+/** The ranges to blank for errors at `errors`, each `{ offset, file }`,
+ * deduplicated, right to left so blanking one leaves the offsets of the rest in
+ * place. An outer statement's blank covers any inner one. Each is `{ start, end,
+ * body }`, `body` being what `blank` leaves in its place. `fileAt` gives the file
+ * an error is in (`caseFileAt`). A range never leaves the offsets its file owns:
+ * a statement a file leaves unfinished runs on over the lines of the files after
+ * it, which are blank in it. */
+function rangesToBlank(fileAt, errors) {
   const ranges = new Map();
-  for (const offset of offsets) {
-    const unit = statementWithCodeAt(fileAt(offset), offset);
-    if (unit) addRange(ranges, statementRange(fileAt(offset), unit));
+  const add = (file, range) => {
+    const end = Math.min(range.end, file.end);
+    if (range.start < end) addRange(ranges, { ...range, end });
+  };
+  const files = errors.map(fileAt);
+  for (const file of files) {
+    const unit = statementWithCodeAt(file.sourceFile, file.offset);
+    if (unit) add(file, statementRange(file.sourceFile, unit));
   }
   // An error outside every statement with code, such as one at `main` after a
   // statement our parser couldn't finish, often goes once what caused it is pruned.
   // Only when no error is in one is it pruned by itself.
   if (!ranges.size) {
-    for (const offset of offsets) {
-      for (const range of recoveryRanges(fileAt(offset), offset)) addRange(ranges, range);
+    for (const file of files) {
+      for (const range of recoveryRanges(file.sourceFile, file.offset)) add(file, range);
     }
   }
   const sorted = [...ranges.values()].sort((a, b) => b.start - a.start);
@@ -372,6 +383,6 @@ function codeLines(text) {
   }).length;
 }
 
-module.exports = { rangesToBlank, sourceFileAt };
+module.exports = { rangesToBlank, caseFileAt };
 
 if (require.main === module) main();

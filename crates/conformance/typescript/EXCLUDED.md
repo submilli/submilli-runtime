@@ -3228,7 +3228,7 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `scanner/ecmascript5/scannerS7.8.4_A7.1_T4.ts` | not supported | invalid unicode escape: expected 4 hex digits, on ` "\u000G" ` |
 | `scanner/ecmascript5/scannerStringLiterals.ts` | not supported | unknown escape sequence `\ `, on ` '\u2192\   ' ` |
 | `scanner/ecmascript5/scannerStringLiteralWithContainingNullCharacter1.ts` | checks too little | 0 after the port |
-| `scanner/ecmascript5/scannerUnexpectedNullCharacter1.ts` | not supported | unexpected byte 0x00, on ` foo + bar; ` |
+| `scanner/ecmascript5/scannerUnexpectedNullCharacter1.ts` | not supported | unexpected byte 0x00, on ` foo\u0000+\u0000bar; ` |
 | `scanner/ecmascript5/scannerUnicodeEscapeInKeyword1.ts` | not supported | unexpected character `\`, on ` \u0076ar x = "hello"; ` |
 | `scanner/ecmascript5/scannerUnicodeEscapeInKeyword2.ts` | porter failure | nothing to prune at offsets 75, 415, 84, 424; our first unsupported error: unexpected character `\` |
 | `scanner/jsdocInvalidTokens.ts` | not supported | JavaScript |

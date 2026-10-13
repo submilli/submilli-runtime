@@ -16,9 +16,11 @@ const FILENAME_LINE = /^\s*\/\/\s*@filename\s*:\s*([^\r\n]*)/i;
 // can't find a neighbouring case.
 const VIRTUAL_ROOT = "/__case__";
 
-/** The case's files, `{ module, fileName, text }` each, or `null` when it is one
- * file: it has fewer than two `@filename` lines. `module` is the path a relative
- * import names it by, and `fileName` where `tsc` sees it. */
+/** The case's files, or `null` when it is one file: it has fewer than two
+ * `@filename` lines. Each is `{ module, fileName, text, firstLine, endLine, start,
+ * end }`: `module` is the path a relative import names it by, `fileName` where
+ * `tsc` sees it, and it owns lines `[firstLine, endLine)` (0-based) and offsets
+ * `[start, end)` of the case. */
 function splitCase(text) {
   const lines = text.split("\n");
   const starts = [];
@@ -27,23 +29,31 @@ function splitCase(text) {
     if (match) starts.push({ index, module: modulePath(match[1].trim()) });
   });
   if (starts.length < 2) return null;
-  const owners = ownersOf(lines.length, starts);
-  return starts.map(({ module }, file) => ({
-    module,
-    fileName: `${VIRTUAL_ROOT}/${module}.ts`,
-    text: lines.map((line, index) => (owners[index] === file ? line : " ".repeat(line.length))).join("\n"),
-  }));
+  const lineStarts = [];
+  let offset = 0;
+  for (const line of lines) {
+    lineStarts.push(offset);
+    offset += line.length + 1;
+  }
+  return starts.map(({ module }, file) => {
+    const firstLine = file === 0 ? 0 : starts[file].index;
+    const endLine = starts[file + 1]?.index ?? lines.length;
+    const owns = (index) => firstLine <= index && index < endLine;
+    return {
+      module,
+      fileName: `${VIRTUAL_ROOT}/${module}.ts`,
+      text: lines.map((line, index) => (owns(index) ? line : " ".repeat(line.length))).join("\n"),
+      firstLine,
+      endLine,
+      start: lineStarts[firstLine],
+      end: endLine < lines.length ? lineStarts[endLine] : text.length,
+    };
+  });
 }
 
-/** For each line, the index of the file it belongs to. */
-function ownersOf(lineCount, starts) {
-  const owners = [];
-  let file = 0;
-  for (let index = 0; index < lineCount; index++) {
-    while (file + 1 < starts.length && starts[file + 1].index <= index) file++;
-    owners.push(file);
-  }
-  return owners;
+/** The file of `files` that owns 0-based line `line`. */
+function fileOwning(files, line) {
+  return files.find((f) => f.firstLine <= line && line < f.endLine);
 }
 
 function modulePath(name) {
@@ -65,13 +75,20 @@ function fileNames(text) {
 function eachFile(text, fileName, step) {
   const files = splitCase(text);
   if (!files) return step(text, fileName);
-  const stepped = files.map((file) => step(file.text, file.fileName).split("\n"));
-  const lines = text.split("\n");
-  if (stepped.some((fileLines) => fileLines.length !== lines.length)) {
-    throw new Error(`a step moved lines of a multi-file case: ${fileName}`);
-  }
-  const owners = ownersOf(lines.length, lines.flatMap((line, index) => (FILENAME_LINE.test(line) ? [{ index }] : [])));
-  return lines.map((_, index) => stepped[owners[index]][index]).join("\n");
+  const lineCount = text.split("\n").length;
+  return files
+    .flatMap((file) => {
+      const lines = step(file.text, file.fileName).split("\n");
+      if (lines.length !== lineCount) throw new Error(`a step moved lines of a multi-file case: ${fileName}`);
+      return lines.slice(file.firstLine, file.endLine);
+    })
+    .join("\n");
+}
+
+/** Module paths named by more than one of the case's files. */
+function duplicateModules(files) {
+  const modules = files.map((f) => f.module);
+  return [...new Set(modules.filter((m, i) => modules.indexOf(m) !== i))];
 }
 
 /** The import specifier from module `from` to module `to`: `./x`, or `../x`. */
@@ -80,4 +97,4 @@ function relativeSpecifier(from, to) {
   return relative.startsWith("../") ? relative : `./${relative}`;
 }
 
-module.exports = { FILENAME_LINE, VIRTUAL_ROOT, splitCase, fileNames, eachFile, ownersOf, relativeSpecifier };
+module.exports = { VIRTUAL_ROOT, splitCase, fileOwning, fileNames, eachFile, duplicateModules, relativeSpecifier };

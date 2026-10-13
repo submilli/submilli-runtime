@@ -44,6 +44,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use case_files::trim_js_space;
 use interpreter::{ExprId, Span, StmtId, Type, TypedAst, TypedExprKind, TypedStmtKind};
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
@@ -1540,11 +1541,6 @@ fn is_option_line(line: &str) -> bool {
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
         .unwrap_or(rest.len());
     name_len > 0 && trim_js_space(&rest[name_len..]).starts_with(':')
-}
-
-/// `line` without the leading characters JavaScript's `\s` matches.
-fn trim_js_space(line: &str) -> &str {
-    line.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
 }
 
 fn collect_files(dir: &Path, keep: &mut impl FnMut(&Path) -> bool, out: &mut Vec<PathBuf>) {

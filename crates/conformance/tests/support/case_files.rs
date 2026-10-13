@@ -18,51 +18,63 @@ pub(super) struct CaseFile {
 /// The case's files, or `None` when it is one file: it has fewer than two
 /// `@filename` lines.
 pub(super) fn split(source: &str) -> Option<Vec<CaseFile>> {
-    let mut starts = Vec::new(); // (line index, module)
-    for (index, line) in source.split('\n').enumerate() {
-        if let Some(name) = filename_option(line) {
-            starts.push((index, module_path(name)));
-        }
-    }
+    let lines: Vec<&str> = source.split('\n').collect();
+    let starts: Vec<(usize, String)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| filename_option(line).map(|name| (index, module_path(name))))
+        .collect();
     if starts.len() < 2 {
         return None;
     }
-    let lines: Vec<&str> = source.split('\n').collect();
-    let owner = |line: usize| {
-        starts
-            .iter()
-            .rposition(|(start, _)| *start <= line)
-            .unwrap_or(0)
-    };
+    let owners = line_owners(lines.len(), &starts);
     let files = starts
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(file, (_, module))| {
-            let text = lines
-                .iter()
-                .enumerate()
-                .map(|(index, line)| {
-                    if owner(index) == file {
-                        (*line).to_string()
-                    } else {
-                        " ".repeat(line.len())
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            CaseFile {
-                module: module.clone(),
-                text,
-            }
+        .map(|(file, (_, module))| CaseFile {
+            module,
+            text: blank_other_files(&lines, &owners, file),
         })
         .collect();
     Some(files)
 }
 
+/// For each line, the index of the file it belongs to: the last whose `@filename`
+/// line is at or before it, or the first.
+fn line_owners(line_count: usize, starts: &[(usize, String)]) -> Vec<usize> {
+    let mut owners = Vec::with_capacity(line_count);
+    let mut file = 0;
+    for index in 0..line_count {
+        while starts
+            .get(file + 1)
+            .is_some_and(|(start, _)| *start <= index)
+        {
+            file += 1;
+        }
+        owners.push(file);
+    }
+    owners
+}
+
+fn blank_other_files(lines: &[&str], owners: &[usize], file: usize) -> String {
+    lines
+        .iter()
+        .zip(owners)
+        .map(|(line, &owner)| {
+            if owner == file {
+                (*line).to_string()
+            } else {
+                " ".repeat(line.len())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The value of a `// @filename: <name>` line, matched as `tsc-case.cjs` matches
 /// an option line.
 fn filename_option(line: &str) -> Option<&str> {
-    let rest = line.trim_start().strip_prefix("//")?.trim_start();
+    let rest = trim_js_space(trim_js_space(line).strip_prefix("//")?);
     let rest = rest.strip_prefix('@')?;
     let name_end = rest
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
@@ -70,8 +82,13 @@ fn filename_option(line: &str) -> Option<&str> {
     if !rest[..name_end].eq_ignore_ascii_case("filename") {
         return None;
     }
-    let value = rest[name_end..].trim_start().strip_prefix(':')?;
+    let value = trim_js_space(&rest[name_end..]).strip_prefix(':')?;
     Some(value.trim())
+}
+
+/// `line` without the leading characters JavaScript's `\s` matches.
+pub(super) fn trim_js_space(line: &str) -> &str {
+    line.trim_start_matches(|c: char| (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}')
 }
 
 fn module_path(name: &str) -> String {
@@ -82,6 +99,12 @@ fn module_path(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_filename_line_after_a_byte_order_mark_starts_a_file() {
+        let files = split("\u{feff}// @filename: a.ts\nexport let x = 1;\n// @filename: b.ts\n");
+        assert_eq!(files.map(|f| f.len()), Some(2));
+    }
 
     #[test]
     fn a_case_with_one_file_is_not_split() {
@@ -110,6 +133,10 @@ mod tests {
                 .text
                 .ends_with("// @Filename: /b.ts\nimport { x } from \"./a\";\n")
         );
-        assert!(files[1].text.starts_with("                \n"));
+        assert!(
+            files[1]
+                .text
+                .starts_with(&format!("{}\n", blank("// @strict: true")))
+        );
     }
 }

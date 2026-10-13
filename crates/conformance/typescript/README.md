@@ -95,7 +95,8 @@ A case is left out as not supported when:
 - it is JavaScript: `@allowJs` or `@checkJs`, or a `.js`, `.jsx`, `.mjs` or `.cjs`
   file;
 - a file is a declaration file (`.d.ts`), JSX (`.tsx`), JSON, `.mts` or `.cts`, or
-  under `node_modules`; or
+  under `node_modules`;
+- two files have one name, which upstream checks as two files; or
 - its files share the global scope: a file with no `import` or `export` is a
   script, whose declarations every file sees, while each of our modules sees only
   what it imports. Such a case is left out when a file uses what another script

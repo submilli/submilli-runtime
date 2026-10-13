@@ -296,7 +296,6 @@ const FEATURES = [
 
 const sample = process.env.COVERAGE_SAMPLE;
 
-
 // Rows of the spec's feature matrix marked for Phase 1 or 2 that the compiler
 // rejects today, so they aren't supported yet and have no row above.
 const NOT_YET_SUPPORTED = [

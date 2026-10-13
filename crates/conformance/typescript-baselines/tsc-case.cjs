@@ -42,7 +42,8 @@ function compilerOptions(file, text = fs.readFileSync(file, "utf8")) {
  * None for a single file. */
 function moduleOptions(text) {
   if (!splitCase(text)) return {};
-  const name = /^\s*\/\/\s*@module\s*:\s*([^\r\n,]*)/im.exec(text)?.[1].trim().toLowerCase();
+  const option = [...text.matchAll(new RegExp(OPTION_LINE.source, "gm"))].find(([, key]) => key.toLowerCase() === "module");
+  const name = option?.[2].split(",")[0].trim().toLowerCase();
   const kind = Object.entries(ts.ModuleKind).find(([key, value]) => typeof value === "number" && key.toLowerCase() === name)?.[1];
   const module = kind ?? ts.ModuleKind.ES2020;
   return { module, moduleResolution: moduleResolutionFor(module) };
@@ -87,25 +88,26 @@ function caseHost(files) {
   };
 }
 
-/** `tsc`'s errors on the case: where each starts, its 1-based line and column, code
- * and message. In a multi-file case, positions in any file are positions in the
- * case. */
+/** `tsc`'s errors on the case: where each starts, its 1-based line and column, the
+ * index of the case's file it is in, code and message. In a multi-file case,
+ * positions in any file are positions in the case. */
 function tscErrors(file) {
   const { program, sourceFiles } = caseProgram(file);
-  return sourceFiles.flatMap((sourceFile) =>
+  return sourceFiles.flatMap((sourceFile, index) =>
     [...program.getSyntacticDiagnostics(sourceFile), ...program.getSemanticDiagnostics(sourceFile)]
       .filter((d) => d.category === ts.DiagnosticCategory.Error && d.file === sourceFile)
       .map((d) => ({
         start: d.start,
         line: lineIndex(sourceFile, d.start) + 1,
         column: sourceFile.getLineAndCharacterOfPosition(d.start).character + 1,
+        file: index,
         code: d.code,
         message: ts.flattenDiagnosticMessageText(d.messageText, " "),
       })),
   );
 }
 
-module.exports = { OPTION_LINE, compilerOptions, moduleOptions, caseProgram, caseHost, lineIndex, tscErrors };
+module.exports = { OPTION_LINE, compilerOptions, moduleOptions, caseProgram, lineIndex, tscErrors };
 
 // `node tsc-case.cjs <case.ts>` prints its errors as JSON, for callers that check
 // many cases at once in child processes.

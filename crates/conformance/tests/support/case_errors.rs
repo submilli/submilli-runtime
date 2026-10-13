@@ -125,6 +125,10 @@ pub(super) struct CaseError {
     /// the runner compares by line.
     #[allow(dead_code)]
     pub column: usize,
+    /// The index of the case's file it is in, for the pruner: an error at the end
+    /// of one file is on the case's last line, which another file owns.
+    #[allow(dead_code)]
+    pub file: usize,
     pub message: String,
     pub support: Support,
 }
@@ -147,6 +151,7 @@ pub(super) fn case_errors(source: &str) -> (TypedAst, Vec<CaseError>) {
             CaseError {
                 line,
                 column,
+                file: d.span.file.0 as usize,
                 message: d.message.clone(),
                 support: support(d, &syntax_errors),
             }
@@ -155,11 +160,13 @@ pub(super) fn case_errors(source: &str) -> (TypedAst, Vec<CaseError>) {
     (typed, errors)
 }
 
-/// Each file's text keeps its offsets in the case, so a diagnostic's span reads
-/// against the case whatever its file.
+/// The typed AST of a multi-file case, our diagnostics on it, and those of them
+/// the parser reports. Each file's text keeps its offsets in the case, so a
+/// diagnostic's span reads against the case whatever its file.
 fn typecheck_files(files: &[case_files::CaseFile]) -> (TypedAst, Vec<Diagnostic>, Vec<Diagnostic>) {
     let syntax_errors = files
         .iter()
+        // A file's id is its index, as `typecheck_package_to_typed_ast` gives it.
         .zip(0u32..)
         .flat_map(|(file, id)| parse_script(&file.text, FileId(id)).diagnostics().to_vec())
         .collect();

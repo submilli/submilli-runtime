@@ -45,11 +45,13 @@ function port(source, fileName) {
   // Without strict null checks tsc erases `null` and `undefined` from types,
   // conflating what Submilli keeps apart.
   text = text.replace(/^(\s*\/\/\s*@strictNullChecks\s*:\s*)false\b/im, "$1true");
-  const multiFile = splitCase(text) !== null;
+  const files = splitCase(text);
+  const multiFile = files !== null;
   text = eachFile(text, fileName, renameRedeclarations);
   text = eachFile(text, fileName, rewriteTokens);
   text = eachFile(text, fileName, (fileText, name) => fillDeclarations(fileText, name, multiFile));
-  if (multiFile) text = eachFile(text, fileName, (fileText, name) => relativeImports(fileText, name, splitCase(text)));
+  // The steps keep each file's name and lines, so `files` still names them.
+  if (multiFile) text = eachFile(text, fileName, (fileText, name) => relativeImports(fileText, name, files));
   // Infer from the rewritten program, including its declaration placeholders.
   text = annotateInferredTypes(text, fileName);
   if (!multiFile && !/^\s*function\s+main\s*\(/m.test(text)) text += "\n\nfunction main(): void {}\n";
@@ -78,15 +80,14 @@ function relativeImports(text, fileName, files) {
 }
 
 /** The case module a specifier in module `from` names, if any: a relative path
- * from `from`'s directory, or else a bare name, with or without an extension. */
+ * from `from`'s directory, or else a bare name, with or without an extension, and
+ * a directory naming its `index`. */
 function caseModuleNamed(specifier, from, modules) {
   const bare = specifier.replace(/\.(ts|js)$/, "");
-  if (bare.startsWith("./") || bare.startsWith("../")) {
-    const resolved = path.posix.join(path.posix.dirname(`/${from}`), bare).slice(1);
-    return modules.has(resolved) ? resolved : undefined;
-  }
-  const name = bare.replace(/^\/+/, "");
-  return modules.has(name) ? name : undefined;
+  const name = bare.startsWith("./") || bare.startsWith("../")
+    ? path.posix.join(path.posix.dirname(`/${from}`), bare).slice(1)
+    : bare.replace(/^\/+/, "");
+  return [name, `${name}/index`].find((module) => modules.has(module));
 }
 
 /** Renames each repeated `var` declaration in a scope `let` would share: the same
@@ -138,7 +139,7 @@ function rewriteTokens(text) {
 }
 
 /** Give each typed binding with no value, and each `declare function`, a placeholder. */
-function fillDeclarations(text, fileName, multiFile = false) {
+function fillDeclarations(text, fileName, multiFile) {
   const sourceFile = parse(text, fileName);
   const edits = [];
   const visit = (node) => {
@@ -153,8 +154,8 @@ function fillDeclarations(text, fileName, multiFile = false) {
         }
       }
       if (filled && text[node.end - 1] !== ";") edits.push({ start: node.end, end: node.end, text: ";" });
-      // A value supplied here is not an ambient declaration another module can import.
-      // In a multi-file case another module does import it.
+      // A value supplied here is not an ambient declaration another module can
+      // import, except in a multi-file case, whose other files do import it.
       if (filled && !multiFile) removeModifier(node, ts.SyntaxKind.ExportKeyword, sourceFile, edits);
     } else if (ts.isFunctionDeclaration(node) && hasDeclare(node)) {
       removeDeclare(node, sourceFile, edits);
@@ -210,6 +211,9 @@ function annotateFile(sourceFile, checker) {
   const spell = (type, node) => checker.typeToString(type, node, ts.TypeFormatFlags.NoTruncation);
   // A type that can't be written where it goes: `any`, a class expression's, or `this`.
   const unwritable = /\bany\b|\(Anonymous|\bthis\b/;
+  // A type another file of the case declares and this one doesn't import, which
+  // `tsc` writes as `import("…")`: nothing is written, as for a parameter.
+  const imported = /\bimport\(/;
   const visit = (node) => {
     const binding =
       (ts.isPropertyDeclaration(node) && ts.isClassLike(node.parent)) || (ts.isParameter(node) && node.initializer);
@@ -220,7 +224,7 @@ function annotateFile(sourceFile, checker) {
       const written = members.map((t) => spell(t, node)).join(" | ");
       // After the name and any `?` or `!`.
       const at = (node.questionToken ?? node.exclamationToken ?? node.name).end;
-      if (!unwritable.test(written)) edits.push({ start: at, end: at, text: `: ${written}` });
+      if (!unwritable.test(written) && !imported.test(written)) edits.push({ start: at, end: at, text: `: ${written}` });
     }
     const annotatable =
       (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node)) &&
@@ -235,7 +239,7 @@ function annotateFile(sourceFile, checker) {
       const end = node.body.getStart(sourceFile);
       let start = end;
       while (start > 0 && text[start - 1] === " ") start--;
-      edits.push({ start, end, text: `: ${written} ` });
+      if (!imported.test(written)) edits.push({ start, end, text: `: ${written} ` });
     }
     ts.forEachChild(node, visit);
   };

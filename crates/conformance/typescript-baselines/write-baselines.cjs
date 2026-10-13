@@ -16,7 +16,7 @@
 const ts = require("typescript");
 const fs = require("fs");
 const path = require("path");
-const { VIRTUAL_ROOT } = require("./case-files.cjs");
+const { VIRTUAL_ROOT, relativeSpecifier } = require("./case-files.cjs");
 const { OPTION_LINE, caseProgram, lineIndex, tscErrors } = require("./tsc-case.cjs");
 
 const casesDir = path.join(__dirname, "..", "typescript");
@@ -101,14 +101,19 @@ function typeEntry(node, sourceFile, checker) {
   if (!type || type.flags & ts.TypeFlags.Any) type = checker.getTypeAtLocation(node);
   const flags = ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.AllowUniqueESSymbolType;
   // A module's type names its file by absolute path; make it relative to the case,
-  // so the baseline doesn't carry the path of the checkout that wrote it.
-  // A multi-file case's files are under a virtual root instead.
+  // so the baseline doesn't carry the path of the checkout that wrote it. A
+  // multi-file case's files are under a virtual root: relative to the file.
   const checkoutPrefix = `import("${path.dirname(sourceFile.fileName)}/`;
   const written = checker
     .typeToString(type, node.parent, flags)
-    .replaceAll(checkoutPrefix, 'import("./')
-    .replaceAll(`import("${VIRTUAL_ROOT}/`, 'import("./');
+    .replace(new RegExp(`import\\("${VIRTUAL_ROOT}/([^"]*)"`, "g"), (_, to) => `import("${relativeSpecifier(moduleOf(sourceFile), to)}"`)
+    .replaceAll(checkoutPrefix, 'import("./');
   return [line, text, written];
+}
+
+/** The module path of a multi-file case's file, as `case-files.cjs` names it. */
+function moduleOf(sourceFile) {
+  return sourceFile.fileName.slice(`${VIRTUAL_ROOT}/`.length).replace(/\.ts$/, "");
 }
 
 function errorLines(file) {

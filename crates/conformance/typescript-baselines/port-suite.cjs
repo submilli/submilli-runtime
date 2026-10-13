@@ -15,7 +15,7 @@ const os = require("os");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
 const ts = require("typescript");
-const { fileNames, splitCase } = require("./case-files.cjs");
+const { fileNames, splitCase, duplicateModules } = require("./case-files.cjs");
 const { caseProgram } = require("./tsc-case.cjs");
 
 const run = promisify(execFile);
@@ -124,6 +124,10 @@ const UNSUPPORTED_FILES = [
 // each seeing only what it imports, so a case whose files use what another
 // script declares, or whose scripts declare the same name, checks something else.
 const SHARED_SCOPE_FEATURE = "script files sharing one global scope";
+
+// Two files of a case with one name: upstream checks both, where a module path
+// can name only one.
+const DUPLICATE_FILES_FEATURE = "two files with one name";
 
 // A construct signature, `new (): T`. One in an object type is rejected, but one
 // in an interface is read as a method named `new`, which pruning can't take out,
@@ -238,6 +242,8 @@ function exclusionBeforePort(rel, source) {
     const kind = UNSUPPORTED_FILES.find(([pattern]) => pattern.test(name));
     if (kind) return exclusion(rel, REASONS.unsupported, kind[1]);
   }
+  const twice = duplicateModules(splitCase(source.replace(/\r\n?/g, "\n")) ?? []);
+  if (twice.length) return exclusion(rel, REASONS.unsupported, `${DUPLICATE_FILES_FEATURE}: \`${twice[0]}\``);
   if (sharesGlobalScope(source)) return exclusion(rel, REASONS.unsupported, SHARED_SCOPE_FEATURE);
   if (CONSTRUCT_SIGNATURE.test(source)) return exclusion(rel, REASONS.unsupported, CONSTRUCT_SIGNATURE_FEATURE);
   return null;
@@ -254,6 +260,7 @@ function isJavaScript(source) {
 function sharesGlobalScope(source) {
   const text = source.replace(/\r\n?/g, "\n");
   if (!splitCase(text)) return false;
+  // The name is only what `caseProgram` calls a single file: this case has several.
   const { program, sourceFiles } = caseProgram("case.ts", text);
   const checker = program.getTypeChecker();
   const scripts = new Set(sourceFiles.filter((f) => !ts.isExternalModule(f)));
@@ -264,20 +271,22 @@ function sharesGlobalScope(source) {
       declared.set(name, script);
     }
   }
-  const usesAnotherScript = (sourceFile) => {
-    let found = false;
-    const visit = (node) => {
-      if (found) return;
-      if (ts.isIdentifier(node)) {
-        const declarations = checker.getSymbolAtLocation(node)?.declarations ?? [];
-        found = declarations.some((d) => d.getSourceFile() !== sourceFile && scripts.has(d.getSourceFile()));
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(sourceFile);
-    return found;
+  return sourceFiles.some((sourceFile) => usesAnotherScript(sourceFile, scripts, checker));
+}
+
+/** Whether a name in `sourceFile` resolves to a declaration in another of `scripts`. */
+function usesAnotherScript(sourceFile, scripts, checker) {
+  let found = false;
+  const visit = (node) => {
+    if (found) return;
+    if (ts.isIdentifier(node)) {
+      const declarations = checker.getSymbolAtLocation(node)?.declarations ?? [];
+      found = declarations.some((d) => d.getSourceFile() !== sourceFile && scripts.has(d.getSourceFile()));
+    }
+    ts.forEachChild(node, visit);
   };
-  return sourceFiles.some(usesAnotherScript);
+  visit(sourceFile);
+  return found;
 }
 
 /** The names a file declares at its top level. */
@@ -407,7 +416,10 @@ function dropDuplicates(ported) {
 
 /** Writes ../typescript/EXCLUDED.md: every upstream case left out, and why. */
 function writeExcluded(excluded) {
-  const cell = (text) => text.replace(/\|/g, "\\|");
+  // A control character, such as the NUL a scanner case is about, is escaped so
+  // the file stays text.
+  const cell = (text) =>
+    text.replace(/\|/g, "\\|").replace(/[\u0000-\u0008\u000b-\u001f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
   const rows = [...excluded]
     .sort((a, b) => a.rel.localeCompare(b.rel))
     .map(({ rel, reason, detail }) => `| \`${rel}\` | ${reason} | ${cell(detail)} |`);
