@@ -33,11 +33,16 @@ pub fn check(ta: &TypedAst) -> Result<Vec<Diagnostic>, CompileError> {
 
 /// Checks a script. `dependencies` are the packages it was inferred against,
 /// which declare the types it imports.
+///
+/// The tree must satisfy [`TypedAst`]'s phase input contract. Dependency type
+/// limits are checked again because callers may have modified declarations
+/// since inference.
 pub fn check_script(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
 ) -> Result<Vec<Diagnostic>, CompileError> {
     tree_height::check_typed(ta, CompilerStage::Infer)?;
+    super::infer::check_declaration_types(dependencies.iter().copied())?;
     let declarations = TypeDeclarations::for_script(ta, dependencies);
     let mut diags = Vec::new();
     run_rules(ta, &declarations, Source::Script, &mut diags).map_err(|fatal| CompileError {
@@ -50,6 +55,9 @@ pub fn check_script(
 /// The type a `@capability` binding path reads from a parameter of type `ty`
 /// in `package`, resolved as the capability-consistency rule resolves it.
 /// `None` when a segment names no field or reaches an unknown declaration.
+/// `ty` must satisfy [`crate::type_size::check`], and all declarations must pass
+/// [`PackageDeclaration::check_type_limits`] since their last mutation; `None` is
+/// not a validation failure.
 pub fn capability_binding_type(
     package: &PackageDeclaration,
     dependencies: &[&PackageDeclaration],

@@ -209,6 +209,8 @@ impl DesugarCtx<'_> {
 }
 
 /// Lowering loops adds nesting, so the output is measured as well as the input.
+/// `ta` must have completed capture analysis and satisfy [`TypedAst`]'s phase
+/// input contract, including bounds needed to drop the owned tree on error.
 pub fn desugar(ta: TypedAst, file: FileId) -> Result<TypedAst, CompilerFailure> {
     tree_height::check_typed(&ta, CompilerStage::Infer)?;
     let desugared = desugar_tree(ta, file)?;

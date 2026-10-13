@@ -15,6 +15,8 @@ use crate::{
 /// receiver inside a closure body.
 pub(crate) const THIS_BINDING: &str = "this";
 
+/// Analyze captures in an inferred, checked tree satisfying [`TypedAst`]'s phase
+/// input contract, including bounds needed to drop the owned tree on error.
 pub fn capture(mut ta: TypedAst) -> Result<TypedAst, CompilerFailure> {
     tree_height::check_typed(&ta, CompilerStage::Infer)?;
     resolve_locals(&mut ta)?;
