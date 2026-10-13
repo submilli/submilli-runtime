@@ -150,9 +150,10 @@ pub enum PlaygroundCmd {
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
     /// runs are labeled `stand-in`.
     Mcp,
-    /// Run a task with your own model key against the playground's tools, as a
-    /// production agent would; prints its answer. The key comes from the playground's
-    /// environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from
+    /// Chat with an agent on your own model key, as a production agent would run: it uses
+    /// the playground's tools and prints its answer. Each chat starts a session; reply in it
+    /// with `--session`. The key comes from the playground's environment
+    /// (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from `--model` or
     /// SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
     Chat(ChatArgs),
     /// Copy a coding assistant's stand-in conversation to the running playground: a
@@ -238,9 +239,17 @@ pub struct SessionEndArgs {
 
 #[derive(ClapArgs)]
 pub struct ChatArgs {
-    /// What the agent should do.
-    #[arg(value_name = "TASK")]
+    /// What the agent should do, or, with `--session`, the next message to it.
+    #[arg(value_name = "MESSAGE")]
     task: String,
+    /// Carry on this chat session: the agent sees the conversation so far, under the
+    /// session's fixed variables, and answers with the session's own model.
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
+    /// The model for a new session, as `<provider>:<model>`, from a provider whose key the
+    /// playground started with. Default: the playground's configured model.
+    #[arg(long, value_name = "PROVIDER:MODEL")]
+    model: Option<String>,
     /// The most tool calls run for one answer of the model; the rest are refused to it.
     #[arg(
         long,
@@ -605,6 +614,8 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Chat(args) => act(
             ActionRequest::Chat(controls::act::ChatRequest {
                 task: args.task,
+                session: args.session,
+                model: args.model,
                 max_calls_per_answer: Some(args.max_calls_per_answer),
             }),
             args.json,
@@ -976,6 +987,12 @@ fn print_description(description: &host::Description, packages_error: Option<&st
     match &description.provider {
         Some(provider) => {
             println!("  provider:   {provider} (keys exported after start need a restart)");
+            if !description.models.is_empty() {
+                println!(
+                    "  chat:       {} (another: chat --model <provider>:<model>)",
+                    description.models.join(", ")
+                );
+            }
         }
         None => println!(
             "  provider:   none; export ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY \

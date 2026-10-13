@@ -55,7 +55,7 @@ pub(crate) const EXIT_PACKAGE_RESOLUTION: u8 = super::super::EXIT_PACKAGE_RESOLU
 pub(crate) const EXIT_NOT_RUNNING: u8 = super::super::EXIT_UNREACHABLE;
 
 /// The command every suggestion starts with.
-const COMMAND: &str = "submilli playground";
+pub(crate) const COMMAND: &str = "submilli playground";
 
 /// A command a result suggests next. Only commands that read, or that draft without
 /// writing, can be named here: nothing a run's content caused can hand the reader a
@@ -920,6 +920,9 @@ pub(crate) fn sessions_text(result: &SessionsResult) -> String {
             },
             plural(session.run_count, "run"),
         );
+        if let Some(agent) = &session.agent {
+            let _ = write!(line, "  agent {}", clean(agent));
+        }
         if session.denied {
             line.push_str("  DENIED");
         }
@@ -970,6 +973,8 @@ pub(crate) fn binding_text(result: &BindingResult) -> String {
 #[derive(Debug, Serialize)]
 pub(crate) struct ChatResult {
     pub(crate) session: Option<String>,
+    /// Whether this message carried on a session an earlier one started.
+    pub(crate) continued: bool,
     pub(crate) provider: &'static str,
     pub(crate) model: String,
     pub(crate) tool_calls: usize,
@@ -997,7 +1002,12 @@ pub(crate) fn chat_text(result: &ChatResult) -> String {
         if result.tool_calls == 1 { "" } else { "s" }
     );
     if let Some(session) = &result.session {
-        let _ = write!(out, " · session {}", clean(session));
+        let _ = write!(
+            out,
+            " · {} session {}",
+            if result.continued { "continued" } else { "new" },
+            clean(session)
+        );
     }
     let _ = writeln!(out);
     match result.stopped {
@@ -1028,6 +1038,13 @@ pub(crate) fn chat_text(result: &ChatResult) -> String {
         let mut fence = Fence::default();
         fence.text("reply", reply, 200);
         fence.render(&mut out);
+    }
+    if let Some(session) = &result.session {
+        let _ = writeln!(
+            out,
+            "to reply: {COMMAND} chat --session {} \"<message>\"",
+            shell_word(session)
+        );
     }
     next_lines(&mut out, &result.next);
     out

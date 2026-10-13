@@ -32,6 +32,8 @@ pub(crate) const MAX_TURNS: usize = 20;
 /// How long one model request may take.
 pub(crate) const PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_OUTPUT_TOKENS: u64 = 4096;
+/// The MCP protocol version chat speaks.
+const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The most of a tool's result handed back to the model.
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 
@@ -91,54 +93,98 @@ pub(crate) struct Choice {
 /// set, else the first provider whose key is set, with its default model. Reads which
 /// key variable is set, never a key's value.
 pub(crate) fn choose(env: impl Fn(&str) -> Option<String>) -> Result<Choice, String> {
-    let set = |name: &str| env(name).filter(|value| !value.trim().is_empty());
-    let key_of = |row: &ProviderRow| row.keys.iter().copied().find(|key| set(key).is_some());
-    let choice = |row: &'static ProviderRow, model: String, key_variable| Choice {
-        provider: row.name,
-        kind: row.kind,
-        model,
-        key_variable,
-        base_url: base_url(row, set(row.base_url_variable)),
-    };
-    if let Some(named) = set(MODEL_VARIABLE) {
-        let (provider, model) = named
-            .split_once(':')
-            .map(|(provider, model)| (provider.trim(), model.trim()))
-            .filter(|(_, model)| !model.is_empty())
-            .ok_or_else(|| {
-                format!(
-                    "{MODEL_VARIABLE} is `{named}`; set it to `<provider>:<model>`, the \
-                     provider one of {}",
-                    provider_names()
-                )
-            })?;
-        let row = PROVIDERS
-            .iter()
-            .find(|row| row.name == provider)
-            .ok_or_else(|| {
-                format!(
-                    "{MODEL_VARIABLE} names provider `{provider}`; use one of {}",
-                    provider_names()
-                )
-            })?;
-        let key = key_of(row).ok_or_else(|| {
-            format!(
-                "no provider configured: {MODEL_VARIABLE} names {}, but {} is not set",
-                row.name,
-                row.keys.join(" or ")
-            )
-        })?;
-        return Ok(choice(row, model.to_owned(), key));
+    if let Some(named) = set(&env, MODEL_VARIABLE) {
+        return choose_named(&env, &named, MODEL_VARIABLE);
     }
     PROVIDERS
         .iter()
-        .find_map(|row| key_of(row).map(|key| choice(row, row.default_model.to_owned(), key)))
+        .find_map(|row| {
+            key_of(&env, row).map(|key| choice(&env, row, row.default_model.to_owned(), key))
+        })
         .ok_or_else(|| {
             "no provider configured: start the playground with ANTHROPIC_API_KEY, \
              OPENAI_API_KEY, or GEMINI_API_KEY set (and optionally \
              SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>)"
                 .to_owned()
         })
+}
+
+/// The provider and model `named` picks, as `<provider>:<model>`, when the environment
+/// `env` holds that provider's key. `source` says where `named` came from.
+pub(crate) fn choose_named(
+    env: impl Fn(&str) -> Option<String>,
+    named: &str,
+    source: &str,
+) -> Result<Choice, String> {
+    let (provider, model) = named
+        .split_once(':')
+        .map(|(provider, model)| (provider.trim(), model.trim()))
+        .filter(|(_, model)| !model.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "{source} is `{named}`; set it to `<provider>:<model>`, the provider one of {}",
+                provider_names()
+            )
+        })?;
+    let row = PROVIDERS
+        .iter()
+        .find(|row| row.name == provider)
+        .ok_or_else(|| {
+            format!(
+                "{source} names provider `{provider}`; use one of {}",
+                provider_names()
+            )
+        })?;
+    let key = key_of(&env, row).ok_or_else(|| {
+        format!(
+            "no provider configured: {source} names {}, but {} is not set",
+            row.name,
+            row.keys.join(" or ")
+        )
+    })?;
+    Ok(choice(&env, row, model.to_owned(), key))
+}
+
+/// The models chat can use, as `<provider>:<model>`: the one [`choose`] picks first, then
+/// every other provider whose key `env` holds, with its default model.
+pub(crate) fn offered(env: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    let first = choose(&env).ok();
+    let mut offered: Vec<String> = first.iter().map(Choice::named).collect();
+    for row in &PROVIDERS {
+        if first
+            .as_ref()
+            .is_some_and(|first| first.provider == row.name)
+        {
+            continue;
+        }
+        if key_of(&env, row).is_some() {
+            offered.push(format!("{}:{}", row.name, row.default_model));
+        }
+    }
+    offered
+}
+
+fn set(env: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> {
+    env(name).filter(|value| !value.trim().is_empty())
+}
+
+fn key_of(env: &impl Fn(&str) -> Option<String>, row: &ProviderRow) -> Option<&'static str> {
+    row.keys.iter().copied().find(|key| set(env, key).is_some())
+}
+
+fn choice(
+    env: &impl Fn(&str) -> Option<String>,
+    row: &'static ProviderRow,
+    model: String,
+    key_variable: &'static str,
+) -> Choice {
+    Choice {
+        provider: row.name,
+        kind: row.kind,
+        model,
+        key_variable,
+        base_url: base_url(row, set(env, row.base_url_variable)),
+    }
 }
 
 /// The provider's address: its override with any version path left off, else its own.
@@ -180,6 +226,23 @@ pub(crate) fn configured() -> Result<Choice, String> {
     choose(|name| std::env::var(name).ok())
 }
 
+/// [`choose_named`] from this process's environment.
+pub(crate) fn configured_named(named: &str, source: &str) -> Result<Choice, String> {
+    choose_named(|name| std::env::var(name).ok(), named, source)
+}
+
+/// [`offered`] from this process's environment.
+pub(crate) fn offered_here() -> Vec<String> {
+    offered(|name| std::env::var(name).ok())
+}
+
+impl Choice {
+    /// `<provider>:<model>`, as `--model` and `SUBMILLI_PLAYGROUND_MODEL` take it.
+    pub(crate) fn named(&self) -> String {
+        format!("{}:{}", self.provider, self.model)
+    }
+}
+
 /// Where a chat runs: the endpoint, its token, the binding, and the log its turns go to.
 pub(crate) struct Setup<'a> {
     pub(crate) choice: Choice,
@@ -196,6 +259,63 @@ pub(crate) struct Setup<'a> {
     /// Set when whoever asked is gone: the chat is cancelled before its next model
     /// request or tool call.
     pub(crate) cancelled: &'a AtomicBool,
+    /// The session this message continues, when it is not the first.
+    pub(crate) resume: Option<Resume>,
+}
+
+/// An earlier chat to carry on: its session, and what was said in it.
+pub(crate) struct Resume {
+    pub(crate) session: String,
+    /// The conversation so far, as [`history`] rebuilds it.
+    pub(crate) history: Vec<Turn>,
+    /// How many messages the session's log holds, so new ones are numbered after them.
+    pub(crate) said: usize,
+}
+
+/// The conversation a session's chat log holds, oldest first, as the model is shown it:
+/// what was said, without the tool calls and their results, which the log does not keep.
+/// Consecutive messages from the same side are joined, so the sides alternate.
+pub(crate) fn history<'m>(messages: impl IntoIterator<Item = (ChatRole, &'m str)>) -> Vec<Turn> {
+    let mut turns: Vec<Turn> = Vec::new();
+    for (role, text) in messages {
+        match (role, turns.last_mut()) {
+            (ChatRole::User, Some(Turn::User(said))) => {
+                said.push_str("\n\n");
+                said.push_str(text);
+            }
+            (
+                ChatRole::Assistant,
+                Some(Turn::Assistant {
+                    text: Some(said), ..
+                }),
+            ) => {
+                said.push_str("\n\n");
+                said.push_str(text);
+            }
+            (ChatRole::User, _) => turns.push(Turn::User(text.to_owned())),
+            (ChatRole::Assistant, _) => turns.push(Turn::Assistant {
+                text: Some(text.to_owned()),
+                calls: Vec::new(),
+            }),
+        }
+    }
+    // A model is asked with the user's turn first.
+    if matches!(turns.first(), Some(Turn::Assistant { .. })) {
+        turns.remove(0);
+    }
+    turns
+}
+
+/// [`history`] with `task` said after it: joined to the last turn when that is the
+/// user's own, which an answer never followed.
+fn with_task(mut turns: Vec<Turn>, task: &str) -> Vec<Turn> {
+    if let Some(Turn::User(said)) = turns.last_mut() {
+        said.push_str("\n\n");
+        said.push_str(task);
+    } else {
+        turns.push(Turn::User(task.to_owned()));
+    }
+    turns
 }
 
 /// Cancels a chat when dropped. The chat runs on a thread of its own; the request that
@@ -237,9 +357,17 @@ pub(crate) enum Stopped {
     Provider,
 }
 
+/// What a chat did, and the session it ran in once it had one, even when it failed.
+pub(crate) struct Ran {
+    pub(crate) session: Option<String>,
+    pub(crate) outcome: Result<Outcome, String>,
+}
+
 /// Runs `task` to the model's answer or the turn limit. Blocking. Errors are the
-/// playground's or the provider's own words, with the key never in them.
-pub(crate) fn run(setup: &Setup<'_>, task: &str) -> Result<Outcome, String> {
+/// playground's or the provider's own words, with the key never in them. The session
+/// stays open, so a later message can carry the conversation on; the server ends it when
+/// it sits idle past the blueprint's idle timeout, or `session end` does.
+pub(crate) fn run(setup: &Setup<'_>, task: &str) -> Ran {
     // Trimmed as `choose` read it, so the header and the redaction use the same text.
     let key = std::env::var(setup.choice.key_variable)
         .map(|key| key.trim().to_owned())
@@ -257,13 +385,18 @@ pub(crate) fn run(setup: &Setup<'_>, task: &str) -> Result<Outcome, String> {
         setup.token,
         setup.secrets,
     );
+    if let Some(resume) = &setup.resume {
+        http.resume(&resume.session, PROTOCOL_VERSION);
+    }
     let mcp = McpConversation {
         http: &http,
         next_id: Cell::new(1),
     };
-    let ran = converse(setup, &mcp, &key, task).map_err(clean);
-    http.close();
-    ran
+    let outcome = converse(setup, &mcp, &key, task).map_err(clean);
+    Ran {
+        session: http.session(),
+        outcome,
+    }
 }
 
 fn converse(
@@ -272,16 +405,23 @@ fn converse(
     key: &str,
     task: &str,
 ) -> Result<Outcome, String> {
-    let tools = connect(mcp, setup.variables)?;
+    let tools = match &setup.resume {
+        Some(_) => list_tools(mcp)?,
+        None => connect(mcp, setup.variables)?,
+    };
     let session = mcp.http.session();
+    let (history, earlier) = setup.resume.as_ref().map_or((Vec::new(), 0), |resume| {
+        (resume.history.clone(), resume.said)
+    });
     let log = Log {
         recorder: setup.recorder,
         session: session.as_deref(),
         agent: setup.label,
         model: &setup.choice.model,
+        earlier,
     };
     log.say(0, ChatRole::User, task, false);
-    let mut turns = vec![Turn::User(task.to_owned())];
+    let mut turns = with_task(history, task);
     let mut tool_calls = 0;
     let mut said = 0;
     let mut last_text = None;
@@ -445,13 +585,18 @@ fn connect(
     mcp.request(
         "initialize",
         json!({
-            "protocolVersion": "2025-06-18",
+            "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": { "name": "submilli-playground-chat", "version": env!("CARGO_PKG_VERSION") },
             "_meta": { "variables": variables },
         }),
     )?;
     mcp.notify("notifications/initialized")?;
+    list_tools(mcp)
+}
+
+/// The tools the session offers.
+fn list_tools(mcp: &McpConversation<'_>) -> Result<Vec<ToolSpec>, String> {
     let listed = mcp.request("tools/list", json!({}))?;
     Ok(listed["tools"]
         .as_array()
@@ -567,6 +712,8 @@ struct Log<'a> {
     agent: &'a str,
     /// The model answering, named on its messages.
     model: &'a str,
+    /// How many messages the session held before this chat's, numbered after them.
+    earlier: usize,
 }
 
 impl Log<'_> {
@@ -575,7 +722,7 @@ impl Log<'_> {
         let Some(session) = self.session else {
             return;
         };
-        let turn = format!("{}-{n}", self.agent);
+        let turn = format!("{}-{}", self.agent, self.earlier + n);
         let mut said = message(&turn, role, text);
         said.truncated |= cut;
         if role == ChatRole::Assistant {
@@ -666,5 +813,71 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(chosen.base_url, "https://generativelanguage.googleapis.com");
+    }
+
+    #[test]
+    fn a_named_model_needs_its_providers_key_and_says_where_it_came_from() {
+        let keys = env(&[("OPENAI_API_KEY", "o"), ("ANTHROPIC_API_KEY", "a")]);
+        let chosen = choose_named(&keys, "anthropic:claude-haiku-5-5", "--model").unwrap();
+        assert_eq!(chosen.named(), "anthropic:claude-haiku-5-5");
+        let unkeyed = choose_named(&keys, "google:gemini-flash-latest", "--model").unwrap_err();
+        assert!(
+            unkeyed
+                .contains("--model names google, but GEMINI_API_KEY or GOOGLE_API_KEY is not set"),
+            "{unkeyed}"
+        );
+        let bad = choose_named(&keys, "gpt-5.5", "--model").unwrap_err();
+        assert!(bad.starts_with("--model is `gpt-5.5`"), "{bad}");
+    }
+
+    #[test]
+    fn the_models_offered_are_the_configured_one_then_one_per_other_keyed_provider() {
+        assert_eq!(
+            offered(env(&[
+                ("OPENAI_API_KEY", "o"),
+                ("ANTHROPIC_API_KEY", "a"),
+                (MODEL_VARIABLE, "openai:gpt-6-luna"),
+            ])),
+            ["openai:gpt-6-luna", "anthropic:claude-sonnet-5-5"]
+        );
+        assert_eq!(
+            offered(env(&[("GEMINI_API_KEY", "g")])),
+            ["google:gemini-flash-latest"]
+        );
+        assert!(offered(env(&[])).is_empty());
+    }
+
+    #[test]
+    fn the_history_alternates_starts_with_the_user_and_takes_the_next_message() {
+        let turns = history([
+            (ChatRole::Assistant, "stray"),
+            (ChatRole::User, "Total cus_acme's charges."),
+            (ChatRole::Assistant, "Running it."),
+            (ChatRole::Assistant, "That was refused."),
+            (ChatRole::User, "Why?"),
+        ]);
+        assert_eq!(
+            turns,
+            [
+                Turn::User("Total cus_acme's charges.".into()),
+                Turn::Assistant {
+                    text: Some("Running it.\n\nThat was refused.".into()),
+                    calls: Vec::new(),
+                },
+                Turn::User("Why?".into()),
+            ]
+        );
+        // The last message went unanswered, so the next is said with it.
+        let next = with_task(turns, "Then last month's only.");
+        assert_eq!(next.len(), 3);
+        assert_eq!(
+            next[2],
+            Turn::User("Why?\n\nThen last month's only.".into())
+        );
+        let answered = with_task(
+            history([(ChatRole::User, "a"), (ChatRole::Assistant, "b")]),
+            "c",
+        );
+        assert_eq!(answered.last(), Some(&Turn::User("c".into())));
     }
 }

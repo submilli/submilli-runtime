@@ -1738,6 +1738,130 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         }
 
         #[test]
+        fn a_chat_carries_on_in_its_session_with_the_conversation_and_its_agent() {
+            let (port, bodies) = model_api(|n| match n {
+                1 => call_execute(n),
+                _ => json!({ "content": [{ "type": "text", "text": format!("Answer {n}.") }],
+                             "stop_reason": "end_turn" }),
+            });
+            let playground = Playground::starter();
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+
+            let first = playground.expect(0, &["chat", "Total the charges."]);
+            assert_eq!(first["continued"], false);
+            let session = first["session"].as_str().unwrap().to_owned();
+            let agent = format!("anthropic:{}", first["model"].as_str().unwrap());
+            let printed = playground.run(&["chat", "--session", &session, "Only last month."]);
+            assert_eq!(printed.status.code(), Some(0), "{}", stderr(&printed));
+            let printed = String::from_utf8_lossy(&printed.stdout);
+            assert!(
+                printed.contains(&format!("continued session {session}"))
+                    && printed.contains(&format!("chat --session {session} \"<message>\"")),
+                "{printed}"
+            );
+
+            // The model saw the conversation so far, then the new message.
+            let bodies = bodies.lock().unwrap().clone();
+            assert_eq!(bodies.len(), 3);
+            let messages = bodies[1]["messages"].as_array().unwrap();
+            let said: Vec<(&str, String)> = messages
+                .iter()
+                .map(|message| {
+                    (
+                        message["role"].as_str().unwrap(),
+                        message["content"].to_string(),
+                    )
+                })
+                .collect();
+            assert_eq!(said.len(), 3, "{said:?}");
+            assert_eq!(
+                said.iter().map(|(role, _)| *role).collect::<Vec<_>>(),
+                ["user", "assistant", "user"]
+            );
+            assert!(said[0].1.contains("Total the charges."), "{said:?}");
+            assert!(said[1].1.contains("Answer 0."), "{said:?}");
+            assert!(said[2].1.contains("Only last month."), "{said:?}");
+
+            // One log, every message once, in order.
+            let log = std::fs::read_to_string(
+                playground
+                    .state()
+                    .join(format!("store/events/{session}.jsonl")),
+            )
+            .unwrap();
+            let turns: Vec<(String, String)> = log
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|event| event["body"]["chat"].is_object())
+                .map(|event| {
+                    (
+                        event["body"]["chat"]["turn"].as_str().unwrap().to_owned(),
+                        event["body"]["chat"]["text"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                turns,
+                [
+                    ("chat-0".to_owned(), "Total the charges.".to_owned()),
+                    ("chat-1".to_owned(), "Answer 0.".to_owned()),
+                    ("chat-2".to_owned(), "Only last month.".to_owned()),
+                    ("chat-3".to_owned(), "Running it.".to_owned()),
+                    ("chat-4".to_owned(), "Answer 2.".to_owned()),
+                ]
+            );
+            // The second message's program ran in the same session.
+            let runs = playground.expect(0, &["runs", "--session", &session]);
+            assert_eq!(runs["runs"].as_array().unwrap().len(), 1, "{runs}");
+            let sessions = playground.expect(0, &["sessions"]);
+            let listed = sessions["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["session"] == session.as_str())
+                .unwrap();
+            assert_eq!(listed["agent"], agent.as_str());
+            assert_eq!(listed["open"], true);
+
+            // A session keeps its agent; only a chat's session can be carried on; an
+            // ended one cannot.
+            let other = playground.run(&[
+                "chat",
+                "--session",
+                &session,
+                "--model",
+                "anthropic:another-model",
+                "x",
+            ]);
+            assert_eq!(other.status.code(), Some(2), "{}", stderr(&other));
+            assert!(
+                stderr(&other).contains(&format!("agent is {agent}")),
+                "{}",
+                stderr(&other)
+            );
+            let started = playground.expect(0, &["session", "start"]);
+            let plain = started["session"].as_str().unwrap();
+            let refused = playground.run(&["chat", "--session", plain, "x"]);
+            assert!(
+                stderr(&refused).contains("was not started by `chat`"),
+                "{}",
+                stderr(&refused)
+            );
+            playground.expect(0, &["session", "end", &session]);
+            let ended = playground.run(&["chat", "--session", &session, "x"]);
+            assert!(stderr(&ended).contains("has ended"), "{}", stderr(&ended));
+            let unkeyed = playground.run(&["chat", "--model", "openai:gpt-5.5", "x"]);
+            assert!(
+                stderr(&unkeyed).contains("OPENAI_API_KEY is not set"),
+                "{}",
+                stderr(&unkeyed)
+            );
+            assert_eq!(bodies.len(), 3);
+            playground.stop();
+        }
+
+        #[test]
         fn chat_stops_at_the_turn_limit_and_says_so_with_no_key() {
             let (port, bodies) = model_api(call_execute);
             let playground = Playground::starter();
