@@ -1,0 +1,136 @@
+{
+ "kind": "runs",
+ "runs": [
+  {
+   "run": 7,
+   "page": "http://127.0.0.1:47100/#run=7",
+   "blueprint_version": "2",
+   "source": "rerun",
+   "decision_refs": [],
+   "started_at_micros": 1791898018116197,
+   "started_at": "2026-10-13T13:26:58Z",
+   "outcome": {
+    "kind": "completed"
+   },
+   "decisions": 2,
+   "denied": [],
+   "session": "5e550000-0000-4000-8000-000000000001",
+   "test_of": null,
+   "rerun_of": 1
+  },
+  {
+   "run": 6,
+   "page": "http://127.0.0.1:47100/#run=6",
+   "blueprint_version": "2",
+   "source": "test",
+   "decision_refs": [],
+   "started_at_micros": 1791898017932798,
+   "started_at": "2026-10-13T13:26:57Z",
+   "outcome": {
+    "kind": "completed"
+   },
+   "decisions": 2,
+   "denied": [],
+   "session": "5e550000-0000-4000-8000-000000000002",
+   "test_of": 2,
+   "rerun_of": null
+  },
+  {
+   "run": 5,
+   "page": "http://127.0.0.1:47100/#run=5",
+   "blueprint_version": "2",
+   "source": "test",
+   "decision_refs": [],
+   "started_at_micros": 1791898017718171,
+   "started_at": "2026-10-13T13:26:57Z",
+   "outcome": {
+    "kind": "completed"
+   },
+   "decisions": 2,
+   "denied": [],
+   "session": "5e550000-0000-4000-8000-000000000003",
+   "test_of": 2,
+   "rerun_of": null
+  },
+  {
+   "run": 4,
+   "page": "http://127.0.0.1:47100/#run=4",
+   "blueprint_version": "1",
+   "source": "chat",
+   "decision_refs": [],
+   "started_at_micros": 1791898016827551,
+   "started_at": "2026-10-13T13:26:56Z",
+   "outcome": {
+    "kind": "completed"
+   },
+   "decisions": 2,
+   "denied": [],
+   "session": "5e550000-0000-4000-8000-000000000004",
+   "test_of": null,
+   "rerun_of": null
+  },
+  {
+   "run": 3,
+   "page": "http://127.0.0.1:47100/#run=3",
+   "blueprint_version": "1",
+   "source": "chat",
+   "decision_refs": [],
+   "started_at_micros": 1791898016711100,
+   "started_at": "2026-10-13T13:26:56Z",
+   "outcome": {
+    "kind": "failed",
+    "error": "compile_error"
+   },
+   "decisions": 0,
+   "denied": [],
+   "session": "5e550000-0000-4000-8000-000000000004",
+   "test_of": null,
+   "rerun_of": null
+  },
+  {
+   "run": 2,
+   "page": "http://127.0.0.1:47100/#run=2",
+   "blueprint_version": "1",
+   "source": "chat",
+   "decision_refs": [
+    "2.1"
+   ],
+   "started_at_micros": 1791898016630614,
+   "started_at": "2026-10-13T13:26:56Z",
+   "outcome": {
+    "kind": "denied",
+    "decision": "2.1"
+   },
+   "decisions": 1,
+   "denied": [
+    "2.1"
+   ],
+   "session": "5e550000-0000-4000-8000-000000000004",
+   "test_of": null,
+   "rerun_of": null
+  },
+  {
+   "run": 1,
+   "page": "http://127.0.0.1:47100/#run=1",
+   "blueprint_version": "1",
+   "source": "chat",
+   "decision_refs": [],
+   "started_at_micros": 1791898016249810,
+   "started_at": "2026-10-13T13:26:56Z",
+   "outcome": {
+    "kind": "completed"
+   },
+   "decisions": 2,
+   "denied": [],
+   "session": "5e550000-0000-4000-8000-000000000004",
+   "test_of": null,
+   "rerun_of": null
+  }
+ ],
+ "more": 0,
+ "next": [
+  "submilli playground show 7",
+  "submilli playground explain 2.1",
+  "submilli playground sessions"
+ ]
+}

@@ -1,0 +1,38 @@
+{
+ "kind": "changes",
+ "versions": [
+  {
+   "version": 2,
+   "at_micros": 1791898017400543,
+   "at": "2026-10-13T13:26:57Z",
+   "classification": "widening",
+   "summary": "Widened: `main` gained an allow rule `globex-support` for `acme.com/charges.list`.",
+   "pin_removals": [],
+   "current": true,
+   "after_run": 4,
+   "changes": [
+    {
+     "caller": "main",
+     "classification": "widening",
+     "rule": "`globex-support`",
+     "summary": "Widened: `main` gained an allow rule `globex-support` for `acme.com/charges.list`."
+    }
+   ]
+  },
+  {
+   "version": 1,
+   "at_micros": 1791898015981929,
+   "at": "2026-10-13T13:26:55Z",
+   "classification": "initial",
+   "summary": "The first version the playground served.",
+   "pin_removals": [],
+   "current": false,
+   "after_run": 0,
+   "changes": []
+  }
+ ],
+ "voided": [],
+ "next": [
+  "submilli playground audit"
+ ]
+}

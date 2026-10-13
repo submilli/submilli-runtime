@@ -1,0 +1,42 @@
+id: 1
+event: event
+data: {"format":1,"session_seq":1,"event_id":"00000000-0000-4000-8000-000000000006-41","position":{"at_micros":1791898017932798,"run":6,"rank":0},"run":6,"body":{"event":{"schema":1,"event_id":"00000000-0000-4000-8000-000000000006-41","seq":41,"at_micros":1791898017937978,"session_id":"5e550000-0000-4000-8000-000000000002","run_id":"00000000-0000-4000-8000-000000000012","kind":"run-started","label":"test","entry":"test","blueprint":"billing","blueprint_hash":"686b81f1dbe9e0635b9fbc0167137131bf393b0d725087d753fc5ea52a96fbc9","code_hash":"03cfb10369678693e044da8d2a2a22cb7fcdbc8d23086124a62529e93e59dbb3"}}}
+
+id: 2
+event: event
+data: {"format":1,"session_seq":2,"event_id":"00000000-0000-4000-8000-000000000006-42","position":{"at_micros":1791898017946509,"run":6,"call_index":0,"rank":0},"run":6,"body":{"event":{"schema":1,"event_id":"00000000-0000-4000-8000-000000000006-42","seq":42,"at_micros":1791898017962501,"session_id":"5e550000-0000-4000-8000-000000000002","run_id":"00000000-0000-4000-8000-000000000012","kind":"call-started","call_index":0,"caller":"main","capability":"acme.com/charges.list","started_micros":13711,"line":{"line":4,"column":24},"package_line":{"package":"@acme/billing","module":"lib","function":"listCharges","line":28,"column":38}}}}
+
+id: 3
+event: event
+data: {"format":1,"session_seq":3,"event_id":"00000000-0000-4000-8000-000000000006-43","position":{"at_micros":1791898017946509,"run":6,"call_index":0,"rank":1},"run":6,"decision":1,"body":{"event":{"schema":1,"event_id":"00000000-0000-4000-8000-000000000006-43","seq":43,"at_micros":1791898017962580,"session_id":"5e550000-0000-4000-8000-000000000002","run_id":"00000000-0000-4000-8000-000000000012","kind":"decision","record":{"call_index":0,"seq":1,"at_micros":13711,"caller":"main","capability":"acme.com/charges.list","context":{"customerId":"cus_globex"},"context_truncated":false,"context_digest":1057546969042097122,"allowed":true,"action":"allow","cause":{"kind":"rule","caller":"main","index":2,"name":"globex-support"},"near_misses":[{"rule":{"caller":"main","index":0,"name":"charges-for-signed-in-customer"},"filter":"customerId == ${vars.customerId}","failures":[{"comparison":"customerId == ${vars.customerId}","actual":"cus_globex","expected":"cus_northwind","reason":{"kind":"not-satisfied"},"negated":false}]}],"source":"policy","rule":2,"reason":null,"entry_path":{"kind":"package-check"},"line":{"line":4,"column":24},"filtered":false,"payload_dropped":false}}}}
+
+id: 4
+event: event
+data: {"format":1,"session_seq":4,"event_id":"00000000-0000-4000-8000-000000000006-44","position":{"at_micros":1791898017946604,"run":6,"call_index":0,"rank":2},"run":6,"body":{"event":{"schema":1,"event_id":"00000000-0000-4000-8000-000000000006-44","seq":44,"at_micros":1791898017962590,"session_id":"5e550000-0000-4000-8000-000000000002","run_id":"00000000-0000-4000-8000-000000000012","kind":"call-finished","call_index":0,"capability":"acme.com/charges.list","started_micros":13711,"ended_micros":13806,"outcome":"returned"}}}
+
+id: 5
+event: event
+data: {"format":1,"session_seq":5,"event_id":"00000000-0000-4000-8000-000000000006-45","position":{"at_micros":1791898017946628,"run":6,"call_index":1,"rank":0},"run":6,"body":{"event":{"schema":1,"event_id":"00000000-0000-4000-8000-000000000006-45","seq":45,"at_micros":1791898017962610,"session_id":"5e550000-0000-4000-8000-000000000002","run_id":"00000000-0000-4000-8000-000000000012","kind":"call-started","call_index":1,"caller":"@acme/billing","capability":"fs.read","started_micros":13830,"line":{"line":4,"column":24},"package_line":{"package":"@acme/billing","module":"lib","function":"listCharges","line":31,"column":27}}}}
+
+id: 6
+event: event
+data: {"format":1,"session_seq":6,"event_id":"00000000-0000-4000-8000-000000000006-46","position":{"at_micros":1791898017946628,"run":6,"call_index":1,"rank":1},"run":6,"decision":2,"body":{"event":{"schema":1,"event_id":"00000000-0000-4000-8000-000000000006-46","seq":46,"at_micros":1791898017962633,"session_id":"5e550000-0000-4000-8000-000000000002","run_id":"00000000-0000-4000-8000-000000000012","kind":"decision","record":{"call_index":1,"seq":1,"at_micros":13830,"caller":"@acme/billing","capability":"fs.read","context":{"path":"/billing/charges.json"},"context_truncated":false,"context_digest":3370474688309865453,"allowed":true,"action":"allow","cause":{"kind":"rule","caller":"@acme/billing","index":0,"name":null},"near_misses":[],"source":"policy","rule":0,"reason":null,"entry_path":{"kind":"gated-op"},"line":{"line":4,"column":24},"filtered":false,"payload_dropped":false}}}}
+
+id: 7
+event: event
+data: {"format":1,"session_seq":7,"event_id":"00000000-0000-4000-8000-000000000006-47","position":{"at_micros":1791898017947813,"run":6,"call_index":1,"rank":2},"run":6,"body":{"event":{"schema":1,"event_id":"00000000-0000-4000-8000-000000000006-47","seq":47,"at_micros":1791898017963797,"session_id":"5e550000-0000-4000-8000-000000000002","run_id":"00000000-0000-4000-8000-000000000012","kind":"call-finished","call_index":1,"capability":"fs.read","started_micros":13830,"ended_micros":15015,"outcome":"returned","result_bytes":21530}}}
+
+id: 8
+event: event
+data: {"format":1,"session_seq":8,"event_id":"00000000-0000-4000-8000-000000000006-48","position":{"at_micros":1791898018053681,"run":6,"rank":3},"run":6,"body":{"event":{"schema":1,"event_id":"00000000-0000-4000-8000-000000000006-48","seq":48,"at_micros":1791898018053681,"session_id":"5e550000-0000-4000-8000-000000000002","run_id":"00000000-0000-4000-8000-000000000012","kind":"run-finished","dispatched":true,"wall_ms":126,"console_bytes":0,"events_dropped":0}}}
+
+id: 9
+event: event
+data: {"format":1,"session_seq":9,"event_id":"00000000-0000-4000-8000-000000000006-49","position":{"at_micros":1791898018060770,"run":6,"rank":3},"run":6,"body":{"event":{"schema":1,"event_id":"00000000-0000-4000-8000-000000000006-49","seq":49,"at_micros":1791898018060770,"session_id":"5e550000-0000-4000-8000-000000000002","run_id":"00000000-0000-4000-8000-000000000012","kind":"returned","bytes":41}}}
+
+event: run-idle
+data: {"kind":"run-idle","session":"5e550000-0000-4000-8000-000000000002"}
+
+event: session-ended
+data: {"kind":"session-ended","session":"5e550000-0000-4000-8000-000000000002"}
+

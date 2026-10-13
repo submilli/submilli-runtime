@@ -1,0 +1,26 @@
+{
+ "kind": "compare",
+ "before": {
+  "run": 1,
+  "page": "http://127.0.0.1:47100/#run=1",
+  "blueprint_version": "1",
+  "source": "chat",
+  "decision_refs": []
+ },
+ "after": {
+  "run": 7,
+  "page": "http://127.0.0.1:47100/#run=7",
+  "blueprint_version": "2",
+  "source": "rerun",
+  "decision_refs": []
+ },
+ "changes": [],
+ "unmatched": [],
+ "alignment": "the nth decision of each caller and capability in one run with the nth of the same caller and capability in the other",
+ "next": [
+  "submilli playground show 7"
+ ],
+ "untrusted": {
+  "contexts": {}
+ }
+}

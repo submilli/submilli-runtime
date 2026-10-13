@@ -1,0 +1,103 @@
+{
+ "kind": "run",
+ "run": 2,
+ "page": "http://127.0.0.1:47100/#run=2",
+ "blueprint_version": "1",
+ "source": "chat",
+ "decision_refs": [
+  "2.1"
+ ],
+ "blueprint": "billing",
+ "entry": "mcp",
+ "started_at_micros": 1791898016630614,
+ "started_at": "2026-10-13T13:26:56Z",
+ "wall_ms": 46,
+ "outcome": {
+  "kind": "denied",
+  "decision": "2.1"
+ },
+ "denied": [
+  "2.1"
+ ],
+ "session": "5e550000-0000-4000-8000-000000000004",
+ "variables": {
+  "customerId": "cus_northwind"
+ },
+ "reruns": [
+  {
+   "run": 5,
+   "kind": "test",
+   "blueprint_version": "2",
+   "outcome": {
+    "kind": "completed"
+   }
+  },
+  {
+   "run": 6,
+   "kind": "test",
+   "blueprint_version": "2",
+   "outcome": {
+    "kind": "completed"
+   }
+  }
+ ],
+ "decision_count": 1,
+ "decisions": [
+  {
+   "refs": [
+    "2.1"
+   ],
+   "outcome": "deny",
+   "caller": "main",
+   "capability": "acme.com/charges.list",
+   "decided_by": "by the default; near misses: `charges-for-signed-in-customer` (rule 1 of `main`), `acme-support` (rule 3 of `main`)",
+   "near_misses": [
+    {
+     "caller": "main",
+     "index": 0,
+     "position": 1,
+     "name": "charges-for-signed-in-customer",
+     "line": 27,
+     "column": 3,
+     "end_line": 30
+    },
+    {
+     "caller": "main",
+     "index": 2,
+     "position": 3,
+     "name": "acme-support",
+     "line": 35,
+     "column": 3,
+     "end_line": 38
+    }
+   ],
+   "filtered": false
+  }
+ ],
+ "decisions_dropped": 0,
+ "log_truncated": false,
+ "calls": {
+  "count": 1,
+  "returned": 0,
+  "failed": 1,
+  "unfinished": 0,
+  "with_bodies": 0
+ },
+ "payloads_included": false,
+ "program_recorded": true,
+ "program_included": true,
+ "next": [
+  "submilli playground explain 2.1",
+  "submilli playground draft-rule 2.1",
+  "submilli playground runs --session 5e550000-0000-4000-8000-000000000004"
+ ],
+ "untrusted": {
+  "contexts": {
+   "2.1": {
+    "customerId": "cus_globex"
+   }
+  },
+  "error": "error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = \"cus_globex\" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.\n  fields: caller = \"main\", capability = \"acme.com/charges.list\", reason = \"policy denied acme.com/charges.list with customerId = \\\"cus_globex\\\" for main\"\n  at listCharges (@acme/billing/lib:28:38)  [thrown here]\n27 | export function listCharges(customerId: string): Charge[] {\n28 |     check(\"acme.com/charges.list\", { customerId });\n   |                                      ^\n29 | \n  at main (<execute>:4:24)  [entry]\n3 | function main(): number {\n4 |     return listCharges(\"cus_globex\").length;\n  |                        ^\n5 | }\n",
+  "program": "import { listCharges } from \"@acme/billing\";\n\nfunction main(): number {\n    return listCharges(\"cus_globex\").length;\n}\n"
+ }
+}

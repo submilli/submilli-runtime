@@ -1,0 +1,82 @@
+{
+ "kind": "sessions",
+ "sessions": [
+  {
+   "session": "5e550000-0000-4000-8000-000000000001",
+   "started_at_micros": 1791898018116197,
+   "started_at": "2026-10-13T13:26:58Z",
+   "sources": [
+    "rerun"
+   ],
+   "variables": {
+    "customerId": "cus_northwind"
+   },
+   "run_count": 1,
+   "runs": [
+    7
+   ],
+   "denied": false,
+   "open": null
+  },
+  {
+   "session": "5e550000-0000-4000-8000-000000000002",
+   "started_at_micros": 1791898017932798,
+   "started_at": "2026-10-13T13:26:57Z",
+   "sources": [
+    "test"
+   ],
+   "variables": {
+    "customerId": "cus_northwind"
+   },
+   "run_count": 1,
+   "runs": [
+    6
+   ],
+   "denied": false,
+   "open": null
+  },
+  {
+   "session": "5e550000-0000-4000-8000-000000000003",
+   "started_at_micros": 1791898017718171,
+   "started_at": "2026-10-13T13:26:57Z",
+   "sources": [
+    "test"
+   ],
+   "variables": {
+    "customerId": "cus_northwind"
+   },
+   "run_count": 1,
+   "runs": [
+    5
+   ],
+   "denied": false,
+   "open": null
+  },
+  {
+   "session": "5e550000-0000-4000-8000-000000000004",
+   "started_at_micros": 1791898016217171,
+   "started_at": "2026-10-13T13:26:56Z",
+   "sources": [
+    "chat"
+   ],
+   "variables": {
+    "customerId": "cus_northwind"
+   },
+   "model": "anthropic:claude-sonnet-5-5",
+   "run_count": 4,
+   "runs": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "denied": true,
+   "open": true
+  }
+ ],
+ "more": 0,
+ "next": [
+  "submilli playground runs --session 5e550000-0000-4000-8000-000000000001",
+  "submilli playground runs --session 5e550000-0000-4000-8000-000000000002"
+ ]
+}
