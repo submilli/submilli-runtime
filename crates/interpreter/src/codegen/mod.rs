@@ -1,4 +1,9 @@
 //! Codegen — translates a typechecked Typed AST into a Wasm module.
+//!
+//! Phase entry points require a captured and desugared tree satisfying
+//! [`TypedAst`]'s phase input contract, and run on a
+//! [`crate::compiler_limits::COMPILER_STACK_BYTES`] stack. They validate borrowed
+//! dependency declarations before cloning or traversing their type payloads.
 
 pub mod analysis;
 mod argument_defaults;
@@ -787,6 +792,8 @@ fn codegen_inner(
     package_sources: Option<&crate::Sources>,
 ) -> Result<GeneratedModule, CompilerFailure> {
     tree_height::check_typed(ta, CompilerStage::Codegen)?;
+    crate::typechecker::infer::check_declaration_types(dependencies.iter().copied())
+        .map_err(|failure| failure.with_stage(CompilerStage::Codegen))?;
     u32::try_from(source.len()).map_err(|_| CompilerFailure::Limit {
         stage: CompilerStage::Codegen,
         span: None,

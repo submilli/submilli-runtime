@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c4650cb06f9ddfc0306ce764ca89272292c0397c347f808ac3bc59923f9a51c4"
+  contentHash: "70e8b03ae628d1ec453bf8f317f9dd7cd27930352453e92f573d05c0183e0b0a"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -363,8 +363,8 @@ submilli run --blueprint blueprint.yaml --var customerId=cus_initech credit.ts
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/credits.apply: policy denied acme.com/credits.apply for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
-  fields: caller = "main", capability = "acme.com/credits.apply", reason = "policy denied acme.com/credits.apply for main"
+error: PermissionDeniedError: permission denied: caller=main capability=acme.com/credits.apply: policy denied acme.com/credits.apply with amount = 1500, customerClass = "premium", customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "acme.com/credits.apply", reason = "policy denied acme.com/credits.apply with amount = 1500, customerClass = \"premium\", customerId = \"cus_northwind\" for mai…"
   at applyCredit (lib:28:66)  [thrown here]
 ```
 

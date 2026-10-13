@@ -131,7 +131,10 @@ fn order(log: &EventLog) -> Vec<String> {
             EventBody::Chat(turn) if current.contains(event.event_id.as_str()) => {
                 Some(format!("chat {:?}", turn.role).to_lowercase())
             }
-            EventBody::Chat(_) | EventBody::ChatReplaced(_) | EventBody::Gap(_) => None,
+            EventBody::Chat(_)
+            | EventBody::ChatReplaced(_)
+            | EventBody::ChatTools(_)
+            | EventBody::Gap(_) => None,
             EventBody::Event(event) => Some(format!(
                 "call {}",
                 event.tool_call_id.as_deref().unwrap_or("-")

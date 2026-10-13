@@ -272,6 +272,7 @@ fn kinds(events: &[&StoredEvent]) -> Vec<String> {
             EventBody::Gap(_) => "gap".to_owned(),
             EventBody::Chat(turn) => format!("chat {}", turn.text),
             EventBody::ChatReplaced(_) => "chat replaced".to_owned(),
+            EventBody::ChatTools(tools) => format!("chat tools {}", tools.turn),
             EventBody::Event(event) => match &event.kind {
                 EventKind::RunStarted { .. } => "started".to_owned(),
                 EventKind::CallStarted { call_index, .. } => format!("call {call_index}"),

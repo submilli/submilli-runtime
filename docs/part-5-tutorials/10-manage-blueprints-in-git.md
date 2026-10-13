@@ -9,7 +9,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4294291ef58c21623a74c432628e953e21d36b5387c871de6b47f43a7745e506"
+  contentHash: "f247fde266edd95a1381eb518cbe7223963bf2f1dcf27ce20f54af8c7d068707"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -125,7 +125,7 @@ chmod +x test.sh
 installed @submilli/acme-billing v0.1.0 -> ~/.submilli/packages/@submilli/acme-billing
 ✓ blueprint.yaml is valid
 2 charges, 6150 cents
-error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
+error: PermissionDeniedError: permission denied: caller=main capability=acme.com/charges.list: policy denied acme.com/charges.list with customerId = "cus_northwind" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
 ```
 
 The first line of the test is the program's result for the customer the

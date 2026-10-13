@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "9b09cd72f9129522ce06f66fa4d01c3f85a942b25ef296a522b929656a92c2cc"
+  contentHash: "1611f0bd14ad229abda51c8ecf36eddf72ed96ec5296f438e1a5cee121e9501a"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -165,8 +165,8 @@ URL Source: https://docs.python.org/3/library/json.html
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=jina.ai/read: policy denied jina.ai/read for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
-  fields: caller = "main", capability = "jina.ai/read", reason = "policy denied jina.ai/read for main"
+error: PermissionDeniedError: permission denied: caller=main capability=jina.ai/read: policy denied jina.ai/read with host = "docs.python.org.evil.com" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
+  fields: caller = "main", capability = "jina.ai/read", reason = "policy denied jina.ai/read with host = \"docs.python.org.evil.com\" for main"
   at read (@submilli/jina/lib:118:41)  [thrown here]
 ```
 
@@ -295,7 +295,7 @@ URL Source: https://docs.python.org/3/library/json.html
 ```
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=jina.ai/read: policy denied jina.ai/read for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
+error: PermissionDeniedError: permission denied: caller=main capability=jina.ai/read: policy denied jina.ai/read with host = "docs.python.org.evil.com" for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
 ```
 
 ```sh

@@ -14,6 +14,10 @@ pub struct RunResult {
 /// Wasm start function, so they run here rather than under
 /// [`dispatch_main_async`]. Arm the execution deadline before this call, and
 /// treat its error as `main`'s: it is shaped the same way.
+///
+/// Every thread polling this future must meet
+/// [`RuntimeConfig::native_stack_size`](crate::runtime::RuntimeConfig::native_stack_size)'s
+/// caller contract for the store's Wasm stack budget.
 pub async fn instantiate_program_async(
     linker: &Linker<StoreData>,
     store: &mut Store<StoreData>,
@@ -23,6 +27,11 @@ pub async fn instantiate_program_async(
     outcome.map_err(|err| uncaught_error(store, err))
 }
 
+/// Calls the instantiated program's `main` and captures its JSON-encoded result.
+///
+/// Every thread polling this future must meet
+/// [`RuntimeConfig::native_stack_size`](crate::runtime::RuntimeConfig::native_stack_size)'s
+/// caller contract, as for [`instantiate_program_async`].
 pub async fn dispatch_main_async(
     store: &mut Store<StoreData>,
     instance: &Instance,

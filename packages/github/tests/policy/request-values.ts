@@ -37,8 +37,13 @@ class FlippingRepository implements RepositoryRef {
 }
 
 function requestValuesHold(capability: string, call: (repository: RepositoryRef) => void): void {
-    const refusedAtMain = "main: policy denied " + capability + " for main";
-    assertOutcome(refusedAtMain, () => { call({ owner: "victim-org", name: "repo.js" }); });
+    // The refusal names the values it was for, the repository's owner among them.
+    const refused = outcomeOf(() => { call({ owner: "victim-org", name: "repo.js" }); });
+    assert(
+        refused.startsWith("main: policy denied " + capability + " with ")
+            && refused.includes("owner = \"victim-org\"") && refused.endsWith(" for main"),
+        "expected main's refusal of victim-org for " + capability + ", got " + refused,
+    );
     assertOutcome(APPROVED_REQUEST, () => { call({ owner: "allowed-org", name: "repo.js" }); });
 
     const flipping = new FlippingRepository();
@@ -48,6 +53,11 @@ function requestValuesHold(capability: string, call: (repository: RepositoryRef)
 }
 
 function assertOutcome(expected: string, action: () => void): void {
+    const outcome = outcomeOf(action);
+    assert(outcome === expected, "expected " + expected + ", got " + outcome);
+}
+
+function outcomeOf(action: () => void): string {
     let outcome = "no error";
     try {
         action();
@@ -56,7 +66,7 @@ function assertOutcome(expected: string, action: () => void): void {
     } catch (error) {
         outcome = error.name + ": " + error.message;
     }
-    assert(outcome === expected, "expected " + expected + ", got " + outcome);
+    return outcome;
 }
 
 function main(): string {

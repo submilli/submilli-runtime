@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6d2936edfc8b81ae1a48ee217ec6c55614caa9bd1443831882fd2db6e666092f"
+  contentHash: "f62227221314c069f0cce2cb5d03b9cfe1bc96994996fee26230a874c00f855c"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -251,7 +251,7 @@ A refused operation throws `PermissionDeniedError`, which a program can
 catch. `e.caller`, `e.capability`, and `e.reason` hold its fields.
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=fs.write: policy denied fs.write on /secrets.txt for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
+error: PermissionDeniedError: permission denied: caller=main capability=fs.write: policy denied fs.write on /secrets.txt for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
   fields: caller = "main", capability = "fs.write", reason = "policy denied fs.write on /secrets.txt for main"
   at main (w.ts:4:43)  [thrown here]
 ```
@@ -267,6 +267,8 @@ that refused.
 | `<path> is in the volume mounted read-only at <mount>` | A write to a read-only volume |
 
 `<target>` is ` on <path>` for the `fs.*`, `git.*`, and `http.download`
-capabilities (` from <path> to <path>` for `fs.copy` and `fs.move`), and
-empty otherwise. [Diagnose a denial](/docs/tutorials/diagnose-a-denial)
+capabilities (` from <path> to <path>` for `fs.copy` and `fs.move`). For a
+capability a Package declares, it is ` with ` and the values the call asked
+with: each text, number, or true/false field, up to four, text cut at 64
+characters. It is empty otherwise. [Diagnose a denial](/docs/tutorials/diagnose-a-denial)
 traces a denial back to the rule that decided it.

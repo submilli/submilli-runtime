@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d1aadc7d02600b00ae0e2cc66b9c5f4553ba617aefdcfa5e4b2788f03b9cb7dc"
+  contentHash: "78b11e80c600be13ed9069d80f1ffdee14bf5ed3a0ebc543992004fd7617444d"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -220,7 +220,7 @@ A program that calls `list_users`, which the filter leaves out, is refused
 before any request leaves:
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=mcp.linear: policy denied mcp.linear for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
+error: PermissionDeniedError: permission denied: caller=main capability=mcp.linear: policy denied mcp.linear for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
 ```
 
 ## Log in with OAuth
