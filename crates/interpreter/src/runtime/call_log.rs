@@ -25,7 +25,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::StoreData;
-use super::decision::{CallTicket, SourceLine};
+use super::decision::{CallTicket, PackageLine, SourceLine};
 
 /// How a call ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +104,9 @@ pub struct CallRecord {
     pub outcome: Option<CallOutcome>,
     /// The program line that led to the call, when known.
     pub line: Option<SourceLine>,
+    /// The line inside a package that made the call, when the program reached it through one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_line: Option<PackageLine>,
     /// What the call sent, when it reached outside the program.
     pub request: Option<Box<PayloadRecord>>,
     /// What came back, or the failure that came instead.
@@ -127,6 +130,7 @@ impl CallRecord {
             ended_micros: self.ended_micros,
             outcome: self.outcome,
             line: self.line,
+            package_line: self.package_line.clone(),
             request: strip(&self.request),
             response: strip(&self.response),
             usage: self.usage,

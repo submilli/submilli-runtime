@@ -185,6 +185,7 @@ pub(crate) fn call(call_index: u64, capability: &str) -> CallRecord {
         ended_micros: Some(call_index * 100 + 10),
         outcome: Some(CallOutcome::Returned),
         line: None,
+        package_line: None,
         request: None,
         response: None,
         usage: None,

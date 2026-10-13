@@ -101,7 +101,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             caller.data().security_check.as_ref(),
                             &context,
                             error,
-                            || crate::stdlib::shared::source_line(&*caller),
+                            || crate::stdlib::shared::call_origin(&*caller),
                         );
                     },
                 )?;
@@ -234,19 +234,19 @@ fn consumer_of_running_package(
 }
 
 /// Audits an attribution failure at the entry of `security.check` as a call of its own.
-/// `line` runs only while a recorder is installed.
+/// `origin` runs only while a recorder is installed.
 fn audit_consumer_failure(
     policy: &dyn crate::runtime::security::SecurityCheck,
     context: &serde_json::Value,
     error: &wasmtime::Error,
-    line: impl FnOnce() -> Option<crate::runtime::decision::SourceLine>,
+    origin: impl FnOnce() -> crate::runtime::decision::CallOrigin,
 ) {
     let Some(denial) = error.downcast_ref::<crate::runtime::host::PermissionDenied>() else {
         return;
     };
     let ticket = policy
         .recorder()
-        .map(|recorder| recorder.begin_call(&denial.caller, &denial.capability, line()));
+        .map(|recorder| recorder.begin_call(&denial.caller, &denial.capability, origin()));
     crate::stdlib::shared::audit_denial_at(
         policy,
         &denial.caller,
@@ -261,6 +261,7 @@ fn audit_consumer_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::decision::CallOrigin;
     use crate::runtime::security::CheckOutcome;
 
     #[test]
@@ -286,13 +287,13 @@ mod tests {
             &sink,
             &context,
             &wasmtime::Error::new(wasmtime::Trap::OutOfFuel),
-            || None,
+            CallOrigin::default,
         );
         audit_consumer_failure(
             &sink,
             &context,
             &crate::runtime::host::fatal_host_error("engine failure"),
-            || None,
+            CallOrigin::default,
         );
         assert!(sink.0.lock().unwrap().is_empty());
         for label in ["<no wasm frame>", "<unnamed module>"] {
@@ -300,7 +301,7 @@ mod tests {
                 &sink,
                 &context,
                 &permission_denied_invariant(label, "test.op", "unattributed caller"),
-                || None,
+                CallOrigin::default,
             );
         }
         assert_eq!(

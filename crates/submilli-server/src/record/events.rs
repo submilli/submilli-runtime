@@ -25,7 +25,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use interpreter::runtime::{
-    CallOutcome, CallRecord, ConsoleLine, DecisionRecord, ModelUsage, RecordObserver, SourceLine,
+    CallOutcome, CallRecord, ConsoleLine, DecisionRecord, ModelUsage, PackageLine, RecordObserver,
+    SourceLine,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -82,6 +83,10 @@ pub enum EventKind {
         started_micros: u64,
         #[serde(skip_serializing_if = "Option::is_none")]
         line: Option<SourceLine>,
+        /// The line inside a package that made the call, when the program reached it
+        /// through one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package_line: Option<PackageLine>,
     },
     Decision {
         record: Box<DecisionRecord>,
@@ -382,8 +387,17 @@ fn kind_size(kind: &EventKind) -> usize {
             text(code_hash),
         ]),
         EventKind::CallStarted {
-            caller, capability, ..
-        } => saturating_sum([caller.len(), capability.len()]),
+            caller,
+            capability,
+            package_line,
+            ..
+        } => saturating_sum([
+            caller.len(),
+            capability.len(),
+            package_line.as_ref().map_or(0, |at| {
+                saturating_sum([at.package.len(), at.module.len(), text(&at.function)])
+            }),
+        ]),
         EventKind::CallFinished { capability, .. } => capability.len(),
         EventKind::ToolCall { tool, .. } => tool.len(),
         EventKind::Console { line, .. } => line.len(),
@@ -532,6 +546,7 @@ impl RecordObserver for RunEvents {
             capability: call.capability.clone(),
             started_micros: call.started_micros,
             line: call.line,
+            package_line: call.package_line.clone(),
         });
     }
 
@@ -613,6 +628,7 @@ mod tests {
             capability: "http.get".into(),
             started_micros: 0,
             line: None,
+            package_line: None,
         }
     }
 
@@ -664,6 +680,7 @@ mod tests {
                 capability: long.clone(),
                 started_micros: 0,
                 line: None,
+                package_line: None,
             },
         );
         assert!(big >= small + 29_000, "{small} vs {big}");

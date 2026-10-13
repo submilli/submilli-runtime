@@ -10,7 +10,7 @@ use base64::Engine as _;
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{
     BodyCopy, CallOutcome, CallRecord, DecisionAction, DecisionCause, DecisionLogOutput,
-    DecisionRecord, EntryPath, ModelUsage, PayloadRecord, RuleCitation, SourceLine,
+    DecisionRecord, EntryPath, ModelUsage, PackageLine, PayloadRecord, RuleCitation, SourceLine,
 };
 use serde_json::{Value, json};
 use submilli_blueprint::{Blueprint, VarBindings};
@@ -168,6 +168,7 @@ fn call(call_index: u64, capability: &str, response: Option<&str>) -> CallRecord
             line: 3,
             column: None,
         }),
+        package_line: None,
         request: Some(payload(
             json!({ "method": "GET", "url": format!("https://api.test/{call_index}") }),
             None,
@@ -237,6 +238,7 @@ fn call_started(call_index: u64) -> EventKind {
         capability: "http.get".into(),
         started_micros: 100 * call_index,
         line: None,
+        package_line: None,
     }
 }
 
@@ -1762,6 +1764,13 @@ fn no_user_data_shares_a_place_with_a_value_the_format_owns() {
             capability: t("capability"),
             started_micros: 0,
             line: None,
+            package_line: Some(PackageLine {
+                package: t("package"),
+                module: t("module"),
+                function: Some(t("function")),
+                line: 3,
+                column: None,
+            }),
         },
         EventKind::Decision {
             record: Box::new(first),
