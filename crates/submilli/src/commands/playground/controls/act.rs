@@ -45,14 +45,15 @@ use super::super::client::{self, Probe, Running};
 use super::super::labels;
 use super::super::project;
 use super::super::state::{self, ADMIN_TOKEN, InstanceRecord, RememberedBinding, StateDir};
+use super::super::store::events::{ChatRole, EventBody};
 use super::super::store::redact::REDACTED;
 use super::super::store::run::{DecisionRef, StoredRun, StoredTestReport};
 use super::super::store::sessions::SessionEntry;
 use super::super::store::{KnownSecrets, Recorder, Store, StoreError};
 use super::read::{self, FlipKind, ShowResult};
 use super::render::{
-    self, EXIT_AWAITING_LIVE, EXIT_DENIED, EXIT_FAILURE, EXIT_NOT_RUNNING, EXIT_PACKAGE_RESOLUTION,
-    EXIT_SUCCESS, EXIT_USAGE, Fence, Next, Page, RunRef, clean, next,
+    self, COMMAND, EXIT_AWAITING_LIVE, EXIT_DENIED, EXIT_FAILURE, EXIT_NOT_RUNNING,
+    EXIT_PACKAGE_RESOLUTION, EXIT_SUCCESS, EXIT_USAGE, Fence, Next, Page, RunRef, clean, next,
 };
 use super::{ReadError, Reader};
 
@@ -415,6 +416,8 @@ pub(crate) struct Actions {
     pub(crate) page: Page,
     /// Runs a cancel was sent for, while they drain.
     pub(crate) cancelling: Mutex<BTreeSet<u64>>,
+    /// Sessions a chat is answering in: one message at a time each.
+    pub(crate) chatting: Arc<Mutex<BTreeSet<String>>>,
     /// Where the stand-in's chat goes.
     pub(crate) chat: super::super::chat::ChatIntake,
     /// The server listener's port, for chat's MCP connection.
@@ -825,17 +828,76 @@ impl Actions {
         }
         let max_calls_per_answer = agent::max_calls_per_answer(request.max_calls_per_answer)
             .map_err(|message| ActError::usage("invalid-max-calls", message))?;
-        let choice = agent::configured()
-            .map_err(|message| ActError::new(EXIT_FAILURE, "no-provider", message))?;
-        let blueprint = self.blueprint(&self.blueprint_name).await?;
-        let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
+        let asked = agent::Settings {
+            effort: request.effort.clone(),
+            max_output: request.max_output,
+            provider: request.provider_settings.clone().unwrap_or_default(),
+        };
+        let (choice, settings, resume, answering) = if let Some(session) = &request.session {
+            if !asked.is_default() {
+                return Err(ActError::usage(
+                    "settings-fixed",
+                    format!(
+                        "session {} keeps the settings it started with; start a new chat to \
+                         change them",
+                        clean(session)
+                    ),
+                ));
+            }
+            // Claimed before the conversation is read, so it is read whole.
+            let answering = Answering::claim(&self.chatting, session)?;
+            let (choice, settings, resume) = self
+                .chat_to_continue(session, request.model.as_deref())
+                .await?;
+            (choice, settings, Some(resume), Some(answering))
+        } else {
+            let choice = match &request.model {
+                Some(named) => agent::configured_named(named, "--model")
+                    .map_err(|message| ActError::usage("invalid-model", message))?,
+                None => agent::configured()
+                    .map_err(|message| ActError::new(EXIT_FAILURE, "no-provider", message))?,
+            };
+            agent::check_settings(&choice, &asked)
+                .map_err(|message| ActError::usage("invalid-settings", message))?;
+            (choice, asked, None, None)
+        };
+        let settings_shown =
+            (!settings.is_default()).then(|| serde_json::to_value(&settings).unwrap_or_default());
+        let continued = resume.is_some();
+        // A session carried on keeps the variables and secrets it started with; a new one
+        // takes the binding's.
+        let (blueprint, variables, secrets) = if continued {
+            (None, BTreeMap::new(), BTreeMap::new())
+        } else {
+            let blueprint = self.blueprint(&self.blueprint_name).await?;
+            let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
+            (Some(blueprint), variables, secrets)
+        };
+        let model = choice.named();
         let token = StateDir::for_project(&self.project_root)
             .token(label)
             .map_err(|error| ActError::failure(format!("{error:#}")))?;
         let actions = Arc::clone(self);
         let cancelled = Arc::new(AtomicBool::new(false));
         let _cancel_when_dropped = agent::CancelOnDrop(Arc::clone(&cancelled));
+        let handle = tokio::runtime::Handle::current();
         let ran = tokio::task::spawn_blocking(move || {
+            // Held until the chat itself stops, which can be after whoever asked is gone.
+            let _answering = answering;
+            // A new chat's session is listed with its model as soon as it starts, even if
+            // the chat then fails or whoever asked is gone, so it can be carried on or ended.
+            let started = |session: &str| {
+                if let Some(blueprint) = &blueprint {
+                    handle.block_on(actions.log_chat_session(
+                        session,
+                        label,
+                        blueprint,
+                        variables.clone(),
+                        &model,
+                        &settings,
+                    ));
+                }
+            };
             let setup = agent::Setup {
                 choice,
                 server_port: actions.server_port,
@@ -847,6 +909,9 @@ impl Actions {
                 recorder: &actions.recorder,
                 max_calls_per_answer,
                 cancelled: &cancelled,
+                resume,
+                started: &started,
+                settings: &settings,
             };
             let ran = agent::run(&setup, &request.task);
             if cancelled.load(Ordering::Relaxed) && ran.is_err() {
@@ -867,6 +932,8 @@ impl Actions {
         });
         let result = render::ChatResult {
             session: outcome.session.clone(),
+            continued,
+            settings: settings_shown,
             provider: outcome.provider,
             model: outcome.model,
             tool_calls: outcome.tool_calls,
@@ -878,6 +945,151 @@ impl Actions {
             },
         };
         Ok(Answer::of(EXIT_SUCCESS, &result, render::chat_text))
+    }
+
+    /// The model and conversation of chat session `session`, to carry it on. `model`,
+    /// when given, must be the session's own.
+    async fn chat_to_continue(
+        &self,
+        session: &str,
+        model: Option<&str>,
+    ) -> Result<(agent::Choice, agent::Settings, agent::Resume), ActError> {
+        let store = Arc::clone(&self.store);
+        let id = session.to_owned();
+        let (fixed_model, fixed_settings, ended, log) = tokio::task::spawn_blocking(move || {
+            let mut fixed_model = None;
+            let mut fixed_settings = None;
+            let mut ended = false;
+            for line in store.session_log()? {
+                if line.entry.session_id() != id {
+                    continue;
+                }
+                match line.entry {
+                    SessionEntry::Started {
+                        model, settings, ..
+                    } => {
+                        fixed_model = model;
+                        fixed_settings = settings;
+                    }
+                    SessionEntry::Ended { .. } => ended = true,
+                }
+            }
+            let log = store.read_events(Some(&id))?;
+            Ok::<_, StoreError>((fixed_model, fixed_settings, ended, log))
+        })
+        .await
+        .map_err(|error| ActError::failure(format!("reading the session failed: {error}")))?
+        .map_err(|error| ActError::store(&error))?;
+        let shown = clean(session);
+        let Some(fixed_model) = fixed_model else {
+            return Err(ActError::usage(
+                "not-a-chat-session",
+                format!(
+                    "session {shown} was not started by `chat`, so there is no chat to carry \
+                     on; start one with `{COMMAND} chat \"<message>\"`"
+                ),
+            ));
+        };
+        let open = match session_variables(&self.app, session).await {
+            Ok(fixed) => fixed.is_some(),
+            Err(error) => {
+                return Err(ActError::failure(format!(
+                    "reading session {shown} failed: {error}"
+                )));
+            }
+        };
+        if ended || !open {
+            return Err(ActError::usage(
+                "session-ended",
+                format!(
+                    "session {shown} has ended{}; start a new chat with `{COMMAND} chat \
+                     \"<message>\"`",
+                    if ended {
+                        ""
+                    } else {
+                        " (it sat idle past its idle timeout, or the playground restarted)"
+                    }
+                ),
+            ));
+        }
+        if let Some(model) = model
+            && model.trim() != fixed_model
+        {
+            return Err(ActError::usage(
+                "model-fixed",
+                format!(
+                    "session {shown} answers with {}; carry it on without --model, or start a \
+                     new chat to use {}",
+                    clean(&fixed_model),
+                    clean(model)
+                ),
+            ));
+        }
+        let choice = agent::configured_named(&fixed_model, &format!("session {shown}'s model"))
+            .map_err(|message| ActError::new(EXIT_FAILURE, "no-provider", message))?;
+        let settings: agent::Settings = match fixed_settings {
+            Some(value) => serde_json::from_value(value).map_err(|error| {
+                ActError::failure(format!("session {shown}'s settings do not read: {error}"))
+            })?,
+            None => agent::Settings::default(),
+        };
+        // Only what the developer and the model said: chat from anything else posting to
+        // the session is not handed to the model as the developer's words.
+        let said: Vec<(ChatRole, &str)> = log
+            .chat()
+            .into_iter()
+            .filter(|(_, turn)| CHAT_LABELS.contains(&turn.agent.as_str()))
+            .map(|(_, turn)| (turn.role, turn.text.as_str()))
+            .collect();
+        // Numbered past every message the log ever held, so none is written over.
+        let numbered: BTreeSet<&str> = log
+            .events
+            .iter()
+            .filter_map(|event| match &event.body {
+                EventBody::Chat(turn) => Some(turn.turn.as_str()),
+                _ => None,
+            })
+            .collect();
+        let resume = agent::Resume {
+            session: session.to_owned(),
+            history: agent::history(said),
+            said: numbered.len(),
+        };
+        Ok((choice, settings, resume))
+    }
+
+    /// Lists chat session `session` with its model. Only noted when that fails: the chat
+    /// goes on, and its answer still goes back.
+    async fn log_chat_session(
+        &self,
+        session: &str,
+        label: &str,
+        blueprint: &Blueprint,
+        variables: BTreeMap<String, String>,
+        model: &str,
+        settings: &agent::Settings,
+    ) {
+        let variables = match session_variables(&self.app, session).await {
+            Ok(Some(fixed)) => fixed,
+            _ => variables,
+        };
+        let logged = self.store.append_session(SessionEntry::Started {
+            session_id: session.to_owned(),
+            variables,
+            label: label.to_owned(),
+            // The server fixes the session's idle timeout from the blueprint it starts
+            // under, which is this one.
+            idle_timeout_ms: u64::try_from(blueprint.idle_timeout.as_millis()).ok(),
+            model: Some(model.to_owned()),
+            settings: (!settings.is_default())
+                .then(|| serde_json::to_value(settings).unwrap_or_default()),
+        });
+        if let Err(error) = logged {
+            super::super::log::note(&format!(
+                "chat session {} was not listed, so it cannot be carried on: {error}",
+                clean(session)
+            ));
+        }
     }
 
     // ---- sessions ----
@@ -914,6 +1126,8 @@ impl Actions {
                     // The server fixes the session's idle timeout from the blueprint it
                     // starts under, which is this one.
                     idle_timeout_ms: u64::try_from(blueprint.idle_timeout.as_millis()).ok(),
+                    model: None,
+                    settings: None,
                 })
                 .map(|()| variables)
                 .map_err(|error| ActError::store(&error))
@@ -1445,6 +1659,51 @@ fn missing_secrets(names: &[String], forgotten: &BTreeSet<String>) -> ActError {
             names.first().map_or("NAME", String::as_str)
         ),
     )
+}
+
+/// The labels own-key chat posts its messages under: from the CLI and from the page.
+const CHAT_LABELS: [&str; 2] = ["chat", "browser-chat"];
+
+/// Holds session `session` for one chat message, so a second waits its turn.
+pub(super) struct Answering {
+    chatting: Arc<Mutex<BTreeSet<String>>>,
+    session: String,
+}
+
+impl Answering {
+    pub(super) fn claim(
+        chatting: &Arc<Mutex<BTreeSet<String>>>,
+        session: &str,
+    ) -> Result<Self, ActError> {
+        let fresh = chatting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(session.to_owned());
+        if !fresh {
+            return Err(ActError::new(
+                EXIT_FAILURE,
+                "session-busy",
+                format!(
+                    "the agent is still answering in session {}; send the next message when \
+                     it is done",
+                    clean(session)
+                ),
+            ));
+        }
+        Ok(Self {
+            chatting: Arc::clone(chatting),
+            session: session.to_owned(),
+        })
+    }
+}
+
+impl Drop for Answering {
+    fn drop(&mut self) {
+        self.chatting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.session);
+    }
 }
 
 fn unknown_session(session: &str) -> ActError {
@@ -2066,6 +2325,22 @@ fn write_blueprint(path: &Path, drafted_from: &[u8], new: &[u8]) -> Result<(), A
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ChatRequest {
     pub(crate) task: String,
+    /// The chat session this message carries on; without one, a new session starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) session: Option<String>,
+    /// The agent for a new session, as `<provider>:<model>`; the configured one when
+    /// absent. A session carried on keeps its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model: Option<String>,
+    /// How hard a new session's model reasons: `low`, `medium`, or `high`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) effort: Option<String>,
+    /// The most tokens one answer of a new session's model may take.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_output: Option<u64>,
+    /// Fields a new session adds to every request to its provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provider_settings: Option<serde_json::Map<String, Value>>,
     /// The most tool calls run for one answer; the default when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) max_calls_per_answer: Option<u16>,

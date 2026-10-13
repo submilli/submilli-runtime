@@ -1,0 +1,4 @@
+line 14 type: by-design spec §1.6 a `toString` member must return a string, since `String(x)` and interpolation call it
+line 14 extra: by-design spec §1.6 a `toString` member must return a string, since `String(x)` and interpolation call it
+line 18, 19, 20, 21 type: artifact both compilers reject the `new Array(...)` on line 17; tsc goes on checking `a` as `(boolean | null | undefined)[]`, where ours is an error type
+line 18, 19, 20, 21 missed: artifact both compilers reject the `new Array(...)` on line 17; tsc goes on checking `a` as `(boolean | null | undefined)[]`, where ours is an error type

@@ -1968,6 +1968,12 @@ pub(crate) struct SessionRow {
     /// The labels of its runs, and of whoever started it.
     pub(crate) sources: Vec<String>,
     pub(crate) variables: BTreeMap<String, String>,
+    /// For a session own-key chat started, its model, as `<provider>:<model>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) model: Option<String>,
+    /// Its chat settings, when it started with any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) settings: Option<Value>,
     pub(crate) run_count: usize,
     pub(crate) runs: Vec<u64>,
     /// Whether any call in it was denied.
@@ -1998,6 +2004,8 @@ fn session_row<'r>(
         started_at: String::new(),
         sources: Vec::new(),
         variables: BTreeMap::new(),
+        model: None,
+        settings: None,
         run_count: 0,
         runs: Vec::new(),
         denied: false,
@@ -2040,6 +2048,8 @@ pub(crate) fn sessions(
                     variables,
                     label,
                     idle_timeout_ms,
+                    model,
+                    settings,
                     ..
                 } => {
                     session.started_at_micros = session.started_at_micros.min(line.at_micros);
@@ -2050,6 +2060,8 @@ pub(crate) fn sessions(
                     }
                     session.open = Some(true);
                     session.idle_timeout_ms = idle_timeout_ms;
+                    session.model = model;
+                    session.settings = settings;
                 }
                 SessionEntry::Ended { .. } => session.open = Some(false),
             }

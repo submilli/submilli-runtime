@@ -1,0 +1,1 @@
+line 12, 15, 16, 17, 22, 23, 24, 25, 28, 29, 32, 33, 34, 41, 45 extra: by-design spec §1.4 a function type with a rest parameter is only satisfied by another rest function with as many parameters

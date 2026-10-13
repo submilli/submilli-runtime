@@ -31,4 +31,34 @@ function main(): void {
         caught++;
     }
     assert(caught === 4);
+
+    // Sources longer than the host's 2048-unit copy buffer are streamed and
+    // restart at their first unit; short ones repeat across buffer blocks.
+    let long = "";
+    for (let i = 0; i < 5000; i++) {
+        long += String.fromCharCode(65 + (i % 26));
+    }
+    const twice = long.repeat(2);
+    assert(twice.length === 10000);
+    assert(twice.slice(0, 5000) === long);
+    assert(twice.slice(5000) === long);
+    assert(long + long === twice);
+    assert(long.concat(long) === twice);
+    const started = "z".padStart(7001, long);
+    assert(started.slice(0, 5000) === long);
+    assert(started.slice(5000, 7000) === long.slice(0, 2000));
+    assert(started.charCodeAt(7000) === 122);
+    const ended = "z".padEnd(12000, "abc");
+    assert(ended.length === 12000);
+    for (let i = 1; i < 12000; i++) {
+        assert(ended.charCodeAt(i) === "abc".charCodeAt((i - 1) % 3));
+    }
+    assert("ab".repeat(3000).slice(4094, 4100) === "ababab");
+    for (const size of [2048, 2049]) {
+        const source = long.slice(0, size);
+        const doubled = source.repeat(2);
+        assert(doubled.length === 2 * size);
+        assert(doubled.slice(size) === source);
+        assert("".padEnd(size + 7, source) === source + source.slice(0, 7));
+    }
 }

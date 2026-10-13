@@ -1,0 +1,2 @@
+line 8 missed: artifact we report the use of `this` before `super()` at the `super()` call, tsc at the use (here a `super` member)
+line 9 extra: artifact we report the use of `this` before `super()` at the `super()` call, tsc at the use (here a `super` member)

@@ -1,0 +1,2 @@
+line 20, 28, 34, 35, 48, 53, 55, 56, 57, 58, 59 extra: by-design spec §Excluded-Features `Intl`, `SharedArrayBuffer` and `globalThis` aren't provided
+line 22, 25, 30, 37, 40, 55, 57, 59 type: by-design spec §Excluded-Features `Intl`, `SharedArrayBuffer` and `globalThis` aren't provided

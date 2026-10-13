@@ -1,0 +1,1 @@
+line 69, 74 extra: by-design spec §2.2 classes are nominal, so `instanceof` a class unrelated to the operand's is always false and rejected

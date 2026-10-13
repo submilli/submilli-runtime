@@ -5573,9 +5573,9 @@ dependencies = [
 
 [[package]]
 name = "submilli-wasm"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20ad8140dc3750e531ec26e98691e680387ea0c5127d6e406583a2f2abf26e33"
+checksum = "37756d1a79694bf7d38e1fd788e5b4423b79b22b8765a848a9447b72e9221302"
 dependencies = [
  "anyhow",
  "async-trait",

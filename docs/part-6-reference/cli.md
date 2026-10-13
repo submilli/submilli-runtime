@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "61fb7e0ae7df7659eac23bfe8f899321a3911ad91dceead003cc46451d5884ba"
+  contentHash: "3566a2b67ff2e3d642ea0b5bf08a3550941a0cadae2557fea63d9acb79e7ba7d"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -1887,7 +1887,7 @@ Commands:
   cancel      Cancel a run in flight
   watch       Follow a session's events as JSON lines until its last run finishes (`--follow`: until the session ends). Without a session, follows the most recent one. On a session already idle it prints the events so far and exits at once, so start it after the run it is to follow has started, or pass `--follow`
   mcp         Serve the running playground's tools over stdio, for a coding assistant's stand-in subagent to launch. Uses the binding and the development secrets; its runs are labeled `stand-in`
-  chat        Run a task with your own model key against the playground's tools, as a production agent would; prints its answer. The key comes from the playground's environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
+  chat        Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key comes from the playground's environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
   chat-hook   Copy a coding assistant's stand-in conversation to the running playground: a Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks post anything. Always exits 0 and prints nothing
   help        Print this message or the help of the given subcommand(s)
 
@@ -2271,14 +2271,19 @@ Options:
 ### `submilli playground chat`
 
 ```text
-Run a task with your own model key against the playground's tools, as a production agent would; prints its answer. The key comes from the playground's environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
+Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key comes from the playground's environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
 
-Usage: submilli playground chat [OPTIONS] <TASK>
+Usage: submilli playground chat [OPTIONS] <MESSAGE>
 
 Arguments:
-  <TASK>  What the agent should do
+  <MESSAGE>  What the agent should do, or, with `--session`, the next message to it
 
 Options:
+      --session <ID>              Carry on this chat session: the agent sees the conversation so far, under the session's fixed variables, and answers with the session's own model
+      --model <PROVIDER:MODEL>    The model for a new session, as `<provider>:<model>`, from a provider whose key the playground started with. Default: the playground's configured model. A session carried on keeps its own
+      --effort <LEVEL>            How hard a new session's model reasons. OpenAI models only, for now [possible values: low, medium, high]
+      --max-output <TOKENS>       The most tokens one answer of a new session's model may take. Default: 4096
+      --provider-settings <JSON>  Fields a new session adds to every request to its provider, as a JSON object in the provider's own API terms, such as `{"temperature": 0.2}`. Fields the playground sets itself (the model, messages, tools, instructions) are refused
       --max-calls-per-answer <N>  The most tool calls run for one answer of the model; the rest are refused to it [default: 16]
       --json                      Print JSON
   -h, --help                      Print help

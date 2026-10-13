@@ -8,6 +8,7 @@
 //! The `$string` ↔ [`Str`] marshalling and host-fn registration live in
 //! [`install`]; this file is just the strings.
 
+mod gc_text;
 mod install;
 pub(crate) mod search;
 mod transforms;
@@ -17,8 +18,7 @@ pub use install::{declare, install};
 
 use unicode_normalization::UnicodeNormalization;
 
-use crate::runtime::host::{fatal_host_error, range_error};
-use crate::runtime::limits::{HostBytes, TenantLimits};
+use crate::runtime::host::fatal_host_error;
 
 /// A submilli string: its UTF-16 code units. Cheap to slice and concatenate, and
 /// faithful to JS — indices, `length`, and surrogate handling are all code-unit
@@ -43,38 +43,6 @@ impl Str {
     }
 }
 
-/// A native string whose allocation remains charged until its buffer is dropped.
-/// Only borrowed access is exposed so the reservation cannot be separated from the buffer.
-pub struct AdmittedStr {
-    // Fields drop in declaration order: free the buffer before refunding bytes.
-    value: Str,
-    _native: HostBytes,
-}
-
-impl AdmittedStr {
-    pub fn as_str(&self) -> &Str {
-        &self.value
-    }
-
-    fn allocate(limits: &TenantLimits, units: usize) -> wasmtime::Result<Self> {
-        let native = admit_units(limits, units)?;
-        let mut buffer = Vec::new();
-        buffer.try_reserve_exact(units).map_err(fatal_host_error)?;
-        Ok(Self {
-            value: Str::from_units(buffer),
-            _native: native,
-        })
-    }
-}
-
-fn admit_units(limits: &TenantLimits, units: usize) -> wasmtime::Result<HostBytes> {
-    let bytes = units
-        .checked_mul(std::mem::size_of::<u16>())
-        .and_then(|bytes| u64::try_from(bytes).ok())
-        .ok_or_else(|| fatal_host_error("native string byte length overflow"))?;
-    Ok(HostBytes::new(limits, bytes)?)
-}
-
 /// A string operation rejected its input the way JS would (a `RangeError`).
 /// [`install`] raises it as a catchable guest `RangeError`.
 #[derive(Debug)]
@@ -88,9 +56,9 @@ impl RangeError {
 
 pub type Result<T> = std::result::Result<T, RangeError>;
 
-/// Caps a built result so a ported op can't allocate an unbounded host buffer.
-/// This language-level ceiling complements tenant admission; it does not prove
-/// that a native allocation fits the tenant's remaining memory budget.
+/// Caps the result of `repeat`, the pads and the case maps, whose length a
+/// small input can multiply. This language-level ceiling complements the memory cap; the result
+/// is still allocated under the GC limiter.
 const MAX_RESULT_UNITS: usize = 32 * 1024 * 1024;
 
 /// `String.prototype.repeat`. `ToInteger(count)` truncates toward zero, leaving
@@ -100,20 +68,8 @@ const MAX_RESULT_UNITS: usize = 32 * 1024 * 1024;
 ///   - `-1 < count < 1`, or `NaN` → `""` (zero repeats)
 ///   - `count >= 1` → repeat, capped so an overflowing or `+Infinity` count
 ///     throws instead of allocating (see [`MAX_RESULT_UNITS`]).
-pub fn repeat(s: &Str, count: f64, limits: &TenantLimits) -> wasmtime::Result<AdmittedStr> {
-    let total = repeat_length(s.len(), count).map_err(|error| range_error(error.message()))?;
-    let mut out = AdmittedStr::allocate(limits, total)?;
-    if total == 0 {
-        return Ok(out);
-    }
-    // repeat_length returns nonzero only for a nonempty receiver and an exact
-    // multiple of its length; the reserved capacity covers every extension.
-    for _ in 0..total / s.len() {
-        out.value.0.extend_from_slice(s.units());
-    }
-    Ok(out)
-}
-
+///
+/// Returns the result's length in units: the receiver repeated that many times.
 pub(crate) fn repeat_length(len: usize, count: f64) -> Result<usize> {
     let n = count.trunc();
     if n <= -1.0 {
@@ -135,10 +91,8 @@ fn trunc_sat_i32(x: f64) -> i32 {
     x as i32
 }
 
-/// Rejects a builder result that would exceed [`MAX_RESULT_UNITS`]. JS throws a
-/// `RangeError` ("Invalid string length") here; the Wasm bodies trapped through
-/// the GC limiter, which a Rust `Vec` would bypass — so host builders bound
-/// themselves explicitly.
+/// Rejects a builder result that would exceed [`MAX_RESULT_UNITS`], with the
+/// `RangeError` ("Invalid string length") JS throws.
 fn checked_len(n: usize) -> Result<usize> {
     if n > MAX_RESULT_UNITS {
         Err(RangeError("Invalid string length"))
@@ -343,69 +297,15 @@ pub fn cmp(a: &Str, b: &Str) -> i32 {
     a.len() as i32 - b.len() as i32
 }
 
-/// `concat`: `self` followed by `other`.
-pub fn concat(s: &Str, other: &Str, limits: &TenantLimits) -> wasmtime::Result<AdmittedStr> {
-    let total = concat_length(s.len(), other.len())?;
-    let mut out = AdmittedStr::allocate(limits, total)?;
-    out.value.0.extend_from_slice(s.units());
-    out.value.0.extend_from_slice(other.units());
-    Ok(out)
-}
-
+/// `concat`: the length of `left` followed by `right`.
 pub(crate) fn concat_length(left: usize, right: usize) -> wasmtime::Result<usize> {
     left.checked_add(right)
-        .ok_or_else(|| fatal_host_error("native string length overflow"))
+        .ok_or_else(|| fatal_host_error("string length overflow"))
 }
 
-/// `padStart`: prepend repetitions of `pad` until the string reaches
-/// `target_length`. Copies `self` when already long enough or `pad` is empty.
-pub fn pad_start(
-    s: &Str,
-    target_length: f64,
-    pad: &Str,
-    limits: &TenantLimits,
-) -> wasmtime::Result<AdmittedStr> {
-    pad_string(s, target_length, pad, limits, true)
-}
-
-/// `padEnd`: append repetitions of `pad` until the string reaches
-/// `target_length`. Copies `self` when already long enough or `pad` is empty.
-pub fn pad_end(
-    s: &Str,
-    target_length: f64,
-    pad: &Str,
-    limits: &TenantLimits,
-) -> wasmtime::Result<AdmittedStr> {
-    pad_string(s, target_length, pad, limits, false)
-}
-
-fn pad_string(
-    s: &Str,
-    target_length: f64,
-    pad: &Str,
-    limits: &TenantLimits,
-    leading: bool,
-) -> wasmtime::Result<AdmittedStr> {
-    let total = pad_length(s.len(), target_length, pad.len())
-        .map_err(|error| range_error(error.message()))?;
-    let mut out = AdmittedStr::allocate(limits, total)?;
-    if !leading {
-        out.value.0.extend_from_slice(s.units());
-    }
-    let mut remaining = total - s.len();
-    while remaining > 0 {
-        // pad_length increases the receiver length only when the pad is nonempty.
-        // Each prefix is bounded by its slice and the admitted output capacity.
-        let chunk = remaining.min(pad.len());
-        out.value.0.extend_from_slice(&pad.units()[..chunk]);
-        remaining -= chunk;
-    }
-    if leading {
-        out.value.0.extend_from_slice(s.units());
-    }
-    Ok(out)
-}
-
+/// `padStart` and `padEnd`: the padded length. Repetitions of `pad` fill the
+/// string up to `target_length`; it keeps its length when already long enough
+/// or when `pad` is empty.
 pub(crate) fn pad_length(len: usize, target_length: f64, pad_len: usize) -> Result<usize> {
     let target = trunc_sat_i32(target_length);
     if target <= 0 || target as usize <= len || pad_len == 0 {
@@ -458,8 +358,6 @@ pub fn to_well_formed(s: &Str) -> Str {
     }
     Str::from_units(out)
 }
-
-pub use transforms::{to_lower_case, to_upper_case, trim, trim_end, trim_start};
 
 /// `normalize`: Unicode normalization. `form` must be `"NFC"`/`"NFD"`/`"NFKC"`/
 /// `"NFKD"` (default `"NFC"`); any other value throws. A lone surrogate is
@@ -525,66 +423,8 @@ pub fn from_code_point(codes: &[f64]) -> Result<Str> {
 }
 
 #[cfg(test)]
-mod allocation_tests {
+mod length_tests {
     use super::*;
-    use crate::runtime::host::ends_the_run;
-    use crate::runtime::limits::MemoryCapExceeded;
-
-    #[test]
-    fn admitted_outputs_hold_and_refund_exact_bytes() {
-        let limits = TenantLimits::new(8);
-        let s = Str::from_units(vec![0xD800, 0x0061]);
-        let out = repeat(&s, 2.0, &limits).expect("exact output budget");
-        assert_eq!(out.as_str().units(), &[0xD800, 0x0061, 0xD800, 0x0061]);
-        assert_eq!(limits.host_attached_bytes(), 8);
-        assert!(repeat(&s, 1.0, &limits).is_err(), "live output is charged");
-        drop(out);
-        assert_eq!(limits.host_attached_bytes(), 0);
-        assert_eq!(limits.peak_bytes(), 8);
-        let smaller = TenantLimits::new(7);
-        let err = repeat(&s, 2.0, &smaller).err().expect("one byte short");
-        assert!(err.is::<MemoryCapExceeded>());
-        assert_eq!(smaller.host_attached_bytes(), 0);
-        assert_eq!(smaller.peak_bytes(), 0);
-    }
-
-    #[test]
-    fn all_builders_admit_before_filling() {
-        let limits = TenantLimits::new(6);
-        let s = Str::from_units(vec![0xD800]);
-        let pad = Str::from_units(vec![0xDC00, 0x0062]);
-        let start = pad_start(&s, 3.0, &pad, &limits).expect("padStart fits");
-        assert_eq!(start.as_str().units(), &[0xDC00, 0x0062, 0xD800]);
-        drop(start);
-        let end = pad_end(&s, 3.0, &pad, &limits).expect("padEnd fits");
-        assert_eq!(end.as_str().units(), &[0xD800, 0xDC00, 0x0062]);
-        drop(end);
-        let joined = concat(&s, &pad, &limits).expect("concat fits");
-        assert_eq!(joined.as_str().units(), &[0xD800, 0xDC00, 0x0062]);
-        drop(joined);
-        assert_eq!(limits.host_attached_bytes(), 0);
-        let smaller = TenantLimits::new(4);
-        assert!(pad_start(&s, 3.0, &pad, &smaller).is_err());
-        assert!(pad_end(&s, 3.0, &pad, &smaller).is_err());
-        assert!(concat(&s, &pad, &smaller).is_err());
-        assert_eq!(smaller.peak_bytes(), 0);
-    }
-
-    #[test]
-    fn allocation_failure_refunds_admission_and_is_fatal() {
-        let limits = TenantLimits::new(u64::MAX);
-        // The byte layout exceeds isize::MAX, so Vec rejects capacity without
-        // attempting an allocation. This exercises cleanup without inducing OOM.
-        let err = AdmittedStr::allocate(&limits, usize::MAX / 2)
-            .err()
-            .expect("invalid allocation layout");
-        assert!(ends_the_run(&err));
-        assert_eq!(limits.host_attached_bytes(), 0);
-        assert!(limits.peak_bytes() > 0, "admission preceded reservation");
-        assert!(AdmittedStr::allocate(&limits, usize::MAX).is_err());
-        assert_eq!(limits.host_attached_bytes(), 0);
-        assert!(concat_length(usize::MAX, 1).is_err());
-    }
 
     #[test]
     fn length_validation_preserves_range_boundaries() {
@@ -619,23 +459,8 @@ mod allocation_tests {
     }
 
     #[test]
-    fn empty_and_unpadded_results_use_fallible_admission() {
-        let empty = Str::from_units(Vec::new());
-        let s = Str::from_units(vec![0xD800, 0x0061]);
-        let limits = TenantLimits::new(4);
-        let out = repeat(&empty, f64::INFINITY, &limits).unwrap();
-        assert!(out.as_str().is_empty());
-        assert_eq!(limits.host_attached_bytes(), 0);
-        drop(out);
-        for op in [pad_start, pad_end] {
-            let out = op(&s, f64::INFINITY, &empty, &limits).unwrap();
-            assert_eq!(out.as_str().units(), s.units());
-            assert_eq!(limits.host_attached_bytes(), 4);
-            drop(out);
-            assert!(op(&s, 1.0, &empty, &TenantLimits::new(3)).is_err());
-        }
-        let err = repeat(&s, -1.0, &limits).err().unwrap();
-        assert!(!ends_the_run(&err), "range errors remain catchable");
-        assert_eq!(limits.host_attached_bytes(), 0);
+    fn concat_length_overflow_is_fatal() {
+        assert_eq!(concat_length(2, 3).unwrap(), 5);
+        assert!(concat_length(usize::MAX, 1).is_err());
     }
 }

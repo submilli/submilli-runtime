@@ -1,0 +1,2 @@
+line 6, 7, 12, 13 extra: bug SUB-1608 a pattern's defaults don't shape the initializer literal, where tsc makes defaulted members optional and allows missing ones
+line 18, 19 type: bug SUB-1608 a pattern's defaults don't shape the initializer literal, where tsc makes defaulted members optional and allows missing ones

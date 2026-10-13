@@ -1,0 +1,3 @@
+line 4, 8, 12 extra: by-design spec §2.2 `this` is valid only inside class method and constructor bodies and field initializers, so not in a parameter default
+line 16 missed: artifact we report the use of `this` before `super()` at the `super()` call, tsc at the use
+line 17 extra: artifact we report the use of `this` before `super()` at the `super()` call, tsc at the use
