@@ -121,6 +121,30 @@ pub struct SourceLine {
     pub column: Option<u32>,
 }
 
+/// A position inside a package: the line of the package's code that made a call the
+/// program reached through it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageLine {
+    pub package: String,
+    /// The package's module the line is in: its path under the package's source
+    /// directory, without the extension, such as `lib` for `src/lib.ts`.
+    pub module: String,
+    /// The function the line is in, when its name is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+    pub line: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
+}
+
+/// Where a call came from: the program's line, and the package's line when the program
+/// reached the call through a package.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallOrigin {
+    pub line: Option<SourceLine>,
+    pub package: Option<PackageLine>,
+}
+
 /// Identity of one host call, assigned when it begins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct CallTicket {
@@ -150,8 +174,9 @@ impl CallSite {
 /// The runtime's side of a recorder: identity for each call. Record contents arrive through
 /// [`SecurityCheck::audit`].
 pub trait DecisionRecorder: Send + Sync {
-    /// A new host call. `line` is the program line that led to it, when known.
-    fn begin_call(&self, caller: &str, capability: &str, line: Option<SourceLine>) -> CallTicket;
+    /// A new host call. `origin` is where in the program, and in a package, it came
+    /// from, when known.
+    fn begin_call(&self, caller: &str, capability: &str, origin: CallOrigin) -> CallTicket;
     /// Marks the latest call's record as a denial the host function treated as a filter.
     fn mark_last_filtered(&self);
     /// Whether the next call's source line would be kept. Callers check it before paying
@@ -561,9 +586,17 @@ impl DecisionLog {
         caller: &str,
         capability: &str,
         ticket: CallTicket,
+        package_line: Option<PackageLine>,
     ) -> Option<CallRecord> {
-        let cost =
-            CALL_BASE_BYTES.saturating_add(caller.len().saturating_add(capability.len()) as u64);
+        let package_bytes = package_line.as_ref().map_or(0, |at| {
+            at.package.len() + at.module.len() + at.function.as_ref().map_or(0, String::len)
+        });
+        let cost = CALL_BASE_BYTES.saturating_add(
+            caller
+                .len()
+                .saturating_add(capability.len())
+                .saturating_add(package_bytes) as u64,
+        );
         if state.calls.len() >= self.config.max_calls
             || state.calls.try_reserve(1).is_err()
             || state.open_calls.try_reserve(1).is_err()
@@ -581,6 +614,7 @@ impl DecisionLog {
             ended_micros: None,
             outcome: None,
             line: ticket.line,
+            package_line,
             request: None,
             response: None,
             usage: None,
@@ -679,10 +713,10 @@ impl DecisionLog {
 }
 
 impl DecisionRecorder for DecisionLog {
-    fn begin_call(&self, caller: &str, capability: &str, line: Option<SourceLine>) -> CallTicket {
+    fn begin_call(&self, caller: &str, capability: &str, origin: CallOrigin) -> CallTicket {
         let mut state = self.lock();
-        let ticket = self.begin(&mut state, caller, capability, line);
-        let opened = self.open_call(&mut state, caller, capability, ticket);
+        let ticket = self.begin(&mut state, caller, capability, origin.line);
+        let opened = self.open_call(&mut state, caller, capability, ticket, origin.package);
         drop(state);
         if let (Some(observer), Some(call)) = (&self.observer, opened) {
             observer.call_started(&call);
@@ -1004,7 +1038,7 @@ mod tests {
         let (data, log) = log_with(DecisionLogConfig::default());
         let recorder = data.security_check.recorder().unwrap();
         recorder.enter_host_call();
-        recorder.begin_call("main", "http.get", None);
+        recorder.begin_call("main", "http.get", CallOrigin::default());
         let output = log.finish();
         let [call] = output.calls.as_slice() else {
             panic!("one call: {output:?}");
@@ -1023,7 +1057,7 @@ mod tests {
         let recorder = data.security_check.recorder().unwrap();
         let body = vec![b'x'; 20 * 1024];
         for _ in 0..6 {
-            let ticket = recorder.begin_call("main", "http.get", None);
+            let ticket = recorder.begin_call("main", "http.get", CallOrigin::default());
             recorder.call_payload(
                 ticket.call_index,
                 Side::Response,
@@ -1060,7 +1094,7 @@ mod tests {
         let recorder = data.security_check.recorder().unwrap();
         let body = vec![b'x'; 20 * 1024];
         for _ in 0..6 {
-            let ticket = recorder.begin_call("main", "http.get", None);
+            let ticket = recorder.begin_call("main", "http.get", CallOrigin::default());
             recorder.call_payload(
                 ticket.call_index,
                 Side::Response,
@@ -1071,7 +1105,7 @@ mod tests {
         let names: Vec<String> = (0..64)
             .map(|i| format!("x-token-{i}-{}", "n".repeat(900)))
             .collect();
-        let ticket = recorder.begin_call("main", "http.get", None);
+        let ticket = recorder.begin_call("main", "http.get", CallOrigin::default());
         recorder.call_payload(
             ticket.call_index,
             Side::Response,
@@ -1084,7 +1118,10 @@ mod tests {
             spent < 512,
             "a payload past the limit enters the reserve as a digest and a size: {spent}"
         );
-        audit_denied(&data, recorder.begin_call("main", "fs.read", None));
+        audit_denied(
+            &data,
+            recorder.begin_call("main", "fs.read", CallOrigin::default()),
+        );
         let output = log.finish();
         assert_eq!(output.records.len(), 1, "a later denial is still recorded");
         let last = output
@@ -1105,7 +1142,7 @@ mod tests {
         let recorder = data.security_check.recorder().unwrap();
         let body = vec![b'x'; 64 * 1024];
         let meta = serde_json::json!({ "url": "https://x.test/" });
-        let ticket = recorder.begin_call("main", "http.get", None);
+        let ticket = recorder.begin_call("main", "http.get", CallOrigin::default());
         recorder.call_payload(
             ticket.call_index,
             Side::Response,
@@ -1134,7 +1171,7 @@ mod tests {
         });
         let recorder = data.security_check.recorder().unwrap();
         let binary = vec![0xffu8; 64 * 1024];
-        let ticket = recorder.begin_call("main", "http.get", None);
+        let ticket = recorder.begin_call("main", "http.get", CallOrigin::default());
         recorder.call_payload(
             ticket.call_index,
             Side::Response,
@@ -1161,7 +1198,7 @@ mod tests {
         });
         let recorder = data.security_check.recorder().unwrap();
         recorder.enter_host_call();
-        let ticket = recorder.begin_call("main", "http.get", None);
+        let ticket = recorder.begin_call("main", "http.get", CallOrigin::default());
         log.lock().charged = max - call_log::DIGEST_ONLY_COST;
         assert!(recorder.wants_payload(ticket.call_index));
         log.lock().charged = max - call_log::DIGEST_ONLY_COST + 1;
@@ -1175,7 +1212,7 @@ mod tests {
             ..DecisionLogConfig::default()
         });
         let recorder = data.security_check.recorder().unwrap();
-        let ticket = recorder.begin_call("main", "http.get", None);
+        let ticket = recorder.begin_call("main", "http.get", CallOrigin::default());
         let meta = serde_json::json!({ "url": "u".repeat(400) });
         recorder.call_payload(
             ticket.call_index,
@@ -1199,7 +1236,7 @@ mod tests {
         });
         let recorder = data.security_check.recorder().unwrap();
         recorder.enter_host_call();
-        let ticket = recorder.begin_call("main", "http.get", None);
+        let ticket = recorder.begin_call("main", "http.get", CallOrigin::default());
         assert!(recorder.wants_payload(ticket.call_index));
         assert!(
             !recorder.wants_payload(ticket.call_index + 1),
@@ -1218,10 +1255,16 @@ mod tests {
         let recorder = data.security_check.recorder().unwrap();
         for _ in 0..2 {
             assert!(recorder.wants_line());
-            audit_denied(&data, recorder.begin_call("main", "fs.read", None));
+            audit_denied(
+                &data,
+                recorder.begin_call("main", "fs.read", CallOrigin::default()),
+            );
         }
         assert!(!recorder.wants_line(), "the cap is reached");
-        audit_denied(&data, recorder.begin_call("main", "fs.read", None));
+        audit_denied(
+            &data,
+            recorder.begin_call("main", "fs.read", CallOrigin::default()),
+        );
         assert!(!recorder.wants_line(), "still off once the log is full");
         assert!(log.finish().truncated);
     }
@@ -1234,7 +1277,7 @@ mod tests {
         });
         let recorder = data.security_check.recorder().unwrap();
         let context = serde_json::json!({ "path": "p".repeat(900) });
-        let ticket = recorder.begin_call("main", "fs.read", None);
+        let ticket = recorder.begin_call("main", "fs.read", CallOrigin::default());
         data.security_check.audit(
             AuditDecision::new("main", "fs.read", &context, true, "policy", None, None)
                 .with_site(CallSite::new(Some(ticket), EntryPath::GatedOp)),
@@ -1250,7 +1293,7 @@ mod tests {
         let (data, log) = log_with(DecisionLogConfig::default());
         let recorder = data.security_check.recorder().unwrap();
         for index in 0..=MAX_TRACKED_PAIRS {
-            recorder.begin_call("main", &format!("cap.{index}"), None);
+            recorder.begin_call("main", &format!("cap.{index}"), CallOrigin::default());
         }
         assert!(recorder.wants_line());
         assert!(log.finish().truncated, "the pair cap truncates");
@@ -1269,7 +1312,10 @@ mod tests {
                 captures += 1;
                 recorder.note_line_capture(5);
             }
-            audit_denied(&data, recorder.begin_call("main", "fs.read", None));
+            audit_denied(
+                &data,
+                recorder.begin_call("main", "fs.read", CallOrigin::default()),
+            );
         }
         let output = log.finish();
         assert!(output.dropped > 0, "records were dropped whole");
@@ -1311,7 +1357,7 @@ mod tests {
         });
         let recorder = data.security_check.recorder().unwrap();
         assert!(recorder.wants_line(), "a bare record fits before any call");
-        let ticket = recorder.begin_call("main", "fs.read", None);
+        let ticket = recorder.begin_call("main", "fs.read", CallOrigin::default());
         assert!(
             recorder.wants_line(),
             "a bare record still fits after the call"
@@ -1367,7 +1413,7 @@ mod tests {
         });
         let context = serde_json::json!({ "path": "p".repeat(900) });
         let recorder = data.security_check.recorder().unwrap();
-        let ticket = recorder.begin_call("main", "fs.read", None);
+        let ticket = recorder.begin_call("main", "fs.read", CallOrigin::default());
         data.security_check.audit(
             AuditDecision::new("main", "fs.read", &context, true, "policy", None, None)
                 .with_site(CallSite::new(Some(ticket), EntryPath::GatedOp)),

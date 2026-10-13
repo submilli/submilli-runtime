@@ -12,8 +12,8 @@ use submilli_engine::runtime::{
     EmbeddingBatch, EmbeddingError, EmbeddingLimits, EmbeddingModel, EmbeddingProvider,
     EmbeddingTokenBudget, EntryPath, ExecutionTokenBudget, FailureReason, FailureReasonRecord,
     FailureRecord, InMemorySessionKv, LinkedPackageModule, LlmCallError, LlmFailure, LlmLimits,
-    LlmModel, LlmOutcome, LlmProvider, MountSpec, NearMissRecord, RecordObserver, RuleCitation,
-    SecurityCheck, SessionKvLimits, SharedTokenBudget, StoreData, Vfs,
+    LlmModel, LlmOutcome, LlmProvider, MountSpec, NearMissRecord, PackageLine, RecordObserver,
+    RuleCitation, SecurityCheck, SessionKvLimits, SharedTokenBudget, StoreData, Vfs,
     install_package_modules_async, install_runtime_host_functions, install_runtime_store_bound,
     install_tenant_limits, limits::ExecutionUsage,
 };
@@ -643,6 +643,20 @@ async fn a_failed_line_lookup_leaves_no_line_and_changes_nothing() {
         "{:#?}",
         stripped.records()
     );
+    // Only the program was stripped: the package's own line is still found.
+    let places: Vec<_> = stripped
+        .calls()
+        .iter()
+        .map(|call| (call.line, package_place(call)))
+        .collect();
+    assert_eq!(
+        places,
+        [
+            (None, None),
+            (None, None),
+            (None, Some(("@acme/core", "lib", Some("fetchIt"), 3))),
+        ]
+    );
 }
 
 // ---- cause, attribution, entry path ----------------------------------------------------
@@ -731,6 +745,11 @@ function main(): string { run("7"); return "done"; }
     assert_eq!(check.entry_path, EntryPath::PackageCheck);
     assert_eq!(check.context, json!({ "id": "7" }));
     assert_eq!(check.line.map(|l| l.line), Some(3));
+    // The check's call names where in the package it was made.
+    assert_eq!(
+        package_place(outcome.call("test.com/op")),
+        Some(("@acme/core", "lib", Some("run"), 8))
+    );
 }
 
 #[tokio::test]
@@ -1200,6 +1219,45 @@ function main(): string {
     let get = outcome.record("http.get");
     assert_eq!(get.caller, "@acme/core");
     assert_eq!(get.line.map(|l| l.line), Some(5), "{get:#?}");
+    // The call keeps the line inside the package too.
+    let call = outcome.call("http.get");
+    assert_eq!(call.line.map(|l| l.line), Some(5));
+    assert_eq!(
+        package_place(call),
+        Some(("@acme/core", "lib", Some("fetchIt"), 3)),
+        "{call:#?}"
+    );
+    assert!(call.package_line.as_ref().unwrap().column.is_some());
+}
+
+/// A call's package line, without its column.
+fn package_place(call: &CallRecord) -> Option<(&str, &str, Option<&str>, u32)> {
+    call.package_line.as_ref().map(|at: &PackageLine| {
+        (
+            at.package.as_str(),
+            at.module.as_str(),
+            at.function.as_deref(),
+            at.line,
+        )
+    })
+}
+
+#[tokio::test]
+async fn a_call_the_program_makes_itself_has_no_package_line() {
+    let outcome = run(MIXED_PROGRAM, mixed(recording())).await;
+    let places: Vec<_> = outcome
+        .calls()
+        .iter()
+        .map(|call| (call.capability.as_str(), package_place(call)))
+        .collect();
+    assert_eq!(
+        places,
+        [
+            ("http.get", None),
+            ("http.post", None),
+            ("http.get", Some(("@acme/core", "lib", Some("fetchIt"), 3))),
+        ]
+    );
 }
 
 #[tokio::test]

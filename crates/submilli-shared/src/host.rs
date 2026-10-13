@@ -15,7 +15,9 @@ use interpreter::runtime::{
     FailureReasonRecord, FailureRecord, HttpRequest, NearMissRecord, RuleCitation, SecretProvider,
     SecurityCheck,
 };
+use interpreter::stdlib::capabilities;
 use interpreter::stdlib::http::HttpTransportPolicy;
+use interpreter::stdlib::{OptionalPackage, Stdlib};
 use url::Url;
 
 use std::collections::BTreeMap;
@@ -128,7 +130,7 @@ impl SecurityCheck for PolicyCheck {
                 rule,
                 reason: format!(
                     "policy denied {capability}{} for {caller}",
-                    filesystem_target(capability, &context)
+                    denial_target(capability, &context)
                 ),
             },
             Action::AskHuman => CheckOutcome::Deny {
@@ -136,7 +138,7 @@ impl SecurityCheck for PolicyCheck {
                 reason: format!(
                     "policy requires human approval for {capability}{} (caller {caller}); \
                      ask-human is deferred and treated as deny",
-                    filesystem_target(capability, &context)
+                    denial_target(capability, &context)
                 ),
             },
         }
@@ -195,6 +197,72 @@ fn failure_record(failure: ComparisonFailure) -> FailureRecord {
         reason,
         negated: failure.negated,
     }
+}
+
+/// What a denial was for, named in its reason: the VFS paths of a filesystem capability,
+/// or the values of an application-defined one. Empty for other capabilities.
+fn denial_target(capability: &str, context: &serde_json::Value) -> String {
+    let paths = filesystem_target(capability, context);
+    if paths.is_empty() && is_application_defined(capability) {
+        request_values(context)
+    } else {
+        paths
+    }
+}
+
+/// The most values a denial names, and the most of each string value it shows.
+const MAX_NAMED_VALUES: usize = 4;
+const MAX_NAMED_VALUE_CHARS: usize = 64;
+
+/// The scalar values of an application-defined capability's request, so a model can tell
+/// the request refused (`customerId = "cus_globex"`) from the capability being refused,
+/// and so a narrowed filter can be fixed from the message. Every one was put there by the
+/// program or by a package it called. A built-in capability's values are left out: a
+/// runtime library can fill them with what the program never saw, such as a redirect's
+/// URL.
+fn request_values(context: &serde_json::Value) -> String {
+    let Some(fields) = context.as_object() else {
+        return String::new();
+    };
+    let named: Vec<String> = fields
+        .iter()
+        .filter_map(|(name, value)| {
+            let shown = match value {
+                serde_json::Value::String(text) => {
+                    let mut chars = text.chars();
+                    let mut cut: String = chars.by_ref().take(MAX_NAMED_VALUE_CHARS).collect();
+                    if chars.next().is_some() {
+                        cut.push('…');
+                    }
+                    serde_json::Value::String(cut).to_string()
+                }
+                serde_json::Value::Number(_) | serde_json::Value::Bool(_) => value.to_string(),
+                _ => return None,
+            };
+            Some(format!("{name} = {shown}"))
+        })
+        .collect();
+    if named.is_empty() {
+        return String::new();
+    }
+    let more = if named.len() > MAX_NAMED_VALUES {
+        ", …"
+    } else {
+        ""
+    };
+    format!(
+        " with {}{more}",
+        named[..named.len().min(MAX_NAMED_VALUES)].join(", ")
+    )
+}
+
+/// Whether `capability` is one an application's package declares: not one the runtime
+/// gates itself, nor an MCP server's tool.
+fn is_application_defined(capability: &str) -> bool {
+    let every = OptionalPackage::ALL
+        .iter()
+        .fold(Stdlib::core(), |stdlib, package| stdlib.with(*package));
+    !capability.starts_with("mcp.") && capabilities::find_gating_for(every, capability).is_none()
 }
 
 /// The normalized VFS paths a denial was for, so a narrowed filter can be fixed
@@ -862,6 +930,64 @@ permissions:
         assert_eq!(
             reason("secrets.get", serde_json::json!({"name": "token"})),
             "policy denied secrets.get for main"
+        );
+    }
+
+    #[test]
+    fn an_application_capabilitys_denial_names_the_values_it_was_for() {
+        let policy = PolicyCheck::new(Arc::new(parse("name: closed\n").unwrap()));
+        let reason = |capability: &str, context: serde_json::Value| match policy
+            .check("main", capability, &context)
+        {
+            CheckOutcome::Deny { reason, .. } => reason,
+            _ => panic!("{capability} not denied"),
+        };
+        assert_eq!(
+            reason(
+                "acme.com/charges.list",
+                serde_json::json!({ "customerId": "cus_globex" })
+            ),
+            "policy denied acme.com/charges.list with customerId = \"cus_globex\" for main"
+        );
+        // Scalars only, a few of them, each cut short.
+        let long = "x".repeat(70);
+        assert_eq!(
+            reason(
+                "acme.com/refund",
+                serde_json::json!({
+                    "a": 1, "b": true, "c": { "nested": 1 }, "d": [1],
+                    "e": long, "f": "y", "g": "z"
+                })
+            ),
+            format!(
+                "policy denied acme.com/refund with a = 1, b = true, e = \"{}…\", f = \"y\", … \
+                 for main",
+                "x".repeat(64)
+            )
+        );
+        assert_eq!(
+            reason("acme.com/ping", serde_json::json!({})),
+            "policy denied acme.com/ping for main"
+        );
+        // A built-in capability's values can come from the runtime rather than the
+        // program, and an MCP tool's are its whole arguments: neither is named.
+        assert_eq!(
+            reason(
+                "http.get",
+                serde_json::json!({ "url": "https://x.test/?sig=1", "host": "x.test" })
+            ),
+            "policy denied http.get for main"
+        );
+        assert_eq!(
+            reason("llm.call", serde_json::json!({ "model": "m" })),
+            "policy denied llm.call for main"
+        );
+        assert_eq!(
+            reason(
+                "mcp.linear/create_issue",
+                serde_json::json!({ "title": "t" })
+            ),
+            "policy denied mcp.linear/create_issue for main"
         );
     }
 

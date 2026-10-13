@@ -20,7 +20,7 @@ mod transport;
 mod work;
 mod worker;
 
-use crate::runtime::decision::{CallSite, EntryPath, SourceLine};
+use crate::runtime::decision::{CallOrigin, CallSite, EntryPath};
 use crate::runtime::fuel;
 use crate::runtime::host::{
     permission_denied, read_string_arg, register_host_fn_async, write_submilli_string_struct,
@@ -69,8 +69,9 @@ struct Job {
     algorithm_fuel: Arc<work::AlgorithmWork>,
     denial: Arc<Mutex<Option<(String, String)>>>,
     history_cache: Option<Arc<log_cache::Cache>>,
-    /// The program line that started the operation, captured only while recording.
-    line: Option<SourceLine>,
+    /// Where in the program, and in a package, the operation started; captured only
+    /// while recording.
+    origin: CallOrigin,
 }
 impl Job {
     fn remote_capability(&self) -> &'static str {
@@ -84,11 +85,11 @@ impl Job {
     fn check(&self, capability: &str, context: Value) -> Result<()> {
         self.check_cancelled()?;
         // Git's decisions are made on a worker thread, after the program's stack is gone;
-        // they reuse the line the host call captured on entry.
+        // they reuse the origin the host call captured on entry.
         let site = CallSite::new(
             self.security
                 .recorder()
-                .map(|recorder| recorder.begin_call(&self.caller, capability, self.line)),
+                .map(|recorder| recorder.begin_call(&self.caller, capability, self.origin.clone())),
             EntryPath::Git,
         );
         crate::stdlib::shared::check_and_audit(
@@ -499,7 +500,7 @@ async fn invoke(
         algorithm_fuel: Arc::new(work::AlgorithmWork::with_meter(Arc::clone(&meter))),
         denial: Arc::new(Mutex::new(None)),
         history_cache: caller.data().git_history.clone(),
-        line: crate::stdlib::shared::source_line(&*caller),
+        origin: crate::stdlib::shared::call_origin(&*caller),
     };
     let vfs = caller.data().vfs.clone();
     let op = op.to_owned();

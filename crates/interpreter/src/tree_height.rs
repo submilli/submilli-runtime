@@ -47,6 +47,9 @@ pub fn check_syntax(ast: &Ast) -> Result<(), CompilerFailure> {
 }
 
 /// Rejects a typed tree whose recursive walks could exhaust the compiler stack.
+/// This checks arena edges and owned expression/statement nesting. Embedded
+/// type payloads still require [`TypedAst`]'s phase input contract; success here
+/// does not certify an arbitrary hand-built tree for later compiler phases.
 pub fn check_typed(ta: &TypedAst, stage: CompilerStage) -> Result<(), CompilerFailure> {
     measure(&TypedTree(ta), MAX_TYPED_HEIGHT, stage, |span| {
         CompilerFailure::Limit {

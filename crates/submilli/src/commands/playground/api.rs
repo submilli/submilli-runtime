@@ -948,6 +948,7 @@ fn sse_event(event: &StoredEvent) -> Event {
         EventBody::Gap(_) => "gap",
         EventBody::Chat(_) => "chat",
         EventBody::ChatReplaced(_) => "chat-replaced",
+        EventBody::ChatTools(_) => "chat-tools",
     };
     Event::default()
         .id(event.session_seq.to_string())

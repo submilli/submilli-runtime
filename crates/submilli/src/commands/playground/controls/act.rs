@@ -45,7 +45,7 @@ use super::super::client::{self, Probe, Running};
 use super::super::labels;
 use super::super::project;
 use super::super::state::{self, ADMIN_TOKEN, InstanceRecord, RememberedBinding, StateDir};
-use super::super::store::events::{ChatRole, EventBody};
+use super::super::store::events::EventBody;
 use super::super::store::redact::REDACTED;
 use super::super::store::run::{DecisionRef, StoredRun, StoredTestReport};
 use super::super::store::sessions::SessionEntry;
@@ -1033,14 +1033,28 @@ impl Actions {
             })?,
             None => agent::Settings::default(),
         };
-        // Only what the developer and the model said: chat from anything else posting to
-        // the session is not handed to the model as the developer's words.
-        let said: Vec<(ChatRole, &str)> = log
+        // Only what the developer and the model said, and the tools the model called: chat
+        // from anything else posting to the session is not handed to the model as the
+        // developer's words.
+        let mut logged: Vec<(_, agent::Logged<'_>)> = log
             .chat()
             .into_iter()
             .filter(|(_, turn)| CHAT_LABELS.contains(&turn.agent.as_str()))
-            .map(|(_, turn)| (turn.role, turn.text.as_str()))
+            .map(|(event, turn)| {
+                (
+                    (event.position, event.session_seq),
+                    agent::Logged::Said(turn.role, turn.text.as_str()),
+                )
+            })
             .collect();
+        logged.extend(log.events.iter().filter_map(|event| match &event.body {
+            EventBody::ChatTools(tools) if CHAT_LABELS.contains(&tools.agent.as_str()) => Some((
+                (event.position, event.session_seq),
+                agent::Logged::Tools(tools),
+            )),
+            _ => None,
+        }));
+        logged.sort_by_key(|(at, _)| *at);
         // Numbered past every message the log ever held, so none is written over.
         let numbered: BTreeSet<&str> = log
             .events
@@ -1052,7 +1066,7 @@ impl Actions {
             .collect();
         let resume = agent::Resume {
             session: session.to_owned(),
-            history: agent::history(said),
+            history: agent::history(logged.into_iter().map(|(_, entry)| entry)),
             said: numbered.len(),
         };
         Ok((choice, settings, resume))
@@ -2643,7 +2657,8 @@ const ENVELOPE_FIELDS: [&str; 6] = [
 /// time, ids, caller and capability names, outcomes, sizes) at the top, and what came from
 /// inside the run (a decision's context, its near misses' values, its reason and its
 /// cause's, an MCP client's own name and tool call id, a console line) under `untrusted`.
-/// A chat message's id is built from the assistant's own ids, so it goes there too.
+/// A chat message's id is built from the assistant's own ids, so it goes there too, as do
+/// the tool calls a chat's answer made and what they returned.
 ///
 /// A decision carries its `<run>.<n>` reference when the store numbered it: the number
 /// `show`, `explain`, and `draft-rule` take for the same decision.
@@ -2670,6 +2685,7 @@ fn watch_line(seq: Option<u64>, stored: &Value, session: &str) -> Value {
     for (kind, untrusted_fields) in [
         ("chat", &["turn", "text", "agent", "model"][..]),
         ("chat-replaced", &["turns"][..]),
+        ("chat-tools", &["turn", "agent", "calls", "results"][..]),
     ] {
         if let Some(chat) = stored["body"][kind].as_object() {
             // Its id is built from the assistant's turn and agent ids.

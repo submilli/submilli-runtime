@@ -326,8 +326,9 @@ mod tests {
             format!(
                 "PermissionDeniedError: permission denied: caller={PACKAGE} \
                  capability=secrets.get: denied in test. \
-                 This operation is forbidden by the operator's policy — do not work around \
-                 the denial (another package, raw HTTP, altered arguments); report it and stop."
+                 This request is forbidden by the operator's policy — do not work around \
+                 the denial (another package, raw HTTP, or other arguments to reach the same \
+                 thing); report it and stop."
             ),
         );
         assert!(
