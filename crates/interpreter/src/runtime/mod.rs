@@ -326,6 +326,10 @@ impl StoreData {
     }
 }
 
+/// Instantiates each linked package module, running its module-level initializers.
+///
+/// Every thread polling this future must meet
+/// [`RuntimeConfig::native_stack_size`]'s caller contract.
 pub async fn install_package_modules_async(
     linker: &mut Linker<StoreData>,
     store: &mut Store<StoreData>,
@@ -452,10 +456,23 @@ impl RuntimeConfig {
     ///
     /// `max_wasm_stack` is an interpreter budget, but a host call that re-enters
     /// Wasm (a callback passed to `map`, say) nests interpreter frames on the
-    /// thread's own stack. The engine charges each crossing 4 KiB of the budget
-    /// so re-entry traps before the thread overflows; a debug build spends up to
-    /// ~64 KiB of native stack per crossing, so the thread is sized well past the
-    /// budget. An overflow here would abort every session in the process.
+    /// thread's own stack. The engine charges each crossing 4 KiB of the budget;
+    /// this bounds re-entry depth, not the thread's available native stack. Debug
+    /// builds have measured about 64 KiB per crossing, so this reservation allows
+    /// 128 KiB per crossing, with an 8 MiB minimum for setup and shallow calls.
+    ///
+    /// Embedders must provide this stack on every thread that polls execution,
+    /// including after an async task migrates between workers. The runners do not
+    /// create a thread or inspect remaining stack space. Poll them near the root
+    /// of the thread, rather than underneath deep native recursion. Undersized
+    /// stacks can overflow and abort the process instead of returning a trap.
+    /// Custom host functions must also bound their own native recursion.
+    ///
+    /// Set a Tokio runtime's `thread_stack_size` for worker threads. Its
+    /// `block_on` caller runs on the calling thread, so size that thread separately
+    /// (also for a current-thread runtime or `pollster::block_on`). Compilation
+    /// separately requires [`crate::compiler_limits::COMPILER_STACK_BYTES`]; use
+    /// the larger requirement when a thread performs both operations.
     pub fn native_stack_size(&self) -> usize {
         self.max_wasm_stack
             .saturating_mul(NATIVE_STACK_PER_WASM_BYTE)
@@ -542,16 +559,29 @@ impl RuntimeConfig {
             })
     }
 
-    /// One-shot runner: compile, instantiate, call `main`, return typed result
+    /// One-shot runner: load compiled Wasm, instantiate, call `main`, return typed result
     /// and captured console. Async like the rest of the runtime — a caller that
     /// isn't on a runtime bridges it itself (`pollster::block_on` for
     /// compute/`fs`-only programs, a tokio runtime when `http` is involved). For
     /// live console streaming, build a custom `Store<StoreData>` and call
     /// [`dispatch_main_async`] directly.
+    ///
+    /// # Native stack
+    ///
+    /// Every thread polling this future must meet [`Self::native_stack_size`]'s
+    /// caller contract. This method does not provision a stack. Compilation
+    /// separately requires [`crate::compiler_limits::COMPILER_STACK_BYTES`].
     pub async fn run(&self, wasm_bytes: &[u8]) -> wasmtime::Result<RunResult> {
         self.run_with_type_info(wasm_bytes, None).await
     }
 
+    /// Runs a compiled script with its result type information and captured console.
+    ///
+    /// # Native stack
+    ///
+    /// Every thread polling this future must meet [`Self::native_stack_size`]'s
+    /// caller contract, just as for [`Self::run`]. Compiling the script separately
+    /// requires [`crate::compiler_limits::COMPILER_STACK_BYTES`].
     pub async fn run_compiled(
         &self,
         compiled: &crate::compile::CompiledScript,

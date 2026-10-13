@@ -859,6 +859,31 @@ pub struct TypedParam {
     pub default: Option<crate::DefaultValue>,
 }
 
+/// Compiler intermediate representation, produced by type inference and consumed
+/// by checking, capture analysis, desugaring, and code generation.
+///
+/// # Phase input contract
+///
+/// Public phase APIs accept compiler-produced trees at the appropriate pipeline
+/// stage. Only continue compilation when inference and checking report no errors.
+/// Public fields support compiler transformations and inspection; they do not
+/// make arbitrary hand-built trees supported phase inputs. Transformations must
+/// preserve the compiler's type, binding, and metadata invariants.
+///
+/// In particular, every embedded [`Type`] must stay within
+/// [`crate::compiler_limits::MAX_TYPE_DEPTH`] and
+/// [`crate::compiler_limits::MAX_TYPE_NODES`], including types in parameters,
+/// declarations, shapes, captures, predicates, and runtime metadata. Inference
+/// bounds annotation resolution, inferred expression types, and substitutions
+/// before handing the tree to later phases. Replacing a payload invalidates that
+/// guarantee; [`crate::type_size::check`] checks a replacement type's bounds, not
+/// the semantic validity of the containing tree.
+///
+/// [`crate::tree_height::check_typed`] checks arena structure, not these payload
+/// invariants. Clone, formatting, and destruction can recurse through payloads,
+/// including destruction when an owning phase returns an error. Keep their
+/// bounds valid before transferring ownership, and perform phase work and
+/// destruction on a [`crate::compiler_limits::COMPILER_STACK_BYTES`] stack.
 #[derive(Default, Clone, Debug)]
 pub struct TypedAst {
     /// Number of parameter-initialization statements before a wrapped body.

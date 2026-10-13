@@ -35,8 +35,8 @@ PR #169, PR #172, PR #189 or PR #206. Entries marked **fixed on branch** have
 completed focused verification and review; other N entries remain open unless
 explicitly accepted as an operational limitation. Fifteen entries, N13, N16 and
 N17 among them, are fixed on main; the `submilli-wasm` 0.1.12 adoption that
-resolves N16's engine residual is on branch. N09/N10 are accepted operational
-limitations. Evidence means:
+resolves N16's engine residual is on branch. N18 remains open. N09/N10 are
+accepted operational limitations. Evidence means:
 
 - **Reproduced:** the stated operation failed in a bounded scratch process.
   The entry says whether this was a public API, source input, or only a dependency
@@ -65,12 +65,13 @@ limitations. Evidence means:
 | N15 | **Fixed on main:** bound artifact reads and retained package data before loading | File and wide-closure regressions pass |
 | N16 | **Fixed on main:** build string results in place under the GC limiter | Memory-cap, host-allocation and fixture regressions; engine 0.1.12 adopted on this branch |
 | N17 | **Fixed on main:** validate reaper configuration and check timer deadlines | Invalid setup/recovery, timer contract and sweep regressions |
+| N18 | **Open:** aggregate compiler memory admission | Q03 measured token/arena amplification; no shared compilation budget or pre-parse server admission |
 
 | ID | Investigation | Exit condition |
 | --- | --- | --- |
-| Q01 | Direct runtime runner's native-stack contract | Prove/enforce stack requirements at the runner's actual polling thread |
-| Q02 | Public typed-phase payload validation before clone/drop | Establish a documented validated-input contract or identify and fix missing checks |
-| Q03 | Aggregate source/token/arena compilation memory | Establish practical aggregate bounds at the named materialization sites |
+| Q01 | **Fixed on branch:** direct runtime runner stack contract | Explicit polling-thread obligation; subprocess callback-recursion regression |
+| Q02 | **Fixed on branch:** typed-phase input contract and dependency admission | Compiler IR invariants documented; direct codegen/rules validate borrowed declarations |
+| Q03 | **Open as N18:** aggregate compilation memory | Confirmed missing admission; implementation tracked by N18 and SUB-1123/SUB-1108 |
 | Q04 | Engine stack/GC transition and callback invariants | Obtain a scoped preservation proof or concrete failing transition for the pinned engine |
 
 Keep N/Q identifiers stable from this reset onward. Close an N entry only after
@@ -452,7 +453,7 @@ preparation, with stage/span/package context preserved. Limits and reverse child
 visit order are unchanged. Regressions cover 100,000-child roots with tiny budgets,
 mixed width/depth, exact limits, child-bearing variants, injected first/later
 reservation failures and healthy follow-up checks. Broader compiler admission
-remains Q03.
+remains N18 (from Q03).
 
 Merged through PR #163 as `f360df57`; the branch evidence above is historical.
 
@@ -666,44 +667,169 @@ three-role review rounds completed: the first found missing Tokio rounding
 headroom, now fixed; the second found no issues. Full verification is deferred
 to the PR gate.
 
+### N18 — Aggregate compiler memory admission (from Q03)
+
+**Confirmed missing resource bounds, not a demonstrated allocator abort.**
+
+- `compile.rs::parse_script` and `parse_package_module` append to an unbounded
+  token vector before parsing. Token payload allocation happens in lexing, so
+  checking token count only after collection is too late. The 32-bit source
+  offset limit is a representation bound, not practical memory admission.
+- `arena.rs::push` uses fallible reservation but its production node cap is
+  `u32::MAX` per arena. It does not budget the retained syntax plus typed arenas,
+  generated nodes, cloned trees or owned type/name payloads. A successful
+  reservation on an overcommitting OS is not a process memory guarantee.
+- `tree_height.rs::measure` allocates full-arena state tables, and node traversal
+  materializes child vectors. Structural depth limits do not bound their width.
+  These temporary buffers must share the admitted arena/edge budget.
+- Package compilation retains all parsed modules and registered source copies;
+  `submilli-build/src/driver.rs::discover_modules` reads all source files before
+  compilation. Per-file limits alone cannot bound a package. CLI `run`/`check`
+  similarly read source before compiler admission. Direct library callers retain
+  ownership of their original buffers, but compiler-owned copies need admission.
+- Server `runner::parse` registers a source copy and tokenizes before
+  `compiler_thread::run`. That helper creates a new sized thread for each call
+  and joins synchronously. A future permit acquired only at that helper would
+  miss queued/parsed request memory. Transport body limits also cannot cover
+  CLI, direct-library and package input or aggregate concurrent requests.
+
+**Implementation sequence and acceptance criteria:**
+
+1. Add one per-compilation budget in the interpreter, shared across package
+   modules and phases. Admit total source bytes/files before compiler-owned
+   copies, token count/payload before growth, and syntax/typed/generated nodes
+   plus owned payloads before retaining them. Temporary validation tables,
+   lowering clones, dependency copies and output buffers need explicit charges
+   or conservative bounds derived from those admitted quantities. Choose and
+   calibrate defaults against maintained packages; the measurements above are
+   evidence of amplification, not safe default limits.
+2. Route script/package and direct checked entry points through that budget;
+   bound CLI/build reads before materializing whole source sets. Preserve source
+   context and typed limit/operational errors; reject the compile without partial
+   Wasm. Use fallible reservations for the named growth points after admission,
+   without turning this into a blanket `Vec` rewrite.
+3. Coordinate SUB-1123 so global/tenant admission starts before source copies,
+   lexing and parsed-work queueing. Bound both running work and queued bytes.
+   Keep permits/accounting through owned worker cleanup after cancellation;
+   abandoning an await must not release memory still used by compilation.
+   SUB-1108's deadline must cooperate with that ownership; a timeout alone does
+   not stop synchronous compilation or reclaim its buffers.
+4. Verify exact/one-over source, token, node and byte budgets; many shallow
+   declarations; packages exceeding aggregate limits despite valid individual
+   files; allocation failure; cancellation and healthy recovery. Server tests
+   must cover parsing and queue saturation, not just compiler thread count.
+   Measure accepted worst-case workloads and concurrent peaks before claiming
+   a process bound. Per-type/function/depth guards remain necessary but do not
+   establish this aggregate guarantee.
+
+The question is now an actionable infrastructure item; SUB-633 stays open until its
+bounds are implemented or a specific limitation is explicitly accepted.
+
 ## Questions requiring a scoped follow-up
 
 ### Q01 — Native stack for direct convenience runners
 
-`crates/interpreter/src/runtime/mod.rs:406–416` explains a native-stack requirement
-scaled from `max_wasm_stack`. `run`/`run_compiled`/`run_with_type_info` at `:497–528`
-execute on the caller's polling thread. Engine `src/exec/mod.rs:90–96`, `:169–175`
-charges 4 KiB per callback crossing; that is not a measurement of native headroom.
-CLI/server provisioning does not establish the requirement for arbitrary library
-executors. **Not a demonstrated overflow.** Resolve whether this is an existing
-sufficient API contract or needs runner provisioning/clearer enforced admission;
-verify supported stacks and callback recursion in debug/release. Do not remove
-the existing documented compiler-sized-stack requirement or reopen bounded parser
-recursion merely because a caller can violate that requirement.
+**Resolved by clarifying the existing caller-provided-stack contract.**
+`RuntimeConfig::native_stack_size`, `run`, `run_compiled`,
+`instantiate_program_async`, `dispatch_main_async` and
+`install_package_modules_async` now explicitly require every polling thread to
+provide the configured native stack, including workers after task migration. A
+Tokio worker stack setting does not size the `block_on` caller; current-thread
+runtimes and `pollster` use their caller's stack.
+Poll near the thread root, and separately provision `COMPILER_STACK_BYTES` for
+compilation (the larger requirement if one thread does both).
+
+The engine 0.1.12 `Execution::enter_call` counts live host re-entry delimiters;
+`stack_bytes` charges 4 KiB for each. This bounds callback depth, not measured
+native headroom. The runtime reserves 32 times the Wasm budget, at least 8 MiB.
+CLI execution uses the larger compiler/runtime requirement; server workers use
+`native_stack_size`. The library leaves thread/executor ownership to embedders.
+Undersized or already deeply consumed caller stacks are outside this contract
+and may abort; custom host functions must bound their own native recursion.
+This is not a new accepted operational panic or a claim of automatic admission.
+
+`crates/interpreter/tests/native_stack.rs` exercises repeated host/Wasm recursion
+through `Array.map`, using both `run` and `run_compiled`, with 64 KiB, 512 KiB
+(default), and 1 MiB Wasm budgets on separately sized execution threads. The
+expected result is a non-catchable `Trap::StackOverflow`. Compilation uses its
+own compiler-sized thread. A child process with a 120-second deadline exposes
+native aborts without terminating the parent suite. This regression does not
+prove arbitrary custom native callbacks or all platforms' frame sizes.
 
 ### Q02 — Typed payloads at public phase APIs
 
-`codegen/mod.rs:732` checks typed arena height, then
-`codegen/runtime_values.rs:70` clones the public `TypedAst`;
-`runtime_values/declarations.rs:93` clones dependencies. `typechecker/capture.rs:41–47`
-also clones parameter payloads. Publicly mutable embedded `Type` trees are not
-necessarily bounded by the arena-edge check. Determine whether every supported
-entry supplies validated payloads before clone, formatting and drop; if the
-contract is compiler-produced-only, establish that exact contract and scope.
-Otherwise add the missing preflight as a concrete finding. **No reproduction or
-blanket assertion that ordinary compiled programs fail.**
+**Fixed on branch with an explicit compiler-IR contract and dependency
+preflight.** `TypedAst` documents that phase inputs come from the compiler at
+the appropriate pipeline stage; public-field transformations must preserve its
+type, binding and metadata invariants. Arbitrary hand-built typed trees are not
+supported inputs. Every embedded type, including those in parameters, captures,
+shapes and runtime tables, must retain `MAX_TYPE_DEPTH`/`MAX_TYPE_NODES` bounds.
+Arena validation does not establish those bounds. Clone, formatting and drop
+require the compiler-sized stack; owning APIs (`capture`, `desugar`) require
+valid payloads before ownership transfer, including their error cleanup. Adding
+a check after transfer would not make unbounded recursive drop safe.
+
+The construction guarantees are annotation checks in
+`typechecker/infer/resolve_type.rs::resolve_type_inner`, expression-type checks
+in `typechecker/infer/expr.rs`, bounded `TypeBudget` substitutions, and phase
+`type_size_checkpoint` failures. Full inference validates borrowed declarations
+with `check_declaration_types` before use. These guarantees apply to the
+compiler's outputs; external mutation can invalidate them. The contract does
+not exempt compiler-produced violations from the no-panic policy.
+
+All four codegen entry points, through the shared `codegen_inner`, and
+`rules::check_script` now call the existing dependency validator too, before
+recursive consumers. Previously these paths relied on validation during
+inference even though their borrowed declarations could have changed since
+then. Limits retain their compiler stage; traversal allocation failures remain
+internal failures. `capability_binding_type`, which is an accessor returning
+`Option`, explicitly requires validated type/declaration arguments. No successful
+default or partial Wasm replaces a validation failure.
+
+`tests/typed_phase_contracts.rs` runs on the documented compiler stack in a child
+process with a deadline. It checks all codegen entry points and script checking
+with dependency types at depth 512, 513 and 100,000, plus codegen's type-node
+limit. The owner disposes of deliberately over-deep borrowed input iteratively.
+A compiler-produced tree with nested types and closure captures passes all
+post-inference phases. These are API/metadata tests, not guest-input exploit
+reproducers.
 
 ### Q03 — Aggregate source/token/arena memory
 
-`compile.rs:105` builds the token vector before parsing; `tree_height.rs`
-materializes arena-sized tables and child vectors. Per-type/per-function/depth
-limits do not automatically prove a total per-compilation bound, especially with
-many small independent declarations and concurrent compilation. Quantify these
-specific retained buffers and their entry-point admission limits, then record a
-bounded fix or a justified limit. N11/N12 cover already confirmed narrower gaps.
-Coordinate with SUB-1123's compiler admission and SUB-1108's compile time limit;
-neither a thread pool nor a timeout alone proves allocation safety. No claim that
-every `Vec`/allocation must become a new error path.
+**Investigation complete; the missing admission remains open as N18.**
+No source/token/arena or server-concurrency guarantee justifies accepting this
+as an invariant. SUB-1123 (compiler pool/admission) and SUB-1108 (compile limits)
+were both still Backlog when checked on 2026-10-08. This finding needs shared
+resource accounting and admission work; it is not resolved by documenting a
+caller stack requirement or making one allocation fallible.
+
+Measured the release library on arm64, Rust 1.98.1, on the branch later merged
+as #189, plus the Q01/Q02 changes. A scratch Rust global allocator counted
+live requested allocation sizes and peak live bytes in separate processes,
+including source construction and compiler caches. The parser probe collected
+ASI tokens, called `parse_checked`, and measured syntax height; the compiler
+probe called `compile_script`. These are small successful examples, not
+worst-case estimates or OOM reproducers. Counts exclude allocator bookkeeping,
+C/native allocations and thread stacks; they are **not RSS**. OS RSS reporting
+was unavailable in the sandbox. The allocator harness is not in the
+repository, so these numbers cannot be
+reproduced from the repository.
+
+| Workload | Source bytes | Tokens / allocated token slots | Syntax expressions / statements | Peak measured Rust heap |
+| --- | ---: | ---: | ---: | ---: |
+| Parse 1 MiB whitespace | 1,048,576 | 1 / 4 | 0 / 0 | 1,049,894 bytes |
+| Parse 65,536 semicolons | 65,536 | 65,537 / 131,072 | 0 / 0 | 13,697,924 bytes |
+| Parse 1,000 small functions plus `main` | 39,817 | 12,013 / 16,384 | 1,001 / 3,003 | 4,469,635 bytes |
+| Parse 10,000 small functions plus `main` | 417,817 | 120,013 / 131,072 | 10,001 / 30,003 | 38,134,460 bytes |
+| Full compile of `main` only | 37 | not sampled | not sampled | 5,689,024 bytes |
+| Full compile of 1,000 functions plus `main` | 39,817 | not sampled | not sampled | 14,502,968 bytes |
+| Full compile of 10,000 functions plus `main` | 417,817 | not sampled | not sampled | 105,786,462 bytes |
+
+On that build, inline `Token`/`Expr`/`Stmt` sizes were 104/264/568 bytes and
+`TypedExpr`/`TypedStmt` were 512/432 bytes, before their separately owned strings,
+vectors, maps or type payloads. EOF alone pushed the semicolon token vector to
+its next capacity bucket. Neither shallow syntax nor a low source-byte count
+bounds these amplification factors tightly enough for a memory guarantee.
 
 ### Q04 — Pinned engine's transition invariants
 
@@ -800,8 +926,8 @@ first-party Rust execution-path proof from this scan.
 
 | Area | Fresh review | Remaining limitation |
 | --- | --- | --- |
-| Frontend and compiler | Dispatch proofs, parser/tree guards, type substitution, metadata traversal, codegen entry/cloning, diagnostic collection/rendering | Typed payload and total-memory questions Q02/Q03 |
-| Runtime and standard library | ABI validation, numeric/GC/crypto guarantees, watchdog, JSON/vtable depth limits, selected string/BigInt/Git allocations and worker ownership | N08/N10/N16; Q01; other host/dependency allocation internals not exhaustively proved |
+| Frontend and compiler | Dispatch proofs, parser/tree guards, type substitution, metadata traversal, codegen entry/cloning, diagnostic collection/rendering | Aggregate compiler memory admission (N18); typed-phase inputs rely on the documented Q02 contract |
+| Runtime and standard library | ABI validation, numeric/GC/crypto guarantees, watchdog, JSON/vtable depth limits, selected string/BigInt/Git allocations and worker ownership | N08/N10/N16; native stack is a caller contract (Q01); other host/dependency allocation internals not exhaustively proved |
 | Blueprint and build | Filter parser/AST consumers, UTF-8 slices, graph traversal, manifest validation, artifact readers, installed closure depth bound | YAML dependency internals not exhaustively reviewed |
 | Shared MCP/LLM/HTTP | OAuth expiry, catalog conversion/depth, bounded bodies, pagination, dispatch error paths, shared policy paths | A bounded response is not a proof of all dependency allocation behavior |
 | Server and CLI | Preparation, sized compiler threads, timeout setup, UUIDs, storage workers, accepted locks, recording/events and reaper | N08–N10/N17; library configurations/callback implementations need explicit contracts |
