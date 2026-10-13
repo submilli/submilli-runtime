@@ -99,15 +99,18 @@ const EXCLUDED_NAMES = [
   [/Construct(or)?Signature/, "construct signatures"],
   [/extend\w+Interface/, "adding to a built-in interface"],
   [/InJs/, "JavaScript"],
+  [/topLevelAwait/, "async/await"],
 ];
 
 // Options that make a case JavaScript.
 const JAVASCRIPT_OPTION = /^\s*\/\/\s*@(allowJs|checkJs)\s*:\s*true/im;
 
+const JAVASCRIPT_FILE = /\.(js|jsx|mjs|cjs)$/i;
+const JAVASCRIPT_FEATURE = "JavaScript";
+
 // The files of a case that aren't TypeScript modules we can check, and what they
 // are. The first that matches a file's name names it.
 const UNSUPPORTED_FILES = [
-  [/\.(js|jsx|mjs|cjs)$/i, "JavaScript"],
   [/(^|\/)node_modules\//, "`node_modules` packages"],
   [/\.d\.[mc]?ts$/i, "declaration files (`.d.ts`)"],
   [/\.tsx$/i, "JSX"],
@@ -230,7 +233,7 @@ function excludedDirectory(rel) {
 function exclusionBeforePort(rel, source) {
   const named = EXCLUDED_NAMES.find(([pattern]) => pattern.test(path.basename(rel, ".ts")));
   if (named) return exclusion(rel, REASONS.unsupported, named[1]);
-  if (JAVASCRIPT_OPTION.test(source)) return exclusion(rel, REASONS.unsupported, "JavaScript");
+  if (isJavaScript(source)) return exclusion(rel, REASONS.unsupported, JAVASCRIPT_FEATURE);
   for (const name of fileNames(source)) {
     const kind = UNSUPPORTED_FILES.find(([pattern]) => pattern.test(name));
     if (kind) return exclusion(rel, REASONS.unsupported, kind[1]);
@@ -238,6 +241,11 @@ function exclusionBeforePort(rel, source) {
   if (sharesGlobalScope(source)) return exclusion(rel, REASONS.unsupported, SHARED_SCOPE_FEATURE);
   if (CONSTRUCT_SIGNATURE.test(source)) return exclusion(rel, REASONS.unsupported, CONSTRUCT_SIGNATURE_FEATURE);
   return null;
+}
+
+/** Whether an upstream case is JavaScript, by its options or a file's name. */
+function isJavaScript(source) {
+  return JAVASCRIPT_OPTION.test(source) || fileNames(source).some((name) => JAVASCRIPT_FILE.test(name));
 }
 
 /** Whether a multi-file case's files share declarations through the global scope:
@@ -507,7 +515,7 @@ function findCases(dir) {
     .sort();
 }
 
-module.exports = { exclusionBeforePort, excludedDirectory, findCases, wasPruned, upstreamErrorCodes, portCausedErrors, codeOf, unsupportedCause, writeExcluded };
+module.exports = { portCase, exclusionBeforePort, isJavaScript, excludedDirectory, findCases, wasPruned, upstreamErrorCodes, portCausedErrors, codeOf, unsupportedCause, writeExcluded };
 
 if (require.main === module) main().catch((e) => {
   console.error(e);

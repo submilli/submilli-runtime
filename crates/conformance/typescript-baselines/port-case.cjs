@@ -26,7 +26,7 @@ const ts = require("typescript");
 const fs = require("fs");
 const path = require("path");
 const { splitCase, eachFile, relativeSpecifier } = require("./case-files.cjs");
-const { caseProgram } = require("./tsc-case.cjs");
+const { caseProgram, moduleOptions } = require("./tsc-case.cjs");
 
 const PLACEHOLDER = (ty) => `null as unknown as (${ty})`;
 
@@ -197,8 +197,7 @@ function removeModifier(node, kind, sourceFile, edits) {
  * return type of a function declaration, class method or getter, and the type of a class
  * field or of a parameter with a default value. */
 function annotateInferredTypes(text, fileName) {
-  const options = { strict: true, target: ts.ScriptTarget.ES2020 };
-  if (splitCase(text)) Object.assign(options, { module: ts.ModuleKind.ES2020, moduleResolution: ts.ModuleResolutionKind.Bundler });
+  const options = { strict: true, target: ts.ScriptTarget.ES2020, ...moduleOptions(text) };
   const { program, sourceFiles } = caseProgram(fileName, text, options);
   const checker = program.getTypeChecker();
   const annotated = new Map(sourceFiles.map((sourceFile) => [sourceFile.fileName, annotateFile(sourceFile, checker)]));

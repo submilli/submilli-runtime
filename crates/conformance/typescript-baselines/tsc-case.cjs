@@ -28,13 +28,30 @@ function compilerOptions(file, text = fs.readFileSync(file, "utf8")) {
     module: ts.ModuleKind.ES2020,
     noEmit: true,
   };
-  // A multi-file case's files import each other by relative path, with no extension.
-  if (splitCase(text)) options.moduleResolution = ts.ModuleResolutionKind.Bundler;
+  Object.assign(options, moduleOptions(text));
   for (const [, name, value] of text.matchAll(new RegExp(OPTION_LINE.source, "gm"))) {
     const key = BOOLEAN_OPTIONS[name.toLowerCase()];
     if (key) options[key] = value.split(",")[0].trim().toLowerCase() === "true";
   }
   return options;
+}
+
+/** The module options of a multi-file case, whose files import each other by
+ * relative path with no extension: its `@module`, as upstream checks it, since
+ * some module kinds reject `export =` and `import x = require()` that others take.
+ * None for a single file. */
+function moduleOptions(text) {
+  if (!splitCase(text)) return {};
+  const name = /^\s*\/\/\s*@module\s*:\s*([^\r\n,]*)/im.exec(text)?.[1].trim().toLowerCase();
+  const kind = Object.entries(ts.ModuleKind).find(([key, value]) => typeof value === "number" && key.toLowerCase() === name)?.[1];
+  const module = kind ?? ts.ModuleKind.ES2020;
+  return { module, moduleResolution: moduleResolutionFor(module) };
+}
+
+function moduleResolutionFor(module) {
+  if (module >= ts.ModuleKind.Node16 && module <= ts.ModuleKind.NodeNext) return ts.ModuleResolutionKind.NodeNext;
+  const isEcmaScript = module >= ts.ModuleKind.ES2015 && module <= ts.ModuleKind.ESNext;
+  return isEcmaScript || module === ts.ModuleKind.Preserve ? ts.ModuleResolutionKind.Bundler : ts.ModuleResolutionKind.Node10;
 }
 
 // The 0-based line `pos` is on, counted in `\n`s as the runner counts them.
@@ -88,7 +105,7 @@ function tscErrors(file) {
   );
 }
 
-module.exports = { OPTION_LINE, compilerOptions, caseProgram, caseHost, lineIndex, tscErrors };
+module.exports = { OPTION_LINE, compilerOptions, moduleOptions, caseProgram, caseHost, lineIndex, tscErrors };
 
 // `node tsc-case.cjs <case.ts>` prints its errors as JSON, for callers that check
 // many cases at once in child processes.
