@@ -150,9 +150,11 @@ pub enum PlaygroundCmd {
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
     /// runs are labeled `stand-in`.
     Mcp,
-    /// Chat with an agent on your own model key, as a production agent would run: it uses
-    /// the playground's tools and prints its answer. Each chat starts a session; reply in it
-    /// with `--session`. The key comes from the playground's environment
+    /// Chat with an agent using your own model key, the way a production agent runs: it uses
+    /// the playground's tools and prints its answer. Each chat starts a session; send the
+    /// next message in it with `--session`. The session stays open until it sits idle past
+    /// the blueprint's idle timeout or `session end` ends it. The key comes from the
+    /// playground's environment
     /// (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from `--model` or
     /// SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
     Chat(ChatArgs),
@@ -247,8 +249,9 @@ pub struct ChatArgs {
     #[arg(long, value_name = "ID")]
     session: Option<String>,
     /// The model for a new session, as `<provider>:<model>`, from a provider whose key the
-    /// playground started with. Default: the playground's configured model.
-    #[arg(long, value_name = "PROVIDER:MODEL")]
+    /// playground started with. Default: the playground's configured model. A session
+    /// carried on keeps its own.
+    #[arg(long, value_name = "PROVIDER:MODEL", conflicts_with = "session")]
     model: Option<String>,
     /// The most tool calls run for one answer of the model; the rest are refused to it.
     #[arg(
@@ -987,10 +990,10 @@ fn print_description(description: &host::Description, packages_error: Option<&st
     match &description.provider {
         Some(provider) => {
             println!("  provider:   {provider} (keys exported after start need a restart)");
-            if !description.models.is_empty() {
+            if !description.chat_models.is_empty() {
                 println!(
                     "  chat:       {} (another: chat --model <provider>:<model>)",
-                    description.models.join(", ")
+                    description.chat_models.join(", ")
                 );
             }
         }

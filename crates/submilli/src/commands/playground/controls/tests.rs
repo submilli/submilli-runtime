@@ -683,7 +683,7 @@ fn sessions_list_newest_first_with_variables_run_counts_and_the_denial() {
             variables: vars("cus_acme"),
             label: "assistant".into(),
             idle_timeout_ms: None,
-            agent: None,
+            model: None,
         })
         .unwrap();
     let (reader, _dir) = fixture.reader();
@@ -1289,7 +1289,7 @@ fn a_started_session_idle_past_its_own_timeout_lists_as_expired() {
                 variables: BTreeMap::new(),
                 label: "assistant".into(),
                 idle_timeout_ms,
-                agent: None,
+                model: None,
             })
             .unwrap();
     }
@@ -1344,7 +1344,7 @@ fn sessions_list_with_a_change_log_that_cannot_be_read() {
             variables: BTreeMap::new(),
             label: "assistant".into(),
             idle_timeout_ms: Some(60_000),
-            agent: None,
+            model: None,
         })
         .unwrap();
     let mut log = std::fs::OpenOptions::new()

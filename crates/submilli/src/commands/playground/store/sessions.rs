@@ -4,7 +4,7 @@
 //! The run index already names the session each run executed in; this log adds the
 //! sessions the playground started with fixed variables, so one is listed before it
 //! has runs, and says whether it is still open. A session own-key chat started names
-//! its agent, which every later message in it uses.
+//! its model, which every later message in it uses.
 
 use std::collections::BTreeMap;
 
@@ -40,7 +40,7 @@ pub(crate) enum SessionEntry {
         /// For a session own-key chat started, the model answering in it, as
         /// `<provider>:<model>`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        agent: Option<String>,
+        model: Option<String>,
     },
     /// The session was closed.
     Ended { session_id: String },
@@ -94,7 +94,7 @@ mod tests {
                 variables: BTreeMap::from([("customerId".into(), "cus_northwind".into())]),
                 label: "assistant".into(),
                 idle_timeout_ms: None,
-                agent: None,
+                model: None,
             })
             .unwrap();
         // A write cut short by a crash.

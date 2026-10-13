@@ -920,8 +920,8 @@ pub(crate) fn sessions_text(result: &SessionsResult) -> String {
             },
             plural(session.run_count, "run"),
         );
-        if let Some(agent) = &session.agent {
-            let _ = write!(line, "  agent {}", clean(agent));
+        if let Some(model) = &session.model {
+            let _ = write!(line, "  model {}", clean(model));
         }
         if session.denied {
             line.push_str("  DENIED");
@@ -1039,11 +1039,13 @@ pub(crate) fn chat_text(result: &ChatResult) -> String {
         fence.text("reply", reply, 200);
         fence.render(&mut out);
     }
+    // Outside `next`, which names only commands that read: sending the next message runs
+    // the agent. It names nothing but the server's session id.
     if let Some(session) = &result.session {
         let _ = writeln!(
             out,
-            "to reply: {COMMAND} chat --session {} \"<message>\"",
-            shell_word(session)
+            "to continue: {COMMAND} chat --session {} \"<message>\"",
+            shell_word(&clean(session))
         );
     }
     next_lines(&mut out, &result.next);

@@ -1738,26 +1738,31 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         }
 
         #[test]
-        fn a_chat_carries_on_in_its_session_with_the_conversation_and_its_agent() {
+        fn a_chat_carries_on_in_its_session_with_the_conversation_and_its_model() {
             let (port, bodies) = model_api(|n| match n {
                 1 => call_execute(n),
                 _ => json!({ "content": [{ "type": "text", "text": format!("Answer {n}.") }],
                              "stop_reason": "end_turn" }),
             });
             let playground = Playground::starter();
-            start_with_model(&playground, port);
+            let page = start_with_model(&playground, port);
             playground.expect(0, &["bind", "customerId=cus_northwind"]);
 
             let first = playground.expect(0, &["chat", "Total the charges."]);
             assert_eq!(first["continued"], false);
             let session = first["session"].as_str().unwrap().to_owned();
-            let agent = format!("anthropic:{}", first["model"].as_str().unwrap());
+            let model = format!("anthropic:{}", first["model"].as_str().unwrap());
+            let status: Value =
+                serde_json::from_slice(&playground.run(&["status", "--json"]).stdout).unwrap();
+            assert_eq!(status["chat_models"], json!([model.as_str()]), "{status}");
             let printed = playground.run(&["chat", "--session", &session, "Only last month."]);
             assert_eq!(printed.status.code(), Some(0), "{}", stderr(&printed));
             let printed = String::from_utf8_lossy(&printed.stdout);
             assert!(
                 printed.contains(&format!("continued session {session}"))
-                    && printed.contains(&format!("chat --session {session} \"<message>\"")),
+                    && printed.contains(&format!(
+                        "to continue: submilli playground chat --session {session} \"<message>\""
+                    )),
                 "{printed}"
             );
 
@@ -1821,12 +1826,18 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 .iter()
                 .find(|row| row["session"] == session.as_str())
                 .unwrap();
-            assert_eq!(listed["agent"], agent.as_str());
+            assert_eq!(listed["model"], model.as_str());
             assert_eq!(listed["open"], true);
+            let text = playground.run(&["sessions"]);
+            assert!(
+                String::from_utf8_lossy(&text.stdout).contains(&format!("model {model}")),
+                "{}",
+                String::from_utf8_lossy(&text.stdout)
+            );
 
-            // A session keeps its agent; only a chat's session can be carried on; an
-            // ended one cannot.
-            let other = playground.run(&[
+            // A session keeps its model: the CLI will not send both, and the playground
+            // refuses a client that does. A model name is a plain name.
+            let both = playground.run(&[
                 "chat",
                 "--session",
                 &session,
@@ -1834,12 +1845,33 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 "anthropic:another-model",
                 "x",
             ]);
-            assert_eq!(other.status.code(), Some(2), "{}", stderr(&other));
-            assert!(
-                stderr(&other).contains(&format!("agent is {agent}")),
-                "{}",
-                stderr(&other)
+            assert_eq!(both.status.code(), Some(2), "{}", stderr(&both));
+            let post = |body: Value| {
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .build()
+                    .into();
+                let mut response = agent
+                    .post(&format!("{page}/api/agent"))
+                    .header(
+                        "authorization",
+                        &format!("Bearer {}", playground.token("admin")),
+                    )
+                    .send_json(body)
+                    .unwrap();
+                response.body_mut().read_to_string().unwrap()
+            };
+            let answer = post(
+                json!({ "task": "x", "session": session, "model": "anthropic:another-model" }),
             );
+            assert!(
+                answer.contains("model-fixed") && answer.contains(&format!("answers with {model}")),
+                "{answer}"
+            );
+            let answer = post(json!({ "task": "x", "model": "google:../../v1/files" }));
+            assert!(answer.contains("invalid-model"), "{answer}");
+
+            // Only a chat's session can be carried on, and an ended one cannot.
             let started = playground.expect(0, &["session", "start"]);
             let plain = started["session"].as_str().unwrap();
             let refused = playground.run(&["chat", "--session", plain, "x"]);

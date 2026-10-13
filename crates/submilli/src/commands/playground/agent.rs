@@ -19,7 +19,7 @@ use submilli_shared::llm::tools::{
 };
 
 use super::chat::{chat_body, message};
-use super::mcp_http::McpHttp;
+use super::mcp_http::{Failure, McpHttp};
 use super::store::Recorder;
 use super::store::events::{ChatRole, Position};
 use super::{DEFAULT_MAX_CALLS_PER_ANSWER, MAX_CALLS_PER_ANSWER_RANGE};
@@ -126,6 +126,19 @@ pub(crate) fn choose_named(
                 provider_names()
             )
         })?;
+    // The name goes into the provider's request, and into the URL for some; only a
+    // plain model name is taken.
+    let plain = |part: &str| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    if !plain(model.strip_prefix("models/").unwrap_or(model)) {
+        return Err(format!(
+            "{source} names model `{model}`; a model name is letters, digits, `.`, `_`, and `-`"
+        ));
+    }
     let row = PROVIDERS
         .iter()
         .find(|row| row.name == provider)
@@ -261,6 +274,8 @@ pub(crate) struct Setup<'a> {
     pub(crate) cancelled: &'a AtomicBool,
     /// The session this message continues, when it is not the first.
     pub(crate) resume: Option<Resume>,
+    /// Told a new chat's session id as soon as the session starts.
+    pub(crate) started: &'a dyn Fn(&str),
 }
 
 /// An earlier chat to carry on: its session, and what was said in it.
@@ -357,17 +372,11 @@ pub(crate) enum Stopped {
     Provider,
 }
 
-/// What a chat did, and the session it ran in once it had one, even when it failed.
-pub(crate) struct Ran {
-    pub(crate) session: Option<String>,
-    pub(crate) outcome: Result<Outcome, String>,
-}
-
 /// Runs `task` to the model's answer or the turn limit. Blocking. Errors are the
 /// playground's or the provider's own words, with the key never in them. The session
 /// stays open, so a later message can carry the conversation on; the server ends it when
 /// it sits idle past the blueprint's idle timeout, or `session end` does.
-pub(crate) fn run(setup: &Setup<'_>, task: &str) -> Ran {
+pub(crate) fn run(setup: &Setup<'_>, task: &str) -> Result<Outcome, String> {
     // Trimmed as `choose` read it, so the header and the redaction use the same text.
     let key = std::env::var(setup.choice.key_variable)
         .map(|key| key.trim().to_owned())
@@ -392,11 +401,7 @@ pub(crate) fn run(setup: &Setup<'_>, task: &str) -> Ran {
         http: &http,
         next_id: Cell::new(1),
     };
-    let outcome = converse(setup, &mcp, &key, task).map_err(clean);
-    Ran {
-        session: http.session(),
-        outcome,
-    }
+    converse(setup, &mcp, &key, task).map_err(clean)
 }
 
 fn converse(
@@ -405,9 +410,14 @@ fn converse(
     key: &str,
     task: &str,
 ) -> Result<Outcome, String> {
-    let tools = match &setup.resume {
-        Some(_) => list_tools(mcp)?,
-        None => connect(mcp, setup.variables)?,
+    let tools = if setup.resume.is_some() {
+        list_tools(mcp)?
+    } else {
+        let tools = connect(mcp, setup.variables);
+        if let Some(session) = mcp.http.session() {
+            (setup.started)(&session);
+        }
+        tools?
     };
     let session = mcp.http.session();
     let (history, earlier) = setup.resume.as_ref().map_or((Vec::new(), 0), |resume| {
@@ -562,7 +572,7 @@ impl McpConversation<'_> {
                     }
                 },
             )
-            .map_err(|failure| failure.to_string())?;
+            .map_err(chat_failure)?;
         let answer = answer.ok_or_else(|| format!("the playground did not answer `{method}`"))?;
         if let Some(message) = answer["error"]["message"].as_str() {
             return Err(format!("the playground refused `{method}`: {message}"));
@@ -573,7 +583,17 @@ impl McpConversation<'_> {
     fn notify(&self, method: &str) -> Result<(), String> {
         self.http
             .send(&json!({ "jsonrpc": "2.0", "method": method }), |_| {})
-            .map_err(|failure| failure.to_string())
+            .map_err(chat_failure)
+    }
+}
+
+/// Why a message got no reply, in chat's terms.
+fn chat_failure(failure: Failure) -> String {
+    match failure {
+        Failure::SessionGone => "the session has ended (it sat idle past its idle timeout, \
+            `session end` ended it, or the playground restarted); start a new chat"
+            .to_owned(),
+        other => other.to_string(),
     }
 }
 
@@ -828,6 +848,12 @@ mod tests {
         );
         let bad = choose_named(&keys, "gpt-5.5", "--model").unwrap_err();
         assert!(bad.starts_with("--model is `gpt-5.5`"), "{bad}");
+        // Only a plain name goes into the provider's request.
+        for odd in ["openai:../../v1/files", "openai:gpt 5", "openai:gpt?x=1"] {
+            assert!(choose_named(&keys, odd, "--model").is_err(), "{odd}");
+        }
+        let google = env(&[("GEMINI_API_KEY", "g")]);
+        assert!(choose_named(&google, "google:models/gemini-flash-latest", "--model").is_ok());
     }
 
     #[test]

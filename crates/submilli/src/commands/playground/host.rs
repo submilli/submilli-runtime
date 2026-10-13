@@ -75,7 +75,7 @@ pub(crate) struct Description {
     pub(crate) model: Option<String>,
     /// The models a chat can use, as `<provider>:<model>`, the default first: one for
     /// each provider whose key the playground started with.
-    pub(crate) models: Vec<String>,
+    pub(crate) chat_models: Vec<String>,
     /// The blueprint's package closure at start: each package's origin and whether a
     /// program may import it. `status` reads it again for the blueprint in force.
     pub(crate) packages: Vec<ClosureEntry>,
@@ -528,7 +528,7 @@ fn describe(
         egress_grants: options.egress.grants(),
         provider,
         model,
-        models: super::agent::offered_here(),
+        chat_models: super::agent::offered_here(),
         packages,
     }
 }
