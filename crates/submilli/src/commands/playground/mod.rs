@@ -150,9 +150,12 @@ pub enum PlaygroundCmd {
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
     /// runs are labeled `stand-in`.
     Mcp,
-    /// Run a task with your own model key against the playground's tools, as a
-    /// production agent would; prints its answer. The key comes from the playground's
-    /// environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from
+    /// Chat with an agent using your own model key, the way a production agent runs: it uses
+    /// the playground's tools and prints its answer. Each chat starts a session; send the
+    /// next message in it with `--session`. The session stays open until it sits idle past
+    /// the blueprint's idle timeout or `session end` ends it. The key comes from the
+    /// playground's environment
+    /// (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from `--model` or
     /// SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
     Chat(ChatArgs),
     /// Copy a coding assistant's stand-in conversation to the running playground: a
@@ -238,9 +241,29 @@ pub struct SessionEndArgs {
 
 #[derive(ClapArgs)]
 pub struct ChatArgs {
-    /// What the agent should do.
-    #[arg(value_name = "TASK")]
+    /// What the agent should do, or, with `--session`, the next message to it.
+    #[arg(value_name = "MESSAGE")]
     task: String,
+    /// Carry on this chat session: the agent sees the conversation so far, under the
+    /// session's fixed variables, and answers with the session's own model.
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
+    /// The model for a new session, as `<provider>:<model>`, from a provider whose key the
+    /// playground started with. Default: the playground's configured model. A session
+    /// carried on keeps its own.
+    #[arg(long, value_name = "PROVIDER:MODEL", conflicts_with = "session")]
+    model: Option<String>,
+    /// How hard a new session's model reasons. OpenAI models only, for now.
+    #[arg(long, value_name = "LEVEL", value_parser = ["low", "medium", "high"], conflicts_with = "session")]
+    effort: Option<String>,
+    /// The most tokens one answer of a new session's model may take. Default: 4096.
+    #[arg(long, value_name = "TOKENS", value_parser = clap::value_parser!(u64).range(1..=1_000_000), conflicts_with = "session")]
+    max_output: Option<u64>,
+    /// Fields a new session adds to every request to its provider, as a JSON object in
+    /// the provider's own API terms, such as `{"temperature": 0.2}`. Fields the
+    /// playground sets itself (the model, messages, tools, instructions) are refused.
+    #[arg(long, value_name = "JSON", value_parser = parse_provider_settings, conflicts_with = "session")]
+    provider_settings: Option<serde_json::Map<String, serde_json::Value>>,
     /// The most tool calls run for one answer of the model; the rest are refused to it.
     #[arg(
         long,
@@ -255,6 +278,17 @@ pub struct ChatArgs {
     /// Print JSON.
     #[arg(long)]
     json: bool,
+}
+
+/// `--provider-settings`: a JSON object.
+fn parse_provider_settings(
+    text: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    match serde_json::from_str(text) {
+        Ok(serde_json::Value::Object(fields)) => Ok(fields),
+        Ok(_) => Err("give a JSON object, such as {\"temperature\": 0.2}".to_owned()),
+        Err(error) => Err(format!("not JSON: {error}")),
+    }
 }
 
 #[derive(ClapArgs)]
@@ -605,6 +639,11 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Chat(args) => act(
             ActionRequest::Chat(controls::act::ChatRequest {
                 task: args.task,
+                session: args.session,
+                model: args.model,
+                effort: args.effort,
+                max_output: args.max_output,
+                provider_settings: args.provider_settings,
                 max_calls_per_answer: Some(args.max_calls_per_answer),
             }),
             args.json,
@@ -976,6 +1015,12 @@ fn print_description(description: &host::Description, packages_error: Option<&st
     match &description.provider {
         Some(provider) => {
             println!("  provider:   {provider} (keys exported after start need a restart)");
+            if !description.chat_models.is_empty() {
+                println!(
+                    "  chat:       {} (another: chat --model <provider>:<model>)",
+                    description.chat_models.join(", ")
+                );
+            }
         }
         None => println!(
             "  provider:   none; export ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY \

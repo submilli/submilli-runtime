@@ -104,6 +104,13 @@ impl McpHttp {
         }
     }
 
+    /// Carries on MCP session `session`, which an earlier connection started under
+    /// `protocol`: later messages name it, with no `initialize` of their own.
+    pub(crate) fn resume(&self, session: &str, protocol: &str) {
+        *lock(&self.session) = Some(session.to_owned());
+        *lock(&self.protocol) = Some(protocol.to_owned());
+    }
+
     /// The MCP session id the server gave, once `initialize` was answered.
     pub(crate) fn session(&self) -> Option<String> {
         lock(&self.session).clone()

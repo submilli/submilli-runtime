@@ -683,6 +683,8 @@ fn sessions_list_newest_first_with_variables_run_counts_and_the_denial() {
             variables: vars("cus_acme"),
             label: "assistant".into(),
             idle_timeout_ms: None,
+            model: None,
+            settings: None,
         })
         .unwrap();
     let (reader, _dir) = fixture.reader();
@@ -1288,6 +1290,8 @@ fn a_started_session_idle_past_its_own_timeout_lists_as_expired() {
                 variables: BTreeMap::new(),
                 label: "assistant".into(),
                 idle_timeout_ms,
+                model: None,
+                settings: None,
             })
             .unwrap();
     }
@@ -1342,6 +1346,8 @@ fn sessions_list_with_a_change_log_that_cannot_be_read() {
             variables: BTreeMap::new(),
             label: "assistant".into(),
             idle_timeout_ms: Some(60_000),
+            model: None,
+            settings: None,
         })
         .unwrap();
     let mut log = std::fs::OpenOptions::new()
@@ -1377,4 +1383,19 @@ fn runs_lists_around_a_run_file_it_cannot_read_and_says_so() {
     assert!(listed.warnings[0].contains(&format!("run {broken}")));
     let text = render::runs_text(&listed);
     assert!(text.contains(&listed.warnings[0]), "{text}");
+}
+
+#[test]
+fn a_session_answers_one_chat_message_at_a_time() {
+    let chatting = std::sync::Arc::default();
+    let first = super::act::Answering::claim(&chatting, "s-1").unwrap();
+    let busy = super::act::Answering::claim(&chatting, "s-1")
+        .err()
+        .unwrap();
+    assert!(busy.message.contains("still answering"), "{}", busy.message);
+    let other = super::act::Answering::claim(&chatting, "s-2").unwrap();
+    drop(first);
+    let again = super::act::Answering::claim(&chatting, "s-1");
+    assert!(again.is_ok());
+    drop(other);
 }
