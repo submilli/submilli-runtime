@@ -834,6 +834,16 @@ impl Actions {
             provider: request.provider_settings.clone().unwrap_or_default(),
         };
         let (choice, settings, resume, answering) = if let Some(session) = &request.session {
+            if !request.variables.is_empty() {
+                return Err(ActError::usage(
+                    "session-values-fixed",
+                    format!(
+                        "session {} keeps the variables it started with; start a new chat to \
+                         set variables",
+                        clean(session)
+                    ),
+                ));
+            }
             if !asked.is_default() {
                 return Err(ActError::usage(
                     "settings-fixed",
@@ -865,12 +875,12 @@ impl Actions {
             (!settings.is_default()).then(|| serde_json::to_value(&settings).unwrap_or_default());
         let continued = resume.is_some();
         // A session carried on keeps the variables and secrets it started with; a new one
-        // takes the binding's.
+        // takes the binding's, under the variables the request names.
         let (blueprint, variables, secrets) = if continued {
             (None, BTreeMap::new(), BTreeMap::new())
         } else {
             let blueprint = self.blueprint(&self.blueprint_name).await?;
-            let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
+            let (variables, secrets) = self.for_new_run(&blueprint, &request.variables)?;
             (Some(blueprint), variables, secrets)
         };
         let model = choice.named();
@@ -2360,6 +2370,10 @@ pub(crate) struct ChatRequest {
     /// The most tool calls run for one answer; the default when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) max_calls_per_answer: Option<u16>,
+    /// Variable values a new session starts with, over the binding's. A session carried
+    /// on keeps its own.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) variables: BTreeMap<String, String>,
 }
 
 /// An action as the CLI sends it to the running playground.

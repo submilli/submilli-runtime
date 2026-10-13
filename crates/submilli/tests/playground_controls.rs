@@ -3412,6 +3412,343 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             assert_eq!(playground.expect(0, &["bind"])["variables"], json!({}));
         }
 
+        /// The status and body of a control request with `token`; the body as JSON when
+        /// it is JSON.
+        fn call(
+            page: &str,
+            method: &str,
+            path: &str,
+            token: Option<&str>,
+            body: Option<Value>,
+        ) -> (u16, Value) {
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .timeout_global(Some(Duration::from_secs(120)))
+                .build()
+                .into();
+            let mut request = ureq::http::Request::builder()
+                .method(method)
+                .uri(format!("{page}{path}"));
+            if let Some(token) = token {
+                request = request.header("authorization", format!("Bearer {token}"));
+            }
+            let mut response = match body {
+                Some(body) => agent
+                    .run(
+                        request
+                            .header("content-type", "application/json")
+                            .body(body.to_string())
+                            .unwrap(),
+                    )
+                    .unwrap(),
+                None => agent.run(request.body(()).unwrap()).unwrap(),
+            };
+            let status = response.status().as_u16();
+            let text = response.body_mut().read_to_string().unwrap_or_default();
+            let body = serde_json::from_str(&text).unwrap_or(Value::String(text));
+            (status, body)
+        }
+
+        /// A browser session, signed in as the page is: a login code the admin token
+        /// mints, traded at `/api/login`.
+        fn browser_session(playground: &Playground, page: &str) -> String {
+            let admin = playground.token("admin");
+            let (status, minted) = call(page, "POST", "/api/login-codes", Some(&admin), None);
+            assert_eq!(status, 200, "{minted}");
+            let code = minted["code"].as_str().unwrap();
+            let (status, session) = call(
+                page,
+                "POST",
+                "/api/login",
+                None,
+                Some(json!({ "code": code })),
+            );
+            assert_eq!(status, 200, "{session}");
+            session["session_token"].as_str().unwrap().to_owned()
+        }
+
+        #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+        #[test]
+        fn the_page_runs_test_rerun_and_cancel_and_reaches_no_admin_route() {
+            let (port, _log) = origin();
+            let playground = Playground::with_blueprint(HTTP_BLUEPRINT);
+            let page = playground.start();
+            let program = playground.write("program.ts", &read_read_write(port));
+            let ran =
+                playground.expect(3, &["exec", &program, "--var", "customerId=cus_northwind"]);
+            let run = ran["run"].as_u64().unwrap();
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let browser = browser_session(&playground, &page);
+
+            for mode in ["recorded", "reads-live", "live"] {
+                let (status, answer) = call(
+                    &page,
+                    "POST",
+                    "/api/test",
+                    Some(&browser),
+                    Some(json!({ "run": run, "mode": mode })),
+                );
+                assert_eq!(status, 200, "{mode}: {answer}");
+                assert_eq!(answer["result"]["source"], "test", "{mode}: {answer}");
+                assert_eq!(answer["result"]["test"]["mode"], mode, "{answer}");
+            }
+            let (status, answer) = call(
+                &page,
+                "POST",
+                "/api/rerun",
+                Some(&browser),
+                Some(json!({ "run": run })),
+            );
+            assert_eq!(status, 200, "{answer}");
+            assert_eq!(answer["result"]["source"], "rerun", "{answer}");
+            assert_eq!(answer["result"]["rerun_of"], run, "{answer}");
+
+            // A run in flight, cancelled from the page.
+            let looping = playground.write(
+                "loop.ts",
+                "function main(): number {\n  let total = 0;\n  for (let i = 0; i < 100000000000; i++) { total += i % 3; }\n  return total;\n}\n",
+            );
+            let running = playground
+                .command(&["exec", &looping, "--json"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let in_flight = playground.runs() as u64 + 1;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                let (status, answer) = call(
+                    &page,
+                    "POST",
+                    "/api/cancel",
+                    Some(&browser),
+                    Some(json!({ "run": in_flight })),
+                );
+                assert_eq!(status, 200, "{answer}");
+                if answer["exit"] == 0 {
+                    assert_eq!(answer["result"]["cancelled"], true, "{answer}");
+                    break;
+                }
+                assert_eq!(
+                    answer["result"]["error"]["kind"], "not-in-flight",
+                    "{answer}"
+                );
+                assert!(Instant::now() < deadline, "run {in_flight} never started");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let output = wait(running);
+            let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["outcome"]["kind"], "cancelled", "{result}");
+
+            let runs_before = playground.runs();
+            for (method, path) in [
+                ("POST", "/api/draft-rule/write"),
+                ("GET", "/api/binding"),
+                ("POST", "/api/bind"),
+                ("POST", "/api/clear"),
+                ("POST", "/api/stop"),
+                ("POST", "/api/exec"),
+                ("POST", "/api/recheck"),
+                ("POST", "/api/sessions/start"),
+                ("POST", "/api/sessions/end"),
+                ("POST", "/api/login-codes"),
+            ] {
+                let (status, body) = call(&page, method, path, Some(&browser), Some(json!({})));
+                assert_eq!(status, 403, "{method} {path}: {body}");
+            }
+            assert_eq!(playground.runs(), runs_before);
+            let (status, body) = call(&page, "GET", "/api/status", Some(&browser), None);
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body["running"], true, "{body}");
+        }
+
+        #[test]
+        fn a_page_chat_starts_its_session_with_the_variables_it_names() {
+            let (port, _bodies) = model_api(|n| match n {
+                0 => call_execute(0),
+                _ => json!({ "content": [{ "type": "text", "text": "Done." }],
+                             "stop_reason": "end_turn" }),
+            });
+            let playground = Playground::starter();
+            let page = start_with_model(&playground, port);
+            let browser = browser_session(&playground, &page);
+            let chat = |body: Value| {
+                let (status, answer) =
+                    call(&page, "POST", "/api/agent", Some(&browser), Some(body));
+                assert_eq!(status, 200, "{answer}");
+                answer
+            };
+
+            // A name the blueprint does not declare is refused as `exec` refuses it.
+            let refused = chat(json!({ "task": "Go.", "variables": { "TYPO": "1" } }));
+            assert_eq!(refused["exit"], 2, "{refused}");
+            let (exec_refused, code) = playground.json(&["exec", "--example", "--var", "TYPO=1"]);
+            assert_eq!(code, 2, "{exec_refused}");
+            assert_eq!(
+                refused["result"]["error"]["kind"], exec_refused["error"]["kind"],
+                "{refused}"
+            );
+            assert_eq!(
+                refused["result"]["error"]["message"], exec_refused["error"]["message"],
+                "{refused}"
+            );
+
+            // Nothing is bound: the session's runs have the chat's value.
+            let answer = chat(json!({
+                "task": "Compute six times seven.",
+                "variables": { "customerId": "cus_page" },
+            }));
+            assert_eq!(answer["exit"], 0, "{answer}");
+            let session = answer["result"]["session"].as_str().unwrap().to_owned();
+            let sessions = playground.expect(0, &["sessions"]);
+            let listed = sessions["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["session"] == session.as_str())
+                .unwrap_or_else(|| panic!("{session} not listed: {sessions}"));
+            assert_eq!(listed["variables"]["customerId"], "cus_page", "{listed}");
+            let runs = playground.expect(0, &["runs", "--session", &session]);
+            let run = runs["runs"][0]["run"].to_string();
+            assert_eq!(runs["runs"][0]["source"], "browser-chat", "{runs}");
+            let shown = playground.expect(0, &["show", &run]);
+            assert_eq!(shown["variables"]["customerId"], "cus_page", "{shown}");
+
+            // A session carried on keeps its own.
+            let refused = chat(json!({
+                "task": "Again.",
+                "session": session,
+                "variables": { "customerId": "cus_other" },
+            }));
+            assert_eq!(refused["exit"], 2, "{refused}");
+            assert_eq!(
+                refused["result"]["error"]["kind"], "session-values-fixed",
+                "{refused}"
+            );
+            assert!(
+                refused["result"]["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("start a new chat"),
+                "{refused}"
+            );
+        }
+
+        #[test]
+        fn status_lists_the_declared_variables_and_the_version_in_force() {
+            let playground = Playground::with_blueprint(
+                "name: demo\nvariables:\n  customerId:\n    required: true\n  region:\n    default: eu\npermissions:\n  main:\n  - capability: http.get\n    action: allow\n",
+            );
+            let page = playground.start();
+            let browser = browser_session(&playground, &page);
+            let (status, body) = call(&page, "GET", "/api/status", Some(&browser), None);
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(
+                body["declared_variables"],
+                json!([
+                    { "name": "customerId", "required": true },
+                    { "name": "region", "required": false },
+                ]),
+                "{body}"
+            );
+            assert_eq!(body["blueprint_status"]["version"], 1, "{body}");
+        }
+
+        #[test]
+        fn the_page_reads_a_module_of_a_package_in_the_closure_and_nothing_else() {
+            let playground = Playground::starter();
+            let submilli = playground.root.join("submilli");
+            // A module over the cap, and a package installed in the same store that the
+            // blueprint does not reach.
+            let billing = submilli.join("packages/billing/src");
+            let mut big = "// padding\n".repeat(30_000);
+            big.push_str("export function big(): number { return 1; }\n");
+            std::fs::write(billing.join("big.ts"), &big).unwrap();
+            let extra = submilli.join("packages/extra");
+            std::fs::create_dir_all(extra.join("src")).unwrap();
+            std::fs::create_dir_all(extra.join("docs")).unwrap();
+            std::fs::write(
+                extra.join("src/lib.ts"),
+                "/** One. */\nexport function one(): number { return 1; }\n",
+            )
+            .unwrap();
+            std::fs::write(extra.join("docs/readme.md"), "# @acme/extra\n").unwrap();
+            let manifest = submilli.join("submilli.toml");
+            let mut text = std::fs::read_to_string(&manifest).unwrap();
+            text.push_str(
+                "\n[[package]]\nname = \"@acme/extra\"\nversion = \"0.1.0\"\ndescription = \
+                 \"Extra.\"\npath = \"packages/extra\"\n",
+            );
+            std::fs::write(&manifest, text).unwrap();
+            let published = Command::new(BIN)
+                .args(["build", "publish-local"])
+                .current_dir(&submilli)
+                .env("SUBMILLI_HOME", playground.dir.path().join("home"))
+                .env("HOME", playground.dir.path().join("home"))
+                .env_remove("SUBMILLI_TELEMETRY")
+                .output()
+                .unwrap();
+            assert!(published.status.success(), "{}", stderr(&published));
+            let page = playground.start();
+            let browser = browser_session(&playground, &page);
+            let source = |package: &str, module: &str| {
+                call(
+                    &page,
+                    "GET",
+                    &format!("/api/packages/source?package={package}&module={module}"),
+                    Some(&browser),
+                    None,
+                )
+            };
+
+            let (status, body) = source("%40acme%2Fbilling", "lib");
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body["package"], "@acme/billing", "{body}");
+            assert_eq!(body["module"], "lib", "{body}");
+            assert_eq!(body["truncated"], false, "{body}");
+            assert_eq!(
+                body["untrusted"]["text"],
+                std::fs::read_to_string(billing.join("lib.ts")).unwrap(),
+                "{body}"
+            );
+
+            let (status, body) = source("%40acme%2Fbilling", "big");
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body["truncated"], true, "{body}");
+            assert_eq!(body["bytes"], big.len(), "{body}");
+            let cut = body["untrusted"]["text"].as_str().unwrap();
+            assert!(
+                cut.len() < big.len() && big.starts_with(cut),
+                "{}",
+                cut.len()
+            );
+            assert!(body["note"].as_str().unwrap().contains("first"), "{body}");
+
+            let (status, body) = source("%40acme%2Fextra", "lib");
+            assert_eq!(status, 404, "{body}");
+            assert_eq!(body["error"], "unknown_package", "{body}");
+            assert!(body.get("untrusted").is_none(), "{body}");
+
+            let (status, body) = source("%40acme%2Fbilling", "nope");
+            assert_eq!(status, 404, "{body}");
+            assert_eq!(body["error"], "unknown_module", "{body}");
+
+            // Installed without its sources.
+            let sources = playground
+                .dir
+                .path()
+                .join("home/packages/@acme/billing/sources.json");
+            assert!(sources.exists(), "{}", sources.display());
+            std::fs::remove_file(&sources).unwrap();
+            let (status, body) = source("%40acme%2Fbilling", "lib");
+            assert_eq!(status, 404, "{body}");
+            assert_eq!(body["error"], "no_sources", "{body}");
+            assert!(
+                body["message"].as_str().unwrap().contains("publish-local"),
+                "{body}"
+            );
+        }
+
         #[test]
         fn after_a_restart_a_secret_must_be_bound_again_and_no_file_holds_its_value() {
             let playground = Playground::with_blueprint(SECRET_BLUEPRINT);

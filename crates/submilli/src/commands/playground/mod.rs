@@ -645,6 +645,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
                 max_output: args.max_output,
                 provider_settings: args.provider_settings,
                 max_calls_per_answer: Some(args.max_calls_per_answer),
+                variables: std::collections::BTreeMap::new(),
             }),
             args.json,
         ),

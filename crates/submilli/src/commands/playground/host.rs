@@ -104,6 +104,8 @@ pub(crate) struct Status {
     pub(crate) stopping: bool,
     pub(crate) browser_sessions: usize,
     pub(crate) blueprint_status: BlueprintStatus,
+    /// The variables the blueprint in force declares, by name.
+    pub(crate) declared_variables: Vec<DeclaredVariable>,
     /// Why the closure of the blueprint in force could not be read; `packages` is
     /// then the closure at start.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,6 +115,14 @@ pub(crate) struct Status {
     pub(crate) health: Option<String>,
     /// The binding new runs get: variable values, and secret names only.
     pub(crate) binding: BindingView,
+}
+
+/// A variable the blueprint declares, and whether a run must have a value for it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct DeclaredVariable {
+    pub(crate) name: String,
+    pub(crate) required: bool,
 }
 
 /// The binding as `status` shows it: the variables, and only the names of the secrets.
@@ -578,6 +588,11 @@ impl ControlState {
         &self.0.actions
     }
 
+    /// The project's packages and the store they install into.
+    pub(crate) fn packages(&self) -> &Arc<ProjectPackages> {
+        &self.0.packages
+    }
+
     /// Becomes `true` once the playground has drained and is closing its listener.
     pub(crate) fn stopping(&self) -> tokio::sync::watch::Receiver<bool> {
         self.0.stopping.clone()
@@ -811,11 +826,26 @@ pub(crate) async fn mint_login_code(State(state): State<ControlState>) -> Respon
 
 pub(crate) async fn status(State(state): State<ControlState>) -> Response {
     let mut description = state.0.description.clone();
-    // The closure of the blueprint in force now, which a save may have changed.
-    let packages_error = match current_closure(&state).await {
-        Ok(Some(closure)) => {
-            description.packages = closure;
-            None
+    let mut declared_variables = Vec::new();
+    // The variables and the closure of the blueprint in force now, which a save may have
+    // changed.
+    let packages_error = match blueprint_in_force(&state).await {
+        Ok(Some(blueprint)) => {
+            declared_variables = blueprint
+                .variables
+                .iter()
+                .map(|(name, declared)| DeclaredVariable {
+                    name: name.clone(),
+                    required: declared.required,
+                })
+                .collect();
+            match closure_of(&state, blueprint).await {
+                Ok(closure) => {
+                    description.packages = closure;
+                    None
+                }
+                Err(message) => Some(message),
+            }
         }
         Ok(None) => None,
         Err(message) => Some(message),
@@ -833,6 +863,7 @@ pub(crate) async fn status(State(state): State<ControlState>) -> Response {
         stopping,
         browser_sessions: state.0.auth.browser_sessions(Now::current()),
         blueprint_status,
+        declared_variables,
         packages_error,
         health: None,
         binding: state.actions().binding_view(),
@@ -840,17 +871,35 @@ pub(crate) async fn status(State(state): State<ControlState>) -> Response {
     .into_response()
 }
 
-async fn current_closure(state: &ControlState) -> Result<Option<Vec<ClosureEntry>>, String> {
-    let blueprint = match state.0.blueprints.get(&state.0.blueprint_name).await {
-        Ok(Some(blueprint)) => blueprint,
-        Ok(None) => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-    };
+/// The package closure of the blueprint in force; `None` when no blueprint is.
+pub(crate) async fn current_closure(
+    state: &ControlState,
+) -> Result<Option<Vec<ClosureEntry>>, String> {
+    match blueprint_in_force(state).await? {
+        Some(blueprint) => closure_of(state, blueprint).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+async fn blueprint_in_force(
+    state: &ControlState,
+) -> Result<Option<submilli_blueprint::Blueprint>, String> {
+    state
+        .0
+        .blueprints
+        .get(&state.0.blueprint_name)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn closure_of(
+    state: &ControlState,
+    blueprint: submilli_blueprint::Blueprint,
+) -> Result<Vec<ClosureEntry>, String> {
     let packages = Arc::clone(&state.0.packages);
     tokio::task::spawn_blocking(move || packages.closure(&blueprint))
         .await
         .map_err(|error| error.to_string())?
-        .map(Some)
         .map_err(|failure| failure.to_string())
 }
 
