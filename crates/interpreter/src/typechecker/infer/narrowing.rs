@@ -1094,7 +1094,8 @@ pub fn is_never_falsy(ty: &Type) -> bool {
 
 /// The type of `x` where `x` is known falsy: keep `null` and falsy literals,
 /// collapse `string` to `""` and `boolean` to `false`, drop never-falsy
-/// reference types. `number` stays `number` — a `0` literal would be unsound
+/// reference types. `{}` stays `{}`: it may hold `0` or `""`, though
+/// TypeScript's `&&` drops it. `number` stays `number` — a `0` literal would be unsound
 /// for `NaN`/`-0`.
 pub fn falsy_part(ty: &Type) -> Type {
     if let Type::Refined {
@@ -1108,9 +1109,6 @@ pub fn falsy_part(ty: &Type) -> Type {
         .into_iter()
         .filter_map(|m| match truthiness_class(m) {
             TruthinessClass::AlwaysTruthy => None,
-            // `{}` has no definitely falsy part, which is all TypeScript keeps
-            // of a member whose truthiness is unknown.
-            TruthinessClass::Dynamic if m.is_empty_object() => None,
             TruthinessClass::StringLike => Some(match m.peel() {
                 Type::String => Type::StringLiteral(String::new()),
                 _ => m.clone(),
@@ -1278,7 +1276,7 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
         }
     }
     if matches!(peeled, Type::Unknown) && tests_only_presence(facts) {
-        return intersect_with(&unknown_as_union(), facts);
+        return recombine_unknown(intersect_with(&unknown_as_union(), facts));
     }
     if matches!(peeled, Type::GenericParam { .. }) && tests_only_presence(facts) {
         return preserve_refinement(ty, intersect_with(&Type::Unknown, facts));
@@ -1315,11 +1313,8 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
     // `unknown` minus `null` or `undefined` is the rest of `{} | null |
     // undefined`, as in TypeScript; minus any other type it stays `unknown`.
     if matches!(peeled, Type::Unknown) {
-        if tests_only_presence(facts)
-            && !facts.contains(TypeFacts::TRUTHY)
-            && !facts.contains(TypeFacts::FALSY)
-        {
-            return subtract(&unknown_as_union(), facts);
+        if tests_only_nullishness(facts) {
+            return recombine_unknown(subtract(&unknown_as_union(), facts));
         }
         return Type::Unknown;
     }
@@ -1421,6 +1416,13 @@ fn tests_only_presence(facts: TypeFacts) -> bool {
     facts != TypeFacts::EMPTY && presence.contains(facts)
 }
 
+/// Whether `facts` test only for `null` or `undefined`, not truthiness.
+fn tests_only_nullishness(facts: TypeFacts) -> bool {
+    tests_only_presence(facts)
+        && !facts.contains(TypeFacts::TRUTHY)
+        && !facts.contains(TypeFacts::FALSY)
+}
+
 /// `union` with each refined type parameter's own `null` or `undefined`
 /// dropped where the union holds that value already, as TypeScript reduces
 /// `(T & ({} | null)) | null` to `(T & {}) | null`.
@@ -1454,11 +1456,25 @@ fn without_nullish_refinements(union: Type) -> Type {
     )
 }
 
-/// `unknown` as the values it holds: `{} | null | undefined`. Built directly,
-/// since [`Type::union`] folds those members back into `unknown`, as it does
-/// what is left of them when a narrowing rules nothing out.
+/// `unknown` as the values it holds: `{} | null | undefined`.
 fn unknown_as_union() -> Type {
     Type::Union(vec![Type::empty_object(), Type::Null, Type::Undefined])
+}
+
+/// `ty`, or `unknown` when it holds all of `{} | null | undefined`: what is
+/// left of `unknown` when a narrowing rules nothing out, or what a flow join
+/// of its narrowed parts gives back, as TypeScript's `recombineUnknownType`.
+/// A declared `{} | null | undefined` stays as written.
+fn recombine_unknown(ty: Type) -> Type {
+    let members = union_members(&ty);
+    let holds = |test: fn(&Type) -> bool| members.iter().copied().any(test);
+    if holds(Type::is_empty_object)
+        && holds(|m| matches!(m.peel(), Type::Null))
+        && holds(|m| matches!(m.peel(), Type::Undefined))
+    {
+        return Type::Unknown;
+    }
+    ty
 }
 
 /// Map a [`TypeFacts`] mask to the concrete `Type` it asserts when narrowing
@@ -1616,7 +1632,7 @@ pub(super) fn join_flow_types(left: &Type, right: &Type) -> Type {
         Type::StringLiteral(_) => !has_string,
         _ => true,
     });
-    Type::union(members)
+    recombine_unknown(Type::union(members))
 }
 
 /// Recurses into `Type::Union` members only — composite slots have fixed runtime
@@ -2086,6 +2102,7 @@ mod tests {
             falsy_part(&Type::Array(Box::new(Type::Number))),
             Type::Never
         );
+        assert_eq!(falsy_part(&Type::empty_object()), Type::empty_object());
     }
 
     #[test]

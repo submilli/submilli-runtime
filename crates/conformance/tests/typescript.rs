@@ -1065,13 +1065,17 @@ fn expand_non_nullable(tsc_ty: &str) -> String {
     while let Some(start) = rest.find(ALIAS) {
         let after = &rest[start + ALIAS.len()..];
         let Some(end) = after.find('>').filter(|&end| is_identifier(&after[..end])) else {
-            break;
+            out.push_str(&rest[..start + ALIAS.len()]);
+            rest = after;
+            continue;
         };
         out.push_str(&rest[..start]);
         out.push_str(&format!("({} & {{}})", &after[..end]));
         rest = &after[end + 1..];
     }
     out.push_str(rest);
+    // We print a top-level refinement bare (`T & {}`), so a whole-type
+    // `NonNullable<T>` loses the parentheses it needs only inside a union.
     match out
         .strip_prefix('(')
         .and_then(|inner| inner.strip_suffix(')'))
@@ -2152,5 +2156,10 @@ fn parameter_initialization_copies_do_not_create_source_reads() {
 fn non_nullable_of_a_type_parameter_is_its_intersection_with_empty_object() {
     assert!(same_type("x", "NonNullable<T>", "T & {}"));
     assert!(same_type("x", "U | NonNullable<T>", "U | (T & {})"));
+    assert!(same_type(
+        "x",
+        "NonNullable<A | B> | NonNullable<T>",
+        "NonNullable<A | B> | (T & {})"
+    ));
     assert!(!same_type("x", "NonNullable<T>", "T"));
 }

@@ -654,7 +654,13 @@ impl<'a> Unifier<'a> {
         // peel aliases — unification is structural, alias label doesn't participate.
         // A type variable still binds to a readonly argument as readonly, or the
         // call's result would hand back a writable view of it.
-        let bindable_arg = arg_ty.peel_preserving_readonly();
+        // A narrowed type parameter (`T & {}`) binds as itself, as in
+        // TypeScript: its shape alone would lose that it is still a `T`.
+        let bindable_arg = if arg_ty.refines_type_parameter() {
+            arg_ty.without_aliases()
+        } else {
+            arg_ty.peel_preserving_readonly()
+        };
         // A readonly array never stands for a mutable one; in a callback's
         // parameter the slot's array is the one passed to the callback.
         let drops_readonly = if self.contravariant {

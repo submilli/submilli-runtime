@@ -1,5 +1,1 @@
-types: 49 of 92 tsc entries compared, 1 differ
-
-line 117: v7
-  tsc:  {} | null | undefined
-  ours: unknown
+types: 49 of 92 tsc entries compared, 0 differ

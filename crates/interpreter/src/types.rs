@@ -673,6 +673,12 @@ impl Type {
         }
     }
 
+    /// Whether this is a narrowed type parameter, like `T & {}`.
+    pub fn refines_type_parameter(&self) -> bool {
+        matches!(self.without_aliases(), Type::Refined { original, .. }
+            if matches!(original.peel(), Type::GenericParam { .. }))
+    }
+
     pub fn peel(&self) -> &Type {
         let mut t = self;
         while let Type::Alias { ty, .. } | Type::Refined { ty, .. } | Type::Readonly(ty) = t {
@@ -704,7 +710,8 @@ impl Type {
     /// [`peel`](Self::peel), with `{}` read as `unknown`: the type whose
     /// representation and run-time operations a value of this type uses.
     /// Codegen matches on this rather than on `peel`, so a `{}` holding a
-    /// number is never treated as an object struct.
+    /// number is never treated as an object struct. `peel` reads a refinement
+    /// as its shape, so `T & {}` lowers as `unknown`, like `T` itself.
     pub fn lowered(&self) -> &Type {
         const UNKNOWN: &Type = &Type::Unknown;
         let peeled = self.peel();
@@ -993,8 +1000,9 @@ impl Type {
     /// document root, so `JSON.stringify` returns `undefined` for it.
     /// Objects and arrays holding such values still produce a document.
     pub fn stringifies_to_undefined(leaf: &Type) -> bool {
+        // `{}` may hold a function, as `unknown` may.
         matches!(
-            leaf,
+            leaf.lowered(),
             Type::Undefined
                 | Type::Void
                 | Type::Unknown
@@ -1057,19 +1065,12 @@ impl Type {
             matches!(member, Type::Refined { original, .. }
                 if flat.iter().any(|other| other.without_aliases() == original.without_aliases()))
         };
-        let refined: Vec<bool> = flat.iter().map(refines_a_member).collect();
-        let mut index = 0;
-        flat.retain(|_| {
-            index += 1;
-            !refined[index - 1]
-        });
-        // `{} | null | undefined` holds every value: it is `unknown`.
-        if flat.iter().any(Type::is_empty_object)
-            && flat.iter().any(|m| matches!(m.peel(), Type::Null))
-            && flat.iter().any(|m| matches!(m.peel(), Type::Undefined))
-        {
-            return Type::Unknown;
-        }
+        let kept: Vec<Type> = flat
+            .iter()
+            .filter(|member| !refines_a_member(member))
+            .cloned()
+            .collect();
+        flat = kept;
         if flat.len() > 1 {
             return Type::Union(flat);
         }
@@ -1266,23 +1267,33 @@ fn canonical_bigint_digits(digits: &str) -> String {
     }
 }
 
-/// Drops the members a `{}` among `members` already holds: every one but
-/// `null`, `undefined`, `void` and a type parameter. TypeScript reduces them
-/// so where it widens a literal, joins flow types, and types `a ?? b`.
+/// Drops the members a `{}` among `members` already holds: every one that
+/// cannot be `null` or `undefined` and is no bare type parameter. TypeScript
+/// reduces them so where it widens a literal, joins flow types, and types
+/// `a ?? b`.
 pub fn without_members_of_empty_object(members: Vec<Type>) -> Vec<Type> {
     if !members.iter().any(Type::is_empty_object) {
         return members;
     }
     members
         .into_iter()
-        .filter(|member| {
-            member.is_empty_object()
-                || matches!(
-                    member.peel(),
-                    Type::Null | Type::Undefined | Type::Void | Type::GenericParam { .. }
-                )
-        })
+        .filter(|member| member.is_empty_object() || outside_empty_object(member))
         .collect()
+}
+
+/// Whether some value of `ty` is no `{}`: it may be `null` or `undefined`
+/// (`T & ({} | undefined)` included), or it is a type parameter.
+fn outside_empty_object(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Null
+        | Type::Undefined
+        | Type::Void
+        | Type::Unknown
+        | Type::GenericParam { .. }
+        | Type::TypeVar(_) => true,
+        Type::Union(members) => members.iter().any(outside_empty_object),
+        _ => false,
+    }
 }
 
 /// `boolean` is `true | false`: a union holding both literals, or `boolean`

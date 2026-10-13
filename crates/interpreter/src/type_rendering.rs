@@ -260,7 +260,7 @@ fn write_node<'a>(
         Type::Array(inner) => {
             let parens = matches!(
                 inner.as_ref(),
-                Type::Union(_) | Type::Function { .. } | Type::Readonly(_)
+                Type::Union(_) | Type::Function { .. } | Type::Readonly(_) | Type::Refined { .. }
             );
             if parens {
                 out.push("(")?;

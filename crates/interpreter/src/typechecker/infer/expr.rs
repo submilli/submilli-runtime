@@ -832,7 +832,7 @@ impl Inferer<'_> {
             );
         }
         self.check_expression_arity(&kind, &ty, span);
-        self.check_tested_read(expr_id, &ty)?;
+        self.note_read_or_check_and(expr_id, &ty)?;
         let id = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -5819,7 +5819,7 @@ impl Inferer<'_> {
                     else {
                         continue;
                     };
-                    self.report_fields_the_spread_overwrites(&written_fields, &fields);
+                    self.report_fields_the_spread_overwrites(&mut written_fields, &fields);
                     let source_index = spread_count;
                     spread_count += 1;
                     object_members.push(crate::TypedObjectMember::Spread {
@@ -6210,30 +6210,23 @@ impl Inferer<'_> {
             .any(|member| self.resolver().index_signature(member).is_some())
     }
 
-    /// The fields a spread copies, and whether they must be found by name at
-    /// run time (`by_name`). A conditional contributes each branch rather than
-    /// their join — `c ? a : {}` joins to `{}`, which would copy nothing when `a`
-    /// is chosen — and a union contributes each member. Over more than one alternative, a
-    /// field some lack is optional and its type is the union of theirs, as in
-    /// TypeScript. Only structural object types and interfaces with an index
-    /// signature spread; anything else is reported. A `by_name` spread's fields
-    /// are recorded in `TypedAst::spread_mask_fields`, which codegen reads.
     /// A field written before a spread that always sets it is dead: the spread
     /// overwrites it whatever the value. tsc reports it (TS2783); a spread field
     /// that may be absent, because it is optional or missing from one of the
     /// spread's alternatives, leaves the earlier value in place and is fine.
     fn report_fields_the_spread_overwrites(
         &mut self,
-        written_fields: &BTreeMap<String, Span>,
+        written_fields: &mut BTreeMap<String, Span>,
         spread_fields: &ObjectFields,
     ) {
         for (name, field) in spread_fields {
             if field.optional {
                 continue;
             }
-            if let Some(span) = written_fields.get(name) {
+            // Reported once, however many spreads after it set the field.
+            if let Some(span) = written_fields.remove(name) {
                 self.error_with_help(
-                    *span,
+                    span,
                     format!("`{name}` is specified more than once, so this value is always overwritten"),
                     vec![format!(
                         "the spread after it always sets `{name}`; remove this field, or move it after the spread"
@@ -6243,6 +6236,14 @@ impl Inferer<'_> {
         }
     }
 
+    /// The fields a spread copies, and whether they must be found by name at
+    /// run time (`by_name`). A conditional contributes each branch rather than
+    /// their join — `c ? a : {}` joins to `{}`, which would copy nothing when `a`
+    /// is chosen — and a union contributes each member. Over more than one alternative, a
+    /// field some lack is optional and its type is the union of theirs, as in
+    /// TypeScript. Only structural object types and interfaces with an index
+    /// signature spread; anything else is reported. A `by_name` spread's fields
+    /// are recorded in `TypedAst::spread_mask_fields`, which codegen reads.
     pub(super) fn spread_source_fields(
         &mut self,
         typed_source: ExprId,
@@ -12486,11 +12487,10 @@ fn conditional_result_type(
 fn branch_result_type(left: Type, right: Type, types: super::assignable::TypeResolver<'_>) -> Type {
     // `c ? 1 : {}` is `1 | {}` in TypeScript; only widening reduces it to `{}`.
     let one_is_empty_object = left.is_empty_object() != right.is_empty_object();
-    if matches!(left.peel(), Type::Object { .. })
+    let distinct_object_shapes = matches!(left.peel(), Type::Object { .. })
         && matches!(right.peel(), Type::Object { .. })
-        && left.peel() != right.peel()
-        || one_is_empty_object
-    {
+        && left.peel() != right.peel();
+    if distinct_object_shapes || one_is_empty_object {
         Type::union(vec![left, right])
     } else if assignable(&left, &right, types) {
         right

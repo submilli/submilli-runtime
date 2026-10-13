@@ -1,7 +1,6 @@
 line 294 missed: by-design spec §1.2 `keyof` of a type parameter is rejected, since generics are erased (on line 278, so `ff1`'s calls aren't checked against it)
 line 29, 35 extra: by-design spec §1.6 an `unknown` must be narrowed before it is used as a condition
 line 278, 279 extra: by-design spec §1.2 `keyof` of a type parameter is rejected, since generics are erased
-line 23, 24, 25 type: by-design spec §1.2 `{} | null | undefined` holds every value, so it is `unknown`
 line 183, 189, 192, 194, 195, 253, 256, 259 type: bug SUB-1679 there is no `object` type, so `typeof x === "object"` keeps `{}` or `T`, where tsc gives `object` or `T & object`
 line 191 type: by-design spec §1.6 `&&` keeps a type parameter in its falsy part, since a `T` can be falsy
 line 366, 375 type: by-design spec §1.6 `==` is an alias for `===`, so `x == y` narrows `x` to the values it shares with `y`, where tsc keeps members `==` could coerce

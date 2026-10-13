@@ -108,7 +108,10 @@ impl Inferer<'_> {
                     }
                 }
             };
+            // A refinement (`T & ({} | undefined)`) is one candidate: splitting
+            // its shape would lose that it is a `T`.
             let members = match ty.peel() {
+                _ if ty.refines_type_parameter() => vec![ty],
                 Type::Union(members) => members.clone(),
                 _ => vec![ty],
             };

@@ -69,7 +69,7 @@ pub fn emit_cast(
         .clone();
 
     // unknown accepts every value — box to $Object, no test.
-    if matches!(target_ty.lowered(), Type::Unknown) {
+    if matches!(target_ty.peel(), Type::Unknown) {
         emit_expr(emitter, ctx, value)?;
         cast::emit_box(emitter, ctx, &source_ty)?;
         return Ok(());
@@ -308,6 +308,15 @@ fn emit_structural_test_inner(
         Type::Undefined | Type::Void => {
             emitter.instruction(Instruction::LocalGet(value_local));
             crate::codegen::function_emitter::expr::emit_is_undefined(emitter, ctx)?;
+        }
+        // `{}` holds every value but `null` and `undefined`.
+        Type::Unknown if ty.is_empty_object() => {
+            emitter.instruction(Instruction::LocalGet(value_local));
+            emitter.instruction(Instruction::RefIsNull);
+            emitter.instruction(Instruction::LocalGet(value_local));
+            crate::codegen::function_emitter::expr::emit_is_undefined(emitter, ctx)?;
+            emitter.instruction(Instruction::I32Or);
+            emitter.instruction(Instruction::I32Eqz);
         }
         Type::Unknown => emitter.instruction(Instruction::I32Const(1)),
         Type::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)?),

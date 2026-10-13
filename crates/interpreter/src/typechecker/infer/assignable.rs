@@ -717,6 +717,9 @@ fn assignable_rec(
     {
         return true;
     }
+    if matches!(actual.peel(), Type::Unknown) && holds_every_value(expected) {
+        return true;
+    }
     // Distribute unions, including named unions, before expanding back-edges.
     // Non-union members retain their names and can reuse the active comparison.
     if let Type::Union(ms) = actual.peel() {
@@ -1514,6 +1517,17 @@ pub(super) fn literal_to_type(lit: &narrowing::LiteralValue) -> Type {
         narrowing::LiteralValue::Null => Type::Null,
         narrowing::LiteralValue::Undefined => Type::Undefined,
     }
+}
+
+/// Whether `ty` is a union holding `{}`, `null` and `undefined`, and so every
+/// value: TypeScript lets `unknown` into it.
+fn holds_every_value(ty: &Type) -> bool {
+    let Type::Union(members) = ty.peel() else {
+        return false;
+    };
+    members.iter().any(Type::is_empty_object)
+        && members.iter().any(|m| matches!(m.peel(), Type::Null))
+        && members.iter().any(|m| matches!(m.peel(), Type::Undefined))
 }
 
 #[cfg(test)]

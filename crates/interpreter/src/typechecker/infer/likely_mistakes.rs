@@ -84,51 +84,85 @@ impl Inferer<'_> {
 
     /// TS2774 and TS2845 for the condition of an `if` or a conditional: reports
     /// a function tested for truthiness that `body`, the code the condition
-    /// guards, never uses, and an enum member, whose value is fixed. The
-    /// operands of a `||` or `??` chain are tested too, as tsc does.
+    /// guards, never uses, and an enum member, whose value is fixed.
     pub(super) fn check_tested_functions(
         &mut self,
         condition: ExprId,
         body: Span,
     ) -> Result<(), CompilerFailure> {
-        let mut pending = vec![condition];
-        while let Some(expr) = pending.pop() {
-            let expr = self.skip_parens(expr)?;
-            match self.ast.try_expr(expr).map_err(super::arena_failure)?.kind {
-                ExprKind::Binary {
-                    op: BinOp::Or | BinOp::NullishCoalesce,
-                    lhs,
-                    rhs,
-                } => {
-                    pending.push(lhs);
-                    pending.push(rhs);
-                }
-                _ => self.check_tested_function(expr, None, Some(body))?,
-            }
-        }
-        Ok(())
+        self.check_tested_condition(condition, Some(body))
     }
 
-    /// TS2774 and TS2845 for the left operand of `a && b`, which `b` may use.
-    /// When the `&&` is (part of) an `if` condition, the `if`'s body may use it
-    /// too.
+    /// TS2774 and TS2845 for the left operand of an `&&`. When the `&&` is
+    /// (part of) an `if` condition, the `if`'s body may use it too.
     fn check_tested_function_in_and(
         &mut self,
         and: ExprId,
         lhs: ExprId,
-        rhs: ExprId,
     ) -> Result<(), CompilerFailure> {
-        let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
         let body = self.if_condition_ands.get(&and).copied();
-        let lhs = self.skip_parens(lhs)?;
-        if let ExprKind::Binary {
+        self.check_tested_condition(lhs, body)
+    }
+
+    /// Tests `condition` and, down a `||` or `??` chain, each left operand,
+    /// as tsc's `checkTestingKnownTruthyCallableOrAwaitableOrEnumMemberType`
+    /// does.
+    fn check_tested_condition(
+        &mut self,
+        condition: ExprId,
+        body: Option<Span>,
+    ) -> Result<(), CompilerFailure> {
+        let mut condition = self.skip_parens(condition)?;
+        self.check_tested_location(condition, body)?;
+        while let ExprKind::Binary {
             op: BinOp::Or | BinOp::NullishCoalesce,
+            lhs,
             ..
-        } = self.ast.try_expr(lhs).map_err(super::arena_failure)?.kind
+        } = self
+            .ast
+            .try_expr(condition)
+            .map_err(super::arena_failure)?
+            .kind
         {
-            return Ok(());
+            condition = self.skip_parens(lhs)?;
+            self.check_tested_location(condition, body)?;
         }
-        self.check_tested_function(lhs, Some(rhs_span), body)
+        Ok(())
+    }
+
+    /// Tests the operand tsc looks at for `condition`: its right operand when
+    /// it is an `&&`, `||` or `??`, else the condition itself.
+    fn check_tested_location(
+        &mut self,
+        condition: ExprId,
+        body: Option<Span>,
+    ) -> Result<(), CompilerFailure> {
+        let ExprKind::Binary {
+            op: BinOp::And | BinOp::Or | BinOp::NullishCoalesce,
+            rhs,
+            ..
+        } = self
+            .ast
+            .try_expr(condition)
+            .map_err(super::arena_failure)?
+            .kind
+        else {
+            return self.check_tested_function(condition, condition, body);
+        };
+        let location = self.skip_parens(rhs)?;
+        if matches!(
+            self.ast
+                .try_expr(location)
+                .map_err(super::arena_failure)?
+                .kind,
+            ExprKind::Binary {
+                op: BinOp::And | BinOp::Or | BinOp::NullishCoalesce,
+                ..
+            }
+        ) {
+            return self.check_tested_condition(location, body);
+        }
+        self.check_tested_function(location, condition, body)
     }
 
     /// Notes, for the `if` about to check `condition`, the `&&` operators its
@@ -160,7 +194,7 @@ impl Inferer<'_> {
 
     /// After inferring `expr`: records a read the condition checks look at, and
     /// checks the left operand of an `&&`.
-    pub(super) fn check_tested_read(
+    pub(super) fn note_read_or_check_and(
         &mut self,
         expr: ExprId,
         ty: &Type,
@@ -174,8 +208,8 @@ impl Inferer<'_> {
             ExprKind::Binary {
                 op: BinOp::And,
                 lhs,
-                rhs,
-            } => self.check_tested_function_in_and(expr, lhs, rhs)?,
+                ..
+            } => self.check_tested_function_in_and(expr, lhs)?,
             _ => {}
         }
         Ok(())
@@ -184,6 +218,8 @@ impl Inferer<'_> {
     /// Records `expr` as a read of a function or of one enum member, for the
     /// checks on a condition that reads it.
     fn note_tested_read(&mut self, expr: ExprId, ty: &Type) {
+        // An expression can be inferred again under a different type (a
+        // retried call argument), so the last inference decides.
         if matches!(ty.peel(), Type::Function { .. }) {
             self.function_reads.insert(expr);
         } else {
@@ -206,10 +242,13 @@ impl Inferer<'_> {
         };
     }
 
+    /// Reports `tested` when it is an enum member (always the same
+    /// truthiness), or a function that is always defined and that neither
+    /// `body` nor the rest of the `&&` chain around `condition` uses.
     fn check_tested_function(
         &mut self,
         tested: ExprId,
-        chain_rest: Option<Span>,
+        condition: ExprId,
         body: Option<Span>,
     ) -> Result<(), CompilerFailure> {
         let span = self
@@ -227,13 +266,16 @@ impl Inferer<'_> {
         let Some((root, fields)) = self.read_path(tested)? else {
             return Ok(());
         };
-        let used = match chain_rest {
-            Some(rest) => self.names_read_within(rest, &root, &fields)?,
-            None => false,
-        } || match body {
+        let mut used = match body {
             Some(body) => self.path_read_within(body, &root, &fields)?,
             None => false,
         };
+        for operand in self.and_chain_right_operands(condition)? {
+            if used {
+                break;
+            }
+            used = self.names_read_within(operand, &root, &fields)?;
+        }
         if !used {
             self.error_with_help(
                 span,
@@ -243,6 +285,36 @@ impl Inferer<'_> {
             );
         }
         Ok(())
+    }
+
+    /// The right operands of the `&&` chain `condition` sits in, as tsc's
+    /// `isSymbolUsedInBinaryExpressionChain` walks it: starting at the
+    /// `&&` whose operand `condition` is, and up through each `&&` that
+    /// directly holds the previous one.
+    fn and_chain_right_operands(&self, condition: ExprId) -> Result<Vec<Span>, CompilerFailure> {
+        let mut operands = Vec::new();
+        let mut child = condition;
+        while let Some((and, rhs)) = self.enclosing_and(child)? {
+            operands.push(self.ast.try_expr(rhs).map_err(super::arena_failure)?.span);
+            child = and;
+        }
+        Ok(operands)
+    }
+
+    /// The `&&` with `child` as an operand, and its right operand.
+    fn enclosing_and(&self, child: ExprId) -> Result<Option<(ExprId, ExprId)>, CompilerFailure> {
+        for id in self.ast.expr_ids().map_err(super::arena_failure)? {
+            if let ExprKind::Binary {
+                op: BinOp::And,
+                lhs,
+                rhs,
+            } = self.ast.try_expr(id).map_err(super::arena_failure)?.kind
+                && (lhs == child || rhs == child)
+            {
+                return Ok(Some((id, rhs)));
+            }
+        }
+        Ok(None)
     }
 
     /// A member of a numeric or string enum read as `E.A`, tested for
@@ -288,8 +360,43 @@ impl Inferer<'_> {
             {
                 return Ok(true);
             }
+            if self.chain_prefix_reads(id, root, fields)? {
+                return Ok(true);
+            }
         }
         Ok(false)
+    }
+
+    /// Whether `expr` is an optional chain whose field reads, before its first
+    /// call or index, pass through `root` and `fields`: `k?.f()` reads `k.f`,
+    /// though no expression of its own does.
+    fn chain_prefix_reads(
+        &self,
+        expr: ExprId,
+        root: &PathRoot,
+        fields: &[String],
+    ) -> Result<bool, CompilerFailure> {
+        let ExprKind::OptionalChain { base, parts } =
+            &self.ast.try_expr(expr).map_err(super::arena_failure)?.kind
+        else {
+            return Ok(false);
+        };
+        let Some((base_root, mut read)) = self.read_path(*base)? else {
+            return Ok(false);
+        };
+        if base_root != *root {
+            return Ok(false);
+        }
+        for part in parts {
+            if read == fields {
+                return Ok(true);
+            }
+            let ChainPart::Field { name, .. } = part else {
+                return Ok(false);
+            };
+            read.push(name.name.clone());
+        }
+        Ok(read == fields)
     }
 
     /// Whether some expression within `region` names the last step of the
@@ -414,7 +521,9 @@ impl Inferer<'_> {
                 ExprKind::Ternary { then_, else_, .. } => {
                     self.syntactic_nullishness(*then_)? | self.syntactic_nullishness(*else_)?
                 }
-                ExprKind::Null | ExprKind::Void { .. } => ALWAYS,
+                // tsc counts `void x` as never nullish, though it is
+                // `undefined`; it is one of the operators it lists none for.
+                ExprKind::Null => ALWAYS,
                 ExprKind::Identifier(ident) if self.reads_global_undefined(expr, &ident.name) => {
                     ALWAYS
                 }

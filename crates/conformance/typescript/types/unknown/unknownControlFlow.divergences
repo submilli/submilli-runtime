@@ -1,16 +1,4 @@
-types: 198 of 284 tsc entries compared, 26 differ
-
-line 23: x2
-  tsc:  {} | null | undefined
-  ours: unknown
-
-line 24: x3
-  tsc:  {} | { x: string; } | null | undefined
-  ours: unknown
-
-line 25: x4
-  tsc:  ThisOrThatNode | null | undefined
-  ours: unknown
+types: 198 of 284 tsc entries compared, 23 differ
 
 line 87: x
   tsc:  {}

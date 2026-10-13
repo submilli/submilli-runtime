@@ -10,7 +10,7 @@ function describe(value: {}): string {
   if (typeof value === "boolean") {
     return value ? "true" : "false";
   }
-  return "object " + JSON.stringify(value);
+  return "object " + String(JSON.stringify(value));
 }
 
 function same(left: {}, right: {}): boolean {
@@ -40,9 +40,34 @@ function main(): void {
   const point = o as Point;
   assert(point.x === 1, "a cast out of `{}` reads the object");
   assert(JSON.stringify({ ...o }) === "{\"x\":1}", "spreading `{}` copies the object's fields");
-  assert(JSON.stringify({ ...n }) === "{}", "spreading a primitive in `{}` copies nothing");
+  assert(JSON.stringify({ ...n }) === "{}", "spreading a number in `{}` copies nothing");
+
+  const andZero = zero && "and";
+  assert(andZero === 0, "`&&` on a falsy primitive in `{}` gives the primitive");
+  const fn: {} = () => 1;
+  assert(JSON.stringify(fn) === undefined, "a function in `{}` has no JSON text");
+
+  assert(castThrows("null"), "a cast to `{}` rejects `null`");
+  assert(castThrows("[1,null]", true), "a cast to `{}[]` rejects a `null` element");
+  assert(!castThrows("5"), "a cast to `{}` accepts a number");
+
+  const maybe: {} | null | undefined = 0;
+  assert((maybe || "fallback") === "fallback", "`{} | null | undefined` can be tested");
 
   let changing: {} = 1;
   changing = "x";
   assert(changing === "x", "a `{}` variable takes values of any type");
+}
+
+function castThrows(json: string, asArray: boolean = false): boolean {
+  try {
+    if (asArray) {
+      JSON.parse(json) as {}[];
+    } else {
+      JSON.parse(json) as {};
+    }
+    return false;
+  } catch (e) {
+    return true;
+  }
 }
