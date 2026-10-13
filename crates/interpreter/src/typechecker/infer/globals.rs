@@ -58,6 +58,7 @@ impl<'a> Inferer<'a> {
                         Some(hint) => hint,
                         None => self.widen_fresh_literals(typed_value, &value_ty)?,
                     };
+                    let bound = self.pattern_binding_storage_type(value, bound)?;
                     let bound = self.global_storage_ty(&name.name, bound);
                     self.finish_later_global(&name, &bound)?;
                     self.bind_top(
@@ -82,13 +83,12 @@ impl<'a> Inferer<'a> {
                         doc,
                         span,
                     })?;
-                    let annotated = ty.is_some();
                     self.narrow_global_initializer(
                         &name,
                         &mangled,
                         &bound,
-                        annotated,
-                        typed_value,
+                        ty.is_some(),
+                        (value, typed_value),
                         value_ty,
                     )?;
                     let assign_id = self
@@ -122,7 +122,9 @@ impl<'a> Inferer<'a> {
                         self.infer_expr_keeping_literals(value, hint.as_ref(), hint.is_none())?;
                     let origin =
                         self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
-                    let bound = hint.unwrap_or(value_ty);
+                    let annotated = hint.is_some();
+                    let bound = hint.unwrap_or_else(|| value_ty.clone());
+                    let bound = self.pattern_binding_storage_type(value, bound)?;
                     self.finish_later_global(&name, &bound)?;
                     self.bind_top(
                         &name,
@@ -136,6 +138,9 @@ impl<'a> Inferer<'a> {
                     if ty.is_none() {
                         self.record_global_aliased_condition(mangled.clone(), typed_value);
                     }
+                    if crate::lower_patterns::is_pattern_value(&name.name) {
+                        self.pattern_sources.insert(name.name.clone(), typed_value);
+                    }
                     self.add_typed_global(crate::TypedGlobal {
                         name: name.clone(),
                         mangled_name: mangled.clone(),
@@ -144,6 +149,14 @@ impl<'a> Inferer<'a> {
                         doc,
                         span,
                     })?;
+                    self.narrow_global_initializer(
+                        &name,
+                        &mangled,
+                        &bound,
+                        annotated,
+                        (value, typed_value),
+                        value_ty,
+                    )?;
                     let assign_id = self
                         .typed_ast
                         .try_push_stmt(TypedStmt {
@@ -169,24 +182,30 @@ impl<'a> Inferer<'a> {
         Ok(())
     }
 
-    /// A module `let` declared as a union starts narrowed to its initializer,
-    /// as a local one does, unless the initializer was rejected. `annotated`
-    /// tells whether `declared` was written or inferred.
+    /// A module variable declared as a union starts narrowed to its
+    /// initializer, as a local one does, unless the initializer was rejected.
+    /// A destructured one narrows to its part of the destructured value.
+    /// `annotated` tells whether `declared` was written or inferred; `value` is
+    /// the initializer and its typed form.
     fn narrow_global_initializer(
         &mut self,
         name: &crate::Ident,
         mangled: &crate::MangledName,
         declared: &crate::Type,
         annotated: bool,
-        value: crate::ExprId,
+        (value, typed_value): (crate::ExprId, crate::ExprId),
         value_ty: crate::Type,
     ) -> Result<(), CompilerFailure> {
-        if !super::stmt::initializer_may_narrow(declared, &value_ty)
-            || !super::assignable(&value_ty, declared, self.resolver())
-        {
+        if !super::assignable(&value_ty, declared, self.resolver()) {
             return Ok(());
         }
-        let flow_ty = self.assigned_flow_type(declared, annotated, value, value_ty)?;
+        let flow_ty = match self.pattern_binding_flow_type(value)? {
+            Some(flow_ty) => flow_ty,
+            None => self.assigned_flow_type(declared, annotated, typed_value, value_ty)?,
+        };
+        if !super::stmt::initializer_may_narrow(declared, &flow_ty) {
+            return Ok(());
+        }
         let narrowed = self.initializer_narrowed_ty(declared, flow_ty);
         self.renarrow_global_after_write(name, mangled, declared, narrowed)
     }

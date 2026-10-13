@@ -12,8 +12,8 @@
 //! it, and the events the run's record still has are appended after it, marked
 //! backfilled.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,6 +53,40 @@ pub(crate) enum EventBody {
     Event(Box<SessionEvent>),
     /// Events of a run were dropped under load.
     Gap(Gap),
+    /// A message of the conversation that drove the session.
+    Chat(ChatTurn),
+    /// The chat turns named are replaced by the ones logged after this entry with the
+    /// same ids: a complete copy of the conversation replacing what was posted live.
+    ChatReplaced(ChatReplaced),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ChatTurn {
+    /// Stable for the message: a later copy of it has the same id.
+    pub(crate) turn: String,
+    pub(crate) role: ChatRole,
+    /// Capped, and with known secrets masked.
+    pub(crate) text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) truncated: bool,
+    /// Who was talking: the agent's id in the assistant that ran it.
+    pub(crate) agent: String,
+    /// The model that wrote an assistant message, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) model: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ChatRole {
+    /// The task, or anything else said to the agent.
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ChatReplaced {
+    pub(crate) turns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,8 +104,8 @@ pub(crate) struct Gap {
 
 /// Where an event happened, the order to read a session in: a timestamp from the
 /// playground's one clock (microseconds since the Unix epoch), then for a run's event its
-/// run id and run-wide call index, then within one call: its start, its decisions, and
-/// its end.
+/// run id and run-wide call index, then within one call: its start, its decisions, its
+/// end, and the console lines written after it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct Position {
     pub(crate) at_micros: u64,
@@ -80,6 +114,18 @@ pub(crate) struct Position {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) call_index: Option<u64>,
     pub(crate) rank: u8,
+}
+
+impl Position {
+    /// A place by time alone, outside any run: where chat goes.
+    pub(crate) fn at(at_micros: u64) -> Self {
+        Self {
+            at_micros,
+            run: None,
+            call_index: None,
+            rank: 0,
+        }
+    }
 }
 
 /// A session's events as read.
@@ -106,8 +152,35 @@ impl EventLog {
     pub(crate) fn gaps(&self) -> impl Iterator<Item = &Gap> {
         self.events.iter().filter_map(|event| match &event.body {
             EventBody::Gap(gap) => Some(gap),
-            EventBody::Event(_) => None,
+            _ => None,
         })
+    }
+
+    /// The conversation as it stands: each turn once, its latest copy, in causal order.
+    pub(crate) fn chat(&self) -> Vec<(&StoredEvent, &ChatTurn)> {
+        let mut current: HashMap<&str, &StoredEvent> = HashMap::new();
+        for event in &self.events {
+            match &event.body {
+                EventBody::Chat(turn) => {
+                    current.insert(&turn.turn, event);
+                }
+                EventBody::ChatReplaced(replaced) => {
+                    for turn in &replaced.turns {
+                        current.remove(turn.as_str());
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut turns: Vec<(&StoredEvent, &ChatTurn)> = current
+            .into_values()
+            .filter_map(|event| match &event.body {
+                EventBody::Chat(turn) => Some((event, turn)),
+                _ => None,
+            })
+            .collect();
+        turns.sort_by_key(|(event, _)| (event.position, event.session_seq));
+        turns
     }
 
     /// The events in causal order: where each happened, not when it was appended.
@@ -366,6 +439,46 @@ impl Store {
             .unwrap_or(u64::MAX)
             .saturating_add(1);
         Ok((events, start.saturating_add(read)))
+    }
+
+    /// The session of the newest log holding an event of one of the tool calls `ids`,
+    /// among the most recently written logs.
+    pub(crate) fn session_with_call(&self, ids: &HashSet<&str>) -> Result<Option<String>> {
+        /// How many logs are searched, newest first: a call worth finding is recent.
+        const LOGS: usize = 64;
+        let dir = self.root.join("events");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(io_error(&dir)(error)),
+        };
+        let mut logs: Vec<(std::time::SystemTime, PathBuf)> = entries
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".jsonl"))
+            .filter_map(|entry| {
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((modified, entry.path()))
+            })
+            .collect();
+        logs.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+        for (_, path) in logs.into_iter().take(LOGS) {
+            let log = read_lines::<StoredEvent>(&path)?;
+            let found = log.records.into_iter().find_map(|event| match event.body {
+                EventBody::Event(event)
+                    if event
+                        .tool_call_id
+                        .as_deref()
+                        .is_some_and(|id| ids.contains(id)) =>
+                {
+                    event.session_id
+                }
+                _ => None,
+            });
+            if found.is_some() {
+                return Ok(found);
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) fn events_path(&self, session: Option<&str>) -> PathBuf {

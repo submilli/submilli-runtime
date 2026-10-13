@@ -194,6 +194,21 @@ pub trait RecordObserver: Send + Sync {
     /// and it has no body and no masked header names, but it keeps its size, digest,
     /// truncation flag, timing, and usage.
     fn call_finished(&self, _call: &CallRecord) {}
+    /// A line the program wrote to its console. Not in the [`DecisionLogOutput`]: the
+    /// run's console holds the text.
+    fn console_line(&self, _line: &ConsoleLine<'_>) {}
+}
+
+/// A console line, placed on the run's clock among its calls.
+#[derive(Debug, Clone, Copy)]
+pub struct ConsoleLine<'a> {
+    pub text: &'a str,
+    /// Microseconds since the recorder started, on the clock its calls use.
+    pub written_micros: u64,
+    /// The last call begun before the line was written; `None` before the first.
+    pub after_call: Option<u64>,
+    /// `text` is the start of a longer line.
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,6 +415,21 @@ impl DecisionLog {
         state.charged = 0;
         state.pairs.clear();
         output
+    }
+
+    /// Reports a console line to the observer, stamped with the run's clock and the last
+    /// call begun.
+    pub fn console_line(&self, text: &str, truncated: bool) {
+        let Some(observer) = &self.observer else {
+            return;
+        };
+        let after_call = self.lock().last_call_index;
+        observer.console_line(&ConsoleLine {
+            text,
+            written_micros: self.now_micros(),
+            after_call,
+            truncated,
+        });
     }
 
     fn lock(&self) -> MutexGuard<'_, LogState> {

@@ -33,10 +33,8 @@ use super::controls::render::Page;
 use super::log::warn;
 use super::packages::{self, ClosureEntry, Freshness, ProjectPackages};
 use super::project::Project;
-use super::state::{APP_TOKEN, InstanceLock, InstanceRecord, StateDir};
+use super::state::{APP_TOKEN, InstanceLock, InstanceRecord, STAND_IN_TOKEN, StateDir};
 
-/// The token the bridge presents for its binding.
-const STAND_IN_TOKEN: &str = "stand-in";
 use super::store::redact::WatchedSecretStore;
 use super::store::{KnownSecrets, Recorder, Store};
 use super::watch::{self, Applier, BlueprintStatus};
@@ -352,6 +350,8 @@ async fn run(
             base: Some(description.url.clone()),
         },
         cancelling: std::sync::Mutex::default(),
+        chat: super::chat::ChatIntake::default(),
+        server_port,
     });
     // Flipped once the server has drained, so the event feeds end and the control
     // listener can close.
@@ -531,19 +531,17 @@ fn describe(
 /// The bring-your-own-key provider the environment names when the playground
 /// starts. Only which variable is set is read here, never its value.
 fn detect_provider() -> (Option<&'static str>, Option<String>) {
-    let set = |key: &str| std::env::var_os(key).is_some_and(|value| !value.is_empty());
-    let provider = [
-        ("ANTHROPIC_API_KEY", "anthropic"),
-        ("OPENAI_API_KEY", "openai"),
-        ("GEMINI_API_KEY", "google"),
-        ("GOOGLE_API_KEY", "google"),
-    ]
-    .into_iter()
-    .find_map(|(key, provider)| set(key).then_some(provider));
-    let model = std::env::var("SUBMILLI_PLAYGROUND_MODEL")
-        .ok()
-        .filter(|model| !model.trim().is_empty());
-    (provider, model)
+    match super::agent::configured() {
+        Ok(choice) => (Some(choice.provider), Some(choice.model)),
+        // Not configured, or configured wrong: `chat` says how; the model variable is
+        // shown as it was set.
+        Err(_) => (
+            None,
+            std::env::var(super::agent::MODEL_VARIABLE)
+                .ok()
+                .filter(|model| !model.trim().is_empty()),
+        ),
+    }
 }
 
 /// Files the server creates under the state directory must be owner-only too.
@@ -558,6 +556,11 @@ fn restrict_new_files() {
 pub(crate) struct ControlState(Arc<ControlInner>);
 
 impl ControlState {
+    /// Who sent a request with `headers`.
+    pub(crate) fn caller(&self, headers: &axum::http::HeaderMap) -> Option<Caller> {
+        self.0.auth.caller(headers, Now::current())
+    }
+
     pub(crate) fn actions(&self) -> &Actions {
         &self.0.actions
     }

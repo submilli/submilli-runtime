@@ -1,0 +1,35 @@
+=== ES5For-of19.ts ===
+for (let v of []) {
+>v : never
+>  : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+    v;
+>v : never
+>  : ^^^^^
+
+    function foo(): void {
+>foo : () => void
+>    : ^^^^^^^^^^
+
+        for (const v of []) {
+>v : never
+>  : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+            v;
+>v : never
+>  : ^^^^^
+
+        }
+    }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

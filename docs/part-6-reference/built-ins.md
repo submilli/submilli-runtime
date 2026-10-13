@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "350185d81c8e0db624c9e759f814396345ac26bd49d661beb8cb0209ff099faa"
+  contentHash: "fc9c94834d4d793ece4cd7f4a6547c3dd9608746e9e5890d776c6a705e9bedea"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -196,13 +196,13 @@ A homogeneous array of `T`.
 | `concat(...others: (readonly T[])[]): T[]` | Returns a new array containing this array's elements followed by every element of each `others` array, in order. |
 | `copyWithin(target: number, start?: number, end?: number): T[]` | Copies the slots `[start, end)` to `target`, in place (overlap-safe), and returns the array. |
 | `entries(): Iterator<[number, T]>` | Returns a live `Iterator<[number, T]>` of index/element pairs. |
-| `every(predicate: (arg0: T, arg1: number, arg2: T[]) => boolean): boolean` | Returns `true` if `predicate` returned `true` for every element. |
+| `every(predicate: (arg0: T, arg1: number, arg2: T[]) => unknown): boolean` | Returns `true` if `predicate` returned a truthy value for every element. |
 | `fill(value: T, start?: number, end?: number): T[]` | Sets every slot in `[start, end)` to `value`, in place, and returns the array. |
-| `filter(predicate: (arg0: T, arg1: number, arg2: T[]) => boolean): T[]` | Returns a new array of the elements for which `predicate` returned `true`. |
-| `find(callback: (arg0: T, arg1: number, arg2: T[]) => boolean): T \| undefined` | Returns the first element for which `callback` returns `true`, or `undefined` if none match. |
-| `findIndex(callback: (arg0: T, arg1: number, arg2: T[]) => boolean): number` | Returns the index of the first element for which `callback` returns `true`, or `-1` if none match. |
-| `findLast(callback: (arg0: T, arg1: number, arg2: T[]) => boolean): T \| undefined` | Returns the last element for which `callback` returns `true`, or `undefined` if none match. |
-| `findLastIndex(callback: (arg0: T, arg1: number, arg2: T[]) => boolean): number` | Returns the index of the last element for which `callback` returns `true`, or `-1` if none match. |
+| `filter(predicate: (arg0: T, arg1: number, arg2: T[]) => unknown): T[]` | Returns a new array of the elements for which `predicate` returned a truthy value. |
+| `find(callback: (arg0: T, arg1: number, arg2: T[]) => unknown): T \| undefined` | Returns the first element for which `callback` returns a truthy value, or `undefined` if none match. |
+| `findIndex(callback: (arg0: T, arg1: number, arg2: T[]) => unknown): number` | Returns the index of the first element for which `callback` returns a truthy value, or `-1` if none match. |
+| `findLast(callback: (arg0: T, arg1: number, arg2: T[]) => unknown): T \| undefined` | Returns the last element for which `callback` returns a truthy value, or `undefined` if none match. |
+| `findLastIndex(callback: (arg0: T, arg1: number, arg2: T[]) => unknown): number` | Returns the index of the last element for which `callback` returns a truthy value, or `-1` if none match. |
 | `flat(depth?: number): T[]` | Flattens nested arrays up to `depth` levels into a new array. |
 | `flatMap<U>(callback: (arg0: T, arg1: number, arg2: T[]) => U[]): U[]` | Maps each element to an array via `callback`, then flattens the results one level. |
 | `forEach(callback: (arg0: T, arg1: number, arg2: T[]) => void): void` | Calls `callback(value, index, array)` once for each element in order. |
@@ -219,7 +219,7 @@ A homogeneous array of `T`.
 | `reverse(): T[]` | Reverses the array in place and returns it. |
 | `shift(): T \| undefined` | Removes and returns the first element, shifting the rest forward. |
 | `slice(start?: number, end?: number): T[]` | Returns a new array of the elements from `start` (inclusive) to `end` (exclusive). |
-| `some(predicate: (arg0: T, arg1: number, arg2: T[]) => boolean): boolean` | Returns `true` if `predicate` returned `true` for at least one element. |
+| `some(predicate: (arg0: T, arg1: number, arg2: T[]) => unknown): boolean` | Returns `true` if `predicate` returned a truthy value for at least one element. |
 | `sort(compareFn?: (arg0: T, arg1: T) => number): T[]` | Sorts the array in place and returns it. |
 | `splice(start: number, deleteCount?: number, ...items: T[]): T[]` | Removes `deleteCount` elements at `start`, inserts `items` there (in place), and returns the removed elements. |
 | `toJson(): string` | Returns the JSON representation of this array — `"["` + elements' `toJson()` joined with `","` + `"]"`. |
@@ -241,7 +241,7 @@ Constructor object for `Array`.
 
 | Member | Description |
 | --- | --- |
-| `from<T, U>(src: { length: number } \| readonly T[] \| Iterable<T> \| Iterator<T>, mapFn?: (arg0: T, arg1: number) => U): U[]` | Materializes any iterable — an array, string (code points), `Iterator<T>`, or `Iterable<T>` — into a fresh array. |
+| `from<T, U>(src: { readonly length: number } \| readonly T[] \| Iterable<T> \| Iterator<T>, mapFn?: (arg0: T, arg1: number) => U): U[]` | Materializes any iterable — an array, string (code points), `Iterator<T>`, or `Iterable<T>` — into a fresh array. |
 | `isArray<T>(value: T): boolean` | Returns `true` when `value` is an array. |
 | `of<T>(...items: T[]): T[]` | Builds an array from its arguments — `Array.of(1, 2, 3)` is `[1, 2, 3]`. |
 
@@ -261,6 +261,10 @@ Arbitrary-precision integer.
 ### `BigIntConstructor`
 
 Constructor object for `bigint`.
+
+| Member | Description |
+| --- | --- |
+| `(value: string \| number): bigint` | Convert a `string` or `number` to a `bigint`. |
 
 ## `Boolean`
 
@@ -295,10 +299,10 @@ A hash-backed key-value collection.
 | `forEach(callback: (arg0: V, arg1: K, arg2: Map<K, V>) => void): void` | Calls `callback(value, key, map)` once for each entry in insertion order, including entries the callback adds. |
 | `get(key: K): V \| undefined` | Returns the value associated with `key`, or `undefined` if the key is not present. |
 | `has(key: K): boolean` | Returns `true` when `key` is present. |
-| `iterator(): Iterator<[K, V]>` | Returns a fresh `Iterator<[K, V]>` over the entries. |
-| `keys(): Iterator<K>` | Returns a lazy `Iterator<K>` over the keys in insertion order. It walks the map live: keys added later are visited, keys deleted first are skipped. |
+| `iterator(): Iterator<[K, V]>` | Returns a fresh `Iterator<[K, V]>` over the entries in insertion order. |
+| `keys(): Iterator<K>` | Returns a lazy `Iterator<K>` over the keys in insertion order. |
 | `set(key: K, value: V): Map<K, V>` | Associates `value` with `key`, overwriting any prior value. |
-| `values(): Iterator<V>` | Returns a lazy `Iterator<V>` over the values in insertion order. It walks the map live: entries added later are visited, entries deleted first are skipped. |
+| `values(): Iterator<V>` | Returns a lazy `Iterator<V>` over the values in insertion order. |
 
 | Constant | Description |
 | --- | --- |
@@ -310,7 +314,7 @@ Constructor object for `Map`.
 
 | Member | Description |
 | --- | --- |
-| `new<K, V>(entries?: readonly [K, V][] \| Iterable<[K, V]> \| Iterator<[K, V]> \| null): Map<K, V>` | Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([["a", 1]])`. |
+| `new <K, V>(entries?: readonly [K, V][] \| Iterable<[K, V]> \| Iterator<[K, V]> \| null): Map<K, V>` | Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([["a", 1]])`. |
 
 ## `Number`
 
@@ -342,6 +346,13 @@ Constructor object for `number`.
 | `readonly NEGATIVE_INFINITY: number` | Same value as `-Infinity`. |
 | `readonly NaN: number` | Same value as the global `NaN`. |
 | `readonly POSITIVE_INFINITY: number` | Same value as the global `Infinity`. |
+| `(value: string \| bigint \| undefined): number` | Convert a `string`, `bigint`, or `undefined` to a `number`. |
+| `isFinite(value: unknown): boolean` | Returns `true` when `value` is neither `NaN` nor ±`Infinity`. |
+| `isInteger(value: unknown): boolean` | Returns `true` when `value` is a finite whole number. |
+| `isNaN(value: unknown): boolean` | Returns `true` when `value` is `NaN`. |
+| `isSafeInteger(value: unknown): boolean` | Returns `true` when `value` is an integer that f64 represents exactly (\|value\| ≤ 2^53 − 1). |
+| `parseFloat(s: string): number` | Same as the global `parseFloat` — parses the longest leading decimal, ignoring trailing junk. |
+| `parseInt(s: string, radix?: number): number` | Same as the global `parseInt` — parses the longest leading integer, ignoring trailing junk. |
 
 ## `Object`
 
@@ -441,7 +452,7 @@ Constructor object for `RegExp`.
 
 | Member | Description |
 | --- | --- |
-| `new(source: string, flags?: string): RegExp` | Construct a new `RegExp` from `source` and `flags`. |
+| `new (source: string, flags?: string): RegExp` | Construct a new `RegExp` from `source` and `flags`. |
 
 ## `Set`
 
@@ -461,7 +472,7 @@ A hash-backed unique-value collection.
 | `isDisjointFrom(other: Set<T>): boolean` | Returns `true` when this set and `other` share no elements. |
 | `isSubsetOf(other: Set<T>): boolean` | Returns `true` when every element of this set is in `other`. |
 | `isSupersetOf(other: Set<T>): boolean` | Returns `true` when every element of `other` is in this set. |
-| `iterator(): Iterator<T>` | Returns a fresh `Iterator<T>` over the elements. |
+| `iterator(): Iterator<T>` | Returns a fresh `Iterator<T>` over the elements in insertion order. |
 | `keys(): Iterator<T>` | Alias of `values()` — sets have no separate keys. |
 | `symmetricDifference(other: Set<T>): Set<T>` | Returns a new set with the elements in exactly one of this set and `other` (the overlap is dropped). |
 | `union(other: Set<T>): Set<T>` | Returns a new set with every element of this set and `other`. |
@@ -477,7 +488,7 @@ Constructor object for `Set`.
 
 | Member | Description |
 | --- | --- |
-| `new<T>(values?: readonly T[] \| Iterable<T> \| Iterator<T> \| null): Set<T>` | Construct a `Set<T>`, optionally from an iterable of values: `new Set([1, 2, 2])` dedups to size 2. |
+| `new <T>(values?: readonly T[] \| Iterable<T> \| Iterator<T> \| null): Set<T>` | Construct a `Set<T>`, optionally from an iterable of values: `new Set([1, 2, 2])` dedups to size 2. |
 
 ## `String`
 
@@ -529,6 +540,12 @@ The UTF-16 string type.
 
 Constructor object for `string`.
 
+| Member | Description |
+| --- | --- |
+| `(value: unknown): string` | Convert any value to its string representation: `"null"` and `"undefined"` for those values, otherwise the value's `toString()` method. |
+| `fromCharCode(...codes: number[]): string` | Builds a string from UTF-16 code units — one unit per argument. |
+| `fromCodePoint(...codePoints: number[]): string` | Builds a string from Unicode code points; astral code points (> U+FFFF) encode as surrogate pairs. |
+
 ## `SyntaxError`
 
 The built-in syntax-error class (`extends Error`, `name` = `"SyntaxError"`).
@@ -555,7 +572,7 @@ Constructor object for `TextDecoder`.
 
 | Member | Description |
 | --- | --- |
-| `new(): TextDecoder` | Construct a new `TextDecoder` instance. |
+| `new (): TextDecoder` | Construct a new `TextDecoder` instance. |
 
 ## `TextEncoder`
 
@@ -575,7 +592,7 @@ Constructor object for `TextEncoder`.
 
 | Member | Description |
 | --- | --- |
-| `new(): TextEncoder` | Construct a new `TextEncoder` instance. |
+| `new (): TextEncoder` | Construct a new `TextEncoder` instance. |
 
 ## `TypeError`
 
@@ -584,6 +601,14 @@ The built-in type-error class (`extends Error`, `name` = `"TypeError"`).
 | Member | Description |
 | --- | --- |
 | `constructor(message?: string)` |  |
+
+## `URIError`
+
+The built-in URI-error class (`extends Error`, `name` = `"URIError"`).
+
+| Member | Description |
+| --- | --- |
+| `constructor(message: string)` |  |
 
 ## `Uint8Array`
 
@@ -596,13 +621,13 @@ Packed byte array.
 | `at(index: number): number \| undefined` | Returns the byte at `index`, or `undefined` if out of range. |
 | `copyWithin(target: number, start?: number, end?: number): Uint8Array` | Copies `bytes[start..end)` to `bytes[target..]` in place. |
 | `equals(other: Uint8Array): boolean` | Byte-by-byte equality with `other`. |
-| `every(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): boolean` | Returns `true` iff `predicate(byte, index, array)` returns `true` for every byte. |
+| `every(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => unknown): boolean` | Returns `true` iff `predicate(byte, index, array)` returns a truthy value for every byte. |
 | `fill(value: number, start?: number, end?: number): Uint8Array` | Converts `value` to a byte and writes it to every position in `[start, end)`. |
-| `filter(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): Uint8Array` | Returns a new `Uint8Array` containing every byte for which `predicate(byte, index, array)` returns `true`. |
+| `filter(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => unknown): Uint8Array` | Returns a new `Uint8Array` containing every byte for which `predicate(byte, index, array)` returns a truthy value. |
 | `find(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number \| undefined` | Returns the first byte for which `predicate(byte, index, array)` returns `true`, or `undefined`. |
 | `findIndex(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number` | Returns the index of the first matching byte, or `-1`. |
-| `findLast(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number \| undefined` | Returns the last byte for which `predicate(byte, index, array)` returns `true`, or `undefined`. |
-| `findLastIndex(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): number` | Returns the index of the last matching byte, or `-1`. |
+| `findLast(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => unknown): number \| undefined` | Returns the last byte for which `predicate(byte, index, array)` returns a truthy value, or `undefined`. |
+| `findLastIndex(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => unknown): number` | Returns the index of the last matching byte, or `-1`. |
 | `forEach(callback: (arg0: number, arg1: number, arg2: Uint8Array) => void): void` | Invokes `callback(byte, index, array)` for every byte in order. |
 | `includes(target: number, fromIndex?: number): boolean` | Returns `true` if `target` appears at or after `fromIndex`. |
 | `indexOf(target: number, fromIndex?: number): number` | Returns the first index of `target`, or `-1`. |
@@ -614,7 +639,7 @@ Packed byte array.
 | `reverse(): Uint8Array` | Reverses this array's bytes in place and returns `this`. |
 | `set(values: Uint8Array, offset?: number): void` | Copies `values` into this array starting at `offset`. |
 | `slice(start?: number, end?: number): Uint8Array` | Returns a fresh copy of the bytes in `[start, end)`. |
-| `some(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => boolean): boolean` | Returns `true` if `predicate` returns `true` for any byte. |
+| `some(predicate: (arg0: number, arg1: number, arg2: Uint8Array) => unknown): boolean` | Returns `true` if `predicate` returns a truthy value for any byte. |
 | `sort(compareFn?: (arg0: number, arg1: number) => number): Uint8Array` | Sorts bytes in place via `compareFn(a, b)`. |
 | `subarray(start?: number, end?: number): Uint8Array` | Deep-copy alias for `slice` under v1 (no `ArrayBuffer` view sharing). |
 | `toBase64(options?: Base64Options): string` | Returns the bytes as a base64 string. |
@@ -640,7 +665,7 @@ Constructor object for `Uint8Array`.
 | `fromBase64(s: string, options?: Base64Options): Uint8Array` | Decode `s` as base64; `options.alphabet` picks standard vs URL-safe. |
 | `fromBytes(other: Uint8Array): Uint8Array` | Returns a deep copy of `other`. |
 | `fromHex(s: string): Uint8Array` | Decode `s` as a hex string. |
-| `new(values: number[] \| number): Uint8Array` | Build a new `Uint8Array`. |
+| `new (values: number[] \| number): Uint8Array` | Build a new `Uint8Array`. |
 | `of(...values: number[]): Uint8Array` | Build a `Uint8Array` from the supplied byte values — `Uint8Array.of(1, 2, 3)`. |
 
 ## `JSON`
@@ -758,7 +783,7 @@ Constructor object for `Temporal.Duration`.
 | --- | --- |
 | `compare(a: Temporal.Duration \| Temporal.DurationFields, b: Temporal.Duration \| Temporal.DurationFields, options?: Temporal.DurationCompareOptions): number` | Compares two Durations: `-1`, `0`, or `1`. |
 | `from(item: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.Duration` | Build a Duration from an ISO 8601 string (e.g. `"PT1H30M"`), an existing Duration, or a fields bag (`{ hours: 1 }`). |
-| `new(fields: Temporal.DurationFields): Temporal.Duration` | Construct a Duration from a fields bag (e.g. `{ hours: 1, minutes: 30 }`). |
+| `new (fields: Temporal.DurationFields): Temporal.Duration` | Construct a Duration from a fields bag (e.g. `{ hours: 1, minutes: 30 }`). |
 
 ### `Temporal.DurationFields`
 

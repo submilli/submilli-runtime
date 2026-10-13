@@ -9,9 +9,9 @@
 //! buffer and never wait for the embedder. Past the buffer's count or byte budget an event
 //! is dropped and counted, never blocking or failing the run. The buffer keeps a reserve
 //! only decisions, run starts and ends, and tool calls may use, so an overflow drops
-//! progress events (a call starting or finishing) first; a run's end reports how many of
-//! its events were dropped, and its [`FinishedRun`](super::FinishedRun) still has every
-//! decision and call the recorder kept.
+//! progress events (a call starting or finishing, a console line) first; a run's end
+//! reports how many of its events were dropped, and its [`FinishedRun`](super::FinishedRun)
+//! still has every decision and call the recorder kept.
 //!
 //! The buffer has its own budget, separate from the run's memory limit, so that streaming
 //! a run never changes how much memory it may use (the same choice the decision recorder
@@ -25,7 +25,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use interpreter::runtime::{
-    CallOutcome, CallRecord, DecisionRecord, ModelUsage, RecordObserver, SourceLine,
+    CallOutcome, CallRecord, ConsoleLine, DecisionRecord, ModelUsage, RecordObserver, SourceLine,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -124,12 +124,28 @@ pub enum EventKind {
         result_bytes: u64,
         wall_ms: u64,
     },
+    /// A line the run wrote to its console, as it was written. The run's console, kept
+    /// whole up to its cap, is what the run's record holds; a line may be cut here.
+    Console {
+        line: String,
+        /// Microseconds since the run's recorder started, on its calls' clock.
+        written_micros: u64,
+        /// The last call begun before the line; absent before the first.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        after_call: Option<u64>,
+        /// `line` is the start of a longer line.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        truncated: bool,
+    },
 }
 
 impl EventKind {
     /// Whether the event may use the buffer's reserve.
     fn reserved(&self) -> bool {
-        !matches!(self, Self::CallStarted { .. } | Self::CallFinished { .. })
+        !matches!(
+            self,
+            Self::CallStarted { .. } | Self::CallFinished { .. } | Self::Console { .. }
+        )
     }
 }
 
@@ -370,6 +386,7 @@ fn kind_size(kind: &EventKind) -> usize {
         } => saturating_sum([caller.len(), capability.len()]),
         EventKind::CallFinished { capability, .. } => capability.len(),
         EventKind::ToolCall { tool, .. } => tool.len(),
+        EventKind::Console { line, .. } => line.len(),
         EventKind::Decision { record } => saturating_sum(
             [
                 record.caller.len(),
@@ -534,6 +551,15 @@ impl RecordObserver for RunEvents {
             sent_bytes: call.request.as_ref().map(|request| request.bytes),
             result_bytes: call.response.as_ref().map(|response| response.bytes),
             usage: call.usage,
+        });
+    }
+
+    fn console_line(&self, line: &ConsoleLine<'_>) {
+        self.push(EventKind::Console {
+            line: line.text.to_owned(),
+            written_micros: line.written_micros,
+            after_call: line.after_call,
+            truncated: line.truncated,
         });
     }
 }

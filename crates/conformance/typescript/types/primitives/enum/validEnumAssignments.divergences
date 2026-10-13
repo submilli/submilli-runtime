@@ -1,0 +1,10 @@
+types: 25 of 52 tsc entries compared, 1 differ
+
+line 21: n
+  tsc:  number
+  ours: E
+
+errors:
+line 24: ours: expected `E`, got `number` (tsc accepts)
+line 25: ours: expected `E`, got `number` (tsc accepts)
+line 26: ours: expected `E`, got `number` (tsc accepts)

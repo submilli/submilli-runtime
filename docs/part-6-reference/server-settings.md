@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6619726328b7b4f50e72791ae83c0cb6280ba678798922bed871d9859c6bba10"
+  contentHash: "d8b320770ecf0ec2fd941deb3e6c26dc54f020300d7aeec87c84497ee3bbec28"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -425,7 +425,7 @@ Options:
       --blueprint-dir <BLUEPRINT_DIR>
           Source directory for the one-time blueprint import into SQLite. The directory moves to archive/blueprints/ beside its original location. [default: ~/.submilli/server/blueprints (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
       --session-store-dir <SESSION_STORE_DIR>
-          Directory the session lifecycle store persists to and loads from on startup — the bookkeeping that makes resume and idle reaping survive a restart. Mount on durable storage. [default: ~/.submilli/server/sessions] Env: `$SUBMILLI_SESSION_STORE_DIR`
+          Source directory for session JSON import into SQLite; also holds the file-backed idempotency ledger. Mount on durable storage. [default: ~/.submilli/server/sessions] Env: `$SUBMILLI_SESSION_STORE_DIR`
       --database-path <PATH>
           Server SQLite database file. The parent directory is created at boot. [default: ~/.submilli/server/db/submilli.db] Env: `$SUBMILLI_DATABASE_PATH`
       --vfs-session-dir <VFS_SESSION_DIR>

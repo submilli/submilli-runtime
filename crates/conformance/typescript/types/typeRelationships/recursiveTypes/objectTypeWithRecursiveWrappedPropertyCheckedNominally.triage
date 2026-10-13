@@ -1,1 +1,1 @@
-line 20, 24, 28 extra: bug SUB-1196 (same-shaped classes) an instance of one class isn't assignable to a same-shaped unrelated class
+line 20, 24, 28 extra: by-design spec §2.2 an instance of one class isn't assignable to a same-shaped unrelated class

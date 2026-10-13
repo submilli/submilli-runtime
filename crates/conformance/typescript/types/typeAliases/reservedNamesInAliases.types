@@ -1,0 +1,38 @@
+=== reservedNamesInAliases.ts ===
+interface I {}
+>I : I
+>  : ^
+
+type any = I;
+>any : I
+>    : ^
+
+type number = I;
+>number : I
+>       : ^
+
+type boolean = I;
+>boolean : I
+>        : ^
+
+type string = I;
+>string : I
+>       : ^
+
+type ;    ; I;
+>type : any
+>     : ^^^
+>I : any
+>  : ^^^
+
+type object = I;
+>object : I
+>       : ^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

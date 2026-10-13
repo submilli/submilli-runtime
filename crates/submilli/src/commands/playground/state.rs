@@ -28,12 +28,14 @@ use submilli_server::{ApiToken, Role};
 /// runs are labeled with (KTD5); none of them ever appears in output or a link.
 pub(crate) const TOKENS: [(&str, Role); 5] = [
     (ADMIN_TOKEN, Role::Admin),
-    ("stand-in", Role::User),
+    (STAND_IN_TOKEN, Role::User),
     (APP_TOKEN, Role::User),
     ("chat", Role::User),
     ("browser-chat", Role::User),
 ];
 pub(crate) const ADMIN_TOKEN: &str = "admin";
+/// The coding assistant's stand-in: its bridge and its chat hook.
+pub(crate) const STAND_IN_TOKEN: &str = "stand-in";
 pub(crate) const APP_TOKEN: &str = "app";
 
 /// What the running playground leaves on disk for other commands: its pid, both
@@ -278,13 +280,13 @@ impl StateDir {
             .collect()
     }
 
-    /// The admin token's value, for a command about to call the control listener.
-    /// Read only after the listener answered the nonce challenge.
-    pub(crate) fn admin_token(&self) -> Result<String> {
-        let path = self.token_path(ADMIN_TOKEN);
+    /// Token `name`'s value, for a command about to call the playground with it. Read
+    /// only after the control listener answered the nonce challenge.
+    pub(crate) fn token(&self, name: &str) -> Result<String> {
+        let path = self.token_path(name);
         let token = read_private(&path)
-            .with_context(|| format!("reading the admin token in {}", path.display()))?
-            .with_context(|| format!("the admin token in {} is missing", path.display()))?;
+            .with_context(|| format!("reading the {name} token in {}", path.display()))?
+            .with_context(|| format!("the {name} token in {} is missing", path.display()))?;
         Ok(token.trim().to_owned())
     }
 
@@ -770,7 +772,7 @@ mod tests {
         state.tokens().unwrap();
         assert_eq!(mode(&admin), 0o600);
         assert_eq!(
-            state.admin_token().unwrap(),
+            state.token(ADMIN_TOKEN).unwrap(),
             "0123456789abcdef0123456789abcdef-admin"
         );
 
@@ -780,7 +782,7 @@ mod tests {
         symlink(&secret, &admin).unwrap();
         let error = state.tokens().unwrap_err();
         assert!(format!("{error:#}").contains("symlink"), "{error:#}");
-        assert!(state.admin_token().is_err());
+        assert!(state.token(ADMIN_TOKEN).is_err());
     }
 
     #[test]

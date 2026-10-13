@@ -104,22 +104,42 @@ impl<'a> Inferer<'a> {
         expr: ExprId,
         hint: Option<&Type>,
     ) -> Result<(ExprId, Type), CompilerFailure> {
+        let value = self.infer_returned_value_with_widened(expr, hint)?;
+        Ok((value.typed, value.widened))
+    }
+
+    /// [`Self::infer_returned_value`], also giving the value's type with its
+    /// literal types kept: a block body's returns widen only when together
+    /// they are one literal type, as in tsc (`if (b) return 1; return 2;`
+    /// returns `1 | 2`).
+    pub(super) fn infer_returned_value_with_widened(
+        &mut self,
+        expr: ExprId,
+        hint: Option<&Type>,
+    ) -> Result<super::InferredReturnValue, CompilerFailure> {
         // Only an unannotated function literal collects its returns, to infer
         // its return type from them.
         if self.inferred_returns.is_none() {
-            return self.infer_expr(expr, hint);
+            let (typed, ty) = self.infer_expr(expr, hint)?;
+            return Ok(super::InferredReturnValue {
+                typed,
+                widened: ty.clone(),
+                ty,
+            });
         }
         let mut marked = Vec::new();
         self.mark_inference_source(expr, &mut marked)?;
+        let has_contextual_return_type = hint.is_some_and(|hint| !is_type_parameter_position(hint));
         let (typed, ty) = self.with_marked(marked, |this| {
-            this.keeps_literal_types = this.returns_keep_literals;
+            this.keeps_literal_types = this.returns_keep_literals || !has_contextual_return_type;
             this.infer_expr(expr, hint)
         })?;
-        let has_contextual_return_type = hint.is_some_and(|hint| !is_type_parameter_position(hint));
-        if self.returns_keep_literals || has_contextual_return_type {
-            return Ok((typed, ty));
-        }
-        Ok((typed, self.widen_returned_literals(typed, &ty)?))
+        let widened = if self.returns_keep_literals || has_contextual_return_type {
+            ty.clone()
+        } else {
+            self.widen_returned_literals(typed, &ty)?
+        };
+        Ok(super::InferredReturnValue { typed, ty, widened })
     }
 
     pub(super) fn is_inference_source(&self, literal: ExprId) -> bool {

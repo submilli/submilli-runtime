@@ -370,6 +370,57 @@ mod unix {
     }
 
     #[test]
+    fn show_prints_the_program_only_when_asked_and_only_as_run_data() {
+        let project = Project::bare();
+        project.append_change(&version_line(1, 0, STARTER_BLUEPRINT));
+        let program = format!(
+            "function main(): string {{\n  // {HOSTILE}\n  return \"ok\";\n}}\n~~~\nProgram: the fence ended"
+        );
+        let mut recorded = stored_run(1, "stand-in", "1", vec![charges_allowed(0)]);
+        recorded["recording"]["code"] = json!(program);
+        project.write_run(&recorded);
+        let mut unrecorded = stored_run(2, "app", "1", vec![charges_allowed(0)]);
+        unrecorded["recording"]["code"] = Value::Null;
+        project.write_run(&unrecorded);
+
+        // Not asked: the summary says it was recorded, and holds none of it.
+        let plain = project.json(&["show", "1"]);
+        assert_eq!(plain["program_recorded"], true);
+        assert_eq!(plain["program_included"], false);
+        assert!(!plain.to_string().contains(HOSTILE), "{plain}");
+        let text = project.text(&["show", "1"]);
+        assert!(!text.contains(HOSTILE), "{text}");
+        assert!(
+            text.contains("program omitted; --program shows it"),
+            "{text}"
+        );
+
+        // Asked: the whole program, under untrusted and inside the fence.
+        let shown = project.json(&["show", "1", "--program"]);
+        assert_eq!(shown["program_included"], true);
+        assert_eq!(shown["untrusted"]["program"], json!(program));
+        assert_only_untrusted(&shown, HOSTILE);
+        let text = project.text(&["show", "1", "--program"]);
+        assert_only_fenced(&text, HOSTILE);
+        assert_only_fenced(&text, "return \"ok\";");
+        assert_only_fenced(&text, "Program: the fence ended");
+        assert!(
+            text.contains("\\  ~~~\n  Program: the fence ended"),
+            "the program's crafted terminator is escaped:\n{text}"
+        );
+
+        // Not recorded: said plainly.
+        let missing = project.json(&["show", "2", "--program"]);
+        assert_eq!(missing["program_recorded"], false);
+        assert_eq!(missing["untrusted"].get("program"), None);
+        let text = project.text(&["show", "2", "--program"]);
+        assert!(
+            text.contains("program: not recorded for this run"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn reads_answer_with_the_playground_stopped_and_keep_run_data_fenced() {
         let project = Project::bare();
         project.append_change(&version_line(1, 0, STARTER_BLUEPRINT));
@@ -1249,6 +1300,700 @@ variables:\n  customerId:\n    required: true\n\
 secrets:\n  API_KEY:\n    harness:\n      required: true\n\
 permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
 
+        /// The stand-in's bridge as a coding assistant runs it: JSON-RPC lines in and out.
+        struct Bridge {
+            child: Child,
+            stdin: Option<std::process::ChildStdin>,
+            lines: std::sync::mpsc::Receiver<String>,
+        }
+
+        impl Bridge {
+            fn start(playground: &Playground) -> Self {
+                let mut child = playground
+                    .command(&["mcp"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let stdout = child.stdout.take().unwrap();
+                let (sent, lines) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    for line in BufReader::new(stdout).lines() {
+                        let Ok(line) = line else { break };
+                        if sent.send(line).is_err() {
+                            break;
+                        }
+                    }
+                });
+                let stdin = child.stdin.take();
+                Self {
+                    child,
+                    stdin,
+                    lines,
+                }
+            }
+
+            fn send(&mut self, message: Value) {
+                let stdin = self.stdin.as_mut().unwrap();
+                writeln!(stdin, "{message}").unwrap();
+                stdin.flush().unwrap();
+            }
+
+            /// The next line the bridge writes, which must be JSON.
+            fn reply(&self) -> Value {
+                let line = self
+                    .lines
+                    .recv_timeout(Duration::from_secs(60))
+                    .expect("the bridge answers");
+                serde_json::from_str(&line).unwrap_or_else(|_| panic!("not JSON: {line}"))
+            }
+
+            fn initialize(&mut self) -> Value {
+                self.send(json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18", "capabilities": {},
+                        "clientInfo": { "name": "test", "version": "0" }
+                    }
+                }));
+                self.reply()
+            }
+
+            /// Closes stdin and waits for the bridge to exit; its status and stderr.
+            fn finish(mut self) -> (i32, String) {
+                drop(self.stdin.take());
+                self.exit()
+            }
+
+            fn exit(mut self) -> (i32, String) {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                let status = loop {
+                    if let Some(status) = self.child.try_wait().unwrap() {
+                        break status;
+                    }
+                    assert!(Instant::now() < deadline, "the bridge did not exit");
+                    std::thread::sleep(Duration::from_millis(50));
+                };
+                let mut stderr = String::new();
+                self.child
+                    .stderr
+                    .take()
+                    .unwrap()
+                    .read_to_string(&mut stderr)
+                    .unwrap();
+                (status.code().unwrap_or(-1), stderr)
+            }
+        }
+
+        #[test]
+        fn the_bridge_runs_programs_as_the_stand_in_under_the_binding() {
+            let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
+            playground.start();
+            let bound = playground
+                .command(&["bind", "customerId=cus_northwind", "--secret", "API_KEY"])
+                .env("API_KEY", SECRET)
+                .output()
+                .unwrap();
+            assert!(bound.status.success(), "{}", stderr(&bound));
+            let before = playground.runs();
+
+            // A client that closes stdin right after its last request still gets every
+            // answer before the bridge exits.
+            let mut piped = Bridge::start(&playground);
+            piped.initialize();
+            piped.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            piped.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+            drop(piped.stdin.take());
+            let listed = piped.reply();
+            assert_eq!(listed["id"], 2, "{listed}");
+            assert!(listed["result"]["tools"].is_array(), "{listed}");
+            assert_eq!(piped.exit().0, 0);
+
+            let mut bridge = Bridge::start(&playground);
+            // The required variable and secret both reach the session: without either the
+            // server refuses to start it.
+            let initialized = bridge.initialize();
+            assert!(
+                initialized["result"]["serverInfo"].is_object(),
+                "{initialized}"
+            );
+            bridge.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            bridge.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+            let tools = bridge.reply();
+            assert_eq!(tools["id"], 2);
+            assert!(
+                tools["result"]["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|tool| tool["name"] == "submilli__typescript__execute"),
+                "{tools}"
+            );
+            bridge.send(json!({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {
+                    "name": "submilli__typescript__execute",
+                    "arguments": { "code": "function main(): string { return \"from the stand-in\"; }" },
+                    "_meta": { "claudecode/toolUseId": "toolu_bridge_test" }
+                }
+            }));
+            let called = bridge.reply();
+            assert_eq!(called["id"], 3, "{called}");
+            assert!(called.to_string().contains("from the stand-in"), "{called}");
+
+            // An assistant stops its MCP servers with a signal.
+            let killed = Command::new("kill")
+                .args(["-TERM", &bridge.child.id().to_string()])
+                .status()
+                .unwrap();
+            assert!(killed.success());
+            let (code, _) = bridge.exit();
+            assert_eq!(code, 0);
+
+            assert_eq!(playground.runs(), before + 1);
+            let runs = playground.expect(0, &["runs", "--limit", "1"]);
+            assert_eq!(runs["runs"][0]["source"], "stand-in", "{runs}");
+        }
+
+        #[test]
+        fn the_stand_ins_chat_lands_in_the_session_its_calls_ran_in() {
+            let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
+            let page = playground.start();
+            let bound = playground
+                .command(&["bind", "customerId=cus_northwind", "--secret", "API_KEY"])
+                .env("API_KEY", SECRET)
+                .output()
+                .unwrap();
+            assert!(bound.status.success(), "{}", stderr(&bound));
+
+            // The stand-in's call goes through the bridge, named as Claude Code names it.
+            let mut bridge = Bridge::start(&playground);
+            bridge.initialize();
+            bridge.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            bridge.send(json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {
+                    "name": "submilli__typescript__execute",
+                    "arguments": { "code": "function main(): number { return 42; }" },
+                    "_meta": { "claudecode/toolUseId": "toolu_chat_test" }
+                }
+            }));
+            assert_eq!(bridge.reply()["id"], 2);
+
+            // Its transcript, where Claude Code writes it, and the call's hook.
+            let claude = playground.dir.path().join("claude");
+            let live = claude.join("cc-session/subagents/agent-agent-x.jsonl");
+            std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+            let lines = [
+                json!({ "type": "user", "uuid": "u1",
+                        "message": { "role": "user", "content": "Total the charges." } }),
+                json!({ "type": "assistant", "uuid": "a1", "message": { "role": "assistant",
+                        "content": [{ "type": "tool_use", "id": "toolu_chat_test",
+                                      "name": "mcp__playground__submilli__typescript__execute",
+                                      "input": {} }] } }),
+                json!({ "type": "assistant", "uuid": "a2", "message": { "role": "assistant",
+                        "content": [{ "type": "text", "text": "The total is 42." }] } }),
+            ];
+            let transcript: String = lines.iter().map(|line| format!("{line}\n")).collect();
+            std::fs::write(&live, transcript).unwrap();
+            let hook = |agent_type: Option<&str>| {
+                let mut hook = json!({
+                    "hook_event_name": "PostToolUse",
+                    "session_id": "cc-session",
+                    "transcript_path": claude.join("cc-session.jsonl"),
+                    "agent_id": "agent-x",
+                    "tool_name": "mcp__playground__submilli__typescript__execute",
+                    "tool_use_id": "toolu_chat_test",
+                });
+                if let Some(agent_type) = agent_type {
+                    hook["agent_type"] = json!(agent_type);
+                }
+                hook
+            };
+            let chat_hook = |hook: &Value| {
+                let mut child = playground
+                    .command(&["chat-hook"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                write!(child.stdin.take().unwrap(), "{hook}").unwrap();
+                let output = child.wait_with_output().unwrap();
+                assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+                assert!(output.stdout.is_empty(), "chat-hook prints nothing");
+                output
+            };
+            chat_hook(&hook(Some("general-purpose")));
+            chat_hook(&hook(None));
+            chat_hook(&hook(Some("submilli-standin")));
+
+            let sessions = playground.expect(0, &["sessions"]);
+            let session = sessions["sessions"][0]["session"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let log = std::fs::read_to_string(
+                playground
+                    .state()
+                    .join(format!("store/events/{session}.jsonl")),
+            )
+            .unwrap();
+            let chat: Vec<String> = log
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter_map(|event| event["body"]["chat"]["text"].as_str().map(str::to_owned))
+                .collect();
+            assert_eq!(chat, ["Total the charges.", "The total is 42."]);
+
+            // Only the stand-in token may post chat.
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .build()
+                .into();
+            for token in ["app", "chat", "admin"] {
+                let status = agent
+                    .post(&format!("{page}/api/chat"))
+                    .header(
+                        "authorization",
+                        &format!("Bearer {}", playground.token(token)),
+                    )
+                    .send_json(json!({ "agent": "agent-y", "messages": [] }))
+                    .unwrap()
+                    .status()
+                    .as_u16();
+                assert_eq!(status, 403, "{token}");
+            }
+
+            // With the playground stopped, the hook still exits 0, silently.
+            drop(bridge);
+            playground.stop();
+            let output = chat_hook(&hook(Some("submilli-standin")));
+            assert!(output.stderr.is_empty(), "{}", stderr(&output));
+        }
+
+        /// A model API on loopback that answers the `n`th request (from 0) with
+        /// `answer(n)`, and keeps each request's body.
+        fn model_api(
+            answer: impl Fn(usize) -> Value + Send + 'static,
+        ) -> (u16, Arc<Mutex<Vec<Value>>>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let bodies = Arc::new(Mutex::new(Vec::new()));
+            let kept = Arc::clone(&bodies);
+            std::thread::spawn(move || {
+                for (n, stream) in listener.incoming().enumerate() {
+                    let Ok(mut stream) = stream else { break };
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    reader.read_exact(&mut body).unwrap();
+                    kept.lock()
+                        .unwrap()
+                        .push(serde_json::from_slice(&body).unwrap_or(Value::Null));
+                    let reply = answer(n).to_string();
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    );
+                }
+            });
+            (port, bodies)
+        }
+
+        const MODEL_KEY: &str = "dummy-model-key-4f9a2c";
+        const PROGRAM: &str = "function main(): number { return 6 * 7; }";
+
+        fn call_execute(n: usize) -> Value {
+            json!({ "content": [
+                { "type": "text", "text": "Running it." },
+                { "type": "tool_use", "id": format!("call_{n}"),
+                  "name": "submilli__typescript__execute", "input": { "code": PROGRAM } },
+            ], "stop_reason": "tool_use" })
+        }
+
+        /// Starts the playground with the model API on `port` and the key set; its page.
+        fn start_with_model(playground: &Playground, port: u16) -> String {
+            let output = playground
+                .command(&["start", "--json"])
+                .env("ANTHROPIC_API_KEY", MODEL_KEY)
+                .env("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}"))
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "start: {}", stderr(&output));
+            let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+            ready["url"]
+                .as_str()
+                .unwrap()
+                .trim_end_matches('/')
+                .to_owned()
+        }
+
+        #[test]
+        fn chat_runs_a_task_with_the_developers_own_key() {
+            let (port, bodies) = model_api(|n| match n {
+                0 => call_execute(0),
+                _ => json!({ "content": [{ "type": "text", "text": "The answer is 42." }],
+                             "stop_reason": "end_turn" }),
+            });
+            let playground = Playground::starter();
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+
+            let output = playground.run(&["chat", "Compute six times seven.", "--json"]);
+            assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+            let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["provider"], "anthropic");
+            assert_eq!(result["stopped"], "answered");
+            assert_eq!(result["tool_calls"], 1);
+            assert_eq!(result["untrusted"]["reply"], "The answer is 42.");
+            assert_only_untrusted(&result, "The answer is 42.");
+            let session = result["session"].as_str().unwrap().to_owned();
+
+            // The tools sent are the server's, and the run's result went back.
+            let bodies = bodies.lock().unwrap().clone();
+            assert_eq!(bodies.len(), 2);
+            let tools: Vec<&str> = bodies[0]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect();
+            assert!(
+                tools.contains(&"submilli__typescript__execute"),
+                "{tools:?}"
+            );
+            assert_eq!(
+                bodies[0]["messages"][0]["content"],
+                "Compute six times seven."
+            );
+            let results = bodies[1]["messages"][2]["content"].to_string();
+            assert!(
+                results.contains("tool_result") && results.contains("42"),
+                "{results}"
+            );
+
+            let runs = playground.expect(0, &["runs", "--limit", "1"]);
+            assert_eq!(runs["runs"][0]["source"], "chat", "{runs}");
+            let log = std::fs::read_to_string(
+                playground
+                    .state()
+                    .join(format!("store/events/{session}.jsonl")),
+            )
+            .unwrap();
+            let chat: Vec<String> = log
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter_map(|event| event["body"]["chat"]["text"].as_str().map(str::to_owned))
+                .collect();
+            assert_eq!(
+                chat,
+                [
+                    "Compute six times seven.",
+                    "Running it.",
+                    "The answer is 42."
+                ]
+            );
+            // Each answer names the model that wrote it; the task names none.
+            let model = result["model"].as_str().unwrap();
+            let models: Vec<Option<String>> = log
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .filter(|event| event["body"]["chat"].is_object())
+                .map(|event| event["body"]["chat"]["model"].as_str().map(str::to_owned))
+                .collect();
+            assert_eq!(
+                models,
+                [None, Some(model.to_owned()), Some(model.to_owned())]
+            );
+
+            let text = playground.run(&["chat", "Compute six times seven."]);
+            let printed = String::from_utf8_lossy(&text.stdout);
+            assert!(
+                printed.contains("anthropic") && printed.contains("next:"),
+                "{printed}"
+            );
+
+            playground.stop();
+            assert!(!String::from_utf8_lossy(&output.stdout).contains(MODEL_KEY));
+            walk(&playground.state(), &mut |path| {
+                let bytes = std::fs::read(path).unwrap();
+                assert!(
+                    !String::from_utf8_lossy(&bytes).contains(MODEL_KEY),
+                    "{} holds the key",
+                    path.display()
+                );
+            });
+        }
+
+        #[test]
+        fn chat_stops_at_the_turn_limit_and_says_so_with_no_key() {
+            let (port, bodies) = model_api(call_execute);
+            let playground = Playground::starter();
+            // No key: no provider, and no request to anyone.
+            playground.start();
+            let refused = playground.run(&["chat", "anything"]);
+            assert_eq!(refused.status.code(), Some(1));
+            assert!(
+                stderr(&refused).contains("no provider configured"),
+                "{}",
+                stderr(&refused)
+            );
+            playground.stop();
+            assert!(bodies.lock().unwrap().is_empty());
+
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let result = playground.expect(0, &["chat", "Keep going."]);
+            assert_eq!(result["stopped"], "turn-limit");
+            assert_eq!(bodies.lock().unwrap().len(), 20);
+            // What the last answer asked for is not run: no model would see it.
+            assert_eq!(result["tool_calls"], 19);
+        }
+
+        #[test]
+        fn chat_runs_at_most_its_limit_of_calls_an_answer_and_none_without_object_arguments() {
+            let (port, bodies) = model_api(|n| match n {
+                // The first request of each chat.
+                n if n % 2 == 0 => {
+                    let mut content = vec![json!({ "type": "tool_use", "id": "bad",
+                        "name": "submilli__typescript__execute", "input": "not an object" })];
+                    content.extend((0..16).map(|i| {
+                        json!({ "type": "tool_use", "id": format!("call_{i}"),
+                                "name": "submilli__typescript__execute",
+                                "input": { "code": PROGRAM } })
+                    }));
+                    json!({ "content": content, "stop_reason": "tool_use" })
+                }
+                _ => json!({ "content": [{ "type": "text", "text": "Done." }],
+                             "stop_reason": "end_turn" }),
+            });
+            let playground = Playground::starter();
+            let page = start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let result = playground.expect(0, &["chat", "Run them all."]);
+            assert_eq!(result["stopped"], "answered");
+            // The first sixteen, less the one with no object: fifteen ran.
+            assert_eq!(result["tool_calls"], 15);
+            let bodies = bodies.lock().unwrap().clone();
+            let results = bodies[1]["messages"][2]["content"]
+                .as_array()
+                .unwrap()
+                .clone();
+            assert_eq!(results.len(), 17, "every call gets a result");
+            let errors: Vec<&str> = results
+                .iter()
+                .filter(|result| result["is_error"] == true)
+                .map(|result| result["tool_use_id"].as_str().unwrap())
+                .collect();
+            assert_eq!(errors, ["bad", "call_15"]);
+
+            // The limit is the chat's to set.
+            let result =
+                playground.expect(0, &["chat", "Run them all.", "--max-calls-per-answer", "3"]);
+            assert_eq!(result["tool_calls"], 2, "{result}");
+            let refused = playground.run(&["chat", "x", "--max-calls-per-answer", "0"]);
+            assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+
+            // The playground checks it too, for a client other than the CLI, and one that
+            // leaves it out gets the default.
+            let post = |body: Value| {
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .build()
+                    .into();
+                let mut response = agent
+                    .post(&format!("{page}/api/agent"))
+                    .header(
+                        "authorization",
+                        &format!("Bearer {}", playground.token("admin")),
+                    )
+                    .send_json(body)
+                    .unwrap();
+                response.body_mut().read_to_string().unwrap()
+            };
+            for limit in [0, 1001] {
+                let answer = post(json!({ "task": "x", "max_calls_per_answer": limit }));
+                assert!(answer.contains("invalid-max-calls"), "{limit}: {answer}");
+            }
+            let answer = post(json!({ "task": "Run them all." }));
+            assert!(answer.contains("\"tool_calls\":15"), "{answer}");
+            playground.stop();
+        }
+
+        #[test]
+        fn chat_says_when_the_model_was_cut_off_or_stopped() {
+            let (port, bodies) = model_api(|n| match n {
+                // Cut mid-call: the last call may be incomplete.
+                0 => json!({ "content": [
+                    { "type": "tool_use", "id": "cut", "name": "submilli__typescript__execute",
+                      "input": { "code": "function main(): number {" } },
+                ], "stop_reason": "max_tokens" }),
+                1 => json!({ "content": [{ "type": "text", "text": "Partial ans" }],
+                             "stop_reason": "max_tokens" }),
+                _ => json!({ "content": [], "stop_reason": "refusal" }),
+            });
+            let playground = Playground::starter();
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+
+            let result = playground.expect(0, &["chat", "Compute six times seven."]);
+            assert_eq!(result["stopped"], "output-limit", "{result}");
+            assert_eq!(result["tool_calls"], 0);
+            assert_eq!(result["untrusted"]["reply"], "Partial ans");
+            let refused = bodies.lock().unwrap()[1]["messages"][2]["content"][0].clone();
+            assert_eq!(refused["is_error"], true, "{refused}");
+            assert!(
+                refused["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("output limit"),
+                "{refused}"
+            );
+            let session = result["session"].as_str().unwrap();
+            let log = std::fs::read_to_string(
+                playground
+                    .state()
+                    .join(format!("store/events/{session}.jsonl")),
+            )
+            .unwrap();
+            let cut = log
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .find(|event| event["body"]["chat"]["text"] == "Partial ans")
+                .unwrap();
+            assert_eq!(cut["body"]["chat"]["truncated"], true, "{cut}");
+
+            let stopped = playground.expect(0, &["chat", "Anything."]);
+            assert_eq!(stopped["stopped"], "provider", "{stopped}");
+            assert_eq!(stopped["stop_reason"], "refusal");
+            let text = playground.run(&["chat", "Anything."]);
+            let printed = String::from_utf8_lossy(&text.stdout);
+            assert!(
+                printed.contains("anthropic stopped the model's answer: refusal"),
+                "{printed}"
+            );
+            playground.stop();
+        }
+
+        #[test]
+        fn a_chat_whose_command_is_stopped_stops_too() {
+            // A model that never finishes, slowly.
+            let (port, bodies) = model_api(|n| {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                call_execute(n)
+            });
+            let playground = Playground::starter();
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let mut chat = playground
+                .command(&["chat", "Keep going."])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let asked = || bodies.lock().unwrap().len();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while asked() < 2 && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            assert!(asked() >= 2, "the chat never started");
+            chat.kill().unwrap();
+            chat.wait().unwrap();
+            // At most the request under way when it stopped, and the one after it.
+            let at_stop = asked();
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            assert!(
+                asked() <= at_stop + 1,
+                "{} requests after the stop",
+                asked() - at_stop
+            );
+            // The playground is still well.
+            playground.expect(0, &["exec", "--example"]);
+            playground.stop();
+        }
+
+        #[test]
+        fn chat_follows_no_redirect_so_the_key_goes_nowhere_else() {
+            let (elsewhere, reached) = model_api(call_execute);
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { break };
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut length = 0;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = vec![0; length];
+                    let _ = reader.read_exact(&mut body);
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 302 Found\r\nlocation: http://127.0.0.1:{elsewhere}/v1/messages\r\n\
+                         content-length: 0\r\nconnection: close\r\n\r\n"
+                    );
+                }
+            });
+            let playground = Playground::starter();
+            start_with_model(&playground, port);
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let output = playground.run(&["chat", "Compute six times seven."]);
+            assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+            assert!(stderr(&output).contains("HTTP 302"), "{}", stderr(&output));
+            assert!(
+                reached.lock().unwrap().is_empty(),
+                "the redirect was followed"
+            );
+            playground.stop();
+        }
+
+        #[test]
+        fn the_bridge_answers_every_request_with_why_it_cannot_connect() {
+            let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
+
+            // Not running.
+            let mut bridge = Bridge::start(&playground);
+            let refused = bridge.initialize();
+            assert_eq!(refused["id"], 1);
+            let message = refused["error"]["message"].as_str().unwrap().to_owned();
+            assert!(message.contains("not running"), "{refused}");
+            bridge.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            bridge.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+            assert_eq!(bridge.reply()["error"]["message"], message.as_str());
+            let (code, stderr) = bridge.finish();
+            assert_eq!(code, 6);
+            assert!(stderr.contains("not running"), "{stderr}");
+
+            // A required secret with no development value.
+            playground.start();
+            playground.expect(0, &["bind", "customerId=cus_northwind"]);
+            let mut bridge = Bridge::start(&playground);
+            let refused = bridge.initialize();
+            let message = refused["error"]["message"].as_str().unwrap();
+            assert!(message.contains("bind --secret API_KEY"), "{refused}");
+            let (code, stderr) = bridge.finish();
+            assert_eq!(code, 2);
+            assert!(stderr.contains("bind --secret API_KEY"), "{stderr}");
+        }
+
         #[test]
         fn development_secrets_reach_only_the_bridge_and_never_a_file() {
             let playground = Playground::with_blueprint(SECRET_BLUEPRINT);
@@ -1297,16 +2042,33 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let (status, body) = bridge(&playground.token("stand-in"));
             assert_eq!(status, 200, "{body}");
             let body: Value = serde_json::from_str(&body).unwrap();
-            assert_eq!(body["secrets"]["API_KEY"], SECRET);
-            assert_eq!(body["variables"]["customerId"], "cus_northwind");
+            assert_eq!(body["exit"], 0, "{body}");
+            assert_eq!(body["result"]["blueprint"], "demo");
+            assert_eq!(body["result"]["secrets"], json!({ "API_KEY": SECRET }));
+            assert_eq!(
+                body["result"]["variables"],
+                json!({ "customerId": "cus_northwind" })
+            );
             for refused in ["app", "admin"] {
                 let (status, body) = bridge(&playground.token(refused));
                 assert_eq!(status, 403, "{refused}: {body}");
                 assert!(!body.contains(SECRET));
             }
 
-            // Without the development value, a test is refused, naming `bind`.
+            // Without the development value, a test is refused, naming `bind`, and so is
+            // the bridge, without connecting.
             playground.expect(0, &["bind", "--unset", "API_KEY"]);
+            let (status, body) = bridge(&playground.token("stand-in"));
+            assert_eq!(status, 200, "{body}");
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["exit"], 2, "{body}");
+            assert_eq!(body["result"]["error"]["kind"], "missing-secrets");
+            assert!(
+                body["result"]["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("bind --secret API_KEY")),
+                "{body}"
+            );
             let tested = playground.run(&["test", &ran["run"].to_string()]);
             assert_eq!(tested.status.code(), Some(2), "{}", stderr(&tested));
             assert!(

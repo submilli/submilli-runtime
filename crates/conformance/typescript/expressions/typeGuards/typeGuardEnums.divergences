@@ -1,0 +1,25 @@
+types: 11 of 18 tsc entries compared, 6 differ
+
+line 5: x
+  tsc:  string | number | E | V
+  ours: number | string
+
+line 5: null as unknown as (number|string|E|V)
+  tsc:  string | number | E | V
+  ours: number | string
+
+line 7: x
+  tsc:  string | number | E | V
+  ours: number | string
+
+line 8: x
+  tsc:  number | E | V
+  ours: number
+
+line 14: x
+  tsc:  string | number | E | V
+  ours: number | string
+
+line 18: x
+  tsc:  number | E | V
+  ours: number

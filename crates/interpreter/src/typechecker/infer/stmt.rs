@@ -357,7 +357,11 @@ impl Inferer<'_> {
         let typed_value = match value {
             Some(v) => {
                 let hint = self.current_return.clone();
-                let (id, value_ty) = self.infer_returned_value(v, hint.as_ref())?;
+                let super::InferredReturnValue {
+                    typed: id,
+                    ty: value_ty,
+                    widened,
+                } = self.infer_returned_value_with_widened(v, hint.as_ref())?;
                 // A closure in a `void` context may return `unknown` (see
                 // `infer_arrow`), so a `void` value it returns is run and
                 // `undefined` returned in its place.
@@ -366,8 +370,14 @@ impl Inferer<'_> {
                 } else {
                     id
                 };
-                if let Some(collected) = self.inferred_returns.as_mut() {
-                    collected.push((value_ty, span));
+                if self.inferred_returns.is_some() {
+                    let fresh = self.fresh_literals(id)?;
+                    self.record_inferred_return(super::ReturnedValue {
+                        ty: value_ty,
+                        widened,
+                        fresh,
+                        span,
+                    });
                 }
                 if self.reachable {
                     self.validate_type_predicate_return(id, span)?;
@@ -403,10 +413,16 @@ impl Inferer<'_> {
                 ty: Type::Undefined,
             })
             .map_err(crate::typechecker::arena_failure)?;
-        if let Some(collected) = self.inferred_returns.as_mut() {
-            collected.push((Type::Undefined, span));
-        }
+        self.record_inferred_return(super::ReturnedValue::undefined(span));
         Ok(undefined)
+    }
+
+    /// Adds `value` to the returns an unannotated function literal collects
+    /// to infer its return type from; other bodies collect none.
+    fn record_inferred_return(&mut self, value: super::ReturnedValue) {
+        if let Some(collected) = self.inferred_returns.as_mut() {
+            collected.push(value);
+        }
     }
 
     /// The `void` expression `effect` run, then the `undefined` it yields.
@@ -647,7 +663,7 @@ impl Inferer<'_> {
             name.span,
             origin,
         );
-        if name.name.starts_with("#pattern_dst_") {
+        if crate::lower_patterns::is_pattern_value(&name.name) {
             self.pattern_sources.insert(name.name.clone(), typed_value);
         }
         if ty.is_none() {
@@ -1834,7 +1850,7 @@ impl Inferer<'_> {
         }
     }
 
-    fn pattern_binding_storage_type(
+    pub(super) fn pattern_binding_storage_type(
         &self,
         value: ExprId,
         declared: Type,
@@ -1848,7 +1864,10 @@ impl Inferer<'_> {
         ))
     }
 
-    fn pattern_binding_flow_type(&self, value: ExprId) -> Result<Option<Type>, CompilerFailure> {
+    pub(super) fn pattern_binding_flow_type(
+        &self,
+        value: ExprId,
+    ) -> Result<Option<Type>, CompilerFailure> {
         use narrowing::{LiteralValue, PathElem};
         let Some((source, element)) = self.pattern_binding_source(value)? else {
             return Ok(None);

@@ -1,28 +1,4 @@
-types: 169 of 308 tsc entries compared, 44 differ
-
-line 14: { ...{ a: 3, ...{ b: false, c: 'overriden' } }, c: 'whatever' }
-  tsc:  { c: string; b: false; a: number; }
-  ours: { a: number; b: boolean; c: string }
-
-line 14: { a: 3, ...{ b: false, c: 'overriden' } }
-  tsc:  { b: false; c: string; a: number; }
-  ours: { a: number; b: boolean; c: string }
-
-line 14: { b: false, c: 'overriden' }
-  tsc:  { b: false; c: string; }
-  ours: { b: boolean; c: string }
-
-line 20: { ...{ a: 1, ...{ b: false, c: 'overriden' } }, c: -1 }
-  tsc:  { c: number; b: false; a: number; }
-  ours: { a: number; b: boolean; c: number }
-
-line 20: { a: 1, ...{ b: false, c: 'overriden' } }
-  tsc:  { b: false; c: string; a: number; }
-  ours: { a: number; b: boolean; c: string }
-
-line 20: { b: false, c: 'overriden' }
-  tsc:  { b: false; c: string; }
-  ours: { b: boolean; c: string }
+types: 169 of 308 tsc entries compared, 38 differ
 
 line 55: nt && { x: nt }
   tsc:  0 | { x: number; }

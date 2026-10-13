@@ -19,7 +19,13 @@ use clap::{Args as ClapArgs, Subcommand};
 use ipnet::IpNet;
 
 #[cfg(unix)]
+mod agent;
+#[cfg(unix)]
 mod api;
+#[cfg(unix)]
+mod bridge;
+#[cfg(unix)]
+mod chat;
 #[cfg(unix)]
 mod client;
 #[cfg(unix)]
@@ -34,6 +40,8 @@ mod host;
 mod labels;
 #[cfg(unix)]
 mod log;
+#[cfg(unix)]
+mod mcp_http;
 #[cfg(unix)]
 mod packages;
 #[cfg(unix)]
@@ -58,6 +66,11 @@ const EXIT_PACKAGE_RESOLUTION: u8 = 5;
 /// `status`, `open`, or `stop` found no playground it can reach: none running, or
 /// one starting, stopping, or failing the nonce challenge.
 const EXIT_UNREACHABLE: u8 = 6;
+/// The most tool calls `chat` runs for one answer unless told otherwise; the rest are
+/// refused to the model.
+const DEFAULT_MAX_CALLS_PER_ANSWER: u16 = 16;
+/// What that limit may be set to.
+const MAX_CALLS_PER_ANSWER_RANGE: std::ops::RangeInclusive<u16> = 1..=1000;
 // A start interrupted while it waits stops what it launched and exits as the shell
 // reports the signal: 129 for SIGHUP, 130 for SIGINT, 143 for SIGTERM. A signal
 // the caller ignores (`nohup`) stays ignored.
@@ -110,14 +123,15 @@ pub enum PlaygroundCmd {
     Bind(BindArgs),
     /// Start a session with its variables fixed, or end one.
     Session(SessionArgs),
-    /// Re-resolve a run's decisions under the blueprint in force. Runs nothing and
-    /// records nothing.
+    /// After a blueprint edit, see which of a run's decisions would change: re-resolves
+    /// them under the blueprint in force. Runs nothing and records nothing.
     Recheck(RunArg),
-    /// Run a recorded program again under the blueprint in force, with its calls answered
-    /// from the recording; it stops at a call with nothing recorded.
+    /// After a blueprint edit, see whether a recorded program gets through now: runs it
+    /// again under the blueprint in force, with its calls answered from the recording.
+    /// It stops at a call with nothing recorded.
     Test(TestArgs),
-    /// Run a recorded program again live under the current binding, as a new run linked
-    /// to its source.
+    /// After a package edit, or to try other variables, run a recorded program again for
+    /// real under the current binding, as a new run linked to its source.
     Rerun(RunArg),
     /// Draft a rule that allows exactly one refused call; `--write` puts it in the
     /// blueprint file. Works with the playground stopped.
@@ -132,6 +146,19 @@ pub enum PlaygroundCmd {
     /// session already idle it prints the events so far and exits at once, so start it
     /// after the run it is to follow has started, or pass `--follow`.
     Watch(WatchArgs),
+    /// Serve the running playground's tools over stdio, for a coding assistant's
+    /// stand-in subagent to launch. Uses the binding and the development secrets; its
+    /// runs are labeled `stand-in`.
+    Mcp,
+    /// Run a task with your own model key against the playground's tools, as a
+    /// production agent would; prints its answer. The key comes from the playground's
+    /// environment (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY), the model from
+    /// SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
+    Chat(ChatArgs),
+    /// Copy a coding assistant's stand-in conversation to the running playground: a
+    /// Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks
+    /// post anything. Always exits 0 and prints nothing.
+    ChatHook,
 }
 
 #[derive(ClapArgs)]
@@ -204,6 +231,27 @@ pub struct SessionStartArgs {
 pub struct SessionEndArgs {
     #[arg(value_name = "ID")]
     session: String,
+    /// Print JSON.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(ClapArgs)]
+pub struct ChatArgs {
+    /// What the agent should do.
+    #[arg(value_name = "TASK")]
+    task: String,
+    /// The most tool calls run for one answer of the model; the rest are refused to it.
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = DEFAULT_MAX_CALLS_PER_ANSWER,
+        value_parser = clap::value_parser!(u16).range(
+            i64::from(*MAX_CALLS_PER_ANSWER_RANGE.start())
+                ..=i64::from(*MAX_CALLS_PER_ANSWER_RANGE.end())
+        ),
+    )]
+    max_calls_per_answer: u16,
     /// Print JSON.
     #[arg(long)]
     json: bool,
@@ -301,6 +349,9 @@ pub struct ShowArgs {
     /// Include call request and response bodies, and results and console output in full.
     #[arg(long)]
     include_payloads: bool,
+    /// Include the program the run ran, as the agent wrote it.
+    #[arg(long)]
+    program: bool,
     /// Print JSON.
     #[arg(long)]
     json: bool,
@@ -461,6 +512,9 @@ impl Args {
             Some(PlaygroundCmd::Clear(_)) => "playground.clear",
             Some(PlaygroundCmd::Cancel(_)) => "playground.cancel",
             Some(PlaygroundCmd::Watch(_)) => "playground.watch",
+            Some(PlaygroundCmd::Mcp) => "playground.mcp",
+            Some(PlaygroundCmd::Chat(_)) => "playground.chat",
+            Some(PlaygroundCmd::ChatHook) => "playground.chat-hook",
         }
     }
 }
@@ -493,7 +547,10 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Show(args) => read(
             ReadRequest::Show {
                 run: args.run,
-                include_payloads: args.include_payloads,
+                options: controls::read::ShowOptions {
+                    include_payloads: args.include_payloads,
+                    include_program: args.program,
+                },
             },
             args.json,
         ),
@@ -544,6 +601,15 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Watch(args) => {
             execute_watch(args.session, args.follow, Output::from_json(args.json))
         }
+        PlaygroundCmd::Mcp => bridge::execute(),
+        PlaygroundCmd::Chat(args) => act(
+            ActionRequest::Chat(controls::act::ChatRequest {
+                task: args.task,
+                max_calls_per_answer: Some(args.max_calls_per_answer),
+            }),
+            args.json,
+        ),
+        PlaygroundCmd::ChatHook => Ok(chat::execute_hook()),
     }
 }
 
@@ -705,6 +771,18 @@ fn secret_value(name: &str) -> Result<String, String> {
             "no value for `{name}`: export ${name}, or store one with `submilli secret put {name}`"
         )
     })
+}
+
+/// `text` cut to at most `max` bytes at a character boundary, and whether it was cut.
+pub(crate) fn within_bytes(text: &str, max: usize) -> (&str, bool) {
+    if text.len() <= max {
+        return (text, false);
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
 }
 
 #[cfg(unix)]

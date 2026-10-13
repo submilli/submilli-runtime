@@ -1,4 +1,4 @@
 line 62 extra: by-design spec §1.5 code after an exhaustive `switch` is unreachable
 line 116 extra: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough
-line 127, 136 extra: bug SUB-1196 (non-exhaustive `switch`) a `switch` without `default` must cover every case, which the spec doesn't state
+line 127, 136 extra: by-design spec §1.5 a `switch` over literals without `default` must cover every value, where tsc accepts it
 line 119 type: by-design spec §1.5 a case must end with `break` or `return`, no fallthrough

@@ -138,6 +138,8 @@ pub fn infer_with_transitive_checked<'a>(
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
+        spread_context_for_next_literal: None,
+        soft_context_function_spans: None,
         invoked_return_hint: None,
         cast_operand: None,
         invoked_body_exit: None,
@@ -423,6 +425,8 @@ pub fn infer_package_checked<'a>(
         fields_keeping_returned_literals: None,
         aliased_conditions: Default::default(),
         immediately_invoked: None,
+        spread_context_for_next_literal: None,
+        soft_context_function_spans: None,
         invoked_return_hint: None,
         cast_operand: None,
         invoked_body_exit: None,
@@ -773,6 +777,14 @@ pub(super) struct Inferer<'a> {
     /// The span of the arrow an immediately-invoked call is about to infer;
     /// see [`iife::immediately_invoked_arrow`].
     immediately_invoked: Option<Span>,
+    /// Set while inferring a spread source that has spreads of its own (see
+    /// `Inferer::infer_spread_source`). That object literal passes it on to
+    /// its own spreads instead of taking it as its expected type.
+    spread_context_for_next_literal: Option<Type>,
+    /// The spans of the function literals inferred while a soft context is
+    /// being tried (see `Inferer::infer_with_soft_context`); `None` outside
+    /// one.
+    soft_context_function_spans: Option<Vec<Span>>,
     /// The type the immediately-invoked call's result is expected to have,
     /// which the arrow it runs takes as its return type's context, as in tsc.
     invoked_return_hint: Option<Type>,
@@ -924,7 +936,7 @@ pub(super) struct Inferer<'a> {
     /// Source-declared cycles already diagnosed during signature validation.
     pub(super) invalid_class_hierarchies: std::collections::BTreeSet<crate::MangledName>,
     pub(super) current_type_predicate: Option<(crate::TypePredicate, String)>,
-    pub(super) inferred_returns: Option<Vec<(Type, Span)>>,
+    pub(super) inferred_returns: Option<Vec<ReturnedValue>>,
     /// Object literals inferred for their own type rather than checked against
     /// a declared one; see [`inference_sources`].
     pub(super) inference_source_literals: BTreeSet<crate::ExprId>,
@@ -1635,4 +1647,36 @@ pub(super) fn type_limit_at(
     span: Span,
 ) -> impl FnOnce(crate::type_size::TypeTooLarge) -> CompilerFailure {
     move |exceeded| exceeded.into_failure(CompilerStage::Infer, Some(span))
+}
+
+/// A value an unannotated function literal's `return` gives.
+pub(super) struct ReturnedValue {
+    /// The value's type as inferred, its literal types kept.
+    pub(super) ty: Type,
+    /// The value's type when it is the function's only return, a fresh
+    /// literal widened (see `Inferer::widen_returned_literals`).
+    pub(super) widened: Type,
+    /// The literal types in `ty` known to be fresh.
+    pub(super) fresh: BTreeSet<Type>,
+    pub(super) span: Span,
+}
+
+impl ReturnedValue {
+    /// The `undefined` a bare `return` gives.
+    pub(super) fn undefined(span: Span) -> Self {
+        Self {
+            ty: Type::Undefined,
+            widened: Type::Undefined,
+            fresh: BTreeSet::new(),
+            span,
+        }
+    }
+}
+
+/// A returned value as inferred: its typed node, its type with literal types
+/// kept, and its type when it is the function's only return.
+pub(super) struct InferredReturnValue {
+    pub(super) typed: crate::ExprId,
+    pub(super) ty: Type,
+    pub(super) widened: Type,
 }

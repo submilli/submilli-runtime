@@ -43,6 +43,17 @@ pub(crate) fn is_pattern_param(name: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('_'))
 }
 
+/// The `fresh` prefix of the value a destructuring declaration unpacks.
+const PATTERN_VALUE: &str = "dst";
+
+/// Whether `name` is the fresh `#pattern_dst_N` that holds the value a
+/// destructuring declaration unpacks.
+pub(crate) fn is_pattern_value(name: &str) -> bool {
+    name.strip_prefix(FRESH_MARKER)
+        .and_then(|rest| rest.strip_prefix(PATTERN_VALUE))
+        .is_some_and(|rest| rest.starts_with('_'))
+}
+
 struct LowerCtx {
     next_tmp: u32,
 }
@@ -295,7 +306,7 @@ impl LowerCtx {
         };
 
         let pattern_span = binding.span();
-        let dst = self.fresh("dst", pattern_span)?;
+        let dst = self.fresh(PATTERN_VALUE, pattern_span)?;
         let is_const = matches!(binding_kind, BindingKind::Const);
         let root = PatternRoot {
             is_const,
@@ -537,7 +548,7 @@ impl LowerCtx {
             ast.tuple_pattern_sources.insert(value);
         }
         let pattern_span = binding.span();
-        let dst = self.fresh("dst", pattern_span)?;
+        let dst = self.fresh(PATTERN_VALUE, pattern_span)?;
         let annotated = ty.is_some();
 
         // temp is always `const` even for `let` patterns — it's never re-assigned
