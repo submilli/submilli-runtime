@@ -350,8 +350,8 @@ fn emit_ref_truthiness(
     nullable: bool,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     use TruthinessClass::*;
-    let peeled = cond_ty.lowered();
-    let members: Vec<&Type> = match peeled {
+    let lowered = cond_ty.lowered();
+    let members: Vec<&Type> = match lowered {
         Type::Union(members) => members.iter().collect(),
         single => vec![single],
     };
@@ -591,8 +591,8 @@ pub fn emit_cast_to(
     ctx: &CodegenCtx<'_>,
     ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    // codegen casts on the structural shape — peel through
-    // aliases. The alias label is purely a typechecker/display thing.
+    // codegen casts on the lowered shape: aliases peeled (their label is
+    // purely a typechecker/display thing) and `{}` read as `unknown`.
     let ty = ty.lowered();
     // Every per-type cast below assumes non-null input, so lift unless the target
     // admits a null of its own.

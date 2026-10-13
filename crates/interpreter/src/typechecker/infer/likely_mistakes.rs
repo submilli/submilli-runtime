@@ -93,13 +93,6 @@ impl Inferer<'_> {
         self.check_tested_condition(condition, Some(body))
     }
 
-    /// TS2774 and TS2845 for the left operand of an `&&`. When the `&&` is
-    /// (part of) an `if` condition, the `if`'s body may use it too.
-    fn check_and_operand(&mut self, and: ExprId, lhs: ExprId) -> Result<(), CompilerFailure> {
-        let body = self.if_condition_ands.get(&and).copied();
-        self.check_tested_condition(lhs, body)
-    }
-
     /// Tests `condition` and, down a `||` or `??` chain, each left operand,
     /// as tsc's `checkTestingKnownTruthyCallableOrAwaitableOrEnumMemberType`
     /// does.
@@ -204,17 +197,20 @@ impl Inferer<'_> {
         Ok(())
     }
 
-    /// After inferring `expr`: when it is an `&&`, checks its left operand.
+    /// After inferring `expr`: when it is an `&&`, TS2774 and TS2845 for its
+    /// left operand. When the `&&` is (part of) an `if` condition, the `if`'s
+    /// body may use the operand too.
     pub(super) fn check_and_left_operand(&mut self, expr: ExprId) -> Result<(), CompilerFailure> {
-        if let ExprKind::Binary {
+        let ExprKind::Binary {
             op: BinOp::And,
             lhs,
             ..
         } = self.ast.try_expr(expr).map_err(super::arena_failure)?.kind
-        {
-            self.check_and_operand(expr, lhs)?;
-        }
-        Ok(())
+        else {
+            return Ok(());
+        };
+        let body = self.if_condition_ands.get(&expr).copied();
+        self.check_tested_condition(lhs, body)
     }
 
     /// Records `expr` as a read of a function or of one enum member, for the

@@ -1549,7 +1549,7 @@ fn refinement_fits_union(
     {
         return true;
     }
-    let Some(Type::Union(pieces)) = actual.refinement_pieces() else {
+    let Some(pieces) = actual.refinement_pieces() else {
         return false;
     };
     pieces

@@ -651,23 +651,19 @@ impl<'a> Unifier<'a> {
     /// param side; `Type::Error` on either side silently succeeds (upstream already reported).
     #[allow(clippy::result_large_err)]
     fn unify(&mut self, param_ty: &Type, arg_ty: &Type) -> Result<(), UnifyError> {
-        // peel aliases — unification is structural, alias label doesn't participate.
-        // A type variable still binds to a readonly argument as readonly, or the
-        // call's result would hand back a writable view of it.
-        // A narrowed type parameter is not a union, so tsc infers it whole
-        // into a union's one bare type parameter: `T & ({} | null)` binds
-        // `V | null`'s `V` to itself, not to its shape's `{}`.
+        // A narrowed type parameter is not a union, whatever its shape, so a
+        // union parameter takes it whole, as tsc infers it: `T & ({} | null)`
+        // binds `V | null`'s `V` to itself, not to its shape's `{}`.
         if arg_ty.refines_type_parameter()
             && let Type::Union(members) = param_ty.peel()
-            && let [type_var] = members
-                .iter()
-                .filter(|member| matches!(member.peel(), Type::TypeVar(_)))
-                .collect::<Vec<_>>()[..]
         {
-            return self.unify(type_var, arg_ty);
+            return self.unify_into_union_members(param_ty, members, arg_ty);
         }
-        // A narrowed type parameter (`T & {}`) binds as itself, as in
-        // TypeScript: its shape alone would lose that it is still a `T`.
+        // peel aliases — unification is structural, alias label doesn't participate.
+        // A type variable still binds to a readonly argument as readonly, or the
+        // call's result would hand back a writable view of it. A narrowed type
+        // parameter (`T & {}`) binds as itself, as in TypeScript: its shape
+        // alone would lose that it is still a `T`.
         let bindable_arg = if arg_ty.refines_type_parameter() {
             arg_ty.without_aliases()
         } else {
@@ -1046,49 +1042,7 @@ impl<'a> Unifier<'a> {
                 Ok(())
             }
             // Union param against a single (non-union) arg: try each member.
-            (Type::Union(pa), _) => {
-                // Each member sees the argument as written: a readonly array
-                // must not fit a mutable member.
-                let arg_ty = unpeeled_arg;
-                // Bottom fits every arm. Give an unbound variable a chance to
-                // infer from it before accepting an unrelated concrete arm.
-                if matches!(arg_ty.peel(), Type::Never) && self.subtype_widening {
-                    let snap = self.snapshot();
-                    if self
-                        .without_subtype_widening(|u| u.unify(param_ty, arg_ty))
-                        .is_ok()
-                    {
-                        return Ok(());
-                    }
-                    self.restore(snap);
-                }
-                if self.infer_from_readonly_into_mutable_member(pa, arg_ty) {
-                    return Ok(());
-                }
-                if self.unify_by_lone_type_var_rule(pa, arg_ty) {
-                    return Ok(());
-                }
-                if self.defer_to_fitting_fallback(pa, arg_ty) {
-                    return Ok(());
-                }
-                if self.infer_through_structured_member(pa, arg_ty) {
-                    return Ok(());
-                }
-                if self.defer_to_identical_member(pa, arg_ty) {
-                    return Ok(());
-                }
-                for m in self.fallback_type_vars_last(pa) {
-                    let snap = self.snapshot();
-                    if self.unify(m, arg_ty).is_ok() {
-                        return Ok(());
-                    }
-                    self.restore(snap);
-                }
-                Err(UnifyError::Mismatch {
-                    expected: param_ty.clone(),
-                    got: arg_ty.clone(),
-                })
-            }
+            (Type::Union(pa), _) => self.unify_into_union_members(param_ty, pa, unpeeled_arg),
             // A param slot resolving to `unknown` accepts any argument — the top
             // type binds nothing. This is how an erased-args receiver
             // (`instanceof Map` narrows to `Map<unknown, unknown>`) accepts
@@ -1118,6 +1072,56 @@ impl<'a> Unifier<'a> {
                 }
             }
         }
+    }
+
+    /// Unifies a union parameter with an argument that is not a union by
+    /// trying its members. Each member sees the argument as written: a
+    /// readonly array must not fit a mutable member.
+    #[allow(clippy::result_large_err)]
+    fn unify_into_union_members(
+        &mut self,
+        param_ty: &Type,
+        pa: &[Type],
+        arg_ty: &Type,
+    ) -> Result<(), UnifyError> {
+        // Bottom fits every arm. Give an unbound variable a chance to
+        // infer from it before accepting an unrelated concrete arm.
+        if matches!(arg_ty.peel(), Type::Never) && self.subtype_widening {
+            let snap = self.snapshot();
+            if self
+                .without_subtype_widening(|u| u.unify(param_ty, arg_ty))
+                .is_ok()
+            {
+                return Ok(());
+            }
+            self.restore(snap);
+        }
+        if self.infer_from_readonly_into_mutable_member(pa, arg_ty) {
+            return Ok(());
+        }
+        if self.unify_by_lone_type_var_rule(pa, arg_ty) {
+            return Ok(());
+        }
+        if self.defer_to_fitting_fallback(pa, arg_ty) {
+            return Ok(());
+        }
+        if self.infer_through_structured_member(pa, arg_ty) {
+            return Ok(());
+        }
+        if self.defer_to_identical_member(pa, arg_ty) {
+            return Ok(());
+        }
+        for m in self.fallback_type_vars_last(pa) {
+            let snap = self.snapshot();
+            if self.unify(m, arg_ty).is_ok() {
+                return Ok(());
+            }
+            self.restore(snap);
+        }
+        Err(UnifyError::Mismatch {
+            expected: param_ty.clone(),
+            got: arg_ty.clone(),
+        })
     }
 
     fn new(

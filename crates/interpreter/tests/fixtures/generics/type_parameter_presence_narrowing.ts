@@ -109,12 +109,21 @@ function required<V>(value: V | undefined): V {
   return value;
 }
 
+function either<V, W>(first: V | W, second: W): W {
+  return second;
+}
+
+function orText<V>(value: V | string | null | undefined): string {
+  return typeof value === "string" ? value : "other";
+}
+
 function throughOptionals<T>(value: T): string {
   if (value !== undefined) {
     const a: T | undefined = maybe(value);
     const b: T | null = orNull(value);
     const c: T = required(value);
-    return String(a) + String(b) + String(c);
+    const d: number = either(value, 1);
+    return String(a) + String(b) + String(c) + String(d) + orText(value);
   }
   return "absent";
 }
@@ -135,6 +144,6 @@ function main(): void {
   assert(regroup(0) === 3, "narrowings of `T` regroup into unions");
   assert(definedOnly(1, 2).length === 3, "a one-sided narrowing of `T` passes on and joins another");
   assert(JSON.stringify(collect<number | string | null>([1, null, "a"])) === "[1,null,\"a\"]", "a `T` element fits `{} | null | undefined`");
-  assert(throughOptionals<number | null>(null) === "nullnullnull", "a narrowed `T` binds a `V | null` parameter as itself");
+  assert(throughOptionals<number | null>(null) === "nullnullnull1other", "a narrowed `T` binds a `V | null` parameter as itself");
   assert(throughOptionals<number | undefined>(undefined) === "absent", "an absent `T` skips the calls");
 }

@@ -693,16 +693,16 @@ impl Type {
                 .any(|m| matches!(m.without_aliases(), Type::Undefined))
     }
 
-    /// A refinement whose shape is a union, as the union of its pieces:
-    /// `T & ({} | null)` is `(T & {}) | null`. `None` for any other type.
-    pub fn refinement_pieces(&self) -> Option<Type> {
+    /// The pieces of a refinement whose shape is a union: `T & ({} | null)`
+    /// is `T & {}` and `null`. `None` for any other type.
+    pub fn refinement_pieces(&self) -> Option<Vec<Type>> {
         let Type::Refined { original, ty } = self.without_aliases() else {
             return None;
         };
         let Type::Union(parts) = ty.peel() else {
             return None;
         };
-        Some(Type::Union(
+        Some(
             parts
                 .iter()
                 .map(|part| match part.peel() {
@@ -713,7 +713,7 @@ impl Type {
                     },
                 })
                 .collect(),
-        ))
+        )
     }
 
     /// Whether this is a narrowed type parameter, like `T & {}`.
