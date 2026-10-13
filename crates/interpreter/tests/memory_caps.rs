@@ -594,13 +594,15 @@ function main(): void {
 }
 
 #[test]
-fn string_builders_refuse_native_output_and_refund_inputs() {
+fn string_builders_past_the_cap_end_the_run() {
     for expression in [
         "\"x\".repeat(1048576)",
         "\"x\".padStart(1048576, \"a\")",
         "\"x\".padEnd(1048576, \"a\")",
         "\"x\".repeat(60000).concat(\"y\".repeat(60000))",
         "\"x\".repeat(60000) + \"y\".repeat(60000)",
+        "\"x\".repeat(200000).toUpperCase()",
+        "\" x\".repeat(100000).trim()",
     ] {
         let src = format!(
             "function main(): void {{ try {{ const text = {expression}; }} catch (e) {{ }} }}"
@@ -608,29 +610,86 @@ fn string_builders_refuse_native_output_and_refund_inputs() {
         let (result, host_bytes) = cap_run_with_host_bytes(&src, 512 * 1024).unwrap();
         let err = result.expect_err(expression);
         assert!(err.is::<MemoryExhausted>(), "{expression}: {err:#}");
-        assert_eq!(host_bytes, 0, "{expression}: all native buffers refunded");
         assert!(
-            err.is::<submilli_engine::runtime::limits::MemoryCapExceeded>(),
-            "{expression}: native admission refused before GC: {err:#}"
+            err.is::<wasmtime::GcHeapOutOfMemory<()>>(),
+            "{expression}: the GC limiter refused the result: {err:#}"
         );
+        assert_eq!(host_bytes, 0, "{expression}: no native buffer was charged");
     }
 }
 
+/// SUB-1668: a builder needs only its inputs and its result under the cap.
+/// Each result is 512 KB and fits the 1 MB cap beside its inputs; a native copy
+/// of the output (another 512 KB) would push any of them past it.
 #[test]
-fn string_builder_gc_failure_refunds_native_output() {
-    let src = "function main(): void { try { const text = \"x\".repeat(100000); } catch (e) { } }";
-    let (result, host_bytes) = cap_run_with_host_bytes(src, 384 * 1024).unwrap();
-    let err = result.expect_err("native output fits but simultaneous GC copy does not");
+fn string_builders_fit_when_inputs_and_result_fit() {
+    for (setup, expression) in [
+        ("", "\"ab\".repeat(131072)"),
+        ("", "\"x\".padStart(262144, \"ab\")"),
+        ("", "\"x\".padEnd(262144, \"ab\")"),
+        ("const half = \"x\".repeat(131072);", "half.concat(half)"),
+        ("const half = \"x\".repeat(131072);", "half + half"),
+    ] {
+        let src = format!(
+            "function main(): void {{
+                {setup}
+                const text = {expression};
+                assert(text.length === 262144);
+            }}"
+        );
+        cap_run(&src, 1024 * 1024).unwrap_or_else(|err| panic!("{expression}: {err:#}"));
+    }
+}
+
+/// Case maps and trims read their receiver and write their result in place:
+/// each 256 KB receiver and its result fit the 640 KB cap, which a charged
+/// native copy of the receiver (another 256 KB) would not.
+#[test]
+fn string_transforms_fit_when_input_and_result_fit() {
+    for expression in [
+        "text.toUpperCase()",
+        "text.toLowerCase()",
+        "text.trim()",
+        "text.trimStart()",
+        "text.trimEnd()",
+    ] {
+        let src = format!(
+            "function main(): void {{
+                const text = \" \".padEnd(131072, \"x\");
+                const result = {expression};
+                assert(result.length >= 131071);
+            }}"
+        );
+        cap_run(&src, 640 * 1024).unwrap_or_else(|err| panic!("{expression}: {err:#}"));
+    }
+}
+
+/// A case map whose result outgrows its receiver spills the extra units into a
+/// native buffer admitted against the cap. Under the cap it fits; past it the
+/// spill's admission ends the run and its reservation is refunded.
+#[test]
+fn a_growing_case_map_spills_its_extra_units() {
+    let fits = "function main(): void {
+        const text = \"\\u00df\".repeat(65536).toUpperCase();
+        assert(text.length === 131072);
+    }";
+    cap_run(fits, 1024 * 1024).expect("receiver, guess, spill and result fit");
+
+    let past = "function main(): void {
+        try { const text = \"\\u00df\".repeat(100000).toUpperCase(); } catch (e) { }
+    }";
+    let (result, host_bytes) = cap_run_with_host_bytes(past, 512 * 1024).unwrap();
+    let err = result.expect_err("the spill outgrows the cap");
     assert!(err.is::<MemoryExhausted>(), "{err:#}");
     assert!(
-        err.is::<wasmtime::GcHeapOutOfMemory<()>>(),
-        "GC refused: {err:#}"
+        err.is::<submilli_engine::runtime::limits::MemoryCapExceeded>(),
+        "the spill's admission refused it: {err:#}"
     );
-    assert_eq!(host_bytes, 0, "GC failure refunds native output and input");
+    assert_eq!(host_bytes, 0, "the spill's reservation was refunded");
 }
 
 #[test]
-fn string_builder_success_and_range_errors_refund_native_buffers() {
+fn string_builder_results_and_range_errors_leave_no_native_charge() {
     let src = r#"
 function main(): void {
     assert("ab".repeat(3) === "ababab");

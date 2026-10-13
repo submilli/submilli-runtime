@@ -339,11 +339,12 @@ fn nightly_only_requested() -> bool {
     })
 }
 
+/// SUB-1668: string builders, case maps and trims write their result straight
+/// into its GC array, so the host holds no native copy of the inputs or the
+/// result beside it.
 #[test]
-fn rejected_string_output_does_not_allocate_its_buffer() {
-    use submilli_engine::runtime::limits::{MemoryCapExceeded, TenantLimits};
-    use submilli_engine::runtime::prelude::string::{Str, concat, pad_end, pad_start, repeat};
-
+fn string_builders_allocate_only_their_result() {
+    const RESULT_BYTES: usize = 4 * 1024 * 1024;
     if !nightly_only_requested() {
         eprintln!("host memory: skipped; set SUBMILLI_TEST_NIGHTLY_ONLY=1 to run");
         return;
@@ -353,26 +354,43 @@ fn rejected_string_output_does_not_allocate_its_buffer() {
         .lock()
         .expect("host memory measurement lock poisoned");
 
-    let input = Str::from_units(vec![0xD800; 512 * 1024]);
-    let pad = Str::from_units(vec![0xDC00]);
-    let limits = TenantLimits::new(16 * 1024);
-    for operation in 0..4 {
-        let baseline = ALLOCATED.load(Ordering::Relaxed);
-        reset_peak_to_current();
-        let result = match operation {
-            0 => repeat(&input, 2.0, &limits),
-            1 => pad_start(&input, 1048576.0, &pad, &limits),
-            2 => pad_end(&input, 1048576.0, &pad, &limits),
-            _ => concat(&input, &input, &limits),
-        };
-        let delta = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
-        let err = result.err().expect("output exceeds the tenant cap");
-        assert!(err.is::<MemoryCapExceeded>(), "{err:#}");
-        assert!(
-            delta < HOST_MEMORY_THRESHOLD,
-            "operation {operation} allocated {delta} bytes despite admission refusal"
+    for (setup, expression, live_bytes) in [
+        ("", "\"ab\".repeat(1048576)", RESULT_BYTES),
+        ("", "\"x\".padStart(2097152, \"ab\")", RESULT_BYTES),
+        ("", "\"x\".padEnd(2097152, \"ab\")", RESULT_BYTES),
+        (
+            "const half = \"x\".repeat(1048576);",
+            "half.concat(half)",
+            RESULT_BYTES + RESULT_BYTES / 2,
+        ),
+        (
+            "const half = \"x\".repeat(1048576);",
+            "half + half",
+            RESULT_BYTES + RESULT_BYTES / 2,
+        ),
+        (
+            "const full = \"x\".repeat(2097152);",
+            "full.toUpperCase()",
+            2 * RESULT_BYTES,
+        ),
+        (
+            "const full = \"x\".repeat(2097152);",
+            "full.trim()",
+            2 * RESULT_BYTES,
+        ),
+    ] {
+        let src = format!(
+            "function main(): void {{
+                {setup}
+                const text = {expression};
+                assert(text.length === 2097152);
+            }}"
         );
-        assert_eq!(limits.host_attached_bytes(), 0);
-        assert_eq!(limits.peak_bytes(), 0);
+        let (delta, _tmp) = measure_scenario(&src, |_root| {}, |_data| {});
+        report(expression, delta, live_bytes as u64);
+        assert!(
+            delta < live_bytes + HOST_MEMORY_THRESHOLD,
+            "{expression}: host peak delta {delta} bytes for {live_bytes} live string bytes"
+        );
     }
 }

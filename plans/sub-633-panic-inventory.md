@@ -601,6 +601,23 @@ shared `TEST_LOCK` with `expect`: a prior panic may have interrupted the protect
 measurement state. Poisoned access is permitted under the repository policy; this
 is an accepted poisoned-lock panic, not a removed or unresolved N16 violation.
 
+**Superseded (2026-10-13, SUB-1668):** the native buffers charged above counted
+against the same cap as the GC result, so `s + s` needed about 14 bytes per
+input unit rather than 6 and failed well under the cap. Repeat, both pads,
+concat and `string_concat` now allocate the result GC array directly and fill
+it from the source arrays through a fixed 2048-unit stack buffer. The GC
+limiter admits the result before its body exists; no native copy of the inputs
+or the result remains, so the guarded native result and its Rust helpers were
+removed. The residual dependency limitation moves to the writer's
+`ArrayRef::new` (`value/gc_aggregate.rs`, `alloc`), which builds the admitted
+body with infallible `vec!` zeroing. The case maps and trims (`toUpperCase`,
+`toLowerCase`, `trim`, `trimStart`, `trimEnd`), which held an 8-byte-per-unit
+native reservation through their GC write, now read the receiver in place too
+(`string/gc_text.rs`). A case map whose result outgrows the receiver admits
+its extra units against the cap as a growing native buffer, refunded on every
+exit path when the buffer drops. The poisoned-lock exception above carries
+over to the replacement measurement, `string_builders_allocate_only_their_result`.
+
 ### N17 — Public reaper timer configuration
 
 **Original site:** `crates/submilli-server/src/session_manager.rs`

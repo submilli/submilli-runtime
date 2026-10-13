@@ -9,22 +9,21 @@ use wasmtime::{
     StructRef, StructRefPre, StructType, Val, ValType,
 };
 
+use super::gc_text::{GcText, GcUnits, Run, allocate, fill_run};
+use super::transforms::{TrimEnds, to_lower_case, to_upper_case, trim_range};
 use super::{
-    AdmittedStr, RangeError, Str, at_index, cmp, code_point, concat, concat_length,
-    ends_with_window, from_char_code, from_code_point, includes, index_of, is_well_formed,
-    last_index_of, normalize, pad_end, pad_length, pad_start, repeat, repeat_length, slice_range,
-    starts_with_window, substring_range, to_lower_case, to_upper_case, to_well_formed, trim,
-    trim_end, trim_start, unit_index,
+    RangeError, Str, at_index, cmp, code_point, concat_length, ends_with_window, from_char_code,
+    from_code_point, includes, index_of, is_well_formed, last_index_of, normalize, pad_length,
+    repeat_length, slice_range, starts_with_window, substring_range, to_well_formed, unit_index,
 };
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    intrinsic_string_type, read_code_unit, read_code_units, read_code_units_range,
-    register_host_fn, register_host_fn_async, string_array_type, write_boxed_number_struct,
-    write_submilli_string_struct, write_submilli_string_struct_units,
+    fatal_host_error, intrinsic_string_type, range_error, read_code_unit, read_code_units,
+    read_code_units_range, register_host_fn, register_host_fn_async, string_array_type,
+    write_boxed_number_struct, write_submilli_string_struct, write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
-use crate::runtime::limits::TenantLimits;
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
 
@@ -62,22 +61,28 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     reg_window_predicate(linker, &engine, &abi, "startsWith", starts_with_window)?;
     reg_window_predicate(linker, &engine, &abi, "endsWith", ends_with_window)?;
 
-    reg_str_str_to_str(linker, &engine, &abi, "concat", concat)?;
-    reg_str_num_str_to_str(linker, &engine, &abi, "padStart", pad_start)?;
-    reg_str_num_str_to_str(linker, &engine, &abi, "padEnd", pad_end)?;
+    reg_concat(linker, &engine, &abi)?;
+    reg_pad(linker, &engine, &abi, "padStart", PadSide::Start)?;
+    reg_pad(linker, &engine, &abi, "padEnd", PadSide::End)?;
 
     reg_str_to_bool(linker, &engine, &abi, "isWellFormed", is_well_formed)?;
     reg_str_to_str(linker, &engine, &abi, "toWellFormed", to_well_formed)?;
 
     super::transforms::prepare_case_properties()?;
-    reg_str_transform(linker, &engine, &abi, "toUpperCase", to_upper_case)?;
-    reg_str_transform(linker, &engine, &abi, "toLowerCase", to_lower_case)?;
-    reg_str_transform(linker, &engine, &abi, "trim", trim)?;
-    reg_str_transform(linker, &engine, &abi, "trimStart", trim_start)?;
-    reg_str_transform(linker, &engine, &abi, "trimEnd", trim_end)?;
+    // Closures, because a generic `fn(&mut impl Text)` is not a fn pointer for
+    // every `GcText` lifetime.
+    reg_case_map(linker, &engine, &abi, "toUpperCase", |text| {
+        to_upper_case(text)
+    })?;
+    reg_case_map(linker, &engine, &abi, "toLowerCase", |text| {
+        to_lower_case(text)
+    })?;
+    reg_trim(linker, &engine, &abi, "trim", TrimEnds::Both)?;
+    reg_trim(linker, &engine, &abi, "trimStart", TrimEnds::Start)?;
+    reg_trim(linker, &engine, &abi, "trimEnd", TrimEnds::End)?;
     reg_str_str_to_str_fallible(linker, &engine, &abi, "normalize", normalize)?;
 
-    reg_str_num_to_str_fallible(linker, &engine, &abi, "repeat", repeat)?;
+    reg_repeat(linker, &engine, &abi)?;
 
     // StringConstructor statics: `Dispatch::Static`, so the receiver is dropped
     // and the variadic args arrive packed into one `$Array` of boxed numbers.
@@ -234,19 +239,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(&engine, [s.clone(), s.clone()], [s.clone()]),
         true,
         move |caller, params, results| {
-            let recv = concat_abi.read_admitted(caller, abi_arg(params, 0)?, "string_concat")?;
-            let other = concat_abi.read_admitted(caller, abi_arg(params, 1)?, "string_concat")?;
-            fuel::charge(
-                &mut *caller,
-                fuel::COPY,
-                concat_length(recv.value.as_str().len(), other.value.as_str().len())? as u64,
+            *abi_result(results, 0)? = concat_abi.concat(
+                caller,
+                abi_arg(params, 0)?,
+                abi_arg(params, 1)?,
+                "string_concat",
             )?;
-            let out = concat(
-                recv.value.as_str(),
-                other.value.as_str(),
-                &caller.data().tenant_limits,
-            )?;
-            *abi_result(results, 0)? = concat_abi.write_precharged(caller, recv.vtable, &out)?;
             Ok(())
         },
     )?;
@@ -638,32 +636,28 @@ fn reg_code_point_at(
     )
 }
 
-/// `(string, f64) -> string` for a builder that can reject its input: `repeat`.
-fn reg_str_num_to_str_fallible(
+/// `repeat`: the receiver `count` times, built in place (see [`StringAbi::build`]).
+fn reg_repeat(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
-    name: &'static str,
-    op: fn(&Str, f64, &TenantLimits) -> wasmtime::Result<AdmittedStr>,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
     let abi = abi.clone();
     register_host_fn(
         linker,
         MODULE_NAME,
-        method_key(name),
+        method_key("repeat"),
         FuncType::new(engine, [s.clone(), ValType::F64], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read_admitted(caller, abi_arg(params, 0)?, name)?;
-            let arg = number(abi_arg(params, 1)?, name)?;
-            fuel::charge(
-                &mut *caller,
-                fuel::COPY,
-                repeat_length(recv.value.as_str().len(), arg).map_err(throw)? as u64,
-            )?;
-            let out = op(recv.value.as_str(), arg, &caller.data().tenant_limits)?;
-            *abi_result(results, 0)? = abi.write_precharged(caller, recv.vtable, &out)?;
+            let recv = abi.payload(caller, abi_arg(params, 0)?, "repeat")?;
+            let count = number(abi_arg(params, 1)?, "repeat")?;
+            fuel::charge(&mut *caller, fuel::COPY, recv.len as u64)?;
+            let total = repeat_length(recv.len, count).map_err(throw)?;
+            fuel::charge(&mut *caller, fuel::COPY, total as u64)?;
+            let runs = [recv.cycle(total)];
+            *abi_result(results, 0)? = abi.build(caller, recv.vtable, &runs)?;
             Ok(())
         },
     )
@@ -814,48 +808,43 @@ fn reg_window_predicate(
     )
 }
 
-/// `(string, string) -> string`: `concat`.
-fn reg_str_str_to_str(
+/// `String#concat`; the `+` operator registers the same operation as
+/// `string_concat`.
+fn reg_concat(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
-    name: &'static str,
-    op: fn(&Str, &Str, &TenantLimits) -> wasmtime::Result<AdmittedStr>,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
     let abi = abi.clone();
     register_host_fn(
         linker,
         MODULE_NAME,
-        method_key(name),
+        method_key("concat"),
         FuncType::new(engine, [s.clone(), s.clone()], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read_admitted(caller, abi_arg(params, 0)?, name)?;
-            let other = abi.read_admitted(caller, abi_arg(params, 1)?, name)?;
-            fuel::charge(
-                &mut *caller,
-                fuel::COPY,
-                concat_length(recv.value.as_str().len(), other.value.as_str().len())? as u64,
-            )?;
-            let out = op(
-                recv.value.as_str(),
-                other.value.as_str(),
-                &caller.data().tenant_limits,
-            )?;
-            *abi_result(results, 0)? = abi.write_precharged(caller, recv.vtable, &out)?;
+            *abi_result(results, 0)? =
+                abi.concat(caller, abi_arg(params, 0)?, abi_arg(params, 1)?, "concat")?;
             Ok(())
         },
     )
 }
 
-/// `(string, f64, string) -> string`: `padStart`, `padEnd`.
-fn reg_str_num_str_to_str(
+/// Which side of the receiver a pad fills.
+#[derive(Clone, Copy)]
+enum PadSide {
+    Start,
+    End,
+}
+
+/// `padStart`, `padEnd`: repetitions of the pad, cut to fit, beside the receiver.
+fn reg_pad(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
     name: &'static str,
-    op: fn(&Str, f64, &Str, &TenantLimits) -> wasmtime::Result<AdmittedStr>,
+    side: PadSide,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
     let abi = abi.clone();
@@ -866,22 +855,22 @@ fn reg_str_num_str_to_str(
         FuncType::new(engine, [s.clone(), ValType::F64, s.clone()], [s]),
         true,
         move |caller, params, results| {
-            let recv = abi.read_admitted(caller, abi_arg(params, 0)?, name)?;
+            let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
             let target = number(abi_arg(params, 1)?, name)?;
-            let pad = abi.read_admitted(caller, abi_arg(params, 2)?, name)?;
-            fuel::charge(
-                &mut *caller,
-                fuel::COPY,
-                pad_length(recv.value.as_str().len(), target, pad.value.as_str().len())
-                    .map_err(throw)? as u64,
-            )?;
-            let out = op(
-                recv.value.as_str(),
-                target,
-                pad.value.as_str(),
-                &caller.data().tenant_limits,
-            )?;
-            *abi_result(results, 0)? = abi.write_precharged(caller, recv.vtable, &out)?;
+            let pad = abi.payload(caller, abi_arg(params, 2)?, name)?;
+            fuel::charge(&mut *caller, fuel::COPY, recv.len as u64 + pad.len as u64)?;
+            let total = pad_length(recv.len, target, pad.len).map_err(throw)?;
+            fuel::charge(&mut *caller, fuel::COPY, total as u64)?;
+            // pad_length never shortens the receiver.
+            let fill_len = total
+                .checked_sub(recv.len)
+                .ok_or_else(|| fatal_host_error("padded string shorter than its receiver"))?;
+            let fill = pad.cycle(fill_len);
+            let runs = match side {
+                PadSide::Start => [fill, recv.whole()],
+                PadSide::End => [recv.whole(), fill],
+            };
+            *abi_result(results, 0)? = abi.build(caller, recv.vtable, &runs)?;
             Ok(())
         },
     )
@@ -968,12 +957,14 @@ fn reg_str_to_str(
     )
 }
 
-fn reg_str_transform(
+/// `toUpperCase`, `toLowerCase`: read the receiver and write the result in
+/// place (see [`GcText`]).
+fn reg_case_map(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
     abi: &StringAbi,
     name: &'static str,
-    op: fn(&Str) -> wasmtime::Result<Str>,
+    map: fn(&mut GcText<'_, '_>) -> wasmtime::Result<()>,
 ) -> wasmtime::Result<()> {
     let s = abi.value_type();
     let abi = abi.clone();
@@ -984,17 +975,49 @@ fn reg_str_transform(
         FuncType::new(engine, [s.clone()], [s]),
         true,
         move |caller, params, results| {
-            let payload = abi.payload(caller, &params[0], name)?;
-            let _native = crate::runtime::limits::HostBytes::new(
-                &caller.data().tenant_limits,
-                (payload.len as u64).saturating_mul(8),
-            )?;
-            let recv = Receiver {
-                vtable: payload.vtable,
-                value: payload.read_all(caller, name)?,
-            };
-            fuel::charge(&mut *caller, fuel::SCAN, recv.value.len() as u64)?;
-            results[0] = abi.write(caller, recv.vtable, &op(&recv.value)?)?;
+            let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
+            // Read, map, and write a result of the receiver's length; a result
+            // of another length pays the difference in `GcText::finish`.
+            let len = recv.len as u64;
+            fuel::charge(&mut *caller, fuel::COPY, len)?;
+            fuel::charge(&mut *caller, fuel::SCAN, len)?;
+            fuel::charge(&mut *caller, fuel::COPY, len)?;
+            let guess = allocate(caller, &abi.payload_ty, recv.len)?;
+            let input = GcUnits::new(caller, recv.array, recv.len);
+            let mut text = GcText::new(input, abi.payload_ty.clone(), guess, recv.len);
+            map(&mut text)?;
+            let payload = text.finish()?;
+            *abi_result(results, 0)? = abi.wrap(caller, recv.vtable, payload)?;
+            Ok(())
+        },
+    )
+}
+
+/// `trim`, `trimStart`, `trimEnd`: scan the receiver's ends in place and copy
+/// the kept range.
+fn reg_trim(
+    linker: &mut Linker<StoreData>,
+    engine: &wasmtime::Engine,
+    abi: &StringAbi,
+    name: &'static str,
+    ends: TrimEnds,
+) -> wasmtime::Result<()> {
+    let s = abi.value_type();
+    let abi = abi.clone();
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key(name),
+        FuncType::new(engine, [s.clone()], [s]),
+        true,
+        move |caller, params, results| {
+            let recv = abi.payload(caller, abi_arg(params, 0)?, name)?;
+            // The SUB-1292 price; the scan reads only the trimmed ends.
+            fuel::charge(&mut *caller, fuel::COPY, recv.len as u64)?;
+            fuel::charge(&mut *caller, fuel::SCAN, recv.len as u64)?;
+            let kept = trim_range(&mut GcUnits::new(caller, recv.array, recv.len), ends)?;
+            fuel::charge(&mut *caller, fuel::COPY, kept.len() as u64)?;
+            *abi_result(results, 0)? = abi.build(caller, recv.vtable, &[recv.range_run(kept)])?;
             Ok(())
         },
     )
@@ -1016,13 +1039,8 @@ struct Receiver {
     value: Str,
 }
 
-struct AdmittedReceiver {
-    vtable: Val,
-    value: AdmittedStr,
-}
-
-/// A `$string` receiver kept where it is: its payload array and length, for
-/// accessors that read a few units or a range rather than the whole string.
+/// A `$string` kept where it is: its payload array and length. Accessors read
+/// a few units or a range from it; builders copy from it as the source of a run.
 struct Payload {
     vtable: Val,
     array: Rooted<ArrayRef>,
@@ -1030,6 +1048,26 @@ struct Payload {
 }
 
 impl Payload {
+    /// The units in `range`, copied once.
+    fn range_run(&self, range: std::ops::Range<usize>) -> Run {
+        Run::copy(self.array, range)
+    }
+
+    /// The whole string, copied once.
+    fn whole(&self) -> Run {
+        Run::copy(self.array, 0..self.len)
+    }
+
+    /// `len` units cycling through this string from its start.
+    fn cycle(&self, len: usize) -> Run {
+        Run {
+            source: self.array,
+            start: 0,
+            period: self.len,
+            len,
+        }
+    }
+
     fn read_all(&self, caller: &mut Caller<'_, StoreData>, name: &str) -> wasmtime::Result<Str> {
         Ok(Str::from_units(read_code_units(
             &mut *caller,
@@ -1064,24 +1102,6 @@ impl StringAbi {
         Ok(Receiver {
             vtable: payload.vtable,
             value: payload.read_all(caller, name)?,
-        })
-    }
-
-    fn read_admitted(
-        &self,
-        caller: &mut Caller<'_, StoreData>,
-        val: &Val,
-        name: &str,
-    ) -> wasmtime::Result<AdmittedReceiver> {
-        let payload = self.payload(caller, val, name)?;
-        let native = super::admit_units(&caller.data().tenant_limits, payload.len)?;
-        let value = payload.read_all(caller, name)?;
-        Ok(AdmittedReceiver {
-            vtable: payload.vtable,
-            value: AdmittedStr {
-                value,
-                _native: native,
-            },
         })
     }
 
@@ -1123,17 +1143,6 @@ impl StringAbi {
         self.write_units(caller, vtable, s)
     }
 
-    /// Builder wrappers charge output fuel before allocating native output.
-    /// The guarded string remains admitted throughout the additional GC copy.
-    fn write_precharged(
-        &self,
-        caller: &mut Caller<'_, StoreData>,
-        vtable: Val,
-        s: &AdmittedStr,
-    ) -> wasmtime::Result<Val> {
-        self.write_units(caller, vtable, s.as_str())
-    }
-
     fn write_units(
         &self,
         caller: &mut Caller<'_, StoreData>,
@@ -1142,6 +1151,51 @@ impl StringAbi {
     ) -> wasmtime::Result<Val> {
         let pre = ArrayRefPre::new(&mut *caller, self.payload_ty.clone());
         let payload = ArrayRef::new_from_i16_slice(&mut *caller, &pre, s.units())?;
+        self.wrap(caller, vtable, payload)
+    }
+
+    /// `a` followed by `b`, built in place.
+    fn concat(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        a: &Val,
+        b: &Val,
+        name: &str,
+    ) -> wasmtime::Result<Val> {
+        let a = self.payload(caller, a, name)?;
+        let b = self.payload(caller, b, name)?;
+        fuel::charge(&mut *caller, fuel::COPY, a.len as u64 + b.len as u64)?;
+        let total = concat_length(a.len, b.len)?;
+        fuel::charge(&mut *caller, fuel::COPY, total as u64)?;
+        self.build(caller, a.vtable, &[a.whole(), b.whole()])
+    }
+
+    /// Builds a string from `runs` directly in a new GC array (see [`gc_text`]).
+    fn build(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        vtable: Val,
+        runs: &[Run],
+    ) -> wasmtime::Result<Val> {
+        let total = runs
+            .iter()
+            .try_fold(0usize, |total, run| total.checked_add(run.len))
+            .ok_or_else(|| fatal_host_error("string length overflow"))?;
+        let payload = allocate(caller, &self.payload_ty, total)?;
+        let mut at = 0;
+        for run in runs {
+            fill_run(&mut *caller, payload, at, run)?;
+            at += run.len;
+        }
+        self.wrap(caller, vtable, payload)
+    }
+
+    fn wrap(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        vtable: Val,
+        payload: Rooted<ArrayRef>,
+    ) -> wasmtime::Result<Val> {
         let pre = StructRefPre::new(&mut *caller, self.string_ty.clone());
         let st = StructRef::new(
             &mut *caller,
@@ -1226,7 +1280,7 @@ fn number(val: &Val, name: &str) -> wasmtime::Result<f64> {
 }
 
 fn throw(e: RangeError) -> wasmtime::Error {
-    crate::runtime::host::range_error(e.message())
+    range_error(e.message())
 }
 
 /// The type/interface surface this module implements — its slice of the
