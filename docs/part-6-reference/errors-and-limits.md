@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "883d4ec808dd774a3b21c57d30132ec77e917db6ce0ad76f107e9d3eaaa73c84"
+  contentHash: "1081f2542a8b2620364a570713e8edb0cee12a2d756478b403e11c07255ea722"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -247,7 +247,7 @@ The standard library throws these classes. Each extends `Error` and has
 
 | Class | Thrown when | Example message |
 | --- | --- | --- |
-| `PermissionDeniedError` | The Blueprint refuses an operation | `permission denied: caller=main capability=http.get: policy denied http.get for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.` |
+| `PermissionDeniedError` | The Blueprint refuses an operation | `permission denied: caller=main capability=http.get: policy denied http.get for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.` |
 | `QuotaExceededError` | A filesystem size limit, a model-token budget, or a session-state limit would be passed | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more` |
 | `RangeError` | A value is outside a fixed bound | `crypto.randomBytes: length 1048577 exceeds maximum 1048576` |
 | `TypeError` | An argument has the wrong form, or a service the call needs isn't present | ``http GET: the URL path "/a/../b" has the dot segment ".."; a URL parser removes a `.` segment, and a `..` segment with the segment before it, so build the path without them`` |
@@ -261,7 +261,7 @@ call is attributed to (`main` for the program); `capability`, the capability
 refused; and `reason`. Uncaught, the run ends with all three:
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=http.get: policy denied http.get for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
+error: PermissionDeniedError: permission denied: caller=main capability=http.get: policy denied http.get for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
   fields: caller = "main", capability = "http.get", reason = "policy denied http.get for main"
   at main (denied.ts:4:12)  [thrown here]
 3 | function main(): number {
@@ -277,6 +277,9 @@ error: PermissionDeniedError: permission denied: caller=main capability=http.get
 
 For a capability on files, `<capability>` is followed by the path, after
 `.` and `..` are resolved, as in `policy denied fs.write on /big.txt for main`.
+For a capability a Package declares, it is followed by the values the call
+asked with, as in `policy denied acme.com/charges.list with customerId =
+"cus_initech" for main`, so the model can tell which request was refused.
 The [Permissions](/docs/reference/permissions) reference describes how a
 call is decided.
 

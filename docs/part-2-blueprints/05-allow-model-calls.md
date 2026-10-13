@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8e8c2bc965b9a82f67f40091e3d5bcbf93388f33d55ce696823f7810aa5c21d1"
+  contentHash: "32c2f58fb183e16d8ded8d92bf843b4773f071eac2911f2f0804db7f34f3e6a8"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -134,7 +134,7 @@ If some listed models should be off limits to the program, filter on
 refused at its first call, before any prompt is sent:
 
 ```text
-error: PermissionDeniedError: permission denied: caller=main capability=llm.call: policy denied llm.call for main. This operation is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, altered arguments); report it and stop.
+error: PermissionDeniedError: permission denied: caller=main capability=llm.call: policy denied llm.call for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.
 ```
 
 ## Run a program
