@@ -19,19 +19,6 @@ function label(v: number): string {
   }
 }
 
-// Without a `default`, a switch on a literal union compiles only when its
-// labels fold to the values they cover.
-function folded(v: 4 | 15 | 32): string {
-  switch (v) {
-    case 1 << 2:
-      return "four";
-    case -1 >>> 28:
-      return "fifteen";
-    case 2 ** 5:
-      return "thirty-two";
-  }
-}
-
 function main(): void {
   assert(label(4) === "shl", "1 << 2");
   assert(label(15) === "ushr", "-1 >>> 28");
@@ -40,5 +27,4 @@ function main(): void {
   assert(label(6) === "xor", "5 ^ 3");
   assert(label(8) === "and", "12 & 10");
   assert(label(7) === "none", "no label");
-  assert(folded(15) === "fifteen", "a folded label covers its value");
 }

@@ -1907,10 +1907,11 @@ impl Inferer<'_> {
                 span,
             )?;
         }
-        // The tag is one of the strings above. Typing it as their union by a
-        // cast makes the union declared, not fresh, so `let t = typeof x` keeps
-        // it, as in TypeScript. The sequence shares the expression's span, so
-        // it carries the union too.
+        // The tag is one of the eight `typeof` returns in TypeScript, `symbol`
+        // included. Typing it as their union by a cast makes the union
+        // declared, not fresh, so `let t = typeof x` keeps it, as in
+        // TypeScript. The sequence shares the expression's span, so it carries
+        // the union too.
         let tag_ty = typeof_result_type();
         let tag = self.push_synthetic_expr(
             TypedExprKind::Sequence {

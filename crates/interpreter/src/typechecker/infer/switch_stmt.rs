@@ -440,7 +440,7 @@ impl Inferer<'_> {
             let leaves_values_unmatched =
                 !matches!(residual, Type::Never) && !narrowing::is_ruled_out(&residual);
             if leaves_values_unmatched {
-                if requires_every_case(&disc_ty) {
+                if !self.reads_typeof_value(typed_disc)? && requires_every_case(&disc_ty) {
                     self.emit_non_exhaustive(&residual, &site, switch_span);
                 }
                 any_arm_reachable_exit |= entry_reachable;
@@ -977,6 +977,32 @@ impl Inferer<'_> {
         }))
     }
 
+    /// Whether the discriminant is a `typeof` value: the expression itself, or
+    /// a local declared with its type. That type lists every tag whatever the
+    /// operand is, even once narrowing removes some, so a switch on it need
+    /// list only the tags its operand can have.
+    fn reads_typeof_value(&self, typed_disc: ExprId) -> Result<bool, CompilerFailure> {
+        let tags = super::expr::typeof_result_type();
+        let disc_expr = self
+            .typed_ast
+            .try_expr(typed_disc)
+            .map_err(crate::typechecker::arena_failure)?;
+        if matches!(&disc_expr.kind, TypedExprKind::Cast { target_ty, .. } if *target_ty == tags) {
+            return Ok(true);
+        }
+        let Some(path) = self.expr_to_reference_path(disc_expr)? else {
+            return Ok(false);
+        };
+        let narrowing::BindingId::Local { name, .. } = &path.root else {
+            return Ok(false);
+        };
+        Ok(path.chain.is_empty()
+            && self
+                .scopes
+                .get(name)
+                .is_some_and(|entry| *entry.write_type().peel() == tags))
+    }
+
     /// The values the discriminant was already known not to hold.
     fn discriminant_exclusions(
         &self,
@@ -1107,22 +1133,11 @@ impl Inferer<'_> {
 /// discriminant: when its type is made of literals alone, which cases can
 /// cover. One with a member such as `string`, `null` or `undefined`, even in
 /// a single member of a discriminated union, can't be listed out, so the
-/// switch may simply fall through. Neither need one on `typeof` tags: a
-/// `typeof` value's type lists every tag whatever its operand is, even after
-/// narrowing removes some, so a switch on it lists the tags its operand can
-/// have.
+/// switch may simply fall through.
 fn requires_every_case(disc_ty: &Type) -> bool {
-    let members = narrowing::union_members(disc_ty);
-    if members.iter().all(|member| is_typeof_tag(member)) {
-        return false;
-    }
-    members.into_iter().all(|member| {
+    narrowing::union_members(disc_ty).into_iter().all(|member| {
         narrowing::unit_literal_value(member).is_some() || matches!(member.peel(), Type::Boolean)
     })
-}
-
-fn is_typeof_tag(ty: &Type) -> bool {
-    narrowing::union_members(&super::expr::typeof_result_type()).contains(&ty.peel())
 }
 
 fn format_residual_missing(residual: &Type) -> String {
