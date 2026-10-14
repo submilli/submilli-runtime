@@ -97,7 +97,7 @@ test('external links, empty search and synthetic input do not qualify', () => {
   f.listeners.input({ isTrusted: false, target: { matches: () => true, value: 'blueprints' } });
   assert.equal(f.controller.state.engaged, false);
   f.advance(10_000); f.timeout.fn();
-  f.listeners.input({ isTrusted: true, target: { matches: () => true, value: 'blueprints' } });
+  f.listeners.input({ isTrusted: true, target: { matches: selector => selector.includes('.pagefind-ui__search-input'), value: 'blueprints' } });
   assert.equal(f.root.hidden, false);
 });
 

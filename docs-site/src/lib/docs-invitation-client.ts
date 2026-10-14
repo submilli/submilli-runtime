@@ -109,7 +109,7 @@ export function createDocsInvitationController({
 	};
 	const onSearch = (event: Event) => {
 		const input = event.target as HTMLInputElement | null;
-		if (event.isTrusted && input?.matches?.('input[type="search"]') && input.value.trim().length >= 2) recordEngagement();
+		if (event.isTrusted && input?.matches?.('input[type="search"], .pagefind-ui__search-input') && input.value.trim().length >= 2) recordEngagement();
 	};
 	const onScrollIntent = (event: Event) => {
 		if (!event.isTrusted || !current || dismissed || engaged || !visible()) return;
