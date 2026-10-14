@@ -116,6 +116,26 @@ impl ChainField {
     }
 }
 
+/// The type of `typeof x` read as a value: the tags `typeof` can return, as
+/// TypeScript types it, whatever `x` is.
+pub(super) fn typeof_result_type() -> Type {
+    Type::union(
+        [
+            "string",
+            "number",
+            "bigint",
+            "boolean",
+            "symbol",
+            "undefined",
+            "object",
+            "function",
+        ]
+        .into_iter()
+        .map(|tag| Type::StringLiteral(tag.into()))
+        .collect(),
+    )
+}
+
 /// Whether `expected` asks for a literal type: it is one `is_literal` accepts,
 /// or a union with such a member. Decides whether a literal expression keeps
 /// its literal type or widens to its primitive. Peels through aliases so
@@ -666,6 +686,11 @@ impl Inferer<'_> {
             ExprKind::Paren(inner) => {
                 self.next_function_keeps_returned_literals = keeps_returned_literals;
                 return self.infer_expr_keeping_literals(inner, expected, keeps_literal);
+            }
+            ExprKind::ObjectLiteral { members }
+                if expected.is_none() && self.ast.object_pattern_sources.contains_key(&expr_id) =>
+            {
+                self.infer_pattern_object_literal(expr_id, members, span)
             }
             ExprKind::ObjectLiteral { members } => {
                 let errors_before = self.error_count();
@@ -1878,12 +1903,27 @@ impl Inferer<'_> {
                 span,
             )?;
         }
-        Ok((
+        // The tag is one of the eight `typeof` returns in TypeScript, `symbol`
+        // included. Typing it as their union by a cast makes the union
+        // declared, not fresh, so `let t = typeof x` keeps it, as in
+        // TypeScript. The sequence shares the expression's span, so it carries
+        // the union too.
+        let tag_ty = typeof_result_type();
+        let tag = self.push_synthetic_expr(
             TypedExprKind::Sequence {
                 stmts: vec![binding],
                 result,
             },
-            Type::String,
+            tag_ty.clone(),
+            span,
+        )?;
+        Ok((
+            TypedExprKind::Cast {
+                value: tag,
+                target_ty: tag_ty.clone(),
+                check: None,
+            },
+            tag_ty,
         ))
     }
 
@@ -5907,10 +5947,10 @@ impl Inferer<'_> {
             .then(|| {
                 self.own_object_literal_type(
                     &merged,
+                    &spread_index_values,
                     expected,
                     expected_fields.as_ref(),
                     interface_target.is_some(),
-                    has_spread,
                 )
             })
             .flatten();
@@ -6050,20 +6090,20 @@ impl Inferer<'_> {
     /// as in tsc: `{ value: 10 }` against `{ value: number; error?: string }` is
     /// `{ value: number }`. Codegen builds it from its field origins instead.
     /// `None` keeps the expected type: against an interface with methods, whose
-    /// methods a value reaches through the interface's own dispatch; with a
-    /// spread, whose fields take their optionality from the expected shape; and
-    /// against an unbound type parameter, which a call site infers from the
-    /// expected shape.
+    /// methods a value reaches through the interface's own dispatch; and against
+    /// an unbound type parameter, which a call site infers from the expected
+    /// shape. A spread's fields keep their own optionality: `{ ...c && { a } }`
+    /// is `{ a?: string }` whatever the expected type requires.
     fn own_object_literal_type(
         &self,
         merged: &std::collections::BTreeMap<
             String,
             (crate::ObjectField, crate::TypedObjectFieldSource),
         >,
+        spread_index_values: &[Type],
         expected: Option<&Type>,
         expected_fields: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
         against_interface: bool,
-        has_spread: bool,
     ) -> Option<Type> {
         let expected = expected?;
         let expected_fields = expected_fields?;
@@ -6071,11 +6111,23 @@ impl Inferer<'_> {
             && expected_fields
                 .values()
                 .any(|field| field.method || matches!(field.ty.peel(), Type::Function { .. }));
-        if dispatches_methods || has_spread || type_contains_type_var(expected) {
+        if dispatches_methods || type_contains_type_var(expected) {
             return None;
         }
+        // A spread record's index signature holds the named fields too, as the
+        // literal's type below has it.
+        let index = (!spread_index_values.is_empty()).then(|| crate::IndexSignature {
+            value: Box::new(Type::union(
+                spread_index_values
+                    .iter()
+                    .cloned()
+                    .chain(merged.values().map(|(field, _)| field.ty.clone()))
+                    .collect(),
+            )),
+            readonly: false,
+        });
         let own = Type::Object {
-            index: None,
+            index,
             fields: merged
                 .iter()
                 .map(|(name, (field, _))| (name.clone(), field.clone()))
@@ -7351,12 +7403,70 @@ impl Inferer<'_> {
             element_types.push(self.widen_fresh_literals(typed_id, &ty)?);
             typed_elements.push(typed_id);
         }
+        let padding = self.tuple_pattern_padding(literal)?;
+        let mut tuple = crate::types::TupleType::from(element_types.clone());
+        tuple.optional = padding.len();
+        tuple.elements.extend(padding);
         Ok((
             TypedExprKind::TupleLiteral {
                 elements: typed_elements,
-                element_types: element_types.clone(),
+                element_types,
             },
-            Type::Tuple(element_types.into()),
+            Type::Tuple(tuple),
+        ))
+    }
+
+    /// The optional elements a parameter's tuple default gains for the
+    /// pattern's defaulted slots past its end, each typed as its default
+    /// widened, or `undefined`. Only literal defaults are typed here, before
+    /// the pattern infers them; with any other, the tuple keeps its length.
+    fn tuple_pattern_padding(&self, literal: ExprId) -> Result<Vec<Type>, CompilerFailure> {
+        let Some(defaults) = self.ast.tuple_pattern_pad_defaults.get(&literal) else {
+            return Ok(Vec::new());
+        };
+        let mut padding = Vec::with_capacity(defaults.len());
+        for &default in defaults {
+            let Some(ty) = super::forward_globals::stated_literal_type(self.ast, default)? else {
+                return Ok(Vec::new());
+            };
+            padding.push(Type::union(vec![ty.widen_literal(), Type::Undefined]));
+        }
+        Ok(padding)
+    }
+
+    /// An object literal an object pattern takes apart, typed as TypeScript
+    /// types it from the pattern: each property the pattern gives a default
+    /// is optional, since the default stands in for it.
+    fn infer_pattern_object_literal(
+        &mut self,
+        literal: ExprId,
+        members: Vec<crate::ObjectLiteralMember>,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let (kind, ty) = self.infer_object_literal_expr(literal, members, None, span)?;
+        let Type::Object { index, mut fields } = ty.clone() else {
+            return Ok((kind, ty));
+        };
+        let defaulted = self
+            .ast
+            .object_pattern_sources
+            .get(&literal)
+            .into_iter()
+            .flatten();
+        for name in defaulted {
+            if let Some(field) = fields.get_mut(name) {
+                field.optional = true;
+            }
+        }
+        let target = Type::Object { index, fields };
+        let value = self.push_synthetic_expr(kind, ty, span)?;
+        Ok((
+            TypedExprKind::Cast {
+                value,
+                target_ty: target.clone(),
+                check: None,
+            },
+            target,
         ))
     }
 
@@ -8217,6 +8327,13 @@ impl Inferer<'_> {
                 };
                 match literal_idx {
                     Some(idx) if idx < elements.len() => elements[idx].clone(),
+                    Some(_)
+                        if pattern_origin
+                            .as_ref()
+                            .is_some_and(|origin| origin.defaulted) =>
+                    {
+                        Type::Undefined
+                    }
                     Some(idx) => {
                         if let Some(origin) = &pattern_origin {
                             let message = format!(
@@ -8377,9 +8494,9 @@ impl Inferer<'_> {
 
     /// The element a read at `index` gives from a union of arrays and tuples: the
     /// union of each member's element there. An array member gives its element at
-    /// any index; a tuple member needs a non-negative integer literal within its
-    /// arity, since its positions have distinct types and no runtime length check
-    /// guards a shorter variant.
+    /// any index; a tuple member needs a non-negative integer literal, since its
+    /// positions have distinct types, within its arity unless a destructuring
+    /// pattern reads it.
     fn array_like_union_element(
         &mut self,
         members: &[Type],
@@ -8405,6 +8522,11 @@ impl Inferer<'_> {
                         Some(min_tuple_arity.map_or(positions.len(), |m| m.min(positions.len())));
                     match literal_idx.and_then(|idx| positions.get(idx)) {
                         Some(element) => elements.push(element.clone()),
+                        // A pattern reads a slot a shorter tuple lacks as
+                        // `undefined`, as tsc does; codegen checks the length.
+                        None if literal_idx.is_some() && pattern_origin.is_some() => {
+                            elements.push(Type::Undefined);
+                        }
                         None => tuple_lacks_index = true,
                     }
                 }
@@ -10387,6 +10509,10 @@ impl Inferer<'_> {
             .filter(|_| type_admits_nullish(&lhs_ty, self.resolver()))
             .cloned();
         let fallback_hint = (cannot_be_typed_alone(self.ast, rhs)?
+            && !self
+                .ast
+                .tuple_pattern_sources
+                .contains(&peel_parens(self.ast, rhs)?)
             && !matches!(
                 lhs_ty.peel(),
                 Type::Error | Type::Null | Type::Undefined | Type::Void
@@ -14905,6 +15031,43 @@ function main(): void { if (result < 10) { } }
             }
             other => panic!("expected lone MethodCall, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn spread_object_literal_keeps_its_own_type_under_an_expected_type() {
+        // tsc types the literal by its spreads: a conditional spread's fields
+        // are optional, a plain one's keep their own optionality.
+        let ta = run_clean(
+            "interface P { a?: number; b?: number; c?: number }\n\
+             const flag = Math.random() > 0.5;\n\
+             const conditional: P = { ...(flag && { a: 1 }), b: 2 };\n\
+             const plain: P = { ...{ a: 1 } };\n\
+             function main(): void {}",
+        );
+        assert_eq!(
+            nth_decl_value_ty(&ta, 1).to_string(),
+            "{ a?: number; b: number }"
+        );
+        assert_eq!(nth_decl_value_ty(&ta, 2).to_string(), "{ a: number }");
+    }
+
+    #[test]
+    fn closure_literal_return_widens_unless_its_context_names_a_literal() {
+        // tsc keeps a returned literal only where the contextual return type
+        // names a literal of its kind, whatever the context's other members.
+        let ta = run_clean(
+            "const a = 100;\n\
+             const plain: () => number = () => a;\n\
+             const nullable: (() => number) | undefined = () => a;\n\
+             const named: () => 0 | 100 = () => a;\n\
+             const mixed: () => \"q\" | number = () => a;\n\
+             function main(): void {}",
+        );
+        let returned = |n| nth_decl_value_ty(&ta, n).to_string();
+        assert_eq!(returned(1), "() => number");
+        assert_eq!(returned(2), "() => number");
+        assert_eq!(returned(3), "() => 100");
+        assert_eq!(returned(4), "() => number");
     }
 
     #[test]
