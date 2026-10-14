@@ -71,23 +71,22 @@ code preparation or PR creation merely because Linear is unavailable.
 
 ## Review and verify
 
-1. Plan focused and final checks using the Verification section of `AGENTS.md`
-   and the entire proposed diff. Before rebasing, run only affected-area checks
-   needed for implementation or review fixes, reusing valid results. Do not run
-   full suites until the single post-rebase, pre-PR run below. This timing applies
-   to every development task. During development, use
-   `SUBMILLI_FULL_TEST=0 cargo test -p <affected-crate> <test-filter>`
+1. Plan affected-area checks using the Verification section of `AGENTS.md`
+   and the entire proposed diff, reusing valid results. Do not run full suites;
+   PR CI runs them. This applies to every development task. During development,
+   use `SUBMILLI_FULL_TEST=0 cargo test -p <affected-crate> <test-filter>`
    plus affected caller/integration checks. Run `cargo fmt --all --check` and
    `cargo clippy --workspace --all-targets -- -D warnings` for Rust source or
    Rust build/dependency/toolchain/lint changes. Use package, chart, and docs
    checks for their respective changes; combine checks for mixed changes.
    Fix formatting before review, without modifying unrelated work.
-   For routine Submilli Cargo checks, set `SUBMILLI_SKIP_HTTP_TESTS=1`, including
-   full compiler/runtime suites. Set `SUBMILLI_TEST_NIGHTLY_ONLY=0` for development
-   and post-rebase PR checks: test262 conformance, compiler determinism, and
-   expensive CLI fuel-accounting tests do not belong in this workflow. The flag
-   is enabled by nightly CI and, separately, the release skill. The exception is
-   the TypeScript conformance suite, which PR CI runs: for compiler or suite
+   For routine Submilli Cargo checks, set `SUBMILLI_SKIP_HTTP_TESTS=1`. Set
+   `SUBMILLI_TEST_NIGHTLY_ONLY=0` for development and pre-PR checks: test262
+   conformance, compiler determinism, and expensive CLI fuel-accounting tests do
+   not belong in this workflow unless the change touches those tests or their
+   selection (see `AGENTS.md`). The flag is enabled by nightly CI and,
+   separately, the release skill. The exception is the TypeScript conformance
+   suite, which needs the flag and is an affected check: for compiler or suite
    changes, run `SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test
    --workspace --test typescript`. For package/example checks, pass
    `--skip-network` to `build test`; that command ignores
@@ -113,15 +112,11 @@ code preparation or PR creation merely because Linear is unavailable.
    skill. New implementation changes or conflict resolutions require renewed
    review; parent-checked final low-priority fixes do not. Record the review
    evidence reused. Reviewers default to reading code, with narrow tests only
-   for concrete hypotheses or edge cases. This outer workflow owns full
-   verification after rebasing.
-3. Reuse completed check results for the same content, scope, base, and relevant
-   environment for focused checks. Review completion does not trigger full suites.
-   Run full tests once after the final rebase and before opening the PR; reuse
-   that run on subsequent invocations unless another rebase integrates new base
-   changes. Pre-rebase focused checks do not replace this full run.
-   If fixes or hooks introduce unreviewed implementation changes, rerun the
-   review loop and affected checks under its completion and reuse rules.
+   for concrete hypotheses or edge cases.
+3. Reuse completed check results for the same content, scope, and relevant
+   environment; after a rebase, rerun only as Rebase step 3 directs. If fixes or
+   hooks introduce unreviewed implementation changes, rerun the review loop and
+   affected checks under its completion and reuse rules.
    A blocked required check, unresolved in-scope finding, or non-converged review
    blocks PR creation, including drafts. Never weaken checks.
 
@@ -174,16 +169,10 @@ attempts if the base advances. Use the selected PR base, not a hard-coded remote
    again solely because the base, commit SHAs, or diff context changed. If there
    were conflicts, review the resolved result using the review-loop skill. New
    implementation fixes also require renewed review under that skill's rules.
-   Resolve findings with only affected-area checks before the full-test gate.
-   Run the full-test commands in `AGENTS.md` once on the integrated result, after
-   the final rebase and before opening the PR. If the rebase is a no-op and no
-   post-rebase full run exists yet, run it now. Otherwise, only another rebase
-   integrating new base changes permits a new full run. New fixes, commits,
-   reviews, or repeated invocations do not. Reassess HTTP-test selection; retain
-   the skip setting unless the integrated diff requires affected HTTP checks.
-   If the full run exposes a failure, fix it, run only affected checks, and
-   complete any required review. Report the original full-run result and focused
-   follow-ups accurately; do not rerun the full suite for those fixes.
+   Rerun affected-area checks only where the new base changed the same areas, or
+   where conflict resolution changed the PR's content. Reassess HTTP-test
+   selection; retain the skip setting unless the integrated diff requires
+   affected HTTP checks. Do not run full suites.
    Commit fixes with relevant IDs; amend only this workflow's own unpublished
    commits, never base commits.
 4. Inspect final status, commit contents, and the full PR diff. Record the verified
@@ -231,7 +220,13 @@ attempts if the base advances. Use the selected PR base, not a hard-coded remote
    or failure; if an update fails, keep the PR open and report the incomplete step
    and reason. A subsequent invocation should reuse that PR and retry only the
    missing updates when its verified content and base are unchanged.
-6. Return the PR URL and any remaining blockers or incomplete Linear updates.
+6. Return the PR URL, report CI as pending, and list any remaining blockers or
+   incomplete Linear updates. If CI later fails, fix it in a new commit with the
+   linked IDs, review it under the review-loop rules if it changes
+   implementation, rerun the affected checks, push it as a fast-forward without
+   rebasing, and confirm the remote tip as in Rebase step 6. If the diff alters
+   what CI runs, report that the CI logs still need checking for the affected
+   suites.
    Keep the detailed verification and publishing record in the working handoff.
    If publishing fails, say exactly what was committed or pushed.
 

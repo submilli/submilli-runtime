@@ -23,8 +23,9 @@ are optional; use the user's requirements and intended behavior when absent.
   a review round. Review by reading code and existing results by default. A
   narrowly scoped test or scratch reproduction is allowed to resolve a concrete
   correctness question or edge case. Never run full workspace, fixture, package,
-  or conformance sweeps in this workflow; full verification belongs to `open-pr`
-  after rebasing onto main (or the selected PR base).
+  or ECMA-262 conformance sweeps in this workflow; full suites run in PR CI and
+  nightly-only sweeps run nightly. The TypeScript conformance suite is an
+  affected check for compiler changes (see `AGENTS.md`).
 - For TypeScript syntax, typing, or runtime changes, provide comparisons with
   the installed/project-pinned TypeScript compiler under strict options and its
   emitted JavaScript under Node. Record versions, options, commands, acceptance,
@@ -241,10 +242,9 @@ explicitly tracked in the handoff without expanding the patch's scope.
 
 After convergence, confirm that affected areas have focused verification for the
 final changes, running only missing or invalidated checks. Do not run a full suite
-as a review exit gate. Defer full verification to `open-pr` after its rebase; a
-clean review does not claim that the later PR verification has passed.
-For documentation-only changes, verify relevant
-links, paths, and instructions; run documentation-site checks only when that site
+as a review exit gate. Full suites run in PR CI; a clean review does not claim
+that CI has passed. For documentation-only changes, verify relevant links,
+paths, and instructions; run documentation-site checks only when that site
 is affected. Do not run Rust suites for documentation-only changes.
 
 If final checks expose a regression, fix it, repeat the review round, and rerun
@@ -264,7 +264,7 @@ empty round or a low-priority-only round, rather than claiming zero findings.
 Report scope/base reviewed, rounds, independent reviews or fallback, findings
 fixed/rejected/filed/deferred with evidence and links where available, introduced
 versus pre-existing defects, checks and compatibility results, and outstanding
-work. Report full verification as deferred to `open-pr`. A clean review requires
+work. State that full suites are left to PR CI. A clean review requires
 completed applicable focused checks and no unresolved in-scope findings.
 
 This skill does not stage, commit, push, create a PR, close issues, or invoke a

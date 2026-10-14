@@ -265,14 +265,23 @@ narrow test or reproduction to resolve a concrete hypothesis or edge case, but
 must not run full suites. Neither `fix-issue` nor `launch-review-agents-loop`
 runs full suites at handoff.
 
-Run full tests exactly once, after the final rebase onto main (or the selected
-PR base) and before opening the pull request. Finish implementation, review,
-and review fixes before that run. Only a subsequent rebase that integrates new
-base changes permits another full run. A no-op rebase, review round, fix,
-commit/amend, or repeated `open-pr` invocation does not. After a full run exposes
-a failure, fix it and rerun only the affected tests; retain the full-run result
-and the focused follow-up results in the handoff. Do not rerun the whole suite
-just to obtain a new all-green summary.
+Do not run full suites locally, not even before opening a pull request; the
+[release skill](.agents/skills/release/SKILL.md) keeps its own gate. PR CI
+(`.github/workflows/ci.yml`) runs formatting, clippy, the full workspace tests,
+the TypeScript conformance suite and the package tests, and every PR waits for
+it, so a local full run only doubles the wait. After a rebase, rerun affected
+checks only where the new base or a conflict resolution changed those areas.
+When CI fails, fix the cause, rerun the affected checks locally, and push again.
+
+PR CI does not cover everything. Still run locally the affected checks it skips:
+nightly-only tests the rules below require (changes to those tests or their
+selection, Git standard-library changes) and HTTP checks required by the
+conditional HTTP policy. Chart and documentation-site checks run in their own
+path-filtered PR workflows (`chart-ci.yml`, `docs.yml`); run them locally only
+when a change affects the chart or book from outside those paths. When a change
+alters what CI runs (`.github/workflows/`, test-selection environment variables
+or build scripts, the toolchain, or workspace manifests), CI runs the PR's own
+version, so confirm in the CI logs that the affected suites still ran.
 
 For Rust source changes or changes to Rust build/dependency/toolchain/lint
 configuration, run from the repository root:
@@ -282,8 +291,8 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Nightly-only tests are excluded from routine development and post-rebase PR
-verification, including `SUBMILLI_FULL_TEST=1`. `SUBMILLI_TEST_NIGHTLY_ONLY=1`
+Nightly-only tests are excluded from routine development and pre-PR checks,
+and `SUBMILLI_FULL_TEST=1` does not enable them. `SUBMILLI_TEST_NIGHTLY_ONLY=1`
 enables the ECMA-262 and TypeScript conformance suite bodies, both compiler
 determinism sweeps, compiler type limits (`type_limits`), Git memory-limit tests
 (`git_memory`), host memory bounds
@@ -296,7 +305,7 @@ enables it only for the TypeScript conformance suite. The
 final release candidate before publication. Enable the flag during development
 only for focused verification of changes to these tests or their selection,
 for the Git standard-library checks below, and for the TypeScript conformance
-suite on compiler changes (see the post-rebase gate).
+suite on compiler changes (see below).
 
 Whenever modifying the Git standard library (`crates/interpreter/src/stdlib/git/`),
 run the Git memory-limit tests in addition to other affected checks:
@@ -309,16 +318,20 @@ These tests use an in-process HTTP transport backed by local `git upload-pack`,
 so they need no network access. The optional calibration report remains ignored;
 it is not required by this command.
 
-At the single post-rebase, pre-PR full-test gate, run:
+PR CI runs the full suites below. Outside the release skill, run them locally
+only to reproduce a CI failure, and then prefer the failing test alone. CI's
+cargo run leaves HTTP socket tests enabled, so reproduce a failing socket test
+with `SUBMILLI_SKIP_HTTP_TESTS=0`. For other CI steps,
+use the failing step's command from `ci.yml`.
 
 ```sh
 SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=0 SUBMILLI_FULL_TEST=1 cargo test --workspace
 cargo run -p submilli -- build test --skip-network
 ```
 
-When the change touches the compiler or the TypeScript conformance suite, also run
-that suite, as PR CI does. It takes a few seconds after the workspace test run,
-since `--workspace` reuses that build:
+When the change touches the compiler or the TypeScript conformance suite, run
+that suite before pushing. It is an affected check: a changed divergence fails CI
+and has to be committed with the change.
 
 ```sh
 SUBMILLI_SKIP_HTTP_TESTS=1 SUBMILLI_TEST_NIGHTLY_ONLY=1 cargo test --workspace --test typescript
@@ -342,10 +355,9 @@ blueprint policy tests. Ordinary TypeScript package or documentation edits do no
 require Rust formatting or clippy. During development, documentation changes need
 only affected documentation checks. Embedded/build-input documentation (such as
 `llm-prompt.md` and package `docs/readme.md`) also needs its owning build/example
-checks. These focused checks do not trigger an early full run or replace the
-single post-rebase, pre-PR full-test gate. For public book changes, use the
-documentation-site checks below. For agent instructions, commands, and skills,
-validate their frontmatter, referenced paths, and workflow consistency.
+checks. For public book changes, use the documentation-site checks below. For
+agent instructions, commands, and skills, validate their frontmatter, referenced
+paths, and workflow consistency.
 
 When a compiler change alters what the TypeScript conformance suite finds, update
 its committed divergences, and edit their `.triage` explanations by hand, including
