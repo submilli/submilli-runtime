@@ -469,7 +469,7 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .state(),
-                &RequestState::Expired { status: 201 }
+                &RequestState::Expired
             );
         }
         assert!(matches!(

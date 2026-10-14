@@ -1832,7 +1832,7 @@ mod tests {
         let mut unit = mgr.unit_of_work.begin().await.unwrap();
         assert_eq!(
             unit.get_request("s1", "k").await.unwrap().unwrap().state(),
-            &RequestState::Expired { status: 200 }
+            &RequestState::Expired
         );
     }
 

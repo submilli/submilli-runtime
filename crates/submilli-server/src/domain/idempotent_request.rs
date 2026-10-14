@@ -15,9 +15,7 @@ pub enum RequestState {
     /// Completed, but its response is no longer kept: the request must not run
     /// again, and there is nothing left to replay. Storage makes this transition
     /// in bulk (`UnitOfWork::expire_responses`), without loading the bodies it drops.
-    Expired {
-        status: u16,
-    },
+    Expired,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,10 +79,7 @@ impl IdempotentRequest {
         completed_at: Option<SystemTime>,
     ) -> Result<Self, RequestError> {
         Self::validate_key(&key)?;
-        let has_completed = matches!(
-            state,
-            RequestState::Completed(_) | RequestState::Expired { .. }
-        );
+        let has_completed = matches!(state, RequestState::Completed(_) | RequestState::Expired);
         if has_completed != completed_at.is_some() {
             return Err(RequestError::CompletionTimeMismatch);
         }
@@ -304,10 +299,10 @@ mod tests {
                 completed_at,
             )
         };
-        assert!(restore(RequestState::Expired { status: 200 }, Some(at(1))).is_ok());
+        assert!(restore(RequestState::Expired, Some(at(1))).is_ok());
         assert!(restore(RequestState::Reserved, None).is_ok());
         assert!(matches!(
-            restore(RequestState::Expired { status: 200 }, None),
+            restore(RequestState::Expired, None),
             Err(RequestError::CompletionTimeMismatch)
         ));
         assert!(matches!(

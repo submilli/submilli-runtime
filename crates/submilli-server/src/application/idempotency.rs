@@ -78,7 +78,7 @@ impl<'a> ReserveRequest<'a> {
                     Ok(RequestDisposition::Completed(outcome.clone()))
                 }
                 RequestState::Indeterminate => Err(RequestFailure::Indeterminate),
-                RequestState::Expired { .. } => Err(RequestFailure::Expired),
+                RequestState::Expired => Err(RequestFailure::Expired),
             };
         }
         unit.save_request(request.clone()).await?;

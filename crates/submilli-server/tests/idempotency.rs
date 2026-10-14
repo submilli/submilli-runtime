@@ -722,7 +722,7 @@ async fn an_expired_response_is_refused_without_running_and_different_code_still
     );
     assert_eq!(
         ledger.load(&session, "k1").await.unwrap().unwrap().state,
-        submilli_server::domain::idempotent_request::RequestState::Expired { status: 200 },
+        submilli_server::domain::idempotent_request::RequestState::Expired,
         "the tombstone stays and nothing ran"
     );
 

@@ -45,7 +45,7 @@ pub(crate) async fn save(
             Some(outcome.status),
             Some(outcome.body.as_bytes()),
         ),
-        RequestState::Expired { status } => ("expired", Some(*status), None),
+        RequestState::Expired => ("expired", None, None),
     };
     sqlx::query("INSERT INTO idempotent_requests(session_id,request_key,fingerprint,reservation_id,owner_generation,created_at_unix_ms,state,response_status,response_body,completed_at_unix_ms) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,request_key) DO UPDATE SET state=excluded.state,response_status=excluded.response_status,response_body=excluded.response_body,completed_at_unix_ms=excluded.completed_at_unix_ms WHERE idempotent_requests.reservation_id=excluded.reservation_id")
         .bind(request.session_id()).bind(request.key()).bind(request.fingerprint()).bind(request.reservation_id()).bind(request.owner_generation()).bind(created).bind(state).bind(status).bind(body).bind(completed).execute(connection).await?;
@@ -95,7 +95,7 @@ pub(crate) async fn expire_responses(
 ) -> Result<u64, DatabaseError> {
     let mut expired = 0;
     for key in keys {
-        expired += sqlx::query("UPDATE idempotent_requests SET state='expired',response_body=NULL WHERE session_id=? AND request_key=? AND state='completed'")
+        expired += sqlx::query("UPDATE idempotent_requests SET state='expired',response_status=NULL,response_body=NULL WHERE session_id=? AND request_key=? AND state='completed'")
             .bind(session)
             .bind(key)
             .execute(&mut *connection)
@@ -116,9 +116,7 @@ fn decode(row: SqliteRow) -> Result<IdempotentRequest, DatabaseError> {
                 body: String::from_utf8(body).map_err(invalid)?,
             })
         }
-        "expired" => RequestState::Expired {
-            status: row.try_get("response_status")?,
-        },
+        "expired" => RequestState::Expired,
         _ => return Err(invalid("invalid request state")),
     };
     let completed_at = row

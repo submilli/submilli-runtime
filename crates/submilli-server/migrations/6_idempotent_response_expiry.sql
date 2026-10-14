@@ -14,7 +14,7 @@ CREATE TABLE idempotent_requests_new (
     completed_at_unix_ms INTEGER CHECK(completed_at_unix_ms >= 0),
     PRIMARY KEY(session_id, request_key),
     CHECK((state = 'completed' AND response_status IS NOT NULL AND response_status BETWEEN 100 AND 599 AND response_body IS NOT NULL AND completed_at_unix_ms IS NOT NULL)
-       OR (state = 'expired' AND response_status IS NOT NULL AND response_status BETWEEN 100 AND 599 AND response_body IS NULL AND completed_at_unix_ms IS NOT NULL)
+       OR (state = 'expired' AND response_status IS NULL AND response_body IS NULL AND completed_at_unix_ms IS NOT NULL)
        OR (state IN ('reserved', 'indeterminate') AND response_status IS NULL AND response_body IS NULL AND completed_at_unix_ms IS NULL))
 );
 
