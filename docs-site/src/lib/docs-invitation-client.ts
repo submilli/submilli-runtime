@@ -12,16 +12,15 @@ function consumeNavigation(storage: Storage | undefined, baseURI: string, now: n
 	try {
 		const raw = storage?.getItem(NAVIGATION_KEY);
 		storage?.removeItem(NAVIGATION_KEY);
-		if (!raw) return undefined;
+		if (!raw) return false;
 		const navigation = JSON.parse(raw) as Record<string, unknown> | null;
 		if (navigation?.path !== docsPath(new URL(baseURI))
-			|| typeof navigation.createdAt !== 'number' || !Number.isFinite(navigation.createdAt) || now < navigation.createdAt || now - navigation.createdAt > NAVIGATION_MAX_AGE_MS
-			|| typeof navigation.elapsed !== 'number' || !Number.isFinite(navigation.elapsed) || navigation.elapsed < 0) return undefined;
-		return Math.min(navigation.elapsed, VISIBLE_DELAY_MS);
-	} catch { return undefined; }
+			|| typeof navigation.createdAt !== 'number' || !Number.isFinite(navigation.createdAt) || now < navigation.createdAt || now - navigation.createdAt > NAVIGATION_MAX_AGE_MS) return false;
+		return true;
+	} catch { return false; }
 }
-function storeNavigation(storage: Storage | undefined, path: string, createdAt: number, elapsed: number) {
-	try { storage?.setItem(NAVIGATION_KEY, JSON.stringify({ path, createdAt, elapsed: Math.min(elapsed, VISIBLE_DELAY_MS) })); } catch {}
+function storeNavigation(storage: Storage | undefined, path: string, createdAt: number) {
+	try { storage?.setItem(NAVIGATION_KEY, JSON.stringify({ path, createdAt })); } catch {}
 }
 function opensInCurrentTab(event: MouseEvent, link: Element) {
 	return !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
@@ -46,9 +45,8 @@ export function createDocsInvitationController({
 }) {
 	// Only a just-clicked docs link can carry engagement into a new document.
 	// Reloads and direct landings must earn it again; dismissal remains durable.
-	const navigationElapsed = consumeNavigation(sessionStorage, document.baseURI, now());
-	let elapsed = navigationElapsed ?? 0;
-	let engaged = navigationElapsed !== undefined;
+	let elapsed = 0;
+	let engaged = consumeNavigation(sessionStorage, document.baseURI, now());
 	let navigationIntent: { event: MouseEvent; path: string; createdAt: number } | undefined;
 	let scrollIntent: { from: number; until: number } | undefined;
 	let lastStartedAt: number | undefined;
@@ -209,13 +207,16 @@ export function createDocsInvitationController({
 	return {
 		bind,
 		pauseForNavigation() {
-			stopTimer(); abortRequest(); current = undefined; scrollIntent = undefined; disconnectOverlayObserver();
+			stopTimer(); abortRequest();
+			if (current) current.hidden = true;
+			current = undefined; scrollIntent = undefined; disconnectOverlayObserver();
 			// Click capture runs before later handlers can cancel navigation. Commit
 			// carryover only when the document actually leaves and cancellation is known.
 			if (!dismissed && navigationIntent && !navigationIntent.event.defaultPrevented
 				&& now() - navigationIntent.createdAt <= NAVIGATION_MAX_AGE_MS)
-				storeNavigation(sessionStorage, navigationIntent.path, now(), elapsed);
+				storeNavigation(sessionStorage, navigationIntent.path, now());
 			navigationIntent = undefined;
+			elapsed = 0; engaged = false;
 		},
 		onVisibilityChange() { if (visible()) { if (elapsed >= VISIBLE_DELAY_MS) revealOrWatch(); else schedule(); } else stopTimer(); },
 		get state() { return { elapsed, engaged, dismissed, visible: Boolean(current && !current.hidden) }; },

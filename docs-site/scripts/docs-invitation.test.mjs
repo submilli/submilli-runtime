@@ -97,8 +97,8 @@ test('a real docs link qualifies, preserves engagement across pages, and keeps t
   f.controller.pauseForNavigation();
   const next = fixture({ session: f.session, arrivedViaDocsLink: false, initialNow: 4_000, baseURI: 'https://docs.example.test/docs/packages' });
   next.controller.bind();
-  assert.equal(next.timeout.delay, 6_000);
-  next.advance(6_000); next.timeout.fn();
+  assert.equal(next.timeout.delay, 10_000);
+  next.advance(10_000); next.timeout.fn();
   assert.equal(next.root.hidden, false);
 });
 
@@ -168,16 +168,20 @@ test('pauses while hidden and resumes with remaining visible time', () => {
   assert.equal(f.root.hidden, false);
 });
 
-test('a restored document resumes its earned time after navigation', () => {
+test('a restored document requires a fresh delay and engagement after navigation', () => {
   const f = fixture();
   f.controller.bind();
   f.advance(4_000);
   f.controller.pauseForNavigation();
   assert.equal(f.timeout, undefined);
   f.controller.bind();
-  assert.equal(f.timeout.delay, 6_000);
-  f.advance(6_000); f.timeout.fn();
+  assert.equal(f.timeout.delay, 10_000);
+  assert.equal(f.controller.state.engaged, false);
+  f.listeners.input({isTrusted:true,target:{matches:()=>true,value:'blueprints'}});
+  f.advance(10_000); f.timeout.fn();
   assert.equal(f.root.hidden, false);
+  f.controller.pauseForNavigation();
+  assert.equal(f.root.hidden, true);
 });
 
 test('reloads and old session flags require fresh engagement and visible time', () => {
@@ -208,6 +212,9 @@ test('navigation carry is one-use, path-specific and short-lived', () => {
   }
   const session = new Map([[key, JSON.stringify({path:'/docs/quickstart',createdAt:0,elapsed:10000})]]);
   const visit = fixture({session, arrivedViaDocsLink:false}); visit.controller.bind();
+  assert.equal(visit.root.hidden, true);
+  assert.equal(visit.timeout.delay, 10_000);
+  visit.advance(10_000); visit.timeout.fn();
   assert.equal(visit.root.hidden, false);
   const reload = fixture({session, arrivedViaDocsLink:false}); reload.controller.bind();
   assert.equal(reload.root.hidden, true);
@@ -244,6 +251,7 @@ test('pauses and defers on routes or overlays where the invitation cannot be sho
   const session = new Map([['submilli.docs-invitation.navigation.v1', JSON.stringify({path:'/docs/quickstart',createdAt:0,elapsed:10000})]]);
   const covered = fixture({ session, arrivedViaDocsLink:false, overlay: true });
   covered.controller.bind();
+  covered.advance(10_000); covered.timeout.fn();
   assert.equal(covered.root.hidden, true);
   covered.document.querySelector = selector => selector === '[data-docs-invitation]' ? covered.root : undefined;
   covered.controller.onVisibilityChange();
@@ -260,6 +268,7 @@ test('can defer through a second overlay cycle after the first one clears', () =
   const session = new Map([['submilli.docs-invitation.navigation.v1', JSON.stringify({path:'/docs/quickstart',createdAt:0,elapsed:10000})]]);
   const covered = fixture({ session, arrivedViaDocsLink:false, overlay: true, mutationObserver: FakeObserver });
   covered.controller.bind();
+  covered.advance(10_000); covered.timeout.fn();
   assert.equal(observers.length, 1);
   covered.document.querySelector = selector => selector === '[data-docs-invitation]' ? covered.root : undefined;
   observers[0].callback();

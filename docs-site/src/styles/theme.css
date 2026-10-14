@@ -828,8 +828,16 @@ mobile-starlight-toc .isMobile a[aria-current='true'] {
 	outline-offset: 2px;
 }
 .expressive-code .frame .copy .feedback {
-	font: 500 0.75rem/1 var(--sl-font-mono);
-	border-radius: var(--radius-sm);
+	font: 600 0.75rem/1 var(--sl-font);
+	letter-spacing: 0;
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: var(--radius-xs);
+	box-shadow: var(--shadow-sm);
+	padding: 0.25rem 0.5rem;
+	margin-inline-end: 0;
+}
+.expressive-code .frame .copy .feedback::after {
+	display: none;
 }
 @media (hover: none), (pointer: coarse) {
 	.expressive-code .frame .copy button {

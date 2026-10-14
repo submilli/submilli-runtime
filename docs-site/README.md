@@ -231,8 +231,9 @@ The dismissible invitation requires ten seconds of visible docs browsing plus a
 reader action: following a docs link, searching, copying a page/code/section link,
 or scrolling at least 80 pixels with wheel, touch or keyboard input. A landing,
 restored scroll position or programmatic click alone never qualifies. Engagement
-and elapsed time carry into the next page only through a just-clicked docs link.
-Reloads and direct landings require fresh engagement and visible time. Closing it
+can carry into the next page only through a just-clicked docs link. Every page
+starts a fresh ten-second visible delay, including docs navigation. Reloads and
+direct landings also require fresh engagement. Closing it
 or successfully saving an email permanently dismisses it in localStorage for
 that browser and origin. It offers
 an email form plus the same Google scheduler as the header. It takes no
