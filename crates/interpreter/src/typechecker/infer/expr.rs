@@ -10442,6 +10442,7 @@ impl Inferer<'_> {
             .filter(|_| type_admits_nullish(&lhs_ty, self.resolver()))
             .cloned();
         let fallback_hint = (cannot_be_typed_alone(self.ast, rhs)?
+            && !self.ast.tuple_pattern_sources.contains(&rhs)
             && !matches!(
                 lhs_ty.peel(),
                 Type::Error | Type::Null | Type::Undefined | Type::Void

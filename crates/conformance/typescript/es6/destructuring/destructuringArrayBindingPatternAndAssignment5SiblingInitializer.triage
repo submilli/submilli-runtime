@@ -1,2 +1,0 @@
-line 26 type: bug SUB-1610 `x ?? []` checks the empty literal against the left operand's tuple type
-line 26 extra: bug SUB-1610 `x ?? []` checks the empty literal against the left operand's tuple type

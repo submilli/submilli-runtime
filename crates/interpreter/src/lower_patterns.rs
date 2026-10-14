@@ -910,6 +910,7 @@ fn mark_literal_source(
         return Ok(Some(LiteralSource::Tuple(len)));
     }
     let Some(names) = object_literal_names(ast, binding, value)? else {
+        mark_operand_tuple_sources(ast, binding, value)?;
         return Ok(None);
     };
     let Binding::Object { fields, .. } = binding else {
@@ -924,6 +925,38 @@ fn mark_literal_source(
         ast.object_pattern_sources.insert(value, defaulted);
     }
     Ok(Some(LiteralSource::Object(names)))
+}
+
+/// An array literal the pattern may take apart as one operand of `value`, a
+/// fallback (`x ?? []`, `x || []`) or a conditional's branch, is a tuple as in
+/// tsc, where the pattern is the context of every such operand.
+fn mark_operand_tuple_sources(
+    ast: &mut Ast,
+    binding: &Binding,
+    value: ExprId,
+) -> Result<(), CompilerFailure> {
+    let operands = match &ast
+        .try_expr(value)
+        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+        .kind
+    {
+        ExprKind::Paren(inner) => vec![*inner],
+        ExprKind::Binary {
+            op: crate::BinOp::NullishCoalesce | crate::BinOp::Or,
+            rhs,
+            ..
+        } => vec![*rhs],
+        ExprKind::Ternary { then_, else_, .. } => vec![*then_, *else_],
+        _ => return Ok(()),
+    };
+    for operand in operands {
+        if tuple_source_len(ast, binding, operand)?.is_some() {
+            ast.tuple_pattern_sources.insert(operand);
+        } else {
+            mark_operand_tuple_sources(ast, binding, operand)?;
+        }
+    }
+    Ok(())
 }
 
 /// The property names of `value` when it is an object literal that `binding`,
