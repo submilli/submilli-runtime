@@ -746,8 +746,9 @@ async fn package_source(
     let (text, truncated) = super::within_bytes(&source.text, MAX_SOURCE_BYTES);
     let note = truncated.then(|| {
         format!(
-            "the module is {bytes} bytes; only the first {} KiB are shown",
-            MAX_SOURCE_BYTES / 1024
+            "the module is {} kB; only the first {} kB are shown",
+            bytes.div_ceil(1000),
+            MAX_SOURCE_BYTES / 1000
         )
     });
     Json(json!({

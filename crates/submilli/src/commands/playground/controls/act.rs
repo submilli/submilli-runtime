@@ -410,6 +410,9 @@ pub(crate) struct Actions {
     /// Where `bind` saves the binding's variables for the next start.
     pub(crate) binding_file: PathBuf,
     pub(crate) blueprints: Arc<dyn submilli_server::blueprint::BlueprintStore>,
+    /// Applies the blueprint file; a run first catches up on a save the watcher has
+    /// not applied yet.
+    pub(crate) applier: Arc<super::super::watch::Applier>,
     pub(crate) blueprint_name: String,
     pub(crate) blueprint_path: PathBuf,
     pub(crate) project_root: PathBuf,
@@ -440,8 +443,10 @@ impl Actions {
             .map_err(ActError::from)
     }
 
-    /// The blueprint in force, as the server runs it.
+    /// The blueprint in force, as the server runs it, once the file's latest save is
+    /// applied.
     async fn blueprint(&self, name: &str) -> Result<Blueprint, ActError> {
+        self.applier.catch_up().await;
         match self.blueprints.get(name).await {
             Ok(Some(blueprint)) => Ok(blueprint),
             Ok(None) => Err(ActError::usage(

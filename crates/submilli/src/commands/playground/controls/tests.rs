@@ -831,6 +831,99 @@ fn a_test_run_shows_its_source_its_variables_and_where_local_state_came_from() {
 }
 
 #[test]
+fn sessions_list_each_sessions_first_message_and_its_tests_and_reruns() {
+    use crate::commands::playground::store::events::{
+        ChatRole, ChatTurn, EventBody, Position, StoredEvent,
+    };
+    let mut fixture = Fixture::new();
+    let source =
+        fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]).session("s-a"));
+    fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]).session("s-b"));
+    let mut stopped = RunSpec::new(Vec::new()).session("s-b");
+    stopped.error = Some(cancelled());
+    fixture.run(stopped);
+    let mut broken = RunSpec::new(Vec::new()).session("s-b");
+    broken.error = Some(crate::commands::playground::store::run::StoredError {
+        kind: submilli_server::error::ErrorKind::CompileError,
+        message: "error: unresolved identifier".into(),
+        ..cancelled()
+    });
+    fixture.run(broken);
+    let mut crashed = RunSpec::new(Vec::new()).session("s-b");
+    crashed.error = Some(crate::commands::playground::store::run::StoredError {
+        kind: submilli_server::error::ErrorKind::RuntimeError,
+        message: "error: index out of range".into(),
+        ..cancelled()
+    });
+    fixture.run(crashed);
+    let mut test = RunSpec::new(vec![charges_allowed(0, "cus_northwind")]).label("test");
+    test.entry = "test".into();
+    test.test_of = Some(source);
+    fixture.run(test);
+    let rerun = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]).label("rerun"));
+    fixture.store.append_link(rerun, source).unwrap();
+    let long = "x".repeat(300);
+    for (n, (role, text)) in [
+        (ChatRole::User, long.as_str()),
+        (ChatRole::Assistant, "Done."),
+        (ChatRole::User, "And the next one?"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let event = StoredEvent {
+            format: 1,
+            session_seq: 0,
+            event_id: format!("chat-{n}"),
+            position: Position::at(10 + n as u64),
+            run: None,
+            backfilled: false,
+            decision: None,
+            body: EventBody::Chat(ChatTurn {
+                turn: format!("turn-{n}"),
+                role,
+                text: text.to_owned(),
+                truncated: false,
+                agent: "agent".into(),
+                model: None,
+            }),
+        };
+        fixture
+            .store
+            .events
+            .append(Some("s-a"), event, |e| {
+                let mut line = serde_json::to_vec(e).unwrap();
+                line.push(b'\n');
+                Some(line)
+            })
+            .unwrap();
+    }
+    let (reader, _dir) = fixture.reader();
+    let listed = read::sessions(&reader, 20, 0).unwrap();
+    let row = |id: &str| listed.sessions.iter().find(|s| s.session == id).unwrap();
+    assert_eq!(row("s-a").follow_ups, 2);
+    assert_eq!(row("s-a").asks, 2);
+    assert_eq!(
+        row("s-a").untrusted.task.as_deref(),
+        Some("x".repeat(200).as_str())
+    );
+    assert_eq!(row("s-b").follow_ups, 0);
+    assert_eq!(row("s-b").asks, 0);
+    // Each session says how many of its runs were cancelled, didn't compile, or failed.
+    let ends = |id: &str| (row(id).cancelled, row(id).rejected, row(id).failed);
+    assert_eq!(ends("s-a"), (0, 0, 0));
+    assert_eq!(ends("s-b"), (1, 1, 1));
+    // The message is the session's driver's own text, so it travels under `untrusted`.
+    let value = json_of(&listed);
+    let untrusted = |id: &str| {
+        let rows = value["sessions"].as_array().unwrap();
+        rows.iter().find(|s| s["session"] == id).unwrap()["untrusted"].clone()
+    };
+    assert_eq!(untrusted("s-a")["task"].as_str().map(str::len), Some(200));
+    assert_eq!(untrusted("s-b"), serde_json::json!({}));
+}
+
+#[test]
 fn a_run_lists_its_tests_and_reruns_oldest_first() {
     let mut fixture = Fixture::new();
     let source = fixture.run(RunSpec::new(vec![charges_allowed(0, "cus_northwind")]));

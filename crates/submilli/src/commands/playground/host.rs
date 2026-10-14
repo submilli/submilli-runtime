@@ -361,6 +361,7 @@ async fn run(
         binding: std::sync::Mutex::new(binding),
         binding_file: state_dir.binding_path(),
         blueprints: Arc::clone(&blueprints),
+        applier: Arc::clone(&applier),
         blueprint_name: serving.name.clone(),
         blueprint_path: options.project.blueprint.clone(),
         project_root: options.project.root.clone(),
